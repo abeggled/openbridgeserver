@@ -334,6 +334,18 @@ class TestDeleteBackgrounds:
                 await delete_backgrounds(body=body, _user="admin")
         assert exc.value.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_late_invalid_name_does_not_partially_delete(self, tmp_path):
+        (tmp_path / "floor.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        from obs.api.v1.visu_backgrounds import DeleteRequest
+
+        body = DeleteRequest(names=["floor", "../evil"])
+        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path):
+            with pytest.raises(HTTPException) as exc:
+                await delete_backgrounds(body=body, _user="admin")
+        assert exc.value.status_code == 400
+        assert (tmp_path / "floor.png").exists()
+
 
 # ===========================================================================
 # visu_backgrounds — import_backgrounds endpoint
@@ -382,6 +394,20 @@ class TestImportBackgrounds:
             result = await import_backgrounds(files=[upload], _user="admin")
         assert result.skipped == 1
         assert result.imported == 0
+
+    @pytest.mark.asyncio
+    async def test_late_invalid_upload_does_not_partially_import(self, tmp_path):
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 50
+        valid = AsyncMock(filename="floor.png")
+        valid.read = AsyncMock(return_value=png_bytes)
+        invalid = AsyncMock(filename="broken.png")
+        invalid.read = AsyncMock(return_value=b"not an image")
+
+        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path):
+            with pytest.raises(HTTPException) as exc:
+                await import_backgrounds(files=[valid, invalid], _user="admin")
+        assert exc.value.status_code == 422
+        assert list(tmp_path.iterdir()) == []
 
 
 # ===========================================================================

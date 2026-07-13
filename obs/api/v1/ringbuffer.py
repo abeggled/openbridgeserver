@@ -2050,9 +2050,8 @@ async def configure_ringbuffer(
         )
 
     async with _CONFIGURE_LOCK:
-        async with db.transaction():
-            result = await _configure_ringbuffer_locked(body, db)
-            await write_application_success(db, request, _user, "POST", "/api/v1/ringbuffer/config", commit=False)
+        result = await _configure_ringbuffer_locked(body, db)
+        await write_application_success(db, request, _user, "POST", "/api/v1/ringbuffer/config", commit=True)
         return result
 
 

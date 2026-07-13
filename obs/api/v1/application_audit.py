@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import wraps
+import inspect
+import logging
 from typing import Any, Callable
 
 from fastapi import HTTPException, Request
@@ -12,6 +14,8 @@ from fastapi import HTTPException, Request
 from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 from obs.api.auth import Principal
 from obs.db.database import Database
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -36,10 +40,16 @@ async def audit_application_route(
         if exc.status_code == 404 and not audit_not_found:
             raise
         outcome = AuditOutcome.DENIED if 400 <= exc.status_code < 500 else AuditOutcome.FAILED
-        await writer.write_contract(method, path, resource_id=resource_id, outcome=outcome)
+        try:
+            await writer.write_contract(method, path, resource_id=resource_id, outcome=outcome)
+        except Exception:
+            logger.exception("Could not persist application contract audit event for %s %s", method, path)
         raise
     except Exception:
-        await writer.write_contract(method, path, resource_id=resource_id, outcome=AuditOutcome.FAILED)
+        try:
+            await writer.write_contract(method, path, resource_id=resource_id, outcome=AuditOutcome.FAILED)
+        except Exception:
+            logger.exception("Could not persist failed application contract audit event for %s %s", method, path)
         raise
 
 
@@ -54,18 +64,21 @@ def audit_application_contract(
     """Wrap a FastAPI endpoint with canonical denial/failure auditing."""
 
     def decorate(endpoint: Callable) -> Callable:
+        signature = inspect.signature(endpoint)
+
         @wraps(endpoint)
         async def wrapped(*args: Any, **kwargs: Any) -> Any:
-            db = kwargs.get("db")
+            arguments = signature.bind_partial(*args, **kwargs).arguments
+            db = arguments.get("db")
             # Preserve direct unit-call compatibility; FastAPI always injects
             # a concrete Database for live requests.
             if not isinstance(db, Database):
                 return await endpoint(*args, **kwargs)
-            principal = kwargs.get(principal_param) if principal_param else None
-            resource_id = str(kwargs[resource_param]) if resource_param and kwargs.get(resource_param) is not None else None
+            principal = arguments.get(principal_param) if principal_param else None
+            resource_id = str(arguments[resource_param]) if resource_param and arguments.get(resource_param) is not None else None
             async with audit_application_route(
                 db,
-                kwargs.get("request"),
+                arguments.get("request"),
                 principal,
                 method,
                 path,

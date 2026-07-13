@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi import HTTPException
 
 from obs.api.auth import Principal
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.api.v1.route_classification_registry import ROUTE_CLASSIFICATIONS
-from obs.api.v1.security_contract_registry import ROUTE_SECURITY_CONTRACTS
+from obs.api.v1.security_contract_registry import AuditEffect, AuditMode, ROUTE_SECURITY_CONTRACTS
 from obs.db.database import Database
 from tools.check_authz_contract import collect_live_routes
 
@@ -50,6 +52,11 @@ def test_bulk_and_multi_scope_contracts_allow_only_stable_summary_fields() -> No
         "item_count",
         "payload_sha256",
     }
+    ringbuffer_config = ROUTE_SECURITY_CONTRACTS[("POST", "/api/v1/ringbuffer/config")]
+    assert (ringbuffer_config.audit_mode, ringbuffer_config.audit_effect) == (
+        AuditMode.RESULT,
+        AuditEffect.EXTERNAL_MUTATION,
+    )
 
 
 @pytest.mark.asyncio
@@ -70,6 +77,73 @@ async def test_denial_wrapper_writes_canonical_outcome_without_sensitive_request
         assert (row["action"], row["outcome"]) == ("ringbuffer.export.settings_updated", "denied")
         assert (row["principal_type"], row["principal_id"]) == ("api_key", "key-1")
         assert row["details_json"] == "{}"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_denial_audit_failure_does_not_replace_original_http_error(monkeypatch, caplog) -> None:
+    db = Database(":memory:")
+    await db.connect()
+
+    @audit_application_contract("PUT", "/api/v1/ringbuffer/export/settings", principal_param="principal")
+    async def denied(*, principal: Principal, db: Database) -> None:
+        raise HTTPException(403, "original denial")
+
+    monkeypatch.setattr(
+        "obs.api.v1.application_audit.AuditLogWriter.write_contract",
+        AsyncMock(side_effect=RuntimeError("audit unavailable")),
+    )
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await denied(principal=Principal(subject="alice", type="user", is_admin=False), db=db)
+        assert (exc_info.value.status_code, exc_info.value.detail) == (403, "original denial")
+        assert "Could not persist application contract audit event" in caplog.text
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ringbuffer_runtime_result_is_audited_after_success_and_failure(monkeypatch) -> None:
+    from obs.api.v1 import ringbuffer as ringbuffer_api
+
+    db = Database(":memory:")
+    await db.connect()
+    stats = ringbuffer_api.RingBufferStats(
+        enabled=True,
+        total=0,
+        oldest_ts=None,
+        newest_ts=None,
+        storage="file",
+        max_entries=None,
+        max_file_size_bytes=None,
+        max_age=None,
+        file_size_bytes=0,
+    )
+    runtime = AsyncMock(return_value=stats)
+    monkeypatch.setattr(ringbuffer_api, "_configure_ringbuffer_locked", runtime)
+    try:
+        result = await ringbuffer_api.configure_ringbuffer(
+            ringbuffer_api.RingBufferConfig(),
+            None,
+            _user="admin",
+            db=db,
+        )
+        assert result == stats
+        row = await db.fetchone("SELECT outcome FROM audit_log_entries WHERE action='ringbuffer.config.updated'")
+        assert row["outcome"] == "success"
+
+        await db.execute_and_commit("DELETE FROM audit_log_entries")
+        runtime.side_effect = RuntimeError("runtime failed")
+        with pytest.raises(RuntimeError, match="runtime failed"):
+            await ringbuffer_api.configure_ringbuffer(
+                ringbuffer_api.RingBufferConfig(),
+                None,
+                _user="admin",
+                db=db,
+            )
+        row = await db.fetchone("SELECT outcome FROM audit_log_entries WHERE action='ringbuffer.config.updated'")
+        assert row["outcome"] == "failed"
     finally:
         await db.disconnect()
 
