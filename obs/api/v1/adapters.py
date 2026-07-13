@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from obs.adapters import registry as adapter_registry
+from obs.adapters.base import AdapterDelegationCapability
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
@@ -200,10 +201,6 @@ def _principal_from_dependency(user: Principal | str) -> Principal:
     return Principal(subject=str(user), type="user", is_admin=str(user) == "admin")
 
 
-def _admin_principal(username: str) -> Principal:
-    return Principal(subject=username, type="user", is_admin=True)
-
-
 async def _filter_readable_datapoint_ids(
     db: Database,
     principal: Principal,
@@ -237,14 +234,28 @@ async def _ensure_instance_mutation(
     if principal.type == "user" and principal.is_admin:
         return
 
-    from obs.adapters.base import AdapterDelegationCapability
-
     await _ensure_instance_write_grant(db, principal, instance_id)
-    if not adapter_registry.supports_delegation(
+    _ensure_adapter_delegates_operation(
+        principal,
         adapter_type,
         AdapterDelegationCapability.CONFIGURE_INSTANCE,
+    )
+
+
+def _ensure_adapter_delegates_operation(
+    principal: Principal,
+    adapter_type: str,
+    *capabilities: AdapterDelegationCapability,
+) -> None:
+    """Require every closed, code-declared capability for an adapter operation."""
+    if principal.type == "user" and principal.is_admin:
+        return
+    if (
+        principal.type != "user"
+        or not capabilities
+        or not all(adapter_registry.supports_delegation(adapter_type, capability) for capability in capabilities)
     ):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Instanzänderung nicht erlaubt")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Operation nicht erlaubt")
 
 
 async def _ensure_instance_write_grant(db: Database, principal: Principal, instance_id: str) -> None:
@@ -997,14 +1008,22 @@ async def iobroker_import_preview(
 async def iobroker_import_states(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
     if row["adapter_type"] != "IOBROKER":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    _ensure_adapter_delegates_operation(
+        principal,
+        row["adapter_type"],
+        AdapterDelegationCapability.CREATE_DATAPOINT,
+        AdapterDelegationCapability.LINK_BINDING,
+    )
 
     from obs.api.v1.bindings import create_binding
     from obs.core.registry import get_registry
@@ -1014,7 +1033,6 @@ async def iobroker_import_states(
     candidates = await _iobroker_candidates(str(instance_id), body, db)
     result = IoBrokerImportResult(preview=candidates)
     registry = get_registry()
-    admin_principal = _admin_principal(_user)
 
     for item in candidates:
         if item.exists:
@@ -1033,6 +1051,13 @@ async def iobroker_import_states(
                 ),
             )
             result.created_datapoints += 1
+            if not principal.is_admin:
+                await db.execute_and_commit(
+                    """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect)
+                       VALUES ('user', ?, 'datapoint', ?, 'operator', 'allow')""",
+                    (principal.subject, str(dp.id)),
+                )
             config: dict[str, Any] = {"state_id": item.state_id}
             if source_type:
                 config["source_data_type"] = source_type
@@ -1044,7 +1069,7 @@ async def iobroker_import_states(
                     config=config,
                     enabled=True,
                 ),
-                admin_principal,
+                principal,
                 db,
             )
             result.created_bindings += 1
@@ -1229,15 +1254,22 @@ async def anwesenheit_list_datapoints(
 async def anwesenheit_sync_bindings(
     instance_id: uuid.UUID,
     body: AnwesenheitSyncRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AnwesenheitSyncResult:
     """Create missing bindings for selected DataPoints and remove bindings for deselected ones."""
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
     if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+    _ensure_adapter_delegates_operation(
+        principal,
+        row["adapter_type"],
+        AdapterDelegationCapability.LINK_BINDING,
+    )
 
     from obs.api.v1.bindings import create_binding, delete_binding
     from obs.models.binding import AdapterBindingCreate
@@ -1253,7 +1285,6 @@ async def anwesenheit_sync_bindings(
     current_ids = set(current.keys())
 
     result = AnwesenheitSyncResult()
-    admin_principal = _admin_principal(_user)
 
     # Create missing bindings
     for dp_id_str in desired_ids - current_ids:
@@ -1267,7 +1298,7 @@ async def anwesenheit_sync_bindings(
                     config={},
                     enabled=True,
                 ),
-                admin_principal,
+                principal,
                 db,
             )
             result.created += 1
@@ -1279,7 +1310,7 @@ async def anwesenheit_sync_bindings(
         try:
             binding_uuid = uuid.UUID(current[dp_id_str])
             dp_uuid = uuid.UUID(dp_id_str)
-            await delete_binding(dp_uuid, binding_uuid, admin_principal, db)
+            await delete_binding(dp_uuid, binding_uuid, principal, db)
             result.removed += 1
         except Exception as exc:
             result.errors.append(f"{dp_id_str}: {exc}")

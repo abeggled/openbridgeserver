@@ -221,11 +221,22 @@ class TestLookup:
         assert not supports_delegation("DELEGABLE", "link_binding")
 
     def test_protocol_declarations_keep_knx_closed_and_mqtt_explicit(self):
+        from obs.adapters.anwesenheit.adapter import AnwesenheitssimulationAdapter
+        from obs.adapters.iobroker.adapter import IoBrokerAdapter
         from obs.adapters.knx.adapter import KnxAdapter
         from obs.adapters.mqtt.adapter import MqttAdapter
 
+        assert AnwesenheitssimulationAdapter.delegation_capabilities == frozenset()
+        assert IoBrokerAdapter.delegation_capabilities == frozenset()
         assert KnxAdapter.delegation_capabilities == frozenset()
-        assert MqttAdapter.delegation_capabilities == frozenset(AdapterDelegationCapability)
+        assert MqttAdapter.delegation_capabilities == frozenset(
+            {
+                AdapterDelegationCapability.CREATE_DEVICE,
+                AdapterDelegationCapability.CREATE_DATAPOINT,
+                AdapterDelegationCapability.LINK_BINDING,
+                AdapterDelegationCapability.CONFIGURE_INSTANCE,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
