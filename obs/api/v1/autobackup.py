@@ -192,20 +192,28 @@ async def restore_autobackup(
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Autobackup-Sicherung wiederherstellen (Upsert-Semantik, wie JSON-Import)."""
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+
+    async def audit_failed(resource_id: str | None = None) -> None:
+        await writer.write_contract("POST", "/api/v1/config/autobackup/restore/{name}", resource_id=resource_id, outcome=AuditOutcome.FAILED)
+
     # Dateinamen strikt validieren (erwartetes Format: YYYYMMDD-HHMM)
     safe_name = Path(name).name
     if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+        await audit_failed()
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     base_dir = _autobackup_dir().resolve()
     allowed_backups = {p.stem: p for p in base_dir.glob("*.json") if p.is_file() and re.fullmatch(r"\d{8}-\d{4}", p.stem)}
     backup_path = allowed_backups.get(safe_name)
     if backup_path is None:
+        await audit_failed(safe_name)
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
 
     try:
         content = json.loads(backup_path.read_text(encoding="utf-8"))
     except Exception as exc:
+        await audit_failed(safe_name)
         raise HTTPException(status_code=400, detail=f"Sicherungsdatei ungültig: {exc}") from exc
 
     from obs.api.v1.config import ConfigExport, ImportResult, import_config
@@ -213,10 +221,10 @@ async def restore_autobackup(
     try:
         body = ConfigExport.model_validate(content)
     except Exception as exc:
+        await audit_failed(safe_name)
         raise HTTPException(status_code=400, detail=f"Sicherungsformat ungültig: {exc}") from exc
 
     result: ImportResult = await import_config(body=body, _user="autobackup-restore", db=db)
-    writer = AuditLogWriter(db, build_audit_context(request, _admin))
     outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
     await writer.write_contract(
         "POST",
@@ -250,14 +258,21 @@ async def delete_autobackup(
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Eine einzelne Autobackup-Sicherung löschen."""
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+
+    async def audit_failed(resource_id: str | None = None) -> None:
+        await writer.write_contract("DELETE", "/api/v1/config/autobackup/{name}", resource_id=resource_id, outcome=AuditOutcome.FAILED)
+
     safe_name = Path(name).name
     if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+        await audit_failed()
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     # Allowlist: nur Namen löschen, die als vorhandene Backups gelistet sind.
     existing_backups = _list_backups()
     matched = next((entry for entry in existing_backups if entry.name == safe_name), None)
     if matched is None:
+        await audit_failed(safe_name)
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
 
     base_dir = _autobackup_dir().resolve()
@@ -265,11 +280,12 @@ async def delete_autobackup(
     try:
         backup_path.relative_to(base_dir)
     except ValueError:
+        await audit_failed(safe_name)
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungspfad.")
 
     if not backup_path.exists():
+        await audit_failed(safe_name)
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
-    writer = AuditLogWriter(db, build_audit_context(request, _admin))
     try:
         backup_path.unlink()
     except OSError:

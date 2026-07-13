@@ -384,31 +384,37 @@ async def update_history_settings(
                 (f"history.{k}", v),
             )
 
-        try:
-            from obs.history.factory import reload_history_plugin
+    audit_writer = AuditLogWriter(
+        db=db,
+        context=build_audit_context(request=request, current_user=_admin),
+    )
+    audit_details = {
+        "plugin": body.plugin,
+        "default_window_hours": body.default_window_hours,
+        "influx_version": body.influx_version,
+    }
+    try:
+        from obs.history.factory import reload_history_plugin
 
-            await reload_history_plugin(db)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Settings were not saved because plugin reload failed: {exc}",
-            ) from exc
-
-        audit_writer = AuditLogWriter(
-            db=db,
-            context=build_audit_context(request=request, current_user=_admin),
-        )
+        await reload_history_plugin(db)
+    except Exception as exc:
         await audit_writer.write_contract(
             "PUT",
             "/api/v1/system/history/settings",
             resource_id="global",
-            details={
-                "plugin": body.plugin,
-                "default_window_hours": body.default_window_hours,
-                "influx_version": body.influx_version,
-            },
-            commit=False,
+            details=audit_details,
+            outcome=AuditOutcome.FAILED,
         )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Settings saved but plugin reload failed: {exc}",
+        ) from exc
+    await audit_writer.write_contract(
+        "PUT",
+        "/api/v1/system/history/settings",
+        resource_id="global",
+        details=audit_details,
+    )
 
     payload = redact_sensitive_fields(
         {
@@ -437,78 +443,63 @@ async def test_history_connection(
     db: Database = Depends(get_db),
 ) -> HistoryTestResult:
     """Test connectivity for the given history backend configuration. Admin only."""
-
-    async def audited(result: HistoryTestResult) -> HistoryTestResult:
-        writer = AuditLogWriter(db, build_audit_context(request, _admin))
-        outcome = AuditOutcome.SUCCESS if result.ok else AuditOutcome.FAILED
-        await writer.write_contract("POST", "/api/v1/system/history/test", resource_id="global", outcome=outcome)
-        return result
-
     try:
         if body.plugin == "sqlite":
-            return await audited(HistoryTestResult(ok=True, message="SQLite is always available."))
+            result = HistoryTestResult(ok=True, message="SQLite is always available.")
+        else:
+            data: dict[str, str] = {
+                "influx_url": body.influx_url,
+                "influx_version": str(body.influx_version),
+                "influx_token": body.influx_token,
+                "influx_org": body.influx_org,
+                "influx_bucket": body.influx_bucket,
+                "influx_database": body.influx_database,
+                "influx_username": body.influx_username,
+                "influx_password": body.influx_password,
+                "timescale_dsn": body.timescale_dsn,
+            }
+            if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
+                existing_cfg = await _read_history_cfg(db)
+                for field in _HISTORY_SENSITIVE_FIELDS:
+                    if data[field] == REDACTED:
+                        data[field] = existing_cfg[field]
 
-        data: dict[str, str] = {
-            "influx_url": body.influx_url,
-            "influx_version": str(body.influx_version),
-            "influx_token": body.influx_token,
-            "influx_org": body.influx_org,
-            "influx_bucket": body.influx_bucket,
-            "influx_database": body.influx_database,
-            "influx_username": body.influx_username,
-            "influx_password": body.influx_password,
-            "timescale_dsn": body.timescale_dsn,
-        }
-        if any(data[field] == REDACTED for field in _HISTORY_SENSITIVE_FIELDS):
-            existing_cfg = await _read_history_cfg(db)
-            for field in _HISTORY_SENSITIVE_FIELDS:
-                if data[field] == REDACTED:
-                    data[field] = existing_cfg[field]
+            if body.plugin == "influxdb":
+                from obs.history.influxdb_plugin import InfluxDBHistoryPlugin
 
-        if body.plugin == "influxdb":
-            from obs.history.influxdb_plugin import InfluxDBHistoryPlugin
-
-            plugin = InfluxDBHistoryPlugin(
-                url=data["influx_url"],
-                version=int(data["influx_version"]),
-                token=data["influx_token"],
-                org=data["influx_org"],
-                bucket=data["influx_bucket"],
-                database=data["influx_database"],
-                username=data["influx_username"],
-                password=data["influx_password"],
-            )
-            ok = await plugin.ping()
-            if ok:
-                return await audited(
-                    HistoryTestResult(
-                        ok=True,
-                        message=f"InfluxDB v{body.influx_version} reachable at {body.influx_url}",
-                    )
+                plugin = InfluxDBHistoryPlugin(
+                    url=data["influx_url"],
+                    version=int(data["influx_version"]),
+                    token=data["influx_token"],
+                    org=data["influx_org"],
+                    bucket=data["influx_bucket"],
+                    database=data["influx_database"],
+                    username=data["influx_username"],
+                    password=data["influx_password"],
                 )
-            return await audited(
-                HistoryTestResult(
-                    ok=False,
-                    message=f"InfluxDB v{body.influx_version} not reachable at {body.influx_url}",
+                ok = await plugin.ping()
+                result = HistoryTestResult(
+                    ok=ok,
+                    message=f"InfluxDB v{body.influx_version} {'reachable' if ok else 'not reachable'} at {body.influx_url}",
                 )
-            )
+            elif body.plugin == "timescaledb":
+                from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin
 
-        if body.plugin == "timescaledb":
-            from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin
-
-            plugin = TimescaleDBHistoryPlugin(dsn=data["timescale_dsn"])
-            ok = await plugin.ping()
-            if ok:
-                return await audited(HistoryTestResult(ok=True, message="PostgreSQL/TimescaleDB reachable."))
-            return await audited(HistoryTestResult(ok=False, message="PostgreSQL/TimescaleDB not reachable."))
-
-        return await audited(HistoryTestResult(ok=False, message=f"Unknown plugin: {body.plugin}"))
-
-    except RuntimeError as exc:
-        # Missing optional dependency
-        return await audited(HistoryTestResult(ok=False, message=str(exc)))
+                plugin = TimescaleDBHistoryPlugin(dsn=data["timescale_dsn"])
+                ok = await plugin.ping()
+                result = HistoryTestResult(
+                    ok=ok,
+                    message=f"PostgreSQL/TimescaleDB {'reachable' if ok else 'not reachable'}.",
+                )
+            else:
+                result = HistoryTestResult(ok=False, message=f"Unknown plugin: {body.plugin}")
     except Exception as exc:
-        return await audited(HistoryTestResult(ok=False, message=str(exc)))
+        result = HistoryTestResult(ok=False, message=str(exc))
+
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    outcome = AuditOutcome.SUCCESS if result.ok else AuditOutcome.FAILED
+    await writer.write_contract("POST", "/api/v1/system/history/test", resource_id="global", outcome=outcome)
+    return result
 
 
 # ---------------------------------------------------------------------------

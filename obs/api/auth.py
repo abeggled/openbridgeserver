@@ -140,12 +140,18 @@ async def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     api_key: str | None = Depends(_api_key_header),
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,  # type: ignore[assignment]
 ) -> Principal:
     """FastAPI dependency — returns authenticated principal or raises 401."""
     if credentials:
-        subject = decode_token(credentials.credentials)
+        try:
+            subject = decode_token(credentials.credentials)
+        except HTTPException:
+            await _audit_authentication_denial(request, db, None)
+            raise
         row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (subject,))
         if not row:
+            await _audit_authentication_denial(request, db, subject)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
         return Principal(subject=subject, type="user", is_admin=bool(row["is_admin"]))
 
@@ -156,6 +162,7 @@ async def get_current_principal(
             (key_hash,),
         )
         if not row:
+            await _audit_authentication_denial(request, db, None)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
         # Update last_used_at
         now = datetime.now(UTC).isoformat()
@@ -173,6 +180,7 @@ async def get_current_principal(
 
         return Principal(subject=str(row["subject"]), type="api_key", is_admin=False, owner=api_key_owner)
 
+    await _audit_authentication_denial(request, db, None)
     raise HTTPException(
         status.HTTP_401_UNAUTHORIZED,
         "Provide Authorization: Bearer {token} or X-API-Key: {key}",
@@ -184,9 +192,10 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     api_key: str | None = Depends(_api_key_header),
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,  # type: ignore[assignment]
 ) -> str:
     """FastAPI compatibility dependency — returns principal subject."""
-    principal = await get_current_principal(credentials, api_key, db)
+    principal = await get_current_principal(credentials, api_key, db, request)
     return principal.subject
 
 
@@ -194,12 +203,29 @@ async def optional_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     api_key: str | None = Depends(_api_key_header),
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,  # type: ignore[assignment]
 ) -> str | None:
     """FastAPI dependency — returns username if authenticated, None otherwise."""
     try:
-        return await get_current_user(credentials, api_key, db)
+        return await get_current_user(credentials, api_key, db, request)
     except HTTPException:
         return None
+
+
+async def _audit_authentication_denial(request: Request | None, db: Database, principal: str | None) -> None:
+    """Persist 401 outcomes for contracted mutations before endpoint dependencies run."""
+    if request is None:
+        return
+    from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+    route = request.scope.get("route")
+    path = getattr(route, "path", request.url.path)
+    writer = AuditLogWriter(db, build_audit_context(request, principal))
+    try:
+        await writer.write_contract(request.method, path, outcome=AuditOutcome.DENIED)
+    except LookupError:
+        # Authentication failures on read-only routes have no mutation contract.
+        return
 
 
 async def get_admin_user(
@@ -486,6 +512,10 @@ async def create_api_key(
 ) -> ApiKeyResponse:
     owner = principal.subject if principal.type == "user" else principal.owner
     if not owner:
+        from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+        writer = AuditLogWriter(db, build_audit_context(request, principal))
+        await writer.write_contract("POST", "/api/v1/auth/apikeys", outcome=AuditOutcome.DENIED)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "API key owner is required")
     key = generate_api_key()
     key_id = str(uuid.uuid4())
@@ -509,14 +539,18 @@ async def delete_api_key(
     current_user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
+    key_row = await db.fetchone("SELECT owner FROM api_keys WHERE id=?", (key_id,))
+    if not key_row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
+    user_row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
+    is_admin = user_row is not None and bool(user_row["is_admin"])
+    if not is_admin and key_row["owner"] != current_user:
+        from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+        writer = AuditLogWriter(db, build_audit_context(request, current_user))
+        await writer.write_contract("DELETE", "/api/v1/auth/apikeys/{key_id}", resource_id=key_id, outcome=AuditOutcome.DENIED)
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete another user's API key")
     async with db.transaction():
-        key_row = await db.fetchone("SELECT owner FROM api_keys WHERE id=?", (key_id,))
-        if not key_row:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
-        user_row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
-        is_admin = user_row is not None and bool(user_row["is_admin"])
-        if not is_admin and key_row["owner"] != current_user:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete another user's API key")
         await db.execute(
             "DELETE FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN (?, ?)",
             (key_id, f"api_key:{key_id}"),
@@ -1015,6 +1049,10 @@ async def set_mqtt_password(
     if not caller:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not found")
     if not caller["is_admin"] and current_user != username:
+        from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+        writer = AuditLogWriter(db, build_audit_context(request, current_user))
+        await writer.write_contract("POST", "/api/v1/auth/users/{username}/mqtt-password", resource_id=username, outcome=AuditOutcome.DENIED)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
 
     target = await db.fetchone("SELECT id FROM users WHERE username=?", (username,))

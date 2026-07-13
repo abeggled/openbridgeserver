@@ -3,15 +3,36 @@
 from __future__ import annotations
 
 import ast
+import sqlite3
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
 
-from obs.api.auth import Principal, get_admin_user
-from obs.api.v1.security_contract_registry import ROUTE_SECURITY_CONTRACTS
-from obs.api.v1.system import AppSettingsIn, update_app_settings
+from obs.api.auth import (
+    ApiKeyCreate,
+    Principal,
+    SetMqttPasswordRequest,
+    create_api_key,
+    delete_api_key,
+    get_admin_user,
+    get_current_principal,
+    set_mqtt_password,
+)
+from obs.api.v1.autobackup import delete_autobackup, restore_autobackup
+from obs.api.v1.config import import_db
+from obs.api.v1.security_contract_registry import AuditEffect, AuditMode, ROUTE_SECURITY_CONTRACTS
+from obs.api.v1.system import (
+    AppSettingsIn,
+    HistorySettingsIn,
+    test_history_connection as run_history_test,
+    update_app_settings,
+    update_history_settings,
+)
 from obs.db.database import Database
 
 
@@ -137,3 +158,184 @@ def test_identity_contract_allowlists_reject_secret_sentinel_fields() -> None:
     for signature in IDENTITY_AUDIT_ROUTES:
         for field in ROUTE_SECURITY_CONTRACTS[signature].allowed_detail_fields:
             assert not (set(field.lower().split("_")) & forbidden), (signature, field)
+
+
+def _http_request(method: str, path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "route": SimpleNamespace(path=path),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_self_and_policy_denials_are_audited() -> None:
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        ownerless = Principal(subject="api_key:key-0", type="api_key", is_admin=False)
+        with pytest.raises(HTTPException, match="owner"):
+            await create_api_key.__wrapped__(
+                request=_http_request("POST", "/api/v1/auth/apikeys"),
+                body=ApiKeyCreate(name="replacement"),
+                principal=ownerless,
+                db=db,
+            )
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, created_at) VALUES ('alice-id','alice','x',0,0,'2026-01-01')"
+        )
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, created_at) VALUES ('bob-id','bob','x',0,0,'2026-01-01')"
+        )
+        await db.execute_and_commit("INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES ('key-1','owned','hash','bob','2026-01-01')")
+        with pytest.raises(HTTPException, match="another user's"):
+            await delete_api_key(
+                key_id="key-1",
+                request=_http_request("DELETE", "/api/v1/auth/apikeys/key-1"),
+                current_user="alice",
+                db=db,
+            )
+        with pytest.raises(HTTPException, match="Admin access"):
+            await set_mqtt_password(
+                username="bob",
+                body=SetMqttPasswordRequest(password="never-audited"),
+                request=_http_request("POST", "/api/v1/auth/users/bob/mqtt-password"),
+                current_user="alice",
+                db=db,
+            )
+        rows = await db.fetchall("SELECT action, outcome FROM audit_log_entries ORDER BY id")
+        assert [(row["action"], row["outcome"]) for row in rows] == [
+            ("auth.api_key.created", "denied"),
+            ("auth.api_key.deleted", "denied"),
+            ("auth.user.mqtt_password_set", "denied"),
+        ]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_history_settings_reload_is_result_audited(monkeypatch) -> None:
+    async def fail_reload(_db):
+        raise RuntimeError("reload failed")
+
+    monkeypatch.setattr("obs.history.factory.reload_history_plugin", fail_reload)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        contract = ROUTE_SECURITY_CONTRACTS[("PUT", "/api/v1/system/history/settings")]
+        assert (contract.audit_mode, contract.audit_effect) == (AuditMode.RESULT, AuditEffect.EXTERNAL_MUTATION)
+        with pytest.raises(HTTPException, match="Settings saved"):
+            await update_history_settings(
+                body=HistorySettingsIn(plugin="sqlite"),
+                request=_http_request("PUT", "/api/v1/system/history/settings"),
+                db=db,
+                _admin="admin",
+            )
+        saved = await db.fetchone("SELECT value FROM app_settings WHERE key='history.plugin'")
+        audit = await db.fetchone("SELECT outcome FROM audit_log_entries WHERE action='system.history.settings_updated'")
+        assert saved is not None and saved["value"] == "sqlite"
+        assert audit is not None and audit["outcome"] == "failed"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_history_test_does_not_retry_failed_audit(monkeypatch) -> None:
+    calls = 0
+
+    async def fail_audit(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr("obs.api.audit.AuditLogWriter.write_contract", fail_audit)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            await run_history_test(body=HistorySettingsIn(plugin="sqlite"), _admin="admin", db=db)
+        assert calls == 1
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_early_autobackup_failures_are_audited(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("obs.api.v1.autobackup._autobackup_dir", lambda: tmp_path)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        with pytest.raises(HTTPException, match="Ungültiger"):
+            await restore_autobackup("../invalid", request=_http_request("POST", "/api/v1/config/autobackup/restore/invalid"), _admin="admin", db=db)
+        with pytest.raises(HTTPException, match="nicht gefunden"):
+            await delete_autobackup(
+                "20260101-0300",
+                request=_http_request("DELETE", "/api/v1/config/autobackup/20260101-0300"),
+                _admin="admin",
+                db=db,
+            )
+        rows = await db.fetchall("SELECT action, outcome FROM audit_log_entries ORDER BY id")
+        assert [(row["action"], row["outcome"]) for row in rows] == [
+            ("autobackup.restored", "failed"),
+            ("autobackup.deleted", "failed"),
+        ]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_database_import_reconnects_and_audits_backup_failure(monkeypatch) -> None:
+    original_connect = sqlite3.connect
+    calls = 0
+
+    def fail_first_connect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise sqlite3.OperationalError("restore failed")
+        return original_connect(*args, **kwargs)
+
+    db = Database(":memory:")
+    await db.connect()
+    monkeypatch.setattr("obs.api.v1.config.sqlite3.connect", fail_first_connect)
+    upload = UploadFile(filename="restore.sqlite", file=BytesIO(b"SQLite format 3\x00" + b"invalid"))
+    try:
+        with pytest.raises(HTTPException, match="Datenbankwiederherstellung"):
+            await import_db(request=_http_request("POST", "/api/v1/config/import/db"), file=upload, _admin="admin", db=db)
+        audit = await db.fetchone("SELECT outcome FROM audit_log_entries WHERE action='config.database.imported'")
+        assert audit is not None and audit["outcome"] == "failed"
+        assert await db.fetchone("SELECT 1 AS ok") is not None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_invalid_token_on_mutation_is_canonically_audited() -> None:
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        request = _http_request("DELETE", "/api/v1/config/reset")
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_principal(
+                credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-token"),
+                api_key=None,
+                db=db,
+                request=request,
+            )
+        assert exc_info.value.status_code == 401
+        audit = await db.fetchone("SELECT principal_type, principal_id, action, outcome, route_template FROM audit_log_entries")
+        assert audit is not None
+        assert (audit["principal_type"], audit["principal_id"]) == ("anonymous", None)
+        assert (audit["action"], audit["outcome"], audit["route_template"]) == (
+            "config.factory_reset",
+            "denied",
+            "/api/v1/config/reset",
+        )
+    finally:
+        await db.disconnect()
