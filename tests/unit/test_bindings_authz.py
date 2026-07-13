@@ -140,6 +140,35 @@ async def _insert_binding(
 
 
 @pytest.mark.asyncio
+async def test_list_bindings_filters_bindings_by_instance_read_access(monkeypatch, db: Database):
+    """Principal with datapoint READ but no instance grant must not see that binding."""
+    dp_id = uuid.uuid4()
+    allowed_instance_id = uuid.uuid4()
+    blocked_instance_id = uuid.uuid4()
+    binding_allowed = uuid.uuid4()
+    binding_blocked = uuid.uuid4()
+
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room")
+    await _insert_grant(db, node_id="allowed-room")
+    await _insert_instance(db, allowed_instance_id)
+    await _insert_instance(db, blocked_instance_id)
+    await _insert_instance_grant(db, allowed_instance_id, role="guest")
+    await _insert_binding(db, binding_id=binding_allowed, dp_id=dp_id, instance_id=allowed_instance_id)
+    await _insert_binding(db, binding_id=binding_blocked, dp_id=dp_id, instance_id=blocked_instance_id)
+
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+    visible = await bindings_api.list_bindings(
+        dp_id=dp_id,
+        _user=_principal("alice"),
+        db=db,
+    )
+
+    assert len(visible) == 1
+    assert visible[0].id == binding_allowed
+
+
+@pytest.mark.asyncio
 async def test_non_admin_list_bindings_requires_read_scope(monkeypatch, db: Database):
     allowed_dp = uuid.uuid4()
     blocked_dp = uuid.uuid4()
@@ -149,6 +178,7 @@ async def test_non_admin_list_bindings_requires_read_scope(monkeypatch, db: Data
     await _insert_datapoint(db, blocked_dp, "blocked-room")
     await _insert_grant(db, node_id="allowed-room")
     await _insert_instance(db, instance_id)
+    await _insert_instance_grant(db, instance_id, role="guest")
     await _insert_binding(db, binding_id=uuid.uuid4(), dp_id=allowed_dp, instance_id=instance_id)
     await _insert_binding(db, binding_id=uuid.uuid4(), dp_id=blocked_dp, instance_id=instance_id)
 
