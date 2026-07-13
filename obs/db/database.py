@@ -951,9 +951,34 @@ async def _migration_v44(conn: aiosqlite.Connection) -> None:
             )
             for node_id in node_ids_by_datapoint.get(datapoint_id, [])
         ]
-        if any(grant.node_type == "datapoint" and grant.node_id == datapoint_id for grant in grants):
+        if not write and any(grant.node_type == "datapoint" and grant.node_id == datapoint_id for grant in grants):
             targets.append(AuthzTarget(node_type="datapoint", node_id=datapoint_id, min_role=min_role))
         return targets
+
+    def datapoint_write_allowed(
+        principal: Principal,
+        datapoint_id: str,
+        targets: list[AuthzTarget],
+        grants: list[RoleGrant],
+    ) -> bool:
+        hierarchy_decision = authorize(
+            principal=principal,
+            action=AuthzAction.WRITE,
+            targets=targets,
+            grants=grants,
+        )
+        direct_grants = [grant for grant in grants if grant.node_type == "datapoint" and grant.node_id == datapoint_id]
+        if not direct_grants:
+            return hierarchy_decision.allowed
+        direct_decision = authorize(
+            principal=principal,
+            action=AuthzAction.WRITE,
+            targets=[AuthzTarget(node_type="datapoint", node_id=datapoint_id)],
+            grants=grants,
+        )
+        if hierarchy_decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":
+            return False
+        return hierarchy_decision.allowed or direct_decision.allowed
 
     inserts: list[tuple[str, str, str, str, str, str]] = []
     for principal_key, grants_by_target in grants_by_principal.items():
@@ -988,13 +1013,7 @@ async def _migration_v44(conn: aiosqlite.Connection) -> None:
                     readable = True
 
                 write_targets = datapoint_targets(datapoint_id, grants, write=True)
-                write_decision = authorize(
-                    principal=principal,
-                    action=AuthzAction.WRITE,
-                    targets=write_targets,
-                    grants=grants,
-                )
-                if not write_decision.allowed:
+                if not datapoint_write_allowed(principal, datapoint_id, write_targets, grants):
                     writable = False
 
             role = "operator" if writable else "guest" if readable else None

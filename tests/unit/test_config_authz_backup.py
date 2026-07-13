@@ -27,6 +27,16 @@ class _EmptyRegistry:
         return []
 
 
+def _authz_import(*grants: config_api.ExportedAuthzGrant) -> config_api.ConfigExport:
+    return config_api.ConfigExport(
+        obs_version="5",
+        exported_at="2026-07-13T00:00:00+00:00",
+        datapoints=[],
+        bindings=[],
+        authz_grants=list(grants),
+    )
+
+
 @pytest.mark.asyncio
 async def test_json_export_import_preserves_central_authz_and_api_key_capabilities(
     monkeypatch: pytest.MonkeyPatch,
@@ -117,6 +127,123 @@ async def test_json_export_import_preserves_central_authz_and_api_key_capabiliti
     assert restored_set["revision"] == 7
     restored_capabilities = await db.fetchall("SELECT capability FROM api_key_capabilities WHERE key_id=?", (key_id,))
     assert [row["capability"] for row in restored_capabilities] == ["datapoint.metadata.write"]
+
+
+@pytest.mark.asyncio
+async def test_import_canonicalizes_legacy_prefixed_api_key_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+) -> None:
+    key_id = str(uuid.uuid4())
+    now = "2026-07-13T00:00:00+00:00"
+    await db.execute_and_commit(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES ('owner', 'owner', 'hash', 0, ?)",
+        (now,),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'hash', 'owner', ?)",
+        (key_id, now),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES ('tree', 'Tree', '', '', ?, ?)",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+           VALUES ('room', 'tree', NULL, 'Room', '', 0, NULL, ?, ?)""",
+        (now, now),
+    )
+    monkeypatch.setattr(config_api, "get_registry", _EmptyRegistry)
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(
+            body=_authz_import(
+                config_api.ExportedAuthzGrant(
+                    principal_type="api_key",
+                    principal_id=f"api_key:{key_id.upper()}",
+                    node_type="hierarchy",
+                    node_id="room",
+                    role="guest",
+                ),
+            ),
+            _user="admin",
+            db=db,
+        )
+
+    assert result.errors == []
+    assert result.authz_grants_upserted == 1
+    restored = await db.fetchone("SELECT principal_id, node_type, node_id FROM authz_node_roles")
+    assert dict(restored) == {"principal_id": key_id, "node_type": "hierarchy", "node_id": "room"}
+
+
+@pytest.mark.asyncio
+async def test_import_skips_missing_and_unknown_grant_targets_but_keeps_valid_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+) -> None:
+    now = "2026-07-13T00:00:00+00:00"
+    await db.execute_and_commit(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES ('alice', 'alice', 'hash', 0, ?)",
+        (now,),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES ('tree', 'Tree', '', '', ?, ?)",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+           VALUES ('room', 'tree', NULL, 'Room', '', 0, NULL, ?, ?)""",
+        (now, now),
+    )
+    monkeypatch.setattr(config_api, "get_registry", _EmptyRegistry)
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(
+            body=_authz_import(
+                config_api.ExportedAuthzGrant(
+                    principal_type="user",
+                    principal_id="alice",
+                    node_type="hierarchy",
+                    node_id="room",
+                    role="guest",
+                ),
+                config_api.ExportedAuthzGrant(
+                    principal_type="user",
+                    principal_id="alice",
+                    node_type="hierarchy",
+                    node_id="missing",
+                    role="owner",
+                ),
+                config_api.ExportedAuthzGrant(
+                    principal_type="user",
+                    principal_id="alice",
+                    node_type="unknown",
+                    node_id="target",
+                    role="owner",
+                ),
+            ),
+            _user="admin",
+            db=db,
+        )
+
+    assert result.authz_grants_upserted == 1
+    assert len(result.errors) == 2
+    assert any("Unknown hierarchy grant targets: missing" in error for error in result.errors)
+    assert any("node_type" in error and "unknown" in error for error in result.errors)
+    rows = await db.fetchall("SELECT node_type, node_id FROM authz_node_roles")
+    assert [dict(row) for row in rows] == [{"node_type": "hierarchy", "node_id": "room"}]
 
 
 @pytest.mark.asyncio

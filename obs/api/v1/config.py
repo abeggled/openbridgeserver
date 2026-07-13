@@ -23,10 +23,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from obs.api.auth import get_admin_user
+from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
+from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 
 router = APIRouter(tags=["config"])
@@ -1124,14 +1126,22 @@ async def import_config(
     # --- Central authorization grants ---
     for grant in body.authz_grants:
         try:
+            principal_id = _canonical_principal_id(grant.principal_type, grant.principal_id)
             principal_table = "users" if grant.principal_type == "user" else "api_keys"
             principal_column = "username" if grant.principal_type == "user" else "id"
             principal = await db.fetchone(
                 f"SELECT 1 FROM {principal_table} WHERE {principal_column}=?",
-                (grant.principal_id,),
+                (principal_id,),
             )
             if principal is None:
-                raise ValueError(f"principal {grant.principal_type}:{grant.principal_id} does not exist")
+                raise ValueError(f"principal {grant.principal_type}:{principal_id} does not exist")
+            target = AuthzPrincipalGrant(
+                node_type=grant.node_type,
+                node_id=grant.node_id,
+                role=grant.role,
+                effect=grant.effect,
+            )
+            await _require_grant_targets(db, [target])
             await db.execute_and_commit(
                 """INSERT INTO authz_node_roles
                        (principal_type, principal_id, node_type, node_id, role, effect)
@@ -1141,7 +1151,7 @@ async def import_config(
                        updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
                 (
                     grant.principal_type,
-                    grant.principal_id,
+                    principal_id,
                     grant.node_type,
                     grant.node_id,
                     grant.role,

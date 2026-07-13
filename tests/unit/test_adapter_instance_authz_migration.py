@@ -211,3 +211,62 @@ async def test_v44_read_scope_ignores_descendant_hierarchy_grants() -> None:
         ]
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_v44_linked_datapoint_write_uses_direct_grant_fallback_with_deny_precedence() -> None:
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit(
+            """
+            INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at)
+            VALUES ('tree', 'Tree', '', ?, ?)
+            """,
+            (NOW, NOW),
+        )
+        await db.execute_and_commit(
+            """
+            INSERT INTO hierarchy_nodes
+                (id, tree_id, parent_id, name, description, node_order, created_at, updated_at)
+            VALUES ('room', 'tree', NULL, 'Room', '', 0, ?, ?)
+            """,
+            (NOW, NOW),
+        )
+        await _insert_datapoint(db, "dp-linked", "room")
+        await _insert_user(db, "direct-writer")
+        await _insert_user(db, "direct-denied")
+        await _insert_user(db, "hierarchy-denied")
+        await db.executemany(
+            """
+            INSERT INTO authz_node_roles
+                (principal_type, principal_id, node_type, node_id, role, effect)
+            VALUES ('user', ?, ?, ?, ?, ?)
+            """,
+            [
+                ("direct-writer", "datapoint", "dp-linked", "resident", "allow"),
+                ("direct-denied", "hierarchy", "room", "operator", "allow"),
+                ("direct-denied", "datapoint", "dp-linked", "resident", "deny"),
+                ("hierarchy-denied", "hierarchy", "room", "operator", "deny"),
+                ("hierarchy-denied", "datapoint", "dp-linked", "resident", "allow"),
+            ],
+        )
+        await db.commit()
+        await _insert_instance(db, "linked-adapter")
+        await _insert_binding(db, "linked-binding", "linked-adapter", "dp-linked")
+
+        await _migration_v44(db.conn)
+
+        grants = await db.fetchall(
+            """
+            SELECT principal_id, node_id, role, effect
+            FROM authz_node_roles
+            WHERE node_type='adapter_instance'
+            ORDER BY principal_id
+            """,
+        )
+        assert [tuple(row) for row in grants] == [
+            ("direct-writer", "linked-adapter", "operator", "allow"),
+        ]
+    finally:
+        await db.disconnect()
