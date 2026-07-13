@@ -426,6 +426,70 @@ async def test_iobroker_import_requires_instance_write_and_declared_create_capab
 
 
 @pytest.mark.asyncio
+async def test_iobroker_preview_matches_import_scope_and_capability_contract(monkeypatch, db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "IOBROKER")
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", lambda *_args: True)
+
+    for concealed_id in (instance_id, uuid.uuid4()):
+        with pytest.raises(HTTPException) as exc_info:
+            await adapters_api.iobroker_import_preview(
+                concealed_id,
+                adapters_api.IoBrokerImportRequest(),
+                _user=_principal(),
+                db=db,
+            )
+        assert exc_info.value.status_code == 403
+
+    await _insert_instance_grant(db, instance_id, "operator")
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", lambda *_args: False)
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_import_preview(
+            instance_id,
+            adapters_api.IoBrokerImportRequest(),
+            _user=_principal(),
+            db=db,
+        )
+    assert exc_info.value.status_code == 403
+
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+           (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('api_key', 'preview-key', 'adapter_instance', ?, 'operator', 'allow')""",
+        (str(instance_id),),
+    )
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", lambda *_args: True)
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_import_preview(
+            instance_id,
+            adapters_api.IoBrokerImportRequest(),
+            _user=Principal(subject="api_key:preview-key", type="api_key", is_admin=False),
+            db=db,
+        )
+    assert exc_info.value.status_code == 403
+
+    instance = SimpleNamespace(browse_states=AsyncMock(return_value=[]))
+    monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _instance_id: instance)
+    preview = await adapters_api.iobroker_import_preview(
+        instance_id,
+        adapters_api.IoBrokerImportRequest(),
+        _user=_principal(),
+        db=db,
+    )
+    assert preview.preview == []
+    instance.browse_states.assert_awaited_once()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_import_preview(
+            uuid.uuid4(),
+            adapters_api.IoBrokerImportRequest(),
+            _user=_principal("admin", is_admin=True),
+            db=db,
+        )
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_iobroker_import_declared_path_creates_datapoint_and_binding(monkeypatch, db: Database):
     instance_id = uuid.uuid4()
     datapoint_id = uuid.uuid4()
@@ -566,7 +630,7 @@ async def test_anwesenheit_sync_declared_link_uses_callers_scoped_principal(monk
     assert delete_binding.await_args.args[2] == _principal()
 
 
-def test_device_creation_has_no_delegated_runtime_route_and_instance_create_stays_admin_only():
+def test_adapter_creation_route_dependencies_match_closed_contract():
     # CREATE_DEVICE is declaration-only until an adapter-owned runtime path
     # exists; Wave 13 must not manufacture a generic route for it.
     adapter_post_routes = [route for route in adapters_api.router.routes if isinstance(route, APIRoute) and "POST" in route.methods]
@@ -574,6 +638,15 @@ def test_device_creation_has_no_delegated_runtime_route_and_instance_create_stay
 
     instance_create = next(route for route in adapter_post_routes if route.path == "/instances")
     assert any(dependency.call is adapters_api.get_admin_user for dependency in instance_create.dependant.dependencies)
+
+    import_preview = next(route for route in adapter_post_routes if route.path.endswith("/iobroker/import-preview"))
+    assert any(dependency.call is adapters_api.get_current_principal for dependency in import_preview.dependant.dependencies)
+
+    type_test = next(route for route in adapter_post_routes if route.path == "/{adapter_type}/test")
+    assert any(dependency.call is adapters_api.get_admin_user for dependency in type_test.dependant.dependencies)
+
+    type_config = next(route for route in adapters_api.router.routes if isinstance(route, APIRoute) and route.path == "/{adapter_type}/config")
+    assert any(dependency.call is adapters_api.get_admin_user for dependency in type_config.dependant.dependencies)
 
     knx_import_routes = [route for route in knxproj_api.router.routes if isinstance(route, APIRoute) and route.path in {"/import", "/import-csv"}]
     assert len(knx_import_routes) == 2
