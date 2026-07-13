@@ -29,7 +29,7 @@ from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
-from obs.logic.capabilities import LOGIC_CAPABILITIES
+from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_CREATE_CAPABILITY
 from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 
@@ -540,6 +540,8 @@ async def export_config(
         try:
             principal_id = _canonical_principal_id("api_key", row["principal_id"])
         except HTTPException:
+            continue
+        if row["node_type"] == "logic_capability" and row["node_id"] == LOGIC_CREATE_CAPABILITY:
             continue
         if principal_id in valid_api_key_ids:
             valid_grant_rows.append(row)
@@ -1200,6 +1202,8 @@ async def import_config(
                     effect=grant.effect,
                     central_control=grant.central_control,
                 )
+                if grant.principal_type == "api_key" and grant.node_type == "logic_capability" and grant.node_id == LOGIC_CREATE_CAPABILITY:
+                    raise ValueError("Logic graph creation can only be granted to users")
                 await _require_grant_targets(db, [target])
                 await db.execute(
                     """INSERT INTO authz_node_roles

@@ -22,7 +22,7 @@ from obs.api.authz_service import (
     resolve_visu_page_targets,
 )
 from obs.db.database import Database, get_db
-from obs.logic.capabilities import LOGIC_CAPABILITIES
+from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_CREATE_CAPABILITY
 from obs.models.authz import (
     AuthzPreviewGrant,
     AuthzPreviewPrincipal,
@@ -294,6 +294,8 @@ def _validate_draft_grants(body: AuthzPreviewRequest) -> None:
     for grant in body.draft_grants:
         if grant.principal_type != expected_type or grant.principal_id not in expected_ids:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Draft grants must target the preview principal")
+        if expected_type == "api_key" and grant.node_type == "logic_capability" and grant.node_id == LOGIC_CREATE_CAPABILITY:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Logic graph creation can only be granted to users")
 
 
 async def _resolve_targets(db: Database, target: AuthzPreviewTarget) -> list[AuthzTarget]:
@@ -474,6 +476,10 @@ async def replace_principal_grants(
     """Atomically replace one principal's complete persisted grant set."""
     expected_etag = _require_if_match(if_match)
     canonical_id = _canonical_principal_id(principal_type, principal_id)
+    if principal_type == "api_key" and any(
+        grant.node_type == "logic_capability" and grant.node_id == LOGIC_CREATE_CAPABILITY for grant in body.grants
+    ):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Logic graph creation can only be granted to users")
     principal_ids = _principal_ids(principal_type, canonical_id)
     placeholders = ",".join("?" for _ in principal_ids)
     async with db.transaction():

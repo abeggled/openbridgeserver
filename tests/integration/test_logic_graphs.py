@@ -19,6 +19,8 @@ import uuid
 
 import pytest
 
+from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
+
 pytestmark = pytest.mark.integration
 
 _MISSING_ID = "00000000-0000-0000-0000-000000000000"
@@ -178,6 +180,68 @@ async def test_create_graph_non_admin_forbidden(client, auth_headers):
         )
         assert resp.status_code == 403, resp.text
     finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+async def test_create_graph_non_admin_with_closed_capability_is_disabled_and_readable(client, auth_headers):
+    username = f"logic-create-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    graph_ids = []
+    try:
+        current = await client.get(f"/api/v1/authz/principals/user/{username}/grants", headers=auth_headers)
+        assert current.status_code == 200, current.text
+        replaced = await client.put(
+            f"/api/v1/authz/principals/user/{username}/grants",
+            json={
+                "grants": [
+                    {
+                        "node_type": "logic_capability",
+                        "node_id": LOGIC_CREATE_CAPABILITY,
+                        "role": "operator",
+                    }
+                ]
+            },
+            headers={**auth_headers, "If-Match": current.headers["etag"]},
+        )
+        assert replaced.status_code == 200, replaced.text
+
+        created = await client.post(
+            "/api/v1/logic/graphs",
+            json={
+                "name": f"LG-Delegated-{uuid.uuid4().hex[:6]}",
+                "enabled": True,
+                "flow_data": {
+                    "nodes": [
+                        {"id": "original-a", "type": "const_value", "position": {"x": 0, "y": 0}, "data": {}},
+                        {"id": "original-b", "type": "not", "position": {"x": 100, "y": 0}, "data": {}},
+                    ],
+                    "edges": [{"id": "original-edge", "source": "original-a", "target": "original-b"}],
+                },
+            },
+            headers=user_headers,
+        )
+        assert created.status_code == 201, created.text
+        graph_id = created.json()["id"]
+        graph_ids.append(graph_id)
+        assert created.json()["enabled"] is False
+
+        readable = await client.get(f"/api/v1/logic/graphs/{graph_id}", headers=user_headers)
+        assert readable.status_code == 200, readable.text
+        run = await client.post(f"/api/v1/logic/graphs/{graph_id}/run", headers=user_headers)
+        assert run.status_code == 422, run.text
+
+        duplicate = await client.post(f"/api/v1/logic/graphs/{graph_id}/duplicate", headers=user_headers)
+        assert duplicate.status_code == 201, duplicate.text
+        graph_ids.append(duplicate.json()["id"])
+        assert duplicate.json()["enabled"] is False
+        copied_ids = {node["id"] for node in duplicate.json()["flow_data"]["nodes"]}
+        assert copied_ids.isdisjoint({"original-a", "original-b"})
+        copied_edge = duplicate.json()["flow_data"]["edges"][0]
+        assert copied_edge["id"] != "original-edge"
+        assert {copied_edge["source"], copied_edge["target"]} == copied_ids
+    finally:
+        for graph_id in reversed(graph_ids):
+            await client.delete(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
@@ -434,6 +498,7 @@ async def test_duplicate_graph_success(client, auth_headers):
     copy = resp.json()
     assert copy["id"] != original["id"]
     assert original["name"] in copy["name"]
+    assert copy["enabled"] is original["enabled"]
 
 
 async def test_duplicate_graph_new_id(client, auth_headers):
@@ -446,15 +511,61 @@ async def test_duplicate_graph_new_id(client, auth_headers):
     assert original["id"] in ids
 
 
-async def test_duplicate_graph_non_admin_forbidden(client, auth_headers):
+async def test_duplicate_graph_non_admin_source_is_concealed(client, auth_headers):
     original = await _create_graph(client, auth_headers)
     username = f"logic-na-{uuid.uuid4().hex[:8]}"
     user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
         resp = await client.post(f"/api/v1/logic/graphs/{original['id']}/duplicate", headers=user_headers)
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+async def test_duplicate_graph_non_admin_readable_source_without_create_capability_is_denied(client, auth_headers):
+    original = await _create_graph(client, auth_headers)
+    username = f"logic-duplicate-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        current = await client.get(f"/api/v1/authz/principals/user/{username}/grants", headers=auth_headers)
+        replaced = await client.put(
+            f"/api/v1/authz/principals/user/{username}/grants",
+            json={"grants": [{"node_type": "logic_graph", "node_id": original["id"], "role": "resident"}]},
+            headers={**auth_headers, "If-Match": current.headers["etag"]},
+        )
+        assert replaced.status_code == 200, replaced.text
+
+        resp = await client.post(f"/api/v1/logic/graphs/{original['id']}/duplicate", headers=user_headers)
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/logic/graphs/{original['id']}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+async def test_duplicate_graph_api_key_denied_after_source_read_grant(client, auth_headers):
+    original = await _create_graph(client, auth_headers)
+    created_key = await client.post(
+        "/api/v1/auth/apikeys",
+        json={"name": f"logic-duplicate-{uuid.uuid4().hex[:8]}"},
+        headers=auth_headers,
+    )
+    assert created_key.status_code == 201, created_key.text
+    key_id = created_key.json()["id"]
+    api_key_headers = {"X-API-Key": created_key.json()["key"]}
+    try:
+        current = await client.get(f"/api/v1/authz/principals/api_key/{key_id}/grants", headers=auth_headers)
+        replaced = await client.put(
+            f"/api/v1/authz/principals/api_key/{key_id}/grants",
+            json={"grants": [{"node_type": "logic_graph", "node_id": original["id"], "role": "resident"}]},
+            headers={**auth_headers, "If-Match": current.headers["etag"]},
+        )
+        assert replaced.status_code == 200, replaced.text
+
+        resp = await client.post(f"/api/v1/logic/graphs/{original['id']}/duplicate", headers=api_key_headers)
+        assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/apikeys/{key_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/logic/graphs/{original['id']}", headers=auth_headers)
 
 
 # ---------------------------------------------------------------------------

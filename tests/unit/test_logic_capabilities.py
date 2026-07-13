@@ -13,7 +13,7 @@ from obs.api.authz import AuthzTarget, RoleGrant
 from obs.api.v1 import authz as authz_api
 from obs.api.v1 import logic as logic_api
 from obs.db.database import Database
-from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
+from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_CREATE_CAPABILITY, LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
 from obs.logic.models import LogicGraphCreate, LogicGraphImport, LogicGraphUpdate, NodeTypeDef
 from obs.logic.node_types import NODE_TYPE_REGISTRY, _classify_node_type
 from obs.models.authz import AuthzPrincipalGrant
@@ -88,7 +88,8 @@ def test_privileged_node_types_publish_stable_capabilities() -> None:
         "wake_on_lan": "wake_on_lan",
     }
 
-    assert LOGIC_CAPABILITIES == frozenset(expected.values())
+    assert LOGIC_CAPABILITIES == frozenset({*expected.values(), LOGIC_CREATE_CAPABILITY})
+    assert LOGIC_CREATE_CAPABILITY not in LOGIC_NODE_CAPABILITIES.values()
     for node_type, capability in expected.items():
         definition = NODE_TYPE_REGISTRY[node_type]
         assert definition.has_external_side_effect is True
