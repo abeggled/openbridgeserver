@@ -1088,7 +1088,7 @@ async def test_factory_reset_counts_rows(monkeypatch):
     assert result.logic_graphs_deleted == 3
     committed_sql = [query for query, _params in db.committed]
     executed_sql = [query for query, _params in db.executed]
-    assert "DELETE FROM authz_node_roles" in executed_sql
+    assert "DELETE FROM authz_node_roles WHERE node_type='logic_graph'" in executed_sql
     assert "DELETE FROM logic_graphs" in executed_sql
     assert "DELETE FROM knx_space_device_links" in committed_sql
     assert "DELETE FROM knx_co_ga_links" in committed_sql
