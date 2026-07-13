@@ -86,6 +86,7 @@ def audit_application_contract(
                 return await endpoint(*args, **kwargs)
 
         setattr(wrapped, "__audit_contract__", (method.upper(), path))
+        setattr(wrapped, "__audit_contract_delivery__", "failure_only")
         return wrapped
 
     return decorate

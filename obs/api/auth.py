@@ -539,6 +539,13 @@ async def list_api_keys(
     ]
 
 
+def _require_api_key_creation_owner(principal: Principal) -> str:
+    owner = principal.subject if principal.type == "user" else principal.owner
+    if not owner:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key owner is required")
+    return owner
+
+
 @router.post("/apikeys", response_model=ApiKeyResponse, status_code=201)
 @limiter.limit("10/minute")
 async def create_api_key(
@@ -547,13 +554,14 @@ async def create_api_key(
     principal: Principal = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> ApiKeyResponse:
-    owner = principal.subject if principal.type == "user" else principal.owner
-    if not owner:
+    try:
+        owner = _require_api_key_creation_owner(principal)
+    except HTTPException:
         from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 
         writer = AuditLogWriter(db, build_audit_context(request, principal))
         await writer.write_contract("POST", "/api/v1/auth/apikeys", outcome=AuditOutcome.DENIED)
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "API key owner is required")
+        raise
     key = generate_api_key()
     key_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()

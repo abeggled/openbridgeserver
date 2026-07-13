@@ -337,4 +337,5 @@ def contract_audit(method: str, path: str) -> Callable[..., AsyncIterator[None]]
 
     _dependency.__name__ = f"audit_{method.lower()}_{contract.audit_action.replace('.', '_')}"
     _dependency.__audit_contract__ = (method.upper(), path)  # type: ignore[attr-defined]
+    _dependency.__audit_contract_delivery__ = "complete"  # type: ignore[attr-defined]
     return _dependency
