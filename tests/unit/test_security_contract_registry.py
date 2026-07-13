@@ -48,6 +48,12 @@ def test_contract_checker_accepts_the_current_router_and_policy() -> None:
     assert validate_contracts(Path(__file__).resolve().parents[2]) == []
 
 
+def test_contract_checker_is_deterministic_across_repeated_ast_walks() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    for _ in range(5):
+        assert validate_contracts(repo_root) == []
+
+
 def test_unknown_mutation_contract_fails_closed() -> None:
     try:
         get_route_security_contract("POST", "/api/v1/unknown")

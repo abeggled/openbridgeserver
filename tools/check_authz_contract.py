@@ -265,12 +265,15 @@ def _endpoint_evidence(endpoint) -> _EndpointEvidence:
     endpoint = inspect.unwrap(endpoint)
     endpoint_module = getattr(endpoint, "__module__", "")
     seen_functions: set[tuple[str, str]] = set()
-    seen_local_functions: set[int] = set()
+    # Keep the AST nodes alive while traversing reachable helpers. Storing only
+    # ``id(node)`` lets CPython reuse an id after a parsed helper tree is
+    # collected, which made otherwise identical checker runs nondeterministic.
+    seen_local_functions: set[ast.FunctionDef | ast.AsyncFunctionDef] = set()
 
     def scan_ast_function(node: ast.FunctionDef | ast.AsyncFunctionDef, namespace: dict[str, object]) -> None:
-        if id(node) in seen_local_functions:
+        if node in seen_local_functions:
             return
-        seen_local_functions.add(id(node))
+        seen_local_functions.add(node)
         local_functions = {child.name: child for child in node.body if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
         class Visitor(ast.NodeVisitor):
