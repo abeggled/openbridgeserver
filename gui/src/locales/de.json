@@ -2265,6 +2265,10 @@
         "orphanedScopeBlock": "{n} ausgewählte Zuweisungen lassen sich keinem Hierarchie-Bereich mehr zuordnen. Entferne sie ausdrücklich oder brich ab; solange sie ausgewählt sind, ist das Speichern gesperrt.",
         "newScopeRoleRequired": "Wähle eine Rolle aus, bevor du neue Hierarchie-Bereiche hinzufügst.",
         "selectedScopes": "{n} Bereiche ausgewählt",
+        "centralControl": "Zentralanlagen steuern",
+        "centralControlEnabled": "Zentralsteuerung aktiviert",
+        "centralControlDisabled": "Zentralsteuerung deaktiviert",
+        "centralControlSummary": "Zentralanlagensteuerung je Bereich",
         "previewTitle": "Effektive Rechte",
         "previewHint": "Prüfe vor dem Speichern die berechnete Entscheidung und ihre Begründung für jede Aktion.",
         "emptyPreview": "Es gibt keine bearbeitbaren oder fortgeschrittenen Zuweisungsziele zu prüfen. Eine Server-Vorschau ist nicht erforderlich.",
@@ -2282,6 +2286,7 @@
           "allowed": "Durch eine passende Rollenzuweisung erlaubt.",
           "direct_datapoint_grant": "Durch eine direkte Datenpunkt-Zuweisung erlaubt.",
           "explicit_deny": "Durch eine ausdrückliche Verbots-Zuweisung verweigert.",
+          "central_control_required": "Verweigert, weil die Zentralanlagensteuerung für diesen Bereich nicht aktiviert ist.",
           "missing_allow": "Verweigert, weil keine passende Erlaubnis-Zuweisung gilt.",
           "no_targets": "Verweigert, weil das Ziel nicht aufgelöst werden konnte."
         },

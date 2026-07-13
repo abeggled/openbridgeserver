@@ -2265,6 +2265,10 @@
         "orphanedScopeBlock": "{n} selected assignments no longer resolve to a hierarchy area. Remove them explicitly or cancel; saving is blocked while they remain selected.",
         "newScopeRoleRequired": "Select a role before adding new hierarchy areas.",
         "selectedScopes": "{n} areas selected",
+        "centralControl": "Central plant control",
+        "centralControlEnabled": "Central control enabled",
+        "centralControlDisabled": "Central control disabled",
+        "centralControlSummary": "Central plant control by area",
         "previewTitle": "Effective permissions",
         "previewHint": "Review the calculated decision and its reason for every action before saving.",
         "emptyPreview": "There are no editable or advanced assignment targets to check. No remote preview is needed.",
@@ -2282,6 +2286,7 @@
           "allowed": "Allowed by matching role assignment.",
           "direct_datapoint_grant": "Allowed by direct datapoint assignment.",
           "explicit_deny": "Denied by an explicit deny assignment.",
+          "central_control_required": "Denied because central plant control is not enabled for this area.",
           "missing_allow": "Denied because no matching allow assignment applies.",
           "no_targets": "Denied because the target could not be resolved."
         },

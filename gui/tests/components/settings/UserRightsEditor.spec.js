@@ -28,8 +28,8 @@ const REASONS_BY_ACTION = {
   generate: 'explicit_deny',
 }
 
-function grant(nodeType, nodeId, role, effect = 'allow') {
-  return { node_type: nodeType, node_id: nodeId, role, effect }
+function grant(nodeType, nodeId, role, effect = 'allow', centralControl = false) {
+  return { node_type: nodeType, node_id: nodeId, role, effect, central_control: centralControl }
 }
 
 beforeEach(() => {
@@ -112,7 +112,7 @@ describe('UserRightsEditor', () => {
       principal: { principal_type: 'user', principal_id: 'alice' },
       actions: ['read', 'write', 'activate', 'generate'],
       targets: [
-        { node_type: 'hierarchy', node_id: 'kitchen' },
+        { node_type: 'hierarchy', node_id: 'kitchen', control_class: 'central_plant' },
         { node_type: 'datapoint', node_id: 'dp-denied' },
         { node_type: 'datapoint', node_id: 'dp-direct' },
       ],
@@ -144,6 +144,83 @@ describe('UserRightsEditor', () => {
     ], '"grants-v1"')
     expect(wrapper.emitted('saved')).toHaveLength(1)
     expect(wrapper.emitted('update:modelValue')).toContainEqual([false])
+  })
+
+  it('edits central plant control independently per scope and shows its preview and confirmation effect', async () => {
+    authzApi.getUserGrants.mockResolvedValue({
+      headers: { etag: '"central-v1"' },
+      data: {
+        principal: { principal_type: 'user', principal_id: 'alice' },
+        grants: [
+          grant('hierarchy', 'kitchen', 'resident', 'allow', true),
+          { node_type: 'hierarchy', node_id: 'upper-floor', role: 'resident', effect: 'allow' },
+        ],
+      },
+    })
+    authzApi.preview.mockResolvedValue({
+      data: {
+        results: [
+          {
+            action: 'write',
+            node_type: 'hierarchy',
+            node_id: 'kitchen',
+            allowed: false,
+            reason: 'central_control_required',
+            reason_text: 'Backend English reason.',
+          },
+          {
+            action: 'write',
+            node_type: 'hierarchy',
+            node_id: 'upper-floor',
+            allowed: true,
+            reason: 'allowed',
+            reason_text: 'Backend English reason.',
+          },
+        ],
+      },
+    })
+    const wrapper = await mountEditor()
+    await next(wrapper)
+
+    const kitchenSwitch = wrapper.get('[data-testid="central-control-kitchen"]')
+    const upperFloorSwitch = wrapper.get('[data-testid="central-control-upper-floor"]')
+    expect(kitchenSwitch.element.checked).toBe(true)
+    expect(upperFloorSwitch.element.checked).toBe(false)
+
+    await kitchenSwitch.setValue(false)
+    await upperFloorSwitch.setValue(true)
+    expect(kitchenSwitch.element.checked).toBe(false)
+    expect(upperFloorSwitch.element.checked).toBe(true)
+
+    await next(wrapper)
+    expect(authzApi.preview).toHaveBeenCalledWith({
+      principal: { principal_type: 'user', principal_id: 'alice' },
+      actions: ['read', 'write', 'activate', 'generate'],
+      targets: [
+        { node_type: 'hierarchy', node_id: 'kitchen', control_class: 'central_plant' },
+        { node_type: 'hierarchy', node_id: 'upper-floor', control_class: 'central_plant' },
+      ],
+      draft_grants: [
+        { principal_type: 'user', principal_id: 'alice', ...grant('hierarchy', 'kitchen', 'resident') },
+        { principal_type: 'user', principal_id: 'alice', ...grant('hierarchy', 'upper-floor', 'resident', 'allow', true) },
+      ],
+      include_persisted: false,
+    })
+    expect(wrapper.get('[data-testid="preview-central-control-kitchen"]').text()).toContain('deaktiviert')
+    expect(wrapper.get('[data-testid="preview-central-control-upper-floor"]').text()).toContain('aktiviert')
+    expect(wrapper.get('[data-testid="preview-kitchen-write"]').text()).toContain('Zentralanlagensteuerung')
+    expect(wrapper.text()).not.toContain('Backend English reason.')
+
+    await next(wrapper)
+    expect(wrapper.get('[data-testid="confirm-central-control-kitchen"]').text()).toContain('deaktiviert')
+    expect(wrapper.get('[data-testid="confirm-central-control-upper-floor"]').text()).toContain('aktiviert')
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [
+      grant('hierarchy', 'kitchen', 'resident'),
+      grant('hierarchy', 'upper-floor', 'resident', 'allow', true),
+    ], '"central-v1"')
   })
 
   it('preserves per-node roles while adding and removing scopes in a mixed assignment', async () => {
@@ -262,7 +339,7 @@ describe('UserRightsEditor', () => {
     expect(wrapper.find('[data-testid="rights-preview-empty"]').exists()).toBe(false)
     expect(authzApi.preview).toHaveBeenCalledWith(expect.objectContaining({
       targets: [
-        { node_type: 'hierarchy', node_id: 'kitchen' },
+        { node_type: 'hierarchy', node_id: 'kitchen', control_class: 'central_plant' },
         { node_type: 'datapoint', node_id: 'dp-denied' },
         { node_type: 'datapoint', node_id: 'dp-direct' },
       ],
@@ -299,7 +376,7 @@ describe('UserRightsEditor', () => {
     await flushPromises()
 
     expect(authzApi.preview).toHaveBeenCalledWith(expect.objectContaining({
-      targets: [{ node_type: 'hierarchy', node_id: 'kitchen' }],
+      targets: [{ node_type: 'hierarchy', node_id: 'kitchen', control_class: 'central_plant' }],
       draft_grants: [],
     }))
     expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [], '"clear-v1"')

@@ -85,23 +85,37 @@
             {{ $t('settings.users.rights.noScopes') }}
           </div>
           <div v-else class="max-h-80 divide-y divide-slate-200 overflow-y-auto rounded-lg border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
-            <label
+            <div
               v-for="node in hierarchyNodes"
               :key="node.id"
-              class="flex cursor-pointer items-start gap-3 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40"
+              class="flex items-start justify-between gap-3 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40"
               :data-testid="`rights-node-${node.id}`"
             >
-              <input v-model="selectedNodeIds" type="checkbox" :value="node.id" :disabled="node.blockedByDeny" class="mt-0.5" />
-              <span class="min-w-0">
-                <span class="block text-sm text-slate-800 dark:text-slate-100">{{ node.pathLabel }}</span>
-                <span v-if="node.blockedByDeny" class="block text-xs text-amber-600 dark:text-amber-400">
-                  {{ $t('settings.users.rights.deniedScopePreserved') }}
+              <label class="flex min-w-0 cursor-pointer items-start gap-3">
+                <input v-model="selectedNodeIds" type="checkbox" :value="node.id" :disabled="node.blockedByDeny" class="mt-0.5" />
+                <span class="min-w-0">
+                  <span class="block text-sm text-slate-800 dark:text-slate-100">{{ node.pathLabel }}</span>
+                  <span v-if="node.blockedByDeny" class="block text-xs text-amber-600 dark:text-amber-400">
+                    {{ $t('settings.users.rights.deniedScopePreserved') }}
+                  </span>
+                  <span v-if="node.orphaned" class="block text-xs text-amber-600 dark:text-amber-400">
+                    {{ $t('settings.users.rights.unknownScope') }}
+                  </span>
                 </span>
-                <span v-if="node.orphaned" class="block text-xs text-amber-600 dark:text-amber-400">
-                  {{ $t('settings.users.rights.unknownScope') }}
-                </span>
-              </span>
-            </label>
+              </label>
+              <label
+                v-if="selectedNodeIds.includes(node.id)"
+                class="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300"
+              >
+                <input
+                  v-model="centralControlByNode[node.id]"
+                  type="checkbox"
+                  :disabled="node.orphaned"
+                  :data-testid="`central-control-${node.id}`"
+                />
+                <span>{{ $t('settings.users.rights.centralControl') }}</span>
+              </label>
+            </div>
           </div>
           <p class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedScopes', { n: selectedNodeIds.length }) }}</p>
           <div v-if="selectedOrphanCount" class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300" data-testid="orphaned-scope-block">
@@ -139,7 +153,16 @@
               class="rounded-lg border border-slate-200 p-3 dark:border-slate-700"
               :data-testid="`preview-target-${group.nodeId}`"
             >
-              <h5 class="mb-2 text-sm font-medium text-slate-800 dark:text-slate-100">{{ group.pathLabel }}</h5>
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <h5 class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ group.pathLabel }}</h5>
+                <span
+                  v-if="group.centralControl !== null"
+                  class="text-xs text-slate-500"
+                  :data-testid="`preview-central-control-${group.nodeId}`"
+                >
+                  {{ group.centralControl ? $t('settings.users.rights.centralControlEnabled') : $t('settings.users.rights.centralControlDisabled') }}
+                </span>
+              </div>
               <div class="grid gap-2 sm:grid-cols-2">
                 <div
                   v-for="result in group.results"
@@ -175,6 +198,20 @@
               <dd class="font-medium text-slate-800 dark:text-slate-100">{{ selectedNodeIds.length }}</dd>
             </div>
           </dl>
+          <div v-if="selectedNodeIds.length" class="flex flex-col gap-2" data-testid="central-control-summary">
+            <h5 class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.centralControlSummary') }}</h5>
+            <div
+              v-for="nodeId in selectedNodeIds"
+              :key="nodeId"
+              class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-xs dark:border-slate-700"
+              :data-testid="`confirm-central-control-${nodeId}`"
+            >
+              <span class="min-w-0 truncate text-slate-600 dark:text-slate-300">{{ nodeLabels[nodeId] ?? nodeId }}</span>
+              <span class="shrink-0 font-medium text-slate-800 dark:text-slate-100">
+                {{ centralControlByNode[nodeId] ? $t('settings.users.rights.centralControlEnabled') : $t('settings.users.rights.centralControlDisabled') }}
+              </span>
+            </div>
+          </div>
           <div v-if="advancedGrants.length" class="flex flex-col gap-2" data-testid="advanced-grants-preserved">
             <div>
               <h5 class="text-sm font-medium text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.advancedTitle') }}</h5>
@@ -246,8 +283,8 @@ const emit = defineEmits(['update:modelValue', 'saved'])
 const { t } = useI18n()
 
 const ACTIONS = ['read', 'write', 'activate', 'generate']
-const GRANT_FIELDS = ['node_type', 'node_id', 'role', 'effect']
-const KNOWN_REASON_CODES = new Set(['admin', 'allowed', 'direct_datapoint_grant', 'explicit_deny', 'missing_allow', 'no_targets'])
+const GRANT_FIELDS = ['node_type', 'node_id', 'role', 'effect', 'central_control']
+const KNOWN_REASON_CODES = new Set(['admin', 'allowed', 'direct_datapoint_grant', 'explicit_deny', 'central_control_required', 'missing_allow', 'no_targets'])
 
 const step = ref(1)
 const loading = ref(false)
@@ -256,6 +293,7 @@ const selectedRole = ref('')
 const selectedNodeIds = ref([])
 const originalNodeIds = ref([])
 const originalRolesByNode = ref({})
+const centralControlByNode = ref({})
 const originalAdvancedTargets = ref([])
 const hierarchyNodes = ref([])
 const advancedGrants = ref([])
@@ -286,8 +324,8 @@ const selectedOrphanCount = computed(() => hierarchyNodes.value.filter((node) =>
 const hasNewScopes = computed(() => selectedNodeIds.value.some((nodeId) => !originalRolesByNode.value[nodeId]))
 const previewTargets = computed(() => {
   const targets = [
-    ...originalNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
-    ...selectedNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId })),
+    ...originalNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId, control_class: 'central_plant' })),
+    ...selectedNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId, control_class: 'central_plant' })),
     ...originalAdvancedTargets.value,
     ...advancedGrants.value.map(({ node_type, node_id }) => ({ node_type, node_id: String(node_id) })),
   ]
@@ -322,6 +360,9 @@ const previewGroups = computed(() => previewTargets.value.map((target) => ({
   pathLabel: target.node_type === 'hierarchy'
     ? nodeLabels.value[target.node_id] ?? target.node_id
     : t('settings.users.rights.advancedTarget', { nodeType: target.node_type, nodeId: target.node_id }),
+  centralControl: target.node_type === 'hierarchy' && target.control_class === 'central_plant'
+    ? Boolean(centralControlByNode.value[target.node_id])
+    : null,
   results: ACTIONS.map((action) => previewResults.value.find((result) => (
     result.node_type === target.node_type && result.node_id === target.node_id && result.action === action
   ))).filter(Boolean),
@@ -336,7 +377,7 @@ watch(
 )
 
 function cleanGrant(grant) {
-  return Object.fromEntries(GRANT_FIELDS.map((field) => [field, grant[field]]))
+  return Object.fromEntries(GRANT_FIELDS.map((field) => [field, field === 'central_control' ? Boolean(grant[field]) : grant[field]]))
 }
 
 function sortGrants(grants) {
@@ -395,6 +436,7 @@ async function initialize() {
   selectedNodeIds.value = []
   originalNodeIds.value = []
   originalRolesByNode.value = {}
+  centralControlByNode.value = {}
   originalAdvancedTargets.value = []
   hierarchyNodes.value = []
   advancedGrants.value = []
@@ -418,6 +460,7 @@ async function initialize() {
     selectedNodeIds.value = [...new Set(editable.map((grant) => String(grant.node_id)))]
     originalNodeIds.value = [...selectedNodeIds.value]
     originalRolesByNode.value = Object.fromEntries(editable.map((grant) => [String(grant.node_id), grant.role]))
+    centralControlByNode.value = Object.fromEntries(editable.map((grant) => [String(grant.node_id), Boolean(grant.central_control)]))
     const roles = [...new Set(editable.map((grant) => grant.role))]
     mixedRoles.value = roles.length > 1
     selectedRole.value = roles.length === 1 ? roles[0] : ''
@@ -447,6 +490,7 @@ function editableGrants() {
       ? originalRolesByNode.value[nodeId]
       : selectedRole.value,
     effect: 'allow',
+    central_control: Boolean(centralControlByNode.value[nodeId]),
   }))
 }
 
