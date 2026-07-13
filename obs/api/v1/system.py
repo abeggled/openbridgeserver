@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from obs import __version__
 from obs.adapters import registry as adapter_registry
-from obs.api.audit import AuditLogWriter, build_audit_context
+from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
@@ -237,24 +237,26 @@ async def update_app_settings(
             detail=f"Unknown timezone: {body.timezone!r}",
         )
 
-    current = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
-    previous_timezone = current["value"] if current else "Europe/Zurich"
-    await db.execute(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('timezone', ?)",
-        (body.timezone,),
-    )
-    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_user))
-    await audit_writer.write(
-        action="system.settings.updated",
-        resource_type="app_settings",
-        resource_id="global",
-        details={
-            "after": {"timezone": body.timezone},
-            "before": {"timezone": previous_timezone},
-            "changed_fields": [] if previous_timezone == body.timezone else ["timezone"],
-        },
-        commit=False,
-    )
+    async with db.transaction():
+        current = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
+        previous_timezone = current["value"] if current else "Europe/Zurich"
+        await db.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('timezone', ?)",
+            (body.timezone,),
+        )
+        audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_user))
+        await audit_writer.write_contract(
+            "PUT",
+            "/api/v1/system/settings",
+            resource_id="global",
+            details={
+                "after": {"timezone": body.timezone},
+                "before": {"timezone": previous_timezone},
+                "changed_fields": [] if previous_timezone == body.timezone else ["timezone"],
+            },
+            commit=False,
+        )
+    # Kept for Database-compatible test doubles; real transactions are already committed.
     await db.commit()
 
     # Hot-reload LogicManager so astro_sun picks up new timezone immediately
@@ -375,45 +377,38 @@ async def update_history_settings(
             if data[field] == REDACTED:
                 data[field] = existing_cfg[field]
 
-    for k, v in data.items():
-        await db.execute_and_commit(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
-            (f"history.{k}", v),
+    async with db.transaction():
+        for k, v in data.items():
+            await db.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                (f"history.{k}", v),
+            )
+
+        try:
+            from obs.history.factory import reload_history_plugin
+
+            await reload_history_plugin(db)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Settings were not saved because plugin reload failed: {exc}",
+            ) from exc
+
+        audit_writer = AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=_admin),
         )
-
-    # Hot-reload the history plugin
-    try:
-        from obs.history.factory import reload_history_plugin
-
-        await reload_history_plugin(db)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Settings saved but plugin reload failed: {exc}",
+        await audit_writer.write_contract(
+            "PUT",
+            "/api/v1/system/history/settings",
+            resource_id="global",
+            details={
+                "plugin": body.plugin,
+                "default_window_hours": body.default_window_hours,
+                "influx_version": body.influx_version,
+            },
+            commit=False,
         )
-
-    audit_writer = AuditLogWriter(
-        db=db,
-        context=build_audit_context(request=request, current_user=_admin),
-    )
-    await audit_writer.write(
-        action="system.history.settings.updated",
-        resource_type="history_settings",
-        resource_id="global",
-        details={
-            "plugin": body.plugin,
-            "default_window_hours": body.default_window_hours,
-            "influx_url": body.influx_url,
-            "influx_version": body.influx_version,
-            "influx_org": body.influx_org,
-            "influx_bucket": body.influx_bucket,
-            "influx_database": body.influx_database,
-            "influx_username": body.influx_username,
-            "has_influx_token": bool(body.influx_token),
-            "has_influx_password": bool(body.influx_password),
-            "has_timescale_dsn": bool(body.timescale_dsn),
-        },
-    )
 
     payload = redact_sensitive_fields(
         {
@@ -437,13 +432,21 @@ async def update_history_settings(
 @router.post("/history/test", response_model=HistoryTestResult)
 async def test_history_connection(
     body: HistorySettingsIn,
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> HistoryTestResult:
     """Test connectivity for the given history backend configuration. Admin only."""
+
+    async def audited(result: HistoryTestResult) -> HistoryTestResult:
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        outcome = AuditOutcome.SUCCESS if result.ok else AuditOutcome.FAILED
+        await writer.write_contract("POST", "/api/v1/system/history/test", resource_id="global", outcome=outcome)
+        return result
+
     try:
         if body.plugin == "sqlite":
-            return HistoryTestResult(ok=True, message="SQLite is always available.")
+            return await audited(HistoryTestResult(ok=True, message="SQLite is always available."))
 
         data: dict[str, str] = {
             "influx_url": body.influx_url,
@@ -477,13 +480,17 @@ async def test_history_connection(
             )
             ok = await plugin.ping()
             if ok:
-                return HistoryTestResult(
-                    ok=True,
-                    message=f"InfluxDB v{body.influx_version} reachable at {body.influx_url}",
+                return await audited(
+                    HistoryTestResult(
+                        ok=True,
+                        message=f"InfluxDB v{body.influx_version} reachable at {body.influx_url}",
+                    )
                 )
-            return HistoryTestResult(
-                ok=False,
-                message=f"InfluxDB v{body.influx_version} not reachable at {body.influx_url}",
+            return await audited(
+                HistoryTestResult(
+                    ok=False,
+                    message=f"InfluxDB v{body.influx_version} not reachable at {body.influx_url}",
+                )
             )
 
         if body.plugin == "timescaledb":
@@ -492,16 +499,16 @@ async def test_history_connection(
             plugin = TimescaleDBHistoryPlugin(dsn=data["timescale_dsn"])
             ok = await plugin.ping()
             if ok:
-                return HistoryTestResult(ok=True, message="PostgreSQL/TimescaleDB reachable.")
-            return HistoryTestResult(ok=False, message="PostgreSQL/TimescaleDB not reachable.")
+                return await audited(HistoryTestResult(ok=True, message="PostgreSQL/TimescaleDB reachable."))
+            return await audited(HistoryTestResult(ok=False, message="PostgreSQL/TimescaleDB not reachable."))
 
-        return HistoryTestResult(ok=False, message=f"Unknown plugin: {body.plugin}")
+        return await audited(HistoryTestResult(ok=False, message=f"Unknown plugin: {body.plugin}"))
 
     except RuntimeError as exc:
         # Missing optional dependency
-        return HistoryTestResult(ok=False, message=str(exc))
+        return await audited(HistoryTestResult(ok=False, message=str(exc)))
     except Exception as exc:
-        return HistoryTestResult(ok=False, message=str(exc))
+        return await audited(HistoryTestResult(ok=False, message=str(exc)))
 
 
 # ---------------------------------------------------------------------------
@@ -532,24 +539,28 @@ async def list_nav_links(
 @router.post("/nav-links", response_model=NavLinkOut, status_code=201)
 async def create_nav_link(
     body: NavLinkIn,
+    request: Request = None,  # type: ignore[assignment]
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> NavLinkOut:
     """Create a new custom navigation link. Admin only."""
     link_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
-    await db.execute_and_commit(
-        "INSERT INTO nav_links (id, label, url, icon, sort_order, open_new_tab, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            link_id,
-            body.label,
-            body.url,
-            body.icon,
-            body.sort_order,
-            int(body.open_new_tab),
-            now,
-        ),
-    )
+    async with db.transaction():
+        await db.execute_and_commit(
+            "INSERT INTO nav_links (id, label, url, icon, sort_order, open_new_tab, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                link_id,
+                body.label,
+                body.url,
+                body.icon,
+                body.sort_order,
+                int(body.open_new_tab),
+                now,
+            ),
+        )
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        await writer.write_contract("POST", "/api/v1/system/nav-links", resource_id=link_id, commit=False)
     return NavLinkOut(
         id=link_id,
         label=body.label,
@@ -564,6 +575,7 @@ async def create_nav_link(
 async def update_nav_link(
     link_id: str,
     body: NavLinkPatch,
+    request: Request = None,  # type: ignore[assignment]
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> NavLinkOut:
@@ -581,10 +593,13 @@ async def update_nav_link(
     new_sort_order = body.sort_order if body.sort_order is not None else row["sort_order"]
     new_open_new_tab = body.open_new_tab if body.open_new_tab is not None else bool(row["open_new_tab"])
 
-    await db.execute_and_commit(
-        "UPDATE nav_links SET label=?, url=?, icon=?, sort_order=?, open_new_tab=? WHERE id=?",
-        (new_label, new_url, new_icon, new_sort_order, int(new_open_new_tab), link_id),
-    )
+    async with db.transaction():
+        await db.execute_and_commit(
+            "UPDATE nav_links SET label=?, url=?, icon=?, sort_order=?, open_new_tab=? WHERE id=?",
+            (new_label, new_url, new_icon, new_sort_order, int(new_open_new_tab), link_id),
+        )
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        await writer.write_contract("PATCH", "/api/v1/system/nav-links/{link_id}", resource_id=link_id, commit=False)
     return NavLinkOut(
         id=link_id,
         label=new_label,
@@ -598,6 +613,7 @@ async def update_nav_link(
 @router.delete("/nav-links/{link_id}", status_code=204)
 async def delete_nav_link(
     link_id: str,
+    request: Request = None,  # type: ignore[assignment]
     db: Database = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ) -> None:
@@ -605,7 +621,10 @@ async def delete_nav_link(
     row = await db.fetchone("SELECT id FROM nav_links WHERE id = ?", (link_id,))
     if row is None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Link not found")
-    await db.execute_and_commit("DELETE FROM nav_links WHERE id = ?", (link_id,))
+    async with db.transaction():
+        await db.execute_and_commit("DELETE FROM nav_links WHERE id = ?", (link_id,))
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        await writer.write_contract("DELETE", "/api/v1/system/nav-links/{link_id}", resource_id=link_id, commit=False)
 
 
 # ---------------------------------------------------------------------------
@@ -653,7 +672,9 @@ async def get_log_level(
 @router.put("/log-level", status_code=204)
 async def set_log_level(
     body: LogLevelIn,
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> None:
     """Change the root log level at runtime without restarting. Admin only."""
     from obs.log_buffer import set_log_buffer_level
@@ -665,3 +686,5 @@ async def set_log_level(
             detail=f"level must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}",
         )
     set_log_buffer_level(lvl)
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    await writer.write_contract("PUT", "/api/v1/system/log-level", resource_id="global")

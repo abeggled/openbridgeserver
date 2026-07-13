@@ -157,7 +157,7 @@ async def test_capability_revocation_is_immediate_and_audit_is_secret_free(db: D
     assert {row["action"] for row in audit_rows} >= {
         "api_key.capability.grant",
         "api_key.capability.revoke",
-        "api_key.capabilities.replace",
+        "auth.api_key.capabilities_replaced",
         "api_key.capability.use",
     }
     serialized = json.dumps([dict(row) for row in audit_rows])

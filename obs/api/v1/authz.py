@@ -517,9 +517,9 @@ async def replace_principal_grants(
             db=db,
             context=build_audit_context(request=request, current_user=_admin),
         )
-        await audit_writer.write(
-            action="authz.grants.replace",
-            resource_type="authz_principal",
+        await audit_writer.write_contract(
+            "PUT",
+            "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants",
             resource_id=f"{principal_type}:{canonical_id}",
             details=_grant_diff_details(before, body.grants),
             commit=False,

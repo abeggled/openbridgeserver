@@ -220,13 +220,31 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/auth/apikeys"): _policy("api_key", "auth.api_key.created", root=RootSemantics.SCOPED_PARENT),
     ("DELETE", "/api/v1/auth/apikeys/{key_id}"): _user("api_key", "auth.api_key.deleted"),
     ("PUT", "/api/v1/auth/apikeys/{key_id}/capabilities"): _admin("api_key_capabilities", "auth.api_key.capabilities_replaced"),
-    ("POST", "/api/v1/auth/users"): _admin("user", "auth.user.created", root=True),
-    ("PATCH", "/api/v1/auth/users/{username}"): _admin("user", "auth.user.updated"),
-    ("DELETE", "/api/v1/auth/users/{username}"): _admin("user", "auth.user.deleted"),
+    ("POST", "/api/v1/auth/users"): _admin("user", "auth.user.created", root=True, details=("is_admin", "mqtt_enabled", "username")),
+    ("PATCH", "/api/v1/auth/users/{username}"): _admin("user", "auth.user.updated", details=("after", "before", "changed_fields")),
+    ("DELETE", "/api/v1/auth/users/{username}"): _admin(
+        "user",
+        "auth.user.deleted",
+        details=("api_keys_revoked", "artifacts_transferred", "is_admin", "mqtt_enabled", "successor_username", "username"),
+    ),
     ("POST", "/api/v1/auth/users/{username}/mqtt-password"): _user("mqtt_password", "auth.user.mqtt_password_set"),
     ("DELETE", "/api/v1/auth/users/{username}/mqtt-password"): _admin("mqtt_password", "auth.user.mqtt_password_deleted"),
     ("POST", "/api/v1/auth/me/change-password"): _user("password", "auth.user.password_changed"),
-    ("PUT", "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants"): _admin("authz_grants", "authz.grants.replaced"),
+    ("PUT", "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants"): _admin(
+        "authz_grants",
+        "authz.grants.replaced",
+        details=(
+            "before_count",
+            "after_count",
+            "added_count",
+            "removed_count",
+            "updated_count",
+            "unchanged_count",
+            "before_sha256",
+            "after_sha256",
+            "changes",
+        ),
+    ),
     # Datapoints and bindings.
     ("POST", "/api/v1/datapoints/"): _admin("datapoint", "datapoint.created", root=True),
     ("PATCH", "/api/v1/datapoints/{dp_id}"): _policy(
@@ -249,8 +267,18 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         extra_checks=(PolicyCheck(CheckKind.ROLE, "write", "adapter_instance", "derived:binding_adapter_instance"),),
     ),
     # URL policy and adapters.
-    ("POST", "/api/v1/security/url-target-allowlist"): _admin("url_target_allowlist", "security.url_target.created"),
-    ("DELETE", "/api/v1/security/url-target-allowlist"): _admin("url_target_allowlist", "security.url_target.deleted"),
+    ("POST", "/api/v1/security/url-target-allowlist"): _admin(
+        "url_target_allowlist",
+        "security.url_target.created",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+    ),
+    ("DELETE", "/api/v1/security/url-target-allowlist"): _admin(
+        "url_target_allowlist",
+        "security.url_target.deleted",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+    ),
     ("POST", "/api/v1/adapters/instances"): _admin("adapter_instance", "adapter.instance.created", root=True),
     ("PATCH", "/api/v1/adapters/instances/{instance_id}"): _policy("adapter_instance", "adapter.instance.updated"),
     ("DELETE", "/api/v1/adapters/instances/{instance_id}"): _policy("adapter_instance", "adapter.instance.deleted"),
@@ -273,8 +301,16 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/adapters/{adapter_type}/test"): _admin("adapter_type", "adapter.type.tested", result=True),
     ("PATCH", "/api/v1/adapters/{adapter_type}/config"): _admin("adapter_type", "adapter.type.config_updated"),
     # Central settings, support, RingBuffer and backup/config lifecycle.
-    ("PUT", "/api/v1/system/settings"): _user("app_settings", "system.settings.updated"),
-    ("PUT", "/api/v1/system/history/settings"): _admin("history_settings", "system.history.settings_updated"),
+    ("PUT", "/api/v1/system/settings"): _user("app_settings", "system.settings.updated", details=("after", "before", "changed_fields")),
+    ("PUT", "/api/v1/system/history/settings"): _admin(
+        "history_settings",
+        "system.history.settings_updated",
+        details=(
+            "plugin",
+            "default_window_hours",
+            "influx_version",
+        ),
+    ),
     ("POST", "/api/v1/system/history/test"): _admin("history_settings", "system.history.connection_tested", result=True),
     ("POST", "/api/v1/system/nav-links"): _admin("nav_link", "system.nav_link.created"),
     ("PATCH", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.updated"),
@@ -297,16 +333,50 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/config/import/db"): _admin(
         "database_config", "config.database.imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
     ),
-    ("POST", "/api/v1/config/import"): _admin("configuration", "config.imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
-    ("DELETE", "/api/v1/config/reset"): _admin("configuration", "config.factory_reset", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
-    ("DELETE", "/api/v1/config/reset/bindings"): _admin("bindings", "config.bindings_cleared"),
-    ("DELETE", "/api/v1/config/reset/datapoints"): _admin("datapoints", "config.datapoints_cleared"),
-    ("DELETE", "/api/v1/config/reset/logic"): _admin("logic_graphs", "config.logic_cleared"),
-    ("DELETE", "/api/v1/config/reset/adapters"): _admin("adapters", "config.adapters_cleared", result=True),
+    ("POST", "/api/v1/config/import"): _admin(
+        "configuration",
+        "config.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count", "payload_sha256"),
+    ),
+    ("DELETE", "/api/v1/config/reset"): _admin(
+        "configuration",
+        "config.factory_reset",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count"),
+    ),
+    ("DELETE", "/api/v1/config/reset/bindings"): _admin(
+        "bindings",
+        "config.bindings_cleared",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count"),
+    ),
+    ("DELETE", "/api/v1/config/reset/datapoints"): _admin(
+        "datapoints",
+        "config.datapoints_cleared",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count"),
+    ),
+    ("DELETE", "/api/v1/config/reset/logic"): _admin(
+        "logic_graphs",
+        "config.logic_cleared",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count"),
+    ),
+    ("DELETE", "/api/v1/config/reset/adapters"): _admin("adapters", "config.adapters_cleared", result=True, details=("counts", "error_count")),
     ("PUT", "/api/v1/config/autobackup/config"): _admin("autobackup_config", "autobackup.config_updated"),
     ("POST", "/api/v1/config/autobackup/run"): _admin("autobackup", "autobackup.run", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
     ("POST", "/api/v1/config/autobackup/restore/{name}"): _admin(
-        "autobackup", "autobackup.restored", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+        "autobackup",
+        "autobackup.restored",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count"),
     ),
     ("DELETE", "/api/v1/config/autobackup/{name}"): _admin(
         "autobackup", "autobackup.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
