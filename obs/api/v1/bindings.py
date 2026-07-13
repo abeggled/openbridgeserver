@@ -160,6 +160,33 @@ def _ensure_adapter_delegates_binding(principal: Principal, adapter_type: str) -
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Typ erlaubt keine delegierte Binding-Änderung")
 
 
+async def _filter_bindings_by_instance_read(
+    db: Database,
+    principal: Principal,
+    bindings: list[BindingOut],
+) -> list[BindingOut]:
+    if _is_admin_principal(principal):
+        return bindings
+    instance_ids = [b.adapter_instance_id for b in bindings if b.adapter_instance_id is not None]
+    if not instance_ids:
+        return bindings
+    grants = await load_role_grants(db, principal, node_type="adapter_instance")
+    result = []
+    for binding in bindings:
+        if binding.adapter_instance_id is None:
+            result.append(binding)
+            continue
+        decision = authorize(
+            principal=principal,
+            action=AuthzAction.READ,
+            targets=[AuthzTarget(node_type="adapter_instance", node_id=str(binding.adapter_instance_id), min_role="guest")],
+            grants=grants,
+        )
+        if decision.allowed:
+            result.append(binding)
+    return result
+
+
 async def _ensure_adapter_instance_binding_scope(
     db: Database,
     principal: Principal,
@@ -290,8 +317,10 @@ async def list_bindings(
 ) -> list[BindingOut]:
     if get_registry().get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} nicht gefunden")
-    await _ensure_datapoint_readable(db, _principal_from_dependency(_user), dp_id)
-    return await _get_bindings_for_dp(db, dp_id)
+    principal = _principal_from_dependency(_user)
+    await _ensure_datapoint_readable(db, principal, dp_id)
+    bindings = await _get_bindings_for_dp(db, dp_id)
+    return await _filter_bindings_by_instance_read(db, principal, bindings)
 
 
 @router.post(

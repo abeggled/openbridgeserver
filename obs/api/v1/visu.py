@@ -211,6 +211,7 @@ async def _check_user_access(db: Database, node_id: str, username: str) -> bool:
         Principal(subject=username, type="user", is_admin=False),
         node_id,
         action=AuthzAction.READ,
+        strict=True,
     )
 
 
@@ -337,6 +338,36 @@ async def _check_page_datapoint_policy(
     allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=action))
     if not set(datapoint_ids).issubset(allowed_ids):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+
+async def _check_page_read_access(
+    db: Database,
+    node_id: str,
+    principal: Principal | None,
+    config: PageConfig,
+    *,
+    session_token: str | None = None,
+) -> None:
+    """Apply the page-config read policy shared by page reads and exports."""
+    access, defining_node_id = await _resolve_access_with_node(db, node_id)
+    if principal is None:
+        if access == "user":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Anmeldung erforderlich",
+            )
+        if access == "protected":
+            validate_id = defining_node_id or node_id
+            if not session_token or not validate_session(session_token, validate_id):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="PIN-Authentifizierung erforderlich",
+                )
+    elif access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+
+    if access == "user":
+        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
 
 
 async def _target_usernames_for_node(
@@ -1001,13 +1032,10 @@ async def export_node(
             row = await cur.fetchone()
         if not row:
             return []
-        access, _ = await _resolve_access_with_node(db, nid)
-        if access == "user" and (principal is None or principal.type != "user"):
-            return []
         page_config = json.loads(row["page_config"]) if row["page_config"] else None
-        if access == "user" and row["type"] == "PAGE":
+        if row["type"] == "PAGE":
             config = PageConfig.model_validate(page_config or {})
-            await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
+            await _check_page_read_access(db, nid, principal, config)
         policy = await db.fetchone("SELECT access_mode FROM authz_visu_page_policies WHERE node_id = ?", (nid,))
         result = [
             {
@@ -1129,30 +1157,14 @@ async def get_page(
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
-    access, defining_node_id = await _resolve_access_with_node(db, node_id)
-    if principal is None:
-        # Unauthentisierter Zugriff: Seitentyp prüfen
-        if access == "user":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Anmeldung erforderlich",
-            )
-        elif access == "protected":
-            session_token = request.headers.get("X-Session-Token")
-            validate_id = defining_node_id or node_id
-            if not session_token or not validate_session(session_token, validate_id):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="PIN-Authentifizierung erforderlich",
-                )
-    else:
-        # Authentifizierter Benutzer: bei user-Pages explizite Zuweisung prüfen
-        if access == "user" and (principal.type != "user" or not await _check_user_access(db, node_id, principal.subject)):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
-
     config = node.page_config or PageConfig()
-    if access == "user":
-        await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
+    await _check_page_read_access(
+        db,
+        node_id,
+        principal,
+        config,
+        session_token=request.headers.get("X-Session-Token"),
+    )
     return config
 
 

@@ -446,6 +446,23 @@ async def test_import_skips_missing_and_unknown_grant_targets_but_keeps_valid_gr
         (now, now),
     )
     monkeypatch.setattr(config_api, "get_registry", _EmptyRegistry)
+    missing_table_targets = [
+        config_api.ExportedAuthzGrant(
+            principal_type="user",
+            principal_id="alice",
+            node_type=node_type,
+            node_id="missing",
+            role="owner",
+        )
+        for node_type in (
+            "hierarchy",
+            "datapoint",
+            "logic_graph",
+            "visu_page",
+            "ringbuffer_filterset",
+            "adapter_instance",
+        )
+    ]
 
     with (
         patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
@@ -465,8 +482,15 @@ async def test_import_skips_missing_and_unknown_grant_targets_but_keeps_valid_gr
                 config_api.ExportedAuthzGrant(
                     principal_type="user",
                     principal_id="alice",
-                    node_type="hierarchy",
-                    node_id="missing",
+                    node_type="logic_capability",
+                    node_id="http_request",
+                    role="operator",
+                ),
+                config_api.ExportedAuthzGrant(
+                    principal_type="user",
+                    principal_id="alice",
+                    node_type="logic_capability",
+                    node_id="invalid_capability",
                     role="owner",
                 ),
                 config_api.ExportedAuthzGrant(
@@ -476,17 +500,30 @@ async def test_import_skips_missing_and_unknown_grant_targets_but_keeps_valid_gr
                     node_id="target",
                     role="owner",
                 ),
+                *missing_table_targets,
             ),
             _user="admin",
             db=db,
         )
 
-    assert result.authz_grants_upserted == 1
-    assert len(result.errors) == 2
-    assert any("Unknown hierarchy grant targets: missing" in error for error in result.errors)
+    assert result.authz_grants_upserted == 2
+    assert len(result.errors) == 8
+    for node_type in (
+        "hierarchy",
+        "datapoint",
+        "logic_graph",
+        "visu_page",
+        "ringbuffer_filterset",
+        "adapter_instance",
+    ):
+        assert any(f"Unknown {node_type} grant targets: missing" in error for error in result.errors)
+    assert any("Unknown logic_capability grant targets: invalid_capability" in error for error in result.errors)
     assert any("node_type" in error and "unknown" in error for error in result.errors)
-    rows = await db.fetchall("SELECT node_type, node_id FROM authz_node_roles")
-    assert [dict(row) for row in rows] == [{"node_type": "hierarchy", "node_id": "room"}]
+    rows = await db.fetchall("SELECT node_type, node_id FROM authz_node_roles ORDER BY node_type")
+    assert [dict(row) for row in rows] == [
+        {"node_type": "hierarchy", "node_id": "room"},
+        {"node_type": "logic_capability", "node_id": "http_request"},
+    ]
 
 
 @pytest.mark.asyncio

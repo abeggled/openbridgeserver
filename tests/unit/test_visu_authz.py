@@ -1008,16 +1008,18 @@ async def test_export_omits_hidden_subtrees_and_allows_assigned_user(db: Databas
 
 
 @pytest.mark.asyncio
-async def test_export_user_page_requires_datapoint_read_grant(db: Database):
+async def test_get_page_and_export_user_page_require_datapoint_read_grant(db: Database):
     await _seed_scope(db)
     await _insert_user(db, "alice")
     await _insert_visu_page(db, "user-page", access="user", config=_page_config(BLOCKED_DP_ID))
     await _assign_visu_user(db, node_id="user-page", username="alice")
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(HTTPException) as page_error:
+        await visu_api.get_page("user-page", _request(), db=db, user=_principal("alice"))
+    with pytest.raises(HTTPException) as export_error:
         await visu_api.export_node("user-page", db=db, _user=_principal("alice"))
 
-    assert exc_info.value.status_code == 403
+    assert page_error.value.status_code == export_error.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -1035,6 +1037,10 @@ async def test_export_hides_user_page_from_api_key_with_visu_grant(db: Database)
         (key_id,),
     )
     principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+
+    with pytest.raises(HTTPException) as page_error:
+        await visu_api.get_page("user-child", _request(), db=db, user=principal)
+    assert page_error.value.status_code == 403
 
     tree = await visu_api.get_tree(db=db, user=principal)
     children = await visu_api.get_children("root", db=db, user=principal)
@@ -1178,3 +1184,48 @@ async def test_factory_reset_removes_visu_page_grants_and_preserves_unrelated_gr
     unrelated = await db.fetchone("SELECT effect FROM authz_node_roles WHERE node_type='logic_capability' AND node_id='http_request'")
     assert unrelated is not None
     assert unrelated["effect"] == "deny"
+
+
+@pytest.mark.asyncio
+async def test_check_user_access_does_not_grant_ancestor_via_descendant_grant(db: Database):
+    """Descendant-only grants must NOT give access to ancestor page content.
+
+    Read-grants carry upward-discovery semantics for tree navigation, but
+    _check_user_access gates full content reads and must require the grant to be
+    on the target node itself or one of its ancestors — not on a child.
+    """
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "parent", access="user")
+    await _insert_visu_page(db, "child", access="user", config=PageConfig(), parent_id="parent")
+    await _assign_visu_user(db, node_id="child")  # only on child, NOT on parent
+
+    result = await visu_api._check_user_access(db, "parent", "alice")
+
+    assert result is False, "Descendant grant must not allow reading ancestor page content"
+
+
+@pytest.mark.asyncio
+async def test_check_user_access_allows_direct_and_ancestor_grants(db: Database):
+    """Direct grants and ancestor grants must still allow content reads after the fix."""
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "parent", access="user")
+    await _insert_visu_page(db, "child", access="user", config=PageConfig(), parent_id="parent")
+    await _assign_visu_user(db, node_id="parent")  # grant on parent
+
+    # parent itself: direct grant → allowed
+    assert await visu_api._check_user_access(db, "parent", "alice") is True
+    # child inherits ancestor grant → allowed
+    assert await visu_api._check_user_access(db, "child", "alice") is True
+
+
+@pytest.mark.asyncio
+async def test_can_discover_node_still_allows_upward_discovery(db: Database):
+    """Tree navigation must still allow upward discovery via descendant grants."""
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "parent", access="user")
+    await _insert_visu_page(db, "child", access="user", config=PageConfig(), parent_id="parent")
+    await _assign_visu_user(db, node_id="child")  # only on child
+
+    principal = _principal("alice")
+    # Discovery of parent IS still allowed via descendant grant (breadcrumb/tree)
+    assert await visu_api._can_discover_node(db, "parent", principal) is True
