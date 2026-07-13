@@ -633,16 +633,18 @@ async def test_export_omits_hidden_subtrees_and_allows_assigned_user(db: Databas
 
 
 @pytest.mark.asyncio
-async def test_export_user_page_requires_datapoint_read_grant(db: Database):
+async def test_get_page_and_export_user_page_require_datapoint_read_grant(db: Database):
     await _seed_scope(db)
     await _insert_user(db, "alice")
     await _insert_visu_page(db, "user-page", access="user", config=_page_config(BLOCKED_DP_ID))
     await _assign_visu_user(db, node_id="user-page", username="alice")
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(HTTPException) as page_error:
+        await visu_api.get_page("user-page", _request(), db=db, user=_principal("alice"))
+    with pytest.raises(HTTPException) as export_error:
         await visu_api.export_node("user-page", db=db, _user=_principal("alice"))
 
-    assert exc_info.value.status_code == 403
+    assert page_error.value.status_code == export_error.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -660,6 +662,10 @@ async def test_export_hides_user_page_from_api_key_with_visu_grant(db: Database)
         (key_id,),
     )
     principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+
+    with pytest.raises(HTTPException) as page_error:
+        await visu_api.get_page("user-child", _request(), db=db, user=principal)
+    assert page_error.value.status_code == 403
 
     tree = await visu_api.get_tree(db=db, user=principal)
     children = await visu_api.get_children("root", db=db, user=principal)
