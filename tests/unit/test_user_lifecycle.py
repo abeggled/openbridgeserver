@@ -332,7 +332,7 @@ async def test_owned_artifacts_require_a_valid_successor(db: Database):
 
 
 @pytest.mark.asyncio
-async def test_audit_failure_rolls_back_deletion(db: Database, monkeypatch):
+async def test_result_audit_failure_does_not_rewrite_committed_deletion(db: Database, monkeypatch):
     await _owned_state(db)
     preflight = await auth._deletion_inventory(db, "alice")
 
@@ -347,15 +347,15 @@ async def test_audit_failure_rolls_back_deletion(db: Database, monkeypatch):
             admin_user="admin",
             db=db,
         )
-    assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is not None
-    assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "alice"
-    assert await db.fetchone("SELECT 1 FROM api_keys WHERE id='key-a'") is not None
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is None
+    assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "bob"
+    assert await db.fetchone("SELECT 1 FROM api_keys WHERE id='key-a'") is None
     key_grants = await db.fetchall("SELECT principal_id FROM authz_node_roles WHERE principal_type='api_key' ORDER BY principal_id")
-    assert [row["principal_id"] for row in key_grants] == ["api_key:key-a", "key-a"]
+    assert key_grants == []
 
 
 @pytest.mark.asyncio
-async def test_audit_failure_rolls_back_user_creation(db: Database, monkeypatch):
+async def test_result_audit_failure_does_not_rewrite_committed_user_creation(db: Database, monkeypatch):
     async def fail_audit(*args, **kwargs):
         raise RuntimeError("audit unavailable")
 
@@ -363,7 +363,7 @@ async def test_audit_failure_rolls_back_user_creation(db: Database, monkeypatch)
     with pytest.raises(RuntimeError, match="audit unavailable"):
         await auth.create_user(auth.UserCreate(username="charlie", password="secret"), _admin="admin", db=db)
 
-    assert await db.fetchone("SELECT 1 FROM users WHERE username='charlie'") is None
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='charlie'") is not None
     assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.created'") is None
 
 
@@ -384,7 +384,7 @@ async def test_rename_preserves_ownership_and_principal_references(db: Database)
 
 
 @pytest.mark.asyncio
-async def test_rename_audit_failure_rolls_back_principal_and_ownership(db: Database, monkeypatch):
+async def test_result_audit_failure_does_not_rewrite_committed_rename(db: Database, monkeypatch):
     await _owned_state(db)
 
     async def fail_audit(*args, **kwargs):
@@ -393,9 +393,9 @@ async def test_rename_audit_failure_rolls_back_principal_and_ownership(db: Datab
     monkeypatch.setattr("obs.api.audit.AuditLogWriter.write", fail_audit)
     with pytest.raises(RuntimeError, match="audit unavailable"):
         await auth.update_user("alice", auth.UserUpdate(username="alicia"), _admin="admin", db=db)
-    assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is not None
-    assert await db.fetchone("SELECT 1 FROM users WHERE username='alicia'") is None
-    assert (await db.fetchone("SELECT created_by FROM logic_graphs WHERE id='graph-a'"))["created_by"] == "alice"
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is None
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='alicia'") is not None
+    assert (await db.fetchone("SELECT created_by FROM logic_graphs WHERE id='graph-a'"))["created_by"] == "alicia"
 
 
 @pytest.mark.asyncio
@@ -427,14 +427,14 @@ async def test_stale_principal_name_cannot_be_reused(db: Database):
 
 
 @pytest.mark.asyncio
-async def test_create_user_audit_failure_rolls_back(db: Database, monkeypatch):
+async def test_result_audit_failure_leaves_created_user_committed(db: Database, monkeypatch):
     async def fail_audit(*args, **kwargs):
         raise RuntimeError("audit unavailable")
 
     monkeypatch.setattr("obs.api.audit.AuditLogWriter.write", fail_audit)
     with pytest.raises(RuntimeError, match="audit unavailable"):
         await auth.create_user(auth.UserCreate(username="newuser", password="secret"), _admin="admin", db=db)
-    assert await db.fetchone("SELECT 1 FROM users WHERE username='newuser'") is None
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='newuser'") is not None
 
 
 @pytest.mark.asyncio

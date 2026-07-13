@@ -220,15 +220,34 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/auth/apikeys"): _policy("api_key", "auth.api_key.created", root=RootSemantics.SCOPED_PARENT),
     ("DELETE", "/api/v1/auth/apikeys/{key_id}"): _user("api_key", "auth.api_key.deleted"),
     ("PUT", "/api/v1/auth/apikeys/{key_id}/capabilities"): _admin("api_key_capabilities", "auth.api_key.capabilities_replaced"),
-    ("POST", "/api/v1/auth/users"): _admin("user", "auth.user.created", root=True, details=("is_admin", "mqtt_enabled", "username")),
-    ("PATCH", "/api/v1/auth/users/{username}"): _admin("user", "auth.user.updated", details=("after", "before", "changed_fields")),
+    ("POST", "/api/v1/auth/users"): _admin(
+        "user",
+        "auth.user.created",
+        result=True,
+        root=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("is_admin", "mqtt_enabled", "username"),
+    ),
+    ("PATCH", "/api/v1/auth/users/{username}"): _admin(
+        "user",
+        "auth.user.updated",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("after", "before", "changed_fields"),
+    ),
     ("DELETE", "/api/v1/auth/users/{username}"): _admin(
         "user",
         "auth.user.deleted",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("api_keys_revoked", "artifacts_transferred", "is_admin", "mqtt_enabled", "successor_username", "username"),
     ),
-    ("POST", "/api/v1/auth/users/{username}/mqtt-password"): _user("mqtt_password", "auth.user.mqtt_password_set"),
-    ("DELETE", "/api/v1/auth/users/{username}/mqtt-password"): _admin("mqtt_password", "auth.user.mqtt_password_deleted"),
+    ("POST", "/api/v1/auth/users/{username}/mqtt-password"): _user(
+        "mqtt_password", "auth.user.mqtt_password_set", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+    ),
+    ("DELETE", "/api/v1/auth/users/{username}/mqtt-password"): _admin(
+        "mqtt_password", "auth.user.mqtt_password_deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+    ),
     ("POST", "/api/v1/auth/me/change-password"): _user("password", "auth.user.password_changed"),
     ("PUT", "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants"): _admin(
         "authz_grants",
@@ -410,7 +429,13 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("counts", "error_count"),
     ),
-    ("DELETE", "/api/v1/config/reset/adapters"): _admin("adapters", "config.adapters_cleared", result=True, details=("counts", "error_count")),
+    ("DELETE", "/api/v1/config/reset/adapters"): _admin(
+        "adapters",
+        "config.adapters_cleared",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("counts", "error_count"),
+    ),
     ("PUT", "/api/v1/config/autobackup/config"): _admin("autobackup_config", "autobackup.config_updated"),
     ("POST", "/api/v1/config/autobackup/run"): _admin("autobackup", "autobackup.run", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
     ("POST", "/api/v1/config/autobackup/restore/{name}"): _admin(
@@ -424,9 +449,19 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         "autobackup", "autobackup.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
     ),
     # KNX, Logic and Visu.
-    ("POST", "/api/v1/knxproj/import"): _admin("knx_project", "knx.project.imported", result=True, details=("resource_count", "payload_sha256")),
+    ("POST", "/api/v1/knxproj/import"): _admin(
+        "knx_project",
+        "knx.project.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
+    ),
     ("POST", "/api/v1/knxproj/import-csv"): _admin(
-        "knx_group_addresses", "knx.group_addresses.imported", result=True, details=("resource_count", "payload_sha256")
+        "knx_group_addresses",
+        "knx.group_addresses.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
     ),
     ("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"): _admin(
         "knx_device", "knx.device.hierarchy_links_updated", details=("resource_count", "payload_sha256")
@@ -576,7 +611,11 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.created"),
     ("DELETE", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.deleted"),
     ("POST", "/api/v1/hierarchy/import-from-ets"): _admin(
-        "hierarchy", "hierarchy.ets_imported", result=True, details=("resource_count", "payload_sha256")
+        "hierarchy",
+        "hierarchy.ets_imported",
+        result=True,
+        audit_effect=AuditEffect.DB_MUTATION,
+        details=("resource_count", "payload_sha256"),
     ),
 }
 

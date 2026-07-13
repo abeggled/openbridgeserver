@@ -420,6 +420,34 @@ async def _sync_mqtt(db: Database) -> None:
     await reload_mosquitto(m.reload_command, m.reload_pid)
 
 
+async def _sync_mqtt_or_audit_failure(
+    db: Database,
+    writer,
+    method: str,
+    path: str,
+    *,
+    resource_id: str,
+    details: dict | None = None,
+) -> None:
+    """Sync MQTT and durably record the failed result without hiding its error."""
+    try:
+        await _sync_mqtt(db)
+    except Exception:
+        from obs.api.audit import AuditOutcome
+
+        try:
+            await writer.write_contract(
+                method,
+                path,
+                resource_id=resource_id,
+                details=details,
+                outcome=AuditOutcome.FAILED,
+            )
+        except Exception:
+            logger.exception("Could not persist failed MQTT sync audit for %s %s", method, path)
+        raise
+
+
 def _user_row(r) -> UserResponse:
     return UserResponse(
         id=r["id"],
@@ -789,6 +817,11 @@ async def create_user(
     from obs.api.audit import AuditLogWriter, build_audit_context
 
     audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
+    details = {
+        "is_admin": body.is_admin,
+        "mqtt_enabled": mqtt_enabled,
+        "username": body.username,
+    }
     async with db.transaction():
         await db.execute(
             "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -802,19 +835,16 @@ async def create_user(
                 now,
             ),
         )
-        await audit_writer.write_contract(
+    if mqtt_enabled:
+        await _sync_mqtt_or_audit_failure(
+            db,
+            audit_writer,
             "POST",
             "/api/v1/auth/users",
             resource_id=uid,
-            details={
-                "is_admin": body.is_admin,
-                "mqtt_enabled": mqtt_enabled,
-                "username": body.username,
-            },
-            commit=False,
+            details=details,
         )
-    if mqtt_enabled:
-        await _sync_mqtt(db)
+    await audit_writer.write_contract("POST", "/api/v1/auth/users", resource_id=uid, details=details)
     row = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE id=?", (uid,))
     return _user_row(row)
 
@@ -892,15 +922,22 @@ async def update_user(
         before = {"is_admin": bool(target["is_admin"]), "mqtt_enabled": bool(target["mqtt_enabled"]), "username": target["username"]}
         after = {"is_admin": bool(new_is_admin), "mqtt_enabled": bool(new_mqtt_enabled), "username": new_username}
         audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
-        await audit_writer.write_contract(
+        details = {"after": after, "before": before, "changed_fields": sorted(field for field in before if before[field] != after[field])}
+    if mqtt_changed:
+        await _sync_mqtt_or_audit_failure(
+            db,
+            audit_writer,
             "PATCH",
             "/api/v1/auth/users/{username}",
             resource_id=target["id"],
-            details={"after": after, "before": before, "changed_fields": sorted(field for field in before if before[field] != after[field])},
-            commit=False,
+            details=details,
         )
-    if mqtt_changed:
-        await _sync_mqtt(db)
+    await audit_writer.write_contract(
+        "PATCH",
+        "/api/v1/auth/users/{username}",
+        resource_id=target["id"],
+        details=details,
+    )
     row = await db.fetchone(f"SELECT {_USER_COLS} FROM users WHERE id=?", (target["id"],))
     return _user_row(row)
 
@@ -1022,22 +1059,29 @@ async def delete_user(
         from obs.api.audit import AuditLogWriter, build_audit_context
 
         audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=admin_user))
-        await audit_writer.write_contract(
+        details = {
+            "api_keys_revoked": len(inventory.api_key_ids),
+            "artifacts_transferred": len(inventory.visu_page_ids) + len(inventory.logic_graph_ids) + len(inventory.filterset_ids),
+            "is_admin": bool(target["is_admin"]),
+            "mqtt_enabled": bool(target["mqtt_enabled"]),
+            "successor_username": successor,
+            "username": target["username"],
+        }
+    if target["mqtt_enabled"]:
+        await _sync_mqtt_or_audit_failure(
+            db,
+            audit_writer,
             "DELETE",
             "/api/v1/auth/users/{username}",
             resource_id=target["id"],
-            details={
-                "api_keys_revoked": len(inventory.api_key_ids),
-                "artifacts_transferred": len(inventory.visu_page_ids) + len(inventory.logic_graph_ids) + len(inventory.filterset_ids),
-                "is_admin": bool(target["is_admin"]),
-                "mqtt_enabled": bool(target["mqtt_enabled"]),
-                "successor_username": successor,
-                "username": target["username"],
-            },
-            commit=False,
+            details=details,
         )
-    if target["mqtt_enabled"]:
-        await _sync_mqtt(db)
+    await audit_writer.write_contract(
+        "DELETE",
+        "/api/v1/auth/users/{username}",
+        resource_id=target["id"],
+        details=details,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1072,14 +1116,20 @@ async def set_mqtt_password(
 
     from obs.api.audit import AuditLogWriter, build_audit_context
 
+    writer = AuditLogWriter(db, build_audit_context(request, current_user))
     async with db.transaction():
         await db.execute(
             "UPDATE users SET mqtt_enabled=1, mqtt_password_hash=? WHERE username=?",
             (mosquitto_hash(body.password), username),
         )
-        writer = AuditLogWriter(db, build_audit_context(request, current_user))
-        await writer.write_contract("POST", "/api/v1/auth/users/{username}/mqtt-password", resource_id=target["id"], commit=False)
-    await _sync_mqtt(db)
+    await _sync_mqtt_or_audit_failure(
+        db,
+        writer,
+        "POST",
+        "/api/v1/auth/users/{username}/mqtt-password",
+        resource_id=target["id"],
+    )
+    await writer.write_contract("POST", "/api/v1/auth/users/{username}/mqtt-password", resource_id=target["id"])
 
 
 @router.delete("/users/{username}/mqtt-password", status_code=204)
@@ -1095,14 +1145,20 @@ async def delete_mqtt_password(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
     from obs.api.audit import AuditLogWriter, build_audit_context
 
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
     async with db.transaction():
         await db.execute(
             "UPDATE users SET mqtt_enabled=0, mqtt_password_hash=NULL WHERE username=?",
             (username,),
         )
-        writer = AuditLogWriter(db, build_audit_context(request, _admin))
-        await writer.write_contract("DELETE", "/api/v1/auth/users/{username}/mqtt-password", resource_id=target["id"], commit=False)
-    await _sync_mqtt(db)
+    await _sync_mqtt_or_audit_failure(
+        db,
+        writer,
+        "DELETE",
+        "/api/v1/auth/users/{username}/mqtt-password",
+        resource_id=target["id"],
+    )
+    await writer.write_contract("DELETE", "/api/v1/auth/users/{username}/mqtt-password", resource_id=target["id"])
 
 
 # ---------------------------------------------------------------------------

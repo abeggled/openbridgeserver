@@ -231,11 +231,19 @@ def test_runtime_side_effect_contracts_are_result_external_mutations() -> None:
         ("POST", "/api/v1/adapters/instances/{source_instance_id}/bindings/migrate"),
         ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import"),
         ("POST", "/api/v1/adapters/instances/{instance_id}/anwesenheit/sync-bindings"),
+        ("DELETE", "/api/v1/config/reset/adapters"),
+        ("POST", "/api/v1/knxproj/import"),
+        ("POST", "/api/v1/knxproj/import-csv"),
     }
 
     for signature in signatures:
         contract = ROUTE_SECURITY_CONTRACTS[signature]
         assert (contract.audit_mode, contract.audit_effect) == (AuditMode.RESULT, AuditEffect.EXTERNAL_MUTATION)
+
+
+def test_ets_hierarchy_import_is_a_result_db_mutation() -> None:
+    contract = ROUTE_SECURITY_CONTRACTS[("POST", "/api/v1/hierarchy/import-from-ets")]
+    assert (contract.audit_mode, contract.audit_effect) == (AuditMode.RESULT, AuditEffect.DB_MUTATION)
 
 
 @pytest.mark.asyncio

@@ -17,11 +17,19 @@ from obs.api.auth import (
     ApiKeyCreate,
     Principal,
     SetMqttPasswordRequest,
+    UserCreate,
+    UserDeletionRequest,
+    UserUpdate,
+    _deletion_inventory,
     create_api_key,
+    create_user,
     delete_api_key,
+    delete_mqtt_password,
+    delete_user,
     get_admin_user,
     get_current_principal,
     set_mqtt_password,
+    update_user,
 )
 from obs.api.audit import AuditLogWriter
 from obs.api.v1.autobackup import delete_autobackup, restore_autobackup
@@ -161,6 +169,19 @@ def test_identity_contract_allowlists_reject_secret_sentinel_fields() -> None:
             assert not (set(field.lower().split("_")) & forbidden), (signature, field)
 
 
+def test_identity_mqtt_mutations_are_result_external_mutations() -> None:
+    signatures = {
+        ("POST", "/api/v1/auth/users"),
+        ("PATCH", "/api/v1/auth/users/{username}"),
+        ("DELETE", "/api/v1/auth/users/{username}"),
+        ("POST", "/api/v1/auth/users/{username}/mqtt-password"),
+        ("DELETE", "/api/v1/auth/users/{username}/mqtt-password"),
+    }
+    for signature in signatures:
+        contract = ROUTE_SECURITY_CONTRACTS[signature]
+        assert (contract.audit_mode, contract.audit_effect) == (AuditMode.RESULT, AuditEffect.EXTERNAL_MUTATION)
+
+
 def _http_request(method: str, path: str) -> Request:
     return Request(
         {
@@ -216,6 +237,175 @@ async def test_self_and_policy_denials_are_audited() -> None:
             ("auth.api_key.deleted", "denied"),
             ("auth.user.mqtt_password_set", "denied"),
         ]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_mqtt_password_set_sync_failure_persists_state_and_failed_audit(monkeypatch) -> None:
+    async def fail_sync(_db):
+        raise RuntimeError("mqtt reload failed")
+
+    monkeypatch.setattr("obs.api.auth._sync_mqtt", fail_sync)
+    monkeypatch.setattr("obs.core.mqtt_passwd.mosquitto_hash", lambda _password: "stored-mqtt-hash")
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, created_at) "
+            "VALUES ('admin-id','admin','x',1,0,'2026-01-01'), ('alice-id','alice','x',0,0,'2026-01-01')"
+        )
+        with pytest.raises(RuntimeError, match="mqtt reload failed"):
+            await set_mqtt_password(
+                username="alice",
+                body=SetMqttPasswordRequest(password="audit-secret-sentinel"),
+                request=_http_request("POST", "/api/v1/auth/users/alice/mqtt-password"),
+                current_user="admin",
+                db=db,
+            )
+
+        user = await db.fetchone("SELECT mqtt_enabled, mqtt_password_hash FROM users WHERE username='alice'")
+        event = await db.fetchone("SELECT outcome, details_json FROM audit_log_entries WHERE action='auth.user.mqtt_password_set'")
+        assert (user["mqtt_enabled"], user["mqtt_password_hash"]) == (1, "stored-mqtt-hash")
+        assert event is not None and event["outcome"] == "failed"
+        assert "audit-secret-sentinel" not in event["details_json"]
+        assert "stored-mqtt-hash" not in event["details_json"]
+        assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.mqtt_password_set' AND outcome='success'") is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_mqtt_password_delete_sync_failure_persists_revocation_and_failed_audit(monkeypatch) -> None:
+    async def fail_sync(_db):
+        raise RuntimeError("mqtt reload failed")
+
+    monkeypatch.setattr("obs.api.auth._sync_mqtt", fail_sync)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) "
+            "VALUES ('alice-id','alice','x',0,1,'old-secret-hash','2026-01-01')"
+        )
+        with pytest.raises(RuntimeError, match="mqtt reload failed"):
+            await delete_mqtt_password(
+                username="alice",
+                request=_http_request("DELETE", "/api/v1/auth/users/alice/mqtt-password"),
+                _admin="admin",
+                db=db,
+            )
+
+        user = await db.fetchone("SELECT mqtt_enabled, mqtt_password_hash FROM users WHERE username='alice'")
+        event = await db.fetchone("SELECT outcome, details_json FROM audit_log_entries WHERE action='auth.user.mqtt_password_deleted'")
+        assert (user["mqtt_enabled"], user["mqtt_password_hash"]) == (0, None)
+        assert event is not None and event["outcome"] == "failed"
+        assert "old-secret-hash" not in event["details_json"]
+        assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.mqtt_password_deleted' AND outcome='success'") is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_user_create_sync_failure_persists_user_and_failed_non_secret_audit(monkeypatch) -> None:
+    async def fail_sync(_db):
+        raise RuntimeError("mqtt reload failed")
+
+    monkeypatch.setattr("obs.api.auth._sync_mqtt", fail_sync)
+    monkeypatch.setattr("obs.api.auth.hash_password", lambda _password: "stored-login-hash")
+    monkeypatch.setattr("obs.core.mqtt_passwd.mosquitto_hash", lambda _password: "stored-mqtt-hash")
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        with pytest.raises(RuntimeError, match="mqtt reload failed"):
+            await create_user(
+                body=UserCreate(
+                    username="alice",
+                    password="login-secret-sentinel",
+                    mqtt_enabled=True,
+                    mqtt_password="mqtt-secret-sentinel",
+                ),
+                request=_http_request("POST", "/api/v1/auth/users"),
+                _admin="admin",
+                db=db,
+            )
+
+        user = await db.fetchone("SELECT mqtt_enabled, password_hash, mqtt_password_hash FROM users WHERE username='alice'")
+        event = await db.fetchone("SELECT outcome, details_json FROM audit_log_entries WHERE action='auth.user.created'")
+        assert (user["mqtt_enabled"], user["password_hash"], user["mqtt_password_hash"]) == (
+            1,
+            "stored-login-hash",
+            "stored-mqtt-hash",
+        )
+        assert event is not None and event["outcome"] == "failed"
+        for secret in ("login-secret-sentinel", "mqtt-secret-sentinel", "stored-login-hash", "stored-mqtt-hash"):
+            assert secret not in event["details_json"]
+        assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.created' AND outcome='success'") is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_user_update_sync_failure_persists_update_and_failed_audit(monkeypatch) -> None:
+    async def fail_sync(_db):
+        raise RuntimeError("mqtt reload failed")
+
+    monkeypatch.setattr("obs.api.auth._sync_mqtt", fail_sync)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) "
+            "VALUES ('alice-id','alice','x',0,1,'old-secret-hash','2026-01-01')"
+        )
+        with pytest.raises(RuntimeError, match="mqtt reload failed"):
+            await update_user(
+                username="alice",
+                body=UserUpdate(mqtt_enabled=False),
+                request=_http_request("PATCH", "/api/v1/auth/users/alice"),
+                _admin="admin",
+                db=db,
+            )
+
+        user = await db.fetchone("SELECT mqtt_enabled, mqtt_password_hash FROM users WHERE username='alice'")
+        event = await db.fetchone("SELECT outcome, details_json FROM audit_log_entries WHERE action='auth.user.updated'")
+        assert (user["mqtt_enabled"], user["mqtt_password_hash"]) == (0, None)
+        assert event is not None and event["outcome"] == "failed"
+        assert "old-secret-hash" not in event["details_json"]
+        assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.updated' AND outcome='success'") is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_user_delete_sync_failure_persists_deletion_and_failed_audit(monkeypatch) -> None:
+    async def fail_sync(_db):
+        raise RuntimeError("mqtt reload failed")
+
+    monkeypatch.setattr("obs.api.auth._sync_mqtt", fail_sync)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit(
+            "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) "
+            "VALUES ('admin-id','admin','x',1,0,NULL,'2026-01-01'), "
+            "('alice-id','alice','x',0,1,'old-secret-hash','2026-01-01')"
+        )
+        inventory = await _deletion_inventory(db, "alice")
+        with pytest.raises(RuntimeError, match="mqtt reload failed"):
+            await delete_user(
+                username="alice",
+                body=UserDeletionRequest(revision=inventory.revision),
+                request=_http_request("DELETE", "/api/v1/auth/users/alice"),
+                admin_user="admin",
+                db=db,
+            )
+
+        event = await db.fetchone("SELECT outcome, details_json FROM audit_log_entries WHERE action='auth.user.deleted'")
+        assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is None
+        assert event is not None and event["outcome"] == "failed"
+        assert "old-secret-hash" not in event["details_json"]
+        assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='auth.user.deleted' AND outcome='success'") is None
     finally:
         await db.disconnect()
 
