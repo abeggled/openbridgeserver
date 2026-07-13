@@ -66,14 +66,14 @@ async def _insert_tree_and_nodes(db: Database) -> None:
     await db.commit()
 
 
-async def _insert_datapoint(db: Database, dp_id: uuid.UUID, node_id: str) -> None:
+async def _insert_datapoint(db: Database, dp_id: uuid.UUID, node_id: str, *, control_class: str = "room_local") -> None:
     await db.execute_and_commit(
         """
         INSERT INTO datapoints
-            (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, created_at, updated_at)
-        VALUES (?, 'Bindings AuthZ', 'FLOAT', NULL, '[]', ?, NULL, 1, 1, ?, ?)
+            (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, created_at, updated_at)
+        VALUES (?, 'Bindings AuthZ', 'FLOAT', NULL, '[]', ?, NULL, 1, 1, ?, ?, ?)
         """,
-        (str(dp_id), f"dp/{dp_id}/value", NOW, NOW),
+        (str(dp_id), f"dp/{dp_id}/value", control_class, NOW, NOW),
     )
     await db.execute_and_commit(
         """
@@ -367,3 +367,23 @@ async def test_non_admin_update_and_delete_binding_allow_delegable_mqtt_with_ope
 
     assert updated.enabled is False
     assert row is None
+
+
+@pytest.mark.asyncio
+async def test_binding_mutation_central_plant_requires_central_control(db: Database):
+    from obs.api.v1.bindings import _ensure_binding_mutation_scope
+
+    dp_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room", control_class="central_plant")
+    await _insert_grant(db, node_id="allowed-room", role="operator")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+    assert exc_info.value.status_code == 403
+
+    await db.execute_and_commit(
+        "UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='allowed-room'",
+    )
+    await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)

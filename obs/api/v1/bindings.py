@@ -129,6 +129,7 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
             node_id=target.node_id,
             ancestors=target.ancestors,
             min_role="operator",
+            control_class=target.control_class,
         )
         for target in targets_by_dp.get(str(dp_id), [])
     ]
