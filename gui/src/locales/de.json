@@ -1334,7 +1334,7 @@
     "newGraphBtn": "+ Neu",
     "run": "Ausführen",
     "graphDisabledSuffix": " (deaktiviert)",
-    "runTitle": "Graph ausführen",
+    "runTitle": "Berechtigungen prüfen und Graph ausführen",
     "runDisabledTitle": "Graph ist deaktiviert — kein Ausführen möglich",
     "toggleActive": "✓ Aktiv",
     "toggleDisabled": "⊘ Deaktiviert",
@@ -1357,6 +1357,20 @@
     "saved": "Graph gespeichert",
     "errorSave": "Fehler beim Speichern",
     "runResult": "Graph ausgeführt — {count} Nodes evaluiert",
+    "preflightTitle": "Graph-Ausführung prüfen",
+    "preflightDescription": "Prüfe den Graphen und alle externen Auswirkungen vor der Ausführung.",
+    "preflightError": "Die benötigten Berechtigungen konnten nicht geprüft werden.",
+    "preflightGraph": "Graph {id} aktivieren",
+    "preflightGraphState": "Graph ist aktiviert",
+    "preflightCapability": "Capability: {capability}",
+    "preflightDatapoint": "Datenpunkt {id}",
+    "preflightNodes": "Verwendet von Nodes: {nodes}",
+    "preflightReasons": {
+      "explicit_deny": "Eine ausdrückliche Sperre greift.",
+      "missing_allow": "Die benötigte Freigabe fehlt.",
+      "graph_disabled": "Der Graph ist deaktiviert und kann nicht ausgeführt werden.",
+      "undeclared_capability": "Für diesen Seiteneffekt ist keine Capability deklariert; er wird standardmäßig gesperrt."
+    },
     "runResultWithWarnings": "Graph ausgeführt — {count} Nodes geprüft, {warnings} Warnungen",
     "nodeError": "⚠ Fehler",
     "graphValidationCycle": "Zyklus erkannt: {count} Node(s) benötigen eine Speicher-Node als Tick-Grenze.",
@@ -1998,6 +2012,13 @@
       "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
     }
   },
+  "authzPreflight": {
+    "allowed": "Erlaubt",
+    "denied": "Verboten",
+    "ready": "Alle benötigten Berechtigungen sind vorhanden.",
+    "blocked": "Diese Aktion ist wegen fehlender Berechtigungen gesperrt.",
+    "noRequirements": "Es werden keine zusätzlichen Berechtigungen benötigt."
+  },
   "settings": {
     "title": "Einstellungen",
     "subtitle": "Benutzer, API Keys, Passwort, Sicherung",
@@ -2163,14 +2184,33 @@
     "users": {
       "deleteUser": "Benutzer löschen",
       "deleteUserConfirm": "Benutzer '{name}' wirklich löschen?",
+      "deleteImpact": "Prüfe vor dem Löschen alle Auswirkungen:",
+      "deletePages": "{n} Visu-Seiten werden übertragen",
+      "deleteGraphs": "{n} Logikblätter werden übertragen",
+      "deleteFiltersets": "{n} RingBuffer-Filtersets werden übertragen",
+      "deleteKeys": "{n} API-Schlüssel werden sofort widerrufen",
+      "deleteReferences": "{n} Zugriffsreferenzen werden entfernt",
+      "successor": "Nachfolger für eigene Artefakte",
+      "selectSuccessor": "Nachfolger auswählen",
+      "deleteKeyWarning": "API-Schlüssel werden nie übertragen. Da der bisherige Inhaber das Geheimnis noch kennen kann, werden sie widerrufen.",
       "count": "{n} Benutzer",
+      "empty": "Keine Benutzer vorhanden",
       "addButton": "+ Benutzer",
       "colUsername": "Benutzername",
       "colAdmin": "Admin",
       "colMqtt": "MQTT",
       "colCreated": "Erstellt",
+      "currentAccount": "Du",
+      "roleAdmin": "Admin",
+      "roleUser": "Benutzer",
+      "status": "Status",
+      "statusCurrent": "Aktuelles Konto",
+      "statusReady": "Bereit",
+      "statusWarning": "MQTT ohne Passwort",
       "mqttActive": "Aktiv",
       "mqttOff": "Aus",
+      "mqttPasswordSetShort": "Passwort gesetzt",
+      "mqttPasswordMissing": "Passwort fehlt",
       "mqttSetTitle": "MQTT-Passwort setzen",
       "mqttDisableTitle": "MQTT deaktivieren",
       "createTitle": "Neuer Benutzer",
@@ -2181,7 +2221,91 @@
       "mqttFor": "Benutzer: {username}",
       "newMqttPassword": "Neues MQTT-Passwort",
       "mqttPasswordSet": "MQTT-Passwort gesetzt",
-      "create": "Erstellen"
+      "create": "Erstellen",
+      "rights": {
+        "openButton": "Rechte bearbeiten",
+        "summary": "{roles} · {n} Bereiche",
+        "summaryNone": "Keine zugewiesenen Bereiche",
+        "title": "Rechte für {username}",
+        "progress": "Fortschritt im Rechte-Editor",
+        "steps": {
+          "role": "Rolle",
+          "scopes": "Bereiche",
+          "preview": "Vorschau",
+          "confirm": "Bestätigen"
+        },
+        "roleTitle": "Rolle auswählen",
+        "roleHint": "Die ausgewählte Rolle wird für neu hinzugefügte Bereiche verwendet. Bestehende Bereiche behalten ihre jeweilige Rolle, solange die Bulk-Neuzuweisung nicht ausdrücklich aktiviert wird.",
+        "mixedRoleWarning": "Dieser Benutzer hat derzeit unterschiedliche Rollen in verschiedenen Bereichen. Beim Hinzufügen oder Entfernen von Bereichen bleiben diese Rollen unverändert.",
+        "bulkRoleTitle": "Alle beibehaltenen bestehenden Bereiche neu zuweisen",
+        "bulkRoleHint": "Die ausgewählte Rolle ausdrücklich auf jeden bestehenden Bereich anwenden, der ausgewählt bleibt.",
+        "roles": {
+          "guest": {
+            "label": "Gast",
+            "description": "Nur Lesezugriff."
+          },
+          "resident": {
+            "label": "Bewohner",
+            "description": "Lesen, Schreiben und Aktivieren."
+          },
+          "operator": {
+            "label": "Operator",
+            "description": "Voller Betriebszugriff einschließlich Erzeugen."
+          },
+          "owner": {
+            "label": "Eigentümer",
+            "description": "Alle Aktionen in den ausgewählten Bereichen."
+          }
+        },
+        "scopeTitle": "Hierarchie-Bereiche auswählen",
+        "scopeHint": "Die ausgewählte Rolle gilt für jeden markierten Bereich und seine Unterbereiche.",
+        "noScopes": "Es sind keine Hierarchie-Bereiche verfügbar.",
+        "unknownScope": "Dieser gespeicherte Bereich ist nicht mehr in der Hierarchie-Liste vorhanden.",
+        "deniedScopePreserved": "Für diesen Bereich besteht eine direkte Verbots-Zuweisung, die erhalten bleibt; hier kann keine Erlaubnis hinzugefügt werden.",
+        "orphanedScopeBlock": "{n} ausgewählte Zuweisungen lassen sich keinem Hierarchie-Bereich mehr zuordnen. Entferne sie ausdrücklich oder brich ab; solange sie ausgewählt sind, ist das Speichern gesperrt.",
+        "newScopeRoleRequired": "Wähle eine Rolle aus, bevor du neue Hierarchie-Bereiche hinzufügst.",
+        "selectedScopes": "{n} Bereiche ausgewählt",
+        "previewTitle": "Effektive Rechte",
+        "previewHint": "Prüfe vor dem Speichern die berechnete Entscheidung und ihre Begründung für jede Aktion.",
+        "emptyPreview": "Es gibt keine bearbeitbaren oder fortgeschrittenen Zuweisungsziele zu prüfen. Eine Server-Vorschau ist nicht erforderlich.",
+        "refreshPreview": "Vorschau aktualisieren",
+        "allowed": "Erlaubt",
+        "denied": "Verboten",
+        "actions": {
+          "read": "Lesen",
+          "write": "Schreiben",
+          "activate": "Aktivieren",
+          "generate": "Erzeugen"
+        },
+        "reasons": {
+          "admin": "Durch die Administrator-Brücke erlaubt.",
+          "allowed": "Durch eine passende Rollenzuweisung erlaubt.",
+          "direct_datapoint_grant": "Durch eine direkte Datenpunkt-Zuweisung erlaubt.",
+          "explicit_deny": "Durch eine ausdrückliche Verbots-Zuweisung verweigert.",
+          "missing_allow": "Verweigert, weil keine passende Erlaubnis-Zuweisung gilt.",
+          "no_targets": "Verweigert, weil das Ziel nicht aufgelöst werden konnte."
+        },
+        "confirmTitle": "Änderungen bestätigen",
+        "confirmHint": "Beim Speichern werden die bearbeitbaren Hierarchie-Zuweisungen atomar ersetzt.",
+        "selectedRole": "Rolle",
+        "roleHandling": "Rollenbehandlung",
+        "roleSummaryBulk": "Alle ausgewählten Bereiche werden der Rolle {role} neu zugewiesen.",
+        "roleSummaryNew": "Bestehende Bereichsrollen bleiben unverändert; neue Bereiche verwenden {role}.",
+        "existingRolesPreserved": "Bestehende Rollen bleiben erhalten",
+        "selectedAreas": "Bereiche",
+        "advancedPreserved": "{n} fortgeschrittene Zuweisungen bleiben unverändert erhalten.",
+        "advancedTitle": "Fortgeschrittene Zuweisungen",
+        "advancedDescription": "{effect} · {role} · {nodeType} · {nodeId}",
+        "advancedTarget": "{nodeType} · {nodeId}",
+        "removeAdvanced": "Entfernen",
+        "back": "Zurück",
+        "next": "Weiter",
+        "save": "Rechte speichern",
+        "loadError": "Die Rechte konnten nicht geladen werden.",
+        "previewError": "Die effektive Vorschau konnte nicht geladen werden.",
+        "saveError": "Die Rechte konnten nicht gespeichert werden.",
+        "concurrentChange": "Die Zuweisungen wurden nach dem Öffnen des Editors geändert. Lade den Editor neu und prüfe vor dem Speichern den aktuellen Stand."
+      }
     },
     "apikeys": {
       "keyName": "API-Key-Name",
@@ -2195,7 +2319,28 @@
       "nameLabel": "Beschreibung / Name",
       "namePlaceholder": "z.B. Home Assistant",
       "create": "Erstellen",
-      "modalTitle": "API Key Name"
+      "modalTitle": "API Key Name",
+      "capabilities": {
+        "open": "Capabilities konfigurieren",
+        "title": "Konfigurations-Capabilities des API-Keys",
+        "target": "Ziel-API-Key: {name}",
+        "warning": "Diese Berechtigungen erlauben dem ausgewählten API-Key Konfiguration zu ändern. Bestehende Zielrechte, Denies und Readonly-Grenzen gelten weiterhin.",
+        "confirm": "Ich bestätige den vollständigen Capability-Ersatz für {name}.",
+        "save": "Capabilities ersetzen",
+        "loadError": "Capabilities konnten nicht geladen werden.",
+        "saveError": "Capabilities konnten nicht gespeichert werden.",
+        "concurrentChange": "Die Capabilities wurden nach dem Öffnen geändert. Lade den aktuellen Stand neu und prüfe ihn.",
+        "effects": {
+          "visu.page_config.write": {
+            "title": "Visu-Seitenkonfiguration schreiben",
+            "description": "Erlaubt nur das Speichern der Konfiguration einer ansonsten beschreibbaren Visu-Seite."
+          },
+          "datapoint.metadata.write": {
+            "title": "DataPoint-Metadaten schreiben",
+            "description": "Erlaubt Metadatenänderungen für DataPoints mit passendem WRITE-Grant; Laufzeitwerte bleiben getrennt."
+          }
+        }
+      }
     },
     "password": {
       "title": "Passwort ändern",

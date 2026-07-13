@@ -4,7 +4,7 @@ Session-scoped setup:
   1. mosquitto  — Eclipse Mosquitto in Docker (anonymous, dynamic localhost port)
   2. app        — FastAPI app with lifespan, SQLite file DB, test MQTT port
   3. client     — httpx.AsyncClient via ASGITransport
-  4. auth_headers — Bearer token from admin/admin login
+  4. auth_headers — Bearer token from the explicitly seeded test owner
 
 Requirements (install alongside regular deps):
   pip install pytest-asyncio asgi-lifespan httpx
@@ -146,7 +146,14 @@ async def app(mosquitto_port):
         ),
     )
 
+    from obs.admin_cli import create_first_owner
+    from obs.db.database import Database
     from obs.main import create_app
+
+    bootstrap_db = Database(db_path)
+    await bootstrap_db.connect()
+    await bootstrap_db.disconnect()
+    create_first_owner(db_path, username="admin", password="integration-test-password", backup=False)
 
     _app = create_app()
 
@@ -212,10 +219,10 @@ async def client(app):
 
 @pytest_asyncio.fixture(scope="session")
 async def auth_headers(client):
-    """Login once as admin and return the Authorization header dict."""
+    """Login once as the explicitly seeded test owner."""
     resp = await client.post(
         "/api/v1/auth/login",
-        json={"username": "admin", "password": "admin"},
+        json={"username": "admin", "password": "integration-test-password"},
     )
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     token = resp.json()["access_token"]

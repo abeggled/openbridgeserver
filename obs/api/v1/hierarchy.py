@@ -29,7 +29,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
 from obs.api.v1.datapoints import NodePathSegment
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, ImportResult, create_ets_hierarchy
 from obs.db.database import Database, get_db
@@ -193,6 +195,31 @@ def _build_tree(nodes: list[HierarchyNode]) -> list[HierarchyNode]:
     return roots
 
 
+def _principal_from_dependency(user: Principal | str) -> Principal:
+    if isinstance(user, Principal):
+        return user
+    # Compatibility for direct unit calls that still pass the legacy username.
+    return Principal(subject=str(user), type="user", is_admin=str(user) == "admin")
+
+
+async def _filter_readable_nodes(
+    db: Database,
+    principal: Principal,
+    nodes: list[HierarchyNode],
+) -> list[HierarchyNode]:
+    if principal.type == "user" and principal.is_admin:
+        return nodes
+    allowed_ids = set(
+        await filter_authorized_hierarchy_nodes(
+            db,
+            principal,
+            [node.id for node in nodes],
+            action=AuthzAction.READ,
+        )
+    )
+    return [node for node in nodes if node.id in allowed_ids]
+
+
 # ---------------------------------------------------------------------------
 # Tree Endpoints
 # ---------------------------------------------------------------------------
@@ -200,11 +227,25 @@ def _build_tree(nodes: list[HierarchyNode]) -> list[HierarchyNode]:
 
 @router.get("/trees", response_model=list[HierarchyTree])
 async def list_trees(
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[HierarchyTree]:
     rows = await db.fetchall("SELECT * FROM hierarchy_trees ORDER BY name")
-    return [_row_to_tree(r) for r in rows]
+    principal = _principal_from_dependency(_user)
+    if principal.type == "user" and principal.is_admin:
+        return [_row_to_tree(r) for r in rows]
+
+    node_rows = await db.fetchall("SELECT id, tree_id FROM hierarchy_nodes")
+    allowed_node_ids = set(
+        await filter_authorized_hierarchy_nodes(
+            db,
+            principal,
+            [row["id"] for row in node_rows],
+            action=AuthzAction.READ,
+        )
+    )
+    allowed_tree_ids = {row["tree_id"] for row in node_rows if row["id"] in allowed_node_ids}
+    return [_row_to_tree(r) for r in rows if r["id"] in allowed_tree_ids]
 
 
 @router.post("/trees", response_model=HierarchyTree, status_code=status.HTTP_201_CREATED)
@@ -265,7 +306,7 @@ async def delete_tree(
 @router.get("/trees/{tree_id}/nodes", response_model=list[HierarchyNode])
 async def get_tree_nodes(
     tree_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[HierarchyNode]:
     """Gibt den Baum als verschachtelte Struktur zurück."""
@@ -276,7 +317,8 @@ async def get_tree_nodes(
         "SELECT * FROM hierarchy_nodes WHERE tree_id=? ORDER BY node_order, name",
         (tree_id,),
     )
-    flat = [_row_to_node(r) for r in rows]
+    principal = _principal_from_dependency(_user)
+    flat = await _filter_readable_nodes(db, principal, [_row_to_node(r) for r in rows])
     return _build_tree(flat)
 
 
@@ -380,11 +422,18 @@ async def delete_node(
 @router.get("/nodes/{node_id}/datapoints", response_model=list[DataPointRef])
 async def get_node_datapoints(
     node_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[DataPointRef]:
     node = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (node_id,))
     if not node:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Knoten nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    if principal.type == "user" and principal.is_admin:
+        node_allowed = True
+    else:
+        node_allowed = node_id in set(await filter_authorized_hierarchy_nodes(db, principal, [node_id], action=AuthzAction.READ))
+    if not node_allowed:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Knoten nicht gefunden")
     rows = await db.fetchall(
         """SELECT hdl.id AS link_id, dp.id, dp.name, dp.data_type, dp.unit
@@ -394,6 +443,17 @@ async def get_node_datapoints(
            ORDER BY dp.name""",
         (node_id,),
     )
+    if principal.type == "user" and principal.is_admin:
+        allowed_dp_ids = {row["id"] for row in rows}
+    else:
+        allowed_dp_ids = set(
+            await filter_authorized_datapoints(
+                db,
+                principal,
+                [row["id"] for row in rows],
+                action=AuthzAction.READ,
+            )
+        )
     return [
         DataPointRef(
             id=r["id"],
@@ -403,15 +463,23 @@ async def get_node_datapoints(
             link_id=r["link_id"],
         )
         for r in rows
+        if r["id"] in allowed_dp_ids
     ]
 
 
 @router.get("/datapoints/{dp_id}/nodes", response_model=list[NodeRef])
 async def get_datapoint_nodes(
     dp_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[NodeRef]:
+    principal = _principal_from_dependency(_user)
+    if principal.type == "user" and principal.is_admin:
+        datapoint_allowed = True
+    else:
+        datapoint_allowed = dp_id in set(await filter_authorized_datapoints(db, principal, [dp_id], action=AuthzAction.READ))
+    if not datapoint_allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "DataPoint nicht gefunden")
     rows = await db.fetchall(
         """SELECT hdl.id AS link_id, hn.id AS node_id, hn.name AS node_name,
                   ht.id AS tree_id, ht.name AS tree_name, ht.display_depth
@@ -423,6 +491,10 @@ async def get_datapoint_nodes(
         (dp_id,),
     )
     node_ids = [r["node_id"] for r in rows]
+    if not (principal.type == "user" and principal.is_admin):
+        allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, node_ids, action=AuthzAction.READ))
+        rows = [r for r in rows if r["node_id"] in allowed_node_ids]
+        node_ids = [r["node_id"] for r in rows]
     node_paths: dict[str, list[NodePathSegment]] = {}
     if node_ids:
         ph = ",".join("?" * len(node_ids))
@@ -505,7 +577,7 @@ async def delete_link(
 async def search_nodes(
     q: str = Query("", description="Volltext-Suche in Knoten- und Hierarchienamen"),
     limit: int = Query(30, ge=1, le=200),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> list[NodeSearchResult]:
     """Knoten über alle Hierarchien hinweg suchen. Gibt Knoten mit Hierarchie-Kontext zurück."""
@@ -556,9 +628,8 @@ async def search_nodes(
                   OR ht.display_depth <= 0
                   OR COALESCE(td.max_depth, 0) < ht.display_depth
                   OR COALESCE(nd.depth, 1) >= ht.display_depth
-               ORDER BY ht.name, hn.name
-               LIMIT ?""",
-            (like, like, limit),
+               ORDER BY ht.name, hn.name""",
+            (like, like),
         )
     else:
         rows = await db.fetchall(
@@ -582,10 +653,13 @@ async def search_nodes(
                   OR ht.display_depth <= 0
                   OR COALESCE(td.max_depth, 0) < ht.display_depth
                   OR COALESCE(nd.depth, 1) >= ht.display_depth
-               ORDER BY ht.name, hn.name
-               LIMIT ?""",
-            (limit,),
+               ORDER BY ht.name, hn.name""",
         )
+
+    principal = _principal_from_dependency(_user)
+    node_ids = [r["node_id"] for r in rows]
+    allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, node_ids, action=AuthzAction.READ))
+    rows = [r for r in rows if r["node_id"] in allowed_node_ids][:limit]
 
     # Build ancestor paths so callers can disambiguate same-named leaves under
     # different parents (#433). The result query is already limited, so path

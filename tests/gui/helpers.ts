@@ -32,8 +32,8 @@ export const BASE_URL = process.env.BASE_URL ?? `http://localhost:${OBS_HTTP_HOS
 // or non-standard setups.
 export const INTERNAL_BASE_URL = process.env.INTERNAL_BASE_URL ?? 'http://localhost:8080'
 
-const E2E_USER = process.env.E2E_USER ?? 'admin'
-const E2E_PASS = process.env.E2E_PASS ?? 'admin'
+const E2E_USER = process.env.E2E_USER
+const E2E_PASS = process.env.E2E_PASS
 
 // Resolved once per worker process.
 let _cachedToken: string | null = null
@@ -61,6 +61,7 @@ export async function getToken(): Promise<string> {
   // Prefer the token saved by auth.setup.ts (no network call, no rate-limit risk)
   _cachedToken = _readTokenFromStorageState()
   if (_cachedToken) return _cachedToken
+  if (!E2E_USER || !E2E_PASS) throw new Error('Set E2E_USER and E2E_PASS to an explicitly bootstrapped test owner')
   // Fallback: fresh login (e.g. isolated run without auth setup)
   const res = await fetch(`${BASE_URL}/api/v1/auth/login`, {
     method: 'POST',

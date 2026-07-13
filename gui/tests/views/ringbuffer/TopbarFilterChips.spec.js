@@ -34,6 +34,7 @@ function makeSet(overrides = {}) {
     is_active: true,
     topbar_active: true,
     topbar_order: 0,
+    can_write: true,
     ...overrides,
   }
 }
@@ -248,13 +249,24 @@ describe('TopbarFilterChips', () => {
     expect(bodyFind('[data-testid="topbar-add-filter-empty"]').text()).toContain('Keine Treffer')
   })
 
-  it('hides the new-filter action for non-admin users', async () => {
+  it('shows the new-filter action for non-admin user principals', async () => {
     const { wrapper } = await mountChips({ authUser: { username: 'viewer', is_admin: false } })
 
     await wrapper.find('[data-testid="topbar-add-filter-btn"]').trigger('click')
     await flushPromises()
 
-    expect(document.body.querySelector('[data-testid="topbar-add-filter-new"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="topbar-add-filter-new"]')).not.toBeNull()
+  })
+
+  it('uses the projected central write decision for the lock marker', async () => {
+    const api = makeApi({
+      listFiltersets: vi.fn().mockResolvedValue({
+        data: [makeSet({ id: 'readonly', created_by: 'alice', can_write: false })],
+      }),
+    })
+    const { wrapper } = await mountChips({ api, authUser: { username: 'viewer', is_admin: false } })
+
+    expect(wrapper.find('[data-testid="topbar-chip-owner-lock-readonly"]').exists()).toBe(true)
   })
 
   it('keeps the dropdown open for inside clicks and closes it on outside clicks', async () => {

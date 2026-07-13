@@ -16,16 +16,20 @@ import sqlite3
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from obs.api.auth import get_admin_user
+from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
+from obs.logic.capabilities import LOGIC_CAPABILITIES
+from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 
 router = APIRouter(tags=["config"])
@@ -177,6 +181,8 @@ class ExportedIcon(BaseModel):
 
 
 class ExportedVisuNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     parent_id: str | None
     name: str
@@ -184,9 +190,17 @@ class ExportedVisuNode(BaseModel):
     node_order: int
     icon: str | None
     access: str | None
-    access_pin: str | None
+    # Accepted only for backwards-compatible import of pre-V42 backups. The
+    # legacy value may be a PIN hash, so it is discarded and never exported or
+    # installed as a credential; protected pages therefore remain fail-closed.
+    access_pin: str | None = Field(default=None, exclude=True)
     page_config: str | None
     users: list[str] = []
+
+    @field_validator("access_pin", mode="before")
+    @classmethod
+    def _discard_legacy_access_pin(cls, _value: object) -> None:
+        return None
 
 
 class ExportedNavLink(BaseModel):
@@ -226,6 +240,21 @@ class ExportedHierarchyDpLink(BaseModel):
     datapoint_id: str
 
 
+class ExportedAuthzGrant(BaseModel):
+    principal_type: Literal["user", "api_key"]
+    principal_id: str
+    node_type: str
+    node_id: str
+    role: Literal["owner", "resident", "operator", "guest"]
+    effect: Literal["allow", "deny"] = "allow"
+
+
+class ExportedApiKeyCapabilitySet(BaseModel):
+    key_id: str
+    revision: int = Field(default=0, ge=0)
+    capabilities: list[Literal["visu.page_config.write", "datapoint.metadata.write"]] = []
+
+
 class ConfigExport(BaseModel):
     obs_version: str
     exported_at: str
@@ -246,6 +275,8 @@ class ConfigExport(BaseModel):
     hierarchy_trees: list[ExportedHierarchyTree] = []
     hierarchy_nodes: list[ExportedHierarchyNode] = []
     hierarchy_dp_links: list[ExportedHierarchyDpLink] = []
+    authz_grants: list[ExportedAuthzGrant] = []
+    api_key_capability_sets: list[ExportedApiKeyCapabilitySet] = []
 
 
 class ImportResult(BaseModel):
@@ -263,6 +294,8 @@ class ImportResult(BaseModel):
     nav_links_upserted: int = 0
     app_settings_upserted: int = 0
     hierarchy_upserted: int = 0
+    authz_grants_upserted: int = 0
+    api_key_capability_sets_upserted: int = 0
     errors: list[str]
 
 
@@ -386,12 +419,20 @@ async def export_config(
     fa_key_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'icons.fontawesome_api_key'")
     fa_api_key = fa_key_row["value"] if fa_key_row else None
 
-    # Visu-Nodes (mit Benutzerzuordnungen)
+    # Visu nodes with central policy/grant assignments. PIN credentials are
+    # intentionally never part of JSON configuration exports.
     visu_node_rows = await db.fetchall("SELECT * FROM visu_nodes ORDER BY node_order, created_at")
-    visu_node_user_rows = await db.fetchall("SELECT node_id, username FROM visu_node_users")
+    policy_rows = await db.fetchall("SELECT node_id, access_mode FROM authz_visu_page_policies")
+    node_policies = {row["node_id"]: row["access_mode"] for row in policy_rows}
+    visu_node_user_rows = await db.fetchall(
+        """SELECT node_id, principal_id
+           FROM authz_node_roles
+           WHERE principal_type='user' AND node_type='visu_page'
+             AND role='guest' AND effect='allow'""",
+    )
     node_users: dict[str, list[str]] = {}
     for r in visu_node_user_rows:
-        node_users.setdefault(r["node_id"], []).append(r["username"])
+        node_users.setdefault(r["node_id"], []).append(r["principal_id"])
 
     visu_nodes = [
         ExportedVisuNode(
@@ -401,8 +442,7 @@ async def export_config(
             type=r["type"],
             node_order=r["node_order"],
             icon=r["icon"],
-            access=r["access"],
-            access_pin=r["access_pin"],
+            access=node_policies.get(r["id"]),
             page_config=r["page_config"],
             users=node_users.get(r["id"], []),
         )
@@ -448,6 +488,82 @@ async def export_config(
     dp_link_rows = await db.fetchall("SELECT * FROM hierarchy_datapoint_links")
     hierarchy_dp_links = [ExportedHierarchyDpLink(id=r["id"], node_id=r["node_id"], datapoint_id=r["datapoint_id"]) for r in dp_link_rows]
 
+    logic_capabilities = sorted(LOGIC_CAPABILITIES)
+    capability_placeholders = ",".join("?" for _ in logic_capabilities)
+    grant_rows = await db.fetchall(
+        f"""SELECT principal_type, principal_id, node_type, node_id, role, effect
+            FROM authz_node_roles AS grant_row
+            WHERE (node_type='hierarchy' AND EXISTS (
+                       SELECT 1 FROM hierarchy_nodes WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='datapoint' AND EXISTS (
+                       SELECT 1 FROM datapoints WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='logic_graph' AND EXISTS (
+                       SELECT 1 FROM logic_graphs WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='visu_page' AND EXISTS (
+                       SELECT 1 FROM visu_nodes WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='ringbuffer_filterset' AND EXISTS (
+                       SELECT 1 FROM ringbuffer_filtersets WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='adapter_instance' AND EXISTS (
+                       SELECT 1 FROM adapter_instances WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='logic_capability' AND node_id IN ({capability_placeholders}))
+            ORDER BY principal_type, principal_id, node_type, node_id""",
+        logic_capabilities,
+    )
+    user_rows = await db.fetchall("SELECT username FROM users")
+    valid_usernames = {row["username"] for row in user_rows}
+    api_key_rows = await db.fetchall("SELECT id FROM api_keys")
+    valid_api_key_ids: set[str] = set()
+    for row in api_key_rows:
+        try:
+            valid_api_key_ids.add(_canonical_principal_id("api_key", row["id"]))
+        except HTTPException:
+            continue
+
+    valid_grant_rows = []
+    for row in grant_rows:
+        if row["principal_type"] == "user":
+            if row["principal_id"] in valid_usernames:
+                valid_grant_rows.append(row)
+            continue
+        try:
+            principal_id = _canonical_principal_id("api_key", row["principal_id"])
+        except HTTPException:
+            continue
+        if principal_id in valid_api_key_ids:
+            valid_grant_rows.append(row)
+
+    authz_grants = [
+        ExportedAuthzGrant(
+            principal_type=row["principal_type"],
+            principal_id=row["principal_id"],
+            node_type=row["node_type"],
+            node_id=row["node_id"],
+            role=row["role"],
+            effect=row["effect"],
+        )
+        for row in valid_grant_rows
+    ]
+
+    capability_set_rows = await db.fetchall("SELECT key_id, revision FROM api_key_capability_sets ORDER BY key_id")
+    capability_rows = await db.fetchall("SELECT key_id, capability FROM api_key_capabilities ORDER BY key_id, capability")
+    capabilities_by_key: dict[str, list[str]] = {}
+    for row in capability_rows:
+        capabilities_by_key.setdefault(row["key_id"], []).append(row["capability"])
+    api_key_capability_sets = [
+        ExportedApiKeyCapabilitySet(
+            key_id=row["key_id"],
+            revision=row["revision"],
+            capabilities=capabilities_by_key.get(row["key_id"], []),
+        )
+        for row in capability_set_rows
+    ]
+
     return ConfigExport(
         obs_version=_EXPORT_VERSION,
         exported_at=datetime.now(UTC).isoformat(),
@@ -464,6 +580,8 @@ async def export_config(
         hierarchy_trees=hierarchy_trees,
         hierarchy_nodes=hierarchy_nodes,
         hierarchy_dp_links=hierarchy_dp_links,
+        authz_grants=authz_grants,
+        api_key_capability_sets=api_key_capability_sets,
     )
 
 
@@ -822,8 +940,8 @@ async def import_config(
             else:
                 await db.execute_and_commit(
                     """INSERT INTO logic_graphs
-                       (id, name, description, enabled, flow_data, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?)""",
+                       (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
+                       VALUES (?,?,?,?,?,?,?,?)""",
                     (
                         lg.id,
                         lg.name,
@@ -832,6 +950,7 @@ async def import_config(
                         flow_json,
                         now,
                         now,
+                        _user,
                     ),
                 )
                 result.logic_graphs_created += 1
@@ -908,12 +1027,12 @@ async def import_config(
                     try:
                         await db.execute_and_commit(
                             """INSERT INTO visu_nodes
-                               (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                               (id, parent_id, name, type, node_order, icon, page_config, created_at, updated_at, created_by)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)
                                ON CONFLICT(id) DO UPDATE
                                SET parent_id=excluded.parent_id, name=excluded.name, type=excluded.type,
-                                   node_order=excluded.node_order, icon=excluded.icon, access=excluded.access,
-                                   access_pin=excluded.access_pin, page_config=excluded.page_config, updated_at=excluded.updated_at""",
+                                   node_order=excluded.node_order, icon=excluded.icon,
+                                   page_config=excluded.page_config, updated_at=excluded.updated_at""",
                             (
                                 node.id,
                                 node.parent_id,
@@ -921,27 +1040,39 @@ async def import_config(
                                 node.type,
                                 node.node_order,
                                 node.icon,
-                                node.access,
-                                node.access_pin,
                                 node.page_config,
                                 now,
                                 now,
+                                _user if node.type == "PAGE" else None,
                             ),
                         )
                         inserted_ids.add(node.id)
                         result.visu_nodes_upserted += 1
 
-                        # Benutzerzuordnungen
-                        if node.users:
-                            await db.execute_and_commit("DELETE FROM visu_node_users WHERE node_id=?", (node.id,))
+                        await db.execute_and_commit("DELETE FROM authz_visu_page_policies WHERE node_id=?", (node.id,))
+                        if node.access is not None:
+                            await db.execute_and_commit(
+                                "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+                                (node.id, node.access),
+                            )
+
+                        # Central user grants replace the old per-page assignment table.
+                        await db.execute_and_commit(
+                            """DELETE FROM authz_node_roles
+                               WHERE principal_type='user' AND node_type='visu_page' AND node_id=?
+                                 AND role='guest' AND effect='allow'""",
+                            (node.id,),
+                        )
+                        if node.users and node.access == "user":
                             for username in node.users:
-                                try:
+                                user = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
+                                if user and not bool(user["is_admin"]):
                                     await db.execute_and_commit(
-                                        "INSERT OR IGNORE INTO visu_node_users (node_id, username) VALUES (?,?)",
-                                        (node.id, username),
+                                        """INSERT OR IGNORE INTO authz_node_roles
+                                               (principal_type, principal_id, node_type, node_id, role, effect)
+                                           VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')""",
+                                        (username, node.id),
                                     )
-                                except Exception:
-                                    pass
                     except Exception as exc:
                         result.errors.append(f"VisuNode {node.id}: {exc}")
                         inserted_ids.add(node.id)
@@ -1038,6 +1169,68 @@ async def import_config(
         except Exception as exc:
             result.errors.append(f"HierarchyDpLink {link.id}: {exc}")
 
+    # --- Central authorization grants ---
+    for grant in body.authz_grants:
+        try:
+            principal_id = _canonical_principal_id(grant.principal_type, grant.principal_id)
+            principal_table = "users" if grant.principal_type == "user" else "api_keys"
+            principal_column = "username" if grant.principal_type == "user" else "id"
+            principal = await db.fetchone(
+                f"SELECT 1 FROM {principal_table} WHERE {principal_column}=?",
+                (principal_id,),
+            )
+            if principal is None:
+                raise ValueError(f"principal {grant.principal_type}:{principal_id} does not exist")
+            target = AuthzPrincipalGrant(
+                node_type=grant.node_type,
+                node_id=grant.node_id,
+                role=grant.role,
+                effect=grant.effect,
+            )
+            await _require_grant_targets(db, [target])
+            await db.execute_and_commit(
+                """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE
+                   SET role=excluded.role, effect=excluded.effect,
+                       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                (
+                    grant.principal_type,
+                    principal_id,
+                    grant.node_type,
+                    grant.node_id,
+                    grant.role,
+                    grant.effect,
+                ),
+            )
+            result.authz_grants_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"AuthzGrant {grant.principal_type}:{grant.principal_id}/{grant.node_type}:{grant.node_id}: {exc}")
+
+    # --- API-key configuration capability sets ---
+    for capability_set in body.api_key_capability_sets:
+        try:
+            key = await db.fetchone("SELECT 1 FROM api_keys WHERE id=?", (capability_set.key_id,))
+            if key is None:
+                raise ValueError(f"API key {capability_set.key_id} does not exist")
+            async with db.transaction():
+                await db.execute("DELETE FROM api_key_capabilities WHERE key_id=?", (capability_set.key_id,))
+                await db.executemany(
+                    "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, ?)",
+                    [(capability_set.key_id, capability) for capability in capability_set.capabilities],
+                )
+                await db.execute(
+                    """INSERT INTO api_key_capability_sets (key_id, revision, updated_at)
+                       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                       ON CONFLICT(key_id) DO UPDATE
+                       SET revision=excluded.revision, updated_at=excluded.updated_at""",
+                    (capability_set.key_id, capability_set.revision),
+                )
+            result.api_key_capability_sets_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"ApiKeyCapabilitySet {capability_set.key_id}: {exc}")
+
     return result
 
 
@@ -1066,7 +1259,9 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
         result.logic_graphs_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM logic_graphs")
+        async with db.transaction():
+            await db.execute("DELETE FROM authz_node_roles")
+            await db.execute("DELETE FROM logic_graphs")
         from obs.logic.manager import get_logic_manager
 
         await get_logic_manager().reload()
@@ -1209,7 +1404,9 @@ async def clear_logic(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
         result.deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM logic_graphs")
+        async with db.transaction():
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='logic_graph'")
+            await db.execute("DELETE FROM logic_graphs")
         from obs.logic.manager import get_logic_manager
 
         await get_logic_manager().reload()

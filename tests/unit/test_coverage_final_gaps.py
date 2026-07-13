@@ -83,7 +83,9 @@ async def test_camera_auth_bearer_header(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera.decode_token", lambda t: "admin")
     req = MagicMock()
     req.headers = {"Authorization": "Bearer mytoken"}
-    result = await _camera_auth(req, _token="")
+    db = MagicMock()
+    db.fetchone = AsyncMock(return_value={"exists": 1})
+    result = await _camera_auth(req, _token="", db=db)
     assert result == "admin"
 
 
@@ -92,17 +94,18 @@ async def test_camera_auth_query_token(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera.decode_token", lambda t: "admin")
     req = MagicMock()
     req.headers = {}
-    result = await _camera_auth(req, _token="querytoken")
+    db = MagicMock()
+    db.fetchone = AsyncMock(return_value={"exists": 1})
+    result = await _camera_auth(req, _token="querytoken", db=db)
     assert result == "admin"
 
 
 @pytest.mark.asyncio
-async def test_camera_auth_missing_raises_401():
+async def test_camera_auth_missing_returns_anonymous_identity():
     req = MagicMock()
     req.headers = {}
-    with pytest.raises(HTTPException) as exc_info:
-        await _camera_auth(req, _token="")
-    assert exc_info.value.status_code == 401
+    result = await _camera_auth(req, _token="")
+    assert result is None
 
 
 # ===========================================================================
@@ -440,6 +443,7 @@ async def test_proxy_camera_rejects_non_http(monkeypatch):
 @pytest.mark.asyncio
 async def test_proxy_camera_head_returns_redirect(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=301, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -453,6 +457,7 @@ async def test_proxy_camera_head_returns_redirect(monkeypatch):
             password="",
             apikey_param="",
             apikey_value="",
+            page_id="page-camera",
             _user="admin",
         )
     assert exc_info.value.status_code == 400
@@ -461,6 +466,7 @@ async def test_proxy_camera_head_returns_redirect(monkeypatch):
 @pytest.mark.asyncio
 async def test_proxy_camera_head_returns_401(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=401, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -474,6 +480,7 @@ async def test_proxy_camera_head_returns_401(monkeypatch):
             password="",
             apikey_param="",
             apikey_value="",
+            page_id="page-camera",
             _user="admin",
         )
     assert exc_info.value.status_code == 502
@@ -484,6 +491,7 @@ async def test_proxy_camera_head_request_error(monkeypatch):
     import httpx
 
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -496,6 +504,7 @@ async def test_proxy_camera_head_request_error(monkeypatch):
             password="",
             apikey_param="",
             apikey_value="",
+            page_id="page-camera",
             _user="admin",
         )
     assert exc_info.value.status_code == 502
@@ -506,6 +515,7 @@ async def test_proxy_camera_success_returns_streaming_response(monkeypatch):
     from fastapi.responses import StreamingResponse
 
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=200, headers={"content-type": "video/mjpeg"})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -518,6 +528,7 @@ async def test_proxy_camera_success_returns_streaming_response(monkeypatch):
         password="pw",
         apikey_param="key",
         apikey_value="abc",
+        page_id="page-camera",
         _user="admin",
     )
     assert isinstance(result, StreamingResponse)
@@ -530,6 +541,7 @@ async def test_proxy_camera_head_405_optimistic(monkeypatch):
     from fastapi.responses import StreamingResponse
 
     monkeypatch.setattr("obs.api.v1.camera._build_fetch_targets", AsyncMock(return_value=(["http://camera.local/stream"], {}, {})))
+    monkeypatch.setattr("obs.api.v1.camera._ensure_camera_page_scope", AsyncMock(return_value=None))
     mock_head = MagicMock(status_code=405, headers={})
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -542,6 +554,7 @@ async def test_proxy_camera_head_405_optimistic(monkeypatch):
         password="",
         apikey_param="",
         apikey_value="",
+        page_id="page-camera",
         _user="admin",
     )
     assert isinstance(result, StreamingResponse)
@@ -696,11 +709,14 @@ def _make_node_row(**kw):
         "icon": None,
         "node_order": 0,
         "access": "public",
+        "access_mode": "public",
         "page_config": None,
         "created_at": "2026-01-01T00:00:00",
         "updated_at": "2026-01-01T00:00:00",
     }
     defaults.update(kw)
+    if "access" in kw and "access_mode" not in kw:
+        defaults["access_mode"] = kw["access"]
 
     class R(dict):
         def __getitem__(self, k):
@@ -1060,7 +1076,7 @@ async def test_check_history_access_public_page(monkeypatch):
     """Public page allows unauthenticated access."""
     from obs.api.v1 import history as hist_api
 
-    monkeypatch.setattr(hist_api, "_resolve_page_access", AsyncMock(return_value="public"))
+    monkeypatch.setattr(hist_api, "_resolve_page_access_with_node", AsyncMock(return_value=("public", None)))
     req = MagicMock()
     req.headers = {"X-Page-Id": "page-1"}
     await _check_history_access(req, user=None, db=MagicMock())  # should not raise
@@ -1071,7 +1087,7 @@ async def test_check_history_access_private_page(monkeypatch):
     """Private page without user raises 401."""
     from obs.api.v1 import history as hist_api
 
-    monkeypatch.setattr(hist_api, "_resolve_page_access", AsyncMock(return_value="private"))
+    monkeypatch.setattr(hist_api, "_resolve_page_access_with_node", AsyncMock(return_value=("private", "page-1")))
     req = MagicMock()
     req.headers = {"X-Page-Id": "page-1"}
     with pytest.raises(HTTPException) as exc_info:
@@ -1592,7 +1608,7 @@ async def test_visu_save_page_success(monkeypatch):
     node_row = _make_node_row(id="p1", type="PAGE", name="Page")
     db = _make_visu_db(row=node_row)
     cfg = PageConfig(grid_cols=12, grid_row_height=80, background=None, widgets=[])
-    await save_page(node_id="p1", config=cfg, db=db, _user="admin")
+    await save_page(node_id="p1", config=cfg, request=None, db=db)
     assert db.conn.execute.called
     assert db.conn.commit.called
 
@@ -1617,7 +1633,7 @@ async def test_visu_update_node_access_pin(monkeypatch):
     """update_node with access_pin hashes it."""
     node_row = _make_node_row(id="n1", type="PAGE", name="PinPage")
     db = _make_visu_db(row=node_row)
-    body = VisuNodeUpdate(access_pin="1234")
+    body = VisuNodeUpdate(access="protected", access_pin="1234")
     result = await update_node(node_id="n1", body=body, db=db, _user="admin")
     assert result is not None
 
@@ -1740,7 +1756,13 @@ async def test_update_app_settings(monkeypatch):
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: MagicMock(update_app_config=MagicMock()))
 
     class _Db:
-        async def execute_and_commit(self, q, p=()):
+        async def fetchone(self, q, p=()):
+            return None
+
+        async def execute(self, q, p=()):
+            pass
+
+        async def commit(self):
             pass
 
     from obs.api.v1.system import AppSettingsIn, update_app_settings
@@ -1775,6 +1797,7 @@ async def test_pin_auth_not_found(monkeypatch):
 
     db = _make_visu_db(row=None)
     db.conn.execute.return_value = _DualCursor(row=None)
+    db.fetchone = AsyncMock(return_value=None)
 
     body = PinAuthRequest(pin="1234")
     req = MagicMock()
@@ -1813,14 +1836,14 @@ async def test_delete_instance_success(monkeypatch):
         committed = []
 
         async def fetchone(self, q, p=()):
-            return _Row({"id": str(uuid.uuid4())})
+            return _Row({"id": str(uuid.uuid4()), "adapter_type": "MQTT"})
 
         async def execute_and_commit(self, q, p=()):
             _Db.committed.append(q)
 
     monkeypatch.setattr("obs.adapters.registry.stop_instance", AsyncMock())
     await delete_instance(instance_id=uuid.uuid4(), _user="admin", db=_Db())
-    assert len(_Db.committed) == 2  # bindings + instance delete
+    assert len(_Db.committed) == 3  # bindings + grants + instance delete
 
 
 @pytest.mark.asyncio
@@ -1915,7 +1938,7 @@ async def test_get_node_users_returns_usernames():
         def __getitem__(self, k):
             return super().__getitem__(k)
 
-    db.fetchall = AsyncMock(return_value=[_URow({"username": "alice"}), _URow({"username": "bob"})])
+    db.fetchall = AsyncMock(return_value=[_URow({"principal_id": "alice"}), _URow({"principal_id": "bob"})])
     result = await get_node_users(node_id="n1", db=db, _admin="admin")
     assert result == ["alice", "bob"]
 
@@ -2137,7 +2160,7 @@ async def test_visu_create_node_with_pin():
     """create_node hashes access_pin when provided."""
     node_row = _make_node_row(id="pinned", type="PAGE", name="Secured")
     db = _make_visu_db(row=node_row)
-    body = VisuNodeCreate(name="Secured", type="PAGE", parent_id=None, access_pin="5678")
+    body = VisuNodeCreate(name="Secured", type="PAGE", parent_id=None, access="protected", access_pin="5678")
     result = await create_node(body=body, db=db, _user="admin")
     assert result is not None
     assert db.conn.commit.called
