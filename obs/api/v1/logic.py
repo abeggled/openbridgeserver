@@ -813,6 +813,7 @@ async def run_graph(
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
     preflight = await _logic_run_preflight(db, principal, row)
     authorization_denied = any(not check.allowed and check.target_type != "logic_graph_state" for check in preflight.checks)
     if authorization_denied:

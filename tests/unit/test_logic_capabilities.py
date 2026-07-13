@@ -404,6 +404,21 @@ async def test_current_principal_preflight_endpoint_returns_decisions(db: Databa
 
 
 @pytest.mark.asyncio
+async def test_run_graph_conceals_existing_unreadable_graph_before_preflight(db: Database) -> None:
+    await _insert_graph(db, "graph-concealed", [_node("sms-node", "notify_sms")])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await logic_api.run_graph(
+            "graph-concealed",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Graph nicht gefunden"
+
+
+@pytest.mark.asyncio
 async def test_disabled_graph_preflight_matches_run_rejection(db: Database) -> None:
     await _insert_graph(db, "graph-disabled", [], enabled=False)
     principal = Principal(subject="admin", type="user", is_admin=True)

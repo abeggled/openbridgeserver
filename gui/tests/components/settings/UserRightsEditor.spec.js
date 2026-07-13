@@ -223,6 +223,41 @@ describe('UserRightsEditor', () => {
     ], '"central-v1"')
   })
 
+  it('adds the closed create-graph capability and its central-plant authority', async () => {
+    const wrapper = await mountEditor()
+    await next(wrapper)
+
+    expect(wrapper.get('[data-testid="logic-create-enabled"]').element.checked).toBe(false)
+    await wrapper.get('[data-testid="logic-create-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="logic-create-central-control"]').setValue(true)
+    await next(wrapper)
+
+    expect(authzApi.preview).toHaveBeenCalledWith(expect.objectContaining({
+      targets: expect.arrayContaining([
+        { node_type: 'logic_capability', node_id: 'create_graph' },
+      ]),
+      draft_grants: expect.arrayContaining([
+        {
+          principal_type: 'user',
+          principal_id: 'alice',
+          ...grant('logic_capability', 'create_graph', 'operator', 'allow', true),
+        },
+      ]),
+    }))
+
+    await next(wrapper)
+    expect(wrapper.get('[data-testid="logic-create-summary"]').text()).toContain('Aktiviert')
+    await wrapper.get('[data-testid="rights-save"]').trigger('click')
+    await flushPromises()
+
+    expect(authzApi.updateUserGrants).toHaveBeenCalledWith('alice', [
+      grant('datapoint', 'dp-denied', 'operator', 'deny'),
+      grant('datapoint', 'dp-direct', 'guest'),
+      grant('hierarchy', 'kitchen', 'resident'),
+      grant('logic_capability', 'create_graph', 'operator', 'allow', true),
+    ], '"grants-v1"')
+  })
+
   it('preserves per-node roles while adding and removing scopes in a mixed assignment', async () => {
     authzApi.getUserGrants.mockResolvedValue({
       headers: { etag: '"mixed-v1"' },

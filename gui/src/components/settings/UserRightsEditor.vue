@@ -118,6 +118,27 @@
             </div>
           </div>
           <p class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedScopes', { n: selectedNodeIds.length }) }}</p>
+          <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700" data-testid="logic-create-capability">
+            <label class="flex cursor-pointer items-start gap-3">
+              <input
+                v-model="logicCreateEnabled"
+                type="checkbox"
+                :disabled="logicCreateDenied"
+                class="mt-0.5"
+                data-testid="logic-create-enabled"
+              />
+              <span>
+                <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">{{ $t('settings.users.rights.logicCreateTitle') }}</span>
+                <span class="mt-1 block text-xs text-slate-500">
+                  {{ logicCreateDenied ? $t('settings.users.rights.logicCreateDenied') : $t('settings.users.rights.logicCreateHint') }}
+                </span>
+              </span>
+            </label>
+            <label v-if="logicCreateEnabled" class="mt-3 flex cursor-pointer items-center gap-2 pl-6 text-xs text-slate-600 dark:text-slate-300">
+              <input v-model="logicCreateCentralControl" type="checkbox" data-testid="logic-create-central-control" />
+              <span>{{ $t('settings.users.rights.logicCreateCentralControl') }}</span>
+            </label>
+          </div>
           <div v-if="selectedOrphanCount" class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300" data-testid="orphaned-scope-block">
             {{ $t('settings.users.rights.orphanedScopeBlock', { n: selectedOrphanCount }) }}
           </div>
@@ -196,6 +217,12 @@
             <div>
               <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.selectedAreas') }}</dt>
               <dd class="font-medium text-slate-800 dark:text-slate-100">{{ selectedNodeIds.length }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-500">{{ $t('settings.users.rights.logicCreateTitle') }}</dt>
+              <dd class="font-medium text-slate-800 dark:text-slate-100" data-testid="logic-create-summary">
+                {{ logicCreateEnabled ? $t('settings.users.rights.enabled') : $t('settings.users.rights.disabled') }}
+              </dd>
             </div>
           </dl>
           <div v-if="selectedNodeIds.length" class="flex flex-col gap-2" data-testid="central-control-summary">
@@ -284,6 +311,7 @@ const { t } = useI18n()
 
 const ACTIONS = ['read', 'write', 'activate', 'generate']
 const GRANT_FIELDS = ['node_type', 'node_id', 'role', 'effect', 'central_control']
+const LOGIC_CREATE_TARGET = { node_type: 'logic_capability', node_id: 'create_graph' }
 const KNOWN_REASON_CODES = new Set(['admin', 'allowed', 'direct_datapoint_grant', 'explicit_deny', 'central_control_required', 'missing_allow', 'no_targets'])
 
 const step = ref(1)
@@ -294,6 +322,10 @@ const selectedNodeIds = ref([])
 const originalNodeIds = ref([])
 const originalRolesByNode = ref({})
 const centralControlByNode = ref({})
+const logicCreateEnabled = ref(false)
+const originalLogicCreateEnabled = ref(false)
+const logicCreateCentralControl = ref(false)
+const logicCreateRole = ref('operator')
 const originalAdvancedTargets = ref([])
 const hierarchyNodes = ref([])
 const advancedGrants = ref([])
@@ -321,11 +353,17 @@ const roleOptions = computed(() => ['guest', 'resident', 'operator', 'owner'].ma
 
 const selectedRoleLabel = computed(() => roleOptions.value.find((option) => option.value === selectedRole.value)?.label ?? '')
 const selectedOrphanCount = computed(() => hierarchyNodes.value.filter((node) => node.orphaned && selectedNodeIds.value.includes(node.id)).length)
+const logicCreateDenied = computed(() => advancedGrants.value.some((grant) => (
+  grant.node_type === LOGIC_CREATE_TARGET.node_type
+  && grant.node_id === LOGIC_CREATE_TARGET.node_id
+  && grant.effect === 'deny'
+)))
 const hasNewScopes = computed(() => selectedNodeIds.value.some((nodeId) => !originalRolesByNode.value[nodeId]))
 const previewTargets = computed(() => {
   const targets = [
     ...originalNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId, control_class: 'central_plant' })),
     ...selectedNodeIds.value.map((nodeId) => ({ node_type: 'hierarchy', node_id: nodeId, control_class: 'central_plant' })),
+    ...(originalLogicCreateEnabled.value || logicCreateEnabled.value ? [LOGIC_CREATE_TARGET] : []),
     ...originalAdvancedTargets.value,
     ...advancedGrants.value.map(({ node_type, node_id }) => ({ node_type, node_id: String(node_id) })),
   ]
@@ -390,6 +428,12 @@ function isEditableGrant(grant) {
   return grant.node_type === 'hierarchy' && grant.effect === 'allow'
 }
 
+function isLogicCreateGrant(grant) {
+  return grant.node_type === LOGIC_CREATE_TARGET.node_type
+    && grant.node_id === LOGIC_CREATE_TARGET.node_id
+    && grant.effect === 'allow'
+}
+
 function flattenNodes(nodes, parentId = null, target = []) {
   for (const node of nodes || []) {
     const normalized = { ...node, parent_id: node.parent_id ?? parentId }
@@ -437,6 +481,10 @@ async function initialize() {
   originalNodeIds.value = []
   originalRolesByNode.value = {}
   centralControlByNode.value = {}
+  logicCreateEnabled.value = false
+  originalLogicCreateEnabled.value = false
+  logicCreateCentralControl.value = false
+  logicCreateRole.value = 'operator'
   originalAdvancedTargets.value = []
   hierarchyNodes.value = []
   advancedGrants.value = []
@@ -455,7 +503,12 @@ async function initialize() {
     grantsEtag.value = headers?.etag ?? headers?.ETag ?? ''
     const grants = (data.grants || []).map(cleanGrant)
     const editable = grants.filter(isEditableGrant)
-    advancedGrants.value = grants.filter((grant) => !isEditableGrant(grant))
+    const logicCreateGrant = grants.find(isLogicCreateGrant)
+    logicCreateEnabled.value = Boolean(logicCreateGrant)
+    originalLogicCreateEnabled.value = logicCreateEnabled.value
+    logicCreateCentralControl.value = Boolean(logicCreateGrant?.central_control)
+    logicCreateRole.value = logicCreateGrant?.role ?? 'operator'
+    advancedGrants.value = grants.filter((grant) => !isEditableGrant(grant) && !isLogicCreateGrant(grant))
     originalAdvancedTargets.value = advancedGrants.value.map(({ node_type, node_id }) => ({ node_type, node_id: String(node_id) }))
     selectedNodeIds.value = [...new Set(editable.map((grant) => String(grant.node_id)))]
     originalNodeIds.value = [...selectedNodeIds.value]
@@ -483,7 +536,7 @@ async function initialize() {
 }
 
 function editableGrants() {
-  return selectedNodeIds.value.map((nodeId) => ({
+  const grants = selectedNodeIds.value.map((nodeId) => ({
     node_type: 'hierarchy',
     node_id: nodeId,
     role: originalRolesByNode.value[nodeId] && !reassignExisting.value
@@ -492,6 +545,15 @@ function editableGrants() {
     effect: 'allow',
     central_control: Boolean(centralControlByNode.value[nodeId]),
   }))
+  if (logicCreateEnabled.value) {
+    grants.push({
+      ...LOGIC_CREATE_TARGET,
+      role: logicCreateRole.value,
+      effect: 'allow',
+      central_control: logicCreateCentralControl.value,
+    })
+  }
+  return grants
 }
 
 function replacementGrants() {
