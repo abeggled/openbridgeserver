@@ -79,6 +79,11 @@ class _DbStub:
         self._fetchone_side_effects: list = []
         self._fetchall_side_effects: list = []
         self.executed: list = []
+        self._in_transaction = False
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._in_transaction
 
     async def fetchone(self, query: str, params=()):
         self._fetchone_call_count += 1
@@ -120,7 +125,16 @@ class _DbStub:
 
     @asynccontextmanager
     async def transaction(self):
-        yield
+        assert not self._in_transaction, "nested test transactions are not supported"
+        snapshot = len(self.executed)
+        self._in_transaction = True
+        try:
+            yield
+        except Exception:
+            del self.executed[snapshot:]
+            raise
+        finally:
+            self._in_transaction = False
 
 
 class _DpStub:
@@ -507,7 +521,8 @@ class TestCreateApiKey:
         )
         assert result.key.startswith("obs_")
         assert result.name == "automation-key"
-        assert len(db.executed) == 1
+        assert len(db.executed) == 2
+        assert "INSERT INTO audit_log_entries" in db.executed[1][0]
 
     @pytest.mark.asyncio
     async def test_api_key_principal_creates_key_for_owner(self):
@@ -553,7 +568,11 @@ class TestCreateApiKey:
             )
 
         assert exc_info.value.status_code == 403
-        assert db.executed == []
+        assert len(db.executed) == 1
+        audit_sql, audit_params = db.executed[0]
+        assert "INSERT INTO audit_log_entries" in audit_sql
+        assert audit_params[1] == "auth.api_key.created"
+        assert audit_params[10] == "denied"
 
 
 # ---------------------------------------------------------------------------
@@ -569,13 +588,15 @@ class TestDeleteApiKey:
         db = _DbStub()
         db._fetchone_side_effects = [key_row, admin_row]
         await auth_module.delete_api_key(key_id="k1", current_user="admin", db=db)
-        assert db.executed == [
+        assert db.executed[:2] == [
             (
                 "DELETE FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN (?, ?)",
                 ("k1", "api_key:k1"),
             ),
             ("DELETE FROM api_keys WHERE id=?", ("k1",)),
         ]
+        assert len(db.executed) == 3
+        assert "INSERT INTO audit_log_entries" in db.executed[2][0]
 
     @pytest.mark.asyncio
     async def test_user_can_delete_own_key(self):
@@ -1026,7 +1047,8 @@ class TestMeEndpoints:
         db = _DbStub(fetchone_result=pw_row)
         body = ChangePasswordRequest(current_password="old_pass", new_password="new_pass")
         await auth_module.change_password(body=body, current_user="alice", db=db)
-        assert len(db.executed) == 1
+        assert len(db.executed) == 2
+        assert "INSERT INTO audit_log_entries" in db.executed[1][0]
 
     @pytest.mark.asyncio
     async def test_change_password_wrong_current_raises_400(self):
