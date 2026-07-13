@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from obs.api.v1 import config as config_api
 from obs.api.v1 import history as history_api
@@ -58,6 +59,7 @@ class _DbStub:
         self.committed: list[tuple] = []
         self.executed: list[tuple] = []
         self.commit_count = 0
+        self._in_transaction = False
         # Support multiple fetchall calls per test via iterator or list-of-lists
         self._fetchall_iter = (
             iter(fetchall_results) if isinstance(fetchall_results, list) and fetchall_results and isinstance(fetchall_results[0], list) else None
@@ -89,15 +91,44 @@ class _DbStub:
     async def commit(self):
         self.commit_count += 1
 
+    @property
+    def in_transaction(self) -> bool:
+        return self._in_transaction
+
     @asynccontextmanager
     async def transaction(self):
-        yield
+        assert not self._in_transaction
+        committed_snapshot = len(self.committed)
+        executed_snapshot = len(self.executed)
+        self._in_transaction = True
+        try:
+            yield
+        except Exception:
+            del self.committed[committed_snapshot:]
+            del self.executed[executed_snapshot:]
+            raise
+        finally:
+            self._in_transaction = False
 
     async def disconnect(self):
         pass
 
     async def connect(self):
         pass
+
+
+def _request(method: str, path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "route": SimpleNamespace(path=path),
+        }
+    )
 
 
 class _RegistryStub:
@@ -1616,7 +1647,7 @@ async def test_set_autobackup_config_valid():
     body = ab_api.AutobackupConfig(enabled=True, hour=2, retention_days=5)
 
     with patch.object(ab_api, "_notify_config_change"):
-        result = await ab_api.set_autobackup_config(body=body, _admin="admin", db=db)
+        result = await ab_api.set_autobackup_config(body=body, request=_request("PUT", "/api/v1/config/autobackup/config"), _admin="admin", db=db)
 
     assert result.hour == 2
     assert result.retention_days == 5
@@ -1657,18 +1688,27 @@ async def test_list_autobackups_endpoint(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_delete_autobackup_invalid_name():
     """delete_autobackup raises 400 for invalid name format."""
+    db = _DbStub()
     with pytest.raises(HTTPException) as exc_info:
-        await ab_api.delete_autobackup(name="../evil", _admin="admin")
+        await ab_api.delete_autobackup(name="../evil", request=_request("DELETE", "/api/v1/config/autobackup/evil"), _admin="admin", db=db)
     assert exc_info.value.status_code == 400
+    assert db.committed[-1][1][10] == "failed"
 
 
 @pytest.mark.asyncio
 async def test_delete_autobackup_not_found(tmp_path, monkeypatch):
     """delete_autobackup raises 404 when backup file doesn't exist."""
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
+    db = _DbStub()
     with pytest.raises(HTTPException) as exc_info:
-        await ab_api.delete_autobackup(name="20250601-0300", _admin="admin")
+        await ab_api.delete_autobackup(
+            name="20250601-0300",
+            request=_request("DELETE", "/api/v1/config/autobackup/20250601-0300"),
+            _admin="admin",
+            db=db,
+        )
     assert exc_info.value.status_code == 404
+    assert db.committed[-1][1][10] == "failed"
 
 
 @pytest.mark.asyncio
@@ -1677,10 +1717,17 @@ async def test_delete_autobackup_success(tmp_path, monkeypatch):
     backup_file = tmp_path / "20250601-0300.json"
     backup_file.write_text("{}")
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
+    db = _DbStub()
 
-    result = await ab_api.delete_autobackup(name="20250601-0300", _admin="admin")
+    result = await ab_api.delete_autobackup(
+        name="20250601-0300",
+        request=_request("DELETE", "/api/v1/config/autobackup/20250601-0300"),
+        _admin="admin",
+        db=db,
+    )
     assert result["ok"] is True
     assert not backup_file.exists()
+    assert db.committed[-1][1][10] == "success"
 
 
 @pytest.mark.asyncio
@@ -1824,17 +1871,21 @@ async def test_update_history_settings_reload_failure():
 async def test_test_history_connection_sqlite():
     """test_history_connection returns ok=True for sqlite."""
     body = system_api.HistorySettingsIn(plugin="sqlite")
-    result = await system_api.test_history_connection(body=body, _admin="admin")
+    db = _DbStub()
+    result = await system_api.test_history_connection(body=body, request=_request("POST", "/api/v1/system/history/test"), _admin="admin", db=db)
     assert result.ok is True
     assert "sqlite" in result.message.lower()
+    assert db.committed[-1][1][10] == "success"
 
 
 @pytest.mark.asyncio
 async def test_test_history_connection_unknown_plugin():
     """test_history_connection returns ok=False for unknown plugin."""
     body = system_api.HistorySettingsIn(plugin="unknown_db")
-    result = await system_api.test_history_connection(body=body, _admin="admin")
+    db = _DbStub()
+    result = await system_api.test_history_connection(body=body, request=_request("POST", "/api/v1/system/history/test"), _admin="admin", db=db)
     assert result.ok is False
+    assert db.committed[-1][1][10] == "failed"
 
 
 @pytest.mark.asyncio
@@ -1861,7 +1912,7 @@ async def test_update_app_settings_valid():
 
     with patch("obs.logic.manager.get_logic_manager") as mock_lm:
         mock_lm.return_value.update_app_config = MagicMock()
-        result = await system_api.update_app_settings(body=body, db=db, _user="admin")
+        result = await system_api.update_app_settings(body=body, request=_request("PUT", "/api/v1/system/settings"), db=db, _user="admin")
 
     assert result.timezone == "Europe/Berlin"
     assert [query.strip().split(maxsplit=1)[0] for query, _params in db.executed] == ["INSERT", "INSERT"]
@@ -1895,7 +1946,7 @@ async def test_create_nav_link():
     """create_nav_link inserts row and returns NavLinkOut."""
     db = _DbStub()
     body = system_api.NavLinkIn(label="OBS", url="https://obs.example.com", icon="home")
-    result = await system_api.create_nav_link(body=body, db=db, _admin="admin")
+    result = await system_api.create_nav_link(body=body, request=_request("POST", "/api/v1/system/nav-links"), db=db, _admin="admin")
     assert result.label == "OBS"
     assert result.url == "https://obs.example.com"
     assert len(db.committed) == 1
@@ -1917,7 +1968,13 @@ async def test_update_nav_link_partial_patch():
     existing = _row({"id": "nl-1", "label": "Old", "url": "http://old.com", "icon": "", "sort_order": 0, "open_new_tab": 1})
     db = _DbStub(fetchone_result=existing)
     body = system_api.NavLinkPatch(label="New Label")
-    result = await system_api.update_nav_link(link_id="nl-1", body=body, db=db, _admin="admin")
+    result = await system_api.update_nav_link(
+        link_id="nl-1",
+        body=body,
+        request=_request("PATCH", "/api/v1/system/nav-links/nl-1"),
+        db=db,
+        _admin="admin",
+    )
     assert result.label == "New Label"
     assert result.url == "http://old.com"  # unchanged
 
@@ -1935,7 +1992,7 @@ async def test_delete_nav_link_not_found():
 async def test_delete_nav_link_success():
     """delete_nav_link deletes existing link."""
     db = _DbStub(fetchone_result=_row({"id": "nl-1"}))
-    await system_api.delete_nav_link(link_id="nl-1", db=db, _admin="admin")
+    await system_api.delete_nav_link(link_id="nl-1", request=_request("DELETE", "/api/v1/system/nav-links/nl-1"), db=db, _admin="admin")
     assert len(db.committed) == 1
 
 
@@ -1965,12 +2022,16 @@ async def test_get_log_level():
 @pytest.mark.asyncio
 async def test_set_log_level_valid():
     """set_log_level calls set_log_buffer_level for valid level."""
+    db = _DbStub()
     with patch("obs.log_buffer.set_log_buffer_level") as mock_set:
         await system_api.set_log_level(
             body=system_api.LogLevelIn(level="DEBUG"),
+            request=_request("PUT", "/api/v1/system/log-level"),
             _admin="admin",
+            db=db,
         )
     mock_set.assert_called_once_with("DEBUG")
+    assert db.committed[-1][1][10] == "success"
 
 
 @pytest.mark.asyncio
