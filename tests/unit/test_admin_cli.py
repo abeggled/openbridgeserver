@@ -748,6 +748,11 @@ def test_first_owner_rolls_back_user_if_root_grant_fails(tmp_path: Path):
 def test_recover_owner_promotes_existing_user_and_grants_owner_role(tmp_path: Path):
     db_path = tmp_path / "auth.db"
     _make_auth_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE hierarchy_nodes (id TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO hierarchy_nodes VALUES ('root')")
+    conn.commit()
+    conn.close()
 
     result = recover_owner(db_path, "alice", password="new-password", node_type="hierarchy", node_id="root", backup=False)
 
@@ -802,6 +807,8 @@ def test_recover_owner_rolls_back_promotion_when_grant_fails(tmp_path: Path):
     db_path = tmp_path / "auth.db"
     _make_auth_db(db_path)
     conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE hierarchy_nodes (id TEXT PRIMARY KEY)")
+    conn.execute("INSERT INTO hierarchy_nodes VALUES ('root')")
     conn.execute("CREATE TRIGGER reject_owner_grant BEFORE INSERT ON authz_node_roles BEGIN SELECT RAISE(ABORT, 'reject grant'); END")
     conn.commit()
     conn.close()
@@ -847,6 +854,36 @@ def test_recover_owner_requires_node_type_and_id_together(tmp_path: Path):
 
     with pytest.raises(AdminCliError, match="gemeinsam"):
         recover_owner(db_path, "alice", node_type="hierarchy", backup=False)
+
+
+def test_recover_owner_rejects_missing_grant_target_without_promoting_user(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE hierarchy_nodes (id TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(AdminCliError, match="Unbekanntes AuthZ-Ziel: hierarchy:missing"):
+        recover_owner(db_path, "alice", node_type="hierarchy", node_id="missing", backup=False)
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT is_admin FROM users WHERE username='alice'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM authz_node_roles").fetchone()[0] == 0
+    conn.close()
+
+
+def test_recover_owner_rejects_unknown_grant_type_without_promoting_user(tmp_path: Path):
+    db_path = tmp_path / "auth.db"
+    _make_auth_db(db_path)
+
+    with pytest.raises(AdminCliError, match="Unbekannter AuthZ-Node-Typ: future_type"):
+        recover_owner(db_path, "alice", node_type="future_type", node_id="target", backup=False)
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT is_admin FROM users WHERE username='alice'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM authz_node_roles").fetchone()[0] == 0
+    conn.close()
 
 
 def test_auth_owner_recovery_cli_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]):

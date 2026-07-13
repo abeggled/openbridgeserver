@@ -912,6 +912,13 @@ async def export_node(
             row = await cur.fetchone()
         if not row:
             return []
+        access, _ = await _resolve_access_with_node(db, nid)
+        if access == "user" and (principal is None or principal.type != "user"):
+            return []
+        page_config = json.loads(row["page_config"]) if row["page_config"] else None
+        if access == "user" and row["type"] == "PAGE":
+            config = PageConfig.model_validate(page_config or {})
+            await _check_page_datapoint_policy(db, principal, _collect_page_datapoint_ids(config), AuthzAction.READ)
         policy = await db.fetchone("SELECT access_mode FROM authz_visu_page_policies WHERE node_id = ?", (nid,))
         result = [
             {
@@ -922,7 +929,7 @@ async def export_node(
                 "node_order": row["node_order"],
                 "icon": row["icon"],
                 "access": policy["access_mode"] if policy else None,
-                "page_config": json.loads(row["page_config"]) if row["page_config"] else None,
+                "page_config": page_config,
             },
         ]
         async with db.conn.execute("SELECT id FROM visu_nodes WHERE parent_id = ? ORDER BY node_order", (nid,)) as cur:

@@ -612,8 +612,10 @@ async def test_discovery_honors_explicit_visu_deny_without_leaking_breadcrumbs_o
 
 @pytest.mark.asyncio
 async def test_export_omits_hidden_subtrees_and_allows_assigned_user(db: Database):
+    await _seed_scope(db)
     await _insert_user(db, "alice")
     await _insert_user(db, "bob")
+    await _insert_grant(db, node_id="blocked")
     await _insert_visu_location(db, "root", access="public")
     await _insert_visu_page(db, "public-child", access="public", config=_page_config(ALLOWED_DP_ID), parent_id="root")
     await _insert_visu_page(db, "user-child", access="user", config=_page_config(BLOCKED_DP_ID), parent_id="root")
@@ -628,6 +630,45 @@ async def test_export_omits_hidden_subtrees_and_allows_assigned_user(db: Databas
     alice_export = json.loads(alice_response.body)
     assert [node["id"] for node in alice_export["nodes"]] == ["root", "public-child", "user-child"]
     assert str(BLOCKED_DP_ID) in alice_response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_export_user_page_requires_datapoint_read_grant(db: Database):
+    await _seed_scope(db)
+    await _insert_user(db, "alice")
+    await _insert_visu_page(db, "user-page", access="user", config=_page_config(BLOCKED_DP_ID))
+    await _assign_visu_user(db, node_id="user-page", username="alice")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.export_node("user-page", db=db, _user=_principal("alice"))
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_export_hides_user_page_from_api_key_with_visu_grant(db: Database):
+    key_id = "00000000-0000-0000-0000-000000000995"
+    await _insert_visu_location(db, "root", access="public")
+    await _insert_visu_page(db, "user-child", access="user", config=_page_config(BLOCKED_DP_ID), parent_id="root")
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'hash', 'admin', ?)",
+        (key_id, NOW),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('api_key', ?, 'visu_page', 'user-child', 'guest', 'allow')""",
+        (key_id,),
+    )
+
+    response = await visu_api.export_node(
+        "root",
+        db=db,
+        _user=Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin"),
+    )
+
+    payload = json.loads(response.body)
+    assert [node["id"] for node in payload["nodes"]] == ["root"]
+    assert str(BLOCKED_DP_ID) not in response.body.decode()
 
 
 @pytest.mark.asyncio

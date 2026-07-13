@@ -19,11 +19,20 @@ import yaml
 from obs import __version__
 from obs.api.auth import hash_password
 from obs.api.v1.support import sanitize_support_data
+from obs.logic.capabilities import LOGIC_CAPABILITIES
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 DOCKER_DEFAULT_ENV = {
     "OBS_CONFIG": "/data/config.yaml",
     "OBS_DATABASE__PATH": "/data/obs.db",
+}
+AUTHZ_RESOURCE_TABLES = {
+    "hierarchy": "hierarchy_nodes",
+    "datapoint": "datapoints",
+    "logic_graph": "logic_graphs",
+    "visu_page": "visu_nodes",
+    "ringbuffer_filterset": "ringbuffer_filtersets",
+    "adapter_instance": "adapter_instances",
 }
 
 
@@ -152,6 +161,20 @@ def _require_columns(conn: sqlite3.Connection, table: str, required: set[str]) -
     if missing:
         raise AdminCliError(f"Tabelle {table} enthaelt nicht alle benoetigten Spalten: {', '.join(missing)}")
     return columns
+
+
+def _require_owner_grant_target(conn: sqlite3.Connection, node_type: str, node_id: str) -> None:
+    if node_type == "logic_capability":
+        if node_id not in LOGIC_CAPABILITIES:
+            raise AdminCliError(f"Unbekanntes AuthZ-Ziel: {node_type}:{node_id}")
+        return
+
+    table = AUTHZ_RESOURCE_TABLES.get(node_type)
+    if table is None:
+        raise AdminCliError(f"Unbekannter AuthZ-Node-Typ: {node_type}")
+    _require_table(conn, table)
+    if conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (node_id,)).fetchone() is None:
+        raise AdminCliError(f"Unbekanntes AuthZ-Ziel: {node_type}:{node_id}")
 
 
 def _json_loads(raw: Any, *, context: str) -> Any:
@@ -615,6 +638,8 @@ def recover_owner(
                 "authz_node_roles",
                 {"principal_type", "principal_id", "node_type", "node_id", "role", "effect", "created_at", "updated_at"},
             )
+            assert node_id is not None
+            _require_owner_grant_target(conn, node_type, node_id)
 
         user = _row(conn, "SELECT id, username, is_admin FROM users WHERE username=?", (username,))
         if user is None and password is None:
