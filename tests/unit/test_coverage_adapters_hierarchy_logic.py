@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -67,6 +68,10 @@ class _DbStub:
 
     async def executemany(self, query, params_list):
         self.committed.append(("executemany", query))
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
 
 def _inst_row(*, adapter_type="KNX", name="Test", enabled=1, config=None, iid=None):
@@ -1289,7 +1294,7 @@ class TestDeleteNode:
         from obs.api.v1 import hierarchy as hier_api
 
         row = _row(id="n1")
-        db = _DbStub(one=row)
+        db = _DbStub(rows=[row], one=row)
         await hier_api.delete_node(node_id="n1", db=db, _user="admin")
         assert any("DELETE" in str(c) for c in db.committed)
 
@@ -1823,22 +1828,33 @@ class TestEtsImport:
 
         class _Db:
             def __init__(self):
-                self.committed = []
+                self.executed = []
+                self._fetchall_calls = 0
 
             async def fetchall(self, query, params=()):
-                assert query == "SELECT id FROM hierarchy_trees WHERE source=?"
-                assert params == ("ets_import:groups",)
-                return [_row(id="tree-1"), _row(id="tree-2")]
+                self._fetchall_calls += 1
+                if self._fetchall_calls == 1:
+                    assert query == "SELECT id FROM hierarchy_trees WHERE source=?"
+                    assert params == ("ets_import:groups",)
+                    return [_row(id="tree-1"), _row(id="tree-2")]
+                return [_row(id="node-1"), _row(id="node-2")]
 
-            async def execute_and_commit(self, query, params=()):
-                self.committed.append((query, tuple(params)))
+            async def execute(self, query, params=()):
+                self.executed.append((query, tuple(params)))
+
+            @asynccontextmanager
+            async def transaction(self):
+                yield
 
         db = _Db()
         result = await replace_existing_ets_trees(db, "groups")
 
         assert result == 2
-        assert len(db.committed) == 1
-        query, params = db.committed[0]
+        assert len(db.executed) == 2
+        grant_query, grant_params = db.executed[0]
+        assert grant_query == "DELETE FROM authz_node_roles WHERE node_type='hierarchy' AND node_id IN (?,?)"
+        assert grant_params == ("node-1", "node-2")
+        query, params = db.executed[1]
         assert query == "DELETE FROM hierarchy_trees WHERE id IN (?,?)"
         assert params == ("tree-1", "tree-2")
 

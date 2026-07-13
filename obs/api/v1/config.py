@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from obs.api.auth import get_admin_user
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
@@ -1324,7 +1325,12 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM hierarchy_trees")
         result.hierarchy_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM hierarchy_trees")
+        async with db.transaction():
+            tree_rows = await db.fetchall("SELECT id FROM hierarchy_trees")
+            tree_ids = [tree_row["id"] for tree_row in tree_rows]
+            node_ids = await collect_hierarchy_tree_node_ids(db, tree_ids)
+            await delete_hierarchy_grants(db, node_ids)
+            await db.execute("DELETE FROM hierarchy_trees")
     except Exception as exc:
         result.errors.append(f"Hierarchy reset failed: {exc}")
 

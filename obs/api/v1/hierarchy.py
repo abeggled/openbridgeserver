@@ -34,6 +34,11 @@ from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
 from obs.api.v1.datapoints import NodePathSegment
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, ImportResult, create_ets_hierarchy
+from obs.api.v1.services.hierarchy_lifecycle import (
+    collect_hierarchy_subtree_node_ids,
+    collect_hierarchy_tree_node_ids,
+    delete_hierarchy_grants,
+)
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["hierarchy"])
@@ -292,10 +297,13 @@ async def delete_tree(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
-    row = await db.fetchone("SELECT id FROM hierarchy_trees WHERE id=?", (tree_id,))
-    if not row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Hierarchiebaum nicht gefunden")
-    await db.execute_and_commit("DELETE FROM hierarchy_trees WHERE id=?", (tree_id,))
+    async with db.transaction():
+        row = await db.fetchone("SELECT id FROM hierarchy_trees WHERE id=?", (tree_id,))
+        if not row:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Hierarchiebaum nicht gefunden")
+        node_ids = await collect_hierarchy_tree_node_ids(db, [tree_id])
+        await delete_hierarchy_grants(db, node_ids)
+        await db.execute("DELETE FROM hierarchy_trees WHERE id=?", (tree_id,))
 
 
 # ---------------------------------------------------------------------------
@@ -408,10 +416,12 @@ async def delete_node(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> None:
-    row = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (node_id,))
-    if not row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Knoten nicht gefunden")
-    await db.execute_and_commit("DELETE FROM hierarchy_nodes WHERE id=?", (node_id,))
+    async with db.transaction():
+        node_ids = await collect_hierarchy_subtree_node_ids(db, node_id)
+        if not node_ids:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Knoten nicht gefunden")
+        await delete_hierarchy_grants(db, node_ids)
+        await db.execute("DELETE FROM hierarchy_nodes WHERE id=?", (node_id,))
 
 
 # ---------------------------------------------------------------------------
