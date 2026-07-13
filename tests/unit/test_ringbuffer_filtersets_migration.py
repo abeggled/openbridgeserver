@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from obs.db.database import Database
+from obs.db.database import Database, _migration_v43
 
 
 @pytest.mark.asyncio
@@ -71,5 +71,88 @@ async def test_v33_creates_user_state_table_and_indexes():
         names = {row["name"] for row in indexes}
         assert "idx_rb_fs_user_state_active" in names
         assert "idx_rb_fs_user_state_order" in names
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_v43_snapshots_existing_readers_and_valid_owner_idempotently():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            """INSERT INTO users
+               (id, username, password_hash, is_admin, mqtt_enabled, created_at)
+               VALUES ('user-alice', 'alice', 'hash', 0, 0, 'now'),
+                      ('user-bob', 'bob', 'hash', 0, 0, 'now')"""
+        )
+        await db.execute(
+            """INSERT INTO api_keys (id, name, key_hash, owner, created_at)
+               VALUES ('key-alice', 'key', 'key-hash', 'alice', 'now')"""
+        )
+        await db.execute(
+            """INSERT INTO ringbuffer_filtersets
+               (id, name, filter_json, created_at, updated_at, created_by)
+               VALUES ('owned', 'Owned', '{}', 'now', 'now', 'alice'),
+                      ('orphan', 'Orphan', '{}', 'now', 'now', 'missing'),
+                      ('empty-owner', 'Empty', '{}', 'now', 'now', '')"""
+        )
+
+        await _migration_v43(db.conn)
+        await _migration_v43(db.conn)
+        await db.commit()
+
+        rows = await db.fetchall(
+            """SELECT principal_type, principal_id, node_id, role, effect
+               FROM authz_node_roles
+               WHERE node_type='ringbuffer_filterset'
+               ORDER BY principal_type, principal_id, node_id"""
+        )
+        assert [tuple(row) for row in rows] == [
+            ("api_key", "key-alice", "empty-owner", "guest", "allow"),
+            ("api_key", "key-alice", "orphan", "guest", "allow"),
+            ("api_key", "key-alice", "owned", "guest", "allow"),
+            ("user", "alice", "empty-owner", "guest", "allow"),
+            ("user", "alice", "orphan", "guest", "allow"),
+            ("user", "alice", "owned", "owner", "allow"),
+            ("user", "bob", "empty-owner", "guest", "allow"),
+            ("user", "bob", "orphan", "guest", "allow"),
+            ("user", "bob", "owned", "guest", "allow"),
+        ]
+        assert (
+            await db.fetchone(
+                """SELECT 1 FROM authz_node_roles
+               WHERE node_type='ringbuffer_filterset' AND principal_id='missing'"""
+            )
+            is None
+        )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_v43_clean_install_and_future_principals_receive_no_implicit_access():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_type='ringbuffer_filterset'") is None
+        await db.execute(
+            """INSERT INTO ringbuffer_filtersets
+               (id, name, filter_json, created_at, updated_at)
+               VALUES ('future-filter', 'Future', '{}', 'now', 'now')"""
+        )
+        await db.execute(
+            """INSERT INTO users
+               (id, username, password_hash, is_admin, mqtt_enabled, created_at)
+               VALUES ('future-user', 'future', 'hash', 0, 0, 'now')"""
+        )
+        await db.commit()
+        assert (
+            await db.fetchone(
+                """SELECT 1 FROM authz_node_roles
+               WHERE node_type='ringbuffer_filterset' AND principal_id='future'"""
+            )
+            is None
+        )
     finally:
         await db.disconnect()

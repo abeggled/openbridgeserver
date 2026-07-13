@@ -378,7 +378,7 @@ async def test_missing_principals_and_invalid_api_key_id_are_rejected(db: Databa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("node_type", ["hierarchy", "datapoint"])
+@pytest.mark.parametrize("node_type", ["hierarchy", "datapoint", "ringbuffer_filterset"])
 async def test_unknown_grant_target_is_rejected_without_changing_existing_set(db: Database, node_type: str) -> None:
     await _insert_user(db)
     await _insert_tree(db)

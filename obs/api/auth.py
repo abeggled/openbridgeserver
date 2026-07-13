@@ -578,7 +578,6 @@ async def _principal_name_is_referenced(db: Database, username: str) -> bool:
         ("SELECT 1 FROM api_keys WHERE owner=? LIMIT 1", username),
         ("SELECT 1 FROM logic_graphs WHERE created_by=? LIMIT 1", username),
         ("SELECT 1 FROM visu_nodes WHERE created_by=? LIMIT 1", username),
-        ("SELECT 1 FROM ringbuffer_filtersets WHERE created_by=? LIMIT 1", username),
         ("SELECT 1 FROM authz_node_roles WHERE principal_type='user' AND principal_id=? LIMIT 1", username),
         ("SELECT 1 FROM ringbuffer_filterset_user_state WHERE username=? LIMIT 1", username),
     )
@@ -598,7 +597,12 @@ async def _deletion_inventory(db: Database, username: str) -> UserDeletionInvent
 
     visu_page_ids = await ids("SELECT id FROM visu_nodes WHERE type='PAGE' AND created_by=? ORDER BY id")
     logic_graph_ids = await ids("SELECT id FROM logic_graphs WHERE created_by=? ORDER BY id")
-    filterset_ids = await ids("SELECT id FROM ringbuffer_filtersets WHERE created_by=? ORDER BY id")
+    filterset_ids = await ids(
+        """SELECT node_id AS id FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id=?
+             AND node_type='ringbuffer_filterset' AND role='owner' AND effect='allow'
+           ORDER BY node_id"""
+    )
     api_key_ids = await ids("SELECT id FROM api_keys WHERE owner=? ORDER BY id")
     grants = [
         [row["node_type"], row["node_id"], row["role"], row["effect"]]
@@ -840,7 +844,24 @@ async def delete_user(
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Successor must be an existing different user")
             await db.execute("UPDATE visu_nodes SET created_by=? WHERE type='PAGE' AND created_by=?", (successor, username))
             await db.execute("UPDATE logic_graphs SET created_by=? WHERE created_by=?", (successor, username))
-            await db.execute("UPDATE ringbuffer_filtersets SET created_by=? WHERE created_by=?", (successor, username))
+            if inventory.filterset_ids:
+                placeholders = ",".join("?" for _ in inventory.filterset_ids)
+                await db.execute(
+                    f"""INSERT INTO authz_node_roles
+                            (principal_type, principal_id, node_type, node_id, role, effect)
+                        SELECT 'user', ?, 'ringbuffer_filterset', node_id, 'owner', 'allow'
+                        FROM authz_node_roles
+                        WHERE principal_type='user' AND principal_id=?
+                          AND node_type='ringbuffer_filterset' AND role='owner' AND effect='allow'
+                          AND node_id IN ({placeholders})
+                        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
+                            role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                    (successor, username, *inventory.filterset_ids),
+                )
+
+        # ``created_by`` is retained as provenance only. Clear a deleted name;
+        # ownership transfer above is exclusively represented by central grants.
+        await db.execute("UPDATE ringbuffer_filtersets SET created_by=NULL WHERE created_by=?", (username,))
 
         await db.execute("DELETE FROM api_keys WHERE owner=?", (username,))
         await db.execute("DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?", (username,))

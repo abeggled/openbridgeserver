@@ -67,6 +67,16 @@ async def _owned_state(db: Database) -> None:
                (principal_type, principal_id, node_type, node_id, role)
            VALUES ('user', 'alice', 'visu_page', 'page-a', 'guest')""",
     )
+    await db.execute(
+        """INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role)
+           VALUES ('user', 'alice', 'ringbuffer_filterset', 'filter-a', 'owner')"""
+    )
+    # V43 snapshots legacy all-authenticated READ access, so a successor may
+    # already hold a GUEST row for the owned filterset.
+    await db.execute(
+        """INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role)
+           VALUES ('user', 'bob', 'ringbuffer_filterset', 'filter-a', 'guest')"""
+    )
     await db.execute("INSERT INTO ringbuffer_filterset_user_state (username, filterset_id) VALUES ('alice', 'filter-a')")
     await db.commit()
 
@@ -138,7 +148,13 @@ async def test_delete_transfers_revokes_and_cleans_references_atomically(db: Dat
     assert await db.fetchone("SELECT 1 FROM api_keys WHERE id='key-a'") is None
     assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "bob"
     assert (await db.fetchone("SELECT created_by FROM logic_graphs WHERE id='graph-a'"))["created_by"] == "bob"
-    assert (await db.fetchone("SELECT created_by FROM ringbuffer_filtersets WHERE id='filter-a'"))["created_by"] == "bob"
+    assert (await db.fetchone("SELECT created_by FROM ringbuffer_filtersets WHERE id='filter-a'"))["created_by"] is None
+    transferred = await db.fetchone(
+        """SELECT role, effect FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='bob'
+             AND node_type='ringbuffer_filterset' AND node_id='filter-a'"""
+    )
+    assert dict(transferred) == {"role": "owner", "effect": "allow"}
     assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE principal_id='alice'") is None
     assert await db.fetchone("SELECT 1 FROM ringbuffer_filterset_user_state WHERE username='alice'") is None
     audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='auth.user.deleted'")

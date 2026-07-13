@@ -763,6 +763,49 @@ async def _migration_v42(conn: aiosqlite.Connection) -> None:
         await conn.execute("UPDATE visu_nodes SET access = NULL, access_pin = NULL WHERE access IS NOT NULL OR access_pin IS NOT NULL")
 
 
+async def _migration_v43(conn: aiosqlite.Connection) -> None:
+    """Snapshot legacy filterset access into central role grants.
+
+    Before V43 every authenticated principal could read every filterset, while
+    a valid ``created_by`` user was its effective owner.  Materialize that
+    exact population once: future principals intentionally receive no grant.
+    Owner rows are inserted first so the subsequent read snapshot cannot
+    downgrade them.  Empty and orphaned owner names never become principals.
+    """
+    await conn.execute(
+        """
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect)
+        SELECT 'user', users.username, 'ringbuffer_filterset', filtersets.id, 'owner', 'allow'
+        FROM ringbuffer_filtersets AS filtersets
+        JOIN users ON users.username = filtersets.created_by
+        WHERE filtersets.created_by IS NOT NULL AND trim(filtersets.created_by) != ''
+        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
+            role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        """
+    )
+    await conn.execute(
+        """
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect)
+        SELECT 'user', users.username, 'ringbuffer_filterset', filtersets.id, 'guest', 'allow'
+        FROM users CROSS JOIN ringbuffer_filtersets AS filtersets
+        WHERE true
+        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO NOTHING
+        """
+    )
+    await conn.execute(
+        """
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect)
+        SELECT 'api_key', api_keys.id, 'ringbuffer_filterset', filtersets.id, 'guest', 'allow'
+        FROM api_keys CROSS JOIN ringbuffer_filtersets AS filtersets
+        WHERE true
+        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO NOTHING
+        """
+    )
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -809,6 +852,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (40, _migration_v40),
     (41, _MIGRATION_V41),
     (42, _migration_v42),
+    (43, _migration_v43),
 ]
 
 
