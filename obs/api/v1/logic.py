@@ -99,6 +99,7 @@ async def _require_logic_graph_creation(
     *,
     operation: str,
     control_class: str,
+    resource_id: str | None = None,
 ) -> bool:
     """Return whether creation is delegated after enforcing its closed capability."""
     if principal.type == "user" and principal.is_admin:
@@ -134,6 +135,7 @@ async def _require_logic_graph_creation(
         await writer.write_contract(
             "POST",
             path,
+            resource_id=resource_id,
             details={"control_class": control_class, "operation": operation, "reason": decision.reason},
             outcome=AuditOutcome.DENIED,
         )
@@ -862,7 +864,6 @@ async def run_graph(
     "/api/v1/logic/graphs/{graph_id}/duplicate",
     principal_param="_user",
     resource_param="graph_id",
-    audit_not_found=False,
 )
 async def duplicate_graph(
     graph_id: str,
@@ -881,6 +882,7 @@ async def duplicate_graph(
         request,
         operation="duplicate",
         control_class=_row_control_class(row),
+        resource_id=graph_id,
     )
 
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}

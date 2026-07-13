@@ -341,7 +341,12 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ),
     ("PATCH", "/api/v1/ringbuffer/filtersets/{filterset_id}/topbar"): _policy("ringbuffer_filterset", "ringbuffer.filterset.topbar_updated"),
     ("PUT", "/api/v1/ringbuffer/export/settings"): _user("ringbuffer_export_settings", "ringbuffer.export.settings_updated"),
-    ("POST", "/api/v1/ringbuffer/config"): _admin("ringbuffer_config", "ringbuffer.config.updated"),
+    ("POST", "/api/v1/ringbuffer/config"): _admin(
+        "ringbuffer_config",
+        "ringbuffer.config.updated",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+    ),
     ("POST", "/api/v1/config/import/db"): _admin(
         "database_config", "config.database.imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
     ),

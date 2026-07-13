@@ -151,8 +151,11 @@ async def import_backgrounds(
 
     directory = _backgrounds_dir()
     imported_names: list[str] = []
+    prepared: list[tuple[str, str, bytes]] = []
     skipped = 0
 
+    # Validate the complete batch before touching the catalog. A malformed
+    # later upload must not leave earlier files imported.
     for upload in files:
         content = await upload.read()
         filename = upload.filename or ""
@@ -170,6 +173,11 @@ async def import_backgrounds(
             continue
 
         ext, _ = detected
+        prepared.append((name, ext, content))
+        if name not in imported_names:
+            imported_names.append(name)
+
+    for name, ext, content in prepared:
         target = directory / f"{name}.{ext}"
         target.write_bytes(content)
 
@@ -180,9 +188,6 @@ async def import_backgrounds(
             alt = directory / f"{name}.{other_ext}"
             if alt.exists():
                 alt.unlink()
-
-        if name not in imported_names:
-            imported_names.append(name)
 
     result = ImportResult(
         imported=len(imported_names),
@@ -235,23 +240,37 @@ async def delete_backgrounds(
     directory = _backgrounds_dir().resolve()
     deleted: list[str] = []
     not_found: list[str] = []
+    prepared: list[tuple[str, Path | None]] = []
+    seen: set[str] = set()
 
+    # Resolve and validate the complete request before deleting the first file.
     for name in body.names:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Ungültiger Hintergrund-Name: {name!r}")
         safe_name = _secure_filename(name)
         if not safe_name or safe_name != name:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Ungültiger Hintergrund-Name: {name!r}")
+        if name in seen:
+            not_found.append(name)
+            prepared.append((name, None))
+            continue
+        seen.add(name)
 
         target = _find_background_file(safe_name, directory)
         if target is None:
             not_found.append(name)
+            prepared.append((name, None))
             continue
 
         resolved = target.resolve()
         if not resolved.is_relative_to(directory):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Ungültiger Hintergrund-Name: {name!r}")
 
+        prepared.append((name, resolved))
+
+    for name, resolved in prepared:
+        if resolved is None:
+            continue
         resolved.unlink()
         deleted.append(name)
 

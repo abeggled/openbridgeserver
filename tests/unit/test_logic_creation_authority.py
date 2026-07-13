@@ -236,7 +236,8 @@ async def test_duplicate_conceals_unreadable_source_before_creation_capability_c
 
     assert exc_info.value.status_code == 404
     assert (await db.fetchone("SELECT COUNT(*) AS n FROM logic_graphs"))["n"] == 1
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    audit = await db.fetchone("SELECT resource_id, outcome FROM audit_log_entries WHERE action='logic.graph.duplicated'")
+    assert (audit["resource_id"], audit["outcome"]) == ("source", "denied")
 
 
 @pytest.mark.asyncio
@@ -249,7 +250,8 @@ async def test_duplicate_denies_readable_source_without_create_capability_and_au
 
     assert exc_info.value.status_code == 403
     assert (await db.fetchone("SELECT COUNT(*) AS n FROM logic_graphs"))["n"] == 1
-    audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.duplicated' AND outcome='denied'")
+    audit = await db.fetchone("SELECT resource_id, details_json FROM audit_log_entries WHERE action='logic.graph.duplicated' AND outcome='denied'")
+    assert audit["resource_id"] == "source"
     assert json.loads(audit["details_json"])["operation"] == "duplicate"
 
 
