@@ -697,6 +697,9 @@ async def create_user(
     mqtt_hash = mosquitto_hash(body.mqtt_password) if mqtt_enabled else None
     password_hash = hash_password(body.password)
 
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
     async with db.transaction():
         await db.execute(
             "INSERT INTO users (id, username, password_hash, is_admin, mqtt_enabled, mqtt_password_hash, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -710,9 +713,6 @@ async def create_user(
                 now,
             ),
         )
-        from obs.api.audit import AuditLogWriter, build_audit_context
-
-        audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
         await audit_writer.write(
             action="auth.user.created",
             resource_type="user",
@@ -864,14 +864,15 @@ async def delete_user(
                 )
                 for node_id in node_ids
             ]
-            await db.executemany(
-                """INSERT INTO authz_node_roles
-                       (principal_type, principal_id, node_type, node_id, role, effect)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
-                       role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
-                transferred_grants,
-            )
+            if transferred_grants:
+                await db.executemany(
+                    """INSERT INTO authz_node_roles
+                           (principal_type, principal_id, node_type, node_id, role, effect)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
+                           role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                    transferred_grants,
+                )
             await db.execute("UPDATE visu_nodes SET created_by=? WHERE type='PAGE' AND created_by=?", (successor, username))
             await db.execute("UPDATE logic_graphs SET created_by=? WHERE created_by=?", (successor, username))
             if inventory.filterset_ids:

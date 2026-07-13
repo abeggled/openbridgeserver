@@ -366,3 +366,59 @@ async def test_stale_principal_name_cannot_be_reused(db: Database):
     with pytest.raises(HTTPException) as exc:
         await auth.create_user(auth.UserCreate(username="retired", password="secret"), _admin="admin", db=db)
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_user_audit_failure_rolls_back(db: Database, monkeypatch):
+    async def fail_audit(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr("obs.api.audit.AuditLogWriter.write", fail_audit)
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        await auth.create_user(auth.UserCreate(username="newuser", password="secret"), _admin="admin", db=db)
+    assert await db.fetchone("SELECT 1 FROM users WHERE username='newuser'") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_cleans_up_api_key_grants(db: Database):
+    await _owned_state(db)
+    await db.execute(
+        "INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role) VALUES ('api_key', 'key-a', 'hierarchy', 'home', 'guest')"
+    )
+    await db.commit()
+
+    preflight = await auth._deletion_inventory(db, "alice")
+    await auth.delete_user(
+        "alice",
+        auth.UserDeletionRequest(revision=preflight.revision, successor_username="bob"),
+        admin_user="admin",
+        db=db,
+    )
+
+    assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE principal_type='api_key' AND principal_id='key-a'") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_transfers_grants_to_admin_successor(db: Database):
+    await _owned_state(db)
+    await db.execute("UPDATE users SET is_admin=1 WHERE username='bob'")
+    await db.commit()
+
+    preflight = await auth._deletion_inventory(db, "alice")
+    await auth.delete_user(
+        "alice",
+        auth.UserDeletionRequest(revision=preflight.revision, successor_username="bob"),
+        admin_user="admin",
+        db=db,
+    )
+
+    transferred = await db.fetchall(
+        """SELECT node_type, node_id, role, effect FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='bob'
+             AND node_type IN ('visu_page', 'logic_graph')
+           ORDER BY node_type, node_id"""
+    )
+    assert [dict(r) for r in transferred] == [
+        {"node_type": "logic_graph", "node_id": "graph-a", "role": "owner", "effect": "allow"},
+        {"node_type": "visu_page", "node_id": "page-a", "role": "owner", "effect": "allow"},
+    ]
