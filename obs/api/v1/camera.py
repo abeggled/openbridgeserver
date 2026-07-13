@@ -51,16 +51,24 @@ def _append_query_param(url: str, param: str, value: str) -> str:
 async def _camera_auth(
     request: Request,
     _token: str = Query("", alias="_token", description="JWT als Query-Parameter"),
+    db: Database = Depends(get_db),
 ) -> str | None:
     """Akzeptiert JWT entweder als 'Authorization: Bearer …'-Header
     oder als URL-Query-Parameter '?_token=…' (nötig für <img>/<video>-Tags).
     """
+
+    async def existing_user(token: str) -> str:
+        username = decode_token(token)
+        if not await db.fetchone("SELECT 1 FROM users WHERE username=?", (username,)):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return username
+
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
-        return decode_token(auth_header[7:])
+        return await existing_user(auth_header[7:])
     if _token:
         try:
-            return decode_token(_token)
+            return await existing_user(_token)
         except HTTPException:
             if request.query_params.get("page_id"):
                 return None

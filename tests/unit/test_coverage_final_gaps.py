@@ -83,7 +83,9 @@ async def test_camera_auth_bearer_header(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera.decode_token", lambda t: "admin")
     req = MagicMock()
     req.headers = {"Authorization": "Bearer mytoken"}
-    result = await _camera_auth(req, _token="")
+    db = MagicMock()
+    db.fetchone = AsyncMock(return_value={"exists": 1})
+    result = await _camera_auth(req, _token="", db=db)
     assert result == "admin"
 
 
@@ -92,7 +94,9 @@ async def test_camera_auth_query_token(monkeypatch):
     monkeypatch.setattr("obs.api.v1.camera.decode_token", lambda t: "admin")
     req = MagicMock()
     req.headers = {}
-    result = await _camera_auth(req, _token="querytoken")
+    db = MagicMock()
+    db.fetchone = AsyncMock(return_value={"exists": 1})
+    result = await _camera_auth(req, _token="querytoken", db=db)
     assert result == "admin"
 
 

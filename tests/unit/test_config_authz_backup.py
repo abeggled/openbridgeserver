@@ -130,6 +130,120 @@ async def test_json_export_import_preserves_central_authz_and_api_key_capabiliti
 
 
 @pytest.mark.asyncio
+async def test_export_omits_orphan_grant_targets_and_preserves_valid_principals(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+) -> None:
+    now = "2026-07-13T00:00:00+00:00"
+    key_id = str(uuid.uuid4())
+    missing_key_id = str(uuid.uuid4())
+    await db.execute_and_commit(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES ('alice', 'alice', 'hash', 0, ?)",
+        (now,),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'hash', 'alice', ?)",
+        (key_id, now),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES ('tree', 'Tree', '', '', ?, ?)",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+           VALUES ('hierarchy-valid', 'tree', NULL, 'Room', '', 0, NULL, ?, ?)""",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO datapoints
+               (id, name, data_type, tags, mqtt_topic, created_at, updated_at)
+           VALUES ('datapoint-valid', 'Datapoint', 'FLOAT', '[]', 'test/datapoint', ?, ?)""",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO logic_graphs
+               (id, name, description, enabled, flow_data, created_at, updated_at)
+           VALUES ('logic-valid', 'Logic', '', 0, '{"nodes":[],"edges":[]}', ?, ?)""",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO visu_nodes
+               (id, parent_id, name, type, page_config, created_at, updated_at)
+           VALUES ('visu-valid', NULL, 'Page', 'PAGE', '{"grid_cols":12,"grid_row_height":80,"background":null,"widgets":[]}', ?, ?)""",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO ringbuffer_filtersets
+               (id, name, filter_json, created_at, updated_at)
+           VALUES ('filterset-valid', 'Filter', '{}', ?, ?)""",
+        (now, now),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO adapter_instances
+               (id, adapter_type, name, config, enabled, created_at, updated_at)
+           VALUES ('adapter-valid', 'MQTT', 'Adapter', '{}', 0, ?, ?)""",
+        (now, now),
+    )
+
+    table_backed_types = {
+        "hierarchy": "hierarchy-valid",
+        "datapoint": "datapoint-valid",
+        "logic_graph": "logic-valid",
+        "visu_page": "visu-valid",
+        "ringbuffer_filterset": "filterset-valid",
+        "adapter_instance": "adapter-valid",
+    }
+    grants = [
+        ("user", "alice", node_type, node_id, "guest", "allow")
+        for node_type, node_id in table_backed_types.items()
+        if node_type != "adapter_instance"
+    ]
+    grants.append(("api_key", f"api_key:{key_id.upper()}", "adapter_instance", "adapter-valid", "guest", "allow"))
+    grants.extend(("user", "alice", node_type, f"{node_type}-orphan", "owner", "deny") for node_type in table_backed_types)
+    grants.extend(
+        [
+            ("api_key", key_id, "logic_graph", "logic-valid", "resident", "allow"),
+            ("api_key", f"api_key:{missing_key_id}", "visu_page", "visu-valid", "owner", "allow"),
+            ("user", "retired", "hierarchy", "hierarchy-valid", "owner", "allow"),
+            ("user", "Alice", "datapoint", "datapoint-valid", "owner", "allow"),
+            ("user", "alice", "logic_capability", "http_request", "operator", "allow"),
+            ("user", "alice", "logic_capability", "invalid_capability", "owner", "allow"),
+            ("user", "alice", "unknown", "target", "owner", "allow"),
+        ],
+    )
+    await db.executemany(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        grants,
+    )
+    await db.commit()
+    monkeypatch.setattr(config_api, "get_registry", _EmptyRegistry)
+
+    with patch("obs.api.v1.icons._icons_dir") as icons_dir:
+        icons_dir.return_value.glob.return_value = []
+        exported = await config_api.export_config(_user="admin", db=db)
+
+    exported_grants = {
+        (grant.principal_type, grant.principal_id, grant.node_type, grant.node_id, grant.role, grant.effect) for grant in exported.authz_grants
+    }
+    expected = {
+        ("user", "alice", node_type, node_id, "guest", "allow")
+        for node_type, node_id in table_backed_types.items()
+        if node_type != "adapter_instance"
+    }
+    expected.update(
+        {
+            ("api_key", f"api_key:{key_id.upper()}", "adapter_instance", "adapter-valid", "guest", "allow"),
+            ("api_key", key_id, "logic_graph", "logic-valid", "resident", "allow"),
+            ("user", "alice", "logic_capability", "http_request", "operator", "allow"),
+        },
+    )
+    assert exported_grants == expected
+
+
+@pytest.mark.asyncio
 async def test_import_canonicalizes_legacy_prefixed_api_key_grant(
     monkeypatch: pytest.MonkeyPatch,
     db: Database,

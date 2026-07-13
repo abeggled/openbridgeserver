@@ -36,13 +36,15 @@ async def test_get_current_principal_user_has_type_subject_and_admin(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_current_principal_user_without_row_is_not_admin(monkeypatch):
+async def test_get_current_principal_rejects_deleted_user_access_token(monkeypatch):
     monkeypatch.setattr("obs.api.auth.decode_token", lambda token: "alice")
     db = _DbStub(user_is_admin=None)
 
-    principal = await get_current_principal(credentials=type("Cred", (), {"credentials": "jwt"})(), api_key=None, db=db)
+    with pytest.raises(HTTPException) as exc:
+        await get_current_principal(credentials=type("Cred", (), {"credentials": "jwt"})(), api_key=None, db=db)
 
-    assert principal == Principal(subject="alice", type="user", is_admin=False)
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "User not found"
 
 
 @pytest.mark.asyncio

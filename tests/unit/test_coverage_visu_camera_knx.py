@@ -471,16 +471,20 @@ class TestCameraAuth:
     async def test_bearer_header_accepted(self):
         request = MagicMock()
         request.headers = {"Authorization": "Bearer mytoken"}
+        db = MagicMock()
+        db.fetchone = AsyncMock(return_value={"exists": 1})
         with patch("obs.api.v1.camera.decode_token", return_value="testuser"):
-            result = await _camera_auth(request=request, _token="")
+            result = await _camera_auth(request=request, _token="", db=db)
         assert result == "testuser"
 
     @pytest.mark.asyncio
     async def test_query_token_accepted(self):
         request = MagicMock()
         request.headers = {}
+        db = MagicMock()
+        db.fetchone = AsyncMock(return_value={"exists": 1})
         with patch("obs.api.v1.camera.decode_token", return_value="testuser"):
-            result = await _camera_auth(request=request, _token="mytoken")
+            result = await _camera_auth(request=request, _token="mytoken", db=db)
         assert result == "testuser"
 
     def test_page_scope_matches_legacy_api_key_auth_type(self):

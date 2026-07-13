@@ -216,6 +216,18 @@ async def test_camera_auth_rejects_stale_query_token_without_page_scope(
 
 
 @pytest.mark.asyncio
+async def test_camera_auth_rejects_deleted_user_bearer_token(monkeypatch: pytest.MonkeyPatch, db: Database):
+    monkeypatch.setattr(camera_api, "decode_token", lambda _token: "deleted")
+    request = SimpleNamespace(headers={"Authorization": "Bearer valid.jwt"}, query_params={})
+
+    with pytest.raises(HTTPException) as exc:
+        await camera_api._camera_auth(request, _token="", db=db)  # noqa: SLF001
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "User not found"
+
+
+@pytest.mark.asyncio
 async def test_proxy_camera_allows_assigned_user_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _insert_user(db, "alice")
     await _insert_camera_page(db, access="user")

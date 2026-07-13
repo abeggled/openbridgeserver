@@ -302,12 +302,14 @@ async def test_export_config_with_visu_nodes(monkeypatch):
     )
 
     async def _fetchall(query, params=()):
+        if "authz_node_roles" in query:
+            return [user_row]
+        if "SELECT username FROM users" in query:
+            return [_row({"username": "alice"})]
         if "FROM visu_nodes" in query:
             return [node_row]
         if "authz_visu_page_policies" in query:
             return [policy_row]
-        if "authz_node_roles" in query:
-            return [user_row]
         return []
 
     db = _DbStub()

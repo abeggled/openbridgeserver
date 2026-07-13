@@ -28,6 +28,7 @@ from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
+from obs.logic.capabilities import LOGIC_CAPABILITIES
 from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 
@@ -487,11 +488,56 @@ async def export_config(
     dp_link_rows = await db.fetchall("SELECT * FROM hierarchy_datapoint_links")
     hierarchy_dp_links = [ExportedHierarchyDpLink(id=r["id"], node_id=r["node_id"], datapoint_id=r["datapoint_id"]) for r in dp_link_rows]
 
+    logic_capabilities = sorted(LOGIC_CAPABILITIES)
+    capability_placeholders = ",".join("?" for _ in logic_capabilities)
     grant_rows = await db.fetchall(
-        """SELECT principal_type, principal_id, node_type, node_id, role, effect
-           FROM authz_node_roles
-           ORDER BY principal_type, principal_id, node_type, node_id""",
+        f"""SELECT principal_type, principal_id, node_type, node_id, role, effect
+            FROM authz_node_roles AS grant_row
+            WHERE (node_type='hierarchy' AND EXISTS (
+                       SELECT 1 FROM hierarchy_nodes WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='datapoint' AND EXISTS (
+                       SELECT 1 FROM datapoints WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='logic_graph' AND EXISTS (
+                       SELECT 1 FROM logic_graphs WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='visu_page' AND EXISTS (
+                       SELECT 1 FROM visu_nodes WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='ringbuffer_filterset' AND EXISTS (
+                       SELECT 1 FROM ringbuffer_filtersets WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='adapter_instance' AND EXISTS (
+                       SELECT 1 FROM adapter_instances WHERE id=grant_row.node_id
+                   ))
+               OR (node_type='logic_capability' AND node_id IN ({capability_placeholders}))
+            ORDER BY principal_type, principal_id, node_type, node_id""",
+        logic_capabilities,
     )
+    user_rows = await db.fetchall("SELECT username FROM users")
+    valid_usernames = {row["username"] for row in user_rows}
+    api_key_rows = await db.fetchall("SELECT id FROM api_keys")
+    valid_api_key_ids: set[str] = set()
+    for row in api_key_rows:
+        try:
+            valid_api_key_ids.add(_canonical_principal_id("api_key", row["id"]))
+        except HTTPException:
+            continue
+
+    valid_grant_rows = []
+    for row in grant_rows:
+        if row["principal_type"] == "user":
+            if row["principal_id"] in valid_usernames:
+                valid_grant_rows.append(row)
+            continue
+        try:
+            principal_id = _canonical_principal_id("api_key", row["principal_id"])
+        except HTTPException:
+            continue
+        if principal_id in valid_api_key_ids:
+            valid_grant_rows.append(row)
+
     authz_grants = [
         ExportedAuthzGrant(
             principal_type=row["principal_type"],
@@ -501,7 +547,7 @@ async def export_config(
             role=row["role"],
             effect=row["effect"],
         )
-        for row in grant_rows
+        for row in valid_grant_rows
     ]
 
     capability_set_rows = await db.fetchall("SELECT key_id, revision FROM api_key_capability_sets ORDER BY key_id")

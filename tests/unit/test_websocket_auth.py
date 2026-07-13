@@ -82,11 +82,13 @@ class _LogAccessDbStub:
 
 
 class _JwtScopeDbStub:
-    def __init__(self, *, is_admin: bool = False) -> None:
+    def __init__(self, *, is_admin: bool | None = False) -> None:
         self.is_admin = is_admin
 
     async def fetchone(self, query: str, _params: tuple):
         if "FROM users" in query:
+            if self.is_admin is None:
+                return None
             return {"is_admin": int(self.is_admin)}
         return None
 
@@ -119,6 +121,27 @@ async def test_authenticate_ws_rejects_missing_credentials():
     ok, reason = await ws_api._authenticate_ws_request(ws)  # noqa: SLF001
     assert ok is False
     assert reason == "Missing credentials"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_ws_rejects_deleted_user_bearer_token(monkeypatch):
+    monkeypatch.setattr(auth_api, "decode_token", lambda _token: "deleted")
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=None))
+    ws = _FakeWebSocket(headers={"authorization": "Bearer valid.jwt"})
+
+    ok, reason = await ws_api._authenticate_ws_request(ws)  # noqa: SLF001
+
+    assert ok is False
+    assert reason == "Invalid token"
+
+
+@pytest.mark.asyncio
+async def test_jwt_principal_rejects_deleted_user():
+    with pytest.raises(HTTPException) as exc:
+        await ws_api._jwt_principal(_JwtScopeDbStub(is_admin=None), "deleted")  # noqa: SLF001
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "User not found"
 
 
 @pytest.mark.asyncio
@@ -559,13 +582,19 @@ async def test_websocket_endpoint_subscribe_sends_initial_registry_value(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_ws_log_access_allows_authenticated_user_without_admin_lookup(monkeypatch):
-    def fail_get_db():
-        raise AssertionError("JWT log access should match REST read access without admin lookup")
-
-    monkeypatch.setattr(ws_api, "get_db", fail_get_db)
+async def test_ws_log_access_revalidates_authenticated_user(monkeypatch):
+    db = _LogAccessDbStub({"exists": 1})
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
     assert await ws_api._ws_has_log_access("regular-user", None) is True  # noqa: SLF001
+    assert "FROM users" in db.queries[0]
+
+
+@pytest.mark.asyncio
+async def test_ws_log_access_rejects_deleted_user(monkeypatch):
+    monkeypatch.setattr(ws_api, "get_db", lambda: _LogAccessDbStub(None))
+
+    assert await ws_api._ws_has_log_access("deleted", None) is False  # noqa: SLF001
 
 
 @pytest.mark.asyncio

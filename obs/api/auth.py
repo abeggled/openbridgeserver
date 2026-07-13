@@ -145,7 +145,9 @@ async def get_current_principal(
     if credentials:
         subject = decode_token(credentials.credentials)
         row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (subject,))
-        return Principal(subject=subject, type="user", is_admin=bool(row and row["is_admin"]))
+        if not row:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+        return Principal(subject=subject, type="user", is_admin=bool(row["is_admin"]))
 
     if api_key:
         key_hash = hash_api_key(api_key)
@@ -398,8 +400,14 @@ async def login(
 
 @router.post("/refresh", response_model=TokenResponse)
 @limiter.limit("10/minute")
-async def refresh(request: Request, body: RefreshRequest) -> TokenResponse:
+async def refresh(
+    request: Request,
+    body: RefreshRequest,
+    db: Database = Depends(lambda: get_db()),
+) -> TokenResponse:
     sub = decode_token(body.refresh_token, expected_type="refresh")
+    if not await db.fetchone("SELECT 1 FROM users WHERE username=?", (sub,)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
     return TokenResponse(
         access_token=create_access_token(sub),
         refresh_token=create_refresh_token(sub),
@@ -458,14 +466,19 @@ async def delete_api_key(
     current_user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
-    key_row = await db.fetchone("SELECT owner FROM api_keys WHERE id=?", (key_id,))
-    if not key_row:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
-    user_row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
-    is_admin = user_row is not None and bool(user_row["is_admin"])
-    if not is_admin and key_row["owner"] != current_user:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete another user's API key")
-    await db.execute_and_commit("DELETE FROM api_keys WHERE id=?", (key_id,))
+    async with db.transaction():
+        key_row = await db.fetchone("SELECT owner FROM api_keys WHERE id=?", (key_id,))
+        if not key_row:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
+        user_row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (current_user,))
+        is_admin = user_row is not None and bool(user_row["is_admin"])
+        if not is_admin and key_row["owner"] != current_user:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot delete another user's API key")
+        await db.execute(
+            "DELETE FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN (?, ?)",
+            (key_id, f"api_key:{key_id}"),
+        )
+        await db.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
 
 
 async def _api_key_capabilities_response(db: Database, key_id: str) -> ApiKeyCapabilitiesResponse:
@@ -880,6 +893,13 @@ async def delete_user(
         # ownership transfer above is exclusively represented by central grants.
         await db.execute("UPDATE ringbuffer_filtersets SET created_by=NULL WHERE created_by=?", (username,))
 
+        if inventory.api_key_ids:
+            api_key_principal_ids = [principal_id for key_id in inventory.api_key_ids for principal_id in (key_id, f"api_key:{key_id}")]
+            placeholders = ",".join("?" for _ in api_key_principal_ids)
+            await db.execute(
+                f"DELETE FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN ({placeholders})",
+                api_key_principal_ids,
+            )
         await db.execute("DELETE FROM api_keys WHERE owner=?", (username,))
         await db.execute("DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?", (username,))
         await db.execute("DELETE FROM ringbuffer_filterset_user_state WHERE username=?", (username,))

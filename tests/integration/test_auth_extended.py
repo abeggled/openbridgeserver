@@ -393,17 +393,17 @@ async def test_delete_mqtt_password_success(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
-# get_me — user deleted after JWT issued → 404
+# get_me — user deleted after JWT issued → 401
 # ---------------------------------------------------------------------------
 
 
-async def test_get_me_user_deleted_returns_404(client, auth_headers):
+async def test_get_me_user_deleted_returns_401(client, auth_headers):
     user = await _create_test_user(client, auth_headers)
     user_headers = _headers(create_access_token(user["username"]))
     await _delete_user(client, auth_headers, user["username"])
 
     resp = await client.get("/api/v1/auth/me", headers=user_headers)
-    assert resp.status_code == 404
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------

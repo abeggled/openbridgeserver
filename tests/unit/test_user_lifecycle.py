@@ -59,6 +59,12 @@ async def _owned_state(db: Database) -> None:
         "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES ('key-a', 'Key', 'hash-a', 'alice', ?)",
         (now,),
     )
+    await db.executemany(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('api_key', ?, 'hierarchy', 'home', 'resident', 'allow')""",
+        [("key-a",), ("api_key:key-a",)],
+    )
     await db.execute(
         "INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role) VALUES ('user', 'alice', 'hierarchy', 'home', 'owner')"
     )
@@ -146,6 +152,7 @@ async def test_delete_transfers_revokes_and_cleans_references_atomically(db: Dat
 
     assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is None
     assert await db.fetchone("SELECT 1 FROM api_keys WHERE id='key-a'") is None
+    assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN ('key-a', 'api_key:key-a')") is None
     assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "bob"
     assert (await db.fetchone("SELECT created_by FROM logic_graphs WHERE id='graph-a'"))["created_by"] == "bob"
     assert (await db.fetchone("SELECT created_by FROM ringbuffer_filtersets WHERE id='filter-a'"))["created_by"] is None
@@ -285,6 +292,8 @@ async def test_audit_failure_rolls_back_deletion(db: Database, monkeypatch):
     assert await db.fetchone("SELECT 1 FROM users WHERE username='alice'") is not None
     assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "alice"
     assert await db.fetchone("SELECT 1 FROM api_keys WHERE id='key-a'") is not None
+    key_grants = await db.fetchall("SELECT principal_id FROM authz_node_roles WHERE principal_type='api_key' ORDER BY principal_id")
+    assert [row["principal_id"] for row in key_grants] == ["api_key:key-a", "key-a"]
 
 
 @pytest.mark.asyncio

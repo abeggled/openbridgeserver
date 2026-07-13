@@ -278,7 +278,7 @@ class TestGetCurrentUser:
 
         token = create_access_token("alice")
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        db = _DbStub()
+        db = _DbStub(fetchone_result=_make_row(is_admin=0))
         result = await auth_module.get_current_user(credentials=creds, api_key=None, db=db)
         assert result == "alice"
 
@@ -323,7 +323,7 @@ class TestOptionalCurrentUser:
 
         token = create_access_token("carol")
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        db = _DbStub()
+        db = _DbStub(fetchone_result=_make_row(is_admin=0))
         result = await auth_module.optional_current_user(credentials=creds, api_key=None, db=db)
         assert result == "carol"
 
@@ -432,9 +432,22 @@ class TestRefreshEndpoint:
         refresh_tok = create_refresh_token("alice")
         request = MagicMock()
         body = RefreshRequest(refresh_token=refresh_tok)
-        result = await auth_module.refresh.__wrapped__(request=request, body=body)
+        db = _DbStub(fetchone_result=_make_row(username="alice"))
+        result = await auth_module.refresh.__wrapped__(request=request, body=body, db=db)
         assert result.access_token
         assert result.token_type == "bearer"
+
+    @pytest.mark.asyncio
+    async def test_deleted_user_refresh_token_raises_401(self):
+        refresh_tok = create_refresh_token("deleted")
+        request = MagicMock()
+        body = RefreshRequest(refresh_token=refresh_tok)
+
+        with pytest.raises(HTTPException) as exc:
+            await auth_module.refresh.__wrapped__(request=request, body=body, db=_DbStub(fetchone_result=None))
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "User not found"
 
     @pytest.mark.asyncio
     async def test_access_token_as_refresh_raises_401(self):
@@ -442,7 +455,7 @@ class TestRefreshEndpoint:
         request = MagicMock()
         body = RefreshRequest(refresh_token=access_tok)
         with pytest.raises(HTTPException) as exc:
-            await auth_module.refresh.__wrapped__(request=request, body=body)
+            await auth_module.refresh.__wrapped__(request=request, body=body, db=_DbStub())
         assert exc.value.status_code == 401
 
 
@@ -556,7 +569,13 @@ class TestDeleteApiKey:
         db = _DbStub()
         db._fetchone_side_effects = [key_row, admin_row]
         await auth_module.delete_api_key(key_id="k1", current_user="admin", db=db)
-        assert any("DELETE" in q for q, _ in db.executed)
+        assert db.executed == [
+            (
+                "DELETE FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN (?, ?)",
+                ("k1", "api_key:k1"),
+            ),
+            ("DELETE FROM api_keys WHERE id=?", ("k1",)),
+        ]
 
     @pytest.mark.asyncio
     async def test_user_can_delete_own_key(self):

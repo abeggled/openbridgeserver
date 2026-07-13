@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction
@@ -512,7 +512,8 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
     auth_header = ws.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         try:
-            decode_token(auth_header[7:])
+            username = decode_token(auth_header[7:])
+            await _jwt_principal(get_db(), username)
             return True, "OK"
         except Exception:
             return False, "Invalid token"
@@ -520,7 +521,8 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
     subprotocol_jwt, _session_token, _selected = _extract_subprotocol_tokens(ws)
     if subprotocol_jwt:
         try:
-            decode_token(subprotocol_jwt)
+            username = decode_token(subprotocol_jwt)
+            await _jwt_principal(get_db(), username)
             return True, "OK"
         except Exception:
             return False, "Invalid token"
@@ -544,7 +546,11 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
 async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
     """Return whether the authenticated websocket may receive log_entry pushes."""
     if user and user != "__api_key__":
-        return True
+        try:
+            db = get_db()
+        except RuntimeError:
+            return False
+        return await db.fetchone("SELECT 1 FROM users WHERE username=?", (user,)) is not None
     if api_key:
         try:
             db = get_db()
@@ -563,7 +569,9 @@ async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
 
 async def _jwt_principal(db: Database, username: str) -> Principal:
     row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
-    return Principal(subject=username, type="user", is_admin=bool(row and row["is_admin"]))
+    if not row:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+    return Principal(subject=username, type="user", is_admin=bool(row["is_admin"]))
 
 
 async def _ws_authorized_datapoint_scope(db: Database, principal: Principal) -> set[str] | None:
