@@ -188,7 +188,7 @@ async def test_atomic_success_requires_surrounding_transaction_and_secrets_are_r
 
 
 @pytest.mark.asyncio
-async def test_atomic_contract_event_commits_and_rolls_back_with_mutation():
+async def test_atomic_contract_event_commits_and_rolls_back_with_mutation(monkeypatch):
     from obs.api.audit import AuditContext, AuditLogWriter
 
     db = Database(":memory:")
@@ -224,6 +224,18 @@ async def test_atomic_contract_event_commits_and_rolls_back_with_mutation():
         assert settings is not None
         assert settings["value"] == "committed"
         assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE resource_id='rolled-back'") is None
+
+        async def fail_audit(*args, **kwargs):
+            raise RuntimeError("audit insert failed")
+
+        monkeypatch.setattr(writer, "write_contract", fail_audit)
+        with pytest.raises(RuntimeError, match="audit insert failed"):
+            async with db.transaction():
+                await db.execute("INSERT INTO app_settings (key, value) VALUES ('wave14.direct-commit', 'partial')")
+                await db.commit()
+                await writer.write_contract("PUT", "/api/v1/system/settings", resource_id="direct-commit", commit=False)
+
+        assert await db.fetchone("SELECT 1 FROM app_settings WHERE key='wave14.direct-commit'") is None
     finally:
         await db.disconnect()
 

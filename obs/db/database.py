@@ -1401,7 +1401,11 @@ class Database:
         return await self.conn.executemany(sql, params)
 
     async def commit(self) -> None:
-        await self.conn.commit()
+        # The outer explicit transaction owns the durability boundary.  Some
+        # legacy bulk helpers call commit() after intermediate phases; allowing
+        # that here would make their domain rows survive a later audit failure.
+        if not self.in_transaction:
+            await self.conn.commit()
 
     async def rollback(self) -> None:
         await self.conn.rollback()
