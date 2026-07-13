@@ -1031,6 +1031,42 @@ async def _migration_v44(conn: aiosqlite.Connection) -> None:
         )
 
 
+async def _migration_v45(conn: aiosqlite.Connection) -> None:
+    """Remove central grants whose concrete resource no longer exists.
+
+    Central grants deliberately have no polymorphic foreign key.  Resource
+    lifecycle cleanup now removes them with each resource, while this one-time
+    reconciliation repairs rows left by older deletion and reset paths.  A
+    missing resource table in a partial historical schema is not evidence that
+    every grant of that type is orphaned, so that type is left untouched.
+    """
+    table_rows = await (await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    tables = {row[0] for row in table_rows}
+    if "authz_node_roles" not in tables:
+        return
+
+    resources = {
+        "datapoint": "datapoints",
+        "hierarchy": "hierarchy_nodes",
+        "visu_page": "visu_nodes",
+        "logic_graph": "logic_graphs",
+        "ringbuffer_filterset": "ringbuffer_filtersets",
+        "adapter_instance": "adapter_instances",
+    }
+    for node_type, table in resources.items():
+        if table not in tables:
+            continue
+        await conn.execute(
+            f"""DELETE FROM authz_node_roles
+                WHERE node_type=?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {table}
+                      WHERE {table}.id=authz_node_roles.node_id
+                  )""",
+            (node_type,),
+        )
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -1079,6 +1115,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (42, _migration_v42),
     (43, _migration_v43),
     (44, _migration_v44),
+    (45, _migration_v45),
 ]
 
 
