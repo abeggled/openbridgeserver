@@ -54,10 +54,10 @@ class WebSocketManager:
     def __init__(self) -> None:
         # conn_id → (websocket, subscribed_dp_ids, send_lock, allowed_dp_ids,
         #            log_access, log_access_check, ringbuffer_metadata)
-        # allowed_dp_ids: None = unrestricted (authenticated user),
-        # otherwise page-scoped allowlist for anonymous viewer sessions.
-        # log_access: authenticated non-page connections receive log_entry pushes.
-        # log_access_check: revalidates API-key existence before every log_entry push.
+        # allowed_dp_ids: None = unrestricted administrator,
+        # otherwise a principal-policy or anonymous page allowlist.
+        # log_access: authenticated JWT non-page connections receive log_entry pushes.
+        # log_access_check: revalidates principal existence before every log_entry push.
         # send_lock serialises concurrent sends on the same WebSocket;
         # concurrent asyncio.gather calls in EventBus would otherwise race.
         self._connections: dict[
@@ -346,7 +346,11 @@ class WebSocketManager:
                 datapoint=dp,
             )
         dead = []
-        for conn_id, entry in list(self._connections.items()):
+        for conn_id in list(self._connections):
+            await self._refresh_datapoint_scope(conn_id)
+            entry = self._connections.get(conn_id)
+            if entry is None:
+                continue
             allowed_ids = entry[3]
             if allowed_ids is not None and dp_id_str not in allowed_ids:
                 continue
@@ -853,7 +857,7 @@ async def websocket_endpoint(
             allowed_dp_ids = set()
 
     effective_api_key = api_key if user == "__api_key__" else None
-    log_access = await _ws_has_log_access(user, effective_api_key) if allowed_dp_ids is None else False
+    log_access = await _ws_has_log_access(user, effective_api_key) if authenticated_user and not page_id and user != "__api_key__" else False
 
     manager = get_ws_manager()
     conn_id = await manager.connect(

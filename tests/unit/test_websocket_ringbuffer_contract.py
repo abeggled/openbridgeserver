@@ -431,6 +431,40 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_ringbuffer_push_revalidates_invalidated_scope_without_value_subscription(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    scope_check = AsyncMock(return_value=set())
+    manager = WebSocketManager()
+    await manager.connect(ws, allowed_dp_ids={dp_id}, datapoint_scope_check=scope_check)
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Revoked RingBuffer DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: True)
+
+    manager.invalidate_datapoint_scopes()
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_uuid,
+            value=2.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    scope_check.assert_awaited_once()
+    assert ws.messages == []
+
+
+@pytest.mark.asyncio
 async def test_value_push_revalidates_scope_and_prunes_revoked_subscription(monkeypatch):
     dp_uuid = uuid4()
     dp_id = str(dp_uuid)

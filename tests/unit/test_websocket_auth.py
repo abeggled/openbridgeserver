@@ -393,6 +393,42 @@ async def test_websocket_endpoint_disables_api_key_log_access_with_datapoint_sco
 
 
 @pytest.mark.asyncio
+async def test_websocket_endpoint_preserves_jwt_log_access_with_datapoint_scope(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    async def _filter_authorized_datapoints(_db, _principal, _ids, *, action):
+        return ["allowed-dp"]
+
+    log_access_check = AsyncMock(return_value=True)
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=False))
+    monkeypatch.setattr(ws_api, "filter_authorized_datapoints", _filter_authorized_datapoints)
+    monkeypatch.setattr(ws_api, "_ws_has_log_access", log_access_check)
+
+    manager = ws_api.init_ws_manager()
+    captured: dict = {}
+    original_connect = manager.connect
+
+    async def _capture_connect(*args, **kwargs):
+        captured.update(kwargs)
+        return await original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "connect", _capture_connect)
+    try:
+        await ws_api.websocket_endpoint(_FakeWebSocket(headers={"authorization": "Bearer valid.jwt.token"}))
+    finally:
+        ws_api.reset_ws_manager()
+
+    assert captured["allowed_dp_ids"] == {"allowed-dp"}
+    assert captured["log_access"] is True
+    assert captured["log_access_check"] is not None
+    log_access_check.assert_awaited_once_with("alice", None)
+
+
+@pytest.mark.asyncio
 async def test_websocket_endpoint_prefers_decoded_jwt_when_api_key_header_is_also_present(monkeypatch):
     def _decode_token(token: str, expected_type: str = "access") -> str:
         if token == "valid.jwt.token" and expected_type == "access":
