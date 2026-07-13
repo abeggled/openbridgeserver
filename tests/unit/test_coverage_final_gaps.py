@@ -1530,7 +1530,7 @@ async def test_visu_create_node_success():
     body = VisuNodeCreate(name="New Page", type="PAGE", parent_id=None)
     result = await create_node(body=body, db=db, _user="admin")
     assert result.name == "New Page"
-    assert db.conn.commit.called
+    assert db.transaction.called
 
 
 @pytest.mark.asyncio
@@ -1986,7 +1986,7 @@ async def test_import_nodes_success():
     body = VisuImportRequest(obs_export="visu_subtree", version=1, nodes=[export_node_1], target_parent_id=None)
     result = await import_nodes(body=body, db=db, _user="admin")
     assert result.name == "Imported"
-    assert db.conn.commit.called
+    assert db.transaction.called
 
 
 @pytest.mark.asyncio
@@ -2072,7 +2072,7 @@ async def test_copy_node_success():
     body = CopyNodeRequest(new_name="Copy", target_parent_id=None)
     result = await copy_node(node_id="orig", body=body, db=db, _user="admin")
     assert result.type == "PAGE"
-    assert conn.commit.called
+    assert db.transaction.called
 
 
 @pytest.mark.asyncio
@@ -2169,7 +2169,7 @@ async def test_visu_create_node_with_pin():
     body = VisuNodeCreate(name="Secured", type="PAGE", parent_id=None, access="protected", access_pin="5678")
     result = await create_node(body=body, db=db, _user="admin")
     assert result is not None
-    assert db.conn.commit.called
+    assert db.transaction.called
 
 
 @pytest.mark.asyncio

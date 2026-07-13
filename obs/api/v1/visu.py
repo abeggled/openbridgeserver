@@ -295,6 +295,18 @@ async def _require_visu_generate(db: Database, principal: Principal, node_ids: l
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
 
+async def _require_visu_creation_parent(db: Database, principal: Principal, parent_id: str | None) -> None:
+    """Authorize creation below an existing Visu parent without granting root authority."""
+    if principal.type != "user":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+    if parent_id is None:
+        if not principal.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+        return
+    await _require_discoverable_node(db, parent_id, principal)
+    await _require_visu_generate(db, principal, [parent_id])
+
+
 def _collect_page_datapoint_ids(config: PageConfig) -> list[str]:
     datapoint_ids: set[str] = set()
     for widget in config.widgets:
@@ -543,7 +555,7 @@ async def get_tree(
 async def import_nodes(
     body: VisuImportRequest,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
     """Importiert einen exportierten Visu-Teilbaum und hängt ihn an target_parent_id."""
     if body.obs_export != "visu_subtree":
@@ -558,33 +570,33 @@ async def import_nodes(
     root_node = body.nodes[0]
     root_new_id = id_map[root_node.id]
 
-    await db.conn.execute("SAVEPOINT visu_import_nodes")
-    try:
-        for node in body.nodes:
-            new_id = id_map[node.id]
-            if node.id == root_node.id:
-                new_parent_id = body.target_parent_id
-            else:
-                new_parent_id = id_map.get(node.parent_id or "") or body.target_parent_id
+    prepared_nodes: list[tuple[Any, str, str | None, str, PageConfig]] = []
+    for node in body.nodes:
+        new_id = id_map[node.id]
+        if node.id == root_node.id:
+            new_parent_id = body.target_parent_id
+        else:
+            new_parent_id = id_map.get(node.parent_id or "") or body.target_parent_id
 
-            # Widget-UUIDs neu generieren
-            pc = node.page_config
-            if pc and "widgets" in pc:
-                for w in pc["widgets"]:
-                    w["id"] = str(uuid.uuid4())
-            pc_json = (
-                json.dumps(pc)
-                if pc
-                else json.dumps(
-                    {
-                        "grid_cols": 12,
-                        "grid_row_height": 80,
-                        "background": None,
-                        "widgets": [],
-                    },
-                )
-            )
+        # Widget-UUIDs neu generieren, ohne das validierte Request-Modell zu mutieren.
+        pc = json.loads(json.dumps(node.page_config)) if node.page_config else None
+        if pc and "widgets" in pc:
+            for widget in pc["widgets"]:
+                widget["id"] = str(uuid.uuid4())
+        page_config = PageConfig.model_validate(pc or {})
+        prepared_nodes.append((node, new_id, new_parent_id, page_config.model_dump_json(), page_config))
+
+    principal = _principal_from_mutation_dependency(_user)
+    async with db.transaction():
+        await _require_visu_creation_parent(db, principal, body.target_parent_id)
+        for node, _new_id, _new_parent_id, _pc_json, page_config in prepared_nodes:
             if node.type == "PAGE":
+                await _check_page_datapoint_policy(
+                    db,
+                    principal,
+                    _collect_page_datapoint_ids(page_config),
+                    AuthzAction.GENERATE,
+                )
                 defining_node_id = await _imported_user_access_defining_node(
                     db,
                     node.id,
@@ -593,8 +605,9 @@ async def import_nodes(
                     target_parent_id=body.target_parent_id,
                 )
                 if defining_node_id is not None:
-                    await _check_user_page_target_datapoint_policy(db, defining_node_id, PageConfig.model_validate_json(pc_json))
+                    await _check_user_page_target_datapoint_policy(db, defining_node_id, page_config)
 
+        for node, new_id, new_parent_id, pc_json, _page_config in prepared_nodes:
             await db.conn.execute(
                 """INSERT INTO visu_nodes
                        (id, parent_id, name, type, node_order, icon,
@@ -610,7 +623,7 @@ async def import_nodes(
                     pc_json,
                     now,
                     now,
-                    _user if node.type == "PAGE" else None,
+                    principal.subject if node.type == "PAGE" else None,
                 ),
             )
             if node.access is not None:
@@ -618,12 +631,6 @@ async def import_nodes(
                     "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
                     (new_id, node.access),
                 )
-    except Exception:
-        await db.conn.execute("ROLLBACK TO SAVEPOINT visu_import_nodes")
-        await db.conn.execute("RELEASE SAVEPOINT visu_import_nodes")
-        raise
-    await db.conn.execute("RELEASE SAVEPOINT visu_import_nodes")
-    await db.conn.commit()
     return await _get_node_or_404(db, root_new_id)
 
 
@@ -655,48 +662,55 @@ async def get_node(
 async def create_node(
     body: VisuNodeCreate,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
+    principal = _principal_from_mutation_dependency(_user)
     now = _now_iso()
     node_id = str(uuid.uuid4())
 
-    pin_hash: str | None = None
-    if body.access == "protected" and body.access_pin:
-        pin_hash = bcrypt.hashpw(body.access_pin.encode(), bcrypt.gensalt()).decode()
-
-    default_pc = json.dumps({"grid_cols": 12, "grid_row_height": 80, "background": None, "widgets": []})
-
-    await db.conn.execute(
-        """
-        INSERT INTO visu_nodes
-            (id, parent_id, name, type, node_order, icon, page_config,
-             created_at, updated_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            node_id,
-            body.parent_id,
-            body.name,
-            body.type,
-            body.order,
-            body.icon,
-            default_pc,
-            now,
-            now,
-            _user if body.type == "PAGE" else None,
-        ),
-    )
-    if body.access is not None:
+    default_page_config = PageConfig()
+    async with db.transaction():
+        await _require_visu_creation_parent(db, principal, body.parent_id)
+        pin_hash: str | None = None
+        if body.access == "protected" and body.access_pin:
+            pin_hash = bcrypt.hashpw(body.access_pin.encode(), bcrypt.gensalt()).decode()
+        if body.type == "PAGE":
+            await _check_inherited_user_page_target_datapoint_policy(
+                db,
+                parent_id=body.parent_id,
+                access=body.access,
+                config=default_page_config,
+            )
         await db.conn.execute(
-            "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
-            (node_id, body.access),
+            """
+            INSERT INTO visu_nodes
+                (id, parent_id, name, type, node_order, icon, page_config,
+                 created_at, updated_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                body.parent_id,
+                body.name,
+                body.type,
+                body.order,
+                body.icon,
+                default_page_config.model_dump_json(),
+                now,
+                now,
+                principal.subject if body.type == "PAGE" else None,
+            ),
         )
-    if pin_hash is not None:
-        await db.conn.execute(
-            "INSERT INTO authz_visu_page_credentials (node_id, pin_hash) VALUES (?, ?)",
-            (node_id, pin_hash),
-        )
-    await db.conn.commit()
+        if body.access is not None:
+            await db.conn.execute(
+                "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+                (node_id, body.access),
+            )
+        if pin_hash is not None:
+            await db.conn.execute(
+                "INSERT INTO authz_visu_page_credentials (node_id, pin_hash) VALUES (?, ?)",
+                (node_id, pin_hash),
+            )
     return await _get_node_or_404(db, node_id)
 
 
@@ -880,55 +894,62 @@ async def copy_node(
     node_id: str,
     body: CopyNodeRequest,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
-    source = await _get_node_or_404(db, node_id)
+    principal = _principal_from_mutation_dependency(_user)
     now = _now_iso()
     new_id = str(uuid.uuid4())
 
-    # page_config: neue Widget-UUIDs generieren
-    pc = source.page_config
-    if pc:
-        new_widgets = [w.model_copy(update={"id": str(uuid.uuid4())}) for w in pc.widgets]
-        new_pc = pc.model_copy(update={"widgets": new_widgets})
-        pc_json = new_pc.model_dump_json()
-    else:
-        new_pc = PageConfig()
-        pc_json = json.dumps({"grid_cols": 12, "grid_row_height": 80, "background": None, "widgets": []})
-    if source.type == "PAGE":
-        await _check_inherited_user_page_target_datapoint_policy(
-            db,
-            parent_id=body.target_parent_id,
-            access=source.access,
-            config=new_pc,
-        )
+    async with db.transaction():
+        await _require_visu_creation_parent(db, principal, body.target_parent_id)
+        source = await _require_discoverable_node(db, node_id, principal)
 
-    await db.conn.execute(
-        """
-        INSERT INTO visu_nodes
-            (id, parent_id, name, type, node_order, icon,
-             page_config, created_at, updated_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            new_id,
-            body.target_parent_id,
-            body.new_name,
-            source.type,
-            source.order,
-            source.icon,
-            pc_json,
-            now,
-            now,
-            _user if source.type == "PAGE" else None,
-        ),
-    )
-    if source.access is not None:
+        # page_config: neue Widget-UUIDs generieren
+        pc = source.page_config
+        if pc:
+            new_widgets = [widget.model_copy(update={"id": str(uuid.uuid4())}) for widget in pc.widgets]
+            new_pc = pc.model_copy(update={"widgets": new_widgets})
+        else:
+            new_pc = PageConfig()
+        if source.type == "PAGE":
+            await _check_page_datapoint_policy(
+                db,
+                principal,
+                _collect_page_datapoint_ids(new_pc),
+                AuthzAction.GENERATE,
+            )
+            await _check_inherited_user_page_target_datapoint_policy(
+                db,
+                parent_id=body.target_parent_id,
+                access=source.access,
+                config=new_pc,
+            )
+
         await db.conn.execute(
-            "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
-            (new_id, source.access),
+            """
+            INSERT INTO visu_nodes
+                (id, parent_id, name, type, node_order, icon,
+                 page_config, created_at, updated_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                body.target_parent_id,
+                body.new_name,
+                source.type,
+                source.order,
+                source.icon,
+                new_pc.model_dump_json(),
+                now,
+                now,
+                principal.subject if source.type == "PAGE" else None,
+            ),
         )
-    await db.conn.commit()
+        if source.access is not None:
+            await db.conn.execute(
+                "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+                (new_id, source.access),
+            )
     return await _get_node_or_404(db, new_id)
 
 
