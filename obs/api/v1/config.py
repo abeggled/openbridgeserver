@@ -1262,7 +1262,7 @@ async def factory_reset(
         row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
         result.logic_graphs_deleted = row["n"] if row else 0
         async with db.transaction():
-            await db.execute("DELETE FROM authz_node_roles")
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='logic_graph'")
             await db.execute("DELETE FROM logic_graphs")
         from obs.logic.manager import get_logic_manager
 
@@ -1325,6 +1325,7 @@ async def factory_reset(
             tree_ids = [tree_row["id"] for tree_row in tree_rows]
             node_ids = await collect_hierarchy_tree_node_ids(db, tree_ids)
             await delete_hierarchy_grants(db, node_ids)
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='hierarchy'")
             await db.execute("DELETE FROM hierarchy_trees")
     except Exception as exc:
         result.errors.append(f"Hierarchy reset failed: {exc}")

@@ -15,6 +15,7 @@ from obs.models.datapoint import DataPointCreate
 
 
 NOW = "2026-07-13T00:00:00+00:00"
+API_KEY_ID = "00000000-0000-0000-0000-000000000001"
 
 
 @pytest.fixture
@@ -37,8 +38,8 @@ async def _insert_principals(db: Database) -> None:
         (str(uuid.uuid4()), NOW),
     )
     await db.execute_and_commit(
-        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES ('key-1', 'key', 'key-hash', 'alice', ?)",
-        (NOW,),
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'key-hash', 'alice', ?)",
+        (API_KEY_ID, NOW),
     )
 
 
@@ -284,7 +285,7 @@ async def test_config_import_rejects_orphan_datapoint_grant_and_keeps_valid_gran
             ),
             config_api.ExportedAuthzGrant(
                 principal_type="api_key",
-                principal_id="key-1",
+                principal_id=API_KEY_ID,
                 node_type="datapoint",
                 node_id=str(uuid.uuid4()),
                 role="operator",
@@ -303,7 +304,7 @@ async def test_config_import_rejects_orphan_datapoint_grant_and_keeps_valid_gran
 
     assert result.authz_grants_upserted == 1
     assert len(result.errors) == 1
-    assert "datapoint target does not exist" in result.errors[0]
+    assert "Unknown datapoint grant targets" in result.errors[0]
     rows = await _grant_rows(db)
     assert {(row["node_type"], row["node_id"], row["effect"]) for row in rows} == {
         ("datapoint", str(datapoint.id), "allow"),

@@ -361,7 +361,7 @@ async def test_import_skips_missing_and_unknown_grant_targets_but_keeps_valid_gr
 
 
 @pytest.mark.asyncio
-async def test_factory_reset_clears_all_grants_while_clear_logic_stays_scoped(
+async def test_factory_reset_clears_reset_resource_grants_while_preserving_filtersets(
     monkeypatch: pytest.MonkeyPatch,
     db: Database,
     tmp_path,
@@ -395,7 +395,7 @@ async def test_factory_reset_clears_all_grants_while_clear_logic_stays_scoped(
         grants_after_clear = await db.fetchall("SELECT node_type FROM authz_node_roles ORDER BY node_type")
 
         reset_result = await config_api.factory_reset(_admin="admin", db=db)
-        grants_after_reset = await db.fetchall("SELECT node_type FROM authz_node_roles")
+        grants_after_reset = await db.fetchall("SELECT node_type FROM authz_node_roles ORDER BY node_type")
 
     assert clear_result.errors == []
     assert [row["node_type"] for row in grants_after_clear] == [
@@ -406,4 +406,4 @@ async def test_factory_reset_clears_all_grants_while_clear_logic_stays_scoped(
         "visu_page",
     ]
     assert reset_result.errors == []
-    assert grants_after_reset == []
+    assert [row["node_type"] for row in grants_after_reset] == ["ringbuffer_filterset"]
