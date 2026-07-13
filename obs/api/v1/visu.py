@@ -1159,7 +1159,10 @@ async def save_page(
                 target_id=node_id,
                 request=request,
             )
-        await _require_visu_generate(db, principal, [node_id])
+        # An API key's exact page-config capability is the resource authority for
+        # that page. Human principals still need an explicit GENERATE grant.
+        if not used_capability:
+            await _require_visu_generate(db, principal, [node_id])
         await _check_page_datapoint_policy(
             db,
             principal,
