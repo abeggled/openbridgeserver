@@ -10,6 +10,9 @@ LOGIC_NODE_CAPABILITIES = {
     "wake_on_lan": "wake_on_lan",
 }
 
+LOGIC_CREATE_CAPABILITY = "create_graph"
+"""Closed user-only capability for creating disabled Logic graphs."""
+
 # Explicit allowlist: a newly registered node is intentionally left
 # unclassified and therefore denied by Logic run preflight until reviewed.
 PURE_LOGIC_NODE_TYPES = frozenset(
@@ -49,4 +52,4 @@ PURE_LOGIC_NODE_TYPES = frozenset(
     }
 )
 
-LOGIC_CAPABILITIES = frozenset(LOGIC_NODE_CAPABILITIES.values())
+LOGIC_CAPABILITIES = frozenset({*LOGIC_NODE_CAPABILITIES.values(), LOGIC_CREATE_CAPABILITY})

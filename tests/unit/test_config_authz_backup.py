@@ -8,6 +8,7 @@ import pytest
 from obs.api.v1 import config as config_api
 from obs.core.registry import DataPointRegistry
 from obs.db.database import Database
+from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.models.datapoint import DataPointCreate
 
 
@@ -41,6 +42,82 @@ def _authz_import(*grants: config_api.ExportedAuthzGrant) -> config_api.ConfigEx
         bindings=[],
         authz_grants=list(grants),
     )
+
+
+@pytest.mark.asyncio
+async def test_config_roundtrip_preserves_user_logic_creation_grant_but_drops_api_key_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+) -> None:
+    key_id = str(uuid.uuid4())
+    now = "2026-07-13T00:00:00+00:00"
+    await db.execute_and_commit(
+        "INSERT INTO users (id, username, password_hash, is_admin, created_at) VALUES ('alice-id', 'alice', 'hash', 0, ?)",
+        (now,),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', ?, 'alice', ?)",
+        (key_id, f"hash-{key_id}", now),
+    )
+    await db.executemany(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES (?, ?, 'logic_capability', ?, 'operator', 'allow')""",
+        [
+            ("user", "alice", LOGIC_CREATE_CAPABILITY),
+            ("api_key", key_id, LOGIC_CREATE_CAPABILITY),
+        ],
+    )
+    await db.commit()
+
+    monkeypatch.setattr(config_api, "get_registry", lambda: _EmptyRegistry())
+    with patch("obs.api.v1.icons._icons_dir") as icons_dir:
+        icons_dir.return_value.glob.return_value = []
+        exported = await config_api.export_config(_user="admin", db=db)
+
+    assert [(grant.principal_type, grant.principal_id, grant.node_id) for grant in exported.authz_grants] == [
+        ("user", "alice", LOGIC_CREATE_CAPABILITY)
+    ]
+
+    await db.execute_and_commit("DELETE FROM authz_node_roles")
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(body=exported, _user="admin", db=db)
+
+    assert result.errors == []
+    assert result.authz_grants_upserted == 1
+    restored = await db.fetchone(
+        """SELECT principal_type, principal_id, role FROM authz_node_roles
+           WHERE node_type='logic_capability' AND node_id=?""",
+        (LOGIC_CREATE_CAPABILITY,),
+    )
+    assert (restored["principal_type"], restored["principal_id"], restored["role"]) == ("user", "alice", "operator")
+
+    rejected_import = _authz_import(
+        config_api.ExportedAuthzGrant(
+            principal_type="api_key",
+            principal_id=key_id,
+            node_type="logic_capability",
+            node_id=LOGIC_CREATE_CAPABILITY,
+            role="owner",
+        )
+    )
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        rejected = await config_api.import_config(body=rejected_import, _user="admin", db=db)
+
+    assert rejected.authz_grants_upserted == 0
+    assert rejected.errors == [
+        f"AuthzGrant api_key:{key_id}/logic_capability:{LOGIC_CREATE_CAPABILITY}: Logic graph creation can only be granted to users"
+    ]
 
 
 @pytest.mark.asyncio

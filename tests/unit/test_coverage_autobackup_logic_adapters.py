@@ -543,7 +543,8 @@ class TestCreateGraph:
             result = await create_graph(body=body, _user="user", db=db)
 
         assert result.name == "New Graph"
-        assert len(db.execute_calls) == 1
+        assert len(db.execute_calls) == 2
+        assert "INSERT INTO audit_log_entries" in db.execute_calls[1][0]
 
     @pytest.mark.asyncio
     async def test_reloads_logic_manager_on_create(self):
@@ -870,7 +871,8 @@ class TestDuplicateGraph:
             result = await duplicate_graph(graph_id=original_row["id"], _user="user", db=db)
 
         assert result.name == "Kopie von Original"
-        assert len(db.execute_calls) == 1
+        assert len(db.execute_calls) == 2
+        assert "INSERT INTO audit_log_entries" in db.execute_calls[1][0]
 
 
 class TestExportGraph:

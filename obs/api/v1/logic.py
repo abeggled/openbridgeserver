@@ -23,12 +23,13 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.auth import Principal, get_current_principal, get_current_user
 from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
+from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -82,10 +83,121 @@ def _principal_from_dependency(value: Principal | str) -> Principal:
 def _principal_from_mutation_dependency(value: Principal | str | object) -> Principal:
     if isinstance(value, Principal):
         return value
-    # Direct callers historically pass the return value of get_admin_user as a
-    # string. Runtime requests now receive a Principal from get_current_principal.
+    if isinstance(value, str) and value.startswith("api_key:"):
+        return Principal(subject=value, type="api_key", is_admin=False)
+    # Direct callers historically pass admin dependency values as strings.
+    # Runtime requests now receive a Principal from get_current_principal.
     subject = value if isinstance(value, str) else "admin"
     return Principal(subject=subject, type="user", is_admin=True)
+
+
+async def _require_logic_graph_creation(
+    db: Database,
+    principal: Principal,
+    request: Request | None,
+    *,
+    operation: str,
+    control_class: str,
+) -> bool:
+    """Return whether creation is delegated after enforcing its closed capability."""
+    if principal.type == "user" and principal.is_admin:
+        return False
+
+    if principal.type != "user":
+        decision = AuthzDecision(False, "principal_type_not_allowed")
+    else:
+        grants = await load_role_grants(db, principal, node_type="logic_capability")
+        decision = authorize(
+            principal=principal,
+            action=AuthzAction.GENERATE,
+            targets=[
+                AuthzTarget(
+                    node_type="logic_capability",
+                    node_id=LOGIC_CREATE_CAPABILITY,
+                    control_class=control_class,
+                )
+            ],
+            grants=grants,
+        )
+
+    if not decision.allowed:
+        await AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=principal.subject),
+        ).write(
+            "logic.graph.create.denied",
+            resource_type="logic_capability",
+            resource_id=LOGIC_CREATE_CAPABILITY,
+            details={
+                "control_class": control_class,
+                "operation": operation,
+                "reason": decision.reason,
+            },
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
+
+    return True
+
+
+async def _persist_created_graph(
+    db: Database,
+    principal: Principal,
+    request: Request | None,
+    *,
+    name: str,
+    description: str,
+    enabled: bool,
+    flow: FlowData,
+    control_class: str,
+    operation: str,
+    delegated: bool,
+) -> dict:
+    now = datetime.now(UTC).isoformat()
+    graph_id = str(uuid.uuid4())
+    persisted_enabled = enabled if not delegated else False
+    async with db.transaction():
+        await db.execute(
+            """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                graph_id,
+                name,
+                description,
+                int(persisted_enabled),
+                flow.model_dump_json(),
+                control_class,
+                now,
+                now,
+                principal.subject,
+            ),
+        )
+        if delegated:
+            await db.execute(
+                """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+                   VALUES ('user', ?, 'logic_graph', ?, 'operator', 'allow', ?)""",
+                (principal.subject, graph_id, int(control_class == "central_plant")),
+            )
+        await AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=principal.subject),
+        ).write(
+            "logic.graph.created",
+            resource_type="logic_graph",
+            resource_id=graph_id,
+            details={
+                "control_class": control_class,
+                "creator_grant_role": "operator" if delegated else None,
+                "delegated": delegated,
+                "enabled_persisted": persisted_enabled,
+                "enabled_requested": enabled,
+                "operation": operation,
+            },
+            commit=False,
+        )
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
+    assert row is not None
+    return row
 
 
 def _flow_from_row(row: dict) -> FlowData:
@@ -383,27 +495,30 @@ async def list_graphs(
 @router.post("/graphs", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
 async def create_graph(
     body: LogicGraphCreate,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
-    now = datetime.now(UTC).isoformat()
-    gid = str(uuid.uuid4())
-    await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            gid,
-            body.name,
-            body.description,
-            int(body.enabled),
-            body.flow_data.model_dump_json(),
-            body.control_class,
-            now,
-            now,
-            _user,
-        ),
+    principal = _principal_from_mutation_dependency(_user)
+    delegated = await _require_logic_graph_creation(
+        db,
+        principal,
+        request,
+        operation="create",
+        control_class=body.control_class,
     )
-    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
+    row = await _persist_created_graph(
+        db,
+        principal,
+        request,
+        name=body.name,
+        description=body.description,
+        enabled=body.enabled,
+        flow=body.flow_data,
+        control_class=body.control_class,
+        operation="create",
+        delegated=delegated,
+    )
     # Load into executor cache so the graph is immediately runnable
     try:
         from obs.logic.manager import get_logic_manager
@@ -553,7 +668,8 @@ async def delete_graph(
 @router.post("/graphs/import", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
 async def import_graph(
     body: LogicGraphImport,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     if body.obs_export != "logic_graph":
@@ -561,6 +677,15 @@ async def import_graph(
             status.HTTP_400_BAD_REQUEST,
             "Ungültiges Export-Format (erwartet 'logic_graph')",
         )
+
+    principal = _principal_from_mutation_dependency(_user)
+    delegated = await _require_logic_graph_creation(
+        db,
+        principal,
+        request,
+        operation="import",
+        control_class=body.control_class,
+    )
 
     known_types = {nt.type for nt in list_node_types()}
 
@@ -599,22 +724,17 @@ async def import_graph(
 
     processed_flow = FlowData(nodes=processed_nodes, edges=body.flow_data.edges)
 
-    now = datetime.now(UTC).isoformat()
-    gid = str(uuid.uuid4())
-    await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            gid,
-            body.name,
-            body.description,
-            int(body.enabled),
-            processed_flow.model_dump_json(),
-            body.control_class,
-            now,
-            now,
-            _user,
-        ),
+    row = await _persist_created_graph(
+        db,
+        principal,
+        request,
+        name=body.name,
+        description=body.description,
+        enabled=body.enabled,
+        flow=processed_flow,
+        control_class=body.control_class,
+        operation="import",
+        delegated=delegated,
     )
     try:
         from obs.logic.manager import get_logic_manager
@@ -622,7 +742,6 @@ async def import_graph(
         await get_logic_manager().reload()
     except Exception:
         pass
-    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
     return _row_to_out(row)
 
 
@@ -683,12 +802,22 @@ async def run_graph(
 )
 async def duplicate_graph(
     graph_id: str,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    principal = _principal_from_mutation_dependency(_user)
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
+    delegated = await _require_logic_graph_creation(
+        db,
+        principal,
+        request,
+        operation="duplicate",
+        control_class=_row_control_class(row),
+    )
 
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     flow = FlowData.model_validate(raw)
@@ -708,23 +837,18 @@ async def duplicate_graph(
     ]
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
 
-    now = datetime.now(UTC).isoformat()
-    new_id = str(uuid.uuid4())
     new_name = f"Kopie von {row['name']}"
-    await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            new_id,
-            new_name,
-            row["description"] or "",
-            int(row["enabled"]),
-            new_flow.model_dump_json(),
-            _row_control_class(row),
-            now,
-            now,
-            _user,
-        ),
+    result = await _persist_created_graph(
+        db,
+        principal,
+        request,
+        name=new_name,
+        description=row["description"] or "",
+        enabled=bool(row["enabled"]),
+        flow=new_flow,
+        control_class=_row_control_class(row),
+        operation="duplicate",
+        delegated=delegated,
     )
     try:
         from obs.logic.manager import get_logic_manager
@@ -732,7 +856,6 @@ async def duplicate_graph(
         await get_logic_manager().reload()
     except Exception:
         pass
-    result = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (new_id,))
     return _row_to_out(result)
 
 
