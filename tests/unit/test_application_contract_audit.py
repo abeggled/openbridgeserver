@@ -82,6 +82,52 @@ async def test_denial_wrapper_writes_canonical_outcome_without_sensitive_request
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [404, 422])
+async def test_non_denial_http_errors_are_audited_as_failed(status_code: int) -> None:
+    db = Database(":memory:")
+    await db.connect()
+
+    @audit_application_contract("PUT", "/api/v1/ringbuffer/export/settings", principal_param="principal")
+    async def failed(*, principal: Principal, db: Database) -> None:
+        raise HTTPException(status_code, "invalid operation")
+
+    try:
+        with pytest.raises(HTTPException, match="invalid operation"):
+            await failed(principal=Principal(subject="alice", type="user", is_admin=False), db=db)
+        row = await db.fetchone("SELECT action, outcome FROM audit_log_entries")
+        assert (row["action"], row["outcome"]) == ("ringbuffer.export.settings_updated", "failed")
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_concealment_not_found_is_audited_as_denied() -> None:
+    db = Database(":memory:")
+    await db.connect()
+
+    @audit_application_contract(
+        "POST",
+        "/api/v1/visu/nodes/{node_id}/auth",
+        principal_param=None,
+        resource_param="node_id",
+    )
+    async def concealed(*, node_id: str, db: Database) -> None:
+        raise HTTPException(404, "not found")
+
+    try:
+        with pytest.raises(HTTPException, match="not found"):
+            await concealed(node_id="hidden-node", db=db)
+        row = await db.fetchone("SELECT action, resource_id, outcome FROM audit_log_entries")
+        assert (row["action"], row["resource_id"], row["outcome"]) == (
+            "visu.page.credential_checked",
+            "hidden-node",
+            "denied",
+        )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_denial_audit_failure_does_not_replace_original_http_error(monkeypatch, caplog) -> None:
     db = Database(":memory:")
     await db.connect()

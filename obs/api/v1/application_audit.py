@@ -13,6 +13,7 @@ from fastapi import HTTPException, Request
 
 from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 from obs.api.auth import Principal
+from obs.api.v1.security_contract_registry import ConcealmentMode, get_route_security_contract
 from obs.db.database import Database
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,6 @@ async def audit_application_route(
     path: str,
     *,
     resource_id: str | None = None,
-    audit_not_found: bool = True,
 ) -> AsyncIterator[AuditLogWriter]:
     """Audit denials/failures while leaving success timing to the endpoint."""
     actual_request = request if isinstance(request, Request) else None
@@ -37,9 +37,9 @@ async def audit_application_route(
     except HTTPException as exc:
         if getattr(exc, "__audit_contract_written__", False):
             raise
-        if exc.status_code == 404 and not audit_not_found:
-            raise
-        outcome = AuditOutcome.DENIED if 400 <= exc.status_code < 500 else AuditOutcome.FAILED
+        contract = get_route_security_contract(method, path)
+        denied = exc.status_code in {401, 403} or (exc.status_code == 404 and contract.concealment == ConcealmentMode.NOT_FOUND)
+        outcome = AuditOutcome.DENIED if denied else AuditOutcome.FAILED
         try:
             await writer.write_contract(method, path, resource_id=resource_id, outcome=outcome)
         except Exception:
@@ -59,7 +59,6 @@ def audit_application_contract(
     *,
     principal_param: str | None,
     resource_param: str | None = None,
-    audit_not_found: bool = True,
 ) -> Callable:
     """Wrap a FastAPI endpoint with canonical denial/failure auditing."""
 
@@ -83,7 +82,6 @@ def audit_application_contract(
                 method,
                 path,
                 resource_id=resource_id,
-                audit_not_found=audit_not_found,
             ):
                 return await endpoint(*args, **kwargs)
 
