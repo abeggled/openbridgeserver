@@ -12,12 +12,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user, get_current_user
+from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.config import get_settings
+from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["visu", "backgrounds"])
 
@@ -137,9 +139,12 @@ async def list_backgrounds(_user: str = Depends(get_current_user)) -> Background
 
 
 @router.post("/import", response_model=ImportResult)
+@audit_application_contract("POST", "/api/v1/visu/backgrounds/import", principal_param="_user")
 async def import_backgrounds(
+    request: Request = None,
     files: list[UploadFile] = File(...),
     _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> ImportResult:
     if not files:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Dateien empfangen")
@@ -179,12 +184,23 @@ async def import_backgrounds(
         if name not in imported_names:
             imported_names.append(name)
 
-    return ImportResult(
+    result = ImportResult(
         imported=len(imported_names),
         skipped=skipped,
         names=imported_names,
         message=(f"{len(imported_names)} Hintergrundbild(er) importiert" + (f", {skipped} übersprungen" if skipped else "")),
     )
+    if isinstance(db, Database):
+        await write_application_success(
+            db,
+            request,
+            _user,
+            "POST",
+            "/api/v1/visu/backgrounds/import",
+            details={"imported_count": result.imported, "skipped_count": result.skipped},
+            commit=True,
+        )
+    return result
 
 
 @router.get("/{name}")
@@ -209,9 +225,12 @@ async def get_background(name: str) -> Response:
 
 
 @router.delete("", status_code=status.HTTP_200_OK)
+@audit_application_contract("DELETE", "/api/v1/visu/backgrounds", principal_param="_user")
 async def delete_backgrounds(
     body: DeleteRequest,
+    request: Request = None,
     _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
 ) -> dict:
     directory = _backgrounds_dir().resolve()
     deleted: list[str] = []
@@ -236,4 +255,18 @@ async def delete_backgrounds(
         resolved.unlink()
         deleted.append(name)
 
+    if isinstance(db, Database):
+        await write_application_success(
+            db,
+            request,
+            _user,
+            "DELETE",
+            "/api/v1/visu/backgrounds",
+            details={
+                "deleted_count": len(deleted),
+                "not_found_count": len(not_found),
+                "requested_count": len(body.names),
+            },
+            commit=True,
+        )
     return {"deleted": len(deleted), "names": deleted, "not_found": not_found}

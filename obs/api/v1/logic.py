@@ -24,9 +24,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from obs.api.auth import Principal, get_current_principal, get_current_user
-from obs.api.audit import AuditLogWriter, build_audit_context
+from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
+from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
@@ -121,20 +122,22 @@ async def _require_logic_graph_creation(
         )
 
     if not decision.allowed:
-        await AuditLogWriter(
+        writer = AuditLogWriter(
             db=db,
-            context=build_audit_context(request=request, current_user=principal.subject),
-        ).write(
-            "logic.graph.create.denied",
-            resource_type="logic_capability",
-            resource_id=LOGIC_CREATE_CAPABILITY,
-            details={
-                "control_class": control_class,
-                "operation": operation,
-                "reason": decision.reason,
-            },
+            context=build_audit_context(request=request, current_user=principal),
         )
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
+        path = {
+            "create": "/api/v1/logic/graphs",
+            "import": "/api/v1/logic/graphs/import",
+            "duplicate": "/api/v1/logic/graphs/{graph_id}/duplicate",
+        }[operation]
+        await writer.write_contract(
+            "POST",
+            path,
+            details={"control_class": control_class, "operation": operation, "reason": decision.reason},
+            outcome=AuditOutcome.DENIED,
+        )
+        raise mark_contract_audited(HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert"))
 
     return True
 
@@ -149,8 +152,8 @@ async def _persist_created_graph(
     enabled: bool,
     flow: FlowData,
     control_class: str,
-    operation: str,
     delegated: bool,
+    audit_path: str,
 ) -> dict:
     now = datetime.now(UTC).isoformat()
     graph_id = str(uuid.uuid4())
@@ -178,23 +181,47 @@ async def _persist_created_graph(
                    VALUES ('user', ?, 'logic_graph', ?, 'operator', 'allow', ?)""",
                 (principal.subject, graph_id, int(control_class == "central_plant")),
             )
-        await AuditLogWriter(
-            db=db,
-            context=build_audit_context(request=request, current_user=principal.subject),
-        ).write(
-            "logic.graph.created",
-            resource_type="logic_graph",
-            resource_id=graph_id,
-            details={
-                "control_class": control_class,
-                "creator_grant_role": "operator" if delegated else None,
-                "delegated": delegated,
-                "enabled_persisted": persisted_enabled,
-                "enabled_requested": enabled,
-                "operation": operation,
-            },
-            commit=False,
-        )
+        details = {
+            "control_class": control_class,
+            "creator_grant_role": "operator" if delegated else None,
+            "delegated": delegated,
+            "enabled_persisted": persisted_enabled,
+            "enabled_requested": enabled,
+            "operation": audit_path.rsplit("/", 1)[-1] if audit_path.endswith(("/import", "/duplicate")) else "create",
+        }
+        if audit_path == "/api/v1/logic/graphs":
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/logic/graphs",
+                resource_id=graph_id,
+                details=details,
+                commit=False,
+            )
+        elif audit_path == "/api/v1/logic/graphs/import":
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/logic/graphs/import",
+                resource_id=graph_id,
+                details=details,
+                commit=False,
+            )
+        else:
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/logic/graphs/{graph_id}/duplicate",
+                resource_id=graph_id,
+                details=details,
+                commit=False,
+            )
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     assert row is not None
     return row
@@ -493,6 +520,7 @@ async def list_graphs(
 
 
 @router.post("/graphs", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/logic/graphs", principal_param="_user")
 async def create_graph(
     body: LogicGraphCreate,
     request: Request = None,
@@ -516,8 +544,8 @@ async def create_graph(
         enabled=body.enabled,
         flow=body.flow_data,
         control_class=body.control_class,
-        operation="create",
         delegated=delegated,
+        audit_path="/api/v1/logic/graphs",
     )
     # Load into executor cache so the graph is immediately runnable
     try:
@@ -544,6 +572,7 @@ async def get_graph(
 
 
 @router.put("/graphs/{graph_id}", response_model=LogicGraphOut)
+@audit_application_contract("PUT", "/api/v1/logic/graphs/{graph_id}", principal_param="_user", resource_param="graph_id")
 async def update_graph_full(
     graph_id: str,
     body: LogicGraphCreate,
@@ -564,20 +593,23 @@ async def update_graph_full(
         body.flow_data,
         control_class=control_class,
     )
-    await db.execute_and_commit(
-        """UPDATE logic_graphs
-           SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
-           WHERE id=?""",
-        (
-            body.name,
-            body.description,
-            int(body.enabled),
-            body.flow_data.model_dump_json(),
-            control_class,
-            now,
-            graph_id,
-        ),
-    )
+    principal = _principal_from_mutation_dependency(_user)
+    async with db.transaction():
+        await db.execute(
+            """UPDATE logic_graphs
+               SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
+               WHERE id=?""",
+            (
+                body.name,
+                body.description,
+                int(body.enabled),
+                body.flow_data.model_dump_json(),
+                control_class,
+                now,
+                graph_id,
+            ),
+        )
+        await write_application_success(db, None, principal, "PUT", "/api/v1/logic/graphs/{graph_id}", resource_id=graph_id, commit=False)
     # Invalidate executor cache
     try:
         from obs.logic.manager import get_logic_manager
@@ -591,6 +623,7 @@ async def update_graph_full(
 
 
 @router.patch("/graphs/{graph_id}", response_model=LogicGraphOut)
+@audit_application_contract("PATCH", "/api/v1/logic/graphs/{graph_id}", principal_param="_user", resource_param="graph_id")
 async def update_graph_partial(
     graph_id: str,
     body: LogicGraphUpdate,
@@ -618,12 +651,15 @@ async def update_graph_partial(
         flow_json = body.flow_data.model_dump_json()
     else:
         flow_json = row["flow_data"]
-    await db.execute_and_commit(
-        """UPDATE logic_graphs
-           SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
-           WHERE id=?""",
-        (name, description, int(enabled), flow_json, control_class, now, graph_id),
-    )
+    principal = _principal_from_mutation_dependency(_user)
+    async with db.transaction():
+        await db.execute(
+            """UPDATE logic_graphs
+               SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
+               WHERE id=?""",
+            (name, description, int(enabled), flow_json, control_class, now, graph_id),
+        )
+        await write_application_success(db, None, principal, "PATCH", "/api/v1/logic/graphs/{graph_id}", resource_id=graph_id, commit=False)
     try:
         from obs.logic.manager import get_logic_manager
 
@@ -636,6 +672,7 @@ async def update_graph_partial(
 
 
 @router.delete("/graphs/{graph_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit_application_contract("DELETE", "/api/v1/logic/graphs/{graph_id}", principal_param="_user", resource_param="graph_id")
 async def delete_graph(
     graph_id: str,
     _user: Principal | str = Depends(get_current_principal),
@@ -644,9 +681,10 @@ async def delete_graph(
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    principal = _principal_from_mutation_dependency(_user)
     await _require_logic_graph_generate(
         db,
-        _principal_from_mutation_dependency(_user),
+        principal,
         row,
         _flow_from_row(row),
         control_class=row["control_class"] if "control_class" in row.keys() else "room_local",
@@ -657,6 +695,7 @@ async def delete_graph(
             (graph_id,),
         )
         await db.execute("DELETE FROM logic_graphs WHERE id=?", (graph_id,))
+        await write_application_success(db, None, principal, "DELETE", "/api/v1/logic/graphs/{graph_id}", resource_id=graph_id, commit=False)
     try:
         from obs.logic.manager import get_logic_manager
 
@@ -666,6 +705,7 @@ async def delete_graph(
 
 
 @router.post("/graphs/import", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/logic/graphs/import", principal_param="_user")
 async def import_graph(
     body: LogicGraphImport,
     request: Request = None,
@@ -733,8 +773,8 @@ async def import_graph(
         enabled=body.enabled,
         flow=processed_flow,
         control_class=body.control_class,
-        operation="import",
         delegated=delegated,
+        audit_path="/api/v1/logic/graphs/import",
     )
     try:
         from obs.logic.manager import get_logic_manager
@@ -760,6 +800,7 @@ async def preflight_graph_run(
 
 
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
+@audit_application_contract("POST", "/api/v1/logic/graphs/{graph_id}/run", principal_param="_user", resource_param="graph_id")
 async def run_graph(
     graph_id: str,
     request: Request = None,
@@ -776,21 +817,37 @@ async def run_graph(
         denied_checks = [check.model_dump() for check in preflight.checks if not check.allowed]
         await AuditLogWriter(
             db=db,
-            context=build_audit_context(request=request, current_user=principal.subject),
-        ).write(
-            "logic.graph.run.denied",
-            resource_type="logic_graph",
+            context=build_audit_context(request=request, current_user=principal),
+        ).write_contract(
+            "POST",
+            "/api/v1/logic/graphs/{graph_id}/run",
             resource_id=graph_id,
             details={"denied_checks": denied_checks},
+            outcome=AuditOutcome.DENIED,
         )
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
+        raise mark_contract_audited(HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert"))
     if not bool(row["enabled"]):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:
         from obs.logic.manager import get_logic_manager
 
         outputs = await get_logic_manager().execute_graph(graph_id)
-        return {"status": "ok", "outputs": outputs, "warnings": _logic_run_warnings(outputs)}
+        warnings = _logic_run_warnings(outputs)
+        await write_application_success(
+            db,
+            request,
+            principal,
+            "POST",
+            "/api/v1/logic/graphs/{graph_id}/run",
+            resource_id=graph_id,
+            details={
+                "control_class": _row_control_class(row),
+                "output_count": len(outputs),
+                "warning_count": len(warnings),
+            },
+            commit=True,
+        )
+        return {"status": "ok", "outputs": outputs, "warnings": warnings}
     except Exception as exc:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
 
@@ -799,6 +856,13 @@ async def run_graph(
     "/graphs/{graph_id}/duplicate",
     response_model=LogicGraphOut,
     status_code=status.HTTP_201_CREATED,
+)
+@audit_application_contract(
+    "POST",
+    "/api/v1/logic/graphs/{graph_id}/duplicate",
+    principal_param="_user",
+    resource_param="graph_id",
+    audit_not_found=False,
 )
 async def duplicate_graph(
     graph_id: str,
@@ -847,8 +911,8 @@ async def duplicate_graph(
         enabled=bool(row["enabled"]),
         flow=new_flow,
         control_class=_row_control_class(row),
-        operation="duplicate",
         delegated=delegated,
+        audit_path="/api/v1/logic/graphs/{graph_id}/duplicate",
     )
     try:
         from obs.logic.manager import get_logic_manager

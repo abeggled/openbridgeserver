@@ -500,7 +500,7 @@ async def test_denied_run_audits_graph_and_missing_capability(db: Database) -> N
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Zugriff verweigert"
-    row = await db.fetchone("SELECT * FROM audit_log_entries WHERE action='logic.graph.run.denied'")
+    row = await db.fetchone("SELECT * FROM audit_log_entries WHERE action='logic.graph.run' AND outcome='denied'")
     assert row["resource_type"] == "logic_graph"
     assert row["resource_id"] == "graph-audit"
     details = json.loads(row["details_json"])

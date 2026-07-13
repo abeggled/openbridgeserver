@@ -39,6 +39,7 @@ from obs.api.authz_service import (
     load_role_grants,
     resolve_visu_page_targets,
 )
+from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.api.v1.sessions import create_session, validate_session
 from obs.db.database import Database, get_db
@@ -552,6 +553,7 @@ async def get_tree(
 
 
 @router.post("/nodes/import", response_model=VisuNode, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/visu/nodes/import", principal_param="_user")
 async def import_nodes(
     body: VisuImportRequest,
     db: Database = Depends(get_db),
@@ -631,6 +633,16 @@ async def import_nodes(
                     "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
                     (new_id, node.access),
                 )
+        await write_application_success(
+            db,
+            None,
+            principal,
+            "POST",
+            "/api/v1/visu/nodes/import",
+            resource_id=root_new_id,
+            details={"node_count": len(prepared_nodes), "operation": "import"},
+            commit=False,
+        )
     return await _get_node_or_404(db, root_new_id)
 
 
@@ -659,6 +671,7 @@ async def get_node(
 
 
 @router.post("/nodes", response_model=VisuNode, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/visu/nodes", principal_param="_user")
 async def create_node(
     body: VisuNodeCreate,
     db: Database = Depends(get_db),
@@ -711,10 +724,12 @@ async def create_node(
                 "INSERT INTO authz_visu_page_credentials (node_id, pin_hash) VALUES (?, ?)",
                 (node_id, pin_hash),
             )
+        await write_application_success(db, None, principal, "POST", "/api/v1/visu/nodes", resource_id=node_id, commit=False)
     return await _get_node_or_404(db, node_id)
 
 
 @router.patch("/nodes/{node_id}", response_model=VisuNode)
+@audit_application_contract("PATCH", "/api/v1/visu/nodes/{node_id}", principal_param="_user", resource_param="node_id")
 async def update_node(
     node_id: str,
     body: VisuNodeUpdate,
@@ -795,11 +810,13 @@ async def update_node(
             )
         if target_usernames is not None:
             await _replace_target_users(db, node_id, target_usernames)
+        await write_application_success(db, None, principal, "PATCH", "/api/v1/visu/nodes/{node_id}", resource_id=node_id, commit=False)
 
     return await _get_node_or_404(db, node_id)
 
 
 @router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit_application_contract("DELETE", "/api/v1/visu/nodes/{node_id}", principal_param="_user", resource_param="node_id")
 async def delete_node(
     node_id: str,
     db: Database = Depends(get_db),
@@ -817,6 +834,7 @@ async def delete_node(
         )
         # ON DELETE CASCADE removes descendants, policies and credentials.
         await db.conn.execute("DELETE FROM visu_nodes WHERE id = ?", (node_id,))
+        await write_application_success(db, None, principal, "DELETE", "/api/v1/visu/nodes/{node_id}", resource_id=node_id, commit=False)
 
 
 # ── Breadcrumb ────────────────────────────────────────────────────────────────
@@ -890,6 +908,7 @@ async def get_children(
 
 
 @router.post("/nodes/{node_id}/copy", response_model=VisuNode, status_code=201)
+@audit_application_contract("POST", "/api/v1/visu/nodes/{node_id}/copy", principal_param="_user", resource_param="node_id")
 async def copy_node(
     node_id: str,
     body: CopyNodeRequest,
@@ -950,6 +969,16 @@ async def copy_node(
                 "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
                 (new_id, source.access),
             )
+        await write_application_success(
+            db,
+            None,
+            principal,
+            "POST",
+            "/api/v1/visu/nodes/{node_id}/copy",
+            resource_id=new_id,
+            details={"node_count": 1, "operation": "copy", "source_node_id": node_id},
+            commit=False,
+        )
     return await _get_node_or_404(db, new_id)
 
 
@@ -1019,6 +1048,7 @@ async def export_node(
 
 
 @router.put("/nodes/{node_id}/move", response_model=VisuNode)
+@audit_application_contract("PUT", "/api/v1/visu/nodes/{node_id}/move", principal_param="_user", resource_param="node_id")
 async def move_node(
     node_id: str,
     body: MoveNodeRequest,
@@ -1026,21 +1056,22 @@ async def move_node(
     _user: Principal | str = Depends(get_current_principal),
 ):
     principal = _principal_from_mutation_dependency(_user)
-    await _require_discoverable_node(db, node_id, principal)
-    target_ids = await _visu_subtree_ids(db, node_id)
-    if body.new_parent_id is not None:
-        await _require_discoverable_node(db, body.new_parent_id, principal)
-        target_ids.append(body.new_parent_id)
-    await _require_visu_generate(db, principal, target_ids)
-    await _check_user_target_pages_datapoint_policy_after_access_change(
-        db,
-        parent_overrides={node_id: body.new_parent_id},
-    )
-    await db.conn.execute(
-        "UPDATE visu_nodes SET parent_id = ?, node_order = ?, updated_at = ? WHERE id = ?",
-        (body.new_parent_id, body.order, _now_iso(), node_id),
-    )
-    await db.conn.commit()
+    async with db.transaction():
+        await _require_discoverable_node(db, node_id, principal)
+        target_ids = await _visu_subtree_ids(db, node_id)
+        if body.new_parent_id is not None:
+            await _require_discoverable_node(db, body.new_parent_id, principal)
+            target_ids.append(body.new_parent_id)
+        await _require_visu_generate(db, principal, target_ids)
+        await _check_user_target_pages_datapoint_policy_after_access_change(
+            db,
+            parent_overrides={node_id: body.new_parent_id},
+        )
+        await db.conn.execute(
+            "UPDATE visu_nodes SET parent_id = ?, node_order = ?, updated_at = ? WHERE id = ?",
+            (body.new_parent_id, body.order, _now_iso(), node_id),
+        )
+        await write_application_success(db, None, principal, "PUT", "/api/v1/visu/nodes/{node_id}/move", resource_id=node_id, commit=False)
     return await _get_node_or_404(db, node_id)
 
 
@@ -1049,6 +1080,7 @@ async def move_node(
 
 @router.post("/nodes/{node_id}/auth", response_model=PinAuthResponse)
 @limiter.limit("10/minute")
+@audit_application_contract("POST", "/api/v1/visu/nodes/{node_id}/auth", principal_param=None, resource_param="node_id")
 async def pin_auth(
     node_id: str,
     body: PinAuthRequest,
@@ -1070,6 +1102,15 @@ async def pin_auth(
     if not bcrypt.checkpw(body.pin.encode(), credential["pin_hash"].encode()):
         raise HTTPException(status_code=401, detail="Falscher PIN")
     token = create_session(defining_node_id, expires_in=3600)
+    await write_application_success(
+        db,
+        request,
+        None,
+        "POST",
+        "/api/v1/visu/nodes/{node_id}/auth",
+        resource_id=node_id,
+        commit=True,
+    )
     return PinAuthResponse(session_token=token, expires_in=3600)
 
 
@@ -1157,6 +1198,7 @@ async def get_widget_ref(
 
 
 @router.put("/pages/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit_application_contract("PUT", "/api/v1/visu/pages/{node_id}", principal_param="_user", resource_param="node_id")
 async def save_page(
     node_id: str,
     config: PageConfig,
@@ -1209,11 +1251,12 @@ async def save_page(
     if access == "user" and defining_node_id is not None:
         await _check_user_page_target_datapoint_policy(db, defining_node_id, config)
 
-    await db.conn.execute(
-        "UPDATE visu_nodes SET page_config = ?, updated_at = ? WHERE id = ?",
-        (config.model_dump_json(), _now_iso(), node_id),
-    )
-    await db.conn.commit()
+    async with db.transaction():
+        await db.conn.execute(
+            "UPDATE visu_nodes SET page_config = ?, updated_at = ? WHERE id = ?",
+            (config.model_dump_json(), _now_iso(), node_id),
+        )
+        await write_application_success(db, request, principal, "PUT", "/api/v1/visu/pages/{node_id}", resource_id=node_id, commit=False)
     if used_capability:
         await audit_config_capability_use(
             db,
@@ -1251,6 +1294,7 @@ async def get_node_users(
 
 
 @router.put("/nodes/{node_id}/users", status_code=status.HTTP_204_NO_CONTENT)
+@audit_application_contract("PUT", "/api/v1/visu/nodes/{node_id}/users", principal_param="_admin", resource_param="node_id")
 async def set_node_users(
     node_id: str,
     body: VisuNodeUsersUpdate,
@@ -1267,3 +1311,4 @@ async def set_node_users(
         valid = await _validate_target_usernames(db, body.usernames)
         await _check_user_target_pages_datapoint_policy(db, node_id, usernames=valid)
         await _replace_target_users(db, node_id, valid)
+        await write_application_success(db, None, principal, "PUT", "/api/v1/visu/nodes/{node_id}/users", resource_id=node_id, commit=False)

@@ -155,9 +155,9 @@ async def test_creator_follow_up_grant_does_not_bypass_side_effect_activation_ca
         await logic_api.run_graph(created.id, _request(f"/api/v1/logic/graphs/{created.id}/run"), _user=_principal(), db=db)
 
     assert exc_info.value.status_code == 403
-    denied = json.loads((await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.run.denied'"))["details_json"])[
-        "denied_checks"
-    ]
+    denied = json.loads(
+        (await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.run' AND outcome='denied'"))["details_json"]
+    )["denied_checks"]
     assert [(check["target_type"], check["target_id"], check["reason"]) for check in denied] == [("logic_capability", "sms", "missing_allow")]
     manager.execute_graph.assert_not_awaited()
 
@@ -249,7 +249,7 @@ async def test_duplicate_denies_readable_source_without_create_capability_and_au
 
     assert exc_info.value.status_code == 403
     assert (await db.fetchone("SELECT COUNT(*) AS n FROM logic_graphs"))["n"] == 1
-    audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.create.denied'")
+    audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.duplicated' AND outcome='denied'")
     assert json.loads(audit["details_json"])["operation"] == "duplicate"
 
 
@@ -265,7 +265,7 @@ async def test_duplicate_api_key_is_denied_even_with_source_and_create_grants(db
 
     assert exc_info.value.status_code == 403
     assert (await db.fetchone("SELECT COUNT(*) AS n FROM logic_graphs"))["n"] == 1
-    audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.create.denied'")
+    audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='logic.graph.duplicated' AND outcome='denied'")
     assert json.loads(audit["details_json"])["reason"] == "principal_type_not_allowed"
 
 
@@ -292,7 +292,7 @@ async def test_denied_create_is_audited_without_partial_resource(
     assert await db.fetchone("SELECT 1 FROM logic_graphs") is None
     assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_type='logic_graph'") is None
     audit = await db.fetchone("SELECT resource_type, resource_id, details_json FROM audit_log_entries")
-    assert (audit["resource_type"], audit["resource_id"]) == ("logic_capability", LOGIC_CREATE_CAPABILITY)
+    assert (audit["resource_type"], audit["resource_id"]) == ("logic_graph", None)
     assert json.loads(audit["details_json"])["reason"] == expected_reason
 
 

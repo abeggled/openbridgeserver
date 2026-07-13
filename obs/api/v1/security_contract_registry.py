@@ -326,7 +326,9 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/ringbuffer/filtersets/{filterset_id}/clone"): _policy(
         "ringbuffer_filterset", "ringbuffer.filterset.cloned", action="generate", root=RootSemantics.SCOPED_PARENT
     ),
-    ("PATCH", "/api/v1/ringbuffer/filtersets/order"): _policy("ringbuffer_filterset", "ringbuffer.filtersets.reordered"),
+    ("PATCH", "/api/v1/ringbuffer/filtersets/order"): _policy(
+        "ringbuffer_filterset", "ringbuffer.filtersets.reordered", details=("item_count", "payload_sha256")
+    ),
     ("PATCH", "/api/v1/ringbuffer/filtersets/{filterset_id}/topbar"): _policy("ringbuffer_filterset", "ringbuffer.filterset.topbar_updated"),
     ("PUT", "/api/v1/ringbuffer/export/settings"): _user("ringbuffer_export_settings", "ringbuffer.export.settings_updated"),
     ("POST", "/api/v1/ringbuffer/config"): _admin("ringbuffer_config", "ringbuffer.config.updated"),
@@ -396,6 +398,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         action="generate",
         root=RootSemantics.SCOPED_PARENT,
         extra_checks=(PolicyCheck(CheckKind.CAPABILITY, "generate", "logic_capability", "constant:create_graph", "create_graph"),),
+        details=("control_class", "creator_grant_role", "delegated", "enabled_persisted", "enabled_requested", "operation", "reason"),
     ),
     ("PUT", "/api/v1/logic/graphs/{graph_id}"): _policy("logic_graph", "logic.graph.updated"),
     ("PATCH", "/api/v1/logic/graphs/{graph_id}"): _policy("logic_graph", "logic.graph.patched"),
@@ -406,6 +409,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         action="generate",
         root=RootSemantics.SCOPED_PARENT,
         extra_checks=(PolicyCheck(CheckKind.CAPABILITY, "generate", "logic_capability", "constant:create_graph", "create_graph"),),
+        details=("control_class", "creator_grant_role", "delegated", "enabled_persisted", "enabled_requested", "operation", "reason"),
     ),
     ("POST", "/api/v1/logic/graphs/{graph_id}/run"): _policy(
         "logic_graph",
@@ -416,6 +420,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
             PolicyCheck(CheckKind.ROLE, "read", "datapoint", "derived:logic_flow_datapoints"),
             PolicyCheck(CheckKind.CAPABILITY, "activate", "logic_capability", "derived:logic_node_capabilities", "logic.declared"),
         ),
+        details=("control_class", "denied_checks", "output_count", "warning_count"),
     ),
     ("POST", "/api/v1/logic/graphs/{graph_id}/duplicate"): _policy(
         "logic_graph",
@@ -426,6 +431,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
             PolicyCheck(CheckKind.ROLE, "read", "logic_graph", "path:graph_id"),
             PolicyCheck(CheckKind.CAPABILITY, "generate", "logic_capability", "constant:create_graph", "create_graph"),
         ),
+        details=("control_class", "creator_grant_role", "delegated", "enabled_persisted", "enabled_requested", "operation", "reason"),
     ),
     ("POST", "/api/v1/visu/nodes/import"): _policy(
         "visu_node",
@@ -433,6 +439,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         action="generate",
         root=RootSemantics.SCOPED_PARENT,
         extra_checks=(PolicyCheck(CheckKind.ROLE, "generate", "datapoint", "derived:visu_referenced_datapoints"),),
+        details=("node_count", "operation"),
     ),
     ("POST", "/api/v1/visu/nodes"): _policy(
         "visu_node",
@@ -452,6 +459,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
             PolicyCheck(CheckKind.ROLE, "read", "visu_node", "path:node_id"),
             PolicyCheck(CheckKind.ROLE, "generate", "datapoint", "derived:visu_referenced_datapoints"),
         ),
+        details=("node_count", "operation", "source_node_id"),
     ),
     ("PUT", "/api/v1/visu/nodes/{node_id}/move"): _policy("visu_node", "visu.node.moved"),
     ("POST", "/api/v1/visu/nodes/{node_id}/auth"): _contract(
@@ -466,10 +474,18 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("PUT", "/api/v1/visu/pages/{node_id}"): _policy("visu_page", "visu.page.updated", capability="visu.page_config.write"),
     ("PUT", "/api/v1/visu/nodes/{node_id}/users"): _policy("visu_page_audience", "visu.page.audience_updated"),
     ("POST", "/api/v1/visu/backgrounds/import"): _admin(
-        "visu_background", "visu.backgrounds.imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+        "visu_background",
+        "visu.backgrounds.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("imported_count", "skipped_count"),
     ),
     ("DELETE", "/api/v1/visu/backgrounds"): _user(
-        "visu_background", "visu.backgrounds.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+        "visu_background",
+        "visu.backgrounds.deleted",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("deleted_count", "not_found_count", "requested_count"),
     ),
     # Icons and hierarchy.
     ("POST", "/api/v1/icons/import"): _admin("icon_set", "icons.imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
