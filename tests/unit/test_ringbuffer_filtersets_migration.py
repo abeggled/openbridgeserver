@@ -156,3 +156,72 @@ async def test_v43_clean_install_and_future_principals_receive_no_implicit_acces
         )
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_v43_rerun_preserves_post_migration_policy_change():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            """INSERT INTO users
+               (id, username, password_hash, is_admin, mqtt_enabled, created_at)
+               VALUES ('user-alice', 'alice', 'hash', 0, 0, 'now')"""
+        )
+        await db.execute(
+            """INSERT INTO ringbuffer_filtersets
+               (id, name, filter_json, created_at, updated_at, created_by)
+               VALUES ('owned', 'Owned', '{}', 'now', 'now', 'alice')"""
+        )
+        await _migration_v43(db.conn)
+        await db.execute(
+            """UPDATE authz_node_roles SET role='resident', effect='deny'
+               WHERE principal_type='user' AND principal_id='alice'
+                 AND node_type='ringbuffer_filterset' AND node_id='owned'"""
+        )
+
+        await _migration_v43(db.conn)
+        await db.commit()
+
+        row = await db.fetchone(
+            """SELECT role, effect FROM authz_node_roles
+               WHERE principal_type='user' AND principal_id='alice'
+                 AND node_type='ringbuffer_filterset' AND node_id='owned'"""
+        )
+        assert dict(row) == {"role": "resident", "effect": "deny"}
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_v43_preserves_preexisting_owner_deny():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            """INSERT INTO users
+               (id, username, password_hash, is_admin, mqtt_enabled, created_at)
+               VALUES ('user-alice', 'alice', 'hash', 0, 0, 'now')"""
+        )
+        await db.execute(
+            """INSERT INTO ringbuffer_filtersets
+               (id, name, filter_json, created_at, updated_at, created_by)
+               VALUES ('owned', 'Owned', '{}', 'now', 'now', 'alice')"""
+        )
+        await db.execute(
+            """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+               VALUES ('user', 'alice', 'ringbuffer_filterset', 'owned', 'guest', 'deny')"""
+        )
+
+        await _migration_v43(db.conn)
+        await db.commit()
+
+        row = await db.fetchone(
+            """SELECT role, effect FROM authz_node_roles
+               WHERE principal_type='user' AND principal_id='alice'
+                 AND node_type='ringbuffer_filterset' AND node_id='owned'"""
+        )
+        assert dict(row) == {"role": "guest", "effect": "deny"}
+    finally:
+        await db.disconnect()

@@ -780,8 +780,7 @@ async def _migration_v43(conn: aiosqlite.Connection) -> None:
         FROM ringbuffer_filtersets AS filtersets
         JOIN users ON users.username = filtersets.created_by
         WHERE filtersets.created_by IS NOT NULL AND trim(filtersets.created_by) != ''
-        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
-            role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO NOTHING
         """
     )
     await conn.execute(
