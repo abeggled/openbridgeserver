@@ -1,0 +1,48 @@
+name: AuthZ Contract
+
+on:
+  push:
+    branches:
+      - main
+      - '[0-9][0-9][0-9][0-9].*.x'
+      - bug/*
+      - bugfix/*
+      - feat/*
+      - feature/*
+  pull_request:
+    branches:
+      - main
+      - '[0-9][0-9][0-9][0-9].*.x'
+
+permissions: {}
+
+jobs:
+  authz-contract:
+    name: authz-contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements_dev.txt
+
+      - name: Validate route security contracts
+        run: python tools/check_authz_contract.py
+
+      - name: Run authorization contract tests
+        run: >-
+          pytest -q
+          tests/unit/test_security_contract_registry.py
+          tests/unit/test_api_v1_route_classification_registry.py
+          tests/unit/test_authz_policy.py
+          tests/unit/test_authz_creation_authority_matrix.py
+          tests/unit/test_audit_log.py

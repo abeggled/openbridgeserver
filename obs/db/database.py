@@ -1084,6 +1084,25 @@ async def _migration_v46(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE authz_node_roles ADD COLUMN central_control INTEGER NOT NULL DEFAULT 0 CHECK (central_control IN (0, 1))")
 
 
+async def _migration_v47(conn: aiosqlite.Connection) -> None:
+    """Add queryable principal, outcome and route identity to audit events."""
+    async with conn.execute("PRAGMA table_info(audit_log_entries)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+    additions = {
+        "principal_type": "TEXT CHECK (principal_type IN ('user', 'api_key', 'anonymous', 'system'))",
+        "principal_id": "TEXT",
+        "outcome": "TEXT NOT NULL DEFAULT 'success' CHECK (outcome IN ('success', 'denied', 'failed'))",
+        "http_method": "TEXT",
+        "route_template": "TEXT",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            await conn.execute(f"ALTER TABLE audit_log_entries ADD COLUMN {name} {definition}")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entries_principal ON audit_log_entries(principal_type, principal_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entries_outcome ON audit_log_entries(outcome)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entries_route ON audit_log_entries(http_method, route_template)")
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -1134,6 +1153,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (44, _migration_v44),
     (45, _migration_v45),
     (46, _migration_v46),
+    (47, _migration_v47),
 ]
 
 
@@ -1345,6 +1365,15 @@ class Database:
             finally:
                 self._transaction_connections.pop(task, None)
                 await transaction_conn.close()
+
+    @property
+    def in_transaction(self) -> bool:
+        """Whether the current asyncio task owns an explicit transaction."""
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            return False
+        return task is not None and task in self._transaction_connections
 
     @property
     def conn(self) -> aiosqlite.Connection:
