@@ -107,7 +107,7 @@ async def test_v39_repairs_existing_v38_without_device_hierarchy_links(tmp_path)
         assert "idx_hierarchy_device_links_node" in await _index_names(db, "hierarchy_device_links")
         assert "idx_hierarchy_device_links_device" in await _index_names(db, "hierarchy_device_links")
         version = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 41
+        assert version["version"] == 42
     finally:
         await db.disconnect()
 

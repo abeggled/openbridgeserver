@@ -282,12 +282,15 @@ async def test_export_config_with_visu_nodes(monkeypatch):
             "page_config": None,
         }
     )
-    user_row = _row({"node_id": "node-1", "username": "alice"})
+    policy_row = _row({"node_id": "node-1", "access_mode": "public"})
+    user_row = _row({"node_id": "node-1", "principal_id": "alice"})
 
     async def _fetchall(query, params=()):
-        if "visu_nodes" in query and "visu_node_users" not in query:
+        if "FROM visu_nodes" in query:
             return [node_row]
-        if "visu_node_users" in query:
+        if "authz_visu_page_policies" in query:
+            return [policy_row]
+        if "authz_node_roles" in query:
             return [user_row]
         return []
 
@@ -856,7 +859,6 @@ async def test_import_config_visu_nodes_topological(monkeypatch):
                 node_order=1,
                 icon=None,
                 access=None,
-                access_pin=None,
                 page_config=None,
                 users=[],
             ),
@@ -868,7 +870,6 @@ async def test_import_config_visu_nodes_topological(monkeypatch):
                 node_order=0,
                 icon=None,
                 access="public",
-                access_pin=None,
                 page_config=None,
                 users=["alice"],
             ),
@@ -904,7 +905,6 @@ async def test_import_config_visu_node_orphan_gets_error(monkeypatch):
                 node_order=0,
                 icon=None,
                 access=None,
-                access_pin=None,
                 page_config=None,
                 users=[],
             )

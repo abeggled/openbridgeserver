@@ -120,8 +120,10 @@ async def _insert_user(db: Database, username: str = "alice", *, is_admin: bool 
 
 async def _assign_visu_user(db: Database, *, node_id: str, username: str = "alice") -> None:
     await db.execute_and_commit(
-        "INSERT INTO visu_node_users (node_id, username) VALUES (?, ?)",
-        (node_id, username),
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')""",
+        (username, node_id),
     )
 
 
@@ -141,6 +143,11 @@ async def _insert_visu_page(
         """,
         (page_id, parent_id, page_id, access, config.model_dump_json(), NOW, NOW),
     )
+    if access is not None:
+        await db.execute_and_commit(
+            "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+            (page_id, access),
+        )
 
 
 async def _insert_visu_location(
@@ -158,6 +165,11 @@ async def _insert_visu_location(
         """,
         (node_id, parent_id, node_id, access, PageConfig().model_dump_json(), NOW, NOW),
     )
+    if access is not None:
+        await db.execute_and_commit(
+            "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+            (node_id, access),
+        )
 
 
 async def _seed_scope(db: Database) -> None:
@@ -175,9 +187,7 @@ async def test_get_page_user_assignment_still_requires_hierarchy_read_grant(db: 
     await _seed_scope(db)
     await _insert_user(db)
     await _insert_visu_page(db, "blocked-page", access="user", config=_page_config(BLOCKED_DP_ID))
-    await db.execute_and_commit(
-        "INSERT INTO visu_node_users (node_id, username) VALUES ('blocked-page', 'alice')",
-    )
+    await _assign_visu_user(db, node_id="blocked-page")
 
     with pytest.raises(HTTPException) as exc_info:
         await visu_api.get_page("blocked-page", _request(), db=db, user=_principal())
@@ -191,9 +201,7 @@ async def test_get_page_with_hierarchy_read_grant_allows_user_page(db: Database)
     await _insert_user(db)
     await _insert_grant(db, node_id="allowed")
     await _insert_visu_page(db, "allowed-page", access="user", config=_page_config(ALLOWED_DP_ID))
-    await db.execute_and_commit(
-        "INSERT INTO visu_node_users (node_id, username) VALUES ('allowed-page', 'alice')",
-    )
+    await _assign_visu_user(db, node_id="allowed-page")
 
     result = await visu_api.get_page("allowed-page", _request(), db=db, user=_principal())
 
@@ -206,9 +214,7 @@ async def test_get_widget_ref_user_page_requires_hierarchy_read_grant(db: Databa
     await _insert_user(db)
     await _insert_grant(db, node_id="allowed")
     await _insert_visu_page(db, "blocked-ref-page", access="user", config=_page_config(BLOCKED_DP_ID))
-    await db.execute_and_commit(
-        "INSERT INTO visu_node_users (node_id, username) VALUES ('blocked-ref-page', 'alice')",
-    )
+    await _assign_visu_user(db, node_id="blocked-ref-page")
 
     with pytest.raises(HTTPException) as exc_info:
         await visu_api.get_widget_ref("blocked-ref-page", _request(), db=db, user=_principal())
@@ -315,7 +321,7 @@ async def test_set_node_users_validates_existing_page_datapoints_for_new_target_
         )
 
     assert exc_info.value.status_code == 403
-    assert await db.fetchall("SELECT username FROM visu_node_users WHERE node_id = 'target-page'") == []
+    assert await db.fetchall("SELECT principal_id FROM authz_node_roles WHERE node_type='visu_page' AND node_id='target-page'") == []
 
 
 @pytest.mark.asyncio
@@ -331,8 +337,8 @@ async def test_set_node_users_allows_target_group_with_datapoint_read_access(db:
         db=db,
     )
 
-    rows = await db.fetchall("SELECT username FROM visu_node_users WHERE node_id = 'target-page'")
-    assert [row["username"] for row in rows] == ["alice"]
+    rows = await db.fetchall("SELECT principal_id FROM authz_node_roles WHERE node_type='visu_page' AND node_id='target-page'")
+    assert [row["principal_id"] for row in rows] == ["alice"]
 
 
 @pytest.mark.asyncio
@@ -350,7 +356,7 @@ async def test_set_node_users_validates_inherited_user_access_pages(db: Database
         )
 
     assert exc_info.value.status_code == 403
-    assert await db.fetchall("SELECT username FROM visu_node_users WHERE node_id = 'secure-folder'") == []
+    assert await db.fetchall("SELECT principal_id FROM authz_node_roles WHERE node_type='visu_page' AND node_id='secure-folder'") == []
 
 
 @pytest.mark.asyncio

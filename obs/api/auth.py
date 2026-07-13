@@ -580,7 +580,6 @@ async def _principal_name_is_referenced(db: Database, username: str) -> bool:
         ("SELECT 1 FROM visu_nodes WHERE created_by=? LIMIT 1", username),
         ("SELECT 1 FROM ringbuffer_filtersets WHERE created_by=? LIMIT 1", username),
         ("SELECT 1 FROM authz_node_roles WHERE principal_type='user' AND principal_id=? LIMIT 1", username),
-        ("SELECT 1 FROM visu_node_users WHERE username=? LIMIT 1", username),
         ("SELECT 1 FROM ringbuffer_filterset_user_state WHERE username=? LIMIT 1", username),
     )
     for sql, value in checks:
@@ -611,7 +610,13 @@ async def _deletion_inventory(db: Database, username: str) -> UserDeletionInvent
         )
     ]
     visu_acl_node_ids = [
-        row["node_id"] for row in await db.fetchall("SELECT node_id FROM visu_node_users WHERE username=? ORDER BY node_id", (username,))
+        row["node_id"]
+        for row in await db.fetchall(
+            """SELECT node_id FROM authz_node_roles
+               WHERE principal_type='user' AND principal_id=? AND node_type='visu_page'
+               ORDER BY node_id""",
+            (username,),
+        )
     ]
     filterset_state_ids = [
         row["filterset_id"]
@@ -771,7 +776,6 @@ async def update_user(
                 "UPDATE visu_nodes SET created_by=? WHERE created_by=?",
                 "UPDATE ringbuffer_filtersets SET created_by=? WHERE created_by=?",
                 "UPDATE authz_node_roles SET principal_id=? WHERE principal_type='user' AND principal_id=?",
-                "UPDATE visu_node_users SET username=? WHERE username=?",
                 "UPDATE ringbuffer_filterset_user_state SET username=? WHERE username=?",
             ):
                 await db.execute(sql, (new_username, username))
@@ -840,7 +844,6 @@ async def delete_user(
 
         await db.execute("DELETE FROM api_keys WHERE owner=?", (username,))
         await db.execute("DELETE FROM authz_node_roles WHERE principal_type='user' AND principal_id=?", (username,))
-        await db.execute("DELETE FROM visu_node_users WHERE username=?", (username,))
         await db.execute("DELETE FROM ringbuffer_filterset_user_state WHERE username=?", (username,))
         await db.execute("DELETE FROM users WHERE username=?", (username,))
 

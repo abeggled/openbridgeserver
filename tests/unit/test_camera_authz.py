@@ -72,6 +72,10 @@ async def _insert_camera_page(
         """,
         (access, page_config, NOW, NOW),
     )
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES ('page-camera', ?)",
+        (access,),
+    )
 
 
 async def _insert_inherited_protected_camera_page(db: Database, *, url: str = CAMERA_URL) -> None:
@@ -82,6 +86,9 @@ async def _insert_inherited_protected_camera_page(db: Database, *, url: str = CA
         VALUES ('protected-root', NULL, 'Protected Root', 'LOCATION', 0, NULL, 'protected', 'hash', '{}', ?, ?)
         """,
         (NOW, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES ('protected-root', 'protected')",
     )
     page_config = f"""
     {{
@@ -212,7 +219,11 @@ async def test_camera_auth_rejects_stale_query_token_without_page_scope(
 async def test_proxy_camera_allows_assigned_user_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _insert_user(db, "alice")
     await _insert_camera_page(db, access="user")
-    await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-camera', 'alice')")
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', 'alice', 'visu_page', 'page-camera', 'guest', 'allow')""",
+    )
     _mock_camera_fetch(monkeypatch)
 
     result = await camera_api.proxy_camera(
@@ -549,7 +560,11 @@ async def test_proxy_camera_blocks_unassigned_user_page_scope(monkeypatch: pytes
 async def test_proxy_camera_requires_jwt_for_user_page_scope(monkeypatch: pytest.MonkeyPatch, db: Database):
     await _insert_user(db, "alice")
     await _insert_camera_page(db, access="user")
-    await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-camera', 'alice')")
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', 'alice', 'visu_page', 'page-camera', 'guest', 'allow')""",
+    )
     build_targets = AsyncMock()
     monkeypatch.setattr(camera_api, "_build_fetch_targets", build_targets)
 

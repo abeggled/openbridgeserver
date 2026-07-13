@@ -407,7 +407,14 @@ async def test_write_value_user_page_assignment_does_not_replace_write_grant(mon
             NOW,
         ),
     )
-    await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-user-write', 'alice')")
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES ('page-user-write', 'user')",
+    )
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', 'alice', 'visu_page', 'page-user-write', 'guest', 'allow')""",
+    )
     monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
     event_bus = MagicMock()
     event_bus.publish = AsyncMock()
@@ -847,7 +854,14 @@ async def test_get_value_assigned_user_visu_page_requires_datapoint_read_grant(m
         """,
         (page_config, NOW, NOW),
     )
-    await db.execute_and_commit("INSERT INTO visu_node_users (node_id, username) VALUES ('page-user', 'alice')")
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES ('page-user', 'user')",
+    )
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', 'alice', 'visu_page', 'page-user', 'guest', 'allow')""",
+    )
     registry = _RegistryStub([datapoint])
     state = ValueState()
     state.update(23.0, "good")

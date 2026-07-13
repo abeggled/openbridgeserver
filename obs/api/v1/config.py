@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from obs.api.auth import get_admin_user
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
@@ -177,6 +177,8 @@ class ExportedIcon(BaseModel):
 
 
 class ExportedVisuNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     parent_id: str | None
     name: str
@@ -184,7 +186,6 @@ class ExportedVisuNode(BaseModel):
     node_order: int
     icon: str | None
     access: str | None
-    access_pin: str | None
     page_config: str | None
     users: list[str] = []
 
@@ -386,12 +387,20 @@ async def export_config(
     fa_key_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'icons.fontawesome_api_key'")
     fa_api_key = fa_key_row["value"] if fa_key_row else None
 
-    # Visu-Nodes (mit Benutzerzuordnungen)
+    # Visu nodes with central policy/grant assignments. PIN credentials are
+    # intentionally never part of JSON configuration exports.
     visu_node_rows = await db.fetchall("SELECT * FROM visu_nodes ORDER BY node_order, created_at")
-    visu_node_user_rows = await db.fetchall("SELECT node_id, username FROM visu_node_users")
+    policy_rows = await db.fetchall("SELECT node_id, access_mode FROM authz_visu_page_policies")
+    node_policies = {row["node_id"]: row["access_mode"] for row in policy_rows}
+    visu_node_user_rows = await db.fetchall(
+        """SELECT node_id, principal_id
+           FROM authz_node_roles
+           WHERE principal_type='user' AND node_type='visu_page'
+             AND role='guest' AND effect='allow'""",
+    )
     node_users: dict[str, list[str]] = {}
     for r in visu_node_user_rows:
-        node_users.setdefault(r["node_id"], []).append(r["username"])
+        node_users.setdefault(r["node_id"], []).append(r["principal_id"])
 
     visu_nodes = [
         ExportedVisuNode(
@@ -401,8 +410,7 @@ async def export_config(
             type=r["type"],
             node_order=r["node_order"],
             icon=r["icon"],
-            access=r["access"],
-            access_pin=r["access_pin"],
+            access=node_policies.get(r["id"]),
             page_config=r["page_config"],
             users=node_users.get(r["id"], []),
         )
@@ -909,12 +917,12 @@ async def import_config(
                     try:
                         await db.execute_and_commit(
                             """INSERT INTO visu_nodes
-                               (id, parent_id, name, type, node_order, icon, access, access_pin, page_config, created_at, updated_at, created_by)
-                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                               (id, parent_id, name, type, node_order, icon, page_config, created_at, updated_at, created_by)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)
                                ON CONFLICT(id) DO UPDATE
                                SET parent_id=excluded.parent_id, name=excluded.name, type=excluded.type,
-                                   node_order=excluded.node_order, icon=excluded.icon, access=excluded.access,
-                                   access_pin=excluded.access_pin, page_config=excluded.page_config, updated_at=excluded.updated_at""",
+                                   node_order=excluded.node_order, icon=excluded.icon,
+                                   page_config=excluded.page_config, updated_at=excluded.updated_at""",
                             (
                                 node.id,
                                 node.parent_id,
@@ -922,8 +930,6 @@ async def import_config(
                                 node.type,
                                 node.node_order,
                                 node.icon,
-                                node.access,
-                                node.access_pin,
                                 node.page_config,
                                 now,
                                 now,
@@ -933,17 +939,30 @@ async def import_config(
                         inserted_ids.add(node.id)
                         result.visu_nodes_upserted += 1
 
-                        # Benutzerzuordnungen
-                        if node.users:
-                            await db.execute_and_commit("DELETE FROM visu_node_users WHERE node_id=?", (node.id,))
+                        await db.execute_and_commit("DELETE FROM authz_visu_page_policies WHERE node_id=?", (node.id,))
+                        if node.access is not None:
+                            await db.execute_and_commit(
+                                "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+                                (node.id, node.access),
+                            )
+
+                        # Central user grants replace the old per-page assignment table.
+                        await db.execute_and_commit(
+                            """DELETE FROM authz_node_roles
+                               WHERE principal_type='user' AND node_type='visu_page' AND node_id=?
+                                 AND role='guest' AND effect='allow'""",
+                            (node.id,),
+                        )
+                        if node.users and node.access == "user":
                             for username in node.users:
-                                try:
+                                user = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
+                                if user and not bool(user["is_admin"]):
                                     await db.execute_and_commit(
-                                        "INSERT OR IGNORE INTO visu_node_users (node_id, username) VALUES (?,?)",
-                                        (node.id, username),
+                                        """INSERT OR IGNORE INTO authz_node_roles
+                                               (principal_type, principal_id, node_type, node_id, role, effect)
+                                           VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')""",
+                                        (username, node.id),
                                     )
-                                except Exception:
-                                    pass
                     except Exception as exc:
                         result.errors.append(f"VisuNode {node.id}: {exc}")
                         inserted_ids.add(node.id)

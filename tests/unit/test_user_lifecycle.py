@@ -62,7 +62,11 @@ async def _owned_state(db: Database) -> None:
     await db.execute(
         "INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role) VALUES ('user', 'alice', 'hierarchy', 'home', 'owner')"
     )
-    await db.execute("INSERT INTO visu_node_users (node_id, username) VALUES ('page-a', 'alice')")
+    await db.execute(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role)
+           VALUES ('user', 'alice', 'visu_page', 'page-a', 'guest')""",
+    )
     await db.execute("INSERT INTO ringbuffer_filterset_user_state (username, filterset_id) VALUES ('alice', 'filter-a')")
     await db.commit()
 
@@ -103,7 +107,7 @@ async def test_preflight_is_deterministic_and_non_sensitive(db: Database):
         "logic_graph_ids": ["graph-a"],
         "filterset_ids": ["filter-a"],
         "api_key_ids": ["key-a"],
-        "grant_count": 1,
+        "grant_count": 2,
         "visu_acl_count": 1,
         "filterset_state_count": 1,
     }
@@ -136,7 +140,6 @@ async def test_delete_transfers_revokes_and_cleans_references_atomically(db: Dat
     assert (await db.fetchone("SELECT created_by FROM logic_graphs WHERE id='graph-a'"))["created_by"] == "bob"
     assert (await db.fetchone("SELECT created_by FROM ringbuffer_filtersets WHERE id='filter-a'"))["created_by"] == "bob"
     assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE principal_id='alice'") is None
-    assert await db.fetchone("SELECT 1 FROM visu_node_users WHERE username='alice'") is None
     assert await db.fetchone("SELECT 1 FROM ringbuffer_filterset_user_state WHERE username='alice'") is None
     audit = await db.fetchone("SELECT details_json FROM audit_log_entries WHERE action='auth.user.deleted'")
     assert audit is not None
@@ -243,7 +246,6 @@ async def test_rename_preserves_ownership_and_principal_references(db: Database)
         ("visu_nodes", "created_by"),
         ("ringbuffer_filtersets", "created_by"),
         ("authz_node_roles", "principal_id"),
-        ("visu_node_users", "username"),
         ("ringbuffer_filterset_user_state", "username"),
     ):
         assert await db.fetchone(f"SELECT 1 FROM {table} WHERE {column}='alicia'") is not None

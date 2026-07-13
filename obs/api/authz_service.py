@@ -56,12 +56,17 @@ async def load_role_grants(
 
     hierarchy_ids = [row["node_id"] for row in rows if row["node_type"] == "hierarchy"]
     hierarchy_targets = {target.node_id: target for target in await resolve_hierarchy_targets(db, hierarchy_ids)}
+    page_ids = [row["node_id"] for row in rows if row["node_type"] == "visu_page"]
+    page_targets = {target.node_id: target for target in await resolve_visu_page_targets(db, page_ids)}
 
     grants: list[RoleGrant] = []
     for row in rows:
         ancestors: tuple[str, ...] = ()
         if row["node_type"] == "hierarchy":
             target = hierarchy_targets.get(row["node_id"])
+            ancestors = target.ancestors if target else ()
+        elif row["node_type"] == "visu_page":
+            target = page_targets.get(row["node_id"])
             ancestors = target.ancestors if target else ()
         grants.append(
             RoleGrant(
@@ -75,6 +80,64 @@ async def load_role_grants(
             )
         )
     return grants
+
+
+async def resolve_visu_page_targets(db: Database, node_ids: Iterable[str]) -> list[AuthzTarget]:
+    """Resolve Visu nodes into central AuthZ targets with page-tree ancestry."""
+    ordered_ids = _unique(node_ids)
+    if not ordered_ids:
+        return []
+
+    rows = await db.fetchall(
+        f"""
+        WITH RECURSIVE anc(leaf_id, cur_id, cur_parent, depth, seen) AS (
+            SELECT id, id, parent_id, 0, '|' || id || '|'
+            FROM visu_nodes
+            WHERE id IN ({_placeholders(ordered_ids)})
+            UNION ALL
+            SELECT anc.leaf_id, vn.id, vn.parent_id, anc.depth + 1, anc.seen || vn.id || '|'
+            FROM anc
+            JOIN visu_nodes vn ON vn.id = anc.cur_parent
+            WHERE anc.cur_parent IS NOT NULL
+              AND instr(anc.seen, '|' || vn.id || '|') = 0
+        )
+        SELECT leaf_id, cur_id, depth
+        FROM anc
+        ORDER BY leaf_id, depth DESC
+        """,
+        ordered_ids,
+    )
+
+    ancestors_by_leaf: dict[str, list[str]] = {}
+    found_leaf_ids: set[str] = set()
+    for row in rows:
+        leaf_id = row["leaf_id"]
+        found_leaf_ids.add(leaf_id)
+        if row["depth"] > 0:
+            ancestors_by_leaf.setdefault(leaf_id, []).append(row["cur_id"])
+
+    return [
+        AuthzTarget(
+            node_type="visu_page",
+            node_id=node_id,
+            ancestors=tuple(ancestors_by_leaf.get(node_id, [])),
+        )
+        for node_id in ordered_ids
+        if node_id in found_leaf_ids
+    ]
+
+
+async def authorize_visu_page(
+    db: Database,
+    principal: Principal,
+    node_id: str,
+    *,
+    action: AuthzAction | str = AuthzAction.READ,
+) -> bool:
+    """Evaluate a Visu page-tree target through the central grant engine."""
+    targets = await resolve_visu_page_targets(db, [node_id])
+    grants = await load_role_grants(db, principal, node_type="visu_page")
+    return authorize(principal=principal, action=action, targets=targets, grants=grants).allowed
 
 
 async def resolve_hierarchy_targets(db: Database, node_ids: Iterable[str]) -> list[AuthzTarget]:

@@ -129,6 +129,10 @@ async def _insert_public_visu_page(db: Database, page_id: str, dp_id: uuid.UUID,
         """,
         (page_id, access, page_config, NOW, NOW),
     )
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, ?)",
+        (page_id, access),
+    )
 
 
 async def _insert_inherited_protected_visu_page(db: Database, page_id: str, dp_id: uuid.UUID) -> None:
@@ -139,6 +143,9 @@ async def _insert_inherited_protected_visu_page(db: Database, page_id: str, dp_i
         VALUES ('protected-root', NULL, 'Protected Root', 'LOCATION', 0, NULL, 'protected', 'hash', '{}', ?, ?)
         """,
         (NOW, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES ('protected-root', 'protected')",
     )
     page_config = f"""
     {{
@@ -204,8 +211,14 @@ async def _insert_user_visu_page(db: Database, page_id: str, username: str, dp_i
         (page_id, page_config, NOW, NOW),
     )
     await db.execute_and_commit(
-        "INSERT INTO visu_node_users (node_id, username) VALUES (?, ?)",
-        (page_id, username),
+        "INSERT INTO authz_visu_page_policies (node_id, access_mode) VALUES (?, 'user')",
+        (page_id,),
+    )
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')""",
+        (username, page_id),
     )
 
 

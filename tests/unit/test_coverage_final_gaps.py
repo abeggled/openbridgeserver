@@ -705,11 +705,14 @@ def _make_node_row(**kw):
         "icon": None,
         "node_order": 0,
         "access": "public",
+        "access_mode": "public",
         "page_config": None,
         "created_at": "2026-01-01T00:00:00",
         "updated_at": "2026-01-01T00:00:00",
     }
     defaults.update(kw)
+    if "access" in kw and "access_mode" not in kw:
+        defaults["access_mode"] = kw["access"]
 
     class R(dict):
         def __getitem__(self, k):
@@ -1626,7 +1629,7 @@ async def test_visu_update_node_access_pin(monkeypatch):
     """update_node with access_pin hashes it."""
     node_row = _make_node_row(id="n1", type="PAGE", name="PinPage")
     db = _make_visu_db(row=node_row)
-    body = VisuNodeUpdate(access_pin="1234")
+    body = VisuNodeUpdate(access="protected", access_pin="1234")
     result = await update_node(node_id="n1", body=body, db=db, _user="admin")
     assert result is not None
 
@@ -1790,6 +1793,7 @@ async def test_pin_auth_not_found(monkeypatch):
 
     db = _make_visu_db(row=None)
     db.conn.execute.return_value = _DualCursor(row=None)
+    db.fetchone = AsyncMock(return_value=None)
 
     body = PinAuthRequest(pin="1234")
     req = MagicMock()
@@ -1930,7 +1934,7 @@ async def test_get_node_users_returns_usernames():
         def __getitem__(self, k):
             return super().__getitem__(k)
 
-    db.fetchall = AsyncMock(return_value=[_URow({"username": "alice"}), _URow({"username": "bob"})])
+    db.fetchall = AsyncMock(return_value=[_URow({"principal_id": "alice"}), _URow({"principal_id": "bob"})])
     result = await get_node_users(node_id="n1", db=db, _admin="admin")
     assert result == ["alice", "bob"]
 
@@ -2152,7 +2156,7 @@ async def test_visu_create_node_with_pin():
     """create_node hashes access_pin when provided."""
     node_row = _make_node_row(id="pinned", type="PAGE", name="Secured")
     db = _make_visu_db(row=node_row)
-    body = VisuNodeCreate(name="Secured", type="PAGE", parent_id=None, access_pin="5678")
+    body = VisuNodeCreate(name="Secured", type="PAGE", parent_id=None, access="protected", access_pin="5678")
     result = await create_node(body=body, db=db, _user="admin")
     assert result is not None
     assert db.conn.commit.called

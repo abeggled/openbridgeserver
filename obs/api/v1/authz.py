@@ -14,7 +14,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from obs.api.auth import Principal, get_admin_user
 from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, GrantEffect, Role, RoleGrant, authorize
-from obs.api.authz_service import _datapoint_read_grants, load_role_grants, resolve_datapoint_targets, resolve_hierarchy_targets
+from obs.api.authz_service import (
+    _datapoint_read_grants,
+    load_role_grants,
+    resolve_datapoint_targets,
+    resolve_hierarchy_targets,
+    resolve_visu_page_targets,
+)
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CAPABILITIES
 from obs.models.authz import (
@@ -84,6 +90,7 @@ async def _require_grant_targets(db: Database, grants: Sequence[AuthzPrincipalGr
         "hierarchy": "hierarchy_nodes",
         "datapoint": "datapoints",
         "logic_graph": "logic_graphs",
+        "visu_page": "visu_nodes",
     }
     for node_type, table in table_by_type.items():
         node_ids = sorted({grant.node_id for grant in grants if grant.node_type == node_type})
@@ -231,10 +238,12 @@ async def _principal_from_preview(db: Database, principal: AuthzPreviewPrincipal
 async def _materialize_draft_grants(db: Database, grants: Sequence[AuthzPreviewGrant]) -> list[RoleGrant]:
     hierarchy_ids = [grant.node_id for grant in grants if grant.node_type == "hierarchy"]
     hierarchy_targets = {target.node_id: target for target in await resolve_hierarchy_targets(db, hierarchy_ids)}
+    page_ids = [grant.node_id for grant in grants if grant.node_type == "visu_page"]
+    page_targets = {target.node_id: target for target in await resolve_visu_page_targets(db, page_ids)}
 
     result: list[RoleGrant] = []
     for grant in grants:
-        target = hierarchy_targets.get(grant.node_id)
+        target = hierarchy_targets.get(grant.node_id) if grant.node_type == "hierarchy" else page_targets.get(grant.node_id)
         result.append(
             RoleGrant(
                 principal_type=grant.principal_type,
@@ -277,6 +286,8 @@ async def _resolve_targets(db: Database, target: AuthzPreviewTarget) -> list[Aut
         resolved = await resolve_hierarchy_targets(db, [target.node_id])
     elif target.node_type == "datapoint":
         resolved = (await resolve_datapoint_targets(db, [target.node_id])).get(target.node_id, [])
+    elif target.node_type == "visu_page":
+        resolved = await resolve_visu_page_targets(db, [target.node_id])
     else:
         resolved = [AuthzTarget(node_type=target.node_type, node_id=target.node_id)]
 

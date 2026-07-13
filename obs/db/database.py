@@ -698,6 +698,71 @@ CREATE INDEX IF NOT EXISTS idx_api_key_capabilities_key ON api_key_capabilities(
 """
 
 
+async def _migration_v42(conn: aiosqlite.Connection) -> None:
+    """Move Visu page access policy and user assignments into central AuthZ storage."""
+    await conn.executescript("""
+        CREATE TABLE IF NOT EXISTS authz_visu_page_policies (
+            node_id      TEXT PRIMARY KEY REFERENCES visu_nodes(id) ON DELETE CASCADE,
+            access_mode  TEXT NOT NULL CHECK (access_mode IN ('readonly', 'public', 'protected', 'user')),
+            created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_authz_visu_page_policies_mode
+            ON authz_visu_page_policies(access_mode);
+
+        CREATE TABLE IF NOT EXISTS authz_visu_page_credentials (
+            node_id      TEXT PRIMARY KEY REFERENCES authz_visu_page_policies(node_id) ON DELETE CASCADE,
+            pin_hash     TEXT NOT NULL,
+            updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+    """)
+
+    async with conn.execute("PRAGMA table_info(visu_nodes)") as cur:
+        visu_columns = {row["name"] for row in await cur.fetchall()}
+    if {"access", "access_pin"} <= visu_columns:
+        # A policy without a usable protected credential remains protected and
+        # therefore fails closed. PIN hashes are deliberately stored only in the
+        # credential table, never in grants or audit payloads.
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO authz_visu_page_policies (node_id, access_mode)
+            SELECT id, access
+            FROM visu_nodes
+            WHERE access IN ('readonly', 'public', 'protected', 'user')
+            """,
+        )
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO authz_visu_page_credentials (node_id, pin_hash)
+            SELECT id, access_pin
+            FROM visu_nodes
+            WHERE access = 'protected'
+              AND access_pin IS NOT NULL
+              AND access_pin != ''
+            """,
+        )
+
+    async with conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='visu_node_users'") as cur:
+        has_legacy_users = await cur.fetchone() is not None
+    if has_legacy_users:
+        # Only unambiguous assignments survive: the defining legacy node must
+        # explicitly be user-scoped and the non-admin user must already exist.
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO authz_node_roles
+                (principal_type, principal_id, node_type, node_id, role, effect)
+            SELECT 'user', vnu.username, 'visu_page', vnu.node_id, 'guest', 'allow'
+            FROM visu_node_users AS vnu
+            JOIN visu_nodes AS vn ON vn.id = vnu.node_id AND vn.access = 'user'
+            JOIN users AS u ON u.username = vnu.username AND u.is_admin = 0
+            """,
+        )
+        await conn.execute("DROP TABLE visu_node_users")
+
+    if {"access", "access_pin"} <= visu_columns:
+        await conn.execute("UPDATE visu_nodes SET access = NULL, access_pin = NULL WHERE access IS NOT NULL OR access_pin IS NOT NULL")
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -743,6 +808,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (39, _MIGRATION_V39),
     (40, _migration_v40),
     (41, _MIGRATION_V41),
+    (42, _migration_v42),
 ]
 
 
