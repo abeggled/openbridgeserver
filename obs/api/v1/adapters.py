@@ -453,12 +453,13 @@ async def delete_instance(
 
     await adapter_registry.stop_instance(str(instance_id))
     # Bindings werden per DB (ON DELETE CASCADE via Trigger oder manuell) gelöscht
-    await db.execute_and_commit("DELETE FROM adapter_bindings WHERE adapter_instance_id=?", (str(instance_id),))
-    await db.execute_and_commit(
-        "DELETE FROM authz_node_roles WHERE node_type='adapter_instance' AND node_id=?",
-        (str(instance_id),),
-    )
-    await db.execute_and_commit("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
+    async with db.transaction():
+        await db.execute("DELETE FROM adapter_bindings WHERE adapter_instance_id=?", (str(instance_id),))
+        await db.execute(
+            "DELETE FROM authz_node_roles WHERE node_type='adapter_instance' AND node_id=?",
+            (str(instance_id),),
+        )
+        await db.execute("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
 
 
 @router.post("/instances/{instance_id}/test", response_model=TestResult)

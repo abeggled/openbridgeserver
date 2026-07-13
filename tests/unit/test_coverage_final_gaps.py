@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncio
@@ -1840,8 +1841,12 @@ async def test_delete_instance_success(monkeypatch):
         async def fetchone(self, q, p=()):
             return _Row({"id": str(uuid.uuid4()), "adapter_type": "MQTT"})
 
-        async def execute_and_commit(self, q, p=()):
+        async def execute(self, q, p=()):
             _Db.committed.append(q)
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield
 
     monkeypatch.setattr("obs.adapters.registry.stop_instance", AsyncMock())
     await delete_instance(instance_id=uuid.uuid4(), _user="admin", db=_Db())

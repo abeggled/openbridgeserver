@@ -1273,28 +1273,21 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
         result.bindings_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM adapter_bindings")
-    except Exception as exc:
-        result.errors.append(f"Bindings reset failed: {exc}")
-
-    try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
         result.datapoints_deleted = row["n"] if row else 0
+        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_instances")
+        result.adapter_instances_deleted = row["n"] if row else 0
         async with db.transaction():
+            await db.execute("DELETE FROM adapter_bindings")
             await db.execute("DELETE FROM authz_node_roles WHERE node_type='datapoint'")
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='adapter_instance'")
+            await db.execute("DELETE FROM adapter_instances")
             await db.execute("DELETE FROM datapoints")
         reg = get_registry()
         reg._points.clear()
         reg._values.clear()
     except Exception as exc:
-        result.errors.append(f"DataPoints reset failed: {exc}")
-
-    try:
-        row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_instances")
-        result.adapter_instances_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM adapter_instances")
-    except Exception as exc:
-        result.errors.append(f"Adapter instances reset failed: {exc}")
+        result.errors.append(f"DataPoints and adapters reset failed: {exc}")
 
     try:
         for table in ("knx_space_device_links", "knx_co_ga_links", "knx_comm_objects", "knx_devices"):
@@ -1439,10 +1432,12 @@ async def clear_adapters(
         await adapter_registry.stop_all()
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
         result.bindings_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM adapter_bindings")
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_instances")
         result.deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM adapter_instances")
+        async with db.transaction():
+            await db.execute("DELETE FROM adapter_bindings")
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='adapter_instance'")
+            await db.execute("DELETE FROM adapter_instances")
     except Exception as exc:
         result.errors.append(f"Adapters clear failed: {exc}")
     return result

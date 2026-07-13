@@ -63,6 +63,10 @@ class _DbStub:
     async def execute(self, query, params=()):
         self.committed.append(("execute", query, params))
 
+    @asynccontextmanager
+    async def transaction(self):
+        yield
+
     async def commit(self):
         pass
 
