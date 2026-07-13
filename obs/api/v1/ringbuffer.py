@@ -30,8 +30,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.audit import audit_payload_sha256
 from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants
+from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
 from obs.ringbuffer.ringbuffer import (
@@ -1093,6 +1095,8 @@ async def _insert_filterset(
     *,
     payload: RingBufferFiltersetIn,
     principal: Principal,
+    request: Request | None = None,
+    audit_path: str = "/api/v1/ringbuffer/filtersets",
 ) -> RingBufferFiltersetOut:
     if principal.type != "user":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User principal required to create filtersets")
@@ -1136,6 +1140,26 @@ async def _insert_filterset(
                 is_active=bool(payload.is_active),
                 topbar_active=bool(payload.topbar_active),
                 topbar_order=int(payload.topbar_order),
+            )
+        if audit_path == "/api/v1/ringbuffer/filtersets":
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/ringbuffer/filtersets",
+                resource_id=filterset_id,
+                commit=False,
+            )
+        else:
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/ringbuffer/filtersets/{filterset_id}/clone",
+                resource_id=filterset_id,
+                commit=False,
             )
     created = await _fetch_filterset(db, filterset_id, username=principal.subject)
     if not created:
@@ -1358,6 +1382,7 @@ async def list_ringbuffer_filtersets(
 
 
 @router.post("/filtersets", response_model=RingBufferFiltersetOut, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/ringbuffer/filtersets", principal_param="current_user")
 async def create_ringbuffer_filterset(
     request: Request,
     current_user: Principal | str = Depends(get_current_principal),
@@ -1370,7 +1395,13 @@ async def create_ringbuffer_filterset(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "filterset.filter must declare at least one criterion (hierarchy_nodes, datapoints, devices, tags, adapters, q, or value_filter)",
         )
-    return await _insert_filterset(db, payload=payload, principal=_principal_from_dependency(current_user))
+    return await _insert_filterset(
+        db,
+        payload=payload,
+        principal=_principal_from_dependency(current_user),
+        request=request,
+        audit_path="/api/v1/ringbuffer/filtersets",
+    )
 
 
 @router.get("/filtersets/{filterset_id}", response_model=RingBufferFiltersetOut)
@@ -1383,6 +1414,7 @@ async def get_ringbuffer_filterset(
 
 
 @router.put("/filtersets/{filterset_id}", response_model=RingBufferFiltersetOut)
+@audit_application_contract("PUT", "/api/v1/ringbuffer/filtersets/{filterset_id}", principal_param="current_user", resource_param="filterset_id")
 async def update_ringbuffer_filterset(
     filterset_id: str,
     request: Request,
@@ -1419,38 +1451,44 @@ async def update_ringbuffer_filterset(
     # ringbuffer_filterset_user_state per-user (#478); PUT only changes the
     # shared payload (name/description/filter/color/dsl_version) and never
     # touches the global is_active / topbar_* columns.
-    await db.execute(
-        """UPDATE ringbuffer_filtersets
-           SET name=?, description=?, dsl_version=?,
-               color=?, filter_json=?, updated_at=?
-           WHERE id=?""",
-        (
-            name,
-            description,
-            dsl_version,
-            color,
-            _encode_filter(new_filter),
-            now,
-            filterset_id,
-        ),
-    )
-    # Allow body.is_active/topbar_active/topbar_order to update the caller's
-    # own per-user state for backward compat with clients that still bundle
-    # these fields into a PUT.
-    if body.is_active is not None or body.topbar_active is not None or body.topbar_order is not None:
-        prior = await _fetch_user_state(db, principal.subject, filterset_id)
-        active = body.is_active if body.is_active is not None else (prior[0] if prior else True)
-        topbar_active = body.topbar_active if body.topbar_active is not None else (prior[1] if prior else False)
-        order = body.topbar_order if body.topbar_order is not None else (prior[2] if prior else 0)
-        await _upsert_user_state(
-            db,
-            username=principal.subject,
-            filterset_id=filterset_id,
-            is_active=bool(active),
-            topbar_active=bool(topbar_active),
-            topbar_order=int(order),
+    async with db.transaction():
+        await db.execute(
+            """UPDATE ringbuffer_filtersets
+               SET name=?, description=?, dsl_version=?,
+                   color=?, filter_json=?, updated_at=?
+               WHERE id=?""",
+            (
+                name,
+                description,
+                dsl_version,
+                color,
+                _encode_filter(new_filter),
+                now,
+                filterset_id,
+            ),
         )
-    await db.commit()
+        if body.is_active is not None or body.topbar_active is not None or body.topbar_order is not None:
+            prior = await _fetch_user_state(db, principal.subject, filterset_id)
+            active = body.is_active if body.is_active is not None else (prior[0] if prior else True)
+            topbar_active = body.topbar_active if body.topbar_active is not None else (prior[1] if prior else False)
+            order = body.topbar_order if body.topbar_order is not None else (prior[2] if prior else 0)
+            await _upsert_user_state(
+                db,
+                username=principal.subject,
+                filterset_id=filterset_id,
+                is_active=bool(active),
+                topbar_active=bool(topbar_active),
+                topbar_order=int(order),
+            )
+        await write_application_success(
+            db,
+            request,
+            principal,
+            "PUT",
+            "/api/v1/ringbuffer/filtersets/{filterset_id}",
+            resource_id=filterset_id,
+            commit=False,
+        )
     updated = await _fetch_filterset(db, filterset_id, username=principal.subject)
     if not updated:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "ringbuffer filterset not found")
@@ -1458,22 +1496,37 @@ async def update_ringbuffer_filterset(
 
 
 @router.delete("/filtersets/{filterset_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit_application_contract("DELETE", "/api/v1/ringbuffer/filtersets/{filterset_id}", principal_param="current_user", resource_param="filterset_id")
 async def delete_ringbuffer_filterset(
     filterset_id: str,
     current_user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> None:
-    await _require_filterset_access(db, filterset_id, _principal_from_dependency(current_user), AuthzAction.WRITE)
+    principal = _principal_from_dependency(current_user)
+    await _require_filterset_access(db, filterset_id, principal, AuthzAction.WRITE)
     async with db.transaction():
         await db.execute(
             "DELETE FROM authz_node_roles WHERE node_type='ringbuffer_filterset' AND node_id=?",
             (filterset_id,),
         )
         await db.execute("DELETE FROM ringbuffer_filtersets WHERE id=?", (filterset_id,))
+        await write_application_success(
+            db,
+            None,
+            principal,
+            "DELETE",
+            "/api/v1/ringbuffer/filtersets/{filterset_id}",
+            resource_id=filterset_id,
+            commit=False,
+        )
 
 
 @router.post("/filtersets/{filterset_id}/clone", response_model=RingBufferFiltersetOut, status_code=status.HTTP_201_CREATED)
+@audit_application_contract(
+    "POST", "/api/v1/ringbuffer/filtersets/{filterset_id}/clone", principal_param="current_user", resource_param="filterset_id"
+)
 async def clone_ringbuffer_filterset(
+    request: Request,
     filterset_id: str,
     body: RingBufferFiltersetCloneRequest,
     current_user: Principal | str = Depends(get_current_principal),
@@ -1497,7 +1550,13 @@ async def clone_ringbuffer_filterset(
         topbar_order=0,
         filter=source.filter,
     )
-    return await _insert_filterset(db, payload=clone_payload, principal=principal)
+    return await _insert_filterset(
+        db,
+        payload=clone_payload,
+        principal=principal,
+        request=request,
+        audit_path="/api/v1/ringbuffer/filtersets/{filterset_id}/clone",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1506,6 +1565,7 @@ async def clone_ringbuffer_filterset(
 
 
 @router.patch("/filtersets/order", response_model=list[RingBufferFiltersetOut])
+@audit_application_contract("PATCH", "/api/v1/ringbuffer/filtersets/order", principal_param="current_user")
 async def patch_ringbuffer_filtersets_order(
     body: RingBufferFiltersetOrderPatch,
     current_user: Principal | str = Depends(get_current_principal),
@@ -1520,26 +1580,44 @@ async def patch_ringbuffer_filtersets_order(
     principal = _principal_from_dependency(current_user)
     visible = await _visible_filtersets(db, principal)
     known_ids = {filterset.id for filterset in visible}
-    for item in body.items:
-        if item.id not in known_ids:
-            continue
-        prior = await _fetch_user_state(db, principal.subject, item.id)
-        is_active = prior[0] if prior else True
-        topbar_active = prior[1] if prior else False
-        await _upsert_user_state(
+    async with db.transaction():
+        for item in body.items:
+            if item.id not in known_ids:
+                continue
+            prior = await _fetch_user_state(db, principal.subject, item.id)
+            is_active = prior[0] if prior else True
+            topbar_active = prior[1] if prior else False
+            await _upsert_user_state(
+                db,
+                username=principal.subject,
+                filterset_id=item.id,
+                is_active=bool(is_active),
+                topbar_active=bool(topbar_active),
+                topbar_order=int(item.topbar_order),
+            )
+        await write_application_success(
             db,
-            username=principal.subject,
-            filterset_id=item.id,
-            is_active=bool(is_active),
-            topbar_active=bool(topbar_active),
-            topbar_order=int(item.topbar_order),
+            None,
+            principal,
+            "PATCH",
+            "/api/v1/ringbuffer/filtersets/order",
+            details={
+                "item_count": len(body.items),
+                "payload_sha256": audit_payload_sha256([item.model_dump() for item in body.items]),
+            },
+            commit=False,
         )
-    await db.commit()
 
     return await _visible_filtersets(db, principal)
 
 
 @router.patch("/filtersets/{filterset_id}/topbar", response_model=RingBufferFiltersetOut)
+@audit_application_contract(
+    "PATCH",
+    "/api/v1/ringbuffer/filtersets/{filterset_id}/topbar",
+    principal_param="current_user",
+    resource_param="filterset_id",
+)
 async def patch_ringbuffer_filterset_topbar(
     filterset_id: str,
     body: RingBufferFiltersetTopbarPatch,
@@ -1578,15 +1656,24 @@ async def patch_ringbuffer_filterset_topbar(
         max_order = int(max_row["max_order"]) if max_row else -1
         topbar_order = max_order + 1
 
-    await _upsert_user_state(
-        db,
-        username=principal.subject,
-        filterset_id=filterset_id,
-        is_active=bool(is_active),
-        topbar_active=bool(topbar_active),
-        topbar_order=int(topbar_order),
-    )
-    await db.commit()
+    async with db.transaction():
+        await _upsert_user_state(
+            db,
+            username=principal.subject,
+            filterset_id=filterset_id,
+            is_active=bool(is_active),
+            topbar_active=bool(topbar_active),
+            topbar_order=int(topbar_order),
+        )
+        await write_application_success(
+            db,
+            None,
+            principal,
+            "PATCH",
+            "/api/v1/ringbuffer/filtersets/{filterset_id}/topbar",
+            resource_id=filterset_id,
+            commit=False,
+        )
 
     updated = await _fetch_filterset(db, filterset_id, username=principal.subject)
     if not updated:
@@ -1915,17 +2002,19 @@ async def get_ringbuffer_export_settings(
 
 
 @router.put("/export/settings", response_model=RingBufferExportSettings)
+@audit_application_contract("PUT", "/api/v1/ringbuffer/export/settings", principal_param="_user")
 async def put_ringbuffer_export_settings(
     body: RingBufferExportSettings,
     _user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> RingBufferExportSettings:
     payload = json.dumps(body.model_dump())
-    await db.execute(
-        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (_EXPORT_SETTINGS_KEY, payload),
-    )
-    await db.commit()
+    async with db.transaction():
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_EXPORT_SETTINGS_KEY, payload),
+        )
+        await write_application_success(db, None, _user, "PUT", "/api/v1/ringbuffer/export/settings", commit=False)
     return body
 
 
@@ -1947,8 +2036,10 @@ async def ringbuffer_stats(
 
 
 @router.post("/config", response_model=RingBufferStats)
+@audit_application_contract("POST", "/api/v1/ringbuffer/config", principal_param="_user")
 async def configure_ringbuffer(
     body: RingBufferConfig,
+    request: Request,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> RingBufferStats:
@@ -1959,7 +2050,10 @@ async def configure_ringbuffer(
         )
 
     async with _CONFIGURE_LOCK:
-        return await _configure_ringbuffer_locked(body, db)
+        async with db.transaction():
+            result = await _configure_ringbuffer_locked(body, db)
+            await write_application_success(db, request, _user, "POST", "/api/v1/ringbuffer/config", commit=False)
+        return result
 
 
 async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> RingBufferStats:
