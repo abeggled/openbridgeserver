@@ -986,6 +986,25 @@ async def _iobroker_candidates(
     return result
 
 
+async def _ensure_iobroker_import_authority(
+    db: Database,
+    principal: Principal,
+    instance_id: str,
+) -> None:
+    await _ensure_instance_write_grant(db, principal, instance_id)
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (instance_id,))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "IOBROKER":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    _ensure_adapter_delegates_operation(
+        principal,
+        row["adapter_type"],
+        AdapterDelegationCapability.CREATE_DATAPOINT,
+        AdapterDelegationCapability.LINK_BINDING,
+    )
+
+
 @router.post(
     "/instances/{instance_id}/iobroker/import-preview",
     response_model=IoBrokerImportResult,
@@ -993,14 +1012,11 @@ async def _iobroker_candidates(
 async def iobroker_import_preview(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "IOBROKER":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    principal = _principal_from_dependency(_user)
+    await _ensure_iobroker_import_authority(db, principal, str(instance_id))
     return IoBrokerImportResult(preview=await _iobroker_candidates(str(instance_id), body, db))
 
 
@@ -1012,18 +1028,7 @@ async def iobroker_import_states(
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
     principal = _principal_from_dependency(_user)
-    await _ensure_instance_write_grant(db, principal, str(instance_id))
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "IOBROKER":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
-    _ensure_adapter_delegates_operation(
-        principal,
-        row["adapter_type"],
-        AdapterDelegationCapability.CREATE_DATAPOINT,
-        AdapterDelegationCapability.LINK_BINDING,
-    )
+    await _ensure_iobroker_import_authority(db, principal, str(instance_id))
 
     from obs.api.v1.bindings import create_binding
     from obs.core.registry import get_registry
