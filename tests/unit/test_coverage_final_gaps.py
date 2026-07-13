@@ -1832,14 +1832,14 @@ async def test_delete_instance_success(monkeypatch):
         committed = []
 
         async def fetchone(self, q, p=()):
-            return _Row({"id": str(uuid.uuid4())})
+            return _Row({"id": str(uuid.uuid4()), "adapter_type": "MQTT"})
 
         async def execute_and_commit(self, q, p=()):
             _Db.committed.append(q)
 
     monkeypatch.setattr("obs.adapters.registry.stop_instance", AsyncMock())
     await delete_instance(instance_id=uuid.uuid4(), _user="admin", db=_Db())
-    assert len(_Db.committed) == 2  # bindings + instance delete
+    assert len(_Db.committed) == 3  # bindings + grants + instance delete
 
 
 @pytest.mark.asyncio

@@ -221,16 +221,18 @@ async def test_config_export_import_keeps_policy_and_grants_but_never_pin(
         await db.disconnect()
 
 
-def test_config_import_rejects_legacy_pin_secret_field() -> None:
-    with pytest.raises(ValueError):
-        config_api.ExportedVisuNode(
-            id="page",
-            parent_id=None,
-            name="Page",
-            type="PAGE",
-            node_order=0,
-            icon=None,
-            access="protected",
-            access_pin="secret",
-            page_config=None,
-        )
+def test_config_import_accepts_but_discards_legacy_pin_secret_field() -> None:
+    node = config_api.ExportedVisuNode(
+        id="page",
+        parent_id=None,
+        name="Page",
+        type="PAGE",
+        node_order=0,
+        icon=None,
+        access="protected",
+        access_pin="legacy-hash",
+        page_config=None,
+    )
+
+    assert node.access_pin is None
+    assert "access_pin" not in node.model_dump()

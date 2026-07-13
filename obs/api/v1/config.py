@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from obs.api.auth import get_admin_user
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
@@ -186,8 +186,17 @@ class ExportedVisuNode(BaseModel):
     node_order: int
     icon: str | None
     access: str | None
+    # Accepted only for backwards-compatible import of pre-V42 backups. The
+    # legacy value may be a PIN hash, so it is discarded and never exported or
+    # installed as a credential; protected pages therefore remain fail-closed.
+    access_pin: str | None = Field(default=None, exclude=True)
     page_config: str | None
     users: list[str] = []
+
+    @field_validator("access_pin", mode="before")
+    @classmethod
+    def _discard_legacy_access_pin(cls, _value: object) -> None:
+        return None
 
 
 class ExportedNavLink(BaseModel):

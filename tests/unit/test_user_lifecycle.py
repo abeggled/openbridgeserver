@@ -117,7 +117,7 @@ async def test_preflight_is_deterministic_and_non_sensitive(db: Database):
         "logic_graph_ids": ["graph-a"],
         "filterset_ids": ["filter-a"],
         "api_key_ids": ["key-a"],
-        "grant_count": 2,
+        "grant_count": 3,
         "visu_acl_count": 1,
         "filterset_state_count": 1,
     }
