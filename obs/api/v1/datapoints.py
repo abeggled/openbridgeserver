@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
@@ -83,6 +83,7 @@ class DataPointOut(BaseModel):
     mqtt_alias: str | None
     persist_value: bool
     record_history: bool
+    control_class: Literal["room_local", "central_plant"] = "room_local"
     created_at: str
     updated_at: str
     # Runtime
@@ -182,6 +183,7 @@ def _enrich(dp: Any) -> DataPointOut:
         mqtt_alias=dp.mqtt_alias,
         persist_value=dp.persist_value,
         record_history=dp.record_history,
+        control_class=getattr(dp, "control_class", "room_local"),
         created_at=dp.created_at.isoformat(),
         updated_at=dp.updated_at.isoformat(),
         value=state.value if state else None,
@@ -601,6 +603,8 @@ async def write_value(
                 grants=grants,
             )
             authenticated_write_allowed = bool(allowed)
+            if not authenticated_write_allowed and getattr(dp, "control_class", "room_local") == "central_plant":
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
     if not authenticated_write_allowed:
         page_id = request.headers.get("X-Page-Id")
         if not page_id:

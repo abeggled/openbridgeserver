@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from obs.api.v1 import config as config_api
+from obs.core.registry import DataPointRegistry
 from obs.db.database import Database
+from obs.models.datapoint import DataPointCreate
 
 
 @pytest.fixture
@@ -25,6 +27,10 @@ class _EmptyRegistry:
 
     def all(self) -> list:
         return []
+
+
+def _registry(db: Database) -> DataPointRegistry:
+    return DataPointRegistry(db=db, mqtt_client=AsyncMock(), event_bus=AsyncMock())
 
 
 def _authz_import(*grants: config_api.ExportedAuthzGrant) -> config_api.ConfigExport:
@@ -65,8 +71,8 @@ async def test_json_export_import_preserves_central_authz_and_api_key_capabiliti
     )
     await db.execute_and_commit(
         """INSERT INTO authz_node_roles
-               (principal_type, principal_id, node_type, node_id, role, effect)
-           VALUES ('user', ?, 'hierarchy', 'room', 'operator', 'deny')""",
+               (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+           VALUES ('user', ?, 'hierarchy', 'room', 'operator', 'deny', 1)""",
         (username,),
     )
     await db.execute_and_commit(
@@ -92,6 +98,7 @@ async def test_json_export_import_preserves_central_authz_and_api_key_capabiliti
             "node_id": "room",
             "role": "operator",
             "effect": "deny",
+            "central_control": True,
         }
     ]
     assert [capability_set.model_dump() for capability_set in exported.api_key_capability_sets] == [
@@ -111,22 +118,67 @@ async def test_json_export_import_preserves_central_authz_and_api_key_capabiliti
         patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
         patch("obs.adapters.registry.get_all_instances", return_value={}),
         patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.logic.manager.get_logic_manager") as logic_manager,
     ):
+        logic_manager.return_value.reload = AsyncMock()
         result = await config_api.import_config(body=exported, _user="admin", db=db)
 
     assert result.errors == []
     assert result.authz_grants_upserted == 1
     assert result.api_key_capability_sets_upserted == 1
     restored_grant = await db.fetchone(
-        """SELECT role, effect FROM authz_node_roles
+        """SELECT role, effect, central_control FROM authz_node_roles
            WHERE principal_type='user' AND principal_id=? AND node_type='hierarchy' AND node_id='room'""",
         (username,),
     )
-    assert (restored_grant["role"], restored_grant["effect"]) == ("operator", "deny")
+    assert (restored_grant["role"], restored_grant["effect"], restored_grant["central_control"]) == (
+        "operator",
+        "deny",
+        1,
+    )
     restored_set = await db.fetchone("SELECT revision FROM api_key_capability_sets WHERE key_id=?", (key_id,))
     assert restored_set["revision"] == 7
     restored_capabilities = await db.fetchall("SELECT capability FROM api_key_capabilities WHERE key_id=?", (key_id,))
     assert [row["capability"] for row in restored_capabilities] == ["datapoint.metadata.write"]
+
+
+@pytest.mark.asyncio
+async def test_config_roundtrip_preserves_resource_control_classes(monkeypatch, db: Database) -> None:
+    now = "2026-07-13T00:00:00+00:00"
+    registry = _registry(db)
+    datapoint = await registry.create(DataPointCreate(name="Plant", control_class="central_plant"))
+    await db.execute_and_commit(
+        """INSERT INTO logic_graphs
+               (id, name, description, enabled, flow_data, control_class, created_at, updated_at)
+           VALUES ('central-graph', 'Central', '', 1, '{"nodes":[],"edges":[]}', 'central_plant', ?, ?)""",
+        (now, now),
+    )
+    monkeypatch.setattr(config_api, "get_registry", lambda: registry)
+    with patch("obs.api.v1.icons._icons_dir") as icons_dir:
+        icons_dir.return_value.glob.return_value = []
+        exported = await config_api.export_config(_user="admin", db=db)
+
+    assert exported.datapoints[0].control_class == "central_plant"
+    assert exported.logic_graphs[0].control_class == "central_plant"
+
+    datapoint.control_class = "room_local"
+    await db.execute_and_commit("UPDATE datapoints SET control_class='room_local'")
+    await db.execute_and_commit("UPDATE logic_graphs SET control_class='room_local'")
+    logic_manager = MagicMock()
+    logic_manager.reload = AsyncMock()
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
+    ):
+        result = await config_api.import_config(body=exported, _user="admin", db=db)
+
+    assert result.errors == []
+    assert registry.get(datapoint.id).control_class == "central_plant"
+    assert (await db.fetchone("SELECT control_class FROM datapoints WHERE id=?", (str(datapoint.id),)))["control_class"] == "central_plant"
+    assert (await db.fetchone("SELECT control_class FROM logic_graphs WHERE id='central-graph'"))["control_class"] == "central_plant"
 
 
 @pytest.mark.asyncio

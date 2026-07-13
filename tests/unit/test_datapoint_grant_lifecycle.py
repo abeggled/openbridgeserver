@@ -11,7 +11,7 @@ import pytest
 from obs.api.v1 import config as config_api
 from obs.core.registry import DataPointRegistry
 from obs.db.database import Database
-from obs.models.datapoint import DataPointCreate
+from obs.models.datapoint import DataPointCreate, DataPointUpdate
 
 
 NOW = "2026-07-13T00:00:00+00:00"
@@ -30,6 +30,21 @@ async def db() -> Database:
 
 def _registry(db: Database) -> DataPointRegistry:
     return DataPointRegistry(db=db, mqtt_client=AsyncMock(), event_bus=AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_registry_persists_and_reloads_datapoint_control_class(db: Database) -> None:
+    registry = _registry(db)
+    datapoint = await registry.create(DataPointCreate(name="Plant", control_class="central_plant"))
+    assert datapoint.control_class == "central_plant"
+    assert (await db.fetchone("SELECT control_class FROM datapoints WHERE id=?", (str(datapoint.id),)))["control_class"] == "central_plant"
+
+    updated = await registry.update(datapoint.id, DataPointUpdate(control_class="room_local"))
+    assert updated.control_class == "room_local"
+
+    reloaded = _registry(db)
+    assert await reloaded.load_from_db() == 1
+    assert reloaded.get(datapoint.id).control_class == "room_local"
 
 
 async def _insert_principals(db: Database) -> None:

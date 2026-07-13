@@ -246,6 +246,7 @@ _DATAPOINT_OUT_FIELDS = {
     "mqtt_alias",
     "persist_value",
     "record_history",
+    "control_class",
     "created_at",
     "updated_at",
     "value",

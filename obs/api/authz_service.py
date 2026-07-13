@@ -216,10 +216,10 @@ async def resolve_datapoint_targets(db: Database, dp_ids: Iterable[str]) -> dict
         return {}
 
     existing_rows = await db.fetchall(
-        f"SELECT id FROM datapoints WHERE id IN ({_placeholders(ordered_ids)})",
+        f"SELECT id, control_class FROM datapoints WHERE id IN ({_placeholders(ordered_ids)})",
         ordered_ids,
     )
-    existing_ids = {row["id"] for row in existing_rows}
+    control_class_by_id = {row["id"]: row["control_class"] for row in existing_rows}
 
     link_rows = await db.fetchall(
         f"""
@@ -234,12 +234,20 @@ async def resolve_datapoint_targets(db: Database, dp_ids: Iterable[str]) -> dict
     targets_by_dp: dict[str, list[AuthzTarget]] = {dp_id: [] for dp_id in ordered_ids}
     for row in link_rows:
         target = node_targets.get(row["node_id"])
-        if target is not None:
-            targets_by_dp[row["datapoint_id"]].append(target)
+        control_class = control_class_by_id.get(row["datapoint_id"])
+        if target is not None and control_class is not None:
+            targets_by_dp[row["datapoint_id"]].append(
+                AuthzTarget(
+                    node_type=target.node_type,
+                    node_id=target.node_id,
+                    ancestors=target.ancestors,
+                    control_class=control_class,
+                )
+            )
 
     for dp_id in ordered_ids:
-        if dp_id in existing_ids and not targets_by_dp[dp_id]:
-            targets_by_dp[dp_id].append(AuthzTarget(node_type="datapoint", node_id=dp_id))
+        if dp_id in control_class_by_id and not targets_by_dp[dp_id]:
+            targets_by_dp[dp_id].append(AuthzTarget(node_type="datapoint", node_id=dp_id, control_class=control_class_by_id[dp_id]))
 
     return targets_by_dp
 
@@ -273,7 +281,8 @@ async def filter_authorized_datapoints(
     for dp_id in direct_grant_ids if action_value == AuthzAction.READ else ():
         targets = targets_by_dp.setdefault(dp_id, [])
         if not any(target.node_type == "datapoint" and target.node_id == dp_id for target in targets):
-            targets.append(AuthzTarget(node_type="datapoint", node_id=dp_id))
+            control_class = targets[0].control_class if targets else "room_local"
+            targets.append(AuthzTarget(node_type="datapoint", node_id=dp_id, control_class=control_class))
 
     allowed: list[str] = []
     for dp_id in ordered_ids:
@@ -286,10 +295,11 @@ async def filter_authorized_datapoints(
             grants=decision_grants,
         )
         if action_value != AuthzAction.READ and dp_id in direct_grant_ids:
+            control_class = targets[0].control_class if targets else "room_local"
             direct_decision = authorize(
                 principal=principal,
                 action=action_value,
-                targets=[AuthzTarget(node_type="datapoint", node_id=dp_id)],
+                targets=[AuthzTarget(node_type="datapoint", node_id=dp_id, control_class=control_class)],
                 grants=resolved_grants,
             )
             if decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":

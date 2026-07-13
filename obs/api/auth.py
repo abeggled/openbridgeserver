@@ -618,9 +618,9 @@ async def _deletion_inventory(db: Database, username: str) -> UserDeletionInvent
     )
     api_key_ids = await ids("SELECT id FROM api_keys WHERE owner=? ORDER BY id")
     grants = [
-        [row["node_type"], row["node_id"], row["role"], row["effect"]]
+        [row["node_type"], row["node_id"], row["role"], row["effect"], bool(row["central_control"])]
         for row in await db.fetchall(
-            """SELECT node_type, node_id, role, effect FROM authz_node_roles
+            """SELECT node_type, node_id, role, effect, central_control FROM authz_node_roles
                WHERE principal_type='user' AND principal_id=?
                ORDER BY node_type, node_id, role, effect""",
             (username,),
@@ -856,8 +856,28 @@ async def delete_user(
         if successor:
             if successor == username or not await db.fetchone("SELECT 1 FROM users WHERE username=?", (successor,)):
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Successor must be an existing different user")
+            source_artifact_grants = await db.fetchall(
+                """SELECT node_type, node_id, central_control
+                   FROM authz_node_roles
+                   WHERE principal_type='user' AND principal_id=?
+                     AND ((node_type='visu_page' AND node_id IN ({visu_placeholders}))
+                       OR (node_type='logic_graph' AND node_id IN ({logic_placeholders})))""".format(
+                    visu_placeholders=",".join("?" for _ in inventory.visu_page_ids) or "NULL",
+                    logic_placeholders=",".join("?" for _ in inventory.logic_graph_ids) or "NULL",
+                ),
+                (username, *inventory.visu_page_ids, *inventory.logic_graph_ids),
+            )
+            central_control_by_artifact = {(row["node_type"], row["node_id"]): bool(row["central_control"]) for row in source_artifact_grants}
             transferred_grants = [
-                ("user", successor, node_type, node_id, "owner", "allow")
+                (
+                    "user",
+                    successor,
+                    node_type,
+                    node_id,
+                    "owner",
+                    "allow",
+                    int(central_control_by_artifact.get((node_type, node_id), False)),
+                )
                 for node_type, node_ids in (
                     ("visu_page", inventory.visu_page_ids),
                     ("logic_graph", inventory.logic_graph_ids),
@@ -867,10 +887,12 @@ async def delete_user(
             if transferred_grants:
                 await db.executemany(
                     """INSERT INTO authz_node_roles
-                           (principal_type, principal_id, node_type, node_id, role, effect)
-                       VALUES (?, ?, ?, ?, ?, ?)
+                           (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
-                           role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                           role='owner', effect='allow',
+                           central_control=MAX(authz_node_roles.central_control, excluded.central_control),
+                           updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
                     transferred_grants,
                 )
             await db.execute("UPDATE visu_nodes SET created_by=? WHERE type='PAGE' AND created_by=?", (successor, username))
@@ -879,14 +901,16 @@ async def delete_user(
                 placeholders = ",".join("?" for _ in inventory.filterset_ids)
                 await db.execute(
                     f"""INSERT INTO authz_node_roles
-                            (principal_type, principal_id, node_type, node_id, role, effect)
-                        SELECT 'user', ?, 'ringbuffer_filterset', node_id, 'owner', 'allow'
+                            (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+                        SELECT 'user', ?, 'ringbuffer_filterset', node_id, 'owner', 'allow', central_control
                         FROM authz_node_roles
                         WHERE principal_type='user' AND principal_id=?
                           AND node_type='ringbuffer_filterset' AND role='owner' AND effect='allow'
                           AND node_id IN ({placeholders})
                         ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
-                            role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                            role='owner', effect='allow',
+                            central_control=MAX(authz_node_roles.central_control, excluded.central_control),
+                            updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
                     (successor, username, *inventory.filterset_ids),
                 )
 

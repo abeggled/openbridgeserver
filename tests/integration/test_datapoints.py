@@ -83,6 +83,27 @@ async def test_create_datapoint(client, auth_headers):
     assert body["mqtt_topic"].startswith("dp/")
 
 
+async def test_datapoint_control_class_roundtrips_create_update_and_read(client, auth_headers):
+    created = await _create_dp(
+        client,
+        auth_headers,
+        {**_DP_PAYLOAD, "name": "Central plant", "control_class": "central_plant"},
+    )
+    try:
+        assert created["control_class"] == "central_plant"
+        updated = await client.patch(
+            f"/api/v1/datapoints/{created['id']}",
+            json={"control_class": "room_local"},
+            headers=auth_headers,
+        )
+        assert updated.status_code == 200
+        assert updated.json()["control_class"] == "room_local"
+        persisted = await client.get(f"/api/v1/datapoints/{created['id']}", headers=auth_headers)
+        assert persisted.json()["control_class"] == "room_local"
+    finally:
+        await client.delete(f"/api/v1/datapoints/{created['id']}", headers=auth_headers)
+
+
 async def test_create_datapoint_unknown_type_returns_422(client, auth_headers):
     resp = await client.post(
         "/api/v1/datapoints/",

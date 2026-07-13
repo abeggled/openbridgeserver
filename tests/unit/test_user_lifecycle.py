@@ -180,6 +180,47 @@ async def test_delete_transfers_revokes_and_cleans_references_atomically(db: Dat
 
 
 @pytest.mark.asyncio
+async def test_delete_preserves_central_control_on_transferred_grants(db: Database):
+    await _owned_state(db)
+    await db.execute(
+        "UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_type IN ('visu_page', 'ringbuffer_filterset')"
+    )
+    await db.execute(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+           VALUES ('user', 'alice', 'logic_graph', 'graph-a', 'guest', 'allow', 0)"""
+    )
+    await db.execute(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+           VALUES ('user', 'bob', 'logic_graph', 'graph-a', 'guest', 'allow', 1)"""
+    )
+    await db.commit()
+    preflight = await auth._deletion_inventory(db, "alice")
+
+    await auth.delete_user(
+        "alice",
+        auth.UserDeletionRequest(revision=preflight.revision, successor_username="bob"),
+        admin_user="admin",
+        db=db,
+    )
+
+    transferred = await db.fetchall(
+        """SELECT node_type, node_id, central_control FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='bob'
+             AND ((node_type='visu_page' AND node_id='page-a')
+               OR (node_type='logic_graph' AND node_id='graph-a')
+               OR (node_type='ringbuffer_filterset' AND node_id='filter-a'))
+           ORDER BY node_type"""
+    )
+    assert [dict(row) for row in transferred] == [
+        {"node_type": "logic_graph", "node_id": "graph-a", "central_control": 1},
+        {"node_type": "ringbuffer_filterset", "node_id": "filter-a", "central_control": 1},
+        {"node_type": "visu_page", "node_id": "page-a", "central_control": 1},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_admin_successor_keeps_transferred_owner_grants_after_demotion(db: Database):
     await _owned_state(db)
     await db.execute_and_commit("UPDATE users SET is_admin=1 WHERE username='bob'")
@@ -229,6 +270,23 @@ async def test_same_count_principal_reference_race_invalidates_revision(db: Data
     await _owned_state(db)
     preflight = await auth._deletion_inventory(db, "alice")
     await db.execute("UPDATE authz_node_roles SET node_id='other-home' WHERE principal_id='alice'")
+    await db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await auth.delete_user(
+            "alice",
+            auth.UserDeletionRequest(revision=preflight.revision, successor_username="bob"),
+            admin_user="admin",
+            db=db,
+        )
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_central_control_change_invalidates_user_deletion_revision(db: Database):
+    await _owned_state(db)
+    preflight = await auth._deletion_inventory(db, "alice")
+    await db.execute("UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='home'")
     await db.commit()
 
     with pytest.raises(HTTPException) as exc:

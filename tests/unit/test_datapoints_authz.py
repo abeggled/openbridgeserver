@@ -50,7 +50,7 @@ async def db() -> Database:
         await database.disconnect()
 
 
-def _dp(dp_id: str, name: str):
+def _dp(dp_id: str, name: str, *, control_class: str = "room_local"):
     parsed_id = uuid.UUID(dp_id)
     return SimpleNamespace(
         id=parsed_id,
@@ -62,6 +62,7 @@ def _dp(dp_id: str, name: str):
         mqtt_alias=None,
         persist_value=True,
         record_history=True,
+        control_class=control_class,
         created_at=datetime(2026, 6, 10, tzinfo=UTC),
         updated_at=datetime(2026, 6, 10, tzinfo=UTC),
     )
@@ -98,10 +99,10 @@ async def _insert_datapoint(db: Database, dp) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO datapoints
-            (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, created_at, updated_at)
-        VALUES (?, ?, ?, ?, '[]', ?, NULL, 1, 1, ?, ?)
+            (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, created_at, updated_at)
+        VALUES (?, ?, ?, ?, '[]', ?, NULL, 1, 1, ?, ?, ?)
         """,
-        (str(dp.id), dp.name, dp.data_type, dp.unit, dp.mqtt_topic, NOW, NOW),
+        (str(dp.id), dp.name, dp.data_type, dp.unit, dp.mqtt_topic, dp.control_class, NOW, NOW),
     )
 
 
@@ -123,13 +124,15 @@ async def _insert_grant(
     node_type: str = "hierarchy",
     role: str = "guest",
     effect: str = "allow",
+    central_control: bool = False,
 ) -> None:
     await db.execute_and_commit(
         """
-        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', ?, ?, ?, ?, ?)
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+        VALUES ('user', ?, ?, ?, ?, ?, ?)
         """,
-        (principal_id, node_type, node_id, role, effect),
+        (principal_id, node_type, node_id, role, effect, int(central_control)),
     )
 
 
@@ -310,6 +313,55 @@ async def test_write_value_requires_write_grant_for_authenticated_principal(monk
     )
 
     event_bus.publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_central_datapoint_write_requires_central_control_grant(monkeypatch, db: Database):
+    datapoint = _dp(
+        "00000000-0000-0000-0000-000000000066",
+        "Central writable",
+        control_class="central_plant",
+    )
+    await _insert_tree(db)
+    await _insert_node(db, "plant")
+    await _insert_datapoint(db, datapoint)
+    await _link_datapoint(db, datapoint.id, "plant")
+    await _insert_grant(db, "plant", role="resident")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+    request = MagicMock()
+    request.headers = {}
+    principal = Principal(subject="alice", type="user", is_admin=False)
+
+    with pytest.raises(HTTPException) as denied:
+        await dp_api.write_value(
+            dp_id=datapoint.id,
+            body=dp_api.WriteValueIn(value=22.5),
+            request=request,
+            user=principal,
+            db=db,
+        )
+    assert denied.value.status_code == 403
+    event_bus.publish.assert_not_awaited()
+
+    await db.execute_and_commit("UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='plant'")
+    await dp_api.write_value(
+        dp_id=datapoint.id,
+        body=dp_api.WriteValueIn(value=23.0),
+        request=request,
+        user=principal,
+        db=db,
+    )
+    await dp_api.write_value(
+        dp_id=datapoint.id,
+        body=dp_api.WriteValueIn(value=24.0),
+        request=request,
+        user=Principal(subject="admin", type="user", is_admin=True),
+        db=db,
+    )
+    assert event_bus.publish.await_count == 2
 
 
 @pytest.mark.asyncio

@@ -106,7 +106,7 @@ async def test_clean_install_reaches_v45_and_reconciliation_is_idempotent() -> N
     await db.connect()
     try:
         row = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert row["version"] == 45
+        assert row["version"] == 46
 
         await _migration_v45(db.conn)
         await _migration_v45(db.conn)
@@ -132,7 +132,7 @@ async def test_populated_v44_database_applies_v45_on_upgrade(tmp_path) -> None:
                VALUES ('user', ?, 'datapoint', ?, 'guest', 'allow')""",
             [("valid-user", "valid-dp"), ("orphan-user", "orphan-dp")],
         )
-        await db.execute("DELETE FROM schema_version WHERE version=45")
+        await db.execute("DELETE FROM schema_version WHERE version>=45")
         await db.commit()
     finally:
         await db.disconnect()
@@ -141,7 +141,7 @@ async def test_populated_v44_database_applies_v45_on_upgrade(tmp_path) -> None:
     await upgraded.connect()
     try:
         version = await upgraded.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 45
+        assert version["version"] == 46
         rows = await upgraded.fetchall(
             "SELECT principal_id, node_id FROM authz_node_roles ORDER BY principal_id",
         )

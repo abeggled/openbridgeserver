@@ -50,6 +50,7 @@ class ExportedDataPoint(BaseModel):
     unit: str | None
     tags: list[str]
     mqtt_alias: str | None
+    control_class: Literal["room_local", "central_plant"] = "room_local"
 
 
 class ExportedBinding(BaseModel):
@@ -174,6 +175,7 @@ class ExportedLogicGraph(BaseModel):
     description: str
     enabled: bool
     flow_data: dict
+    control_class: Literal["room_local", "central_plant"] = "room_local"
 
 
 class ExportedIcon(BaseModel):
@@ -248,6 +250,7 @@ class ExportedAuthzGrant(BaseModel):
     node_id: str
     role: Literal["owner", "resident", "operator", "guest"]
     effect: Literal["allow", "deny"] = "allow"
+    central_control: bool = False
 
 
 class ExportedApiKeyCapabilitySet(BaseModel):
@@ -340,6 +343,7 @@ async def export_config(
             unit=dp.unit,
             tags=dp.tags,
             mqtt_alias=dp.mqtt_alias,
+            control_class=getattr(dp, "control_class", "room_local"),
         )
         for dp in all_dps
     ]
@@ -394,6 +398,7 @@ async def export_config(
             description=r["description"] or "",
             enabled=bool(r["enabled"]),
             flow_data=json.loads(r["flow_data"]) if r["flow_data"] else {"nodes": [], "edges": []},
+            control_class=r["control_class"] if "control_class" in r.keys() else "room_local",
         )
         for r in graph_rows
     ]
@@ -492,7 +497,7 @@ async def export_config(
     logic_capabilities = sorted(LOGIC_CAPABILITIES)
     capability_placeholders = ",".join("?" for _ in logic_capabilities)
     grant_rows = await db.fetchall(
-        f"""SELECT principal_type, principal_id, node_type, node_id, role, effect
+        f"""SELECT principal_type, principal_id, node_type, node_id, role, effect, central_control
             FROM authz_node_roles AS grant_row
             WHERE (node_type='hierarchy' AND EXISTS (
                        SELECT 1 FROM hierarchy_nodes WHERE id=grant_row.node_id
@@ -547,6 +552,7 @@ async def export_config(
             node_id=row["node_id"],
             role=row["role"],
             effect=row["effect"],
+            central_control=bool(row["central_control"]) if "central_control" in row.keys() else False,
         )
         for row in valid_grant_rows
     ]
@@ -750,6 +756,7 @@ async def import_config(
                         unit=dp_data.unit,
                         tags=dp_data.tags,
                         mqtt_alias=dp_data.mqtt_alias,
+                        control_class=dp_data.control_class,
                     ),
                 )
                 result.datapoints_updated += 1
@@ -761,11 +768,12 @@ async def import_config(
                     unit=dp_data.unit,
                     tags=dp_data.tags,
                     mqtt_alias=dp_data.mqtt_alias,
+                    control_class=dp_data.control_class,
                 )
                 await db.execute_and_commit(
                     """INSERT OR IGNORE INTO datapoints
-                       (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                       (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, control_class, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
                     (
                         str(dp.id),
                         dp.name,
@@ -774,6 +782,7 @@ async def import_config(
                         json.dumps(dp.tags),
                         dp.mqtt_topic,
                         dp.mqtt_alias,
+                        dp.control_class,
                         now,
                         now,
                     ),
@@ -933,22 +942,23 @@ async def import_config(
             if row:
                 await db.execute_and_commit(
                     """UPDATE logic_graphs
-                       SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
+                       SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
                        WHERE id=?""",
-                    (lg.name, lg.description, int(lg.enabled), flow_json, now, lg.id),
+                    (lg.name, lg.description, int(lg.enabled), flow_json, lg.control_class, now, lg.id),
                 )
                 result.logic_graphs_updated += 1
             else:
                 await db.execute_and_commit(
                     """INSERT INTO logic_graphs
-                       (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
-                       VALUES (?,?,?,?,?,?,?,?)""",
+                       (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
                     (
                         lg.id,
                         lg.name,
                         lg.description,
                         int(lg.enabled),
                         flow_json,
+                        lg.control_class,
                         now,
                         now,
                         _user,
@@ -1188,14 +1198,15 @@ async def import_config(
                     node_id=grant.node_id,
                     role=grant.role,
                     effect=grant.effect,
+                    central_control=grant.central_control,
                 )
                 await _require_grant_targets(db, [target])
                 await db.execute(
                     """INSERT INTO authz_node_roles
-                           (principal_type, principal_id, node_type, node_id, role, effect)
-                       VALUES (?, ?, ?, ?, ?, ?)
+                           (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE
-                       SET role=excluded.role, effect=excluded.effect,
+                       SET role=excluded.role, effect=excluded.effect, central_control=excluded.central_control,
                            updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
                     (
                         grant.principal_type,
@@ -1204,6 +1215,7 @@ async def import_config(
                         grant.node_id,
                         grant.role,
                         grant.effect,
+                        int(grant.central_control),
                     ),
                 )
             result.authz_grants_upserted += 1

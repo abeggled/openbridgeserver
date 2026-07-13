@@ -58,8 +58,15 @@ def _row_to_out(row: dict) -> LogicGraphOut:
         flow_data=FlowData.model_validate(raw),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
-        control_class=row["control_class"] if "control_class" in row.keys() else "room_local",
+        control_class=_row_control_class(row),
     )
+
+
+def _row_control_class(row: dict) -> str:
+    try:
+        return row["control_class"]
+    except (IndexError, KeyError):
+        return "room_local"
 
 
 def _principal_from_dependency(value: Principal | str) -> Principal:
@@ -227,10 +234,11 @@ def _direct_datapoint_activation_decision(
     direct_grants = [grant for grant in grants if grant.node_type == "datapoint" and grant.node_id == datapoint_id]
     if not direct_grants:
         return decision
+    control_class = targets[0].control_class if targets else "room_local"
     direct_decision = authorize(
         principal=principal,
         action=AuthzAction.ACTIVATE,
-        targets=[AuthzTarget(node_type="datapoint", node_id=datapoint_id)],
+        targets=[AuthzTarget(node_type="datapoint", node_id=datapoint_id, control_class=control_class)],
         grants=grants,
     )
     if decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":
@@ -248,7 +256,7 @@ async def _logic_run_preflight(db: Database, principal: Principal, row: dict) ->
     graph_decision = authorize(
         principal=principal,
         action=AuthzAction.ACTIVATE,
-        targets=[AuthzTarget(node_type="logic_graph", node_id=row["id"])],
+        targets=[AuthzTarget(node_type="logic_graph", node_id=row["id"], control_class=_row_control_class(row))],
         grants=grants,
     )
     checks.append(
@@ -381,14 +389,15 @@ async def create_graph(
     now = datetime.now(UTC).isoformat()
     gid = str(uuid.uuid4())
     await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
-           VALUES (?,?,?,?,?,?,?,?)""",
+        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             gid,
             body.name,
             body.description,
             int(body.enabled),
             body.flow_data.model_dump_json(),
+            body.control_class,
             now,
             now,
             _user,
@@ -489,6 +498,7 @@ async def update_graph_partial(
     name = body.name if body.name is not None else row["name"]
     description = body.description if body.description is not None else row["description"]
     enabled = body.enabled if body.enabled is not None else bool(row["enabled"])
+    control_class = body.control_class if body.control_class is not None else _row_control_class(row)
     if body.flow_data is not None:
         flow_json = body.flow_data.model_dump_json()
     else:
@@ -592,14 +602,15 @@ async def import_graph(
     now = datetime.now(UTC).isoformat()
     gid = str(uuid.uuid4())
     await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
-           VALUES (?,?,?,?,?,?,?,?)""",
+        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             gid,
             body.name,
             body.description,
             int(body.enabled),
             processed_flow.model_dump_json(),
+            body.control_class,
             now,
             now,
             _user,
@@ -701,14 +712,15 @@ async def duplicate_graph(
     new_id = str(uuid.uuid4())
     new_name = f"Kopie von {row['name']}"
     await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at, created_by)
-           VALUES (?,?,?,?,?,?,?,?)""",
+        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             new_id,
             new_name,
             row["description"] or "",
             int(row["enabled"]),
             new_flow.model_dump_json(),
+            _row_control_class(row),
             now,
             now,
             _user,
@@ -796,6 +808,7 @@ async def export_graph(
         "name": row["name"],
         "description": row["description"] or "",
         "enabled": bool(row["enabled"]),
+        "control_class": _row_control_class(row),
         "flow_data": json.loads(row["flow_data"]) if row["flow_data"] else {"nodes": [], "edges": []},
     }
     safe_name = row["name"].replace(" ", "_").replace("/", "_")

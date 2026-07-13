@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -14,7 +14,7 @@ from obs.api.v1 import authz as authz_api
 from obs.api.v1 import logic as logic_api
 from obs.db.database import Database
 from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
-from obs.logic.models import NodeTypeDef
+from obs.logic.models import LogicGraphCreate, LogicGraphImport, LogicGraphUpdate, NodeTypeDef
 from obs.logic.node_types import NODE_TYPE_REGISTRY, _classify_node_type
 from obs.models.authz import AuthzPrincipalGrant
 
@@ -35,14 +35,16 @@ async def _insert_graph(
     nodes: list[dict],
     *,
     enabled: bool = True,
+    control_class: str = "room_local",
 ) -> dict:
     now = datetime.now(UTC).isoformat()
     await db.execute_and_commit(
         """
-        INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-        VALUES (?, 'Capabilities', '', ?, ?, ?, ?)
+        INSERT INTO logic_graphs
+            (id, name, description, enabled, flow_data, control_class, created_at, updated_at)
+        VALUES (?, 'Capabilities', '', ?, ?, ?, ?, ?)
         """,
-        (graph_id, int(enabled), json.dumps({"nodes": nodes, "edges": []}), now, now),
+        (graph_id, int(enabled), json.dumps({"nodes": nodes, "edges": []}), control_class, now, now),
     )
     return await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
 
@@ -54,13 +56,15 @@ async def _grant(
     *,
     role: str = "resident",
     effect: str = "allow",
+    central_control: bool = False,
 ) -> None:
     await db.execute_and_commit(
         """
-        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', 'alice', ?, ?, ?, ?)
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+        VALUES ('user', 'alice', ?, ?, ?, ?, ?)
         """,
-        (node_type, node_id, role, effect),
+        (node_type, node_id, role, effect, int(central_control)),
     )
 
 
@@ -277,6 +281,89 @@ async def test_admin_bridge_keeps_full_logic_activation_access(
 
     assert preflight.allowed is True
     assert {check.reason for check in preflight.checks} == {"admin", "enabled"}
+
+
+@pytest.mark.asyncio
+async def test_central_graph_run_preflight_requires_central_control(db: Database, monkeypatch) -> None:
+    row = await _insert_graph(db, "graph-central", [], control_class="central_plant")
+    await _grant(db, "logic_graph", "graph-central")
+    principal = Principal(subject="alice", type="user", is_admin=False)
+
+    denied = await logic_api._logic_run_preflight(db, principal, row)
+    graph_check = next(check for check in denied.checks if check.target_type == "logic_graph")
+    assert denied.allowed is False
+    assert (graph_check.allowed, graph_check.reason) == (False, "central_control_required")
+
+    with pytest.raises(HTTPException) as run_denied:
+        await logic_api.run_graph("graph-central", _user=principal, db=db)
+    assert run_denied.value.status_code == 403
+
+    await db.execute_and_commit("UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='graph-central'")
+    allowed = await logic_api._logic_run_preflight(db, principal, row)
+    assert allowed.allowed is True
+    assert allowed.checks[0].reason == "allowed"
+
+    manager = MagicMock()
+    manager.execute_graph = AsyncMock(return_value={})
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
+    assert await logic_api.run_graph("graph-central", _user=principal, db=db) == {
+        "status": "ok",
+        "outputs": {},
+        "warnings": [],
+    }
+
+    admin = await logic_api._logic_run_preflight(
+        db,
+        Principal(subject="admin", type="user", is_admin=True),
+        row,
+    )
+    assert admin.allowed is True
+    assert admin.checks[0].reason == "admin"
+
+
+@pytest.mark.asyncio
+async def test_logic_control_class_roundtrips_crud_import_export_and_duplicate(db: Database, monkeypatch) -> None:
+    manager = MagicMock()
+    manager.reload = AsyncMock()
+    manager.invalidate_cache = MagicMock()
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
+
+    created = await logic_api.create_graph(
+        LogicGraphCreate(name="Central", control_class="central_plant"),
+        _user="admin",
+        db=db,
+    )
+    assert created.control_class == "central_plant"
+
+    exported = await logic_api.export_graph(created.id, _user="admin", db=db)
+    export_payload = json.loads(exported.body)
+    assert export_payload["control_class"] == "central_plant"
+
+    duplicate = await logic_api.duplicate_graph(created.id, _user="admin", db=db)
+    assert duplicate.control_class == "central_plant"
+
+    replaced = await logic_api.update_graph_full(
+        created.id,
+        LogicGraphCreate(name="Local", control_class="room_local"),
+        _user="admin",
+        db=db,
+    )
+    assert replaced.control_class == "room_local"
+    patched = await logic_api.update_graph_partial(
+        created.id,
+        LogicGraphUpdate(control_class="central_plant"),
+        _user="admin",
+        db=db,
+    )
+    assert patched.control_class == "central_plant"
+
+    imported = await logic_api.import_graph(
+        LogicGraphImport.model_validate(export_payload),
+        _user="admin",
+        db=db,
+    )
+    assert imported.control_class == "central_plant"
+    assert (await db.fetchone("SELECT control_class FROM logic_graphs WHERE id=?", (imported.id,)))["control_class"] == "central_plant"
 
 
 @pytest.mark.asyncio
