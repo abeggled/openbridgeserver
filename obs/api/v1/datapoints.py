@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
+from obs.api.audit import contract_audit
 from obs.api.auth import Principal, get_admin_user, get_current_principal
 from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
 from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
@@ -343,7 +344,12 @@ async def list_datapoints(
     )
 
 
-@router.post("/", response_model=DataPointOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=DataPointOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/datapoints/"))],
+)
 async def create_datapoint(
     body: DataPointCreate,
     _user: str = Depends(get_admin_user),
@@ -375,7 +381,11 @@ async def get_datapoint(
     return _enrich(dp)
 
 
-@router.patch("/{dp_id}", response_model=DataPointOut)
+@router.patch(
+    "/{dp_id}",
+    response_model=DataPointOut,
+    dependencies=[Depends(contract_audit("PATCH", "/api/v1/datapoints/{dp_id}"))],
+)
 async def update_datapoint(
     dp_id: uuid.UUID,
     body: DataPointUpdate,
@@ -464,7 +474,11 @@ async def update_datapoint(
     return result
 
 
-@router.delete("/{dp_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{dp_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/datapoints/{dp_id}"))],
+)
 async def delete_datapoint(
     dp_id: uuid.UUID,
     _user: str = Depends(get_admin_user),

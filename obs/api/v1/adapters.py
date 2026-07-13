@@ -26,12 +26,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from obs.adapters import registry as adapter_registry
 from obs.adapters.base import AdapterDelegationCapability
 from obs.adapters.knx.dpt_registry import DPTRegistry
+from obs.api.audit import AuditOutcome, contract_audit, set_contract_audit_outcome, set_contract_audit_summary
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import authorize_adapter_instance, filter_authorized_datapoints
@@ -121,6 +122,17 @@ class TestResult(BaseModel):
     detail: str  # non-localized fallback (issue #779)
     detail_code: str | None = None  # key suffix under adapters.testResult.*
     detail_params: dict = {}
+
+
+def _failed_test_result(request: Request | None, result: TestResult) -> TestResult:
+    if request is not None:
+        set_contract_audit_outcome(request, AuditOutcome.FAILED)
+    return result
+
+
+def _bulk_summary(request: Request | None, *, count: int, payload: Any) -> None:
+    if request is not None:
+        set_contract_audit_summary(request, resource_count=count, payload=payload)
 
 
 class IoBrokerStateOut(BaseModel):
@@ -319,6 +331,7 @@ async def list_instances(
     "/instances",
     response_model=AdapterInstanceOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances"))],
 )
 async def create_instance(
     body: AdapterInstanceCreate,
@@ -386,7 +399,11 @@ async def get_instance(
     return _instance_out(row, instance)
 
 
-@router.patch("/instances/{instance_id}", response_model=AdapterInstanceOut)
+@router.patch(
+    "/instances/{instance_id}",
+    response_model=AdapterInstanceOut,
+    dependencies=[Depends(contract_audit("PATCH", "/api/v1/adapters/instances/{instance_id}"))],
+)
 async def update_instance(
     instance_id: uuid.UUID,
     body: AdapterInstanceUpdate,
@@ -444,7 +461,11 @@ async def update_instance(
     return _instance_out(row, instance)
 
 
-@router.delete("/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/instances/{instance_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/adapters/instances/{instance_id}"))],
+)
 async def delete_instance(
     instance_id: uuid.UUID,
     _user: Principal | str = Depends(get_current_principal),
@@ -473,10 +494,15 @@ async def delete_instance(
         await db.execute("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
 
 
-@router.post("/instances/{instance_id}/test", response_model=TestResult)
+@router.post(
+    "/instances/{instance_id}/test",
+    response_model=TestResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/test"))],
+)
 async def test_instance(
     instance_id: uuid.UUID,
     body: TestRequest | None = None,
+    request: Request = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> TestResult:
@@ -495,11 +521,14 @@ async def test_instance(
 
     cls = adapter_registry.get_class(row["adapter_type"])
     if cls is None:
-        return TestResult(
-            success=False,
-            detail=f"Adapter-Typ '{row['adapter_type']}' nicht registriert",
-            detail_code="typeNotRegistered",
-            detail_params={"type": row["adapter_type"]},
+        return _failed_test_result(
+            request,
+            TestResult(
+                success=False,
+                detail=f"Adapter-Typ '{row['adapter_type']}' nicht registriert",
+                detail_code="typeNotRegistered",
+                detail_params={"type": row["adapter_type"]},
+            ),
         )
 
     if body and body.config:
@@ -511,7 +540,10 @@ async def test_instance(
     try:
         cls.config_schema(**config_dict)
     except Exception as exc:
-        return TestResult(success=False, detail=f"Config-Fehler: {exc}", detail_code="configError", detail_params={"error": str(exc)})
+        return _failed_test_result(
+            request,
+            TestResult(success=False, detail=f"Config-Fehler: {exc}", detail_code="configError", detail_params={"error": str(exc)}),
+        )
 
     from obs.core.event_bus import EventBus
 
@@ -533,12 +565,16 @@ async def test_instance(
                 detail_code="connectOk",
                 detail_params={"type": row["adapter_type"]},
             )
-        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
+        return _failed_test_result(request, TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed"))
     except Exception as exc:
-        return TestResult(success=False, detail=str(exc))
+        return _failed_test_result(request, TestResult(success=False, detail=str(exc)))
 
 
-@router.post("/instances/{instance_id}/restart", response_model=AdapterInstanceOut)
+@router.post(
+    "/instances/{instance_id}/restart",
+    response_model=AdapterInstanceOut,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/restart"))],
+)
 async def restart_instance_route(
     instance_id: uuid.UUID,
     _user: Principal | str = Depends(get_current_principal),
@@ -565,10 +601,15 @@ async def restart_instance_route(
     return _instance_out(row, instance)
 
 
-@router.post("/instances/{source_instance_id}/bindings/migrate", response_model=BindingMigrationResult)
+@router.post(
+    "/instances/{source_instance_id}/bindings/migrate",
+    response_model=BindingMigrationResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{source_instance_id}/bindings/migrate"))],
+)
 async def migrate_instance_bindings(
     source_instance_id: uuid.UUID,
     body: BindingMigrationRequest,
+    request: Request = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingMigrationResult:
@@ -637,19 +678,25 @@ async def migrate_instance_bindings(
         target_datapoint_ids.add(binding_row["datapoint_id"])
         migrated += 1
 
-    if migrated > 0:
+    if migrated > 0 and not getattr(db, "in_transaction", False):
         await db.commit()
 
     await adapter_registry.reload_instance_bindings(source_id, db)
     await adapter_registry.reload_instance_bindings(target_id, db)
 
-    return BindingMigrationResult(
+    result = BindingMigrationResult(
         source_instance_id=source_instance_id,
         target_instance_id=body.target_instance_id,
         total_source_bindings=total_source_bindings,
         migrated=migrated,
         skipped=skipped,
     )
+    _bulk_summary(
+        request,
+        count=migrated,
+        payload={"source_instance_id": source_id, "target_instance_id": target_id},
+    )
+    return result
 
 
 @router.get("/instances/{instance_id}/bindings", response_model=list[InstanceBindingEntry])
@@ -1008,22 +1055,31 @@ async def _ensure_iobroker_import_authority(
 @router.post(
     "/instances/{instance_id}/iobroker/import-preview",
     response_model=IoBrokerImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import-preview"))],
 )
 async def iobroker_import_preview(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
+    request: Request = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
     principal = _principal_from_dependency(_user)
     await _ensure_iobroker_import_authority(db, principal, str(instance_id))
-    return IoBrokerImportResult(preview=await _iobroker_candidates(str(instance_id), body, db))
+    result = IoBrokerImportResult(preview=await _iobroker_candidates(str(instance_id), body, db))
+    _bulk_summary(request, count=len(result.preview), payload=body.model_dump())
+    return result
 
 
-@router.post("/instances/{instance_id}/iobroker/import", response_model=IoBrokerImportResult)
+@router.post(
+    "/instances/{instance_id}/iobroker/import",
+    response_model=IoBrokerImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import"))],
+)
 async def iobroker_import_states(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
+    request: Request = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
@@ -1080,6 +1136,11 @@ async def iobroker_import_states(
             result.created_bindings += 1
         except Exception as exc:
             result.errors.append(f"{item.state_id}: {exc}")
+    _bulk_summary(
+        request,
+        count=result.created_datapoints + result.created_bindings + result.skipped_existing,
+        payload=body.model_dump(),
+    )
     return result
 
 
@@ -1255,10 +1316,12 @@ async def anwesenheit_list_datapoints(
 @router.post(
     "/instances/{instance_id}/anwesenheit/sync-bindings",
     response_model=AnwesenheitSyncResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/anwesenheit/sync-bindings"))],
 )
 async def anwesenheit_sync_bindings(
     instance_id: uuid.UUID,
     body: AnwesenheitSyncRequest,
+    request: Request = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AnwesenheitSyncResult:
@@ -1328,6 +1391,7 @@ async def anwesenheit_sync_bindings(
     except Exception:
         pass  # non-critical — bindings take effect on next restart
 
+    _bulk_summary(request, count=result.created + result.removed, payload=sorted(body.datapoint_ids))
     return result
 
 
@@ -1459,10 +1523,15 @@ async def get_binding_schema(
     return schema
 
 
-@router.post("/{adapter_type}/test", response_model=TestResult)
+@router.post(
+    "/{adapter_type}/test",
+    response_model=TestResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/{adapter_type}/test"))],
+)
 async def test_adapter(
     adapter_type: str,
     body: TestRequest,
+    request: Request = None,
     _user: str = Depends(get_admin_user),
 ) -> TestResult:
     cls = adapter_registry.get_class(adapter_type)
@@ -1471,11 +1540,14 @@ async def test_adapter(
     try:
         cls.config_schema(**body.config)
     except Exception as exc:
-        return TestResult(
-            success=False,
-            detail=f"Config-Validierungsfehler: {exc}",
-            detail_code="configValidationError",
-            detail_params={"error": str(exc)},
+        return _failed_test_result(
+            request,
+            TestResult(
+                success=False,
+                detail=f"Config-Validierungsfehler: {exc}",
+                detail_code="configValidationError",
+                detail_params={"error": str(exc)},
+            ),
         )
 
     from obs.core.event_bus import EventBus
@@ -1498,12 +1570,16 @@ async def test_adapter(
                 detail_code="connectOk",
                 detail_params={"type": adapter_type},
             )
-        return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
+        return _failed_test_result(request, TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed"))
     except Exception as exc:
-        return TestResult(success=False, detail=str(exc))
+        return _failed_test_result(request, TestResult(success=False, detail=str(exc)))
 
 
-@router.patch("/{adapter_type}/config", response_model=AdapterConfigOut)
+@router.patch(
+    "/{adapter_type}/config",
+    response_model=AdapterConfigOut,
+    dependencies=[Depends(contract_audit("PATCH", "/api/v1/adapters/{adapter_type}/config"))],
+)
 async def update_adapter_config(
     adapter_type: str,
     body: ConfigPatch,

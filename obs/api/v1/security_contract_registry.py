@@ -284,19 +284,27 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("DELETE", "/api/v1/adapters/instances/{instance_id}"): _policy("adapter_instance", "adapter.instance.deleted"),
     ("POST", "/api/v1/adapters/instances/{instance_id}/test"): _policy("adapter_instance", "adapter.instance.tested", result=True),
     ("POST", "/api/v1/adapters/instances/{instance_id}/restart"): _policy("adapter_instance", "adapter.instance.restarted", result=True),
-    ("POST", "/api/v1/adapters/instances/{source_instance_id}/bindings/migrate"): _policy("adapter_instance", "adapter.bindings.migrated"),
+    ("POST", "/api/v1/adapters/instances/{source_instance_id}/bindings/migrate"): _policy(
+        "adapter_instance", "adapter.bindings.migrated", details=("resource_count", "payload_sha256")
+    ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import-preview"): _policy(
-        "adapter_instance", "adapter.iobroker.import_previewed", result=True, capability="adapter.declared"
+        "adapter_instance",
+        "adapter.iobroker.import_previewed",
+        result=True,
+        capability="adapter.declared",
+        details=("resource_count", "payload_sha256"),
     ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import"): _policy(
         "adapter_instance",
         "adapter.iobroker.imported",
         capability="adapter.create_datapoint+link_binding",
+        details=("resource_count", "payload_sha256"),
     ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/anwesenheit/sync-bindings"): _policy(
         "adapter_instance",
         "adapter.anwesenheit.bindings_synced",
         capability="adapter.link_binding",
+        details=("resource_count", "payload_sha256"),
     ),
     ("POST", "/api/v1/adapters/{adapter_type}/test"): _admin("adapter_type", "adapter.type.tested", result=True),
     ("PATCH", "/api/v1/adapters/{adapter_type}/config"): _admin("adapter_type", "adapter.type.config_updated"),
@@ -384,10 +392,16 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         "autobackup", "autobackup.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
     ),
     # KNX, Logic and Visu.
-    ("POST", "/api/v1/knxproj/import"): _admin("knx_project", "knx.project.imported", result=True),
-    ("POST", "/api/v1/knxproj/import-csv"): _admin("knx_group_addresses", "knx.group_addresses.imported", result=True),
-    ("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"): _admin("knx_device", "knx.device.hierarchy_links_updated"),
-    ("DELETE", "/api/v1/knxproj/group-addresses"): _user("knx_group_addresses", "knx.group_addresses.cleared"),
+    ("POST", "/api/v1/knxproj/import"): _admin("knx_project", "knx.project.imported", result=True, details=("resource_count", "payload_sha256")),
+    ("POST", "/api/v1/knxproj/import-csv"): _admin(
+        "knx_group_addresses", "knx.group_addresses.imported", result=True, details=("resource_count", "payload_sha256")
+    ),
+    ("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"): _admin(
+        "knx_device", "knx.device.hierarchy_links_updated", details=("resource_count", "payload_sha256")
+    ),
+    ("DELETE", "/api/v1/knxproj/group-addresses"): _user(
+        "knx_group_addresses", "knx.group_addresses.cleared", details=("resource_count", "payload_sha256")
+    ),
     ("POST", "/api/v1/knx/keyfile"): _admin("knx_keyfile", "knx.keyfile.uploaded", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
     ("DELETE", "/api/v1/knx/keyfile/{file_id}"): _admin(
         "knx_keyfile", "knx.keyfile.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
@@ -488,12 +502,38 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         details=("deleted_count", "not_found_count", "requested_count"),
     ),
     # Icons and hierarchy.
-    ("POST", "/api/v1/icons/import"): _admin("icon_set", "icons.imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
-    ("POST", "/api/v1/icons/export"): _user("icon_set", "icons.exported", result=True, audit_effect=AuditEffect.EXPORT),
-    ("DELETE", "/api/v1/icons/"): _admin("icon_set", "icons.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
+    ("POST", "/api/v1/icons/import"): _admin(
+        "icon_set",
+        "icons.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
+    ),
+    ("POST", "/api/v1/icons/export"): _user(
+        "icon_set", "icons.exported", result=True, audit_effect=AuditEffect.EXPORT, details=("resource_count", "payload_sha256")
+    ),
+    ("DELETE", "/api/v1/icons/"): _admin(
+        "icon_set",
+        "icons.deleted",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
+    ),
     ("PUT", "/api/v1/icons/settings"): _user("icon_settings", "icons.settings_updated"),
-    ("POST", "/api/v1/icons/fontawesome"): _admin("icon_set", "icons.fontawesome_imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
-    ("POST", "/api/v1/icons/knxuf"): _user("icon_set", "icons.knxuf_imported", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
+    ("POST", "/api/v1/icons/fontawesome"): _admin(
+        "icon_set",
+        "icons.fontawesome_imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
+    ),
+    ("POST", "/api/v1/icons/knxuf"): _user(
+        "icon_set",
+        "icons.knxuf_imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
+    ),
     ("POST", "/api/v1/hierarchy/trees"): _admin("hierarchy_tree", "hierarchy.tree.created", root=True),
     ("PUT", "/api/v1/hierarchy/trees/{tree_id}"): _admin("hierarchy_tree", "hierarchy.tree.updated"),
     ("DELETE", "/api/v1/hierarchy/trees/{tree_id}"): _admin("hierarchy_tree", "hierarchy.tree.deleted"),
@@ -503,7 +543,9 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("DELETE", "/api/v1/hierarchy/nodes/{node_id}"): _admin("hierarchy_node", "hierarchy.node.deleted"),
     ("POST", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.created"),
     ("DELETE", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.deleted"),
-    ("POST", "/api/v1/hierarchy/import-from-ets"): _admin("hierarchy", "hierarchy.ets_imported", result=True),
+    ("POST", "/api/v1/hierarchy/import-from-ets"): _admin(
+        "hierarchy", "hierarchy.ets_imported", result=True, details=("resource_count", "payload_sha256")
+    ),
 }
 
 
