@@ -46,7 +46,7 @@ async def load_role_grants(
 
     rows = await db.fetchall(
         f"""
-        SELECT principal_type, principal_id, node_type, node_id, role, effect
+        SELECT principal_type, principal_id, node_type, node_id, role, effect, central_control
         FROM authz_node_roles
         WHERE principal_type=? AND principal_id IN ({_placeholders(principal_ids)}){node_filter}
         ORDER BY node_type, node_id, role
@@ -76,6 +76,7 @@ async def load_role_grants(
                 node_id=row["node_id"],
                 role=row["role"],
                 effect=row["effect"],
+                central_control=bool(row["central_control"]),
                 ancestors=ancestors,
             )
         )

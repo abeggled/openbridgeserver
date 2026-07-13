@@ -1067,6 +1067,23 @@ async def _migration_v45(conn: aiosqlite.Connection) -> None:
         )
 
 
+async def _migration_v46(conn: aiosqlite.Connection) -> None:
+    """Add fail-closed central-control metadata without widening existing access."""
+    for table in ("datapoints", "logic_graphs"):
+        async with conn.execute(f"PRAGMA table_info({table})") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if columns and "control_class" not in columns:
+            await conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN control_class TEXT NOT NULL DEFAULT 'room_local' "
+                "CHECK (control_class IN ('room_local', 'central_plant'))"
+            )
+
+    async with conn.execute("PRAGMA table_info(authz_node_roles)") as cur:
+        grant_columns = {row["name"] for row in await cur.fetchall()}
+    if grant_columns and "central_control" not in grant_columns:
+        await conn.execute("ALTER TABLE authz_node_roles ADD COLUMN central_control INTEGER NOT NULL DEFAULT 0 CHECK (central_control IN (0, 1))")
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -1116,6 +1133,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (43, _migration_v43),
     (44, _migration_v44),
     (45, _migration_v45),
+    (46, _migration_v46),
 ]
 
 

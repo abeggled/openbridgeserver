@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from obs.api.auth import Principal
-from obs.api.authz import AuthzAction, AuthzTarget, GrantEffect, Role, RoleGrant, authorize
+from obs.api.authz import AuthzAction, AuthzTarget, ControlClass, GrantEffect, Role, RoleGrant, authorize
 
 
 def _user(subject: str = "alice", *, is_admin: bool = False) -> Principal:
@@ -16,6 +16,7 @@ def _grant(
     ancestors: tuple[str, ...] = (),
     principal_type: str = "user",
     principal_id: str = "alice",
+    central_control: bool = False,
 ) -> RoleGrant:
     return RoleGrant(
         principal_type=principal_type,
@@ -25,11 +26,24 @@ def _grant(
         role=role,
         effect=effect,
         ancestors=ancestors,
+        central_control=central_control,
     )
 
 
-def _target(node_id: str, *, ancestors: tuple[str, ...] = (), min_role: Role | str | None = None) -> AuthzTarget:
-    return AuthzTarget(node_type="hierarchy", node_id=node_id, ancestors=ancestors, min_role=min_role)
+def _target(
+    node_id: str,
+    *,
+    ancestors: tuple[str, ...] = (),
+    min_role: Role | str | None = None,
+    control_class: ControlClass | str = ControlClass.ROOM_LOCAL,
+) -> AuthzTarget:
+    return AuthzTarget(
+        node_type="hierarchy",
+        node_id=node_id,
+        ancestors=ancestors,
+        min_role=min_role,
+        control_class=control_class,
+    )
 
 
 def test_admin_user_is_allowed_without_grants():
@@ -61,6 +75,37 @@ def test_guest_can_read_but_not_write():
     assert read.allowed is True
     assert write.allowed is False
     assert write.reason == "missing_allow"
+
+
+def test_central_plant_write_requires_explicit_scope_switch():
+    target = _target("plant", control_class=ControlClass.CENTRAL_PLANT)
+
+    denied = authorize(principal=_user(), action=AuthzAction.WRITE, targets=[target], grants=[_grant("plant", role=Role.OPERATOR)])
+    allowed = authorize(
+        principal=_user(),
+        action=AuthzAction.WRITE,
+        targets=[target],
+        grants=[_grant("plant", role=Role.OPERATOR, central_control=True)],
+    )
+
+    assert denied == type(denied)(False, "central_control_required")
+    assert allowed.allowed is True
+
+
+def test_central_scope_switch_never_overrides_explicit_deny():
+    target = _target("plant", control_class="central_plant")
+    decision = authorize(
+        principal=_user(),
+        action=AuthzAction.ACTIVATE,
+        targets=[target],
+        grants=[
+            _grant("plant", role=Role.OPERATOR, central_control=True),
+            _grant("plant", role=Role.GUEST, effect=GrantEffect.DENY),
+        ],
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "explicit_deny"
 
 
 def test_deny_beats_matching_allow():

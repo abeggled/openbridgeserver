@@ -122,6 +122,50 @@ def _replace(grants: list[AuthzPrincipalGrant]) -> AuthzPrincipalGrantsReplace:
     return AuthzPrincipalGrantsReplace(grants=grants)
 
 
+@pytest.mark.asyncio
+async def test_v46_defaults_resources_to_room_local_and_grants_to_no_central_control(db: Database) -> None:
+    datapoint_columns = {row["name"] for row in await db.fetchall("PRAGMA table_info(datapoints)")}
+    graph_columns = {row["name"] for row in await db.fetchall("PRAGMA table_info(logic_graphs)")}
+    grant_columns = {row["name"] for row in await db.fetchall("PRAGMA table_info(authz_node_roles)")}
+
+    assert "control_class" in datapoint_columns
+    assert "control_class" in graph_columns
+    assert "central_control" in grant_columns
+
+    await _insert_tree(db)
+    await _insert_node(db, "room")
+    await _insert_grant(db, node_id="room")
+    row = await db.fetchone("SELECT central_control FROM authz_node_roles WHERE node_id='room'")
+    assert row["central_control"] == 0
+
+
+@pytest.mark.asyncio
+async def test_central_control_scope_switch_roundtrips_through_grant_api(db: Database) -> None:
+    await _insert_user(db)
+    await _insert_tree(db)
+    await _insert_node(db, "plant")
+
+    response, _ = await _replace_current(
+        db,
+        "user",
+        "alice",
+        _replace(
+            [
+                AuthzPrincipalGrant(
+                    node_type="hierarchy",
+                    node_id="plant",
+                    role="operator",
+                    central_control=True,
+                )
+            ]
+        ),
+    )
+
+    assert response.grants[0].central_control is True
+    row = await db.fetchone("SELECT central_control FROM authz_node_roles WHERE node_id='plant'")
+    assert row["central_control"] == 1
+
+
 async def _get_grants(
     db: Database,
     principal_type: str,
@@ -192,9 +236,9 @@ async def test_replace_user_grants_roundtrips_full_set_and_audits_only_counts(db
     assert response.model_dump() == {
         "principal": {"principal_type": "user", "principal_id": "alice"},
         "grants": [
-            {"node_type": "hierarchy", "node_id": "added", "role": "owner", "effect": "allow"},
-            {"node_type": "hierarchy", "node_id": "changed", "role": "resident", "effect": "allow"},
-            {"node_type": "hierarchy", "node_id": "same", "role": "operator", "effect": "deny"},
+            {"node_type": "hierarchy", "node_id": "added", "role": "owner", "effect": "allow", "central_control": False},
+            {"node_type": "hierarchy", "node_id": "changed", "role": "resident", "effect": "allow", "central_control": False},
+            {"node_type": "hierarchy", "node_id": "same", "role": "operator", "effect": "deny", "central_control": False},
         ],
     }
     loaded, get_http_response = await _get_grants(db, "user", "alice")
@@ -210,9 +254,9 @@ async def test_replace_user_grants_roundtrips_full_set_and_audits_only_counts(db
     assert audit["request_id"] == "grant-test"
     details = json.loads(audit["details_json"])
     before_grants = [
-        {"node_type": "hierarchy", "node_id": "changed", "role": "guest", "effect": "allow"},
-        {"node_type": "hierarchy", "node_id": "removed", "role": "resident", "effect": "allow"},
-        {"node_type": "hierarchy", "node_id": "same", "role": "operator", "effect": "deny"},
+        {"node_type": "hierarchy", "node_id": "changed", "role": "guest", "effect": "allow", "central_control": False},
+        {"node_type": "hierarchy", "node_id": "removed", "role": "resident", "effect": "allow", "central_control": False},
+        {"node_type": "hierarchy", "node_id": "same", "role": "operator", "effect": "deny", "central_control": False},
     ]
     after_grants = response.model_dump()["grants"]
     assert details == {
@@ -226,18 +270,18 @@ async def test_replace_user_grants_roundtrips_full_set_and_audits_only_counts(db
                 "node_type": "hierarchy",
                 "node_id": "added",
                 "before": None,
-                "after": {"role": "owner", "effect": "allow"},
+                "after": {"role": "owner", "effect": "allow", "central_control": False},
             },
             {
                 "node_type": "hierarchy",
                 "node_id": "changed",
-                "before": {"role": "guest", "effect": "allow"},
-                "after": {"role": "resident", "effect": "allow"},
+                "before": {"role": "guest", "effect": "allow", "central_control": False},
+                "after": {"role": "resident", "effect": "allow", "central_control": False},
             },
             {
                 "node_type": "hierarchy",
                 "node_id": "removed",
-                "before": {"role": "resident", "effect": "allow"},
+                "before": {"role": "resident", "effect": "allow", "central_control": False},
                 "after": None,
             },
         ],
@@ -886,7 +930,9 @@ async def test_http_api_roundtrip_and_duplicate_validation(db: Database) -> None
     assert get_response.json() == put_response.json()
     assert duplicate_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert missing_grants_response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert get_response.json()["grants"] == [{"node_type": "hierarchy", "node_id": "room", "role": "guest", "effect": "allow"}]
+    assert get_response.json()["grants"] == [
+        {"node_type": "hierarchy", "node_id": "room", "role": "guest", "effect": "allow", "central_control": False}
+    ]
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,7 @@ _REASON_TEXT: dict[str, str] = {
     "allowed": "Allowed by matching role grant.",
     "direct_datapoint_grant": "Allowed by direct datapoint grant.",
     "explicit_deny": "Denied by explicit deny grant.",
+    "central_control_required": "Denied because central plant control is not enabled for the matching scope.",
     "missing_allow": "Denied because no matching allow grant applies.",
     "no_targets": "Denied because the target could not be resolved.",
 }
@@ -128,7 +129,7 @@ async def _load_principal_grants(
     placeholders = ",".join("?" for _ in principal_ids)
     rows = await db.fetchall(
         f"""
-        SELECT principal_id, node_type, node_id, role, effect
+        SELECT principal_id, node_type, node_id, role, effect, central_control
         FROM authz_node_roles
         WHERE principal_type=? AND principal_id IN ({placeholders})
         ORDER BY CASE WHEN principal_id=? THEN 0 ELSE 1 END, node_type, node_id
@@ -138,7 +139,13 @@ async def _load_principal_grants(
     by_target: dict[tuple[str, str], AuthzPrincipalGrant] = {}
     for row in rows:
         target = (row["node_type"], row["node_id"])
-        grant = AuthzPrincipalGrant(node_type=row["node_type"], node_id=row["node_id"], role=row["role"], effect=row["effect"])
+        grant = AuthzPrincipalGrant(
+            node_type=row["node_type"],
+            node_id=row["node_id"],
+            role=row["role"],
+            effect=row["effect"],
+            central_control=bool(row["central_control"]),
+        )
         existing = by_target.get(target)
         if existing is not None:
             if reject_conflicts and existing != grant:
@@ -159,13 +166,14 @@ def _grants_response(
     )
 
 
-def _canonical_grants(grants: Sequence[AuthzPrincipalGrant]) -> list[dict[str, str]]:
+def _canonical_grants(grants: Sequence[AuthzPrincipalGrant]) -> list[dict[str, str | bool]]:
     return [
         {
             "node_type": grant.node_type,
             "node_id": grant.node_id,
             "role": grant.role,
             "effect": grant.effect,
+            "central_control": grant.central_control,
         }
         for grant in sorted(grants, key=lambda grant: (grant.node_type, grant.node_id))
     ]
@@ -195,8 +203,12 @@ def _grant_diff_details(
     before: Sequence[AuthzPrincipalGrant],
     after: Sequence[AuthzPrincipalGrant],
 ) -> dict[str, Any]:
-    before_by_target = {(grant.node_type, grant.node_id): {"role": grant.role, "effect": grant.effect} for grant in before}
-    after_by_target = {(grant.node_type, grant.node_id): {"role": grant.role, "effect": grant.effect} for grant in after}
+    before_by_target = {
+        (grant.node_type, grant.node_id): {"role": grant.role, "effect": grant.effect, "central_control": grant.central_control} for grant in before
+    }
+    after_by_target = {
+        (grant.node_type, grant.node_id): {"role": grant.role, "effect": grant.effect, "central_control": grant.central_control} for grant in after
+    }
     common = set(before_by_target) & set(after_by_target)
     changed_targets = sorted(
         target for target in set(before_by_target) | set(after_by_target) if before_by_target.get(target) != after_by_target.get(target)
@@ -254,6 +266,7 @@ async def _materialize_draft_grants(db: Database, grants: Sequence[AuthzPreviewG
                 node_id=grant.node_id,
                 role=grant.role,
                 effect=grant.effect,
+                central_control=grant.central_control,
                 ancestors=target.ancestors if target else (),
             )
         )
@@ -291,9 +304,9 @@ async def _resolve_targets(db: Database, target: AuthzPreviewTarget) -> list[Aut
     elif target.node_type == "visu_page":
         resolved = await resolve_visu_page_targets(db, [target.node_id])
     else:
-        resolved = [AuthzTarget(node_type=target.node_type, node_id=target.node_id)]
+        resolved = [AuthzTarget(node_type=target.node_type, node_id=target.node_id, control_class=target.control_class)]
 
-    if target.min_role is None:
+    if target.min_role is None and target.control_class == "room_local":
         return resolved
     return [
         AuthzTarget(
@@ -301,6 +314,7 @@ async def _resolve_targets(db: Database, target: AuthzPreviewTarget) -> list[Aut
             node_id=resolved_target.node_id,
             ancestors=resolved_target.ancestors,
             min_role=target.min_role,
+            control_class=target.control_class,
         )
         for resolved_target in resolved
     ]
@@ -320,7 +334,14 @@ def _decision_for_target(
     resolved_targets: Sequence[AuthzTarget],
     grants: Sequence[RoleGrant],
 ) -> AuthzDecision:
-    direct_targets = [AuthzTarget(node_type="datapoint", node_id=target.node_id, min_role=target.min_role)]
+    direct_targets = [
+        AuthzTarget(
+            node_type="datapoint",
+            node_id=target.node_id,
+            min_role=target.min_role,
+            control_class=target.control_class,
+        )
+    ]
     direct_grants = _direct_datapoint_grants(grants, target)
 
     if target.node_type == "datapoint" and action == AuthzAction.READ:
@@ -371,7 +392,14 @@ def _matching_grants(
 ) -> list[RoleGrant]:
     targets = list(resolved_targets)
     if target.node_type == "datapoint" and _direct_datapoint_grants(grants, target):
-        targets.append(AuthzTarget(node_type="datapoint", node_id=target.node_id, min_role=target.min_role))
+        targets.append(
+            AuthzTarget(
+                node_type="datapoint",
+                node_id=target.node_id,
+                min_role=target.min_role,
+                control_class=target.control_class,
+            )
+        )
     matching_candidates = _datapoint_read_grants(grants, targets) if (target.node_type == "datapoint" and action == AuthzAction.READ) else grants
 
     return [
@@ -396,6 +424,7 @@ def _grant_to_model(grant: RoleGrant) -> AuthzPreviewGrant:
         node_id=grant.node_id,
         role=grant.role.value,
         effect=grant.effect.value,
+        central_control=grant.central_control,
     )
 
 
@@ -405,6 +434,7 @@ def _target_to_model(target: AuthzTarget) -> AuthzPreviewResolvedTarget:
         node_id=target.node_id,
         ancestors=list(target.ancestors),
         min_role=target.min_role.value if target.min_role else None,
+        control_class=target.control_class.value,
     )
 
 
@@ -460,10 +490,21 @@ async def replace_principal_grants(
             await db.executemany(
                 """
                 INSERT INTO authz_node_roles
-                    (principal_type, principal_id, node_type, node_id, role, effect)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                [(principal_type, canonical_id, grant.node_type, grant.node_id, grant.role, grant.effect) for grant in body.grants],
+                [
+                    (
+                        principal_type,
+                        canonical_id,
+                        grant.node_type,
+                        grant.node_id,
+                        grant.role,
+                        grant.effect,
+                        int(grant.central_control),
+                    )
+                    for grant in body.grants
+                ],
             )
 
         audit_writer = AuditLogWriter(
@@ -505,6 +546,7 @@ async def preview_permissions(
             node_id=grant.node_id,
             role=grant.role,
             effect=grant.effect,
+            central_control=grant.central_control,
         )
         for grant in body.draft_grants
     )

@@ -19,6 +19,7 @@ NodeTypeName = Literal[
 ]
 PrincipalTypeName = Literal["user", "api_key"]
 RoleName = Literal["owner", "resident", "operator", "guest"]
+ControlClassName = Literal["room_local", "central_plant"]
 
 
 class AuthzPreviewPrincipal(BaseModel):
@@ -34,12 +35,14 @@ class AuthzPreviewGrant(BaseModel):
     node_id: str
     role: RoleName
     effect: EffectName = "allow"
+    central_control: bool = False
 
 
 class AuthzPreviewTarget(BaseModel):
     node_type: NodeTypeName
     node_id: str
     min_role: RoleName | None = None
+    control_class: ControlClassName = "room_local"
 
 
 class AuthzPreviewRequest(BaseModel):
@@ -55,6 +58,7 @@ class AuthzPreviewResolvedTarget(BaseModel):
     node_id: str
     ancestors: list[str] = Field(default_factory=list)
     min_role: RoleName | None = None
+    control_class: ControlClassName = "room_local"
 
 
 class AuthzPreviewResult(BaseModel):
@@ -82,6 +86,7 @@ class AuthzPrincipalGrant(BaseModel):
     node_id: str
     role: RoleName
     effect: EffectName = "allow"
+    central_control: bool = False
 
 
 class AuthzPrincipalGrantsReplace(BaseModel):

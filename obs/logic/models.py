@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
+
+ControlClassName = Literal["room_local", "central_plant"]
 
 
 class NodePosition(BaseModel):
@@ -45,6 +47,7 @@ class LogicGraphCreate(BaseModel):
     description: str = ""
     enabled: bool = True
     flow_data: FlowData = FlowData()
+    control_class: ControlClassName = "room_local"
 
 
 class LogicGraphUpdate(BaseModel):
@@ -52,6 +55,7 @@ class LogicGraphUpdate(BaseModel):
     description: str | None = None
     enabled: bool | None = None
     flow_data: FlowData | None = None
+    control_class: ControlClassName | None = None
 
 
 class LogicGraphOut(BaseModel):
@@ -62,6 +66,7 @@ class LogicGraphOut(BaseModel):
     flow_data: FlowData
     created_at: str
     updated_at: str
+    control_class: ControlClassName = "room_local"
 
 
 class LogicGraphImport(BaseModel):
@@ -73,6 +78,7 @@ class LogicGraphImport(BaseModel):
     description: str = ""
     enabled: bool = True
     flow_data: FlowData
+    control_class: ControlClassName = "room_local"
 
 
 class NodeTypePort(BaseModel):
