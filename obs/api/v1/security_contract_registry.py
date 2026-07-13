@@ -498,7 +498,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         action="activate",
         result=True,
         extra_checks=(
-            PolicyCheck(CheckKind.ROLE, "read", "datapoint", "derived:logic_flow_datapoints"),
+            PolicyCheck(CheckKind.ROLE, "activate", "datapoint", "derived:logic_flow_datapoints"),
             PolicyCheck(CheckKind.CAPABILITY, "activate", "logic_capability", "derived:logic_node_capabilities", "logic.declared"),
         ),
         details=("control_class", "denied_checks", "output_count", "warning_count"),

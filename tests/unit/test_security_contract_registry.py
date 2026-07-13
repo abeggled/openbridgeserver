@@ -74,6 +74,19 @@ def test_multi_scope_creation_and_execution_contracts_are_explicit() -> None:
     assert len(ROUTE_SECURITY_CONTRACTS[("POST", "/api/v1/datapoints/{dp_id}/bindings")].checks) >= 2
 
 
+def test_logic_run_contract_datapoint_check_requires_activate_not_read() -> None:
+    from obs.api.v1.security_contract_registry import CheckKind
+
+    contract = ROUTE_SECURITY_CONTRACTS[("POST", "/api/v1/logic/graphs/{graph_id}/run")]
+    dp_checks = [c for c in contract.checks if c.kind == CheckKind.ROLE and c.target_type == "datapoint"]
+    assert dp_checks, "logic-run contract must have a datapoint ROLE check"
+    for check in dp_checks:
+        assert check.action == "activate", (
+            f"logic-run datapoint check uses {check.action!r} but runtime authorizes with ACTIVATE; "
+            "approving a 'read'-only grant while the endpoint requires operator+ causes silent access denial"
+        )
+
+
 def test_duplicate_live_route_signature_fails_closed() -> None:
     async def unaudited_duplicate() -> None:
         return None
