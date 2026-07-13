@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from obs.api.auth import get_admin_user, get_current_user
+from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+from obs.db.database import Database, get_db
 from obs.security.url_targets import (
     add_allowed_url_target,
     allowlist_path,
@@ -72,30 +74,43 @@ async def get_url_target_allowlist(_admin: str = Depends(get_admin_user)) -> Url
 @router.post("/url-target-allowlist", response_model=UrlTargetAllowlistEntryOut)
 async def create_url_target_allowlist_entry(
     body: UrlTargetAllowlistCreate,
+    request: Request = None,  # type: ignore[assignment]
     admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> UrlTargetAllowlistEntryOut:
+    writer = AuditLogWriter(db, build_audit_context(request, admin))
     try:
         entry = await asyncio.to_thread(add_allowed_url_target, body.target, reason=body.reason, created_by=admin)
     except ValueError as exc:
+        await writer.write_contract("POST", "/api/v1/security/url-target-allowlist", outcome=AuditOutcome.FAILED)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except OSError as exc:
+        await writer.write_contract("POST", "/api/v1/security/url-target-allowlist", outcome=AuditOutcome.FAILED)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not write URL target allowlist: {exc}") from exc
+    await writer.write_contract("POST", "/api/v1/security/url-target-allowlist", resource_id=entry.id)
     return _entry_out(entry)
 
 
 @router.delete("/url-target-allowlist")
 async def delete_url_target_allowlist_entry(
     target: str = Query(..., description="Exact allowlist target, for example 10.38.113.23/32"),
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> dict[str, bool]:
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
     try:
         deleted = remove_allowed_url_target(target)
     except ValueError as exc:
+        await writer.write_contract("DELETE", "/api/v1/security/url-target-allowlist", outcome=AuditOutcome.FAILED)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except OSError as exc:
+        await writer.write_contract("DELETE", "/api/v1/security/url-target-allowlist", outcome=AuditOutcome.FAILED)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not write URL target allowlist: {exc}") from exc
     if not deleted:
+        await writer.write_contract("DELETE", "/api/v1/security/url-target-allowlist", outcome=AuditOutcome.FAILED)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist target not found")
+    await writer.write_contract("DELETE", "/api/v1/security/url-target-allowlist")
     return {"deleted": True}
 
 

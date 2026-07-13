@@ -206,10 +206,12 @@ async def get_admin_user(
     principal: Principal = Depends(get_current_principal),
     current_user: str | None = None,
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,  # type: ignore[assignment]
 ) -> str:
     """FastAPI dependency — returns username or raises 403 if not admin."""
     if isinstance(principal, Principal):
         if principal.type != "user" or not principal.is_admin:
+            await _audit_admin_denial(request, db, principal)
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
         return principal.subject
 
@@ -218,9 +220,29 @@ async def get_admin_user(
         if row and row["is_admin"]:
             return current_user
 
+        await _audit_admin_denial(request, db, current_user)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
 
+    await _audit_admin_denial(request, db, None)
     raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
+
+
+async def _audit_admin_denial(request: Request | None, db: Database, principal: Principal | str | None) -> None:
+    """Persist denied admin mutations without making audit availability an auth bypass."""
+    if request is None:
+        return
+    try:
+        from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+        writer = AuditLogWriter(db, build_audit_context(request, principal))
+        await writer.write_contract(request.method, path, outcome=AuditOutcome.DENIED)
+    except LookupError:
+        # Read-only admin routes have no mutation contract and need no event here.
+        return
+    except Exception:
+        logger.exception("Could not persist denied admin mutation audit event")
 
 
 # ---------------------------------------------------------------------------
@@ -388,10 +410,15 @@ async def login(
     body: LoginRequest,
     db: Database = Depends(lambda: get_db()),
 ) -> TokenResponse:
+    from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+    writer = AuditLogWriter(db, build_audit_context(request, body.username))
     row = await db.fetchone("SELECT password_hash FROM users WHERE username=?", (body.username,))
     if not row or not verify_password(body.password, row["password_hash"]):
+        await writer.write_contract("POST", "/api/v1/auth/login", outcome=AuditOutcome.DENIED)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
+    await writer.write_contract("POST", "/api/v1/auth/login")
     return TokenResponse(
         access_token=create_access_token(body.username),
         refresh_token=create_refresh_token(body.username),
@@ -405,9 +432,19 @@ async def refresh(
     body: RefreshRequest,
     db: Database = Depends(lambda: get_db()),
 ) -> TokenResponse:
-    sub = decode_token(body.refresh_token, expected_type="refresh")
+    from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+    try:
+        sub = decode_token(body.refresh_token, expected_type="refresh")
+    except HTTPException:
+        writer = AuditLogWriter(db, build_audit_context(request, None))
+        await writer.write_contract("POST", "/api/v1/auth/refresh", outcome=AuditOutcome.DENIED)
+        raise
+    writer = AuditLogWriter(db, build_audit_context(request, sub))
     if not await db.fetchone("SELECT 1 FROM users WHERE username=?", (sub,)):
+        await writer.write_contract("POST", "/api/v1/auth/refresh", outcome=AuditOutcome.DENIED)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+    await writer.write_contract("POST", "/api/v1/auth/refresh")
     return TokenResponse(
         access_token=create_access_token(sub),
         refresh_token=create_refresh_token(sub),
@@ -453,16 +490,22 @@ async def create_api_key(
     key = generate_api_key()
     key_id = str(uuid.uuid4())
     now = datetime.now(UTC).isoformat()
-    await db.execute_and_commit(
-        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?,?,?,?,?)",
-        (key_id, body.name, hash_api_key(key), owner, now),
-    )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    async with db.transaction():
+        await db.execute(
+            "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?,?,?,?,?)",
+            (key_id, body.name, hash_api_key(key), owner, now),
+        )
+        writer = AuditLogWriter(db, build_audit_context(request, principal))
+        await writer.write_contract("POST", "/api/v1/auth/apikeys", resource_id=key_id, commit=False)
     return ApiKeyResponse(id=key_id, name=body.name, key=key, created_at=now)
 
 
 @router.delete("/apikeys/{key_id}", status_code=204)
 async def delete_api_key(
     key_id: str,
+    request: Request = None,  # type: ignore[assignment]
     current_user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
@@ -479,6 +522,10 @@ async def delete_api_key(
             (key_id, f"api_key:{key_id}"),
         )
         await db.execute("DELETE FROM api_keys WHERE id=?", (key_id,))
+        from obs.api.audit import AuditLogWriter, build_audit_context
+
+        writer = AuditLogWriter(db, build_audit_context(request, current_user))
+        await writer.write_contract("DELETE", "/api/v1/auth/apikeys/{key_id}", resource_id=key_id, commit=False)
 
 
 async def _api_key_capabilities_response(db: Database, key_id: str) -> ApiKeyCapabilitiesResponse:
@@ -560,11 +607,10 @@ async def replace_api_key_capabilities(
                 details={"api_key_id": key_id, "capability": capability, "revision": revision},
                 commit=False,
             )
-        await writer.write(
-            "api_key.capabilities.replace",
-            resource_type="api_key",
+        await writer.write_contract(
+            "PUT",
+            "/api/v1/auth/apikeys/{key_id}/capabilities",
             resource_id=key_id,
-            details={"api_key_id": key_id, "added": added, "revoked": revoked, "revision": revision},
             commit=False,
         )
 
@@ -713,9 +759,9 @@ async def create_user(
                 now,
             ),
         )
-        await audit_writer.write(
-            action="auth.user.created",
-            resource_type="user",
+        await audit_writer.write_contract(
+            "POST",
+            "/api/v1/auth/users",
             resource_id=uid,
             details={
                 "is_admin": body.is_admin,
@@ -803,9 +849,9 @@ async def update_user(
         before = {"is_admin": bool(target["is_admin"]), "mqtt_enabled": bool(target["mqtt_enabled"]), "username": target["username"]}
         after = {"is_admin": bool(new_is_admin), "mqtt_enabled": bool(new_mqtt_enabled), "username": new_username}
         audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=_admin))
-        await audit_writer.write(
-            action="auth.user.updated",
-            resource_type="user",
+        await audit_writer.write_contract(
+            "PATCH",
+            "/api/v1/auth/users/{username}",
             resource_id=target["id"],
             details={"after": after, "before": before, "changed_fields": sorted(field for field in before if before[field] != after[field])},
             commit=False,
@@ -933,9 +979,9 @@ async def delete_user(
         from obs.api.audit import AuditLogWriter, build_audit_context
 
         audit_writer = AuditLogWriter(db=db, context=build_audit_context(request=request, current_user=admin_user))
-        await audit_writer.write(
-            action="auth.user.deleted",
-            resource_type="user",
+        await audit_writer.write_contract(
+            "DELETE",
+            "/api/v1/auth/users/{username}",
             resource_id=target["id"],
             details={
                 "api_keys_revoked": len(inventory.api_key_ids),
@@ -960,6 +1006,7 @@ async def delete_user(
 async def set_mqtt_password(
     username: str,
     body: SetMqttPasswordRequest,
+    request: Request = None,  # type: ignore[assignment]
     current_user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
@@ -976,16 +1023,22 @@ async def set_mqtt_password(
 
     from obs.core.mqtt_passwd import mosquitto_hash
 
-    await db.execute_and_commit(
-        "UPDATE users SET mqtt_enabled=1, mqtt_password_hash=? WHERE username=?",
-        (mosquitto_hash(body.password), username),
-    )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    async with db.transaction():
+        await db.execute(
+            "UPDATE users SET mqtt_enabled=1, mqtt_password_hash=? WHERE username=?",
+            (mosquitto_hash(body.password), username),
+        )
+        writer = AuditLogWriter(db, build_audit_context(request, current_user))
+        await writer.write_contract("POST", "/api/v1/auth/users/{username}/mqtt-password", resource_id=target["id"], commit=False)
     await _sync_mqtt(db)
 
 
 @router.delete("/users/{username}/mqtt-password", status_code=204)
 async def delete_mqtt_password(
     username: str,
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
@@ -993,10 +1046,15 @@ async def delete_mqtt_password(
     target = await db.fetchone("SELECT id FROM users WHERE username=?", (username,))
     if not target:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"User '{username}' not found")
-    await db.execute_and_commit(
-        "UPDATE users SET mqtt_enabled=0, mqtt_password_hash=NULL WHERE username=?",
-        (username,),
-    )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    async with db.transaction():
+        await db.execute(
+            "UPDATE users SET mqtt_enabled=0, mqtt_password_hash=NULL WHERE username=?",
+            (username,),
+        )
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        await writer.write_contract("DELETE", "/api/v1/auth/users/{username}/mqtt-password", resource_id=target["id"], commit=False)
     await _sync_mqtt(db)
 
 
@@ -1019,13 +1077,19 @@ async def get_me(
 @router.post("/me/change-password", status_code=204)
 async def change_password(
     body: ChangePasswordRequest,
+    request: Request = None,  # type: ignore[assignment]
     current_user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
     row = await db.fetchone("SELECT password_hash FROM users WHERE username=?", (current_user,))
     if not row or not verify_password(body.current_password, row["password_hash"]):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
-    await db.execute_and_commit(
-        "UPDATE users SET password_hash=? WHERE username=?",
-        (hash_password(body.new_password), current_user),
-    )
+    from obs.api.audit import AuditLogWriter, build_audit_context
+
+    async with db.transaction():
+        await db.execute(
+            "UPDATE users SET password_hash=? WHERE username=?",
+            (hash_password(body.new_password), current_user),
+        )
+        writer = AuditLogWriter(db, build_audit_context(request, current_user))
+        await writer.write_contract("POST", "/api/v1/auth/me/change-password", resource_id=current_user, commit=False)

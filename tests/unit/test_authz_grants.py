@@ -246,10 +246,10 @@ async def test_replace_user_grants_roundtrips_full_set_and_audits_only_counts(db
     assert put_http_response.headers["etag"] == get_http_response.headers["etag"]
     assert put_http_response.headers["cache-control"] == "no-store"
 
-    audit = await db.fetchone("SELECT * FROM audit_log_entries WHERE action='authz.grants.replace'")
+    audit = await db.fetchone("SELECT * FROM audit_log_entries WHERE action='authz.grants.replaced'")
     assert audit is not None
     assert audit["actor"] == "admin"
-    assert audit["resource_type"] == "authz_principal"
+    assert audit["resource_type"] == "authz_grants"
     assert audit["resource_id"] == "user:alice"
     assert audit["request_id"] == "grant-test"
     details = json.loads(audit["details_json"])

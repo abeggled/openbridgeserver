@@ -18,11 +18,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from obs.api.auth import get_admin_user
+from obs.api.audit import AuditLogWriter, AuditOutcome, audit_payload_sha256, build_audit_context
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
@@ -629,6 +630,7 @@ async def export_db(
 
 @router.post("/import/db", status_code=status.HTTP_200_OK)
 async def import_db(
+    request: Request = None,  # type: ignore[assignment]
     file: UploadFile = File(...),
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
@@ -712,6 +714,8 @@ async def import_db(
         except Exception:
             pass
 
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        await writer.write_contract("POST", "/api/v1/config/import/db", resource_id="global")
         return {"ok": True, "message": "Datenbankwiederherstellung erfolgreich.", "adapters_restarted": adapters_restarted}
 
     finally:
@@ -726,6 +730,7 @@ async def import_config(
     body: ConfigExport,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,  # type: ignore[assignment]
 ) -> ImportResult:
     result = ImportResult(
         datapoints_created=0,
@@ -1249,11 +1254,28 @@ async def import_config(
         except Exception as exc:
             result.errors.append(f"ApiKeyCapabilitySet {capability_set.key_id}: {exc}")
 
+    if request is not None:
+        writer = AuditLogWriter(db, build_audit_context(request, _user))
+        outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
+        result_data = result.model_dump()
+        counts = {key: value for key, value in result_data.items() if key != "errors"}
+        await writer.write_contract(
+            "POST",
+            "/api/v1/config/import",
+            resource_id="global",
+            outcome=outcome,
+            details={
+                "counts": counts,
+                "error_count": len(result.errors),
+                "payload_sha256": audit_payload_sha256(counts),
+            },
+        )
     return result
 
 
 @router.delete("/reset", response_model=ResetResult, status_code=status.HTTP_200_OK)
 async def factory_reset(
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ResetResult:
@@ -1364,11 +1386,22 @@ async def factory_reset(
     except Exception as exc:
         result.errors.append(f"Icons reset failed: {exc}")
 
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
+    result_data = result.model_dump()
+    await writer.write_contract(
+        "DELETE",
+        "/api/v1/config/reset",
+        resource_id="global",
+        outcome=outcome,
+        details={"counts": {key: value for key, value in result_data.items() if key != "errors"}, "error_count": len(result.errors)},
+    )
     return result
 
 
 @router.delete("/reset/bindings", response_model=ClearResult, status_code=status.HTTP_200_OK)
 async def clear_bindings(
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ClearResult:
@@ -1385,11 +1418,21 @@ async def clear_bindings(
         await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
         result.errors.append(f"Bindings clear failed: {exc}")
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
+    await writer.write_contract(
+        "DELETE",
+        "/api/v1/config/reset/bindings",
+        resource_id="global",
+        outcome=outcome,
+        details={"counts": {"deleted": result.deleted}, "error_count": len(result.errors)},
+    )
     return result
 
 
 @router.delete("/reset/datapoints", response_model=ClearResult, status_code=status.HTTP_200_OK)
 async def clear_datapoints(
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ClearResult:
@@ -1414,11 +1457,21 @@ async def clear_datapoints(
         await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
         result.errors.append(f"DataPoints clear failed: {exc}")
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
+    await writer.write_contract(
+        "DELETE",
+        "/api/v1/config/reset/datapoints",
+        resource_id="global",
+        outcome=outcome,
+        details={"counts": {"deleted": result.deleted, "bindings_deleted": result.bindings_deleted}, "error_count": len(result.errors)},
+    )
     return result
 
 
 @router.delete("/reset/logic", response_model=ClearResult, status_code=status.HTTP_200_OK)
 async def clear_logic(
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ClearResult:
@@ -1435,11 +1488,21 @@ async def clear_logic(
         await get_logic_manager().reload()
     except Exception as exc:
         result.errors.append(f"Logic graphs clear failed: {exc}")
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
+    await writer.write_contract(
+        "DELETE",
+        "/api/v1/config/reset/logic",
+        resource_id="global",
+        outcome=outcome,
+        details={"counts": {"deleted": result.deleted}, "error_count": len(result.errors)},
+    )
     return result
 
 
 @router.delete("/reset/adapters", response_model=ClearResult, status_code=status.HTTP_200_OK)
 async def clear_adapters(
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> ClearResult:
@@ -1459,4 +1522,13 @@ async def clear_adapters(
             await db.execute("DELETE FROM adapter_instances")
     except Exception as exc:
         result.errors.append(f"Adapters clear failed: {exc}")
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    outcome = AuditOutcome.FAILED if result.errors else AuditOutcome.SUCCESS
+    await writer.write_contract(
+        "DELETE",
+        "/api/v1/config/reset/adapters",
+        resource_id="global",
+        outcome=outcome,
+        details={"counts": {"deleted": result.deleted, "bindings_deleted": result.bindings_deleted}, "error_count": len(result.errors)},
+    )
     return result
