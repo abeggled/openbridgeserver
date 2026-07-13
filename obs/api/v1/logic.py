@@ -430,7 +430,12 @@ async def delete_graph(
     row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
-    await db.execute_and_commit("DELETE FROM logic_graphs WHERE id=?", (graph_id,))
+    async with db.transaction():
+        await db.execute(
+            "DELETE FROM authz_node_roles WHERE node_type='logic_graph' AND node_id=?",
+            (graph_id,),
+        )
+        await db.execute("DELETE FROM logic_graphs WHERE id=?", (graph_id,))
     try:
         from obs.logic.manager import get_logic_manager
 

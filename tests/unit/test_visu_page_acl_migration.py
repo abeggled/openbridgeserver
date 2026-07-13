@@ -152,6 +152,34 @@ async def test_runtime_page_grants_use_tree_inheritance_and_deny_precedence() ->
         await db.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_breadcrumb_and_children_preserve_explicit_page_access() -> None:
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        folder = await visu_api.create_node(
+            VisuNodeCreate(name="Folder", type="LOCATION", access="user"),
+            db=db,
+            _user="admin",
+        )
+        page = await visu_api.create_node(
+            VisuNodeCreate(parent_id=folder.id, name="Page", type="PAGE", access="readonly"),
+            db=db,
+            _user="admin",
+        )
+
+        breadcrumb = await visu_api.get_breadcrumb(page.id, db=db)
+        children = await visu_api.get_children(folder.id, db=db)
+
+        assert [(node.id, node.access) for node in breadcrumb] == [
+            (folder.id, "user"),
+            (page.id, "readonly"),
+        ]
+        assert [(node.id, node.access) for node in children] == [(page.id, "readonly")]
+    finally:
+        await db.disconnect()
+
+
 class _EmptyRegistry:
     def all(self):
         return []

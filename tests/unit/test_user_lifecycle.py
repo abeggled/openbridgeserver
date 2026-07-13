@@ -149,6 +149,16 @@ async def test_delete_transfers_revokes_and_cleans_references_atomically(db: Dat
     assert (await db.fetchone("SELECT created_by FROM visu_nodes WHERE id='page-a'"))["created_by"] == "bob"
     assert (await db.fetchone("SELECT created_by FROM logic_graphs WHERE id='graph-a'"))["created_by"] == "bob"
     assert (await db.fetchone("SELECT created_by FROM ringbuffer_filtersets WHERE id='filter-a'"))["created_by"] is None
+    transferred_artifact_grants = await db.fetchall(
+        """SELECT node_type, node_id, role, effect FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='bob'
+             AND node_type IN ('visu_page', 'logic_graph')
+           ORDER BY node_type, node_id"""
+    )
+    assert [dict(row) for row in transferred_artifact_grants] == [
+        {"node_type": "logic_graph", "node_id": "graph-a", "role": "owner", "effect": "allow"},
+        {"node_type": "visu_page", "node_id": "page-a", "role": "owner", "effect": "allow"},
+    ]
     transferred = await db.fetchone(
         """SELECT role, effect FROM authz_node_roles
            WHERE principal_type='user' AND principal_id='bob'

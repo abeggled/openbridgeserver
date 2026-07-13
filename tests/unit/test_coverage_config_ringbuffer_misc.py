@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -87,6 +88,10 @@ class _DbStub:
 
     async def commit(self):
         self.commit_count += 1
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
     async def disconnect(self):
         pass
@@ -167,6 +172,8 @@ async def test_export_config_empty_db(monkeypatch):
     assert result.hierarchy_trees == []
     assert result.hierarchy_nodes == []
     assert result.hierarchy_dp_links == []
+    assert result.authz_grants == []
+    assert result.api_key_capability_sets == []
     assert result.fa_api_key is None
 
 
@@ -283,7 +290,16 @@ async def test_export_config_with_visu_nodes(monkeypatch):
         }
     )
     policy_row = _row({"node_id": "node-1", "access_mode": "public"})
-    user_row = _row({"node_id": "node-1", "principal_id": "alice"})
+    user_row = _row(
+        {
+            "principal_type": "user",
+            "principal_id": "alice",
+            "node_type": "visu_page",
+            "node_id": "node-1",
+            "role": "guest",
+            "effect": "allow",
+        }
+    )
 
     async def _fetchall(query, params=()):
         if "FROM visu_nodes" in query:
@@ -1069,6 +1085,9 @@ async def test_factory_reset_counts_rows(monkeypatch):
     assert result.bindings_deleted == 5
     assert result.logic_graphs_deleted == 3
     committed_sql = [query for query, _params in db.committed]
+    executed_sql = [query for query, _params in db.executed]
+    assert "DELETE FROM authz_node_roles WHERE node_type='logic_graph'" in executed_sql
+    assert "DELETE FROM logic_graphs" in executed_sql
     assert "DELETE FROM knx_space_device_links" in committed_sql
     assert "DELETE FROM knx_co_ga_links" in committed_sql
     assert "DELETE FROM knx_comm_objects" in committed_sql
@@ -1175,6 +1194,10 @@ async def test_clear_logic(monkeypatch):
 
     assert result.deleted == 4
     assert result.errors == []
+    assert [query for query, _params in db.executed] == [
+        "DELETE FROM authz_node_roles WHERE node_type='logic_graph'",
+        "DELETE FROM logic_graphs",
+    ]
 
 
 @pytest.mark.asyncio

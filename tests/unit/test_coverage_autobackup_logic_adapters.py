@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -56,6 +57,15 @@ class _DbStub:
         self.last_query = query
         self.last_params = params
         self.execute_calls.append((query, params))
+
+    async def execute(self, query, params=()):
+        self.last_query = query
+        self.last_params = params
+        self.execute_calls.append((query, params))
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
     async def fetchone_or_raise(self, query, params=(), detail="Not found"):
         row = self._one
@@ -688,8 +698,9 @@ class TestDeleteGraph:
         db = _DbStub(one=row)
         with patch("obs.logic.manager.get_logic_manager", side_effect=RuntimeError("no manager")):
             await delete_graph(graph_id=row["id"], _user="user", db=db)
-        assert len(db.execute_calls) == 1
-        assert "DELETE" in db.execute_calls[0][0]
+        assert len(db.execute_calls) == 2
+        assert "DELETE FROM authz_node_roles" in db.execute_calls[0][0]
+        assert "DELETE FROM logic_graphs" in db.execute_calls[1][0]
 
     @pytest.mark.asyncio
     async def test_invalidates_cache_on_delete(self):

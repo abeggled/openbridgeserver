@@ -185,6 +185,29 @@ async def test_anwesenheit_list_datapoints_filters_unreadable_candidates(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_anwesenheit_health_hides_instance_without_read_grant(db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.anwesenheit_health(instance_id, _user=_principal(), db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_anwesenheit_list_datapoints_hides_instance_without_read_grant(monkeypatch, db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id)
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub([]))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.anwesenheit_list_datapoints(instance_id, _user=_principal(), db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_instance_read_is_filtered_by_central_instance_grant(db: Database):
     allowed_id = uuid.uuid4()
     blocked_id = uuid.uuid4()

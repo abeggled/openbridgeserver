@@ -445,3 +445,14 @@ async def test_grant_target_validation_accepts_graph_and_rejects_unknown_capabil
         )
 
     assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_delete_graph_removes_central_role_grants(db: Database) -> None:
+    await _insert_graph(db, "graph-delete", [])
+    await _grant(db, "logic_graph", "graph-delete", role="owner")
+
+    await logic_api.delete_graph("graph-delete", _user="admin", db=db)
+
+    assert await db.fetchone("SELECT 1 FROM logic_graphs WHERE id='graph-delete'") is None
+    assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_type='logic_graph' AND node_id='graph-delete'") is None

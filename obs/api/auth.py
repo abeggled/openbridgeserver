@@ -840,8 +840,26 @@ async def delete_user(
         if transfer_required and not successor:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A successor is required for owned artifacts")
         if successor:
-            if successor == username or not await db.fetchone("SELECT 1 FROM users WHERE username=?", (successor,)):
+            successor_row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (successor,))
+            if successor == username or not successor_row:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Successor must be an existing different user")
+            if not successor_row["is_admin"]:
+                transferred_grants = [
+                    ("user", successor, node_type, node_id, "owner", "allow")
+                    for node_type, node_ids in (
+                        ("visu_page", inventory.visu_page_ids),
+                        ("logic_graph", inventory.logic_graph_ids),
+                    )
+                    for node_id in node_ids
+                ]
+                await db.executemany(
+                    """INSERT INTO authz_node_roles
+                           (principal_type, principal_id, node_type, node_id, role, effect)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE SET
+                           role='owner', effect='allow', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                    transferred_grants,
+                )
             await db.execute("UPDATE visu_nodes SET created_by=? WHERE type='PAGE' AND created_by=?", (successor, username))
             await db.execute("UPDATE logic_graphs SET created_by=? WHERE created_by=?", (successor, username))
             if inventory.filterset_ids:

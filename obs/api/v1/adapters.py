@@ -1072,6 +1072,8 @@ async def anwesenheit_health(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEITSSIMULATION-Instanzen verfügbar")
 
@@ -1098,7 +1100,6 @@ async def anwesenheit_health(
         "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? AND direction='SOURCE' AND enabled=1",
         (str(instance_id),),
     )
-    principal = _principal_from_dependency(_user)
     allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, [row["datapoint_id"] for row in binding_rows])
     binding_rows = [row for row in binding_rows if row["datapoint_id"] in allowed_dp_ids]
     total = len(binding_rows)
@@ -1177,6 +1178,8 @@ async def anwesenheit_list_datapoints(
     row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
 
@@ -1184,7 +1187,6 @@ async def anwesenheit_list_datapoints(
 
     registry = get_registry()
     all_dps = registry.all()
-    principal = _principal_from_dependency(_user)
 
     # Existing bindings for this instance
     binding_rows = await db.fetchall(

@@ -16,6 +16,7 @@ import sqlite3
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -236,6 +237,21 @@ class ExportedHierarchyDpLink(BaseModel):
     datapoint_id: str
 
 
+class ExportedAuthzGrant(BaseModel):
+    principal_type: Literal["user", "api_key"]
+    principal_id: str
+    node_type: str
+    node_id: str
+    role: Literal["owner", "resident", "operator", "guest"]
+    effect: Literal["allow", "deny"] = "allow"
+
+
+class ExportedApiKeyCapabilitySet(BaseModel):
+    key_id: str
+    revision: int = Field(default=0, ge=0)
+    capabilities: list[Literal["visu.page_config.write", "datapoint.metadata.write"]] = []
+
+
 class ConfigExport(BaseModel):
     obs_version: str
     exported_at: str
@@ -256,6 +272,8 @@ class ConfigExport(BaseModel):
     hierarchy_trees: list[ExportedHierarchyTree] = []
     hierarchy_nodes: list[ExportedHierarchyNode] = []
     hierarchy_dp_links: list[ExportedHierarchyDpLink] = []
+    authz_grants: list[ExportedAuthzGrant] = []
+    api_key_capability_sets: list[ExportedApiKeyCapabilitySet] = []
 
 
 class ImportResult(BaseModel):
@@ -273,6 +291,8 @@ class ImportResult(BaseModel):
     nav_links_upserted: int = 0
     app_settings_upserted: int = 0
     hierarchy_upserted: int = 0
+    authz_grants_upserted: int = 0
+    api_key_capability_sets_upserted: int = 0
     errors: list[str]
 
 
@@ -465,6 +485,37 @@ async def export_config(
     dp_link_rows = await db.fetchall("SELECT * FROM hierarchy_datapoint_links")
     hierarchy_dp_links = [ExportedHierarchyDpLink(id=r["id"], node_id=r["node_id"], datapoint_id=r["datapoint_id"]) for r in dp_link_rows]
 
+    grant_rows = await db.fetchall(
+        """SELECT principal_type, principal_id, node_type, node_id, role, effect
+           FROM authz_node_roles
+           ORDER BY principal_type, principal_id, node_type, node_id""",
+    )
+    authz_grants = [
+        ExportedAuthzGrant(
+            principal_type=row["principal_type"],
+            principal_id=row["principal_id"],
+            node_type=row["node_type"],
+            node_id=row["node_id"],
+            role=row["role"],
+            effect=row["effect"],
+        )
+        for row in grant_rows
+    ]
+
+    capability_set_rows = await db.fetchall("SELECT key_id, revision FROM api_key_capability_sets ORDER BY key_id")
+    capability_rows = await db.fetchall("SELECT key_id, capability FROM api_key_capabilities ORDER BY key_id, capability")
+    capabilities_by_key: dict[str, list[str]] = {}
+    for row in capability_rows:
+        capabilities_by_key.setdefault(row["key_id"], []).append(row["capability"])
+    api_key_capability_sets = [
+        ExportedApiKeyCapabilitySet(
+            key_id=row["key_id"],
+            revision=row["revision"],
+            capabilities=capabilities_by_key.get(row["key_id"], []),
+        )
+        for row in capability_set_rows
+    ]
+
     return ConfigExport(
         obs_version=_EXPORT_VERSION,
         exported_at=datetime.now(UTC).isoformat(),
@@ -481,6 +532,8 @@ async def export_config(
         hierarchy_trees=hierarchy_trees,
         hierarchy_nodes=hierarchy_nodes,
         hierarchy_dp_links=hierarchy_dp_links,
+        authz_grants=authz_grants,
+        api_key_capability_sets=api_key_capability_sets,
     )
 
 
@@ -1068,6 +1121,60 @@ async def import_config(
         except Exception as exc:
             result.errors.append(f"HierarchyDpLink {link.id}: {exc}")
 
+    # --- Central authorization grants ---
+    for grant in body.authz_grants:
+        try:
+            principal_table = "users" if grant.principal_type == "user" else "api_keys"
+            principal_column = "username" if grant.principal_type == "user" else "id"
+            principal = await db.fetchone(
+                f"SELECT 1 FROM {principal_table} WHERE {principal_column}=?",
+                (grant.principal_id,),
+            )
+            if principal is None:
+                raise ValueError(f"principal {grant.principal_type}:{grant.principal_id} does not exist")
+            await db.execute_and_commit(
+                """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE
+                   SET role=excluded.role, effect=excluded.effect,
+                       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                (
+                    grant.principal_type,
+                    grant.principal_id,
+                    grant.node_type,
+                    grant.node_id,
+                    grant.role,
+                    grant.effect,
+                ),
+            )
+            result.authz_grants_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"AuthzGrant {grant.principal_type}:{grant.principal_id}/{grant.node_type}:{grant.node_id}: {exc}")
+
+    # --- API-key configuration capability sets ---
+    for capability_set in body.api_key_capability_sets:
+        try:
+            key = await db.fetchone("SELECT 1 FROM api_keys WHERE id=?", (capability_set.key_id,))
+            if key is None:
+                raise ValueError(f"API key {capability_set.key_id} does not exist")
+            async with db.transaction():
+                await db.execute("DELETE FROM api_key_capabilities WHERE key_id=?", (capability_set.key_id,))
+                await db.executemany(
+                    "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, ?)",
+                    [(capability_set.key_id, capability) for capability in capability_set.capabilities],
+                )
+                await db.execute(
+                    """INSERT INTO api_key_capability_sets (key_id, revision, updated_at)
+                       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                       ON CONFLICT(key_id) DO UPDATE
+                       SET revision=excluded.revision, updated_at=excluded.updated_at""",
+                    (capability_set.key_id, capability_set.revision),
+                )
+            result.api_key_capability_sets_upserted += 1
+        except Exception as exc:
+            result.errors.append(f"ApiKeyCapabilitySet {capability_set.key_id}: {exc}")
+
     return result
 
 
@@ -1096,7 +1203,9 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
         result.logic_graphs_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM logic_graphs")
+        async with db.transaction():
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='logic_graph'")
+            await db.execute("DELETE FROM logic_graphs")
         from obs.logic.manager import get_logic_manager
 
         await get_logic_manager().reload()
@@ -1239,7 +1348,9 @@ async def clear_logic(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM logic_graphs")
         result.deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM logic_graphs")
+        async with db.transaction():
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='logic_graph'")
+            await db.execute("DELETE FROM logic_graphs")
         from obs.logic.manager import get_logic_manager
 
         await get_logic_manager().reload()

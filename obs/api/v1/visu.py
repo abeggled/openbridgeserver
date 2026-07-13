@@ -615,11 +615,18 @@ async def get_breadcrumb(node_id: str, db: Database = Depends(get_db)):
     crumbs: list[VisuNode] = []
     current_id: str | None = node_id
     while current_id:
-        async with db.conn.execute("SELECT * FROM visu_nodes WHERE id = ?", (current_id,)) as cur:
+        async with db.conn.execute(
+            """SELECT vn.*, avp.access_mode
+               FROM visu_nodes AS vn
+               LEFT JOIN authz_visu_page_policies AS avp ON avp.node_id = vn.id
+               WHERE vn.id = ?""",
+            (current_id,),
+        ) as cur:
             row = await cur.fetchone()
         if not row:
             break
-        crumbs.insert(0, _row_to_node(row))
+        access = row["access_mode"] if "access_mode" in row.keys() else None
+        crumbs.insert(0, _row_to_node(row, access=access))
         current_id = row["parent_id"]
     return crumbs
 
@@ -630,11 +637,15 @@ async def get_breadcrumb(node_id: str, db: Database = Depends(get_db)):
 @router.get("/nodes/{node_id}/children", response_model=list[VisuNode])
 async def get_children(node_id: str, db: Database = Depends(get_db)):
     async with db.conn.execute(
-        "SELECT * FROM visu_nodes WHERE parent_id = ? ORDER BY node_order ASC",
+        """SELECT vn.*, avp.access_mode
+           FROM visu_nodes AS vn
+           LEFT JOIN authz_visu_page_policies AS avp ON avp.node_id = vn.id
+           WHERE vn.parent_id = ?
+           ORDER BY vn.node_order ASC""",
         (node_id,),
     ) as cur:
         rows = await cur.fetchall()
-    return [_row_to_node(r) for r in rows]
+    return [_row_to_node(row, access=row["access_mode"] if "access_mode" in row.keys() else None) for row in rows]
 
 
 # ── Kopieren ──────────────────────────────────────────────────────────────────

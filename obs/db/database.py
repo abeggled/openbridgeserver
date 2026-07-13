@@ -976,11 +976,14 @@ async def _migration_v44(conn: aiosqlite.Connection) -> None:
             writable = True
             for datapoint_id in bound_datapoints:
                 read_targets = datapoint_targets(datapoint_id, grants, write=False)
+                read_grants = [
+                    grant for grant in grants if any(grant.node_type == target.node_type and grant.node_id in target.path for target in read_targets)
+                ]
                 if authorize(
                     principal=principal,
                     action=AuthzAction.READ,
                     targets=read_targets,
-                    grants=grants,
+                    grants=read_grants,
                 ).allowed:
                     readable = True
 

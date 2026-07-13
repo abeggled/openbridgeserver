@@ -154,3 +154,60 @@ async def test_v44_materializes_only_unambiguous_effective_instance_scope() -> N
         assert [tuple(row) for row in second] == [tuple(row) for row in first]
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_v44_read_scope_ignores_descendant_hierarchy_grants() -> None:
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit(
+            """
+            INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at)
+            VALUES ('tree', 'Tree', '', ?, ?)
+            """,
+            (NOW, NOW),
+        )
+        await db.executemany(
+            """
+            INSERT INTO hierarchy_nodes
+                (id, tree_id, parent_id, name, description, node_order, created_at, updated_at)
+            VALUES (?, 'tree', ?, ?, '', 0, ?, ?)
+            """,
+            [
+                ("building", None, "Building", NOW, NOW),
+                ("floor", "building", "Floor", NOW, NOW),
+                ("room", "floor", "Room", NOW, NOW),
+            ],
+        )
+        await db.commit()
+        await _insert_datapoint(db, "dp-floor", "floor")
+        await _insert_user(db, "ancestor")
+        await _insert_user(db, "descendant")
+        await db.executemany(
+            """
+            INSERT INTO authz_node_roles
+                (principal_type, principal_id, node_type, node_id, role, effect)
+            VALUES ('user', ?, 'hierarchy', ?, 'guest', 'allow')
+            """,
+            [("ancestor", "building"), ("descendant", "room")],
+        )
+        await db.commit()
+        await _insert_instance(db, "floor-adapter")
+        await _insert_binding(db, "binding-floor", "floor-adapter", "dp-floor")
+
+        await _migration_v44(db.conn)
+
+        grants = await db.fetchall(
+            """
+            SELECT principal_id, node_id, role, effect
+            FROM authz_node_roles
+            WHERE node_type='adapter_instance'
+            ORDER BY principal_id
+            """,
+        )
+        assert [tuple(row) for row in grants] == [
+            ("ancestor", "floor-adapter", "guest", "allow"),
+        ]
+    finally:
+        await db.disconnect()
