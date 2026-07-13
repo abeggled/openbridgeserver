@@ -387,3 +387,29 @@ async def test_binding_mutation_central_plant_requires_central_control(db: Datab
         "UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='allowed-room'",
     )
     await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+
+@pytest.mark.asyncio
+async def test_direct_datapoint_grant_without_central_control_cannot_mutate_central_plant_binding(db: Database):
+    """A direct operator grant on a central_plant datapoint without central_control must not bypass the control-class check.
+
+    Before the fix, direct_target was created without control_class (defaulting to room_local),
+    so _grant_allows returned True for the direct decision, and line 145 allowed the mutation.
+    """
+    from obs.api.v1.bindings import _ensure_binding_mutation_scope
+
+    dp_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room", control_class="central_plant")
+    # Direct datapoint grant: node_type="datapoint", central_control defaults to 0 (False)
+    await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+    assert exc_info.value.status_code == 403
+
+    await db.execute_and_commit(
+        f"UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='{dp_id}'",
+    )
+    await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
