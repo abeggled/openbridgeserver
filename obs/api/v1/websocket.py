@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -39,6 +40,7 @@ router = APIRouter(tags=["websocket"])
 
 LogAccessCheck = Callable[[], Awaitable[bool]]
 DatapointScopeCheck = Callable[[], Awaitable[set[str] | None]]
+DATAPOINT_SCOPE_REFRESH_SECONDS = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +65,7 @@ class WebSocketManager:
             tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None, bool],
         ] = {}
         self._datapoint_scope_checks: dict[str, DatapointScopeCheck] = {}
+        self._datapoint_scope_refreshed_at: dict[str, float] = {}
         # Tracks which connections may receive non-DP action broadcasts (e.g. logic_run).
         # True for authenticated (JWT/API-key) connections; False for anonymous page-scoped viewers.
         self._action_access: dict[str, bool] = {}
@@ -90,12 +93,14 @@ class WebSocketManager:
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
         if datapoint_scope_check is not None:
             self._datapoint_scope_checks[conn_id] = datapoint_scope_check
+            self._datapoint_scope_refreshed_at[conn_id] = time.monotonic()
         self._action_access[conn_id] = action_access
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
     async def disconnect(self, conn_id: str) -> None:
         self._datapoint_scope_checks.pop(conn_id, None)
+        self._datapoint_scope_refreshed_at.pop(conn_id, None)
         self._action_access.pop(conn_id, None)
         entry = self._connections.pop(conn_id, None)
         if entry:
@@ -110,10 +115,20 @@ class WebSocketManager:
             len(self._connections),
         )
 
-    async def _refresh_datapoint_scope(self, conn_id: str) -> None:
+    def invalidate_datapoint_scopes(self) -> None:
+        """Force scoped connections to revalidate before their next push."""
+        self._datapoint_scope_refreshed_at.clear()
+
+    async def _refresh_datapoint_scope(self, conn_id: str, *, force: bool = False) -> None:
         scope_check = self._datapoint_scope_checks.get(conn_id)
         if scope_check is None:
             return
+
+        now = time.monotonic()
+        refreshed_at = self._datapoint_scope_refreshed_at.get(conn_id)
+        if not force and refreshed_at is not None and now - refreshed_at < DATAPOINT_SCOPE_REFRESH_SECONDS:
+            return
+        self._datapoint_scope_refreshed_at[conn_id] = now
 
         try:
             refreshed = await scope_check()
@@ -131,7 +146,7 @@ class WebSocketManager:
         self._connections[conn_id] = (ws, subs, lock, allowed, log_access, log_access_check, ringbuffer_metadata)
 
     async def subscribe(self, conn_id: str, dp_ids: list[str]) -> None:
-        await self._refresh_datapoint_scope(conn_id)
+        await self._refresh_datapoint_scope(conn_id, force=True)
         if conn_id in self._connections:
             allowed = self._connections[conn_id][3]
             if allowed is None:
@@ -244,7 +259,8 @@ class WebSocketManager:
         log_only = msg.get("action") == "log_entry"
         scoped_dp_id = self._message_datapoint_id(msg)
         for conn_id in list(self._connections):
-            await self._refresh_datapoint_scope(conn_id)
+            if scoped_dp_id is not None:
+                await self._refresh_datapoint_scope(conn_id)
             entry = self._connections.get(conn_id)
             if entry is None:
                 continue
@@ -276,9 +292,6 @@ class WebSocketManager:
         except RuntimeError:
             return
 
-        for conn_id in list(self._datapoint_scope_checks):
-            await self._refresh_datapoint_scope(conn_id)
-
         dp_id_str = str(event.datapoint_id)
         dp = reg.get(event.datapoint_id)
         state = reg.get_value(event.datapoint_id)
@@ -297,6 +310,10 @@ class WebSocketManager:
         for conn_id, entry in list(self._connections.items()):
             subs = entry[1]
             if dp_id_str not in subs:
+                continue
+            await self._refresh_datapoint_scope(conn_id)
+            entry = self._connections.get(conn_id)
+            if entry is None or dp_id_str not in entry[1]:
                 continue
             if not await self._send(conn_id, dp_msg):
                 dead.append(conn_id)
@@ -691,6 +708,12 @@ def get_ws_manager() -> WebSocketManager:
     if _manager is None:
         raise RuntimeError("WebSocketManager not initialized")
     return _manager
+
+
+def invalidate_datapoint_scopes() -> None:
+    """Invalidate live WebSocket authorization caches when policy inputs change."""
+    if _manager is not None:
+        _manager.invalidate_datapoint_scopes()
 
 
 def reset_ws_manager() -> None:

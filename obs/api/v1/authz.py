@@ -532,6 +532,9 @@ async def replace_principal_grants(
             commit=False,
         )
 
+    from obs.api.v1.websocket import invalidate_datapoint_scopes
+
+    invalidate_datapoint_scopes()
     grants = sorted(body.grants, key=lambda grant: (grant.node_type, grant.node_id))
     _set_revision_headers(response, grants)
     return _grants_response(principal_type, canonical_id, grants)

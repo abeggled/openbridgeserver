@@ -290,6 +290,24 @@ async def test_api_key_metadata_capability_still_requires_target_write_grant_and
 
 
 @pytest.mark.asyncio
+async def test_user_write_grant_can_update_datapoint_metadata_without_api_key_capability(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000042", "Delegated metadata")
+    await _insert_datapoint(db, datapoint)
+    await _insert_grant(db, str(datapoint.id), node_type="datapoint", role="resident")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    result = await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(name="Updated by user"),
+        request=None,
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result.name == "Updated by user"
+
+
+@pytest.mark.asyncio
 async def test_write_value_requires_write_grant_for_authenticated_principal(monkeypatch, db: Database):
     datapoint = _dp("00000000-0000-0000-0000-000000000061", "Writable")
     await _insert_tree(db)

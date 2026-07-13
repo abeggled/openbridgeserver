@@ -226,8 +226,13 @@ class TestLookup:
         from obs.adapters.knx.adapter import KnxAdapter
         from obs.adapters.mqtt.adapter import MqttAdapter
 
-        assert AnwesenheitssimulationAdapter.delegation_capabilities == frozenset()
-        assert IoBrokerAdapter.delegation_capabilities == frozenset()
+        assert AnwesenheitssimulationAdapter.delegation_capabilities == frozenset({AdapterDelegationCapability.LINK_BINDING})
+        assert IoBrokerAdapter.delegation_capabilities == frozenset(
+            {
+                AdapterDelegationCapability.CREATE_DATAPOINT,
+                AdapterDelegationCapability.LINK_BINDING,
+            }
+        )
         assert KnxAdapter.delegation_capabilities == frozenset()
         assert MqttAdapter.delegation_capabilities == frozenset(
             {

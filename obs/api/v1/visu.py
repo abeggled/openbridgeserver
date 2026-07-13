@@ -1269,6 +1269,9 @@ async def save_page(
             (config.model_dump_json(), _now_iso(), node_id),
         )
         await write_application_success(db, request, principal, "PUT", "/api/v1/visu/pages/{node_id}", resource_id=node_id, commit=False)
+    from obs.api.v1.websocket import invalidate_datapoint_scopes
+
+    invalidate_datapoint_scopes()
     if used_capability:
         await audit_config_capability_use(
             db,
@@ -1324,3 +1327,6 @@ async def set_node_users(
         await _check_user_target_pages_datapoint_policy(db, node_id, usernames=valid)
         await _replace_target_users(db, node_id, valid)
         await write_application_success(db, None, principal, "PUT", "/api/v1/visu/nodes/{node_id}/users", resource_id=node_id, commit=False)
+    from obs.api.v1.websocket import invalidate_datapoint_scopes
+
+    invalidate_datapoint_scopes()

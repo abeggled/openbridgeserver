@@ -87,6 +87,25 @@ def test_logic_run_contract_datapoint_check_requires_activate_not_read() -> None
         )
 
 
+def test_generate_mutation_contracts_match_runtime_datapoint_checks() -> None:
+    from obs.api.v1.security_contract_registry import CheckKind
+
+    signatures = (
+        ("PUT", "/api/v1/logic/graphs/{graph_id}"),
+        ("PATCH", "/api/v1/logic/graphs/{graph_id}"),
+        ("DELETE", "/api/v1/logic/graphs/{graph_id}"),
+        ("PUT", "/api/v1/visu/pages/{node_id}"),
+    )
+    for signature in signatures:
+        contract = ROUTE_SECURITY_CONTRACTS[signature]
+        assert contract.action == "generate"
+        datapoint_checks = [check for check in contract.checks if check.kind == CheckKind.ROLE and check.target_type == "datapoint"]
+        assert datapoint_checks
+        assert all(check.action == "generate" for check in datapoint_checks)
+
+    assert ROUTE_SECURITY_CONTRACTS[("PUT", "/api/v1/visu/pages/{node_id}")].capability == "visu.page_config.write"
+
+
 def test_duplicate_live_route_signature_fails_closed() -> None:
     async def unaudited_duplicate() -> None:
         return None

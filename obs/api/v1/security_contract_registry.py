@@ -481,9 +481,24 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         extra_checks=(PolicyCheck(CheckKind.CAPABILITY, "generate", "logic_capability", "constant:create_graph", "create_graph"),),
         details=("control_class", "creator_grant_role", "delegated", "enabled_persisted", "enabled_requested", "operation", "reason"),
     ),
-    ("PUT", "/api/v1/logic/graphs/{graph_id}"): _policy("logic_graph", "logic.graph.updated"),
-    ("PATCH", "/api/v1/logic/graphs/{graph_id}"): _policy("logic_graph", "logic.graph.patched"),
-    ("DELETE", "/api/v1/logic/graphs/{graph_id}"): _policy("logic_graph", "logic.graph.deleted"),
+    ("PUT", "/api/v1/logic/graphs/{graph_id}"): _policy(
+        "logic_graph",
+        "logic.graph.updated",
+        action="generate",
+        extra_checks=(PolicyCheck(CheckKind.ROLE, "generate", "datapoint", "derived:logic_flow_datapoints"),),
+    ),
+    ("PATCH", "/api/v1/logic/graphs/{graph_id}"): _policy(
+        "logic_graph",
+        "logic.graph.patched",
+        action="generate",
+        extra_checks=(PolicyCheck(CheckKind.ROLE, "generate", "datapoint", "derived:logic_flow_datapoints"),),
+    ),
+    ("DELETE", "/api/v1/logic/graphs/{graph_id}"): _policy(
+        "logic_graph",
+        "logic.graph.deleted",
+        action="generate",
+        extra_checks=(PolicyCheck(CheckKind.ROLE, "generate", "datapoint", "derived:logic_flow_datapoints"),),
+    ),
     ("POST", "/api/v1/logic/graphs/import"): _policy(
         "logic_graph",
         "logic.graph.imported",
@@ -552,7 +567,13 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         AuditMode.SECURITY,
         concealment=ConcealmentMode.NOT_FOUND,
     ),
-    ("PUT", "/api/v1/visu/pages/{node_id}"): _policy("visu_page", "visu.page.updated", capability="visu.page_config.write"),
+    ("PUT", "/api/v1/visu/pages/{node_id}"): _policy(
+        "visu_page",
+        "visu.page.updated",
+        action="generate",
+        capability="visu.page_config.write",
+        extra_checks=(PolicyCheck(CheckKind.ROLE, "generate", "datapoint", "derived:visu_referenced_datapoints"),),
+    ),
     ("PUT", "/api/v1/visu/nodes/{node_id}/users"): _policy("visu_page_audience", "visu.page.audience_updated"),
     ("POST", "/api/v1/visu/backgrounds/import"): _admin(
         "visu_background",

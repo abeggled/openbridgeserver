@@ -42,7 +42,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from obs.adapters.base import AdapterBase
+from obs.adapters.base import AdapterBase, AdapterDelegationCapability
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps, jsonable
@@ -145,6 +145,12 @@ class IoBrokerAdapter(AdapterBase):
     adapter_type = "IOBROKER"
     config_schema = IoBrokerAdapterConfig
     binding_config_schema = IoBrokerBindingConfig
+    delegation_capabilities = frozenset(
+        {
+            AdapterDelegationCapability.CREATE_DATAPOINT,
+            AdapterDelegationCapability.LINK_BINDING,
+        }
+    )
 
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)

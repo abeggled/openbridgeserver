@@ -412,14 +412,20 @@ async def update_datapoint(
     db: Database = Depends(get_db),
 ) -> DataPointOut:
     principal = _principal_from_dependency(_user)
-    used_capability = await require_config_capability(
-        db,
-        principal,
-        ConfigCapability.DATAPOINT_METADATA_WRITE,
-        target_type="datapoint",
-        target_id=str(dp_id),
-        request=request,
-    )
+    used_capability = False
+    if principal.type == "api_key":
+        used_capability = await require_config_capability(
+            db,
+            principal,
+            ConfigCapability.DATAPOINT_METADATA_WRITE,
+            target_type="datapoint",
+            target_id=str(dp_id),
+            request=request,
+        )
+    elif not principal.is_admin:
+        allowed = await filter_authorized_datapoints(db, principal, [str(dp_id)], action=AuthzAction.WRITE)
+        if not allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Datapoint write scope required")
     reg = get_registry()
     current_dp = reg.get(dp_id)
     if current_dp is None:

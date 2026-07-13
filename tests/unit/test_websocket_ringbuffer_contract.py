@@ -450,6 +450,7 @@ async def test_value_push_revalidates_scope_and_prunes_revoked_subscription(monk
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
     monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: False)
 
+    manager.invalidate_datapoint_scopes()
     await manager.handle_value_event(
         DataValueEvent(
             datapoint_id=dp_uuid,
@@ -463,6 +464,40 @@ async def test_value_push_revalidates_scope_and_prunes_revoked_subscription(monk
     assert scope_check.await_count == 2
     assert manager.subscriptions(conn_id) == set()
     assert ws.messages == []
+
+
+@pytest.mark.asyncio
+async def test_high_rate_value_pushes_reuse_cached_scope_until_invalidated(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    scope_check = AsyncMock(return_value={dp_id})
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws, allowed_dp_ids={dp_id}, datapoint_scope_check=scope_check)
+    await manager.subscribe(conn_id, [dp_id])
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Cached DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: False)
+    event = DataValueEvent(
+        datapoint_id=dp_uuid,
+        value=2.0,
+        quality="good",
+        source_adapter="api",
+        ts=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+    )
+
+    await manager.handle_value_event(event)
+    await manager.handle_value_event(event)
+
+    assert scope_check.await_count == 1
+    assert len(ws.messages) == 2
 
 
 @pytest.mark.asyncio

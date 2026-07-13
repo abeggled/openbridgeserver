@@ -248,8 +248,8 @@ async def test_websocket_endpoint_adds_page_scope_for_authenticated_page_context
 
     assert ws.accepted is True
     assert ws.sent == [{"action": "subscribed", "ids": ["page-dp"]}]
-    # Handshake, subscribe, and initial-value send each resolve the page scope once.
-    assert page_allowed.await_count == 3
+    # Handshake and subscribe resolve the page scope; initial values reuse the fresh scope.
+    assert page_allowed.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -324,8 +324,8 @@ async def test_websocket_endpoint_adds_page_scope_for_api_key_page_context(monke
 
     assert ws.accepted is True
     assert ws.sent == [{"action": "subscribed", "ids": ["page-dp"]}]
-    # Handshake, subscribe, and initial-value send each resolve the page scope once.
-    assert page_allowed.await_count == 3
+    # Handshake and subscribe resolve the page scope; initial values reuse the fresh scope.
+    assert page_allowed.await_count == 2
 
 
 @pytest.mark.asyncio
