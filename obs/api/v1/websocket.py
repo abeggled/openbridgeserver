@@ -216,15 +216,24 @@ class WebSocketManager:
             await self.disconnect(conn_id)
 
     async def broadcast_message_archive_entry(self, entry: dict[str, Any], previous_entry: dict[str, Any] | None = None) -> None:
-        """Push a newly stored message archive entry to allowed clients."""
+        """Push a newly stored message archive entry to allowed clients.
+
+        A connection that could see ``previous_entry`` but no longer matches the updated
+        ``entry`` (e.g. an edit moved it to a different archive/type/severity/source out of
+        a page-scoped predicate) must not receive the new payload — that would leak the
+        updated contents outside its allowed scope. It gets a refresh nudge instead, which
+        re-fetches through the access-checked REST endpoint rather than the raw entry.
+        """
         dead: list[str] = []
-        msg = {"action": "message_archive_entry", "entry": entry}
+        entry_msg = {"action": "message_archive_entry", "entry": entry}
+        refresh_msg = {"action": "message_archive_refresh", "archive_id": str(entry.get("archive_id") or "").lower() or None}
         for conn_id in list(self._connections):
             access = self._message_archive_access.get(conn_id)
-            if access is not None and not (
-                _message_archive_entry_matches_access(entry, access)
-                or (previous_entry is not None and _message_archive_entry_matches_access(previous_entry, access))
-            ):
+            if access is None or _message_archive_entry_matches_access(entry, access):
+                msg = entry_msg
+            elif previous_entry is not None and _message_archive_entry_matches_access(previous_entry, access):
+                msg = refresh_msg
+            else:
                 continue
             if not await self._send(conn_id, msg):
                 dead.append(conn_id)

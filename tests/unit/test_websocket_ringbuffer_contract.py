@@ -286,6 +286,34 @@ async def test_message_archive_push_is_filtered_by_page_widget_predicates():
 
 @pytest.mark.asyncio
 async def test_message_archive_push_uses_previous_entry_for_filter_transitions():
+    """A connection still in scope for the updated entry gets the live entry payload."""
+    manager = WebSocketManager()
+    ws = _FakeWebSocket()
+
+    await manager.connect(
+        ws,
+        allowed_dp_ids=set(),
+        allowed_message_archive_access=[
+            MessageArchivePredicate(
+                archive_ids={"system"},
+            )
+        ],
+    )
+
+    await manager.broadcast_message_archive_entry(
+        {"id": "entry-1", "archive_id": "system", "status": "acknowledged"},
+        previous_entry={"id": "entry-1", "archive_id": "system", "status": "new"},
+    )
+
+    assert [msg["entry"]["id"] for msg in ws.messages] == ["entry-1"]
+    assert ws.messages[0]["entry"]["status"] == "acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_message_archive_push_sends_refresh_not_entry_when_moved_out_of_scope():
+    """A connection that could see the entry before the edit, but no longer matches the
+    updated one, must not receive the new (now out-of-scope) payload — only a refresh
+    nudge, so it re-fetches through the access-checked REST endpoint instead."""
     manager = WebSocketManager()
     ws = _FakeWebSocket()
 
@@ -301,12 +329,11 @@ async def test_message_archive_push_uses_previous_entry_for_filter_transitions()
     )
 
     await manager.broadcast_message_archive_entry(
-        {"id": "entry-1", "archive_id": "system", "status": "acknowledged"},
+        {"id": "entry-1", "archive_id": "system", "status": "acknowledged", "message": "now hidden"},
         previous_entry={"id": "entry-1", "archive_id": "system", "status": "new"},
     )
 
-    assert [msg["entry"]["id"] for msg in ws.messages] == ["entry-1"]
-    assert ws.messages[0]["entry"]["status"] == "acknowledged"
+    assert ws.messages == [{"action": "message_archive_refresh", "archive_id": "system"}]
 
 
 @pytest.mark.asyncio
