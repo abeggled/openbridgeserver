@@ -218,6 +218,26 @@ async def test_get_graph_requires_read_scope_for_api_client_variable_datapoints(
 
 
 @pytest.mark.asyncio
+async def test_side_effect_graph_requires_graph_grant_even_when_datapoints_are_readable(db: Database):
+    allowed_dp, _ = await _seed_scope(db)
+    flow = _flow_with_nodes([_api_client_node(allowed_dp)])
+    await _insert_graph_flow(db, "graph-api-client-readable", "API client readable graph", flow)
+    principal = Principal(subject="alice", type="user", is_admin=False)
+
+    with pytest.raises(HTTPException) as get_error:
+        await logic_api.get_graph(graph_id="graph-api-client-readable", _user=principal, db=db)
+    assert get_error.value.status_code == 404
+
+    with pytest.raises(HTTPException) as export_error:
+        await logic_api.export_graph(graph_id="graph-api-client-readable", _user=principal, db=db)
+    assert export_error.value.status_code == 404
+
+    await _insert_grant(db, "graph-api-client-readable", role="resident", node_type="logic_graph")
+    graph = await logic_api.get_graph(graph_id="graph-api-client-readable", _user=principal, db=db)
+    assert graph.id == "graph-api-client-readable"
+
+
+@pytest.mark.asyncio
 async def test_export_graph_returns_404_for_existing_out_of_scope_graph(db: Database):
     _, blocked_dp = await _seed_scope(db)
     await _insert_graph(db, "graph-blocked", "Blocked graph", blocked_dp)

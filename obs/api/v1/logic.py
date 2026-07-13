@@ -110,6 +110,14 @@ async def _authorized_logic_datapoint_ids(
     return all_ids, allowed_ids
 
 
+def _flow_requires_graph_grant(flow: FlowData) -> bool:
+    for node in flow.nodes:
+        node_type = get_node_type(node.type)
+        if node_type is None or node_type.has_external_side_effect is not False:
+            return True
+    return False
+
+
 async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -> bool:
     if principal.type == "user" and principal.is_admin:
         return True
@@ -124,6 +132,8 @@ async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -
         return False
     if graph_decision.allowed:
         return True
+    if _flow_requires_graph_grant(_flow_from_row(row)):
+        return False
     all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.READ)
     return bool(all_ids) and len(allowed_ids) == len(all_ids)
 

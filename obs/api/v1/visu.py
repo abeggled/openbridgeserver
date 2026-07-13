@@ -239,7 +239,9 @@ async def _can_discover_node(db: Database, node_id: str, principal: Principal | 
         return True
     if principal is None:
         return False
-    if principal.type == "user" and principal.is_admin:
+    if principal.type != "user":
+        return False
+    if principal.is_admin:
         return True
     return await authorize_visu_page(db, principal, node_id, action=AuthzAction.READ)
 
@@ -750,7 +752,7 @@ async def delete_node(
         rows = await db.fetchall(
             """WITH RECURSIVE subtree(id) AS (
                    SELECT id FROM visu_nodes WHERE id = ?
-                   UNION ALL
+                   UNION
                    SELECT child.id FROM visu_nodes AS child JOIN subtree ON child.parent_id = subtree.id
                )
                SELECT id FROM subtree""",

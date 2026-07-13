@@ -659,11 +659,23 @@ async def test_export_hides_user_page_from_api_key_with_visu_grant(db: Database)
            VALUES ('api_key', ?, 'visu_page', 'user-child', 'guest', 'allow')""",
         (key_id,),
     )
+    principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+
+    tree = await visu_api.get_tree(db=db, user=principal)
+    children = await visu_api.get_children("root", db=db, user=principal)
+    assert [node.id for node in tree] == ["root"]
+    assert children == []
+    with pytest.raises(HTTPException) as node_error:
+        await visu_api.get_node("user-child", db=db, user=principal)
+    assert node_error.value.status_code == 404
+    with pytest.raises(HTTPException) as breadcrumb_error:
+        await visu_api.get_breadcrumb("user-child", db=db, user=principal)
+    assert breadcrumb_error.value.status_code == 404
 
     response = await visu_api.export_node(
         "root",
         db=db,
-        _user=Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin"),
+        _user=principal,
     )
 
     payload = json.loads(response.body)
@@ -741,6 +753,21 @@ async def test_delete_subtree_removes_only_its_visu_page_grants(db: Database):
         "SELECT node_id FROM authz_node_roles WHERE node_type='visu_page' ORDER BY node_id",
     )
     assert [row["node_id"] for row in remaining] == ["unrelated"]
+
+
+@pytest.mark.asyncio
+async def test_delete_subtree_grant_cleanup_terminates_for_parent_cycle(db: Database):
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "root", access="user")
+    await _insert_visu_page(db, "child", access=None, config=PageConfig(), parent_id="root")
+    await _assign_visu_user(db, node_id="root")
+    await _assign_visu_user(db, node_id="child")
+    await db.execute_and_commit("UPDATE visu_nodes SET parent_id='child' WHERE id='root'")
+
+    await visu_api.delete_node("root", db=db)
+
+    assert await db.fetchall("SELECT id FROM visu_nodes WHERE id IN ('root', 'child')") == []
+    assert await db.fetchall("SELECT node_id FROM authz_node_roles WHERE node_type='visu_page'") == []
 
 
 @pytest.mark.asyncio
