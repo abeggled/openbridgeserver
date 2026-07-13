@@ -387,3 +387,26 @@ async def test_binding_mutation_central_plant_requires_central_control(db: Datab
         "UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_id='allowed-room'",
     )
     await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+
+@pytest.mark.asyncio
+async def test_binding_mutation_direct_datapoint_grant_central_plant_requires_central_control(db: Database):
+    """Direct datapoint grant without central_control must not bypass the central-plant gate."""
+    from obs.api.v1.bindings import _ensure_binding_mutation_scope
+
+    dp_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room", control_class="central_plant")
+    # Direct grant on the datapoint itself (not via hierarchy), central_control defaults to 0
+    await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+    assert exc_info.value.status_code == 403
+
+    await db.execute_and_commit(
+        "UPDATE authz_node_roles SET central_control=1 WHERE principal_id='alice' AND node_type='datapoint' AND node_id=?",
+        (str(dp_id),),
+    )
+    await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)

@@ -109,10 +109,12 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
 
     targets_by_dp = await resolve_datapoint_targets(db, [str(dp_id)])
     grants = await load_role_grants(db, principal)
+    dp_targets = targets_by_dp.get(str(dp_id), [])
     direct_target = AuthzTarget(
         node_type="datapoint",
         node_id=str(dp_id),
         min_role="operator",
+        control_class=dp_targets[0].control_class if dp_targets else "room_local",
     )
     direct_decision = authorize(
         principal=principal,
