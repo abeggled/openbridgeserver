@@ -643,6 +643,9 @@ async def import_db(
     from obs.config import get_settings
 
     dst_path = get_settings().database.path
+    audit_context = build_audit_context(request, _admin)
+    db_disconnected = False
+    operation_succeeded = False
 
     # Hochgeladene Datei in temporäre Datei speichern
     tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
@@ -673,19 +676,18 @@ async def import_db(
 
         # Aiosqlite-Verbindung trennen
         await db.disconnect()
+        db_disconnected = True
 
         # Restore via sqlite3.backup()
         try:
-            src_conn = sqlite3.connect(tmp.name)
-            dst_conn = sqlite3.connect(dst_path)
-            src_conn.backup(dst_conn)
-            dst_conn.close()
-            src_conn.close()
+            with sqlite3.connect(tmp.name) as src_conn, sqlite3.connect(dst_path) as dst_conn:
+                src_conn.backup(dst_conn)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Datenbankwiederherstellung fehlgeschlagen: {exc}") from exc
 
         # Verbindung wieder aufbauen (inkl. Migrationen)
         await db.connect()
+        db_disconnected = False
 
         # Registry neu laden
         reg = get_registry()
@@ -714,10 +716,20 @@ async def import_db(
         except Exception:
             pass
 
-        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        operation_succeeded = True
+        writer = AuditLogWriter(db, audit_context)
         await writer.write_contract("POST", "/api/v1/config/import/db", resource_id="global")
         return {"ok": True, "message": "Datenbankwiederherstellung erfolgreich.", "adapters_restarted": adapters_restarted}
 
+    except Exception:
+        if operation_succeeded:
+            raise
+        if db_disconnected:
+            await db.connect()
+            db_disconnected = False
+        writer = AuditLogWriter(db, audit_context)
+        await writer.write_contract("POST", "/api/v1/config/import/db", resource_id="global", outcome=AuditOutcome.FAILED)
+        raise
     finally:
         try:
             os.unlink(tmp.name)

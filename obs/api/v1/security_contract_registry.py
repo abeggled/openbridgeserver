@@ -313,6 +313,8 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("PUT", "/api/v1/system/history/settings"): _admin(
         "history_settings",
         "system.history.settings_updated",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=(
             "plugin",
             "default_window_hours",
