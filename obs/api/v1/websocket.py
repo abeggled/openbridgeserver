@@ -597,6 +597,8 @@ async def _ws_authenticated_page_scope(
 ) -> set[str] | None:
     from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
+    user_source_page_ids: set[str] = set()
+
     async def _can_access_page(candidate_page_id: str) -> bool:
         access, defining_node_id = await _resolve_access_with_node(db, candidate_page_id)
         if access in ("public", "readonly"):
@@ -607,7 +609,10 @@ async def _ws_authenticated_page_scope(
             validate_id = defining_node_id or candidate_page_id
             return bool(session_token and sessions_api.validate_session(session_token, validate_id))
         if access == "user" and principal.type == "user":
-            return await _check_user_access(db, candidate_page_id, principal.subject)
+            ok = await _check_user_access(db, candidate_page_id, principal.subject)
+            if ok and candidate_page_id != page_id:
+                user_source_page_ids.add(candidate_page_id)
+            return ok
         return False
 
     if not await _can_access_page(page_id):
@@ -620,26 +625,27 @@ async def _ws_authenticated_page_scope(
         allowed_ids = set(await filter_authorized_datapoints(db, principal, page_scope_ids, action=AuthzAction.READ))
         return page_scope_ids & allowed_ids
 
-    # For non-user top-level pages, datapoints that are reachable *only* via a user-page
-    # widget_ref still require READ grants — mirroring the HTTP widget-ref endpoint which
-    # calls _check_page_datapoint_policy when the referenced page has access == "user".
-    async def _can_access_non_user_page(candidate_page_id: str) -> bool:
-        src_access, src_defining = await _resolve_access_with_node(db, candidate_page_id)
-        if src_access in ("public", "readonly"):
-            return True
-        if src_access == "protected":
-            if principal.type == "user":
-                return True
-            validate_id = src_defining or candidate_page_id
-            return bool(session_token and sessions_api.validate_session(session_token, validate_id))
-        return False
+    # Datapoints contributed by user-access widget_ref source pages must also respect READ grants.
+    if user_source_page_ids:
+        user_sourced: set[str] = set()
+        for src_page_id in user_source_page_ids:
+            src_ids = await _page_allowed_datapoints(db, src_page_id)
+            if src_ids:
+                user_sourced.update(src_ids)
+        user_sourced &= page_scope_ids
+        if user_sourced:
+            # Datapoints directly on this page (not only via widget_ref) must not be subject
+            # to the widget_ref READ grant filter, even if they happen to appear in a
+            # user-access source page as well.
+            async def _deny_widget_refs(_: str) -> bool:
+                return False
 
-    non_user_scope = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_can_access_non_user_page) or set()
-    user_ref_ids = page_scope_ids - non_user_scope
-    if not user_ref_ids:
-        return page_scope_ids
-    filtered = set(await filter_authorized_datapoints(db, principal, user_ref_ids, action=AuthzAction.READ))
-    return non_user_scope | filtered
+            direct_ids = await _page_allowed_datapoints(db, page_id, widget_ref_access_check=_deny_widget_refs) or set()
+            user_sourced -= direct_ids
+        if user_sourced:
+            read_allowed = set(await filter_authorized_datapoints(db, principal, user_sourced, action=AuthzAction.READ))
+            page_scope_ids = (page_scope_ids - user_sourced) | read_allowed
+    return page_scope_ids
 
 
 async def _merge_authenticated_page_scope(

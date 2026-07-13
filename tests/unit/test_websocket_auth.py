@@ -468,57 +468,47 @@ async def test_websocket_endpoint_filters_user_page_scope_by_datapoint_read_poli
 
 
 @pytest.mark.asyncio
-async def test_websocket_endpoint_filters_user_page_widget_ref_datapoints_by_read_policy(monkeypatch):
-    """Datapoints reachable only via a user-page widget_ref must still require READ grants
-    even when the top-level page is public.  The HTTP widget-ref endpoint applies
-    _check_page_datapoint_policy for user pages; the WebSocket scope must mirror this so
-    a user without a datapoint READ grant cannot subscribe to live values via the socket
-    while the HTTP path would deny them.
-    """
+async def test_websocket_widget_ref_user_source_page_requires_read_grants(monkeypatch):
+    """A user-access widget_ref source must enforce READ grants for its datapoints."""
 
     def _decode_token(token: str, expected_type: str = "access") -> str:
         if token == "valid.jwt.token" and expected_type == "access":
             return "alice"
         raise HTTPException(401, "invalid")
 
-    # Alice has no explicit datapoint READ grants, so all ids are denied.
     async def _filter_authorized_datapoints(_db, _principal, ids, *, action):
-        return []
+        return [dp for dp in ids if dp == "src-allowed-dp"]
 
-    async def _resolve_public_access(_db, _node_id: str) -> tuple[str, str | None]:
-        return "public", None
+    async def _resolve_access(_db, node_id: str) -> tuple[str, str | None]:
+        if node_id == "main-page":
+            return "protected", None
+        if node_id == "src-user-page":
+            return "user", "src-user-page"
+        return "protected", None
 
-    # First call (with _can_access_page): includes user-page widget_ref datapoints.
-    # Second call (with _can_access_non_user_page): excludes them.
-    _calls: list[int] = []
+    async def _check_user_access_stub(_db, _node_id: str, username: str) -> bool:
+        return username == "alice"
 
-    async def _page_allowed(_db, _page_id, *, widget_ref_access_check=None):
-        _calls.append(1)
-        if len(_calls) == 1:
-            return {"public-dp", "user-ref-dp"}
-        return {"public-dp"}
-
-    class _PublicPageDbStub:
-        async def fetchone(self, query: str, _params: tuple):
-            if "FROM users" in query:
-                return {"is_admin": 0}
-            return None
-
-        async def fetchall(self, query: str, _params: tuple = ()):
-            if "FROM datapoints" in query:
-                return [{"id": "public-dp"}, {"id": "user-ref-dp"}]
-            return []
+    async def _page_allowed(_db, page_id: str, *, widget_ref_access_check=None):
+        if page_id == "main-page":
+            if widget_ref_access_check is not None and await widget_ref_access_check("src-user-page"):
+                return {"main-dp", "src-allowed-dp", "src-denied-dp"}
+            return {"main-dp"}
+        if page_id == "src-user-page":
+            return {"src-allowed-dp", "src-denied-dp"}
+        return None
 
     monkeypatch.setattr(auth_api, "decode_token", _decode_token)
-    monkeypatch.setattr(ws_api, "get_db", lambda: _PublicPageDbStub())
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=False))
     monkeypatch.setattr(ws_api, "filter_authorized_datapoints", _filter_authorized_datapoints)
     monkeypatch.setattr(ws_api, "_page_allowed_datapoints", _page_allowed)
-    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_public_access)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _check_user_access_stub)
 
     ws = _FakeWebSocket(
         headers={"authorization": "Bearer valid.jwt.token"},
-        query_params={"page_id": "page-public"},
-        received=[{"action": "subscribe", "ids": ["public-dp", "user-ref-dp"]}],
+        query_params={"page_id": "main-page"},
+        received=[{"action": "subscribe", "ids": ["main-dp", "src-allowed-dp", "src-denied-dp"]}],
     )
     ws_api.init_ws_manager()
     try:
@@ -527,8 +517,62 @@ async def test_websocket_endpoint_filters_user_page_widget_ref_datapoints_by_rea
         ws_api.reset_ws_manager()
 
     assert ws.accepted is True
-    # user-ref-dp must be absent: it came from a user-page widget_ref and alice has no READ grant.
-    assert ws.sent == [{"action": "subscribed", "ids": ["public-dp"]}]
+    subscribed_ids = set(next(message for message in ws.sent if message["action"] == "subscribed")["ids"])
+    assert subscribed_ids == {"main-dp", "src-allowed-dp"}
+
+
+@pytest.mark.asyncio
+async def test_websocket_widget_ref_direct_dp_preserved_when_also_in_user_source_page(monkeypatch):
+    """A direct page datapoint remains visible when it also occurs in a user source page."""
+
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    async def _filter_authorized_datapoints(_db, _principal, ids, *, action):
+        return []
+
+    async def _resolve_access(_db, node_id: str) -> tuple[str, str | None]:
+        if node_id == "main-page":
+            return "protected", None
+        if node_id == "src-user-page":
+            return "user", "src-user-page"
+        return "protected", None
+
+    async def _check_user_access_stub(_db, _node_id: str, username: str) -> bool:
+        return username == "alice"
+
+    async def _page_allowed(_db, page_id: str, *, widget_ref_access_check=None):
+        if page_id == "main-page":
+            if widget_ref_access_check is not None and await widget_ref_access_check("src-user-page"):
+                return {"main-dp", "src-only-dp"}
+            return {"main-dp"}
+        if page_id == "src-user-page":
+            return {"main-dp", "src-only-dp"}
+        return None
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    monkeypatch.setattr(ws_api, "get_db", lambda: _JwtScopeDbStub(is_admin=False))
+    monkeypatch.setattr(ws_api, "filter_authorized_datapoints", _filter_authorized_datapoints)
+    monkeypatch.setattr(ws_api, "_page_allowed_datapoints", _page_allowed)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _check_user_access_stub)
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        query_params={"page_id": "main-page"},
+        received=[{"action": "subscribe", "ids": ["main-dp", "src-only-dp"]}],
+    )
+    ws_api.init_ws_manager()
+    try:
+        await ws_api.websocket_endpoint(ws)
+    finally:
+        ws_api.reset_ws_manager()
+
+    assert ws.accepted is True
+    subscribed_ids = set(next(message for message in ws.sent if message["action"] == "subscribed")["ids"])
+    assert subscribed_ids == {"main-dp"}
 
 
 @pytest.mark.asyncio
