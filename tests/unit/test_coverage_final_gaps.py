@@ -123,7 +123,23 @@ from obs.api.v1.autobackup import (
 )
 
 
-class _DbStub:
+class _AuditTxMixin:
+    _transaction_depth = 0
+
+    @property
+    def in_transaction(self):
+        return self._transaction_depth > 0
+
+    @asynccontextmanager
+    async def transaction(self):
+        self._transaction_depth += 1
+        try:
+            yield
+        finally:
+            self._transaction_depth -= 1
+
+
+class _DbStub(_AuditTxMixin):
     def __init__(self, rows=None, one=None):
         self._rows = rows or []
         self._one = one
@@ -136,6 +152,9 @@ class _DbStub:
         return self._one
 
     async def execute_and_commit(self, query, params=()):
+        self.committed.append((query, params))
+
+    async def execute(self, query, params=()):
         self.committed.append((query, params))
 
 
@@ -245,7 +264,7 @@ async def test_list_autobackups_endpoint(tmp_path, monkeypatch):
 async def test_delete_autobackup_not_found(tmp_path, monkeypatch):
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
     with pytest.raises(HTTPException) as exc_info:
-        await ab_api.delete_autobackup(name="20260601-0300", _admin="admin")
+        await ab_api.delete_autobackup(name="20260601-0300", _admin="admin", db=_DbStub())
     assert exc_info.value.status_code == 404
 
 
@@ -253,7 +272,7 @@ async def test_delete_autobackup_not_found(tmp_path, monkeypatch):
 async def test_delete_autobackup_invalid_name(tmp_path, monkeypatch):
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
     with pytest.raises(HTTPException) as exc_info:
-        await ab_api.delete_autobackup(name="../../etc/passwd", _admin="admin")
+        await ab_api.delete_autobackup(name="../../etc/passwd", _admin="admin", db=_DbStub())
     assert exc_info.value.status_code == 400
 
 
@@ -261,7 +280,7 @@ async def test_delete_autobackup_invalid_name(tmp_path, monkeypatch):
 async def test_delete_autobackup_success(tmp_path, monkeypatch):
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
     (tmp_path / "20260601-0300.json").write_text("{}")
-    result = await ab_api.delete_autobackup(name="20260601-0300", _admin="admin")
+    result = await ab_api.delete_autobackup(name="20260601-0300", _admin="admin", db=_DbStub())
     assert result["ok"] is True
 
 
@@ -1511,6 +1530,19 @@ def _make_visu_db(row=None):
     db.conn = conn
     db.fetchone = AsyncMock(return_value=node_row)
     db.fetchall = AsyncMock(return_value=[node_row])
+    db.execute = AsyncMock(return_value=None)
+    db.execute_and_commit = AsyncMock(return_value=None)
+    db.in_transaction = False
+
+    @asynccontextmanager
+    async def transaction():
+        db.in_transaction = True
+        try:
+            yield
+        finally:
+            db.in_transaction = False
+
+    db.transaction = MagicMock(side_effect=transaction)
     return db
 
 
@@ -1611,9 +1643,9 @@ async def test_visu_save_page_success(monkeypatch):
     node_row = _make_node_row(id="p1", type="PAGE", name="Page")
     db = _make_visu_db(row=node_row)
     cfg = PageConfig(grid_cols=12, grid_row_height=80, background=None, widgets=[])
-    await save_page(node_id="p1", config=cfg, request=None, db=db)
+    await save_page(node_id="p1", config=cfg, request=None, db=db, _user="admin")
     assert db.conn.execute.called
-    assert db.conn.commit.called
+    assert db.transaction.called
 
 
 @pytest.mark.asyncio
@@ -1758,7 +1790,7 @@ async def test_update_app_settings(monkeypatch):
     """update_app_settings saves timezone and notifies logic manager."""
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: MagicMock(update_app_config=MagicMock()))
 
-    class _Db:
+    class _Db(_AuditTxMixin):
         async def fetchone(self, q, p=()):
             return None
 
@@ -1782,7 +1814,7 @@ async def test_test_history_sqlite():
     from obs.api.v1.system import HistorySettingsIn
 
     body = HistorySettingsIn(plugin="sqlite", default_window_hours=168)
-    result = await test_history_connection(body=body, _admin="admin")
+    result = await test_history_connection(body=body, _admin="admin", db=_DbStub())
     assert result.ok is True
 
 
@@ -1882,13 +1914,16 @@ async def test_create_nav_link():
         def __getitem__(self, k):
             return super().__getitem__(k)
 
-    class _Db:
+    class _Db(_AuditTxMixin):
         _created = {}
 
         async def fetchone(self, q, p=()):
             return _Row({"id": "new-link", "label": "Test", "url": "https://x.com", "icon": "", "sort_order": 0, "open_new_tab": 1})
 
         async def execute_and_commit(self, q, p=()):
+            pass
+
+        async def execute(self, q, p=()):
             pass
 
     body = NavLinkIn(label="Test", url="https://x.com")
@@ -2018,7 +2053,7 @@ async def test_test_history_influxdb_not_reachable():
         influx_org="org",
         influx_bucket="bucket",
     )
-    result = await test_history_connection(body=body, _admin="admin")
+    result = await test_history_connection(body=body, _admin="admin", db=_DbStub())
     assert result.ok is False
 
 
@@ -2062,11 +2097,8 @@ async def test_copy_node_success():
             return _DualCursor(row=node_row)  # first get_node_or_404
         return _DualCursor(row=new_row)  # second get_node_or_404
 
-    conn = MagicMock()
-    conn.execute = MagicMock(side_effect=make_cursor)
-    conn.commit = AsyncMock()
-    db = MagicMock()
-    db.conn = conn
+    db = _make_visu_db(row=node_row)
+    db.conn.execute = MagicMock(side_effect=make_cursor)
     db.fetchone = AsyncMock(return_value=node_row)
 
     body = CopyNodeRequest(new_name="Copy", target_parent_id=None)
@@ -2112,7 +2144,7 @@ async def test_test_history_unknown_plugin():
     from obs.api.v1.system import test_history_connection, HistorySettingsIn
 
     body = HistorySettingsIn(plugin="unknown_plugin", default_window_hours=168)
-    result = await test_history_connection(body=body, _admin="admin")
+    result = await test_history_connection(body=body, _admin="admin", db=_DbStub())
     assert result.ok is False
 
 
@@ -2125,11 +2157,14 @@ async def test_update_nav_link_success():
         def __getitem__(self, k):
             return super().__getitem__(k)
 
-    class _Db:
+    class _Db(_AuditTxMixin):
         async def fetchone(self, q, p=()):
             return _Row({"id": "nav-link-1", "label": "Updated", "url": "https://z.com", "icon": "", "sort_order": 0, "open_new_tab": 0})
 
         async def execute_and_commit(self, q, p=()):
+            pass
+
+        async def execute(self, q, p=()):
             pass
 
     body = NavLinkIn(label="Updated", url="https://z.com")
@@ -2152,7 +2187,7 @@ async def test_test_history_timescaledb_not_reachable():
         default_window_hours=168,
         timescale_dsn="postgresql://nonexistent:5432/obs",
     )
-    result = await test_history_connection(body=body, _admin="admin")
+    result = await test_history_connection(body=body, _admin="admin", db=_DbStub())
     assert result.ok is False
 
 
