@@ -29,7 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from obs.api.audit import contract_audit, set_contract_audit_summary
+from obs.api.audit import contract_audit, set_contract_audit_resource_id, set_contract_audit_summary
 from obs.api.auth import Principal, get_admin_user, get_current_principal
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
@@ -264,9 +264,12 @@ async def create_tree(
     body: HierarchyTreeCreate,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
+    request: Request = None,
 ) -> HierarchyTree:
     now = _now()
     tid = _new_id()
+    if request is not None:
+        set_contract_audit_resource_id(request, tid)
     await db.execute_and_commit(
         "INSERT INTO hierarchy_trees (id, name, description, display_depth, created_at, updated_at) VALUES (?,?,?,?,?,?)",
         (tid, body.name, body.description, body.display_depth, now, now),
@@ -354,6 +357,7 @@ async def create_node(
     body: HierarchyNodeCreate,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
+    request: Request = None,
 ) -> HierarchyNode:
     # Baum muss existieren
     tree = await db.fetchone("SELECT id FROM hierarchy_trees WHERE id=?", (body.tree_id,))
@@ -367,6 +371,8 @@ async def create_node(
 
     now = _now()
     nid = _new_id()
+    if request is not None:
+        set_contract_audit_resource_id(request, nid)
     await db.execute_and_commit(
         """INSERT INTO hierarchy_nodes
            (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
@@ -576,6 +582,7 @@ async def create_link(
     body: HierarchyLinkCreate,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
+    request: Request = None,
 ) -> dict:
     node = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE id=?", (body.node_id,))
     if not node:
@@ -589,9 +596,13 @@ async def create_link(
         (body.node_id, body.datapoint_id),
     )
     if existing:
+        if request is not None:
+            set_contract_audit_resource_id(request, existing["id"])
         return {"id": existing["id"], "node_id": body.node_id, "datapoint_id": body.datapoint_id}
 
     lid = _new_id()
+    if request is not None:
+        set_contract_audit_resource_id(request, lid)
     now = _now()
     await db.execute_and_commit(
         "INSERT INTO hierarchy_datapoint_links (id, node_id, datapoint_id, created_at) VALUES (?,?,?,?)",
@@ -758,6 +769,7 @@ async def import_from_ets(
     """Erzeugt einen neuen Hierarchiebaum aus importierten ETS-Daten."""
     result = await create_ets_hierarchy(db, body)
     if request is not None:
+        set_contract_audit_resource_id(request, result.tree_id)
         set_contract_audit_summary(
             request,
             resource_count=result.nodes_created + result.links_created,

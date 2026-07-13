@@ -32,7 +32,14 @@ from pydantic import BaseModel
 from obs.adapters import registry as adapter_registry
 from obs.adapters.base import AdapterDelegationCapability
 from obs.adapters.knx.dpt_registry import DPTRegistry
-from obs.api.audit import AuditOutcome, contract_audit, set_contract_audit_outcome, set_contract_audit_summary
+from obs.api.audit import (
+    AuditOutcome,
+    contract_audit,
+    set_contract_audit_details,
+    set_contract_audit_outcome,
+    set_contract_audit_resource_id,
+    set_contract_audit_summary,
+)
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import authorize_adapter_instance, filter_authorized_datapoints
@@ -130,9 +137,23 @@ def _failed_test_result(request: Request | None, result: TestResult) -> TestResu
     return result
 
 
-def _bulk_summary(request: Request | None, *, count: int, payload: Any) -> None:
+def _bulk_summary(request: Request | None, *, count: int, payload: Any, error_count: int | None = None) -> None:
     if request is not None:
         set_contract_audit_summary(request, resource_count=count, payload=payload)
+        if error_count is not None:
+            set_contract_audit_details(
+                request,
+                {
+                    **request.state.contract_audit_details,
+                    "error_count": error_count,
+                },
+            )
+
+
+def _bulk_mutation_result(request: Request | None, *, count: int, payload: Any, errors: list[str]) -> None:
+    _bulk_summary(request, count=count, payload=payload, error_count=len(errors))
+    if errors and request is not None:
+        set_contract_audit_outcome(request, AuditOutcome.FAILED)
 
 
 class IoBrokerStateOut(BaseModel):
@@ -337,6 +358,7 @@ async def create_instance(
     body: AdapterInstanceCreate,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,
 ) -> AdapterInstanceOut:
     cls = adapter_registry.get_class(body.adapter_type)
     if cls is None:
@@ -354,6 +376,8 @@ async def create_instance(
         ) from exc
 
     instance_id = str(uuid.uuid4())
+    if request is not None:
+        set_contract_audit_resource_id(request, instance_id)
     now = datetime.now(UTC).isoformat()
 
     await db.execute_and_commit(
@@ -1136,10 +1160,11 @@ async def iobroker_import_states(
             result.created_bindings += 1
         except Exception as exc:
             result.errors.append(f"{item.state_id}: {exc}")
-    _bulk_summary(
+    _bulk_mutation_result(
         request,
         count=result.created_datapoints + result.created_bindings + result.skipped_existing,
         payload=body.model_dump(),
+        errors=result.errors,
     )
     return result
 
@@ -1391,7 +1416,12 @@ async def anwesenheit_sync_bindings(
     except Exception:
         pass  # non-critical — bindings take effect on next restart
 
-    _bulk_summary(request, count=result.created + result.removed, payload=sorted(body.datapoint_ids))
+    _bulk_mutation_result(
+        request,
+        count=result.created + result.removed,
+        payload=sorted(body.datapoint_ids),
+        errors=result.errors,
+    )
     return result
 
 

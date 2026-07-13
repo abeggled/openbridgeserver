@@ -223,9 +223,12 @@ async def _audit_authentication_denial(request: Request | None, db: Database, pr
     writer = AuditLogWriter(db, build_audit_context(request, principal))
     try:
         await writer.write_contract(request.method, path, outcome=AuditOutcome.DENIED)
+        request.state.contract_audit_outcome_written = True
     except LookupError:
         # Authentication failures on read-only routes have no mutation contract.
         return
+    except Exception:
+        logger.exception("Could not persist denied authentication audit event")
 
 
 async def get_admin_user(
@@ -257,6 +260,11 @@ async def _audit_admin_denial(request: Request | None, db: Database, principal: 
     """Persist denied admin mutations without making audit availability an auth bypass."""
     if request is None:
         return
+    if getattr(request.state, "contract_audit_wrapper_active", False):
+        # The route wrapper owns the denied event after any atomic transaction
+        # has rolled back.  Writing here would be duplicate for result routes
+        # and would be rolled back for atomic routes.
+        return
     try:
         from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 
@@ -264,6 +272,7 @@ async def _audit_admin_denial(request: Request | None, db: Database, principal: 
         path = getattr(route, "path", request.url.path)
         writer = AuditLogWriter(db, build_audit_context(request, principal))
         await writer.write_contract(request.method, path, outcome=AuditOutcome.DENIED)
+        request.state.contract_audit_outcome_written = True
     except LookupError:
         # Read-only admin routes have no mutation contract and need no event here.
         return

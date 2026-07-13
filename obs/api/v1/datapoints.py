@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
-from obs.api.audit import contract_audit
+from obs.api.audit import contract_audit, set_contract_audit_details, set_contract_audit_resource_id
 from obs.api.auth import Principal, get_admin_user, get_current_principal
 from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
 from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
@@ -38,6 +38,21 @@ from obs.models.datapoint import DataPointCreate, DataPointUpdate
 from obs.models.visu import PageConfig
 
 router = APIRouter(tags=["datapoints"])
+
+_AUDITABLE_METADATA_FIELDS = (
+    "name",
+    "data_type",
+    "unit",
+    "tags",
+    "mqtt_alias",
+    "persist_value",
+    "record_history",
+    "control_class",
+)
+
+
+def _audit_metadata_snapshot(datapoint: Any) -> dict[str, Any]:
+    return {field: getattr(datapoint, field, "room_local" if field == "control_class" else None) for field in _AUDITABLE_METADATA_FIELDS}
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +368,7 @@ async def list_datapoints(
 async def create_datapoint(
     body: DataPointCreate,
     _user: str = Depends(get_admin_user),
+    request: Request = None,
 ) -> DataPointOut:
     from obs.models.types import DataTypeRegistry
 
@@ -363,6 +379,8 @@ async def create_datapoint(
         )
     reg = get_registry()
     dp = await reg.create(body)
+    if request is not None:
+        set_contract_audit_resource_id(request, dp.id)
     return _enrich(dp)
 
 
@@ -406,6 +424,7 @@ async def update_datapoint(
     current_dp = reg.get(dp_id)
     if current_dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    before = _audit_metadata_snapshot(current_dp)
 
     if used_capability:
         allowed = await filter_authorized_datapoints(db, principal, [str(dp_id)], action=AuthzAction.WRITE)
@@ -449,6 +468,16 @@ async def update_datapoint(
     # value=None in model_copy keeps value updates out of DataPoint metadata;
     # DataPoint has no value field.
     dp = await reg.update(dp_id, body.model_copy(update={"value": None}))
+    after = _audit_metadata_snapshot(dp)
+    details: dict[str, Any] = {
+        "before": before,
+        "after": after,
+        "changed_fields": [field for field in _AUDITABLE_METADATA_FIELDS if before[field] != after[field]],
+    }
+    if used_capability:
+        details["capability"] = ConfigCapability.DATAPOINT_METADATA_WRITE.value
+    if request is not None:
+        set_contract_audit_details(request, details)
 
     if "value" in body.model_fields_set:
         await get_event_bus().publish(

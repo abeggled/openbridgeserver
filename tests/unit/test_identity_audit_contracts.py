@@ -23,6 +23,7 @@ from obs.api.auth import (
     get_current_principal,
     set_mqtt_password,
 )
+from obs.api.audit import AuditLogWriter
 from obs.api.v1.autobackup import delete_autobackup, restore_autobackup
 from obs.api.v1.config import import_db
 from obs.api.v1.security_contract_registry import AuditEffect, AuditMode, ROUTE_SECURITY_CONTRACTS
@@ -337,5 +338,26 @@ async def test_invalid_token_on_mutation_is_canonically_audited() -> None:
             "denied",
             "/api/v1/config/reset",
         )
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_invalid_token_remains_401_when_denial_audit_is_unavailable(monkeypatch) -> None:
+    async def fail_audit(*_args, **_kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(AuditLogWriter, "write_contract", fail_audit)
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_principal(
+                credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-token"),
+                api_key=None,
+                db=db,
+                request=_http_request("DELETE", "/api/v1/config/reset"),
+            )
+        assert exc_info.value.status_code == 401
     finally:
         await db.disconnect()

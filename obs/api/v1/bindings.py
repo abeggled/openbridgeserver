@@ -16,10 +16,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from obs.api.audit import contract_audit
+from obs.api.audit import contract_audit, set_contract_audit_resource_id
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
 from obs.api.authz_service import (
@@ -302,6 +302,7 @@ async def create_binding(
     body: AdapterBindingCreate,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
+    request: Request = None,
 ) -> BindingOut:
     principal = _principal_from_dependency(_user)
     await _ensure_binding_mutation_scope(db, principal, dp_id)
@@ -340,6 +341,8 @@ async def create_binding(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Ungültige Formel: {err}")
 
     binding_id = str(uuid.uuid4())
+    if request is not None:
+        set_contract_audit_resource_id(request, binding_id)
     now = datetime.now(UTC).isoformat()
 
     await db.execute_and_commit(

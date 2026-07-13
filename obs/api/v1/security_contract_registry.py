@@ -246,24 +246,35 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         ),
     ),
     # Datapoints and bindings.
-    ("POST", "/api/v1/datapoints/"): _admin("datapoint", "datapoint.created", root=True),
+    ("POST", "/api/v1/datapoints/"): _admin("datapoint", "datapoint.created", root=True, result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
     ("PATCH", "/api/v1/datapoints/{dp_id}"): _policy(
-        "datapoint", "datapoint.updated", capability="datapoint.metadata.write", details=("capability", "changed_fields", "before", "after")
+        "datapoint",
+        "datapoint.updated",
+        capability="datapoint.metadata.write",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("capability", "changed_fields", "before", "after"),
     ),
-    ("DELETE", "/api/v1/datapoints/{dp_id}"): _admin("datapoint", "datapoint.deleted"),
+    ("DELETE", "/api/v1/datapoints/{dp_id}"): _admin("datapoint", "datapoint.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION),
     ("POST", "/api/v1/datapoints/{dp_id}/bindings"): _policy(
         "binding",
         "binding.created",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         extra_checks=(PolicyCheck(CheckKind.ROLE, "write", "adapter_instance", "derived:binding_adapter_instance"),),
     ),
     ("PATCH", "/api/v1/datapoints/{dp_id}/bindings/{binding_id}"): _policy(
         "binding",
         "binding.updated",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         extra_checks=(PolicyCheck(CheckKind.ROLE, "write", "adapter_instance", "derived:binding_adapter_instance"),),
     ),
     ("DELETE", "/api/v1/datapoints/{dp_id}/bindings/{binding_id}"): _policy(
         "binding",
         "binding.deleted",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         extra_checks=(PolicyCheck(CheckKind.ROLE, "write", "adapter_instance", "derived:binding_adapter_instance"),),
     ),
     # URL policy and adapters.
@@ -279,13 +290,23 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         result=True,
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
     ),
-    ("POST", "/api/v1/adapters/instances"): _admin("adapter_instance", "adapter.instance.created", root=True),
-    ("PATCH", "/api/v1/adapters/instances/{instance_id}"): _policy("adapter_instance", "adapter.instance.updated"),
-    ("DELETE", "/api/v1/adapters/instances/{instance_id}"): _policy("adapter_instance", "adapter.instance.deleted"),
+    ("POST", "/api/v1/adapters/instances"): _admin(
+        "adapter_instance", "adapter.instance.created", root=True, result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+    ),
+    ("PATCH", "/api/v1/adapters/instances/{instance_id}"): _policy(
+        "adapter_instance", "adapter.instance.updated", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+    ),
+    ("DELETE", "/api/v1/adapters/instances/{instance_id}"): _policy(
+        "adapter_instance", "adapter.instance.deleted", result=True, audit_effect=AuditEffect.EXTERNAL_MUTATION
+    ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/test"): _policy("adapter_instance", "adapter.instance.tested", result=True),
     ("POST", "/api/v1/adapters/instances/{instance_id}/restart"): _policy("adapter_instance", "adapter.instance.restarted", result=True),
     ("POST", "/api/v1/adapters/instances/{source_instance_id}/bindings/migrate"): _policy(
-        "adapter_instance", "adapter.bindings.migrated", details=("resource_count", "payload_sha256")
+        "adapter_instance",
+        "adapter.bindings.migrated",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        details=("resource_count", "payload_sha256"),
     ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import-preview"): _policy(
         "adapter_instance",
@@ -297,14 +318,18 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import"): _policy(
         "adapter_instance",
         "adapter.iobroker.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         capability="adapter.create_datapoint+link_binding",
-        details=("resource_count", "payload_sha256"),
+        details=("resource_count", "payload_sha256", "error_count"),
     ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/anwesenheit/sync-bindings"): _policy(
         "adapter_instance",
         "adapter.anwesenheit.bindings_synced",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
         capability="adapter.link_binding",
-        details=("resource_count", "payload_sha256"),
+        details=("resource_count", "payload_sha256", "error_count"),
     ),
     ("POST", "/api/v1/adapters/{adapter_type}/test"): _admin("adapter_type", "adapter.type.tested", result=True),
     ("PATCH", "/api/v1/adapters/{adapter_type}/config"): _admin("adapter_type", "adapter.type.config_updated"),
