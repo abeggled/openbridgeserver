@@ -184,6 +184,8 @@ test('Logic-Graph: value_map auf datapoint_read wird bei Ausführung angewendet'
 
     await page.click('[data-testid="btn-debug"]')
     await page.click('[data-testid="btn-run"]')
+    await expect(page.locator('[data-testid="action-preflight"]')).toBeVisible()
+    await page.click('[data-testid="preflight-confirm"]')
     await page.waitForTimeout(2_000)
 
     // The debug band on the datapoint_read node should appear (graph ran without error)

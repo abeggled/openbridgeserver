@@ -13,7 +13,9 @@ from __future__ import annotations
 import io
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,11 +34,12 @@ from obs.api.auth import (
     RefreshRequest,
     SetMqttPasswordRequest,
     UserCreate,
+    UserDeletionRequest,
     UserUpdate,
     create_access_token,
     create_refresh_token,
     decode_token,
-    ensure_default_user,
+    require_configured_owner,
     hash_password,
 )
 from obs.api.v1.icons import (
@@ -79,6 +82,21 @@ class _DbStub:
 
     async def fetchone(self, query: str, params=()):
         self._fetchone_call_count += 1
+        if "COUNT(*) AS n" in query:
+            return _make_row(n=0)
+        if any(
+            marker in query
+            for marker in (
+                "FROM api_keys WHERE owner=? LIMIT 1",
+                "FROM logic_graphs WHERE created_by=? LIMIT 1",
+                "FROM visu_nodes WHERE created_by=? LIMIT 1",
+                "FROM ringbuffer_filtersets WHERE created_by=? LIMIT 1",
+                "FROM authz_node_roles WHERE principal_type='user' AND principal_id=? LIMIT 1",
+                "FROM visu_node_users WHERE username=? LIMIT 1",
+                "FROM ringbuffer_filterset_user_state WHERE username=? LIMIT 1",
+            )
+        ):
+            return None
         if self._fetchone_side_effects:
             result = self._fetchone_side_effects.pop(0)
             if isinstance(result, Exception):
@@ -99,6 +117,10 @@ class _DbStub:
 
     async def commit(self):
         pass
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
 
 class _DpStub:
@@ -256,7 +278,7 @@ class TestGetCurrentUser:
 
         token = create_access_token("alice")
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        db = _DbStub()
+        db = _DbStub(fetchone_result=_make_row(is_admin=0))
         result = await auth_module.get_current_user(credentials=creds, api_key=None, db=db)
         assert result == "alice"
 
@@ -301,7 +323,7 @@ class TestOptionalCurrentUser:
 
         token = create_access_token("carol")
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        db = _DbStub()
+        db = _DbStub(fetchone_result=_make_row(is_admin=0))
         result = await auth_module.optional_current_user(credentials=creds, api_key=None, db=db)
         assert result == "carol"
 
@@ -340,18 +362,24 @@ class TestGetAdminUser:
 # ---------------------------------------------------------------------------
 
 
-class TestEnsureDefaultUser:
+class TestRequireConfiguredOwner:
     @pytest.mark.asyncio
-    async def test_creates_admin_when_no_users(self):
+    async def test_fails_closed_when_no_administrator_exists(self):
         db = _DbStub(fetchone_result=_make_row(c=0))
-        await ensure_default_user(db)
-        assert len(db.executed) == 1
-        assert "INSERT INTO users" in db.executed[0][0]
+        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
+            await require_configured_owner(db)
+        assert len(db.executed) == 0
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_admin_count_cannot_be_read(self):
+        db = _DbStub(fetchone_result=None)
+        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
+            await require_configured_owner(db)
 
     @pytest.mark.asyncio
     async def test_skips_when_users_exist(self):
         db = _DbStub(fetchone_result=_make_row(c=1))
-        await ensure_default_user(db)
+        await require_configured_owner(db)
         assert len(db.executed) == 0
 
 
@@ -404,9 +432,22 @@ class TestRefreshEndpoint:
         refresh_tok = create_refresh_token("alice")
         request = MagicMock()
         body = RefreshRequest(refresh_token=refresh_tok)
-        result = await auth_module.refresh.__wrapped__(request=request, body=body)
+        db = _DbStub(fetchone_result=_make_row(username="alice"))
+        result = await auth_module.refresh.__wrapped__(request=request, body=body, db=db)
         assert result.access_token
         assert result.token_type == "bearer"
+
+    @pytest.mark.asyncio
+    async def test_deleted_user_refresh_token_raises_401(self):
+        refresh_tok = create_refresh_token("deleted")
+        request = MagicMock()
+        body = RefreshRequest(refresh_token=refresh_tok)
+
+        with pytest.raises(HTTPException) as exc:
+            await auth_module.refresh.__wrapped__(request=request, body=body, db=_DbStub(fetchone_result=None))
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "User not found"
 
     @pytest.mark.asyncio
     async def test_access_token_as_refresh_raises_401(self):
@@ -414,7 +455,7 @@ class TestRefreshEndpoint:
         request = MagicMock()
         body = RefreshRequest(refresh_token=access_tok)
         with pytest.raises(HTTPException) as exc:
-            await auth_module.refresh.__wrapped__(request=request, body=body)
+            await auth_module.refresh.__wrapped__(request=request, body=body, db=_DbStub())
         assert exc.value.status_code == 401
 
 
@@ -528,7 +569,13 @@ class TestDeleteApiKey:
         db = _DbStub()
         db._fetchone_side_effects = [key_row, admin_row]
         await auth_module.delete_api_key(key_id="k1", current_user="admin", db=db)
-        assert any("DELETE" in q for q, _ in db.executed)
+        assert db.executed == [
+            (
+                "DELETE FROM authz_node_roles WHERE principal_type='api_key' AND principal_id IN (?, ?)",
+                ("k1", "api_key:k1"),
+            ),
+            ("DELETE FROM api_keys WHERE id=?", ("k1",)),
+        ]
 
     @pytest.mark.asyncio
     async def test_user_can_delete_own_key(self):
@@ -705,6 +752,39 @@ class TestGetUser:
 
 class TestUpdateUser:
     @pytest.mark.asyncio
+    async def test_rejects_self_demotion(self):
+        target = _make_row(id="admin-id", username="admin", is_admin=1, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
+        db = _DbStub(fetchone_result=target)
+
+        with pytest.raises(HTTPException, match="demote your own account") as exc:
+            await auth_module.update_user(username="admin", body=UserUpdate(is_admin=False), _admin="admin", db=db)
+
+        assert exc.value.status_code == 400
+        assert db.executed == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_demotion_of_last_administrator(self):
+        target = _make_row(id="owner-id", username="owner", is_admin=1, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
+        db = _DbStub()
+        db._fetchone_side_effects = [target, _make_row(c=1)]
+
+        with pytest.raises(HTTPException, match="last administrator") as exc:
+            await auth_module.update_user(username="owner", body=UserUpdate(is_admin=False), _admin="admin", db=db)
+
+        assert exc.value.status_code == 400
+        assert db.executed == []
+
+    @pytest.mark.asyncio
+    async def test_atomic_update_rejects_concurrent_last_administrator_demotion(self):
+        target = _make_row(id="owner-id", username="owner", is_admin=1, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
+        db = _DbStub()
+        db._fetchone_side_effects = [target, _make_row(c=2)]
+        db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
+
+        with pytest.raises(HTTPException, match="last administrator"):
+            await auth_module.update_user(username="owner", body=UserUpdate(is_admin=False), _admin="admin", db=db)
+
+    @pytest.mark.asyncio
     async def test_update_username_success(self):
         uid = str(uuid.uuid4())
         target_row = _make_row(
@@ -806,18 +886,37 @@ class TestDeleteUser:
 
     @pytest.mark.asyncio
     async def test_delete_user_success(self):
-        user_row = _make_row(mqtt_enabled=0)
+        user_row = _make_row(id=str(uuid.uuid4()), username="alice", is_admin=0, mqtt_enabled=0, mqtt_password_hash=None, created_at="2024-01-01")
         db = _DbStub(fetchone_result=user_row)
-        await auth_module.delete_user(username="alice", admin_user="admin", db=db)
+        preflight = await auth_module._deletion_inventory(db, "alice")
+        await auth_module.delete_user(
+            username="alice",
+            body=UserDeletionRequest(revision=preflight.revision),
+            admin_user="admin",
+            db=db,
+        )
         assert any("DELETE" in q for q, _ in db.executed)
 
     @pytest.mark.asyncio
     async def test_delete_mqtt_user_triggers_sync(self, monkeypatch):
-        user_row = _make_row(mqtt_enabled=1)
+        user_row = _make_row(
+            id=str(uuid.uuid4()),
+            username="mqttuser",
+            is_admin=0,
+            mqtt_enabled=1,
+            mqtt_password_hash="hash",
+            created_at="2024-01-01",
+        )
         db = _DbStub(fetchone_result=user_row)
         sync_mock = AsyncMock()
         monkeypatch.setattr(auth_module, "_sync_mqtt", sync_mock)
-        await auth_module.delete_user(username="mqttuser", admin_user="admin", db=db)
+        preflight = await auth_module._deletion_inventory(db, "mqttuser")
+        await auth_module.delete_user(
+            username="mqttuser",
+            body=UserDeletionRequest(revision=preflight.revision),
+            admin_user="admin",
+            db=db,
+        )
         sync_mock.assert_awaited_once()
 
 
@@ -1438,7 +1537,7 @@ class TestUpdateDatapoint:
         reg = _RegistryStub(dps=[dp])
         monkeypatch.setattr(dp_api, "get_registry", lambda: reg)
         body = DataPointUpdate(name="New Name")
-        result = await dp_api.update_datapoint(dp_id=dp.id, body=body, _user="admin")
+        result = await dp_api.update_datapoint(dp_id=dp.id, body=body, request=None, _user="admin")
         assert result.name == "New Name"
 
     @pytest.mark.asyncio
@@ -1446,7 +1545,7 @@ class TestUpdateDatapoint:
         monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub())
         body = DataPointUpdate(name="X")
         with pytest.raises(HTTPException) as exc:
-            await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=body, _user="admin")
+            await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=body, request=None, _user="admin")
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -1459,7 +1558,7 @@ class TestUpdateDatapoint:
         monkeypatch.setattr(DataTypeRegistry, "is_registered", lambda dt: False)
         body = DataPointUpdate(data_type="INVALID")
         with pytest.raises(HTTPException) as exc:
-            await dp_api.update_datapoint(dp_id=dp.id, body=body, _user="admin")
+            await dp_api.update_datapoint(dp_id=dp.id, body=body, request=None, _user="admin")
         assert exc.value.status_code == 422
 
 
@@ -1883,7 +1982,7 @@ class TestDeleteBinding:
     @pytest.mark.asyncio
     async def test_delete_binding_success(self, monkeypatch):
         inst_id = str(uuid.uuid4())
-        row = _make_row(adapter_instance_id=inst_id)
+        row = _make_row(adapter_type="KNX", adapter_instance_id=inst_id)
         db = _DbStub(fetchone_result=row)
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
         await bindings_api.delete_binding(dp_id=uuid.uuid4(), binding_id=uuid.uuid4(), _user="admin", db=db)
@@ -1891,7 +1990,7 @@ class TestDeleteBinding:
 
     @pytest.mark.asyncio
     async def test_delete_binding_no_instance(self, monkeypatch):
-        row = _make_row(adapter_instance_id=None)
+        row = _make_row(adapter_type="KNX", adapter_instance_id=None)
         db = _DbStub(fetchone_result=row)
         reload_mock = AsyncMock()
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", reload_mock)

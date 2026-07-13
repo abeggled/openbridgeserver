@@ -183,8 +183,8 @@ class DataPointRegistry:
         dp = DataPoint(**payload.model_dump())
         await self._db.execute_and_commit(
             """INSERT INTO datapoints
-               (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(dp.id),
                 dp.name,
@@ -195,6 +195,7 @@ class DataPointRegistry:
                 dp.mqtt_alias,
                 int(dp.persist_value),
                 int(dp.record_history),
+                dp.control_class,
                 dp.created_at.isoformat(),
                 dp.updated_at.isoformat(),
             ),
@@ -219,7 +220,7 @@ class DataPointRegistry:
 
         await self._db.execute_and_commit(
             """UPDATE datapoints
-               SET name=?, data_type=?, unit=?, tags=?, mqtt_alias=?, persist_value=?, record_history=?, updated_at=?
+               SET name=?, data_type=?, unit=?, tags=?, mqtt_alias=?, persist_value=?, record_history=?, control_class=?, updated_at=?
                WHERE id=?""",
             (
                 dp.name,
@@ -229,6 +230,7 @@ class DataPointRegistry:
                 dp.mqtt_alias,
                 int(dp.persist_value),
                 int(dp.record_history),
+                dp.control_class,
                 now.isoformat(),
                 str(dp_id),
             ),
@@ -249,7 +251,12 @@ class DataPointRegistry:
 
     async def delete(self, dp_id: uuid.UUID) -> None:
         self.get_or_raise(dp_id)  # raises KeyError if not found
-        await self._db.execute_and_commit("DELETE FROM datapoints WHERE id=?", (str(dp_id),))
+        async with self._db.transaction():
+            await self._db.execute(
+                "DELETE FROM authz_node_roles WHERE node_type='datapoint' AND node_id=?",
+                (str(dp_id),),
+            )
+            await self._db.execute("DELETE FROM datapoints WHERE id=?", (str(dp_id),))
         del self._points[dp_id]
         del self._values[dp_id]
         logger.debug("DataPoint deleted: %s", dp_id)
@@ -343,6 +350,7 @@ def _row_to_datapoint(row: Any) -> DataPoint:
         mqtt_alias=row["mqtt_alias"],
         persist_value=bool(row["persist_value"]) if row["persist_value"] is not None else True,
         record_history=bool(row["record_history"]) if row["record_history"] is not None else True,
+        control_class=row["control_class"] if "control_class" in row.keys() else "room_local",
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

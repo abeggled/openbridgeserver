@@ -1,12 +1,14 @@
 """DataPoint Pydantic model — Phase 1."""
 
 from __future__ import annotations
-from typing import Any
+from typing import Any, Literal
 
 import datetime
 import uuid
 
 from pydantic import BaseModel, Field, model_validator
+
+ControlClassName = Literal["room_local", "central_plant"]
 
 
 class DataPoint(BaseModel):
@@ -19,6 +21,7 @@ class DataPoint(BaseModel):
     mqtt_alias: str | None = None
     persist_value: bool = True
     record_history: bool = True
+    control_class: ControlClassName = "room_local"
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
 
@@ -37,6 +40,7 @@ class DataPointCreate(BaseModel):
     mqtt_alias: str | None = None
     persist_value: bool = True
     record_history: bool = True
+    control_class: ControlClassName = "room_local"
 
 
 class DataPointUpdate(BaseModel):
@@ -47,4 +51,5 @@ class DataPointUpdate(BaseModel):
     mqtt_alias: str | None = None
     persist_value: bool | None = None
     record_history: bool | None = None
+    control_class: ControlClassName | None = None
     value: Any | None = None  # Allow setting the datapoint value via PATCH

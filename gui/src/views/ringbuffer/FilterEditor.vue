@@ -475,14 +475,12 @@ const expandingDevice = ref(false)
 const expandingDevicePa = ref('')
 const loadedSet = ref(null)
 
-// Fine-grained ownership (#478): admin can edit every set; non-admin users
-// only the sets they created themselves. New sets are admin-only in Phase 1.
-// Legacy sets (created_by == null) are admin-only.
+// The backend projects the central WRITE decision onto each visible set.
+// Admin remains a safe fallback for old cached responses during an upgrade.
 const canEdit = computed(() => {
-  if (!props.setId) return auth.isAdmin
-  const owner = loadedSet.value?.created_by
+  if (!props.setId) return true
   if (auth.isAdmin) return true
-  return owner != null && owner === auth.username
+  return loadedSet.value?.can_write === true
 })
 
 const deleteSetMessage = computed(() =>

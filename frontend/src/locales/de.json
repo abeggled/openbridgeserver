@@ -176,6 +176,9 @@
     "pinMismatch": "PINs stimmen nicht überein",
     "allowedUsers": "Zugelassene Benutzer (Admins haben immer Zugriff)",
     "noNonAdminUsers": "Keine nicht-Admin Benutzer vorhanden. Benutzer können in den Einstellungen angelegt werden.",
+    "targetDatapointsDenied": "{username} kann nicht zugewiesen werden: Zugriff auf {count} Datenpunkt(e) fehlt: {datapoints}",
+    "targetUsersInvalid": "Diese Benutzer können nicht zugewiesen werden: {usernames}",
+    "targetUsersRequireUserAccess": "Zugewiesene Benutzer erfordern die Berechtigung Benutzer.",
     "saved": "Gespeichert",
     "furtherActions": "Weitere Aktionen",
     "newNode": "Neuer Knoten",
@@ -905,7 +908,9 @@
       "widget": "Widget (Name)",
       "selectWidget": "— Widget wählen —",
       "noNamedWidgets": "— keine benannten Widgets —",
-      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben."
+      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben.",
+      "reference": "Referenz",
+      "chooseReference": "Referenz wählen …"
     },
     "zeitschaltuhr": {
       "title": "Zeitschaltuhr",
@@ -961,6 +966,7 @@
       "miniWidgetLabel": "Bezeichnung",
       "miniWidgetLabelPlaceholder": "z.B. Lampe Flur",
       "statusDatapoint": "Status-Datenpunkt (optional)",
+      "noImageConfigured": "Kein Bild konfiguriert",
       "widthPx": "Breite (px)",
       "heightPx": "Höhe (px)",
       "showInVisu": "In Visu anzeigen",
