@@ -271,7 +271,7 @@ async def _visu_subtree_ids(db: Database, node_id: str) -> list[str]:
     rows = await db.fetchall(
         """WITH RECURSIVE subtree(id) AS (
                SELECT id FROM visu_nodes WHERE id = ?
-               UNION ALL
+            UNION
                SELECT child.id FROM visu_nodes AS child JOIN subtree ON child.parent_id = subtree.id
            )
            SELECT id FROM subtree""",
