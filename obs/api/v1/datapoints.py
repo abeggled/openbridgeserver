@@ -20,6 +20,7 @@ from pydantic import BaseModel, field_serializer
 
 from obs.api.auth import get_admin_user, get_current_user, optional_current_user
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config
+from obs.api.v1.services.knx_traceability import KnxDatapointContextOut, build_datapoint_knx_context
 from obs.api.v1.sessions import validate_session
 from obs.core.event_bus import DataValueEvent, get_event_bus
 from obs.core.registry import get_registry
@@ -247,6 +248,17 @@ async def get_datapoint(
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
     return _enrich(dp)
+
+
+@router.get("/{dp_id}/knx-context", response_model=KnxDatapointContextOut)
+async def get_datapoint_knx_context(
+    dp_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> KnxDatapointContextOut:
+    if get_registry().get(dp_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    return await build_datapoint_knx_context(dp_id, db)
 
 
 @router.patch("/{dp_id}", response_model=DataPointOut)

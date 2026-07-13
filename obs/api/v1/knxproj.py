@@ -31,6 +31,11 @@ from pydantic import BaseModel, Field
 
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
+from obs.api.v1.services.knx_traceability import (
+    KnxDeviceDatapointsContextOut,
+    KnxTraceDatapointOut,
+    build_device_datapoints_context,
+)
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
 from obs.knxproj.parser import (
@@ -99,6 +104,7 @@ class KnxCommObjectOut(BaseModel):
     name: str
     datapoint_type: str
     ga_addresses: list[str]
+    datapoints: list[KnxTraceDatapointOut] = Field(default_factory=list)
 
 
 class KnxHierarchyLinkOut(BaseModel):
@@ -1132,12 +1138,31 @@ async def get_knx_device(
         if ga:
             by_id[co_id].ga_addresses.append(ga)
 
+    datapoint_context = await build_device_datapoints_context(pa, db)
+    datapoints_by_co: dict[str, list[KnxTraceDatapointOut]] = {
+        co.id: [dp for ga in co.group_addresses for dp in ga.datapoints] for co in datapoint_context.comm_objects
+    }
+    for co_id, datapoints in datapoints_by_co.items():
+        if co_id in by_id:
+            by_id[co_id].datapoints = datapoints
+
     device = _device_out_from_row(device_row)
     links_by_device_id = await _load_device_hierarchy_links(db, [device_row["id"]])
     return KnxDeviceDetailOut(
         **_with_hierarchy_links(device, links_by_device_id.get(device_row["id"])).model_dump(),
         comm_objects=list(by_id.values()),
     )
+
+
+@router.get("/devices/{pa}/datapoints", response_model=KnxDeviceDatapointsContextOut)
+async def get_knx_device_datapoints(
+    pa: str,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> KnxDeviceDatapointsContextOut:
+    if not await _knx_device_schema_ready(db):
+        return KnxDeviceDatapointsContextOut(pa=pa)
+    return await build_device_datapoints_context(pa, db)
 
 
 @router.put("/devices/{pa}/hierarchy-links", response_model=KnxDeviceDetailOut)

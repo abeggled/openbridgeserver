@@ -125,7 +125,41 @@
                 </Badge>
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
-              <div class="text-xs text-slate-500 font-mono mt-1 truncate">{{ JSON.stringify(b.config) }}</div>
+              <div v-if="b.adapter_type?.toUpperCase() === 'KNX'" class="mt-2 flex flex-col gap-2" data-testid="datapoint-knx-context">
+                <div v-if="knxContextLoading" class="text-xs text-slate-500">
+                  {{ $t('common.loading') }}
+                </div>
+                <div
+                  v-for="ga in bindingKnxGroupAddresses(b)"
+                  :key="`${b.id}:${ga.role}:${ga.address}`"
+                  class="rounded border border-slate-200 dark:border-slate-700 px-2 py-1.5"
+                >
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-mono text-xs text-blue-600 dark:text-blue-300">{{ ga.address }}</span>
+                    <Badge variant="muted" size="xs">{{ knxRoleLabel(ga.role) }}</Badge>
+                    <span class="truncate text-xs text-slate-700 dark:text-slate-200">{{ knxGaLabel(ga.address) }}</span>
+                    <span v-if="knxGaContext(ga.address)?.dpt" class="font-mono text-xs text-slate-500">{{ knxGaContext(ga.address).dpt }}</span>
+                  </div>
+                  <div v-if="knxGaContext(ga.address)?.devices?.length" class="mt-1 flex flex-col gap-1">
+                    <div
+                      v-for="device in knxGaContext(ga.address).devices"
+                      :key="`${ga.address}:${device.pa}`"
+                      class="text-xs text-slate-500"
+                    >
+                      <span class="font-mono text-slate-700 dark:text-slate-200">{{ device.pa }}</span>
+                      <span v-if="device.name" class="text-slate-700 dark:text-slate-200"> {{ device.name }}</span>
+                      <span v-if="device.comm_objects?.length">
+                        · {{ device.comm_objects.map(co => [co.number, co.name].filter(Boolean).join(' ')).filter(Boolean).join(', ') }}
+                      </span>
+                    </div>
+                  </div>
+                  <div v-else class="mt-1 text-xs text-slate-500">{{ $t('datapoints.detail.knxNoDevices') }}</div>
+                </div>
+                <div v-if="!bindingKnxGroupAddresses(b).length" class="text-xs text-slate-500 font-mono truncate">
+                  {{ JSON.stringify(b.config) }}
+                </div>
+              </div>
+              <div v-else class="text-xs text-slate-500 font-mono mt-1 truncate">{{ JSON.stringify(b.config) }}</div>
             </div>
             <div class="flex gap-1 shrink-0">
               <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')">
@@ -214,6 +248,8 @@ const dp                  = ref(null)
 const bindings            = ref([])
 const bindingsLoading     = ref(false)
 const bindingsLoaded      = ref(false)
+const knxContext          = ref(null)
+const knxContextLoading   = ref(false)
 const logicUsages         = ref([])
 const logicUsagesLoading  = ref(false)
 const showEdit            = ref(false)
@@ -251,7 +287,7 @@ onMounted(async () => {
   unsubWs = ws.onValue((id, value, quality) => {
     if (id === props.id && dp.value) { dp.value.value = value; dp.value.quality = quality }
   })
-  await Promise.all([loadBindings(), loadLogicUsages()])
+  await Promise.all([loadBindings(), loadLogicUsages(), loadKnxContext()])
 })
 onUnmounted(() => unsubWs?.())
 
@@ -277,6 +313,18 @@ async function loadBindings() {
   finally { bindingsLoading.value = false }
 }
 
+async function loadKnxContext() {
+  knxContextLoading.value = true
+  try {
+    const { data } = await dpApi.knxContext(props.id)
+    knxContext.value = data
+  } catch {
+    knxContext.value = { datapoint_id: props.id, group_addresses: [] }
+  } finally {
+    knxContextLoading.value = false
+  }
+}
+
 async function loadLogicUsages() {
   logicUsagesLoading.value = true
   try { const { data } = await logicApi.datapointUsages(props.id); logicUsages.value = data }
@@ -290,12 +338,42 @@ async function onEditSave(payload) {
 }
 
 function openEditBinding(b) { editBinding.value = b; showBindingForm.value = true }
-async function onBindingSave() { showBindingForm.value = false; await loadBindings() }
+async function onBindingSave() { showBindingForm.value = false; await Promise.all([loadBindings(), loadKnxContext()]) }
 
 function confirmDeleteBinding(b) { deleteBindingTarget.value = b; showBindingConfirm.value = true }
 async function doDeleteBinding() {
   await dpApi.deleteBinding(props.id, deleteBindingTarget.value.id)
-  await loadBindings()
+  await Promise.all([loadBindings(), loadKnxContext()])
+}
+
+function bindingKnxGroupAddresses(binding) {
+  const cfg = binding?.config || {}
+  const pairs = [
+    { role: 'group_address', address: cfg.group_address },
+    { role: 'state_group_address', address: cfg.state_group_address },
+  ]
+  const seen = new Set()
+  return pairs
+    .map(item => ({ ...item, address: String(item.address || '').trim() }))
+    .filter((item) => {
+      const key = `${item.role}:${item.address}`
+      if (!item.address || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+function knxGaContext(address) {
+  return (knxContext.value?.group_addresses || []).find(item => item.address === address)
+}
+
+function knxGaLabel(address) {
+  const ctx = knxGaContext(address)
+  return ctx?.name || ctx?.description || t('datapoints.detail.knxUnnamedGa')
+}
+
+function knxRoleLabel(role) {
+  return role === 'state_group_address' ? t('datapoints.detail.knxStateGa') : t('datapoints.detail.knxMainGa')
 }
 
 function coerceWriteValue(raw) {
