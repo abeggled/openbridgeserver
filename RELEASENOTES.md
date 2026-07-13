@@ -37,6 +37,7 @@
 * Security (Upstream PR #956): bind legacy SHA-512 fallback verification to the app bundle filename.
 * Security (Upstream PR #955): keep updater checksum notes compatible with legacy app-bundle verification.
 * Security (Upstream PR #954): prevent API-client URL variables from changing request authority.
+* Security (Upstream PR #953): redact MESSAGE provider credentials in adapter responses without overwriting stored secrets.
 * Security (Upstream PR #952): prevent MQTT writes from mutating bindingless internal datapoints.
 * QA/CI: The i18n hard gate now runs reliably with macOS Bash 3.2 when no explicit diff range is provided, avoiding local pre-push failures caused by empty Bash arrays. https://github.com/abeggled/openbridgeserver/pull/898
 * Release: `obs-update` and `obs-admin` self-update steps now use atomic `install -m 755` instead of `cp + chmod`, preventing a self-overwrite race that could truncate the running script in-place. https://github.com/abeggled/openbridgeserver/issues/939
