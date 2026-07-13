@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
+from obs.api.audit import contract_audit
 from obs.api.auth import get_admin_user
 from obs.config import get_settings
 
@@ -144,7 +145,11 @@ async def scan_knx_gateways(
     ]
 
 
-@router.post("/keyfile", response_model=KeyfileParseResult)
+@router.post(
+    "/keyfile",
+    response_model=KeyfileParseResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/knx/keyfile"))],
+)
 async def upload_keyfile(
     file: UploadFile = File(...),
     password: str = Form(...),
@@ -222,7 +227,11 @@ async def upload_keyfile(
     )
 
 
-@router.delete("/keyfile/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/keyfile/{file_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/knx/keyfile/{file_id}"))],
+)
 async def delete_keyfile(
     file_id: str,
     _admin: str = Depends(get_admin_user),

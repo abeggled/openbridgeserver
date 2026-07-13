@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from obs.api.audit import contract_audit
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
 from obs.api.authz_service import (
@@ -294,6 +295,7 @@ async def list_bindings(
     "/{dp_id}/bindings",
     response_model=BindingOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/datapoints/{dp_id}/bindings"))],
 )
 async def create_binding(
     dp_id: uuid.UUID,
@@ -371,7 +373,11 @@ async def create_binding(
     return _row_out(row, name_map)
 
 
-@router.patch("/{dp_id}/bindings/{binding_id}", response_model=BindingOut)
+@router.patch(
+    "/{dp_id}/bindings/{binding_id}",
+    response_model=BindingOut,
+    dependencies=[Depends(contract_audit("PATCH", "/api/v1/datapoints/{dp_id}/bindings/{binding_id}"))],
+)
 async def update_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,
@@ -462,7 +468,11 @@ async def update_binding(
     return _row_out(updated, name_map)
 
 
-@router.delete("/{dp_id}/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{dp_id}/bindings/{binding_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/datapoints/{dp_id}/bindings/{binding_id}"))],
+)
 async def delete_binding(
     dp_id: uuid.UUID,
     binding_id: uuid.UUID,

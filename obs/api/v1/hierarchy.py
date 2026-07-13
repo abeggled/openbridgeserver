@@ -26,9 +26,10 @@ import uuid as uuid_mod
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from obs.api.audit import contract_audit, set_contract_audit_summary
 from obs.api.auth import Principal, get_admin_user, get_current_principal
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
@@ -253,7 +254,12 @@ async def list_trees(
     return [_row_to_tree(r) for r in rows if r["id"] in allowed_tree_ids]
 
 
-@router.post("/trees", response_model=HierarchyTree, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/trees",
+    response_model=HierarchyTree,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/hierarchy/trees"))],
+)
 async def create_tree(
     body: HierarchyTreeCreate,
     _user: str = Depends(get_admin_user),
@@ -269,7 +275,11 @@ async def create_tree(
     return _row_to_tree(row)
 
 
-@router.put("/trees/{tree_id}", response_model=HierarchyTree)
+@router.put(
+    "/trees/{tree_id}",
+    response_model=HierarchyTree,
+    dependencies=[Depends(contract_audit("PUT", "/api/v1/hierarchy/trees/{tree_id}"))],
+)
 async def update_tree(
     tree_id: str,
     body: HierarchyTreeUpdate,
@@ -291,7 +301,11 @@ async def update_tree(
     return _row_to_tree(row)
 
 
-@router.delete("/trees/{tree_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/trees/{tree_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/hierarchy/trees/{tree_id}"))],
+)
 async def delete_tree(
     tree_id: str,
     _user: str = Depends(get_admin_user),
@@ -330,7 +344,12 @@ async def get_tree_nodes(
     return _build_tree(flat)
 
 
-@router.post("/nodes", response_model=HierarchyNode, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/nodes",
+    response_model=HierarchyNode,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/hierarchy/nodes"))],
+)
 async def create_node(
     body: HierarchyNodeCreate,
     _user: str = Depends(get_admin_user),
@@ -358,7 +377,11 @@ async def create_node(
     return _row_to_node(row)
 
 
-@router.put("/nodes/{node_id}", response_model=HierarchyNode)
+@router.put(
+    "/nodes/{node_id}",
+    response_model=HierarchyNode,
+    dependencies=[Depends(contract_audit("PUT", "/api/v1/hierarchy/nodes/{node_id}"))],
+)
 async def update_node(
     node_id: str,
     body: HierarchyNodeUpdate,
@@ -381,7 +404,11 @@ async def update_node(
     return _row_to_node(row)
 
 
-@router.put("/nodes/{node_id}/move", response_model=HierarchyNode)
+@router.put(
+    "/nodes/{node_id}/move",
+    response_model=HierarchyNode,
+    dependencies=[Depends(contract_audit("PUT", "/api/v1/hierarchy/nodes/{node_id}/move"))],
+)
 async def move_node(
     node_id: str,
     body: HierarchyNodeMove,
@@ -410,7 +437,11 @@ async def move_node(
     return _row_to_node(row)
 
 
-@router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/nodes/{node_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/hierarchy/nodes/{node_id}"))],
+)
 async def delete_node(
     node_id: str,
     _user: str = Depends(get_admin_user),
@@ -536,7 +567,11 @@ async def get_datapoint_nodes(
     ]
 
 
-@router.post("/links", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/links",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/hierarchy/links"))],
+)
 async def create_link(
     body: HierarchyLinkCreate,
     _user: str = Depends(get_admin_user),
@@ -565,7 +600,11 @@ async def create_link(
     return {"id": lid, "node_id": body.node_id, "datapoint_id": body.datapoint_id}
 
 
-@router.delete("/links", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/links",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/hierarchy/links"))],
+)
 async def delete_link(
     node_id: str = Query(...),
     datapoint_id: str = Query(...),
@@ -704,11 +743,24 @@ async def search_nodes(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/import-from-ets", response_model=ImportResult, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/import-from-ets",
+    response_model=ImportResult,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/hierarchy/import-from-ets"))],
+)
 async def import_from_ets(
     body: EtsImportRequest,
+    request: Request = None,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> ImportResult:
     """Erzeugt einen neuen Hierarchiebaum aus importierten ETS-Daten."""
-    return await create_ets_hierarchy(db, body)
+    result = await create_ets_hierarchy(db, body)
+    if request is not None:
+        set_contract_audit_summary(
+            request,
+            resource_count=result.nodes_created + result.links_created,
+            payload=body.model_dump(),
+        )
+    return result

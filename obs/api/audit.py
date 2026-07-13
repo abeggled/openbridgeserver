@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import AsyncIterator, Callable
 from hashlib import sha256
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 
-from obs.api.auth import Principal, optional_current_user
+from obs.api.auth import Principal, get_current_principal, optional_current_user
 from obs.db.database import Database, get_db
+
+logger = logging.getLogger(__name__)
 
 
 class AuditOutcome(StrEnum):
@@ -111,6 +115,19 @@ def audit_payload_sha256(value: Any) -> str:
     return sha256(payload).hexdigest()
 
 
+def set_contract_audit_summary(request: Request, *, resource_count: int, payload: Any) -> None:
+    """Attach a redacted bulk summary for the active contract dependency."""
+    request.state.contract_audit_details = {
+        "resource_count": resource_count,
+        "payload_sha256": audit_payload_sha256(payload),
+    }
+
+
+def set_contract_audit_outcome(request: Request, outcome: AuditOutcome) -> None:
+    """Override the automatic success outcome for a returned domain result."""
+    request.state.contract_audit_outcome = outcome
+
+
 class AuditLogWriter:
     def __init__(self, db: Database, context: AuditContext) -> None:
         self._db = db
@@ -203,3 +220,99 @@ async def get_audit_log_writer(
     db: Database = Depends(get_db),
 ) -> AuditLogWriter:
     return AuditLogWriter(db=db, context=build_audit_context(request, current_user))
+
+
+def _path_resource_id(request: Request) -> str | None:
+    """Choose the most specific non-secret identifier from matched path params."""
+    path_params = request.path_params
+    for name in (
+        "binding_id",
+        "instance_id",
+        "source_instance_id",
+        "dp_id",
+        "node_id",
+        "tree_id",
+        "file_id",
+        "key_id",
+        "pa",
+        "adapter_type",
+        "name",
+    ):
+        value = path_params.get(name)
+        if value is not None:
+            return str(value)
+    return None
+
+
+async def _write_failure_event(
+    writer: AuditLogWriter,
+    method: str,
+    path: str,
+    resource_id: str | None,
+    outcome: AuditOutcome,
+) -> None:
+    """Best-effort secondary audit that never hides the endpoint exception."""
+    try:
+        await writer.write_contract(method, path, resource_id=resource_id, outcome=outcome)
+    except Exception:
+        logger.exception("Could not persist %s contract audit for %s %s", outcome, method, path)
+
+
+def contract_audit(method: str, path: str) -> Callable[..., AsyncIterator[None]]:
+    """Create a route dependency enforcing its declared audit delivery mode.
+
+    Atomic contracts wrap the complete endpoint in the task-local DB transaction;
+    the success event is the final write before commit.  Denied/failed events are
+    emitted only after that transaction has rolled back, so they remain durable.
+    Result contracts record the outcome after the external operation returns.
+    """
+    from obs.api.v1.security_contract_registry import AuditMode, ConcealmentMode, get_route_security_contract
+
+    contract = get_route_security_contract(method, path)
+
+    async def _dependency(
+        request: Request,
+        principal: Principal = Depends(get_current_principal),
+        db: Database = Depends(get_db),
+    ) -> AsyncIterator[None]:
+        writer = AuditLogWriter(db, build_audit_context(request, principal))
+        resource_id = _path_resource_id(request)
+
+        def details() -> dict[str, Any]:
+            return getattr(request.state, "contract_audit_details", {})
+
+        def outcome() -> AuditOutcome:
+            return getattr(request.state, "contract_audit_outcome", AuditOutcome.SUCCESS)
+
+        try:
+            if contract.audit_mode == AuditMode.ATOMIC:
+                async with db.transaction():
+                    yield
+                    await writer.write_contract(
+                        method,
+                        path,
+                        resource_id=resource_id,
+                        details=details(),
+                        outcome=outcome(),
+                        commit=False,
+                    )
+            else:
+                yield
+                await writer.write_contract(method, path, resource_id=resource_id, details=details(), outcome=outcome())
+        except HTTPException as exc:
+            denied = exc.status_code in {401, 403} or (exc.status_code == 404 and contract.concealment == ConcealmentMode.NOT_FOUND)
+            await _write_failure_event(
+                writer,
+                method,
+                path,
+                resource_id,
+                AuditOutcome.DENIED if denied else AuditOutcome.FAILED,
+            )
+            raise
+        except Exception:
+            await _write_failure_event(writer, method, path, resource_id, AuditOutcome.FAILED)
+            raise
+
+    _dependency.__name__ = f"audit_{method.lower()}_{contract.audit_action.replace('.', '_')}"
+    _dependency.__audit_contract__ = (method.upper(), path)  # type: ignore[attr-defined]
+    return _dependency

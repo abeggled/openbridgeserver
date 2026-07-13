@@ -1342,7 +1342,12 @@ class Database:
         task = asyncio.current_task()
         assert task is not None
         if task in self._transaction_connections:
-            raise RuntimeError("Nested database transactions are not supported")
+            # Mutation endpoints own the outer transaction so their domain write
+            # and canonical audit event commit together.  Existing domain helpers
+            # may already describe a smaller transaction boundary; reusing the
+            # task-local connection lets the outer boundary remain authoritative.
+            yield
+            return
 
         # Checkpoints, disconnect/restore, and explicit transactions all hold this
         # lifecycle guard. A restore therefore cannot close or replace the database

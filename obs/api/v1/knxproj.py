@@ -22,6 +22,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
@@ -29,6 +30,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from obs.api.audit import AuditOutcome, contract_audit, set_contract_audit_outcome, set_contract_audit_summary
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
@@ -749,9 +751,14 @@ async def _create_requested_hierarchies(
     return results
 
 
-@router.post("/import", response_model=ImportResult)
+@router.post(
+    "/import",
+    response_model=ImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/knxproj/import"))],
+)
 async def import_knxproj_file(
     file: UploadFile = File(...),
+    request: Request = None,
     password: str | None = Form(None),
     adapter_name: str | None = Query(
         None,
@@ -818,15 +825,21 @@ async def import_knxproj_file(
             if code == "INVALID_PASSWORD"
             else "Die .knxproj-Datei konnte nicht verarbeitet werden."
         )
+        if request is not None:
+            set_contract_audit_outcome(request, AuditOutcome.FAILED)
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": detail, "error_code": code})
     except Exception:
         logger.exception("Unerwarteter Fehler beim Parsen der .knxproj-Datei")
+        if request is not None:
+            set_contract_audit_outcome(request, AuditOutcome.FAILED)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Unerwarteter Fehler beim Parsen.", "error_code": "PARSE_ERROR"},
         )
 
     if not records:
+        if request is not None:
+            set_contract_audit_outcome(request, AuditOutcome.FAILED)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
@@ -993,7 +1006,7 @@ async def import_knxproj_file(
     if extra:
         msg += ", " + ", ".join(extra)
 
-    return ImportResult(
+    result = ImportResult(
         imported=len(records),
         created=created,
         updated=updated,
@@ -1003,11 +1016,26 @@ async def import_knxproj_file(
         hierarchies=hierarchy_results,
         message=msg,
     )
+    if request is not None:
+        set_contract_audit_summary(
+            request,
+            resource_count=result.imported + result.created + result.updated,
+            payload={
+                "group_addresses": sorted(record.address for record in records),
+                "hierarchy_modes": sorted(requested_hierarchy_modes),
+            },
+        )
+    return result
 
 
-@router.post("/import-csv", response_model=ImportResult)
+@router.post(
+    "/import-csv",
+    response_model=ImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/knxproj/import-csv"))],
+)
 async def import_ga_csv_file(
     file: UploadFile = File(...),
+    request: Request = None,
     adapter_name: str | None = Query(
         None,
         description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
@@ -1070,20 +1098,34 @@ async def import_ga_csv_file(
 
     # Ohne Adapter: nur GA-Tabelle → fertig
     if not adapter_name:
-        return ImportResult(
+        result = ImportResult(
             imported=len(records),
             message=f"{len(records)} Gruppenadressen importiert (ohne DataPoints — adapter_name fehlt)",
         )
+        if request is not None:
+            set_contract_audit_summary(
+                request,
+                resource_count=result.imported,
+                payload={"group_addresses": sorted(record.address for record in records)},
+            )
+        return result
 
     # Mit Adapter: DataPoints + Bindings bulk anlegen
     created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
 
-    return ImportResult(
+    result = ImportResult(
         imported=created + updated,
         created=created,
         updated=updated,
         message=f"{created} DataPoints neu erstellt, {updated} aktualisiert",
     )
+    if request is not None:
+        set_contract_audit_summary(
+            request,
+            resource_count=result.imported,
+            payload={"group_addresses": sorted(record.address for record in records)},
+        )
+    return result
 
 
 @router.get("/devices", response_model=KnxDevicePage)
@@ -1268,10 +1310,15 @@ async def get_knx_device(
     )
 
 
-@router.put("/devices/{pa}/hierarchy-links", response_model=KnxDeviceDetailOut)
+@router.put(
+    "/devices/{pa}/hierarchy-links",
+    response_model=KnxDeviceDetailOut,
+    dependencies=[Depends(contract_audit("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"))],
+)
 async def set_knx_device_hierarchy_links(
     pa: str,
     body: KnxDeviceHierarchyLinksIn,
+    request: Request = None,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> KnxDeviceDetailOut:
@@ -1298,7 +1345,10 @@ async def set_knx_device_hierarchy_links(
             "INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
             [(str(uuid_mod.uuid4()), node_id, device_row["id"], now) for node_id in node_ids],
         )
-    await db.commit()
+    if not getattr(db, "in_transaction", False):
+        await db.commit()
+    if request is not None:
+        set_contract_audit_summary(request, resource_count=len(node_ids), payload=sorted(node_ids))
     admin_principal = Principal(subject=_user, type="user", is_admin=True)
     return await get_knx_device(pa=pa, _user=admin_principal, db=db)
 
@@ -1428,10 +1478,18 @@ async def list_group_addresses(
     )
 
 
-@router.delete("/group-addresses", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/group-addresses",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/knxproj/group-addresses"))],
+)
 async def clear_group_addresses(
+    request: Request = None,
     _user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> None:
     """Alle importierten KNX Gruppenadressen löschen."""
+    addresses = [row["address"] for row in await db.fetchall("SELECT address FROM knx_group_addresses ORDER BY address")]
     await db.execute_and_commit("DELETE FROM knx_group_addresses")
+    if request is not None:
+        set_contract_audit_summary(request, resource_count=len(addresses), payload=addresses)

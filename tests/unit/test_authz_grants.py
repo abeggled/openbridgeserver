@@ -734,11 +734,26 @@ async def test_normal_commit_cannot_interleave_with_replace_transaction(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_nested_database_transaction_is_rejected(db: Database) -> None:
-    with pytest.raises(RuntimeError, match="Nested database transactions"):
+async def test_nested_database_transaction_joins_outer_boundary(db: Database) -> None:
+    with pytest.raises(RuntimeError, match="roll back outer boundary"):
         async with db.transaction():
             async with db.transaction():
-                pass
+                await db.execute_and_commit("INSERT INTO app_settings (key, value) VALUES ('nested', 'joined')")
+            raise RuntimeError("roll back outer boundary")
+
+    assert await db.fetchone("SELECT 1 FROM app_settings WHERE key='nested'") is None
+
+
+@pytest.mark.asyncio
+async def test_transaction_connection_is_not_inherited_by_detached_child(db: Database) -> None:
+    async with db.transaction():
+        child_in_transaction = await asyncio.create_task(_read_transaction_state(db))
+
+    assert child_in_transaction is False
+
+
+async def _read_transaction_state(db: Database) -> bool:
+    return db.in_transaction
 
 
 @pytest.mark.asyncio
