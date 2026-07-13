@@ -63,6 +63,9 @@ class WebSocketManager:
             tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None, bool],
         ] = {}
         self._datapoint_scope_checks: dict[str, DatapointScopeCheck] = {}
+        # Tracks which connections may receive non-DP action broadcasts (e.g. logic_run).
+        # True for authenticated (JWT/API-key) connections; False for anonymous page-scoped viewers.
+        self._action_access: dict[str, bool] = {}
 
     async def connect(
         self,
@@ -72,6 +75,7 @@ class WebSocketManager:
         log_access_check: LogAccessCheck | None = None,
         datapoint_scope_check: DatapointScopeCheck | None = None,
         ringbuffer_metadata: bool = False,
+        action_access: bool = False,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -86,11 +90,13 @@ class WebSocketManager:
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check, ringbuffer_metadata)
         if datapoint_scope_check is not None:
             self._datapoint_scope_checks[conn_id] = datapoint_scope_check
+        self._action_access[conn_id] = action_access
         logger.debug("WS client connected: %s  (total: %d)", conn_id[:8], len(self._connections))
         return conn_id
 
     async def disconnect(self, conn_id: str) -> None:
         self._datapoint_scope_checks.pop(conn_id, None)
+        self._action_access.pop(conn_id, None)
         entry = self._connections.pop(conn_id, None)
         if entry:
             ws = entry[0]
@@ -249,7 +255,7 @@ class WebSocketManager:
                 if log_access_check is not None and not await log_access_check():
                     self._set_log_access(conn_id, False)
                     continue
-            if allowed_ids is not None and scoped_dp_id is None:
+            if allowed_ids is not None and scoped_dp_id is None and not self._action_access.get(conn_id, False):
                 continue
             if scoped_dp_id is not None and allowed_ids is not None and scoped_dp_id not in allowed_ids:
                 continue
@@ -834,6 +840,7 @@ async def websocket_endpoint(
         log_access_check=(lambda: _ws_has_log_access(user, effective_api_key)) if log_access else None,
         datapoint_scope_check=datapoint_scope_check,
         ringbuffer_metadata=authenticated_user,
+        action_access=authenticated_user,
         subprotocol=selected_subprotocol,
     )
 

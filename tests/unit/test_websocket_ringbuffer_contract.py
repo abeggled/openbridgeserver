@@ -271,6 +271,31 @@ async def test_broadcast_blocks_unscoped_messages_for_scoped_connections():
 
 
 @pytest.mark.asyncio
+async def test_broadcast_allows_action_messages_for_authenticated_scoped_connections():
+    """Non-admin authenticated (JWT/API-key) connections with a DP scope must
+    still receive non-DP action broadcasts such as logic_run.
+    Only anonymous page-scoped connections (action_access=False) are blocked."""
+    manager = WebSocketManager()
+    admin_ws = _FakeWebSocket()
+    authenticated_non_admin_ws = _FakeWebSocket()
+    anonymous_page_ws = _FakeWebSocket()
+
+    # Admin: unrestricted
+    await manager.connect(admin_ws)
+    # Non-admin JWT user: scoped DPs, but action_access=True
+    await manager.connect(authenticated_non_admin_ws, allowed_dp_ids={"some-dp"}, action_access=True)
+    # Anonymous Visu viewer: page-scoped, action_access=False (default)
+    await manager.connect(anonymous_page_ws, allowed_dp_ids={"some-dp"}, action_access=False)
+
+    msg = {"action": "logic_run", "graph_id": "graph-1", "outputs": {"node-1": {"value": 42}}}
+    await manager.broadcast(msg)
+
+    assert admin_ws.messages == [msg]
+    assert authenticated_non_admin_ws.messages == [msg]
+    assert anonymous_page_ws.messages == []
+
+
+@pytest.mark.asyncio
 async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     ws = _FakeWebSocket()
     manager = WebSocketManager()
