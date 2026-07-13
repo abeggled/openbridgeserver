@@ -14,6 +14,7 @@ from obs.api.v1.security import (
     get_url_target_allowlist,
 )
 from obs.config import SecuritySettings, Settings, override_settings
+from obs.db.database import Database
 from obs.security.url_targets import (
     UrlTargetAllowEntry,
     UrlTargetAllowlistReadError,
@@ -30,6 +31,16 @@ from obs.security.url_targets import (
 
 def _settings_for(path) -> Settings:
     return Settings(security=SecuritySettings(jwt_secret="unit-test-secret-32-chars-xxx", url_target_allowlist_path=str(path)))
+
+
+@pytest.fixture
+async def audit_db() -> Database:
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        yield db
+    finally:
+        await db.disconnect()
 
 
 def test_private_ip_is_blocked_without_allowlist(tmp_path):
@@ -538,36 +549,36 @@ def test_url_target_decision_api_detail():
 
 
 @pytest.mark.asyncio
-async def test_security_api_rejects_invalid_create_target(tmp_path):
+async def test_security_api_rejects_invalid_create_target(tmp_path, audit_db):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
     with pytest.raises(HTTPException) as exc:
-        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=" "), admin="admin")
+        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=" "), admin="admin", db=audit_db)
 
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["not a host", "Gugeseli", "10.38.113.23/33", "http://internal.example:99999/status"])
-async def test_security_api_rejects_nonsense_create_targets(tmp_path, target):
+async def test_security_api_rejects_nonsense_create_targets(tmp_path, target, audit_db):
     allowlist = tmp_path / "allow.yaml"
     override_settings(_settings_for(allowlist))
 
     with pytest.raises(HTTPException) as exc:
-        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=target), admin="admin")
+        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target=target), admin="admin", db=audit_db)
 
     assert exc.value.status_code == 400
     assert not allowlist.exists()
 
 
 @pytest.mark.asyncio
-async def test_security_api_rejects_unresolvable_fqdn_create_target(tmp_path):
+async def test_security_api_rejects_unresolvable_fqdn_create_target(tmp_path, audit_db):
     allowlist = tmp_path / "allow.yaml"
     override_settings(_settings_for(allowlist))
 
     with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
         with pytest.raises(HTTPException) as exc:
-            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="internal.example"), admin="admin")
+            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="internal.example"), admin="admin", db=audit_db)
 
     assert exc.value.status_code == 400
     assert "FQDN target must resolve" in exc.value.detail
@@ -575,12 +586,12 @@ async def test_security_api_rejects_unresolvable_fqdn_create_target(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_security_api_reports_allowlist_write_error(tmp_path):
+async def test_security_api_reports_allowlist_write_error(tmp_path, audit_db):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
     with patch("obs.api.v1.security.add_allowed_url_target", side_effect=OSError("permission denied")):
         with pytest.raises(HTTPException) as exc:
-            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="10.38.113.23/32", reason="unit"), admin="admin")
+            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="10.38.113.23/32", reason="unit"), admin="admin", db=audit_db)
 
     assert exc.value.status_code == 500
     assert "Could not write URL target allowlist" in exc.value.detail
@@ -588,12 +599,13 @@ async def test_security_api_reports_allowlist_write_error(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_security_api_happy_paths(tmp_path):
+async def test_security_api_happy_paths(tmp_path, audit_db):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
     created = await create_url_target_allowlist_entry(
         UrlTargetAllowlistCreate(target="10.38.113.23", reason="unit"),
         admin="admin",
+        db=audit_db,
     )
     assert created.target == "10.38.113.23/32"
     assert created.created_by == "admin"
@@ -608,7 +620,7 @@ async def test_security_api_happy_paths(tmp_path):
     assert checked.allowed is True
     assert checked.allowlisted_by == "10.38.113.23/32"
 
-    deleted = await delete_url_target_allowlist_entry("10.38.113.23/32", _admin="admin")
+    deleted = await delete_url_target_allowlist_entry("10.38.113.23/32", _admin="admin", db=audit_db)
     assert deleted == {"deleted": True}
 
 
@@ -642,7 +654,7 @@ async def test_security_api_check_runs_target_evaluation_off_event_loop(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_security_api_create_runs_allowlist_write_off_event_loop(tmp_path):
+async def test_security_api_create_runs_allowlist_write_off_event_loop(tmp_path, audit_db):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
     with patch("obs.api.v1.security.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
@@ -657,6 +669,7 @@ async def test_security_api_create_runs_allowlist_write_off_event_loop(tmp_path)
         created = await create_url_target_allowlist_entry(
             UrlTargetAllowlistCreate(target="10.38.113.23/32", reason="unit"),
             admin="admin",
+            db=audit_db,
         )
 
     mock_to_thread.assert_awaited_once_with(
@@ -670,13 +683,13 @@ async def test_security_api_create_runs_allowlist_write_off_event_loop(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_security_api_delete_error_paths(tmp_path):
+async def test_security_api_delete_error_paths(tmp_path, audit_db):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
     with pytest.raises(HTTPException) as missing:
-        await delete_url_target_allowlist_entry("10.38.113.23/32", _admin="admin")
+        await delete_url_target_allowlist_entry("10.38.113.23/32", _admin="admin", db=audit_db)
     assert missing.value.status_code == 404
 
     with pytest.raises(HTTPException) as invalid:
-        await delete_url_target_allowlist_entry(" ", _admin="admin")
+        await delete_url_target_allowlist_entry(" ", _admin="admin", db=audit_db)
     assert invalid.value.status_code == 400
