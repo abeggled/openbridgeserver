@@ -144,10 +144,12 @@ if r:
         sha256_asset = next((a for a in r['assets'] if 'app-bundle' in a['name'] and a['name'].endswith('.tar.gz.sha256')), None)
         if sha256_asset:
             print('sha256url:' + sha256_asset['browser_download_url'])
-        else:
+        elif bundle:
             expected_sha512_name = bundle['name'] + '.sha512'
             sha512 = next((a for a in r['assets'] if a['name'] == expected_sha512_name), None)
             print('sha512url:' + sha512['browser_download_url'] if sha512 else '')
+        else:
+            print('')
 ")
 
 BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
