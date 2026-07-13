@@ -211,7 +211,7 @@ async def test_atomic_contract_event_commits_and_rolls_back_with_mutation():
 
         with pytest.raises(RuntimeError, match="force rollback"):
             async with db.transaction():
-                await db.execute("UPDATE app_settings SET value='rolled-back' WHERE key='wave14.atomic'")
+                await db.execute_and_commit("UPDATE app_settings SET value='rolled-back' WHERE key='wave14.atomic'")
                 await writer.write_contract(
                     "PUT",
                     "/api/v1/system/settings",

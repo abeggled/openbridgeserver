@@ -1411,7 +1411,11 @@ class Database:
 
     async def execute_and_commit(self, sql: str, params: Any = ()) -> aiosqlite.Cursor:
         cur = await self.conn.execute(sql, params)
-        await self.conn.commit()
+        # An explicit task-local transaction owns its commit boundary.  Legacy
+        # mutation helpers may still call this method inside that boundary; an
+        # early commit here would make the mutation survive a later audit failure.
+        if not self.in_transaction:
+            await self.conn.commit()
         return cur
 
 
