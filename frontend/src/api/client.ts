@@ -22,6 +22,17 @@ function extractDetail(body: unknown, fallback: string): string {
   return String(detail)
 }
 
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+    this.name = 'ApiRequestError'
+  }
+}
+
 // ── Token-Verwaltung ──────────────────────────────────────────────────────────
 
 export function getJwt(): string | null {
@@ -123,7 +134,15 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => null)
-    throw new Error(extractDetail(body, res.statusText))
+    const detail = body && typeof body === 'object'
+      ? (body as Record<string, unknown>).detail
+      : null
+    if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+      const details = detail as Record<string, unknown>
+      const code = typeof details.code === 'string' ? details.code : undefined
+      throw new ApiRequestError(code ?? res.statusText, code, details)
+    }
+    throw new ApiRequestError(extractDetail(body, res.statusText))
   }
 
   // 204 No Content
@@ -156,7 +175,7 @@ export const auth = {
 
 // ── Visu-Nodes ────────────────────────────────────────────────────────────────
 
-import type { VisuNode, PageConfig, PinAuthResponse, UserResponse } from '@/types'
+import type { VisuNode, VisuNodeUpdate, PageConfig, PinAuthResponse, UserResponse } from '@/types'
 
 export const visu = {
   tree: () => request<VisuNode[]>('/visu/tree'),
@@ -166,7 +185,7 @@ export const visu = {
   createNode: (data: Partial<VisuNode>) =>
     request<VisuNode>('/visu/nodes', { method: 'POST', body: JSON.stringify(data) }),
 
-  updateNode: (id: string, data: Partial<VisuNode>) =>
+  updateNode: (id: string, data: VisuNodeUpdate) =>
     request<VisuNode>(`/visu/nodes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   deleteNode: (id: string) =>

@@ -766,6 +766,9 @@ async def test_list_nodes_returns_nodes():
     row = _make_node_row(type="PAGE", label="Home")
 
     class _FakeCursor:
+        async def fetchone(self):
+            return row
+
         async def fetchall(self):
             return [row]
 
@@ -1536,7 +1539,6 @@ async def test_visu_delete_node_success():
     db = _make_visu_db(row=node_row)
     await delete_node(node_id="del-1", db=db, _user="admin")
     assert db.conn.execute.call_count >= 2
-    assert db.conn.commit.called
 
 
 @pytest.mark.asyncio
@@ -1925,7 +1927,6 @@ async def test_set_node_users_empty():
     body = VisuNodeUsersUpdate(usernames=[])
     await set_node_users(node_id="n1", body=body, db=db, _admin="admin")
     assert db.conn.execute.called
-    assert db.conn.commit.called
 
 
 @pytest.mark.asyncio

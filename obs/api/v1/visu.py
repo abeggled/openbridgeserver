@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
-from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user, limiter
+from obs.api.auth import Principal, get_admin_user, get_current_principal, limiter
 from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import authorize_visu_page, filter_authorized_datapoints
@@ -46,6 +46,7 @@ from obs.models.visu import (
     VisuImportRequest,
     VisuNode,
     VisuNodeCreate,
+    VisuNodeSummary,
     VisuNodeUpdate,
     VisuNodeUsersUpdate,
     WidgetInstance,
@@ -54,6 +55,7 @@ from obs.models.visu import (
 router = APIRouter(tags=["visu"])
 _visu_bearer = HTTPBearer(auto_error=False)
 _visu_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_UNSET = object()
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
@@ -76,6 +78,26 @@ def _row_to_node(row, *, access: str | None = None) -> VisuNode:
         access=access,
         access_pin=None,  # PIN-Hash niemals in der API zurückgeben
         page_config=PageConfig(**pc) if pc else None,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_summary(
+    row,
+    *,
+    access: str | None = None,
+    parent_id: str | None | object = _UNSET,
+) -> VisuNodeSummary:
+    """SQLite row to the deliberately redacted navigation DTO."""
+    return VisuNodeSummary(
+        id=row["id"],
+        parent_id=row["parent_id"] if parent_id is _UNSET else parent_id,
+        name=row["name"],
+        type=row["type"],
+        order=row["node_order"],
+        icon=row["icon"],
+        access=access,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -110,8 +132,9 @@ async def _resolve_access(db: Database, node_id: str) -> str:
             row = await cur.fetchone()
         if not row:
             break
-        if row["access_mode"] is not None:
-            return row["access_mode"]
+        access_mode = row["access_mode"] if "access_mode" in row.keys() else row["access"]
+        if access_mode is not None:
+            return access_mode
         current_id = row["parent_id"]
     return "public"  # Fallback: kein Knoten hat explizites Access → public
 
@@ -132,8 +155,9 @@ async def _resolve_access_with_node(db: Database, node_id: str) -> tuple[str, st
             row = await cur.fetchone()
         if not row:
             break
-        if row["access_mode"] is not None:
-            return row["access_mode"], current_id
+        access_mode = row["access_mode"] if "access_mode" in row.keys() else row["access"]
+        if access_mode is not None:
+            return access_mode, current_id
         current_id = row["parent_id"]
     return "public", None
 
@@ -159,7 +183,8 @@ async def _resolve_access_with_node_overrides(
             row = await cur.fetchone()
         if not row:
             break
-        access = access_overrides[current_id] if access_overrides and current_id in access_overrides else row["access_mode"]
+        stored_access = row["access_mode"] if "access_mode" in row.keys() else row["access"]
+        access = access_overrides[current_id] if access_overrides and current_id in access_overrides else stored_access
         if access is not None:
             return access, current_id
         current_id = parent_overrides[current_id] if parent_overrides and current_id in parent_overrides else row["parent_id"]
@@ -199,11 +224,31 @@ async def _optional_visu_principal(
 def _principal_from_dependency(value: Principal | str | None) -> Principal | None:
     if value is None or isinstance(value, Principal):
         return value
+    if not isinstance(value, str):
+        return None
     return Principal(
         subject=value,
         type="api_key" if value.startswith("api_key:") else "user",
         is_admin=value == "admin",
     )
+
+
+async def _can_discover_node(db: Database, node_id: str, principal: Principal | None) -> bool:
+    access, _ = await _resolve_access_with_node(db, node_id)
+    if access != "user":
+        return True
+    if principal is None:
+        return False
+    if principal.type == "user" and principal.is_admin:
+        return True
+    return await authorize_visu_page(db, principal, node_id, action=AuthzAction.READ)
+
+
+async def _require_discoverable_node(db: Database, node_id: str, principal: Principal | None) -> VisuNode:
+    node = await _get_node_or_404(db, node_id)
+    if not await _can_discover_node(db, node_id, principal):
+        raise HTTPException(status_code=404, detail="Knoten nicht gefunden")
+    return node
 
 
 def _collect_page_datapoint_ids(config: PageConfig) -> list[str]:
@@ -271,8 +316,16 @@ async def _check_user_page_target_datapoint_policy(
         user_row = await db.fetchone("SELECT is_admin FROM users WHERE username = ?", (username,))
         principal = Principal(subject=username, type="user", is_admin=bool(user_row and user_row["is_admin"]))
         allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=AuthzAction.READ))
-        if not set(datapoint_ids).issubset(allowed_ids):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zielgruppe darf nicht alle Datenpunkte lesen")
+        missing_ids = sorted(set(datapoint_ids) - allowed_ids)
+        if missing_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "visu_target_audience_datapoints_denied",
+                    "username": username,
+                    "datapoint_ids": missing_ids,
+                },
+            )
 
 
 async def _check_user_target_pages_datapoint_policy(
@@ -301,6 +354,7 @@ async def _check_user_target_pages_datapoint_policy_after_access_change(
     *,
     access_overrides: dict[str, str | None] | None = None,
     parent_overrides: dict[str, str | None] | None = None,
+    usernames_overrides: dict[str, list[str]] | None = None,
 ) -> None:
     rows = await db.fetchall("SELECT * FROM visu_nodes WHERE type = 'PAGE'")
     for row in rows:
@@ -312,7 +366,8 @@ async def _check_user_target_pages_datapoint_policy_after_access_change(
             access_overrides=access_overrides,
             parent_overrides=parent_overrides,
         )
-        if (access, access_node_id) == (current_access, current_access_node_id):
+        target_group_changed = access_node_id is not None and usernames_overrides is not None and access_node_id in usernames_overrides
+        if (access, access_node_id) == (current_access, current_access_node_id) and not target_group_changed:
             continue
         if access != "user" or access_node_id is None:
             continue
@@ -321,6 +376,43 @@ async def _check_user_target_pages_datapoint_policy_after_access_change(
             db,
             access_node_id,
             node.page_config or PageConfig(),
+            usernames=usernames_overrides.get(access_node_id) if usernames_overrides and access_node_id in usernames_overrides else None,
+        )
+
+
+async def _validate_target_usernames(db: Database, usernames: list[str]) -> list[str]:
+    requested = sorted(set(usernames))
+    valid: list[str] = []
+    invalid: list[str] = []
+    for username in requested:
+        row = await db.fetchone("SELECT is_admin FROM users WHERE username = ?", (username,))
+        if row is None or bool(row["is_admin"]):
+            invalid.append(username)
+        else:
+            valid.append(username)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "visu_target_audience_invalid_users", "usernames": invalid},
+        )
+    return valid
+
+
+async def _replace_target_users(db: Database, node_id: str, usernames: list[str]) -> None:
+    """Replace only the simple target-audience grants; preserve advanced grants."""
+    await db.conn.execute(
+        """DELETE FROM authz_node_roles
+           WHERE principal_type='user' AND node_type='visu_page' AND node_id=?
+             AND role='guest' AND effect='allow'""",
+        (node_id,),
+    )
+    if usernames:
+        await db.conn.executemany(
+            """INSERT INTO authz_node_roles
+                   (principal_type, principal_id, node_type, node_id, role, effect)
+               VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')
+               ON CONFLICT(principal_type, principal_id, node_type, node_id) DO NOTHING""",
+            [(username, node_id) for username in usernames],
         )
 
 
@@ -374,9 +466,13 @@ async def _check_page_write_access(db: Database, node_id: str, principal: Princi
 # ── Tree ──────────────────────────────────────────────────────────────────────
 
 
-@router.get("/tree", response_model=list[VisuNode])
-async def get_tree(db: Database = Depends(get_db)):
+@router.get("/tree", response_model=list[VisuNodeSummary])
+async def get_tree(
+    db: Database = Depends(get_db),
+    user: Principal | str | None = Depends(_optional_visu_principal),
+):
     """Gesamtbaum als flache Liste (Frontend baut Baum via parent_id)."""
+    principal = _principal_from_dependency(user)
     async with db.conn.execute(
         """SELECT vn.*, avp.access_mode
            FROM visu_nodes AS vn
@@ -384,7 +480,16 @@ async def get_tree(db: Database = Depends(get_db)):
            ORDER BY vn.node_order ASC""",
     ) as cur:
         rows = await cur.fetchall()
-    return [_row_to_node(r, access=r["access_mode"] if "access_mode" in r.keys() else None) for r in rows]
+    visible_rows = [row for row in rows if await _can_discover_node(db, row["id"], principal)]
+    visible_ids = {row["id"] for row in visible_rows}
+    return [
+        _row_to_summary(
+            row,
+            access=row["access_mode"] if "access_mode" in row.keys() else None,
+            parent_id=row["parent_id"] if row["parent_id"] in visible_ids else None,
+        )
+        for row in visible_rows
+    ]
 
 
 # ── Einzelner Knoten ──────────────────────────────────────────────────────────
@@ -478,9 +583,28 @@ async def import_nodes(
     return await _get_node_or_404(db, root_new_id)
 
 
-@router.get("/nodes/{node_id}", response_model=VisuNode)
-async def get_node(node_id: str, db: Database = Depends(get_db)):
-    return await _get_node_or_404(db, node_id)
+@router.get("/nodes/{node_id}", response_model=VisuNodeSummary)
+async def get_node(
+    node_id: str,
+    db: Database = Depends(get_db),
+    user: Principal | str | None = Depends(_optional_visu_principal),
+):
+    principal = _principal_from_dependency(user)
+    node = await _require_discoverable_node(db, node_id, principal)
+    parent_id = node.parent_id
+    if parent_id is not None and not await _can_discover_node(db, parent_id, principal):
+        parent_id = None
+    return VisuNodeSummary(
+        id=node.id,
+        parent_id=parent_id,
+        name=node.name,
+        type=node.type,
+        order=node.order,
+        icon=node.icon,
+        access=node.access,
+        created_at=node.created_at,
+        updated_at=node.updated_at,
+    )
 
 
 @router.post("/nodes", response_model=VisuNode, status_code=status.HTTP_201_CREATED)
@@ -539,58 +663,78 @@ async def update_node(
     db: Database = Depends(get_db),
     _user=Depends(get_admin_user),
 ):
-    await _get_node_or_404(db, node_id)
-    updates: list[str] = []
-    values: list = []
+    access_supplied = "access" in body.model_fields_set
+    usernames_supplied = "usernames" in body.model_fields_set
 
-    if body.access == "user":
-        await _check_user_target_pages_datapoint_policy_after_access_change(
-            db,
-            access_overrides={node_id: body.access},
-        )
+    async with db.transaction():
+        node = await _get_node_or_404(db, node_id)
+        requested_access = body.access if access_supplied else node.access
+        target_usernames: list[str] | None = None
+        if usernames_supplied:
+            target_usernames = await _validate_target_usernames(db, body.usernames or [])
+            if requested_access != "user" and target_usernames:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail={"code": "visu_target_audience_requires_user_access"},
+                )
+        elif access_supplied and requested_access != "user":
+            target_usernames = []
 
-    if body.name is not None:
-        updates.append("name = ?")
-        values.append(body.name)
-    if body.order is not None:
-        updates.append("node_order = ?")
-        values.append(body.order)
-    if body.icon is not None:
-        updates.append("icon = ?")
-        values.append(body.icon)
-    if body.access_pin is not None:
-        explicit_policy = await db.fetchone(
-            "SELECT access_mode FROM authz_visu_page_policies WHERE node_id = ?",
-            (node_id,),
-        )
-        requested_policy = body.access if body.access is not None else explicit_policy["access_mode"] if explicit_policy else None
-        if requested_policy != "protected":
-            raise HTTPException(status_code=400, detail="PIN ist nur für geschützte Knoten zulässig")
-        pin_hash = bcrypt.hashpw(body.access_pin.encode(), bcrypt.gensalt()).decode()
+        access_overrides = {node_id: requested_access} if access_supplied else None
+        usernames_overrides = {node_id: target_usernames} if target_usernames is not None else None
+        if access_supplied or target_usernames is not None:
+            await _check_user_target_pages_datapoint_policy_after_access_change(
+                db,
+                access_overrides=access_overrides,
+                usernames_overrides=usernames_overrides,
+            )
 
-    if updates:
-        updates.append("updated_at = ?")
-        values.append(_now_iso())
-        values.append(node_id)
-        await db.conn.execute(f"UPDATE visu_nodes SET {', '.join(updates)} WHERE id = ?", values)
-    if body.access is not None:
-        await db.conn.execute(
-            """INSERT INTO authz_visu_page_policies (node_id, access_mode, updated_at)
-               VALUES (?, ?, ?)
-               ON CONFLICT(node_id) DO UPDATE SET access_mode=excluded.access_mode, updated_at=excluded.updated_at""",
-            (node_id, body.access, _now_iso()),
-        )
-        if body.access != "protected":
-            await db.conn.execute("DELETE FROM authz_visu_page_credentials WHERE node_id = ?", (node_id,))
-    if body.access_pin is not None:
-        await db.conn.execute(
-            """INSERT INTO authz_visu_page_credentials (node_id, pin_hash, updated_at)
-               VALUES (?, ?, ?)
-               ON CONFLICT(node_id) DO UPDATE SET pin_hash=excluded.pin_hash, updated_at=excluded.updated_at""",
-            (node_id, pin_hash, _now_iso()),
-        )
-    if updates or body.access is not None or body.access_pin is not None:
-        await db.conn.commit()
+        updates: list[str] = []
+        values: list = []
+        if body.name is not None:
+            updates.append("name = ?")
+            values.append(body.name)
+        if body.order is not None:
+            updates.append("node_order = ?")
+            values.append(body.order)
+        if "icon" in body.model_fields_set:
+            updates.append("icon = ?")
+            values.append(body.icon)
+
+        pin_hash: str | None = None
+        if body.access_pin is not None:
+            if requested_access != "protected":
+                raise HTTPException(status_code=400, detail="PIN ist nur für geschützte Knoten zulässig")
+            pin_hash = bcrypt.hashpw(body.access_pin.encode(), bcrypt.gensalt()).decode()
+
+        if updates:
+            updates.append("updated_at = ?")
+            values.extend((_now_iso(), node_id))
+            await db.conn.execute(f"UPDATE visu_nodes SET {', '.join(updates)} WHERE id = ?", values)
+
+        if access_supplied:
+            if requested_access is None:
+                await db.conn.execute("DELETE FROM authz_visu_page_policies WHERE node_id = ?", (node_id,))
+            else:
+                await db.conn.execute(
+                    """INSERT INTO authz_visu_page_policies (node_id, access_mode, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(node_id) DO UPDATE
+                    SET access_mode=excluded.access_mode, updated_at=excluded.updated_at""",
+                    (node_id, requested_access, _now_iso()),
+                )
+            if requested_access != "protected":
+                await db.conn.execute("DELETE FROM authz_visu_page_credentials WHERE node_id = ?", (node_id,))
+
+        if pin_hash is not None:
+            await db.conn.execute(
+                """INSERT INTO authz_visu_page_credentials (node_id, pin_hash, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET pin_hash=excluded.pin_hash, updated_at=excluded.updated_at""",
+                (node_id, pin_hash, _now_iso()),
+            )
+        if target_usernames is not None:
+            await _replace_target_users(db, node_id, target_usernames)
 
     return await _get_node_or_404(db, node_id)
 
@@ -601,18 +745,40 @@ async def delete_node(
     db: Database = Depends(get_db),
     _user=Depends(get_admin_user),
 ):
-    await _get_node_or_404(db, node_id)
-    # ON DELETE CASCADE löscht Kinder automatisch
-    await db.conn.execute("DELETE FROM visu_nodes WHERE id = ?", (node_id,))
-    await db.conn.commit()
+    async with db.transaction():
+        await _get_node_or_404(db, node_id)
+        rows = await db.fetchall(
+            """WITH RECURSIVE subtree(id) AS (
+                   SELECT id FROM visu_nodes WHERE id = ?
+                   UNION ALL
+                   SELECT child.id FROM visu_nodes AS child JOIN subtree ON child.parent_id = subtree.id
+               )
+               SELECT id FROM subtree""",
+            (node_id,),
+        )
+        subtree_ids = [row["id"] for row in rows]
+        placeholders = ",".join("?" for _ in subtree_ids)
+        await db.conn.execute(
+            f"DELETE FROM authz_node_roles WHERE node_type='visu_page' AND node_id IN ({placeholders})",
+            subtree_ids,
+        )
+        # ON DELETE CASCADE removes descendants, policies and credentials.
+        await db.conn.execute("DELETE FROM visu_nodes WHERE id = ?", (node_id,))
 
 
 # ── Breadcrumb ────────────────────────────────────────────────────────────────
 
 
-@router.get("/nodes/{node_id}/breadcrumb", response_model=list[VisuNode])
-async def get_breadcrumb(node_id: str, db: Database = Depends(get_db)):
-    crumbs: list[VisuNode] = []
+@router.get("/nodes/{node_id}/breadcrumb", response_model=list[VisuNodeSummary])
+async def get_breadcrumb(
+    node_id: str,
+    db: Database = Depends(get_db),
+    user: Principal | str | None = Depends(_optional_visu_principal),
+):
+    principal = _principal_from_dependency(user)
+    if not await _can_discover_node(db, node_id, principal):
+        raise HTTPException(status_code=404, detail="Visu-Knoten nicht gefunden")
+    rows = []
     current_id: str | None = node_id
     while current_id:
         async with db.conn.execute(
@@ -625,17 +791,32 @@ async def get_breadcrumb(node_id: str, db: Database = Depends(get_db)):
             row = await cur.fetchone()
         if not row:
             break
-        access = row["access_mode"] if "access_mode" in row.keys() else None
-        crumbs.insert(0, _row_to_node(row, access=access))
+        if await _can_discover_node(db, row["id"], principal):
+            rows.insert(0, row)
         current_id = row["parent_id"]
-    return crumbs
+    visible_ids = {row["id"] for row in rows}
+    return [
+        _row_to_summary(
+            row,
+            access=row["access_mode"] if "access_mode" in row.keys() else None,
+            parent_id=row["parent_id"] if row["parent_id"] in visible_ids else None,
+        )
+        for row in rows
+    ]
 
 
 # ── Kinder ────────────────────────────────────────────────────────────────────
 
 
-@router.get("/nodes/{node_id}/children", response_model=list[VisuNode])
-async def get_children(node_id: str, db: Database = Depends(get_db)):
+@router.get("/nodes/{node_id}/children", response_model=list[VisuNodeSummary])
+async def get_children(
+    node_id: str,
+    db: Database = Depends(get_db),
+    user: Principal | str | None = Depends(_optional_visu_principal),
+):
+    principal = _principal_from_dependency(user)
+    if not await _can_discover_node(db, node_id, principal):
+        raise HTTPException(status_code=404, detail="Visu-Knoten nicht gefunden")
     async with db.conn.execute(
         """SELECT vn.*, avp.access_mode
            FROM visu_nodes AS vn
@@ -645,7 +826,11 @@ async def get_children(node_id: str, db: Database = Depends(get_db)):
         (node_id,),
     ) as cur:
         rows = await cur.fetchall()
-    return [_row_to_node(row, access=row["access_mode"] if "access_mode" in row.keys() else None) for row in rows]
+    return [
+        _row_to_summary(row, access=row["access_mode"] if "access_mode" in row.keys() else None)
+        for row in rows
+        if await _can_discover_node(db, row["id"], principal)
+    ]
 
 
 # ── Kopieren ──────────────────────────────────────────────────────────────────
@@ -715,11 +900,14 @@ async def copy_node(
 async def export_node(
     node_id: str,
     db: Database = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
 ) -> JSONResponse:
     """Exportiert den Knoten und alle Nachfolger rekursiv als JSON (ohne access_pin)."""
+    principal = _principal_from_dependency(_user)
 
     async def collect(nid: str) -> list[dict]:
+        if not await _can_discover_node(db, nid, principal):
+            return []
         async with db.conn.execute("SELECT * FROM visu_nodes WHERE id = ?", (nid,)) as cur:
             row = await cur.fetchone()
         if not row:
@@ -986,29 +1174,8 @@ async def set_node_users(
     """Setzt die autorisierten Benutzer für diesen Knoten (ersetzt die gesamte Liste).
     Nur gültige (existierende, nicht-Admin) Benutzernamen werden gespeichert.
     """
-    await _get_node_or_404(db, node_id)
-
-    # Nur existierende, nicht-Admin Benutzer akzeptieren
-    valid: list[str] = []
-    for username in body.usernames:
-        row = await db.fetchone("SELECT is_admin FROM users WHERE username = ?", (username,))
-        if row and not bool(row["is_admin"]):
-            valid.append(username)
-
-    await _check_user_target_pages_datapoint_policy(db, node_id, usernames=valid)
-
-    await db.conn.execute(
-        """DELETE FROM authz_node_roles
-           WHERE principal_type='user' AND node_type='visu_page' AND node_id=?
-             AND role='guest' AND effect='allow'""",
-        (node_id,),
-    )
-    if valid:
-        await db.conn.executemany(
-            """INSERT INTO authz_node_roles
-                   (principal_type, principal_id, node_type, node_id, role, effect)
-               VALUES ('user', ?, 'visu_page', ?, 'guest', 'allow')
-               ON CONFLICT(principal_type, principal_id, node_type, node_id) DO NOTHING""",
-            [(u, node_id) for u in valid],
-        )
-    await db.conn.commit()
+    async with db.transaction():
+        await _get_node_or_404(db, node_id)
+        valid = await _validate_target_usernames(db, body.usernames)
+        await _check_user_target_pages_datapoint_policy(db, node_id, usernames=valid)
+        await _replace_target_users(db, node_id, valid)

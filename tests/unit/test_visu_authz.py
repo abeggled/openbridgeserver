@@ -127,6 +127,15 @@ async def _assign_visu_user(db: Database, *, node_id: str, username: str = "alic
     )
 
 
+async def _deny_visu_user(db: Database, *, node_id: str, username: str = "alice") -> None:
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', ?, 'visu_page', ?, 'guest', 'deny')""",
+        (username, node_id),
+    )
+
+
 async def _insert_visu_page(
     db: Database,
     page_id: str,
@@ -250,7 +259,7 @@ async def test_save_user_page_validates_target_users_can_read_referenced_datapoi
         await visu_api.save_page("target-page", _page_config(BLOCKED_DP_ID), request=None, db=db)
 
     assert exc_info.value.status_code == 403
-    assert "Zielgruppe" in exc_info.value.detail
+    assert exc_info.value.detail["code"] == "visu_target_audience_datapoints_denied"
 
 
 @pytest.mark.asyncio
@@ -550,3 +559,142 @@ async def test_public_page_read_without_auth_remains_compatible(db: Database):
     result = await visu_api.get_page("public-page", _request(), db=db, user=None)
 
     assert result.widgets[0].datapoint_id == str(BLOCKED_DP_ID)
+
+
+@pytest.mark.asyncio
+async def test_discovery_redacts_page_configs_and_hides_user_scoped_nodes(db: Database):
+    await _insert_user(db, "alice")
+    await _insert_user(db, "bob")
+    await _insert_visu_page(db, "public-page", access="public", config=_page_config(ALLOWED_DP_ID))
+    await _insert_visu_page(db, "protected-page", access="protected", config=_page_config(BLOCKED_DP_ID))
+    await _insert_visu_page(db, "user-page", access="user", config=_page_config(BLOCKED_DP_ID))
+    await _assign_visu_user(db, node_id="user-page", username="alice")
+
+    anonymous = await visu_api.get_tree(db=db, user=None)
+    assert [node.id for node in anonymous] == ["public-page", "protected-page"]
+    assert all(not hasattr(node, "page_config") for node in anonymous)
+
+    out_of_scope = await visu_api.get_tree(db=db, user=_principal("bob"))
+    assert [node.id for node in out_of_scope] == ["public-page", "protected-page"]
+
+    assigned = await visu_api.get_tree(db=db, user=_principal("alice"))
+    assert [node.id for node in assigned] == ["public-page", "protected-page", "user-page"]
+
+    admin = await visu_api.get_tree(db=db, user=_principal("admin", is_admin=True))
+    assert [node.id for node in admin] == ["public-page", "protected-page", "user-page"]
+    assert all(not hasattr(node, "page_config") for node in admin)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.get_node("user-page", db=db, user=_principal("bob"))
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_discovery_honors_explicit_visu_deny_without_leaking_breadcrumbs_or_children(db: Database):
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "assigned-root", access="user")
+    await _insert_visu_page(db, "denied-child", access=None, config=_page_config(BLOCKED_DP_ID), parent_id="assigned-root")
+    await _assign_visu_user(db, node_id="assigned-root", username="alice")
+    await _deny_visu_user(db, node_id="denied-child", username="alice")
+
+    visible = await visu_api.get_tree(db=db, user=_principal("alice"))
+    assert [node.id for node in visible] == ["assigned-root"]
+
+    children = await visu_api.get_children("assigned-root", db=db, user=_principal("alice"))
+    assert children == []
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.get_breadcrumb("denied-child", db=db, user=_principal("alice"))
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_export_omits_hidden_subtrees_and_allows_assigned_user(db: Database):
+    await _insert_user(db, "alice")
+    await _insert_user(db, "bob")
+    await _insert_visu_location(db, "root", access="public")
+    await _insert_visu_page(db, "public-child", access="public", config=_page_config(ALLOWED_DP_ID), parent_id="root")
+    await _insert_visu_page(db, "user-child", access="user", config=_page_config(BLOCKED_DP_ID), parent_id="root")
+    await _assign_visu_user(db, node_id="user-child", username="alice")
+
+    bob_response = await visu_api.export_node("root", db=db, _user=_principal("bob"))
+    bob_export = json.loads(bob_response.body)
+    assert [node["id"] for node in bob_export["nodes"]] == ["root", "public-child"]
+    assert str(BLOCKED_DP_ID) not in bob_response.body.decode()
+
+    alice_response = await visu_api.export_node("root", db=db, _user=_principal("alice"))
+    alice_export = json.loads(alice_response.body)
+    assert [node["id"] for node in alice_export["nodes"]] == ["root", "public-child", "user-child"]
+    assert str(BLOCKED_DP_ID) in alice_response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_atomic_access_and_target_update_rolls_back_before_mutation(db: Database):
+    await _seed_scope(db)
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "public-folder", access="public")
+    await _insert_visu_page(db, "child-page", access=None, config=_page_config(BLOCKED_DP_ID), parent_id="public-folder")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await visu_api.update_node(
+            "public-folder",
+            visu_api.VisuNodeUpdate(name="Renamed", access="user", usernames=["alice"]),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {
+        "code": "visu_target_audience_datapoints_denied",
+        "username": "alice",
+        "datapoint_ids": [str(BLOCKED_DP_ID)],
+    }
+    node = await db.fetchone("SELECT name FROM visu_nodes WHERE id='public-folder'")
+    policy = await db.fetchone("SELECT access_mode FROM authz_visu_page_policies WHERE node_id='public-folder'")
+    assert node["name"] == "public-folder"
+    assert policy["access_mode"] == "public"
+    assert await db.fetchall("SELECT * FROM authz_node_roles WHERE node_type='visu_page'") == []
+
+
+@pytest.mark.asyncio
+async def test_atomic_access_and_target_update_commits_policy_metadata_and_grants(db: Database):
+    await _seed_scope(db)
+    await _insert_user(db, "alice")
+    await _insert_grant(db, node_id="allowed")
+    await _insert_visu_location(db, "public-folder", access="public")
+    await db.execute_and_commit(
+        "INSERT INTO authz_visu_page_credentials (node_id, pin_hash) VALUES ('public-folder', 'stale-hash')",
+    )
+    await _insert_visu_page(db, "child-page", access=None, config=_page_config(ALLOWED_DP_ID), parent_id="public-folder")
+
+    result = await visu_api.update_node(
+        "public-folder",
+        visu_api.VisuNodeUpdate(name="Assigned folder", access="user", usernames=["alice"]),
+        db=db,
+    )
+
+    assert result.name == "Assigned folder"
+    assert result.access == "user"
+    grants = await db.fetchall(
+        "SELECT principal_id, role, effect FROM authz_node_roles WHERE node_type='visu_page' AND node_id='public-folder'",
+    )
+    assert [(row["principal_id"], row["role"], row["effect"]) for row in grants] == [("alice", "guest", "allow")]
+    assert await db.fetchone("SELECT 1 FROM authz_visu_page_credentials WHERE node_id='public-folder'") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_subtree_removes_only_its_visu_page_grants(db: Database):
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "root", access="user")
+    await _insert_visu_page(db, "child", access=None, config=PageConfig(), parent_id="root")
+    await _insert_visu_page(db, "unrelated", access="user", config=PageConfig())
+    await _assign_visu_user(db, node_id="root")
+    await _assign_visu_user(db, node_id="child")
+    await _assign_visu_user(db, node_id="unrelated")
+
+    await visu_api.delete_node("root", db=db)
+
+    assert await db.fetchall("SELECT id FROM visu_nodes WHERE id IN ('root', 'child')") == []
+    remaining = await db.fetchall(
+        "SELECT node_id FROM authz_node_roles WHERE node_type='visu_page' ORDER BY node_id",
+    )
+    assert [row["node_id"] for row in remaining] == ["unrelated"]
