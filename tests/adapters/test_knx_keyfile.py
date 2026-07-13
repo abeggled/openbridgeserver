@@ -8,24 +8,33 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from obs.api.auth import Principal, get_admin_user, get_current_principal
 from obs.api.v1.knxkeyfile import router
+from obs.db.database import get_db
 
 # ---------------------------------------------------------------------------
 # App-Fixture mit überschriebenem Auth
 # ---------------------------------------------------------------------------
 
 
+class _AuditDbStub:
+    async def execute_and_commit(self, _query, _params=()):
+        return SimpleNamespace(lastrowid=1)
+
+
 def _create_test_app() -> FastAPI:
-    from obs.api.auth import get_admin_user
 
     app = FastAPI()
     app.dependency_overrides[get_admin_user] = lambda: "admin-testuser"
+    app.dependency_overrides[get_current_principal] = lambda: Principal(subject="admin-testuser", type="user", is_admin=True)
+    app.dependency_overrides[get_db] = _AuditDbStub
     app.include_router(router, prefix="/knx")
     return app
 

@@ -70,7 +70,7 @@ async def test_v44_clean_install_is_default_deny_and_idempotent() -> None:
     await db.connect()
     try:
         version = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 46
+        assert version["version"] == 47
 
         await _migration_v44(db.conn)
         await _migration_v44(db.conn)
