@@ -23,6 +23,24 @@ from obs.message_archive import (
 )
 
 
+async def test_message_archive_store_bounds_wal_growth(tmp_path):
+    """See issue #908: without these pragmas the -wal sidecar grows without bound
+    on a continuously-written table like message_archive_entries."""
+    path = tmp_path / "messages.sqlite3"
+    store = MessageArchiveStore(str(path))
+    await store.connect()
+    try:
+        cur = await store.conn.execute("PRAGMA wal_autocheckpoint")
+        row = await cur.fetchone()
+        assert int(row[0]) == 1000
+
+        cur = await store.conn.execute("PRAGMA journal_size_limit")
+        row = await cur.fetchone()
+        assert int(row[0]) == 67108864
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_store_persists_entries_in_separate_db(tmp_path):
     path = tmp_path / "messages.sqlite3"
     store = MessageArchiveStore(str(path))

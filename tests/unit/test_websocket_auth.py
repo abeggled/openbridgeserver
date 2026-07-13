@@ -359,6 +359,18 @@ async def test_ws_log_access_revalidates_resolved_api_key_owner(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ws_log_access_ignores_stray_api_key_for_jwt_identity(monkeypatch):
+    def fail_get_db():
+        raise AssertionError("A JWT-derived identity must not be revalidated against an unrelated api_key header")
+
+    monkeypatch.setattr(ws_api, "get_db", fail_get_db)
+
+    assert (
+        await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True  # noqa: SLF001
+    )
+
+
+@pytest.mark.asyncio
 async def test_websocket_endpoint_accepts_public_visu_page_scope(monkeypatch):
     db = _DbStub(has_key=False, page_type="PAGE")
     monkeypatch.setattr(ws_api, "get_db", lambda: db)

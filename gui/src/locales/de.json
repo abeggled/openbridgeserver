@@ -2665,6 +2665,7 @@
     "newArchive": "Neues Archiv",
     "archives": "Archive",
     "noArchives": "Keine Archive vorhanden",
+    "loadError": "Meldungsarchive konnten nicht geladen werden",
     "selectArchive": "Archiv auswählen oder neu erstellen.",
     "dbPath": "Archiv-DB",
     "integrityCheck": "Integrität prüfen",

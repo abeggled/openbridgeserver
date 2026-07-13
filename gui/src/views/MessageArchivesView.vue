@@ -296,7 +296,7 @@ async function loadArchives() {
     if (!selectedArchive.value && data.length) selectedArchive.value = data[0]
     await loadEntries()
   } catch (err) {
-    error.value = err?.response?.data?.detail || err.message || t('common.loadError')
+    error.value = err?.response?.data?.detail || err.message || t('messageArchives.loadError')
   } finally {
     loading.value = false
   }
@@ -325,7 +325,7 @@ async function loadEntries() {
     entriesTotal.value = data.total
   } catch (err) {
     if (currentArchiveId.value !== archiveId) return
-    error.value = err?.response?.data?.detail || err.message || t('common.loadError')
+    error.value = err?.response?.data?.detail || err.message || t('messageArchives.loadError')
   } finally {
     if (currentArchiveId.value === archiveId) entriesLoading.value = false
   }

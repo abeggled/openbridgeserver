@@ -261,6 +261,12 @@ class MessageArchiveStore:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
+        # Bound the -wal sidecar the same way obs/db/database.py does: without these,
+        # the default PASSIVE auto-checkpoint never truncates the WAL file on disk, and
+        # message_archive_entries is written on every archived MESSAGE-adapter
+        # notification, so the WAL can grow without bound. See issue #908.
+        await self._conn.execute("PRAGMA wal_autocheckpoint=1000")
+        await self._conn.execute("PRAGMA journal_size_limit=67108864")
         await self._conn.commit()
         await self._run_migrations()
         self.status = "ok"
@@ -365,6 +371,26 @@ class MessageArchiveStore:
         )
         return [self._archive_row(row) for row in rows]
 
+    async def _get_archive_settings(self, archive_id: str) -> dict[str, Any] | None:
+        """Fetch archive config columns only, without the entry_count/oldest/newest aggregate.
+
+        Used on the hot insert path (``create_entry`` / ``enforce_retention``), which runs
+        on every archived message — a full ``get_archive()`` there would re-scan all entries
+        of the archive on every single insert.
+        """
+        archive_id = _normalize_archive_id(archive_id)
+        row = await self._fetchone(
+            "SELECT default_type, retention_max_entries, retention_max_age_days FROM message_archives WHERE id=?",
+            (archive_id,),
+        )
+        if not row:
+            return None
+        return {
+            "default_type": row["default_type"],
+            "retention_max_entries": row["retention_max_entries"],
+            "retention_max_age_days": row["retention_max_age_days"],
+        }
+
     async def get_archive(self, archive_id: str) -> dict[str, Any] | None:
         archive_id = _normalize_archive_id(archive_id)
         row = await self._fetchone(
@@ -432,7 +458,7 @@ class MessageArchiveStore:
     async def create_entry(self, body: EntryInput) -> dict[str, Any]:
         archive_id = _normalize_archive_id(body.archive_id)
         await self.ensure_archive(archive_id)
-        archive = await self.get_archive(archive_id)
+        archive = await self._get_archive_settings(archive_id)
         entry_id = str(uuid.uuid4())
         created_at = _normalize_entry_timestamp(body.created_at)
         entry_type = body.type or (archive or {}).get("default_type") or "system"
@@ -672,7 +698,7 @@ class MessageArchiveStore:
 
     async def enforce_retention(self, archive_id: str) -> int:
         archive_id = _normalize_archive_id(archive_id)
-        archive = await self.get_archive(archive_id)
+        archive = await self._get_archive_settings(archive_id)
         if not archive:
             return 0
         deleted = 0

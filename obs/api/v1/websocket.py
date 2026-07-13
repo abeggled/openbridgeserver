@@ -758,9 +758,15 @@ async def _resolve_ws_api_key_subject(api_key: str) -> str | None:
     return owner or f"api_key:{row['id']}"
 
 
-async def _ws_has_log_access(user: str | None, api_key: str | None) -> bool:
-    """Return whether the authenticated websocket may receive log_entry pushes."""
-    if api_key:
+async def _ws_has_log_access(user: str | None, api_key: str | None, *, identity_from_jwt: bool = False) -> bool:
+    """Return whether the authenticated websocket may receive log_entry pushes.
+
+    ``identity_from_jwt`` must be True when ``user`` was resolved from a decoded JWT rather
+    than from ``api_key``. Otherwise a valid JWT identity plus a stray/invalid X-API-Key
+    header (e.g. leftover localStorage value from a prior session) would be evaluated
+    against the (invalid) API key and silently lose log access despite being authenticated.
+    """
+    if api_key and not identity_from_jwt:
         try:
             db = get_db()
         except RuntimeError:
@@ -841,6 +847,7 @@ async def websocket_endpoint(
 
     page_id = ws.query_params.get("page_id")
     user: str | None = "__api_key__" if api_key else None
+    identity_from_jwt = resolved_token is not None
     invalid_token = False
     if resolved_token is not None:
         try:
@@ -928,7 +935,7 @@ async def websocket_endpoint(
             widget_ref_readonly_check=_is_readonly_widget_ref_page,
         )
 
-    log_access = await _ws_has_log_access(user, api_key) if allowed_dp_ids is None else False
+    log_access = await _ws_has_log_access(user, api_key, identity_from_jwt=identity_from_jwt) if allowed_dp_ids is None else False
 
     manager = get_ws_manager()
     conn_id = await manager.connect(
@@ -936,7 +943,7 @@ async def websocket_endpoint(
         allowed_dp_ids=allowed_dp_ids,
         allowed_message_archive_access=allowed_message_archive_access,
         log_access=log_access,
-        log_access_check=(lambda: _ws_has_log_access(user, api_key)) if log_access else None,
+        log_access_check=(lambda: _ws_has_log_access(user, api_key, identity_from_jwt=identity_from_jwt)) if log_access else None,
         subprotocol=selected_subprotocol,
     )
 

@@ -2665,6 +2665,7 @@
     "newArchive": "New Archive",
     "archives": "Archives",
     "noArchives": "No archives available",
+    "loadError": "Failed to load message archives",
     "selectArchive": "Select or create an archive.",
     "dbPath": "Archive DB",
     "integrityCheck": "Integrity Check",

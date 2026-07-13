@@ -338,14 +338,15 @@ async def _archive_read_access(request: Request, db: Database) -> ArchiveReadAcc
     if auth_header.startswith("Bearer "):
         try:
             username = decode_token(auth_header[7:])
+        except HTTPException:
+            if not page_id:
+                raise
+        else:
             row = await db.fetchone("SELECT is_admin FROM users WHERE username=?", (username,))
             is_admin = bool(row and row["is_admin"])
             if not page_id or is_admin:
                 return ArchiveReadAccess(username=username, is_admin=is_admin)
             return await _page_scoped_archive_access(request, db, username=username)
-        except HTTPException:
-            if not page_id:
-                raise
 
     api_key = request.headers.get("x-api-key")
     if api_key:
@@ -652,10 +653,27 @@ async def import_message_archive_db(
                         status.HTTP_500_INTERNAL_SERVER_ERROR,
                         "Meldungsarchiv-Wiederherstellung fehlgeschlagen; die Sicherung der vorherigen Datenbank wurde erhalten.",
                     ) from None
+            elif not target_exists:
+                # No pre-import backup exists (first-ever archive DB) — target_path still
+                # holds the copy of the just-imported, now known-bad file. Remove it before
+                # reconnecting so we don't reconnect to broken data.
+                try:
+                    os.unlink(target_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("Could not remove corrupted message archive database %s", target_path)
             _unlink_sqlite_sidecars(target_path)
-            await store.connect()
-            activate_message_archive_service(store)
             logger.exception("Message archive database import failed")
+            try:
+                await store.connect()
+                activate_message_archive_service(store)
+            except Exception:
+                logger.exception("Message archive database reconnect failed after import failure")
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "Meldungsarchiv-Wiederherstellung fehlgeschlagen; die Datenbank konnte nicht reaktiviert werden.",
+                ) from None
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Meldungsarchiv-Wiederherstellung fehlgeschlagen.")
 
         return {
