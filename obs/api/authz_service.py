@@ -133,10 +133,20 @@ async def authorize_visu_page(
     node_id: str,
     *,
     action: AuthzAction | str = AuthzAction.READ,
+    strict: bool = False,
 ) -> bool:
-    """Evaluate a Visu page-tree target through the central grant engine."""
+    """Evaluate a Visu page-tree target through the central grant engine.
+
+    With strict=True only grants on the node itself or its ancestors are
+    considered; descendant grants that enable upward-discovery navigation are
+    excluded.  Use strict=True for content reads, strict=False (default) for
+    tree/breadcrumb discovery.
+    """
     targets = await resolve_visu_page_targets(db, [node_id])
     grants = await load_role_grants(db, principal, node_type="visu_page")
+    if strict and targets:
+        target_path = set(targets[0].path)
+        grants = [g for g in grants if g.node_id in target_path]
     return authorize(principal=principal, action=action, targets=targets, grants=grants).allowed
 
 

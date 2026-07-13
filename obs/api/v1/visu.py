@@ -205,6 +205,7 @@ async def _check_user_access(db: Database, node_id: str, username: str) -> bool:
         Principal(subject=username, type="user", is_admin=False),
         node_id,
         action=AuthzAction.READ,
+        strict=True,
     )
 
 

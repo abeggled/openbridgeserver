@@ -809,3 +809,48 @@ async def test_factory_reset_removes_visu_page_grants_and_preserves_unrelated_gr
     unrelated = await db.fetchone("SELECT effect FROM authz_node_roles WHERE node_type='logic_capability' AND node_id='http_request'")
     assert unrelated is not None
     assert unrelated["effect"] == "deny"
+
+
+@pytest.mark.asyncio
+async def test_check_user_access_does_not_grant_ancestor_via_descendant_grant(db: Database):
+    """Descendant-only grants must NOT give access to ancestor page content.
+
+    Read-grants carry upward-discovery semantics for tree navigation, but
+    _check_user_access gates full content reads and must require the grant to be
+    on the target node itself or one of its ancestors — not on a child.
+    """
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "parent", access="user")
+    await _insert_visu_page(db, "child", access="user", config=PageConfig(), parent_id="parent")
+    await _assign_visu_user(db, node_id="child")  # only on child, NOT on parent
+
+    result = await visu_api._check_user_access(db, "parent", "alice")
+
+    assert result is False, "Descendant grant must not allow reading ancestor page content"
+
+
+@pytest.mark.asyncio
+async def test_check_user_access_allows_direct_and_ancestor_grants(db: Database):
+    """Direct grants and ancestor grants must still allow content reads after the fix."""
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "parent", access="user")
+    await _insert_visu_page(db, "child", access="user", config=PageConfig(), parent_id="parent")
+    await _assign_visu_user(db, node_id="parent")  # grant on parent
+
+    # parent itself: direct grant → allowed
+    assert await visu_api._check_user_access(db, "parent", "alice") is True
+    # child inherits ancestor grant → allowed
+    assert await visu_api._check_user_access(db, "child", "alice") is True
+
+
+@pytest.mark.asyncio
+async def test_can_discover_node_still_allows_upward_discovery(db: Database):
+    """Tree navigation must still allow upward discovery via descendant grants."""
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "parent", access="user")
+    await _insert_visu_page(db, "child", access="user", config=PageConfig(), parent_id="parent")
+    await _assign_visu_user(db, node_id="child")  # only on child
+
+    principal = _principal("alice")
+    # Discovery of parent IS still allowed via descendant grant (breadcrumb/tree)
+    assert await visu_api._can_discover_node(db, "parent", principal) is True
