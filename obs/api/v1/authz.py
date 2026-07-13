@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
 from obs.api.auth import Principal, get_admin_user
 from obs.api.audit import AuditLogWriter, build_audit_context
+from obs.api.v1.application_audit import audit_application_contract
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, GrantEffect, Role, RoleGrant, authorize
 from obs.api.authz_service import (
     _datapoint_read_grants,
@@ -462,6 +463,12 @@ async def get_principal_grants(
 @router.put(
     "/principals/{principal_type}/{principal_id:path}/grants",
     response_model=AuthzPrincipalGrantsResponse,
+)
+@audit_application_contract(
+    "PUT",
+    "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants",
+    principal_param="_admin",
+    resource_param="principal_id",
 )
 async def replace_principal_grants(
     principal_type: PrincipalTypeName,

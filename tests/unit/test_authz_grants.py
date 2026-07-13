@@ -402,7 +402,8 @@ async def test_api_key_conflicting_raw_and_prefixed_grants_fail_closed(db: Datab
         (key_id, "guest", "allow"),
         (f"api_key:{key_id}", "owner", "allow"),
     }
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # Failure audit (409) is now written by the audit_application_contract decorator.
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is not None
 
 
 @pytest.mark.asyncio
@@ -436,7 +437,8 @@ async def test_unknown_grant_target_is_rejected_without_changing_existing_set(db
     row = await db.fetchone("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
     assert row is not None
     assert row["node_id"] == "existing"
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # Failure audit (422) is now written by the audit_application_contract decorator.
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is not None
 
 
 @pytest.mark.asyncio
@@ -495,7 +497,10 @@ async def test_replace_rejects_missing_or_invalid_if_match(db: Database, if_matc
             _admin="admin",
         )
     assert exc_info.value.status_code == status.HTTP_428_PRECONDITION_REQUIRED
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # A failure audit must be recorded even for precondition rejections.
+    audit_row = await db.fetchone("SELECT action FROM audit_log_entries")
+    assert audit_row is not None
+    assert audit_row["action"] == "authz.grants.replaced"
 
 
 @pytest.mark.asyncio
@@ -528,7 +533,7 @@ async def test_stale_if_match_does_not_mutate_or_audit(db: Database) -> None:
     assert [(row["node_id"], row["role"]) for row in rows] == [("room", "guest")]
     audit_count = await db.fetchone("SELECT COUNT(*) AS count FROM audit_log_entries")
     assert audit_count is not None
-    assert audit_count["count"] == 1
+    assert audit_count["count"] == 2  # success (from _replace_current) + failure (stale etag)
 
 
 @pytest.mark.asyncio
@@ -560,7 +565,7 @@ async def test_concurrent_replacements_with_same_etag_have_one_winner(file_db: D
     assert row["node_id"] == successes[0].json()["grants"][0]["node_id"]
     audit_count = await file_db.fetchone("SELECT COUNT(*) AS count FROM audit_log_entries")
     assert audit_count is not None
-    assert audit_count["count"] == 1
+    assert audit_count["count"] == 2  # 1 success + 1 failure (412) written by decorator
 
 
 @pytest.mark.asyncio
@@ -589,7 +594,8 @@ async def test_audit_failure_rolls_back_delete_and_insert(monkeypatch: pytest.Mo
 
     rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
     assert [row["node_id"] for row in rows] == ["before"]
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # Decorator writes a failure audit outside the rolled-back transaction.
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is not None
 
 
 @pytest.mark.asyncio
@@ -621,7 +627,8 @@ async def test_commit_failure_after_audit_insert_rolls_back_both(monkeypatch: py
 
     rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
     assert [row["node_id"] for row in rows] == ["before"]
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # Decorator writes a failure audit outside the rolled-back transaction.
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is not None
 
 
 @pytest.mark.asyncio
@@ -646,7 +653,8 @@ async def test_insert_failure_rolls_back_delete(monkeypatch: pytest.MonkeyPatch,
 
     rows = await db.fetchall("SELECT node_id FROM authz_node_roles WHERE principal_id='alice'")
     assert [row["node_id"] for row in rows] == ["before"]
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # Decorator writes a failure audit outside the rolled-back transaction.
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is not None
 
 
 @pytest.mark.asyncio
@@ -903,7 +911,10 @@ async def test_http_put_requires_valid_strong_if_match(db: Database) -> None:
 
     assert missing.status_code == status.HTTP_428_PRECONDITION_REQUIRED
     assert weak.status_code == status.HTTP_428_PRECONDITION_REQUIRED
-    assert await db.fetchone("SELECT 1 FROM audit_log_entries") is None
+    # Both 428s produce failure audits via the audit_application_contract decorator.
+    audit_count = await db.fetchone("SELECT COUNT(*) AS count FROM audit_log_entries")
+    assert audit_count is not None
+    assert audit_count["count"] == 2
 
 
 @pytest.mark.asyncio
