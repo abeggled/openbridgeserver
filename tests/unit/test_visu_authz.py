@@ -138,6 +138,23 @@ async def _deny_visu_user(db: Database, *, node_id: str, username: str = "alice"
     )
 
 
+async def _insert_visu_grant(
+    db: Database,
+    *,
+    node_id: str,
+    role: str = "operator",
+    effect: str = "allow",
+    principal_id: str = "alice",
+    principal_type: str = "user",
+) -> None:
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES (?, ?, 'visu_page', ?, ?, ?)""",
+        (principal_type, principal_id, node_id, role, effect),
+    )
+
+
 async def _insert_visu_page(
     db: Database,
     page_id: str,
@@ -280,6 +297,7 @@ async def test_save_user_page_allows_datapoints_readable_by_target_users(db: Dat
 
 @pytest.mark.asyncio
 async def test_api_key_page_capability_preserves_access_boundary_and_audits_use(db: Database):
+    await _seed_scope(db)
     key_id = "00000000-0000-0000-0000-000000000989"
     await db.execute_and_commit(
         "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'visu-hash', 'admin', ?)",
@@ -292,6 +310,15 @@ async def test_api_key_page_capability_preserves_access_boundary_and_audits_use(
     principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
     await _insert_visu_page(db, "public-page", access="public", config=_page_config(ALLOWED_DP_ID))
     await _insert_visu_page(db, "readonly-page", access="readonly", config=_page_config(ALLOWED_DP_ID))
+    await _insert_visu_grant(db, node_id="public-page", principal_id=key_id, principal_type="api_key")
+    await _insert_visu_grant(db, node_id="readonly-page", principal_id=key_id, principal_type="api_key")
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('api_key', ?, 'hierarchy', 'allowed', 'operator', 'allow'),
+                  ('api_key', ?, 'hierarchy', 'blocked', 'operator', 'allow')""",
+        (key_id, key_id),
+    )
 
     await visu_api.save_page("public-page", _page_config(BLOCKED_DP_ID), request=None, db=db, _user=principal)
     with pytest.raises(HTTPException) as exc_info:
@@ -303,6 +330,92 @@ async def test_api_key_page_capability_preserves_access_boundary_and_audits_use(
         ("public-page", "allowed"),
         ("readonly-page", "denied"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_existing_visu_update_requires_generate_grant_after_discovery(db: Database):
+    await _insert_visu_page(db, "public-page", access="public", config=PageConfig())
+    principal = _principal()
+
+    with pytest.raises(HTTPException) as denied:
+        await visu_api.update_node(
+            "public-page",
+            visu_api.VisuNodeUpdate(name="Denied"),
+            db=db,
+            _user=principal,
+        )
+    assert denied.value.status_code == 403
+
+    await _insert_visu_grant(db, node_id="public-page")
+    updated = await visu_api.update_node(
+        "public-page",
+        visu_api.VisuNodeUpdate(name="Allowed"),
+        db=db,
+        _user=principal,
+    )
+    assert updated.name == "Allowed"
+
+
+@pytest.mark.asyncio
+async def test_existing_visu_mutation_conceals_undiscoverable_user_page(db: Database):
+    await _insert_user(db)
+    await _insert_visu_page(db, "hidden-page", access="user", config=PageConfig())
+
+    with pytest.raises(HTTPException) as exc:
+        await visu_api.update_node(
+            "hidden-page",
+            visu_api.VisuNodeUpdate(name="Leak"),
+            db=db,
+            _user=_principal(),
+        )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_subtree_applies_generate_policy_to_every_node_and_deny_wins(db: Database):
+    await _insert_visu_location(db, "root", access="public")
+    await _insert_visu_page(db, "child", access=None, config=PageConfig(), parent_id="root")
+    await _insert_visu_grant(db, node_id="root")
+    await _insert_visu_grant(db, node_id="child", role="guest", effect="deny")
+
+    with pytest.raises(HTTPException) as exc:
+        await visu_api.delete_node("root", db=db, _user=_principal())
+
+    assert exc.value.status_code == 403
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE id='root'") is not None
+    assert await db.fetchone("SELECT 1 FROM visu_nodes WHERE id='child'") is not None
+
+
+@pytest.mark.asyncio
+async def test_save_page_requires_generate_scope_for_page_and_every_proposed_datapoint(db: Database):
+    await _seed_scope(db)
+    await _insert_visu_page(db, "public-page", access="public", config=_page_config(BLOCKED_DP_ID))
+    await _insert_visu_grant(db, node_id="public-page")
+    await _insert_grant(db, node_id="allowed", role="operator")
+    principal = _principal()
+
+    with pytest.raises(HTTPException) as denied:
+        await visu_api.save_page(
+            "public-page",
+            _page_config(ALLOWED_DP_ID),
+            request=None,
+            db=db,
+            _user=principal,
+        )
+    assert denied.value.status_code == 403
+    row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id='public-page'")
+    assert str(BLOCKED_DP_ID) in row["page_config"]
+
+    await _insert_grant(db, node_id="blocked", role="operator")
+    await visu_api.save_page(
+        "public-page",
+        _page_config(ALLOWED_DP_ID),
+        request=None,
+        db=db,
+        _user=principal,
+    )
+    row = await db.fetchone("SELECT page_config FROM visu_nodes WHERE id='public-page'")
+    assert str(ALLOWED_DP_ID) in row["page_config"]
 
 
 @pytest.mark.asyncio

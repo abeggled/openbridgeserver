@@ -1007,6 +1007,20 @@ async def _filterset_grants(db: Database, principal: Principal) -> list[RoleGran
     return await load_role_grants(db, principal, node_type="ringbuffer_filterset")
 
 
+async def _require_explicit_datapoint_scope(
+    db: Database,
+    principal: Principal,
+    criteria: FilterCriteria,
+) -> None:
+    """Require READ access to every explicitly referenced datapoint."""
+    datapoint_ids = list(dict.fromkeys(criteria.datapoints))
+    if not datapoint_ids:
+        return
+    allowed_ids = set(await filter_authorized_datapoints(db, principal, datapoint_ids, action=AuthzAction.READ))
+    if set(datapoint_ids) != allowed_ids:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Datapoint read scope required")
+
+
 async def _require_filterset_access(
     db: Database,
     filterset_id: str,
@@ -1082,6 +1096,7 @@ async def _insert_filterset(
 ) -> RingBufferFiltersetOut:
     if principal.type != "user":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "User principal required to create filtersets")
+    await _require_explicit_datapoint_scope(db, principal, payload.filter)
     now = _now_iso()
     filterset_id = _new_id()
 
@@ -1398,6 +1413,7 @@ async def update_ringbuffer_filterset(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "filterset.filter must declare at least one criterion (hierarchy_nodes, datapoints, devices, tags, adapters, q, or value_filter)",
         )
+    await _require_explicit_datapoint_scope(db, principal, new_filter)
 
     # is_active, topbar_active and topbar_order live in
     # ringbuffer_filterset_user_state per-user (#478); PUT only changes the

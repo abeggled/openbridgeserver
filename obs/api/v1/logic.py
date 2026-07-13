@@ -58,6 +58,7 @@ def _row_to_out(row: dict) -> LogicGraphOut:
         flow_data=FlowData.model_validate(raw),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        control_class=row["control_class"] if "control_class" in row.keys() else "room_local",
     )
 
 
@@ -69,6 +70,15 @@ def _principal_from_dependency(value: Principal | str) -> Principal:
         type="api_key" if value.startswith("api_key:") else "user",
         is_admin=value == "admin",
     )
+
+
+def _principal_from_mutation_dependency(value: Principal | str | object) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    # Direct callers historically pass the return value of get_admin_user as a
+    # string. Runtime requests now receive a Principal from get_current_principal.
+    subject = value if isinstance(value, str) else "admin"
+    return Principal(subject=subject, type="user", is_admin=True)
 
 
 def _flow_from_row(row: dict) -> FlowData:
@@ -141,6 +151,55 @@ async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -
 async def _require_logic_graph_read(db: Database, principal: Principal, row: dict) -> None:
     if not await _can_read_logic_graph(db, principal, row):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+
+
+async def _require_logic_graph_generate(
+    db: Database,
+    principal: Principal,
+    row: dict,
+    flow: FlowData,
+    *,
+    control_class: str,
+) -> None:
+    """Authorize an existing graph and every datapoint in the proposed flow."""
+    await _require_logic_graph_read(db, principal, row)
+    if principal.type == "user" and principal.is_admin:
+        return
+    grants = await load_role_grants(db, principal)
+    current_control_class = row["control_class"] if "control_class" in row.keys() else "room_local"
+    graph_targets = [
+        AuthzTarget(
+            node_type="logic_graph",
+            node_id=row["id"],
+            control_class=current_control_class,
+        )
+    ]
+    if control_class != current_control_class:
+        graph_targets.append(
+            AuthzTarget(
+                node_type="logic_graph",
+                node_id=row["id"],
+                control_class=control_class,
+            )
+        )
+    graph_decision = authorize(
+        principal=principal,
+        action=AuthzAction.GENERATE,
+        targets=graph_targets,
+        grants=grants,
+    )
+    datapoint_ids = list(dict.fromkeys([*_logic_datapoint_ids(_flow_from_row(row)), *_logic_datapoint_ids(flow)]))
+    allowed_ids = set(
+        await filter_authorized_datapoints(
+            db,
+            principal,
+            datapoint_ids,
+            action=AuthzAction.GENERATE,
+            grants=grants,
+        )
+    )
+    if not graph_decision.allowed or allowed_ids != set(datapoint_ids):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
 
 
 def _datapoint_node_ids(flow: FlowData) -> dict[str, list[str]]:
@@ -364,22 +423,33 @@ async def get_graph(
 async def update_graph_full(
     graph_id: str,
     body: LogicGraphCreate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    control_class = (
+        body.control_class if "control_class" in body.model_fields_set else (row["control_class"] if "control_class" in row.keys() else "room_local")
+    )
+    await _require_logic_graph_generate(
+        db,
+        _principal_from_mutation_dependency(_user),
+        row,
+        body.flow_data,
+        control_class=control_class,
+    )
     await db.execute_and_commit(
         """UPDATE logic_graphs
-           SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
+           SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
            WHERE id=?""",
         (
             body.name,
             body.description,
             int(body.enabled),
             body.flow_data.model_dump_json(),
+            control_class,
             now,
             graph_id,
         ),
@@ -400,13 +470,22 @@ async def update_graph_full(
 async def update_graph_partial(
     graph_id: str,
     body: LogicGraphUpdate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    proposed_flow = body.flow_data if body.flow_data is not None else _flow_from_row(row)
+    control_class = body.control_class or (row["control_class"] if "control_class" in row.keys() else "room_local")
+    await _require_logic_graph_generate(
+        db,
+        _principal_from_mutation_dependency(_user),
+        row,
+        proposed_flow,
+        control_class=control_class,
+    )
     name = body.name if body.name is not None else row["name"]
     description = body.description if body.description is not None else row["description"]
     enabled = body.enabled if body.enabled is not None else bool(row["enabled"])
@@ -416,9 +495,9 @@ async def update_graph_partial(
         flow_json = row["flow_data"]
     await db.execute_and_commit(
         """UPDATE logic_graphs
-           SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
+           SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
            WHERE id=?""",
-        (name, description, int(enabled), flow_json, now, graph_id),
+        (name, description, int(enabled), flow_json, control_class, now, graph_id),
     )
     try:
         from obs.logic.manager import get_logic_manager
@@ -434,12 +513,19 @@ async def update_graph_partial(
 @router.delete("/graphs/{graph_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_graph(
     graph_id: str,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_generate(
+        db,
+        _principal_from_mutation_dependency(_user),
+        row,
+        _flow_from_row(row),
+        control_class=row["control_class"] if "control_class" in row.keys() else "room_local",
+    )
     async with db.transaction():
         await db.execute(
             "DELETE FROM authz_node_roles WHERE node_type='logic_graph' AND node_id=?",

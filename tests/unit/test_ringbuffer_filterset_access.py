@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 import pytest
 from fastapi import HTTPException
@@ -42,6 +43,25 @@ def _principal(username: str, *, admin: bool = False) -> Principal:
 
 def _payload(name: str = "Filter") -> rb_api.RingBufferFiltersetIn:
     return rb_api.RingBufferFiltersetIn(name=name, filter=rb_api.FilterCriteria(adapters=["api"]))
+
+
+async def _insert_datapoint(db: Database, dp_id: str) -> None:
+    await db.execute_and_commit(
+        """INSERT INTO datapoints
+               (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias,
+                persist_value, record_history, created_at, updated_at)
+           VALUES (?, ?, 'FLOAT', NULL, '[]', ?, NULL, 1, 1, 'now', 'now')""",
+        (dp_id, f"DP {dp_id}", f"dp/{dp_id}/value"),
+    )
+
+
+async def _grant_datapoint(db: Database, username: str, dp_id: str) -> None:
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', ?, 'datapoint', ?, 'guest', 'allow')""",
+        (username, dp_id),
+    )
 
 
 async def _grant(db: Database, username: str, filterset_id: str, role: str) -> None:
@@ -160,5 +180,64 @@ async def test_delete_removes_filterset_grants_atomically(db: Database):
 @pytest.mark.asyncio
 async def test_filterset_payload_remains_valid_json_after_central_access_changes(db: Database):
     created = await rb_api._insert_filterset(db, payload=_payload(), principal=_principal("alice"))
+    row = await db.fetchone("SELECT filter_json FROM ringbuffer_filtersets WHERE id=?", (created.id,))
+    assert json.loads(row["filter_json"])["adapters"] == ["api"]
+
+
+@pytest.mark.asyncio
+async def test_create_requires_read_scope_for_every_explicit_datapoint_before_persistence(db: Database):
+    allowed_id = str(uuid.uuid4())
+    blocked_id = str(uuid.uuid4())
+    await _insert_datapoint(db, allowed_id)
+    await _insert_datapoint(db, blocked_id)
+    await _grant_datapoint(db, "alice", allowed_id)
+    payload = rb_api.RingBufferFiltersetIn(
+        name="Scoped",
+        filter=rb_api.FilterCriteria(datapoints=[allowed_id, blocked_id]),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await rb_api._insert_filterset(db, payload=payload, principal=_principal("alice"))
+
+    assert exc.value.status_code == 403
+    assert await db.fetchone("SELECT 1 FROM ringbuffer_filtersets") is None
+
+
+@pytest.mark.asyncio
+async def test_admin_can_persist_existing_explicit_datapoints_but_not_unknown_ids(db: Database):
+    existing_id = str(uuid.uuid4())
+    await _insert_datapoint(db, existing_id)
+
+    created = await rb_api._insert_filterset(
+        db,
+        payload=rb_api.RingBufferFiltersetIn(name="Admin", filter=rb_api.FilterCriteria(datapoints=[existing_id])),
+        principal=_principal("admin", admin=True),
+    )
+    assert created.filter.datapoints == [existing_id]
+
+    with pytest.raises(HTTPException) as exc:
+        await rb_api._insert_filterset(
+            db,
+            payload=rb_api.RingBufferFiltersetIn(name="Unknown", filter=rb_api.FilterCriteria(datapoints=[str(uuid.uuid4())])),
+            principal=_principal("admin", admin=True),
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_out_of_scope_explicit_datapoint_without_mutating_filter(db: Database):
+    blocked_id = str(uuid.uuid4())
+    await _insert_datapoint(db, blocked_id)
+    created = await rb_api._insert_filterset(db, payload=_payload(), principal=_principal("alice"))
+
+    with pytest.raises(HTTPException) as exc:
+        await rb_api.update_ringbuffer_filterset(
+            created.id,
+            _JsonRequest({"filter": {"datapoints": [blocked_id]}}),  # type: ignore[arg-type]
+            current_user=_principal("alice"),
+            db=db,
+        )
+
+    assert exc.value.status_code == 403
     row = await db.fetchone("SELECT filter_json FROM ringbuffer_filtersets WHERE id=?", (created.id,))
     assert json.loads(row["filter_json"])["adapters"] == ["api"]

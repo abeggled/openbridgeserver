@@ -32,8 +32,13 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 
 from obs.api.auth import Principal, get_admin_user, get_current_principal, limiter
 from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
-from obs.api.authz import AuthzAction
-from obs.api.authz_service import authorize_visu_page, filter_authorized_datapoints
+from obs.api.authz import AuthzAction, authorize
+from obs.api.authz_service import (
+    authorize_visu_page,
+    filter_authorized_datapoints,
+    load_role_grants,
+    resolve_visu_page_targets,
+)
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.api.v1.sessions import create_session, validate_session
 from obs.db.database import Database, get_db
@@ -233,6 +238,15 @@ def _principal_from_dependency(value: Principal | str | None) -> Principal | Non
     )
 
 
+def _principal_from_mutation_dependency(value: Principal | str | object) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    # Direct callers historically pass the return value of get_admin_user as a
+    # string. Runtime requests now receive a Principal from get_current_principal.
+    subject = value if isinstance(value, str) else "admin"
+    return Principal(subject=subject, type="user", is_admin=True)
+
+
 async def _can_discover_node(db: Database, node_id: str, principal: Principal | None) -> bool:
     access, _ = await _resolve_access_with_node(db, node_id)
     if access != "user":
@@ -251,6 +265,34 @@ async def _require_discoverable_node(db: Database, node_id: str, principal: Prin
     if not await _can_discover_node(db, node_id, principal):
         raise HTTPException(status_code=404, detail="Knoten nicht gefunden")
     return node
+
+
+async def _visu_subtree_ids(db: Database, node_id: str) -> list[str]:
+    rows = await db.fetchall(
+        """WITH RECURSIVE subtree(id) AS (
+               SELECT id FROM visu_nodes WHERE id = ?
+               UNION ALL
+               SELECT child.id FROM visu_nodes AS child JOIN subtree ON child.parent_id = subtree.id
+           )
+           SELECT id FROM subtree""",
+        (node_id,),
+    )
+    return [row["id"] for row in rows]
+
+
+async def _require_visu_generate(db: Database, principal: Principal, node_ids: list[str]) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+    targets = await resolve_visu_page_targets(db, node_ids)
+    grants = await load_role_grants(db, principal, node_type="visu_page")
+    decision = authorize(
+        principal=principal,
+        action=AuthzAction.GENERATE,
+        targets=targets,
+        grants=grants,
+    )
+    if not decision.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
 
 def _collect_page_datapoint_ids(config: PageConfig) -> list[str]:
@@ -663,13 +705,15 @@ async def update_node(
     node_id: str,
     body: VisuNodeUpdate,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
+    principal = _principal_from_mutation_dependency(_user)
     access_supplied = "access" in body.model_fields_set
     usernames_supplied = "usernames" in body.model_fields_set
 
     async with db.transaction():
-        node = await _get_node_or_404(db, node_id)
+        node = await _require_discoverable_node(db, node_id, principal)
+        await _require_visu_generate(db, principal, await _visu_subtree_ids(db, node_id))
         requested_access = body.access if access_supplied else node.access
         target_usernames: list[str] | None = None
         if usernames_supplied:
@@ -745,20 +789,13 @@ async def update_node(
 async def delete_node(
     node_id: str,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
+    principal = _principal_from_mutation_dependency(_user)
     async with db.transaction():
-        await _get_node_or_404(db, node_id)
-        rows = await db.fetchall(
-            """WITH RECURSIVE subtree(id) AS (
-                   SELECT id FROM visu_nodes WHERE id = ?
-                   UNION
-                   SELECT child.id FROM visu_nodes AS child JOIN subtree ON child.parent_id = subtree.id
-               )
-               SELECT id FROM subtree""",
-            (node_id,),
-        )
-        subtree_ids = [row["id"] for row in rows]
+        await _require_discoverable_node(db, node_id, principal)
+        subtree_ids = await _visu_subtree_ids(db, node_id)
+        await _require_visu_generate(db, principal, subtree_ids)
         placeholders = ",".join("?" for _ in subtree_ids)
         await db.conn.execute(
             f"DELETE FROM authz_node_roles WHERE node_type='visu_page' AND node_id IN ({placeholders})",
@@ -965,9 +1002,15 @@ async def move_node(
     node_id: str,
     body: MoveNodeRequest,
     db: Database = Depends(get_db),
-    _user=Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
 ):
-    await _get_node_or_404(db, node_id)
+    principal = _principal_from_mutation_dependency(_user)
+    await _require_discoverable_node(db, node_id, principal)
+    target_ids = await _visu_subtree_ids(db, node_id)
+    if body.new_parent_id is not None:
+        await _require_discoverable_node(db, body.new_parent_id, principal)
+        target_ids.append(body.new_parent_id)
+    await _require_visu_generate(db, principal, target_ids)
     await _check_user_target_pages_datapoint_policy_after_access_change(
         db,
         parent_overrides={node_id: body.new_parent_id},
@@ -1100,23 +1143,33 @@ async def save_page(
     db: Database = Depends(get_db),
     _user: Principal | str = Depends(get_current_principal),
 ):
-    principal = _principal_from_dependency(_user) if isinstance(_user, (Principal, str)) else Principal(subject="admin", type="user", is_admin=True)
-    used_capability = await require_config_capability(
-        db,
-        principal,
-        ConfigCapability.VISU_PAGE_CONFIG_WRITE,
-        target_type="visu_page",
-        target_id=node_id,
-        request=request,
-    )
-    node = await _get_node_or_404(db, node_id)
+    principal = _principal_from_mutation_dependency(_user)
+    node = await _require_discoverable_node(db, node_id, principal)
     if node.type != "PAGE":
         raise HTTPException(status_code=400, detail="Knoten ist keine Seite")
 
-    if used_capability:
-        try:
+    used_capability = False
+    try:
+        if principal.type == "api_key":
+            used_capability = await require_config_capability(
+                db,
+                principal,
+                ConfigCapability.VISU_PAGE_CONFIG_WRITE,
+                target_type="visu_page",
+                target_id=node_id,
+                request=request,
+            )
+        await _require_visu_generate(db, principal, [node_id])
+        await _check_page_datapoint_policy(
+            db,
+            principal,
+            sorted(set(_collect_page_datapoint_ids(node.page_config or PageConfig())) | set(_collect_page_datapoint_ids(config))),
+            AuthzAction.GENERATE,
+        )
+        if principal.type == "api_key":
             await _check_page_write_access(db, node_id, principal)
-        except HTTPException:
+    except HTTPException:
+        if used_capability:
             await audit_config_capability_use(
                 db,
                 principal,
@@ -1126,7 +1179,7 @@ async def save_page(
                 allowed=False,
                 request=request,
             )
-            raise
+        raise
 
     access, defining_node_id = await _resolve_access_with_node(db, node_id)
     if access == "user" and defining_node_id is not None:
@@ -1178,13 +1231,15 @@ async def set_node_users(
     node_id: str,
     body: VisuNodeUsersUpdate,
     db: Database = Depends(get_db),
-    _admin=Depends(get_admin_user),
+    _admin: Principal | str = Depends(get_current_principal),
 ):
     """Setzt die autorisierten Benutzer für diesen Knoten (ersetzt die gesamte Liste).
     Nur gültige (existierende, nicht-Admin) Benutzernamen werden gespeichert.
     """
+    principal = _principal_from_mutation_dependency(_admin)
     async with db.transaction():
-        await _get_node_or_404(db, node_id)
+        await _require_discoverable_node(db, node_id, principal)
+        await _require_visu_generate(db, principal, await _visu_subtree_ids(db, node_id))
         valid = await _validate_target_usernames(db, body.usernames)
         await _check_user_target_pages_datapoint_policy(db, node_id, usernames=valid)
         await _replace_target_users(db, node_id, valid)

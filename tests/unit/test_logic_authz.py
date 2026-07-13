@@ -74,13 +74,16 @@ async def _insert_grant(
     role: str = "guest",
     principal_id: str = "alice",
     node_type: str = "hierarchy",
+    effect: str = "allow",
+    central_control: bool = False,
 ) -> None:
     await db.execute_and_commit(
         """
-        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', ?, ?, ?, ?, 'allow')
+        INSERT INTO authz_node_roles
+            (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+        VALUES ('user', ?, ?, ?, ?, ?, ?)
         """,
-        (principal_id, node_type, node_id, role),
+        (principal_id, node_type, node_id, role, effect, int(central_control)),
     )
 
 
@@ -95,6 +98,10 @@ def _flow(*dp_ids: uuid.UUID) -> str:
         for index, dp_id in enumerate(dp_ids)
     ]
     return json.dumps({"nodes": nodes, "edges": []})
+
+
+def _logic_ids(flow_json: str) -> list[str]:
+    return [node["data"]["datapoint_id"] for node in json.loads(flow_json)["nodes"]]
 
 
 def _flow_with_nodes(nodes: list[dict]) -> str:
@@ -250,6 +257,100 @@ async def test_export_graph_returns_404_for_existing_out_of_scope_graph(db: Data
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_full_update_requires_generate_scope_for_graph_and_every_proposed_datapoint(db: Database):
+    allowed_dp, blocked_dp = await _seed_scope(db, allowed_role="operator")
+    await _insert_grant(db, "graph-edit", role="operator", node_type="logic_graph")
+    await _insert_graph(db, "graph-edit", "Editable", blocked_dp)
+    principal = Principal(subject="alice", type="user", is_admin=False)
+    body = logic_api.LogicGraphCreate(
+        name="Denied change",
+        flow_data=logic_api.FlowData.model_validate_json(_flow(allowed_dp)),
+        control_class="room_local",
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await logic_api.update_graph_full("graph-edit", body, _user=principal, db=db)
+
+    assert denied.value.status_code == 403
+    row = await db.fetchone("SELECT name, flow_data FROM logic_graphs WHERE id='graph-edit'")
+    assert row["name"] == "Editable"
+    assert _logic_ids(row["flow_data"]) == [str(blocked_dp)]
+
+    await _insert_grant(db, "blocked-room", role="operator")
+    updated = await logic_api.update_graph_full("graph-edit", body, _user=principal, db=db)
+    assert updated.name == "Denied change"
+    assert _logic_ids(updated.flow_data.model_dump_json()) == [str(allowed_dp)]
+
+
+@pytest.mark.asyncio
+async def test_existing_graph_mutation_conceals_unreadable_graph_before_generate_check(db: Database):
+    _, blocked_dp = await _seed_scope(db, allowed_role="operator")
+    await _insert_graph(db, "graph-hidden", "Hidden", blocked_dp)
+
+    with pytest.raises(HTTPException) as exc:
+        await logic_api.update_graph_partial(
+            "graph-hidden",
+            logic_api.LogicGraphUpdate(name="Leak"),
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_requires_generate_role_and_preserves_admin_bridge(db: Database):
+    await _insert_graph(db, "graph-delete", "Delete", enabled=False)
+    await _insert_grant(db, "graph-delete", role="resident", node_type="logic_graph")
+
+    with pytest.raises(HTTPException) as denied:
+        await logic_api.delete_graph(
+            "graph-delete",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+    assert denied.value.status_code == 403
+    assert await db.fetchone("SELECT 1 FROM logic_graphs WHERE id='graph-delete'") is not None
+
+    await logic_api.delete_graph(
+        "graph-delete",
+        _user=Principal(subject="owner", type="user", is_admin=True),
+        db=db,
+    )
+    assert await db.fetchone("SELECT 1 FROM logic_graphs WHERE id='graph-delete'") is None
+
+
+@pytest.mark.asyncio
+async def test_central_graph_mutation_requires_scope_switch(db: Database):
+    await _insert_graph(db, "graph-central", "Central")
+    await db.execute_and_commit("UPDATE logic_graphs SET control_class='central_plant' WHERE id='graph-central'")
+    await _insert_grant(db, "graph-central", role="operator", node_type="logic_graph")
+    principal = Principal(subject="alice", type="user", is_admin=False)
+
+    with pytest.raises(HTTPException) as denied:
+        await logic_api.update_graph_partial(
+            "graph-central",
+            logic_api.LogicGraphUpdate(name="Downgrade", control_class="room_local"),
+            _user=principal,
+            db=db,
+        )
+    assert denied.value.status_code == 403
+
+    await db.execute_and_commit(
+        """UPDATE authz_node_roles SET central_control=1
+           WHERE principal_id='alice' AND node_type='logic_graph' AND node_id='graph-central'"""
+    )
+    updated = await logic_api.update_graph_full(
+        "graph-central",
+        logic_api.LogicGraphCreate(name="Allowed central"),
+        _user=principal,
+        db=db,
+    )
+    assert updated.name == "Allowed central"
+    assert updated.control_class == "central_plant"
 
 
 @pytest.mark.asyncio
