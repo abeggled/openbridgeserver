@@ -118,6 +118,27 @@ git config core.hooksPath .githooks
 
 Danach läuft der i18n-Gate automatisch vor jedem `git push`.
 
+## Authorization and mutation audit contract (MUST)
+
+Every new or changed mutating v1 endpoint is incomplete until its authorization
+and audit contract is implemented and tested together with the route:
+
+1. Classify the route in `obs/api/v1/route_classification_registry.py` and add
+   its exact security contract to `obs/api/v1/security_contract_registry.py`.
+2. Use the declared principal dependency and real policy/capability checks.
+   Never use `optional_current_user`, wildcard capabilities, or a synthetic
+   admin `Principal` to protect a mutation.
+3. Emit the contract's canonical event with `AuditLogWriter.write_contract()`.
+   A successful DB mutation and its event must share `db.transaction()` and use
+   `commit=False`; denied/failed attempts must be recorded only after rollback.
+   Raw passwords, tokens, credentials, keyfiles, PINs, or request payloads must
+   never enter audit details.
+4. Add focused admin/user/API-key/anonymous persona tests as applicable,
+   including denial-without-state-change and audit rollback/redaction cases.
+5. Run `tools/with-venv python tools/check_authz_contract.py` and the focused
+   authorization/audit test suite before pushing. The `authz-contract` CI job is
+   a required anti-drift gate; do not bypass or baseline new violations.
+
 ## Test Coverage Gate (verbindlich)
 
 **Jede neue Zeile Code muss durch Tests abgedeckt sein.** Codecov prüft die *Patch Coverage* —
