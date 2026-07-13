@@ -1302,7 +1302,9 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM visu_nodes")
         result.visu_nodes_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM visu_nodes WHERE parent_id IS NULL")
+        async with db.transaction():
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='visu_page'")
+            await db.execute("DELETE FROM visu_nodes WHERE parent_id IS NULL")
     except Exception as exc:
         result.errors.append(f"Visu nodes reset failed: {exc}")
 

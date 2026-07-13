@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from obs.api.auth import Principal
+from obs.api.v1 import config as config_api
 from obs.api.v1 import visu as visu_api
 from obs.db.database import Database
 from obs.models.visu import PageConfig, WidgetInstance
@@ -698,3 +700,40 @@ async def test_delete_subtree_removes_only_its_visu_page_grants(db: Database):
         "SELECT node_id FROM authz_node_roles WHERE node_type='visu_page' ORDER BY node_id",
     )
     assert [row["node_id"] for row in remaining] == ["unrelated"]
+
+
+@pytest.mark.asyncio
+async def test_factory_reset_removes_visu_page_grants_and_preserves_unrelated_grants(
+    monkeypatch: pytest.MonkeyPatch,
+    db: Database,
+):
+    await _insert_user(db, "alice")
+    await _insert_visu_location(db, "root", access="user")
+    await _insert_visu_page(db, "child", access=None, config=PageConfig(), parent_id="root")
+    await _assign_visu_user(db, node_id="root")
+    await _assign_visu_user(db, node_id="child")
+    await db.execute_and_commit(
+        """INSERT INTO authz_node_roles
+               (principal_type, principal_id, node_type, node_id, role, effect)
+           VALUES ('user', 'alice', 'logic_capability', 'http_request', 'resident', 'deny')"""
+    )
+    monkeypatch.setattr(config_api, "get_registry", lambda: SimpleNamespace(_points={}, _values={}))
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.logic.manager.get_logic_manager") as manager,
+        patch("obs.api.v1.icons._icons_dir") as icons_dir,
+    ):
+        manager.return_value.reload = AsyncMock()
+        icons_dir.return_value = MagicMock(glob=MagicMock(return_value=[]))
+        result = await config_api.factory_reset(_admin="admin", db=db)
+
+    assert result.errors == []
+    assert result.visu_nodes_deleted == 2
+    assert await db.fetchone("SELECT 1 FROM visu_nodes") is None
+    assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_type='visu_page'") is None
+    unrelated = await db.fetchone(
+        "SELECT effect FROM authz_node_roles WHERE node_type='logic_capability' AND node_id='http_request'"
+    )
+    assert unrelated is not None
+    assert unrelated["effect"] == "deny"

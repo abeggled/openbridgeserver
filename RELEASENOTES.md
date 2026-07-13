@@ -38,6 +38,7 @@
 * Visu: Link widget: the navigation arrow (→) can now be hidden independently of the icon via the "show_arrow" option (default: shown).
 
 ### Fixes 🐞
+* Security: Visu navigation and subtree exports now respect page scope without exposing page configuration, target-audience changes validate and commit atomically, and DataPoint, hierarchy, Visu-page, and adapter-instance grants are removed with their resources. A one-time migration also reconciles historical orphan grants without widening access. https://github.com/abeggled/openbridgeserver/issues/583
 * Security (Upstream PR #956): bind legacy SHA-512 fallback verification to the app bundle filename.
 * Security (Upstream PR #955): keep updater checksum notes compatible with legacy app-bundle verification.
 * Security (Upstream PR #954): prevent API-client URL variables from changing request authority.
