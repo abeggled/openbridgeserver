@@ -88,6 +88,24 @@ def _dependency_names(route: APIRoute) -> set[str]:
     return names
 
 
+def _bound_audit_contracts(route: APIRoute) -> set[tuple[str, str]]:
+    """Return route/endpoint markers installed by contract audit wrappers."""
+    markers: set[tuple[str, str]] = set()
+    endpoint_marker = getattr(route.endpoint, "__audit_contract__", None)
+    if isinstance(endpoint_marker, tuple) and len(endpoint_marker) == 2:
+        markers.add(endpoint_marker)
+
+    def walk(dependant) -> None:
+        for dependency in dependant.dependencies:
+            marker = getattr(dependency.call, "__audit_contract__", None)
+            if isinstance(marker, tuple) and len(marker) == 2:
+                markers.add(marker)
+            walk(dependency)
+
+    walk(route.dependant)
+    return markers
+
+
 def _synthetic_admin_principals(repo_root: Path) -> Counter[tuple[str, str, str]]:
     found: Counter[tuple[str, str, str]] = Counter()
     api_root = repo_root / "obs" / "api" / "v1"
@@ -113,6 +131,44 @@ def _synthetic_admin_principals(repo_root: Path) -> Counter[tuple[str, str, str]
                         expression = ast.unparse(keyword.value)
                         if expression == "True" or "'admin'" in expression or '"admin"' in expression:
                             found[(relative, functions[-1] if functions else "<module>", expression)] += 1
+                self.generic_visit(node)
+
+        Visitor().visit(tree)
+    return found
+
+
+def _literal_contract_audit_calls(repo_root: Path) -> dict[tuple[str, str], list[tuple[str, str, bool]]]:
+    """Collect statically reviewable contract writes from API source modules."""
+    found: dict[tuple[str, str], list[tuple[str, str, bool]]] = {}
+    for path in (repo_root / "obs" / "api").rglob("*.py"):
+        relative = path.relative_to(repo_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        functions: list[str] = []
+
+        class Visitor(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                functions.append(node.name)
+                self.generic_visit(node)
+                functions.pop()
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Call(self, node: ast.Call) -> None:
+                is_contract_write = isinstance(node.func, ast.Attribute) and node.func.attr == "write_contract"
+                if is_contract_write and len(node.args) >= 2:
+                    method_node, path_node = node.args[:2]
+                    if (
+                        isinstance(method_node, ast.Constant)
+                        and isinstance(method_node.value, str)
+                        and isinstance(path_node, ast.Constant)
+                        and isinstance(path_node.value, str)
+                    ):
+                        signature = (method_node.value.upper(), path_node.value)
+                        commit_false = any(
+                            keyword.arg == "commit" and isinstance(keyword.value, ast.Constant) and keyword.value.value is False
+                            for keyword in node.keywords
+                        )
+                        found.setdefault(signature, []).append((relative, functions[-1] if functions else "<module>", commit_false))
                 self.generic_visit(node)
 
         Visitor().visit(tree)
@@ -174,6 +230,24 @@ def validate_contracts(repo_root: Path | None = None) -> list[str]:
     for capability in CONFIG_CAPABILITIES:
         if capability == "*" or "*" in capability:
             errors.append(f"wildcard configuration capability {capability!r}")
+
+    audit_calls = _literal_contract_audit_calls(root)
+    for signature, contract in ROUTE_SECURITY_CONTRACTS.items():
+        route = live.get(signature)
+        bound_contracts = _bound_audit_contracts(route) if isinstance(route, APIRoute) else set()
+        if bound_contracts and signature not in bound_contracts:
+            errors.append(f"{signature}: mismatched audit contract binding {sorted(bound_contracts)!r}")
+        if signature in bound_contracts:
+            continue
+        endpoint_module = getattr(getattr(route, "endpoint", None), "__module__", "")
+        endpoint_path = f"{endpoint_module.replace('.', '/')}.py"
+        matching_calls = [call for call in audit_calls.get(signature, []) if call[0] == endpoint_path]
+        if not matching_calls:
+            errors.append(f"{signature}: endpoint module has no literal write_contract call")
+        elif contract.audit_mode == AuditMode.ATOMIC and not any(call[2] for call in matching_calls):
+            errors.append(f"{signature}: atomic endpoint has no write_contract call with commit=False")
+    for signature in audit_calls.keys() - ROUTE_SECURITY_CONTRACTS.keys():
+        errors.append(f"{signature}: stale literal write_contract call without route contract")
 
     synthetic = _synthetic_admin_principals(root)
     for key, count in synthetic.items():
