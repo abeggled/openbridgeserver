@@ -1162,6 +1162,36 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
 # ---------------------------------------------------------------------------
 
 
+class _LoopReusableLock:
+    """An asyncio lock that may be reused by sequential event loops."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def acquire(self) -> bool:
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            if self._lock.locked():
+                raise RuntimeError("Database lock is still owned by another event loop")
+            self._lock = asyncio.Lock()
+            self._loop = loop
+        return await self._lock.acquire()
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    async def __aenter__(self) -> _LoopReusableLock:
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.release()
+
+
 class Database:
     """Async SQLite database wrapper with built-in migration support."""
 
@@ -1178,7 +1208,13 @@ class Database:
         # (POST /config/import/db) disconnects the DB and rewrites the file, and
         # cancelling asyncio.to_thread does not stop the worker thread — so disconnect
         # must wait for any in-flight checkpoint to finish before returning. See #908.
-        self._checkpoint_lock = asyncio.Lock()
+        self._checkpoint_lock = _LoopReusableLock()
+        # Dedicated audit transactions use private SQLite connections while legacy
+        # helpers still write through the shared connection. Serialize both paths so
+        # a shared execute-and-commit cannot collide with BEGIN IMMEDIATE under
+        # concurrent HTTP mutations.
+        self._write_lock = _LoopReusableLock()
+        self._legacy_write_owner: asyncio.Task | None = None
         self._transaction_connections: dict[asyncio.Task, aiosqlite.Connection] = {}
 
     # ------------------------------------------------------------------
@@ -1334,6 +1370,7 @@ class Database:
         conn = await aiosqlite.connect(self._connection_path, uri=self._connection_uri)
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys=ON")
+        await conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     @asynccontextmanager
@@ -1348,11 +1385,13 @@ class Database:
             # task-local connection lets the outer boundary remain authoritative.
             yield
             return
+        if task is self._legacy_write_owner:
+            raise RuntimeError("Commit or roll back the pending shared-connection transaction first")
 
         # Checkpoints, disconnect/restore, and explicit transactions all hold this
         # lifecycle guard. A restore therefore cannot close or replace the database
         # file while a dedicated transaction is still using it.
-        async with self._checkpoint_lock:
+        async with self._checkpoint_lock, self._write_lock:
             if self._conn is None:
                 raise RuntimeError("Database.connect() has not been called")
             transaction_conn = await self._open_connection()
@@ -1395,20 +1434,74 @@ class Database:
         return self._conn
 
     async def execute(self, sql: str, params: Any = ()) -> aiosqlite.Cursor:
-        return await self.conn.execute(sql, params)
+        if self.in_transaction:
+            return await self.conn.execute(sql, params)
+        task = asyncio.current_task()
+        assert task is not None
+        if task is self._legacy_write_owner:
+            return await self.conn.execute(sql, params)
+        await self._write_lock.acquire()
+        try:
+            cur = await self.conn.execute(sql, params)
+            if self.conn.in_transaction:
+                self._legacy_write_owner = task
+            else:
+                self._write_lock.release()
+            return cur
+        except BaseException:
+            self._write_lock.release()
+            raise
 
     async def executemany(self, sql: str, params: Any) -> aiosqlite.Cursor:
-        return await self.conn.executemany(sql, params)
+        if self.in_transaction:
+            return await self.conn.executemany(sql, params)
+        task = asyncio.current_task()
+        assert task is not None
+        if task is self._legacy_write_owner:
+            return await self.conn.executemany(sql, params)
+        await self._write_lock.acquire()
+        try:
+            cur = await self.conn.executemany(sql, params)
+            if self.conn.in_transaction:
+                self._legacy_write_owner = task
+            else:
+                self._write_lock.release()
+            return cur
+        except BaseException:
+            self._write_lock.release()
+            raise
 
     async def commit(self) -> None:
         # The outer explicit transaction owns the durability boundary.  Some
         # legacy bulk helpers call commit() after intermediate phases; allowing
         # that here would make their domain rows survive a later audit failure.
-        if not self.in_transaction:
+        if self.in_transaction:
+            return
+        task = asyncio.current_task()
+        if task is self._legacy_write_owner:
+            try:
+                await self.conn.commit()
+            finally:
+                self._legacy_write_owner = None
+                self._write_lock.release()
+            return
+        async with self._write_lock:
             await self.conn.commit()
 
     async def rollback(self) -> None:
-        await self.conn.rollback()
+        if self.in_transaction:
+            await self.conn.rollback()
+            return
+        task = asyncio.current_task()
+        if task is self._legacy_write_owner:
+            try:
+                await self.conn.rollback()
+            finally:
+                self._legacy_write_owner = None
+                self._write_lock.release()
+            return
+        async with self._write_lock:
+            await self.conn.rollback()
 
     async def fetchall(self, sql: str, params: Any = ()) -> list[aiosqlite.Row]:
         async with self.conn.execute(sql, params) as cur:
@@ -1419,13 +1512,24 @@ class Database:
             return await cur.fetchone()
 
     async def execute_and_commit(self, sql: str, params: Any = ()) -> aiosqlite.Cursor:
-        cur = await self.conn.execute(sql, params)
         # An explicit task-local transaction owns its commit boundary.  Legacy
         # mutation helpers may still call this method inside that boundary; an
         # early commit here would make the mutation survive a later audit failure.
-        if not self.in_transaction:
+        if self.in_transaction:
+            return await self.conn.execute(sql, params)
+        task = asyncio.current_task()
+        if task is self._legacy_write_owner:
+            try:
+                cur = await self.conn.execute(sql, params)
+                await self.conn.commit()
+                return cur
+            finally:
+                self._legacy_write_owner = None
+                self._write_lock.release()
+        async with self._write_lock:
+            cur = await self.conn.execute(sql, params)
             await self.conn.commit()
-        return cur
+            return cur
 
 
 # ---------------------------------------------------------------------------

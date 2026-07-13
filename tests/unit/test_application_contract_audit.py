@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -217,6 +218,72 @@ async def test_application_success_event_rolls_back_with_its_mutation() -> None:
         assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action='ringbuffer.export.settings_updated'") is None
     finally:
         await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_direct_commit_waits_for_atomic_audit_transaction(tmp_path) -> None:
+    db = Database(str(tmp_path / "audit-concurrency.db"))
+    await db.connect()
+    transaction_started = asyncio.Event()
+    release_transaction = asyncio.Event()
+
+    async def atomic_writer() -> None:
+        async with db.transaction():
+            await db.execute("INSERT INTO app_settings (key, value) VALUES ('atomic', 'value')")
+            transaction_started.set()
+            await release_transaction.wait()
+
+    async def direct_writer() -> None:
+        await transaction_started.wait()
+        await db.execute_and_commit("INSERT INTO app_settings (key, value) VALUES ('direct', 'value')")
+
+    try:
+        atomic_task = asyncio.create_task(atomic_writer())
+        direct_task = asyncio.create_task(direct_writer())
+        await transaction_started.wait()
+        await asyncio.sleep(0)
+        assert not direct_task.done()
+        release_transaction.set()
+        await asyncio.gather(atomic_task, direct_task)
+
+        rows = await db.fetchall("SELECT key FROM app_settings WHERE key IN ('atomic', 'direct') ORDER BY key")
+        assert [row["key"] for row in rows] == ["atomic", "direct"]
+    finally:
+        release_transaction.set()
+        await db.disconnect()
+
+
+def test_database_write_lock_is_reusable_across_sequential_event_loops(tmp_path) -> None:
+    db = Database(str(tmp_path / "cross-loop.db"))
+
+    async def contend_for_write_lock() -> None:
+        await db.connect()
+        transaction_started = asyncio.Event()
+        release_transaction = asyncio.Event()
+
+        async def atomic_writer() -> None:
+            async with db.transaction():
+                transaction_started.set()
+                await release_transaction.wait()
+
+        async def waiting_reader() -> None:
+            await transaction_started.wait()
+            await db.fetchone("SELECT 1")
+
+        atomic_task = asyncio.create_task(atomic_writer())
+        reader_task = asyncio.create_task(waiting_reader())
+        await transaction_started.wait()
+        await asyncio.sleep(0)
+        assert not reader_task.done()
+        release_transaction.set()
+        await asyncio.gather(atomic_task, reader_task)
+
+    async def use_next_loop() -> None:
+        assert await db.fetchone("SELECT 1") is not None
+        await db.disconnect()
+
+    asyncio.run(contend_for_write_lock())
+    asyncio.run(use_next_loop())
 
 
 @pytest.mark.asyncio
