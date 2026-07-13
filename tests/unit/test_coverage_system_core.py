@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from starlette.requests import Request
 
 from obs.security.url_targets import UrlTargetDecision
 
@@ -61,6 +62,7 @@ class _DbStub:
         self._rows = rows or []
         self._one = one
         self.executed: list[tuple] = []
+        self._in_transaction = False
 
     async def fetchone(self, query, params=()):
         return self._one
@@ -77,9 +79,36 @@ class _DbStub:
     async def commit(self):
         pass
 
+    @property
+    def in_transaction(self) -> bool:
+        return self._in_transaction
+
     @asynccontextmanager
     async def transaction(self):
-        yield
+        assert not self._in_transaction
+        snapshot = len(self.executed)
+        self._in_transaction = True
+        try:
+            yield
+        except Exception:
+            del self.executed[snapshot:]
+            raise
+        finally:
+            self._in_transaction = False
+
+
+def _request(method: str, path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "route": SimpleNamespace(path=path),
+        }
+    )
 
 
 # ===========================================================================
@@ -1654,7 +1683,7 @@ class TestSystemAppSettings:
         monkeypatch.setattr("obs.logic.manager.get_logic_manager", _mock_get_logic_manager, raising=False)
 
         body = sys_api.AppSettingsIn(timezone="Europe/Berlin")
-        result = await sys_api.update_app_settings(body=body, db=db, _user="admin")
+        result = await sys_api.update_app_settings(body=body, request=_request("PUT", "/api/v1/system/settings"), db=db, _user="admin")
         assert result.timezone == "Europe/Berlin"
 
     @pytest.mark.asyncio
@@ -1696,7 +1725,7 @@ class TestSystemNavLinks:
 
         db = _DbStub()
         body = sys_api.NavLinkIn(label="Test", url="http://test.com")
-        result = await sys_api.create_nav_link(body=body, db=db, _admin="admin")
+        result = await sys_api.create_nav_link(body=body, request=_request("POST", "/api/v1/system/nav-links"), db=db, _admin="admin")
         assert result.label == "Test"
         assert result.url == "http://test.com"
         assert len(result.id) > 0
@@ -1719,7 +1748,13 @@ class TestSystemNavLinks:
         row = _row(id="link-1", label="Old", url="http://old.com", icon="", sort_order=0, open_new_tab=1)
         db = _DbStub(one=row)
         body = sys_api.NavLinkPatch(label="Updated")
-        result = await sys_api.update_nav_link(link_id="link-1", body=body, db=db, _admin="admin")
+        result = await sys_api.update_nav_link(
+            link_id="link-1",
+            body=body,
+            request=_request("PATCH", "/api/v1/system/nav-links/link-1"),
+            db=db,
+            _admin="admin",
+        )
         assert result.label == "Updated"
         assert result.url == "http://old.com"
 
@@ -1739,7 +1774,12 @@ class TestSystemNavLinks:
 
         db = _DbStub(one=_row(id="link-1"))
         # Should not raise
-        await sys_api.delete_nav_link(link_id="link-1", db=db, _admin="admin")
+        await sys_api.delete_nav_link(
+            link_id="link-1",
+            request=_request("DELETE", "/api/v1/system/nav-links/link-1"),
+            db=db,
+            _admin="admin",
+        )
         assert any("DELETE" in q for q, _ in db.executed)
 
 
@@ -1796,7 +1836,8 @@ class TestSystemLogs:
         monkeypatch.setattr("obs.log_buffer.set_log_buffer_level", lambda lvl: called_with.append(lvl))
 
         body = sys_api.LogLevelIn(level="debug")
-        result = await sys_api.set_log_level(body=body, _admin="admin")
+        db = _DbStub()
+        result = await sys_api.set_log_level(body=body, request=_request("PUT", "/api/v1/system/log-level"), _admin="admin", db=db)
         assert result is None
         assert called_with == ["DEBUG"]
 
@@ -1850,7 +1891,8 @@ class TestSystemHistorySettings:
         import obs.api.v1.system as sys_api
 
         body = sys_api.HistorySettingsIn(plugin="sqlite")
-        result = await sys_api.test_history_connection(body=body, _admin="admin")
+        db = _DbStub()
+        result = await sys_api.test_history_connection(body=body, request=_request("POST", "/api/v1/system/history/test"), _admin="admin", db=db)
         assert result.ok is True
         assert "SQLite" in result.message
 
@@ -1890,7 +1932,8 @@ class TestSystemHistorySettings:
         import obs.api.v1.system as sys_api
 
         body = sys_api.HistorySettingsIn(plugin="unknownplugin")
-        result = await sys_api.test_history_connection(body=body, _admin="admin")
+        db = _DbStub()
+        result = await sys_api.test_history_connection(body=body, request=_request("POST", "/api/v1/system/history/test"), _admin="admin", db=db)
         assert result.ok is False
 
 
