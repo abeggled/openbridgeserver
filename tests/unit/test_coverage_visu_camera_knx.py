@@ -456,33 +456,70 @@ class TestCheckSsrf:
 # ===========================================================================
 
 
-from obs.api.v1.camera import _camera_auth
+from obs.api.v1.camera import _camera_auth, _page_config_contains_camera_url
 
 
 class TestCameraAuth:
     @pytest.mark.asyncio
-    async def test_missing_auth_raises_401(self):
+    async def test_missing_auth_returns_anonymous_identity(self):
         request = MagicMock()
         request.headers = {"Authorization": ""}
-        with pytest.raises(HTTPException) as exc:
-            await _camera_auth(request=request, _token="")
-        assert exc.value.status_code == 401
+        result = await _camera_auth(request=request, _token="")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_bearer_header_accepted(self):
         request = MagicMock()
         request.headers = {"Authorization": "Bearer mytoken"}
+        db = MagicMock()
+        db.fetchone = AsyncMock(return_value={"exists": 1})
         with patch("obs.api.v1.camera.decode_token", return_value="testuser"):
-            result = await _camera_auth(request=request, _token="")
+            result = await _camera_auth(request=request, _token="", db=db)
         assert result == "testuser"
 
     @pytest.mark.asyncio
     async def test_query_token_accepted(self):
         request = MagicMock()
         request.headers = {}
+        db = MagicMock()
+        db.fetchone = AsyncMock(return_value={"exists": 1})
         with patch("obs.api.v1.camera.decode_token", return_value="testuser"):
-            result = await _camera_auth(request=request, _token="mytoken")
+            result = await _camera_auth(request=request, _token="mytoken", db=db)
         assert result == "testuser"
+
+    def test_page_scope_matches_legacy_api_key_auth_type(self):
+        page_config = {
+            "widgets": [
+                {
+                    "type": "kamera",
+                    "config": {
+                        "url": "http://cam.local/snapshot",
+                        "authType": "API-Key (Query-Parameter)",
+                        "apiKeyParam": "token",
+                        "apiKeyValue": "abc123",
+                    },
+                }
+            ]
+        }
+
+        assert _page_config_contains_camera_url(page_config, "http://cam.local/snapshot?token=abc123")
+
+    def test_page_scope_matches_legacy_basic_auth_type(self):
+        page_config = {
+            "widgets": [
+                {
+                    "type": "kamera",
+                    "config": {
+                        "url": "http://cam.local/snapshot",
+                        "authType": "Basic Auth (Benutzername / Passwort)",
+                        "username": "alice",
+                        "password": "secret",
+                    },
+                }
+            ]
+        }
+
+        assert _page_config_contains_camera_url(page_config, "http://cam.local/snapshot", "alice", "secret")
 
 
 # ===========================================================================
@@ -558,7 +595,7 @@ class TestResolveAccess:
 
     @pytest.mark.asyncio
     async def test_returns_explicit_access(self):
-        row = _Row({"access": "readonly", "parent_id": None})
+        row = _Row({"access_mode": "readonly", "parent_id": None})
         db = MagicMock()
         cursor = _FakeCursor(row=row)
         db.conn.execute = MagicMock(return_value=cursor)
@@ -568,8 +605,8 @@ class TestResolveAccess:
     @pytest.mark.asyncio
     async def test_traverses_parents(self):
         # Child has access=None, parent has access="user"
-        child_row = _Row({"access": None, "parent_id": "parent-1"})
-        parent_row = _Row({"access": "user", "parent_id": None})
+        child_row = _Row({"access_mode": None, "parent_id": "parent-1"})
+        parent_row = _Row({"access_mode": "user", "parent_id": None})
 
         cursors = iter([_FakeCursor(row=child_row), _FakeCursor(row=parent_row)])
 
@@ -594,7 +631,7 @@ class TestResolveAccessWithNode:
 
     @pytest.mark.asyncio
     async def test_returns_defining_node_id(self):
-        row = _Row({"access": "protected", "parent_id": None})
+        row = _Row({"access_mode": "protected", "parent_id": None})
         db = MagicMock()
         cursor = _FakeCursor(row=row)
         db.conn.execute = MagicMock(return_value=cursor)
@@ -782,7 +819,8 @@ class TestGetPage:
                 "type": "PAGE",
                 "node_order": 0,
                 "icon": None,
-                "access": access,
+                "access": None,
+                "access_mode": access,
                 "page_config": json.dumps({"grid_cols": 12, "grid_row_height": 80, "background": None, "widgets": []}),
                 "created_at": "2024-01-01T00:00:00+00:00",
                 "updated_at": "2024-01-01T00:00:00+00:00",
@@ -800,6 +838,7 @@ class TestGetPage:
                 "node_order": 0,
                 "icon": None,
                 "access": None,
+                "access_mode": None,
                 "page_config": None,
                 "created_at": "2024-01-01T00:00:00+00:00",
                 "updated_at": "2024-01-01T00:00:00+00:00",
@@ -1717,9 +1756,7 @@ class TestConfigModels:
         assert lg.name == "Graph"
 
     def test_exported_visu_node_defaults(self):
-        vn = ExportedVisuNode(
-            id="v1", parent_id=None, name="Room", type="LOCATION", node_order=0, icon=None, access=None, access_pin=None, page_config=None
-        )
+        vn = ExportedVisuNode(id="v1", parent_id=None, name="Room", type="LOCATION", node_order=0, icon=None, access=None, page_config=None)
         assert vn.users == []
 
     def test_import_result_defaults(self):

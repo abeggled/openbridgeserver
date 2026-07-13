@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints, getWriteContext } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import VisuIcon from '@/components/VisuIcon.vue'
 import type { DataPointValue } from '@/types'
 
@@ -24,6 +25,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const { t } = useI18n()
@@ -111,7 +113,7 @@ function setFeedback(id: string, value: 'success' | 'error') {
 async function press(button: ButtonConfig) {
   if (props.editorMode || props.readonly || !props.datapointId || pendingId.value) return
   const datapointId = props.datapointId
-  const writeContext = { ...getWriteContext() }
+  const writeContext = { ...(props.writeContext ?? getWriteContext()) }
   pendingId.value = button.id
   feedback.value = {}
   try {

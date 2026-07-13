@@ -656,11 +656,11 @@ async def test_filterset_query_combines_devices_with_other_criteria_using_and(cl
 
 
 # ---------------------------------------------------------------------------
-# Access control hardening (#590): filterset mutation routes are admin-only.
+# Central filterset authorization (#629).
 # ---------------------------------------------------------------------------
 
 
-async def test_non_admin_cannot_create_filterset(client, auth_headers):
+async def test_non_admin_can_create_owned_filterset(client, auth_headers):
     username = f"rb-na-{uuid.uuid4().hex[:8]}"
     user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
     try:
@@ -669,7 +669,12 @@ async def test_non_admin_cannot_create_filterset(client, auth_headers):
             json={"name": f"Owned by user {uuid.uuid4()}", "filter": {"adapters": ["api"]}},
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 201, resp.text
+        created = resp.json()
+        assert created["created_by"] == username
+        assert created["can_write"] is True
+        delete = await client.delete(f"/api/v1/ringbuffer/filtersets/{created['id']}", headers=user_headers)
+        assert delete.status_code == 204, delete.text
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
@@ -688,7 +693,7 @@ async def test_non_admin_cannot_update_filterset(client, auth_headers):
             json={"name": "hijacked", "filter": {"adapters": ["api"]}},
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
@@ -707,7 +712,7 @@ async def test_non_admin_cannot_delete_filterset(client, auth_headers):
             f"/api/v1/ringbuffer/filtersets/{created['id']}",
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
@@ -727,13 +732,13 @@ async def test_non_admin_cannot_clone_filterset(client, auth_headers):
             json={"name": "forbidden clone"},
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_non_admin_can_patch_filterset_topbar(client, auth_headers):
+async def test_future_user_cannot_patch_out_of_scope_filterset_topbar(client, auth_headers):
     created = await _create_filterset(
         client,
         auth_headers,
@@ -747,14 +752,13 @@ async def test_non_admin_can_patch_filterset_topbar(client, auth_headers):
             json={"topbar_active": True},
             headers=user_headers,
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["topbar_active"] is True
+        assert resp.status_code == 404, resp.text
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
-async def test_non_admin_can_patch_filterset_order(client, auth_headers):
+async def test_future_user_order_ignores_out_of_scope_filtersets(client, auth_headers):
     created = await _create_filterset(
         client,
         auth_headers,
@@ -769,8 +773,7 @@ async def test_non_admin_can_patch_filterset_order(client, auth_headers):
             headers=user_headers,
         )
         assert resp.status_code == 200, resp.text
-        by_id = {row["id"]: row for row in resp.json()}
-        assert by_id[created["id"]]["topbar_order"] == 5
+        assert resp.json() == []
     finally:
         await _delete_filterset(client, auth_headers, created["id"])
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

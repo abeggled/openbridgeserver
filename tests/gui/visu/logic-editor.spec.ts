@@ -48,6 +48,8 @@ test('Logic-Editor Debug-Modus zeigt Wert nach Ausführen', async ({ page }) => 
 
     // 6. Run the graph
     await page.click('[data-testid="btn-run"]')
+    await expect(page.locator('[data-testid="action-preflight"]')).toBeVisible()
+    await page.click('[data-testid="preflight-confirm"]')
 
     // 7. The debug-band must appear and show a value (not "—")
     //    runGraph() calls POST /api/v1/logic/graphs/{id}/run → Vue reactivity update; allow up to 8 s
@@ -92,6 +94,8 @@ test('AND-Gate mit 3 Eingängen (input_count=3) zeigt true wenn alle Eingänge t
     await page.waitForTimeout(1_000)
     await page.click('[data-testid="btn-debug"]')
     await page.click('[data-testid="btn-run"]')
+    await expect(page.locator('[data-testid="action-preflight"]')).toBeVisible()
+    await page.click('[data-testid="preflight-confirm"]')
     // Verify the AND gate's debug band shows a truthy result
     const debugBands = page.locator('[data-testid="debug-band"]')
     await expect(debugBands.first()).toBeVisible({ timeout: 8_000 })

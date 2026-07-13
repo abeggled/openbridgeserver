@@ -142,6 +142,8 @@ async def test_export_top_level_shape(client, auth_headers):
         "app_settings",
         "hierarchy_trees",
         "hierarchy_nodes",
+        "authz_grants",
+        "api_key_capability_sets",
     ):
         assert field in body, f"missing top-level field: {field}"
 
@@ -149,7 +151,7 @@ async def test_export_top_level_shape(client, auth_headers):
 async def test_export_lists_are_lists(client, auth_headers):
     resp = await client.get("/api/v1/config/export", headers=auth_headers)
     body = resp.json()
-    for key in ("datapoints", "bindings", "adapter_instances", "logic_graphs"):
+    for key in ("datapoints", "bindings", "adapter_instances", "logic_graphs", "authz_grants", "api_key_capability_sets"):
         assert isinstance(body[key], list), f"{key} should be a list"
 
 
@@ -189,7 +191,7 @@ async def test_export_datapoint_shape(client, auth_headers):
 
 
 async def test_export_db_requires_admin(client, auth_headers):
-    # admin/admin is the default → should work
+    # The integration fixture explicitly seeds an administrator.
     resp = await client.get("/api/v1/config/export/db", headers=auth_headers)
     assert resp.status_code == 200
 

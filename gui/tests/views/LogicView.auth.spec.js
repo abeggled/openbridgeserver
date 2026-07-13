@@ -40,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.doUnmock('@/api/client')
+  vi.doUnmock('@/api/logicAuthz')
   vi.doUnmock('vue-router')
   vi.doUnmock('@vue-flow/core')
   vi.doUnmock('@vue-flow/background')
@@ -78,14 +79,29 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
       data: { id: 'graph-new', name: 'New', description: '', enabled: true, flow_data: { nodes: [], edges: [] } },
     }),
     saveGraph: vi.fn().mockImplementation((id, payload) => Promise.resolve({ data: { ...defaultGraph, id, ...payload } })),
+  }
+  const logicRunAuthzApi = {
+    preflight: vi.fn().mockResolvedValue({
+      data: {
+        graph_id: 'graph-1',
+        allowed: true,
+        checks: [
+          { target_type: 'logic_graph', target_id: 'graph-1', node_ids: [], allowed: true, reason: 'allowed' },
+          { target_type: 'logic_graph_state', target_id: 'enabled', node_ids: [], allowed: true, reason: 'enabled' },
+        ],
+      },
+    }),
+  }
+  Object.assign(logicApi, {
     runGraph: vi.fn().mockResolvedValue({ data: { outputs: { n1: { value: 42, changed: true } } } }),
     patchGraph: vi.fn().mockImplementation((id, payload) => Promise.resolve({ data: { ...defaultGraph, id, ...payload } })),
     deleteGraph: vi.fn().mockResolvedValue({}),
     duplicateGraph: vi.fn().mockResolvedValue({ data: makeGraph('graph-copy', { name: 'Main Graph Copy' }) }),
     exportGraph: vi.fn().mockResolvedValue({ data: { export_type: 'logic_graph', name: 'Main Graph' } }),
     importGraph: vi.fn().mockResolvedValue({ data: makeGraph('graph-imported', { name: 'Imported Graph' }) }),
-  }
+  })
   vi.doMock('@/api/client', () => ({ logicApi }))
+  vi.doMock('@/api/logicAuthz', () => ({ logicRunAuthzApi }))
 
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -99,6 +115,11 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
       stubs: {
         NodePalette: true,
         NodeConfigPanel: true,
+        ActionPreflightDialog: {
+          props: ['modelValue', 'items', 'loading', 'error'],
+          emits: ['update:modelValue', 'confirm'],
+          template: '<div v-if="modelValue" data-testid="run-preflight"><button data-testid="preflight-confirm" :disabled="loading || !!error || items.some(item => !item.allowed)" @click="$emit(\'confirm\')">confirm</button></div>',
+        },
         Modal: { template: '<div><slot /><slot name="footer" /></div>' },
         ConfirmDialog: true,
         Spinner: { template: '<span />' },
@@ -107,7 +128,7 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
     attachTo: document.body,
   })
   await flushPromises()
-  return { wrapper, logicApi }
+  return { wrapper, logicApi, logicRunAuthzApi }
 }
 
 describe('LogicView auth gates', () => {
@@ -128,7 +149,7 @@ describe('LogicView auth gates', () => {
     })
 
     expect(logicApi.getGraph).toHaveBeenCalledWith('graph-1')
-    expect(wrapper.find('[data-testid="btn-run"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="btn-run"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="btn-toggle-enabled"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="btn-rename"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="btn-duplicate"]').exists()).toBe(false)
@@ -183,6 +204,94 @@ describe('LogicView auth gates', () => {
       flow_data: { nodes: [], edges: [] },
     })
     expect(wrapper.vm.activeGraphId).toBe('graph-new')
+  })
+
+  it('preflights a delegated graph run and executes only after confirmation', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(logicRunAuthzApi.preflight).toHaveBeenCalledWith('graph-1')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="preflight-confirm"]').trigger('click')
+    await flushPromises()
+    expect(logicApi.runGraph).toHaveBeenCalledWith('graph-1')
+  })
+
+  it('keeps a denied preflight from executing the graph', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicRunAuthzApi.preflight.mockResolvedValueOnce({
+      data: {
+        graph_id: 'graph-1',
+        allowed: false,
+        checks: [{ target_type: 'logic_capability', target_id: 'sms', node_ids: ['n2'], allowed: false, reason: 'missing_allow' }],
+      },
+    })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="preflight-confirm"]').attributes('disabled')).toBeDefined()
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+  })
+
+  it('discards a preflight when graph selection changes before confirmation', async () => {
+    const graphOne = makeGraph('graph-1')
+    const graphTwo = makeGraph('graph-2', { name: 'Second Graph' })
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graphOne, graphTwo],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graphOne, 'graph-2': graphTwo },
+    })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.preflightGraphId).toBe('graph-1')
+
+    wrapper.vm.activeGraphId = 'graph-2'
+    await flushPromises()
+    await wrapper.vm.confirmGraphRun()
+
+    expect(wrapper.vm.showRunPreflight).toBe(false)
+    expect(wrapper.vm.preflightGraphId).toBe('')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+  })
+
+  it('ignores a stale preflight response after selection changed', async () => {
+    const graphOne = makeGraph('graph-1')
+    const graphTwo = makeGraph('graph-2', { name: 'Second Graph' })
+    let resolvePreflight
+    const pendingPreflight = new Promise(resolve => { resolvePreflight = resolve })
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graphOne, graphTwo],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graphOne, 'graph-2': graphTwo },
+    })
+    logicRunAuthzApi.preflight.mockReturnValueOnce(pendingPreflight)
+
+    const request = wrapper.vm.requestGraphRun()
+    wrapper.vm.activeGraphId = 'graph-2'
+    await flushPromises()
+    resolvePreflight({ data: { graph_id: 'graph-1', allowed: true, checks: [] } })
+    await request
+
+    expect(wrapper.vm.preflightGraphId).toBe('')
+    expect(wrapper.vm.runPreflightItems).toEqual([])
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
   })
 
   it('loads and operates an active graph', async () => {

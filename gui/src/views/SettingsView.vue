@@ -135,34 +135,78 @@
         <span class="flex-1 text-sm text-slate-400">{{ $t('settings.users.count', { n: users.length }) }}</span>
         <button @click="openCreateUser" class="btn-primary btn-sm">{{ $t('settings.users.addButton') }}</button>
       </div>
-      <div class="card overflow-hidden">
+      <div class="card">
         <div v-if="usersLoading" class="flex justify-center py-8"><Spinner /></div>
-        <table v-else class="table">
-          <thead><tr><th>{{ $t('settings.users.colUsername') }}</th><th>{{ $t('settings.users.colAdmin') }}</th><th>{{ $t('settings.users.colMqtt') }}</th><th>{{ $t('settings.users.colCreated') }}</th><th class="w-20"></th></tr></thead>
-          <tbody>
-            <tr v-for="u in users" :key="u.id">
-              <td class="font-medium">{{ u.username }}</td>
-              <td><Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? 'Admin' : 'User' }}</Badge></td>
-              <td>
-                <div class="flex items-center gap-1">
-                  <Badge :variant="u.mqtt_enabled ? 'success' : 'muted'" size="xs">{{ u.mqtt_enabled ? $t('settings.users.mqttActive') : $t('settings.users.mqttOff') }}</Badge>
-                  <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" :title="$t('settings.users.mqttSetTitle')">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
-                  </button>
-                  <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" :title="$t('settings.users.mqttDisableTitle')">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                  </button>
+        <div v-else-if="!ownerFirstUsers.length" class="text-sm text-slate-500 text-center py-8" data-testid="users-empty">
+          {{ $t('settings.users.empty') }}
+        </div>
+        <div v-else class="divide-y divide-slate-200 dark:divide-slate-700/60" data-testid="owner-first-users">
+          <div
+            v-for="u in ownerFirstUsers"
+            :key="u.id"
+            class="p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+            :data-testid="`user-card-${u.username}`"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  :class="[
+                    'h-2.5 w-2.5 rounded-full shrink-0',
+                    userStatus(u).tone === 'warning' ? 'bg-amber-400' :
+                    userStatus(u).tone === 'success' ? 'bg-green-500' : 'bg-slate-400'
+                  ]"
+                >
+                  <span class="sr-only">{{ userStatus(u).label }}</span>
+                </span>
+                <span class="font-semibold text-slate-800 dark:text-slate-100 truncate">{{ u.username }}</span>
+                <Badge v-if="u.username === auth.username" variant="info" size="xs">{{ $t('settings.users.currentAccount') }}</Badge>
+                <Badge :variant="u.is_admin ? 'warning' : 'muted'" size="xs">{{ u.is_admin ? $t('settings.users.roleAdmin') : $t('settings.users.roleUser') }}</Badge>
+                <span class="text-xs text-slate-500" :data-testid="`user-rights-summary-${u.username}`">
+                  {{ userRightsSummary(u) }}
+                </span>
+              </div>
+              <div class="mt-2 grid gap-2 text-xs text-slate-500 sm:grid-cols-3">
+                <div>
+                  <span class="block uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.users.status') }}</span>
+                  <span class="font-medium text-slate-700 dark:text-slate-300">{{ userStatus(u).label }}</span>
                 </div>
-              </td>
-              <td class="text-xs text-slate-500">{{ fmtDate(u.created_at) }}</td>
-              <td>
-                <button v-if="u.username !== auth.username" @click="confirmDeleteUser(u)" class="btn-icon text-red-400">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                <div>
+                  <span class="block uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.users.colMqtt') }}</span>
+                  <span :class="u.mqtt_enabled ? 'text-green-600 dark:text-green-400' : 'text-slate-500'">
+                    {{ u.mqtt_enabled ? $t('settings.users.mqttActive') : $t('settings.users.mqttOff') }}
+                  </span>
+                  <span v-if="u.mqtt_enabled" class="text-slate-400">
+                    · {{ u.mqtt_password_set ? $t('settings.users.mqttPasswordSetShort') : $t('settings.users.mqttPasswordMissing') }}
+                  </span>
+                </div>
+                <div>
+                  <span class="block uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.users.colCreated') }}</span>
+                  <span>{{ fmtDate(u.created_at) }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <button
+                v-if="users.length >= 2"
+                type="button"
+                class="btn-secondary btn-sm"
+                :data-testid="`user-rights-${u.username}`"
+                @click="openRightsEditor(u)"
+              >
+                {{ $t('settings.users.rights.openButton') }}
+              </button>
+              <button @click="openMqttPassword(u)" class="btn-icon text-slate-400 hover:text-blue-400" :title="$t('settings.users.mqttSetTitle')" :data-testid="`user-mqtt-set-${u.username}`">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
+              </button>
+              <button v-if="u.mqtt_enabled" @click="doDeleteMqttPassword(u)" class="btn-icon text-red-400 hover:text-red-300" :title="$t('settings.users.mqttDisableTitle')" :data-testid="`user-mqtt-delete-${u.username}`">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+              <button v-if="u.username !== auth.username" @click="confirmDeleteUser(u)" class="btn-icon text-red-400" :title="$t('common.delete')" :data-testid="`user-delete-${u.username}`">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -175,12 +219,19 @@
       <div class="card overflow-hidden mb-4">
         <div v-if="keysLoading" class="flex justify-center py-8"><Spinner /></div>
         <table v-else class="table">
-          <thead><tr><th>{{ $t('settings.apikeys.colName') }}</th><th>{{ $t('settings.apikeys.colCreated') }}</th><th class="w-20"></th></tr></thead>
+          <thead><tr><th>{{ $t('settings.apikeys.colName') }}</th><th>{{ $t('settings.apikeys.colCreated') }}</th><th class="w-28"></th></tr></thead>
           <tbody>
             <tr v-for="k in apiKeys" :key="k.id">
               <td class="font-medium">{{ k.name }}</td>
               <td class="text-xs text-slate-500">{{ fmtDate(k.created_at) }}</td>
-              <td><button @click="deleteApiKey(k.id)" class="btn-icon text-red-400"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button></td>
+              <td class="flex justify-end gap-1">
+                <button v-if="auth.isAdmin" type="button" class="btn-icon text-blue-400"
+                  :title="$t('settings.apikeys.capabilities.open')" :data-testid="`apikey-capabilities-${k.id}`"
+                  @click="openApiKeyCapabilities(k)">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                </button>
+                <button @click="deleteApiKey(k.id)" class="btn-icon text-red-400" :data-testid="`apikey-delete-${k.id}`"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -1329,9 +1380,75 @@
       </form>
     </Modal>
 
-    <ConfirmDialog v-model="showUserConfirm" :title="$t('settings.users.deleteUser')"
-      :message="$t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username })"
-      :confirm-label="$t('common.delete')" @confirm="doDeleteUser" />
+    <Modal v-model="showUserConfirm" :title="$t('settings.users.deleteUser')" max-width="lg">
+      <div class="space-y-4" data-testid="user-deletion-impact">
+        <p>{{ $t('settings.users.deleteUserConfirm', { name: deleteUserTarget?.username }) }}</p>
+        <Spinner v-if="deletePreflightLoading" />
+        <template v-else-if="deletePreflight">
+          <p class="text-sm text-slate-500">{{ $t('settings.users.deleteImpact') }}</p>
+          <ul class="text-sm list-disc pl-5">
+            <li>{{ $t('settings.users.deletePages', { n: deletePreflight.visu_page_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteGraphs', { n: deletePreflight.logic_graph_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteFiltersets', { n: deletePreflight.filterset_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteKeys', { n: deletePreflight.api_key_ids.length }) }}</li>
+            <li>{{ $t('settings.users.deleteReferences', { n: deletionReferenceCount }) }}</li>
+          </ul>
+          <div v-if="deletionNeedsSuccessor" class="form-group">
+            <label class="label">{{ $t('settings.users.successor') }}</label>
+            <select v-model="deleteSuccessor" class="input" data-testid="user-deletion-successor">
+              <option value="">{{ $t('settings.users.selectSuccessor') }}</option>
+              <option v-for="u in deletionSuccessors" :key="u.id" :value="u.username">{{ u.username }}</option>
+            </select>
+          </div>
+          <p class="text-sm text-amber-600">{{ $t('settings.users.deleteKeyWarning') }}</p>
+        </template>
+        <p v-if="deletePreflightError" class="text-sm text-red-500">{{ deletePreflightError }}</p>
+        <div class="flex justify-end gap-3">
+          <button class="btn-secondary" @click="showUserConfirm = false">{{ $t('common.cancel') }}</button>
+          <button class="btn-danger" data-testid="user-deletion-confirm" :disabled="!deletePreflight || (deletionNeedsSuccessor && !deleteSuccessor)" @click="doDeleteUser">
+            {{ $t('common.delete') }}
+          </button>
+        </div>
+      </div>
+    </Modal>
+
+    <Modal v-model="showApiKeyCapabilities" :title="$t('settings.apikeys.capabilities.title')" max-width="lg">
+      <div v-if="capabilitiesLoading" class="flex justify-center py-8"><Spinner /></div>
+      <form v-else class="flex flex-col gap-4" @submit.prevent="saveApiKeyCapabilities">
+        <p class="text-sm text-slate-500">
+          {{ $t('settings.apikeys.capabilities.target', { name: capabilityTarget?.name }) }}
+        </p>
+        <div class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+          {{ $t('settings.apikeys.capabilities.warning') }}
+        </div>
+        <label v-for="capability in capabilityOptions" :key="capability" class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <input v-model="selectedCapabilities" type="checkbox" :value="capability" class="mt-1"
+            :data-testid="`apikey-capability-${capability}`" />
+          <span>
+            <span class="block font-medium">{{ $t(`settings.apikeys.capabilities.effects.${capability}.title`) }}</span>
+            <span class="block text-xs text-slate-500">{{ $t(`settings.apikeys.capabilities.effects.${capability}.description`) }}</span>
+          </span>
+        </label>
+        <label class="flex items-start gap-3 text-sm">
+          <input v-model="capabilitiesConfirmed" type="checkbox" class="mt-1" data-testid="apikey-capabilities-confirm" />
+          <span>{{ $t('settings.apikeys.capabilities.confirm', { name: capabilityTarget?.name }) }}</span>
+        </label>
+        <p v-if="capabilitiesError" class="text-sm text-red-400">{{ capabilitiesError }}</p>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn-secondary" @click="showApiKeyCapabilities = false">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary" :disabled="capabilitiesSaving || !capabilitiesConfirmed || !!capabilitiesError" data-testid="apikey-capabilities-save">
+            {{ $t('settings.apikeys.capabilities.save') }}
+          </button>
+        </div>
+      </form>
+    </Modal>
+
+    <UserRightsEditor
+      v-if="rightsTarget"
+      v-model="showRightsEditor"
+      :username="rightsTarget.username"
+      @saved="loadUsers"
+    />
 
     <ConfirmDialog v-model="showDzConfirm" :title="dzConfirmTitle"
       :message="dzConfirmMessage" :confirm-label="dzConfirmLabel" @confirm="doDzAction" />
@@ -1341,6 +1458,8 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi, supportApi } from '@/api/client'
+import { accountAdminApi } from '@/api/accountAdmin'
+import { authzApi } from '@/api/authz'
 import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
@@ -1349,6 +1468,7 @@ import { useTz } from '@/composables/useTz'
 import Badge            from '@/components/ui/Badge.vue'
 import Spinner          from '@/components/ui/Spinner.vue'
 import HierarchyManager from '@/components/HierarchyManager.vue'
+import UserRightsEditor from '@/components/settings/UserRightsEditor.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
@@ -2094,12 +2214,56 @@ const usersLoading = ref(false)
 const showCreateUser = ref(false)
 const showUserConfirm = ref(false)
 const deleteUserTarget = ref(null)
+const deletePreflight = ref(null)
+const deletePreflightLoading = ref(false)
+const deletePreflightError = ref('')
+const deleteSuccessor = ref('')
+const showRightsEditor = ref(false)
+const rightsTarget = ref(null)
+const userGrants = ref({})
 const userForm    = reactive({ username: '', password: '', is_admin: false, mqtt_enabled: false, mqtt_password: '' })
+const ownerFirstUsers = computed(() => {
+  return [...users.value].sort((a, b) => {
+    const aCurrent = a.username === auth.username
+    const bCurrent = b.username === auth.username
+    if (aCurrent !== bCurrent) return aCurrent ? -1 : 1
+    if (a.is_admin !== b.is_admin) return a.is_admin ? -1 : 1
+    return (a.username || '').localeCompare(b.username || '')
+  })
+})
 
 async function loadUsers() {
   usersLoading.value = true
-  try { const { data } = await authApi.listUsers(); users.value = data }
+  try {
+    const { data } = await authApi.listUsers()
+    users.value = data
+    const grants = await Promise.all(data.map(async (user) => {
+      try {
+        const response = await authzApi.getUserGrants(user.username)
+        return [user.username, response.data?.grants || []]
+      } catch {
+        return [user.username, []]
+      }
+    }))
+    userGrants.value = Object.fromEntries(grants)
+  }
   finally { usersLoading.value = false }
+}
+function userRightsSummary(u) {
+  const hierarchyGrants = (userGrants.value[u.username] || [])
+    .filter(grant => grant.node_type === 'hierarchy' && grant.effect !== 'deny')
+  if (!hierarchyGrants.length) return t('settings.users.rights.summaryNone')
+  const roles = [...new Set(hierarchyGrants.map(grant => t(`settings.users.rights.roles.${grant.role}.label`)))]
+  return t('settings.users.rights.summary', { roles: roles.join(', '), n: hierarchyGrants.length })
+}
+function userStatus(u) {
+  if (u.mqtt_enabled && !u.mqtt_password_set) {
+    return { tone: 'warning', label: t('settings.users.statusWarning') }
+  }
+  if (u.username === auth.username) {
+    return { tone: 'success', label: t('settings.users.statusCurrent') }
+  }
+  return { tone: 'muted', label: t('settings.users.statusReady') }
 }
 function openCreateUser() {
   userForm.username = ''; userForm.password = ''; userForm.is_admin = false
@@ -2115,8 +2279,38 @@ async function doCreateUser() {
   await authApi.createUser(payload)
   showCreateUser.value = false; await loadUsers()
 }
-function confirmDeleteUser(u) { deleteUserTarget.value = u; showUserConfirm.value = true }
-async function doDeleteUser() { await authApi.deleteUser(deleteUserTarget.value.username); await loadUsers() }
+const deletionNeedsSuccessor = computed(() => !!deletePreflight.value && (
+  deletePreflight.value.visu_page_ids.length + deletePreflight.value.logic_graph_ids.length + deletePreflight.value.filterset_ids.length > 0
+))
+const deletionReferenceCount = computed(() => deletePreflight.value
+  ? deletePreflight.value.grant_count + deletePreflight.value.visu_acl_count + deletePreflight.value.filterset_state_count
+  : 0)
+const deletionSuccessors = computed(() => users.value.filter(u => u.username !== deleteUserTarget.value?.username))
+async function confirmDeleteUser(u) {
+  deleteUserTarget.value = u
+  deletePreflight.value = null
+  deleteSuccessor.value = ''
+  deletePreflightError.value = ''
+  deletePreflightLoading.value = true
+  showUserConfirm.value = true
+  try {
+    const { data } = await accountAdminApi.userDeletionPreflight(u.username)
+    deletePreflight.value = data
+  } catch (e) {
+    deletePreflightError.value = e.response?.data?.detail ?? t('common.error')
+  } finally {
+    deletePreflightLoading.value = false
+  }
+}
+async function doDeleteUser() {
+  await accountAdminApi.deleteUser(deleteUserTarget.value.username, {
+    revision: deletePreflight.value.revision,
+    successor_username: deleteSuccessor.value || null,
+  })
+  showUserConfirm.value = false
+  await loadUsers()
+}
+function openRightsEditor(u) { rightsTarget.value = u; showRightsEditor.value = true }
 
 // ── MQTT Password ──────────────────────────────────────────────────────────
 const showMqttPassword = ref(false)
@@ -2153,6 +2347,15 @@ const keysLoading   = ref(false)
 const newKeySecret  = ref('')
 const newKeyName    = ref('')
 const showNewKeyName = ref(false)
+const showApiKeyCapabilities = ref(false)
+const capabilitiesLoading = ref(false)
+const capabilitiesSaving = ref(false)
+const capabilitiesConfirmed = ref(false)
+const capabilitiesError = ref('')
+const capabilityTarget = ref(null)
+const capabilityRevision = ref(0)
+const capabilityOptions = ref([])
+const selectedCapabilities = ref([])
 
 async function loadKeys() {
   keysLoading.value = true
@@ -2167,6 +2370,43 @@ async function doCreateKey() {
   showNewKeyName.value = false; await loadKeys()
 }
 async function deleteApiKey(id) { await authApi.deleteApiKey(id); await loadKeys() }
+async function openApiKeyCapabilities(key) {
+  capabilityTarget.value = key
+  capabilitiesConfirmed.value = false
+  capabilitiesError.value = ''
+  capabilitiesLoading.value = true
+  showApiKeyCapabilities.value = true
+  try {
+    const { data } = await accountAdminApi.getApiKeyCapabilities(key.id)
+    capabilityRevision.value = data.revision
+    capabilityOptions.value = data.available_capabilities
+    selectedCapabilities.value = [...data.capabilities]
+  } catch (e) {
+    capabilitiesError.value = e.response?.data?.detail ?? t('settings.apikeys.capabilities.loadError')
+  } finally {
+    capabilitiesLoading.value = false
+  }
+}
+async function saveApiKeyCapabilities() {
+  if (!capabilitiesConfirmed.value || !capabilityTarget.value || capabilitiesError.value) return
+  capabilitiesSaving.value = true
+  capabilitiesError.value = ''
+  try {
+    await accountAdminApi.replaceApiKeyCapabilities(
+      capabilityTarget.value.id,
+      capabilityRevision.value,
+      selectedCapabilities.value,
+    )
+    showApiKeyCapabilities.value = false
+  } catch (e) {
+    capabilitiesError.value = e.response?.status === 409
+      ? t('settings.apikeys.capabilities.concurrentChange')
+      : (e.response?.data?.detail ?? t('settings.apikeys.capabilities.saveError'))
+    capabilitiesConfirmed.value = false
+  } finally {
+    capabilitiesSaving.value = false
+  }
+}
 
 // ── Sicherung / Wiederherstellung ──────────────────────────────────────────
 const importResult    = ref(null)

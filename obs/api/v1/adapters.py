@@ -30,9 +30,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from obs.adapters import registry as adapter_registry
+from obs.adapters.base import AdapterDelegationCapability
 from obs.adapters.knx.dpt_registry import DPTRegistry
-from obs.api.auth import get_admin_user, get_current_user
-from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import authorize_adapter_instance, filter_authorized_datapoints
+from obs.api.v1.bindings import _ensure_binding_mutation_scope, _json_config, _validate_adapter_binding
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["adapters"])
@@ -191,6 +194,84 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
     )
 
 
+def _principal_from_dependency(user: Principal | str) -> Principal:
+    if isinstance(user, Principal):
+        return user
+    # Compatibility for direct unit calls that still pass the legacy username.
+    return Principal(subject=str(user), type="user", is_admin=str(user) == "admin")
+
+
+async def _filter_readable_datapoint_ids(
+    db: Database,
+    principal: Principal,
+    dp_ids: list[str],
+) -> set[str]:
+    if principal.type == "user" and principal.is_admin:
+        return set(dp_ids)
+    return set(await filter_authorized_datapoints(db, principal, dp_ids, action=AuthzAction.READ))
+
+
+async def _ensure_instance_read(db: Database, principal: Principal, instance_id: str) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+    decision = await authorize_adapter_instance(
+        db,
+        principal,
+        instance_id,
+        action=AuthzAction.READ,
+        min_role="guest",
+    )
+    if not decision.allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+
+
+async def _ensure_instance_mutation(
+    db: Database,
+    principal: Principal,
+    instance_id: str,
+    adapter_type: str,
+) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+
+    await _ensure_instance_write_grant(db, principal, instance_id)
+    _ensure_adapter_delegates_operation(
+        principal,
+        adapter_type,
+        AdapterDelegationCapability.CONFIGURE_INSTANCE,
+    )
+
+
+def _ensure_adapter_delegates_operation(
+    principal: Principal,
+    adapter_type: str,
+    *capabilities: AdapterDelegationCapability,
+) -> None:
+    """Require every closed, code-declared capability for an adapter operation."""
+    if principal.type == "user" and principal.is_admin:
+        return
+    if (
+        principal.type != "user"
+        or not capabilities
+        or not all(adapter_registry.supports_delegation(adapter_type, capability) for capability in capabilities)
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Operation nicht erlaubt")
+
+
+async def _ensure_instance_write_grant(db: Database, principal: Principal, instance_id: str) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+    decision = await authorize_adapter_instance(
+        db,
+        principal,
+        instance_id,
+        action=AuthzAction.WRITE,
+        min_role="operator",
+    )
+    if not decision.allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Instanzänderung nicht erlaubt")
+
+
 async def _validate_message_config_preserves_binding_targets(
     instance_id: str,
     config: dict[str, Any],
@@ -218,12 +299,17 @@ async def _validate_message_config_preserves_binding_targets(
 
 @router.get("/instances", response_model=list[AdapterInstanceOut])
 async def list_instances(
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[AdapterInstanceOut]:
     rows = await db.fetchall("SELECT * FROM adapter_instances ORDER BY adapter_type, name")
+    principal = _principal_from_dependency(_user)
     result = []
     for row in rows:
+        try:
+            await _ensure_instance_read(db, principal, row["id"])
+        except HTTPException:
+            continue
         instance = adapter_registry.get_instance_by_id(row["id"])
         result.append(_instance_out(row, instance))
     return result
@@ -289,12 +375,13 @@ async def create_instance(
 @router.get("/instances/{instance_id}", response_model=AdapterInstanceOut)
 async def get_instance(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     return _instance_out(row, instance)
 
@@ -303,12 +390,20 @@ async def get_instance(
 async def update_instance(
     instance_id: uuid.UUID,
     body: AdapterInstanceUpdate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     # Neue Werte bestimmen
     name_new = body.name if body.name is not None else row["name"]
@@ -352,30 +447,51 @@ async def update_instance(
 @router.delete("/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_instance(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
-    row = await db.fetchone("SELECT id FROM adapter_instances WHERE id=?", (str(instance_id),))
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
+    row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     await adapter_registry.stop_instance(str(instance_id))
     # Bindings werden per DB (ON DELETE CASCADE via Trigger oder manuell) gelöscht
-    await db.execute_and_commit("DELETE FROM adapter_bindings WHERE adapter_instance_id=?", (str(instance_id),))
-    await db.execute_and_commit("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
+    async with db.transaction():
+        await db.execute("DELETE FROM adapter_bindings WHERE adapter_instance_id=?", (str(instance_id),))
+        await db.execute(
+            "DELETE FROM authz_node_roles WHERE node_type='adapter_instance' AND node_id=?",
+            (str(instance_id),),
+        )
+        await db.execute("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
 
 
 @router.post("/instances/{instance_id}/test", response_model=TestResult)
 async def test_instance(
     instance_id: uuid.UUID,
     body: TestRequest | None = None,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> TestResult:
     """Verbindungstest mit aktuellem oder gegebenem Config (ephemer, kein Persist)."""
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     cls = adapter_registry.get_class(row["adapter_type"])
     if cls is None:
@@ -425,12 +541,20 @@ async def test_instance(
 @router.post("/instances/{instance_id}/restart", response_model=AdapterInstanceOut)
 async def restart_instance_route(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     from obs.core.event_bus import get_event_bus
 
@@ -445,11 +569,14 @@ async def restart_instance_route(
 async def migrate_instance_bindings(
     source_instance_id: uuid.UUID,
     body: BindingMigrationRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingMigrationResult:
     source_id = str(source_instance_id)
     target_id = str(body.target_instance_id)
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, source_id)
+    await _ensure_instance_write_grant(db, principal, target_id)
     if source_id == target_id:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Quell- und Ziel-Instanz dürfen nicht identisch sein")
 
@@ -460,6 +587,9 @@ async def migrate_instance_bindings(
     target_row = await db.fetchone("SELECT id, adapter_type, config FROM adapter_instances WHERE id=?", (target_id,))
     if target_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ziel-Instanz nicht gefunden")
+
+    await _ensure_instance_mutation(db, principal, source_id, source_row["adapter_type"])
+    await _ensure_instance_mutation(db, principal, target_id, target_row["adapter_type"])
 
     if source_row["adapter_type"] != target_row["adapter_type"]:
         raise HTTPException(
@@ -488,6 +618,7 @@ async def migrate_instance_bindings(
         if binding_row["datapoint_id"] in target_datapoint_ids:
             skipped += 1
             continue
+        await _ensure_binding_mutation_scope(db, principal, uuid.UUID(binding_row["datapoint_id"]))
         if target_message_config is not None:
             _validate_adapter_binding(
                 "MESSAGE",
@@ -524,10 +655,15 @@ async def migrate_instance_bindings(
 @router.get("/instances/{instance_id}/bindings", response_model=list[InstanceBindingEntry])
 async def list_instance_bindings(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[InstanceBindingEntry]:
     """Alle Bindings einer Adapter-Instanz, angereichert mit Datenpunkt-Namen."""
+    instance_row = await db.fetchone("SELECT id FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if instance_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     rows = await db.fetchall(
         """SELECT ab.id, ab.datapoint_id, dp.name AS dp_name, ab.enabled, ab.config
            FROM adapter_bindings ab
@@ -536,6 +672,7 @@ async def list_instance_bindings(
            ORDER BY dp.name, ab.created_at""",
         (str(instance_id),),
     )
+    allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, [row["datapoint_id"] for row in rows])
     return [
         InstanceBindingEntry(
             binding_id=uuid.UUID(row["id"]),
@@ -545,6 +682,7 @@ async def list_instance_bindings(
             config=json.loads(row["config"]) if row["config"] else {},
         )
         for row in rows
+        if row["datapoint_id"] in allowed_dp_ids
     ]
 
 
@@ -557,7 +695,7 @@ class HolidayEntry(BaseModel):
 async def list_instance_holidays(
     instance_id: uuid.UUID,
     year: int = Query(default=0, description="Jahr (0 = aktuelles Jahr)"),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[HolidayEntry]:
     """Alle Feiertage einer Zeitschaltuhr-Instanz für das angegebene Jahr (Library + benutzerdefiniert)."""
@@ -566,6 +704,7 @@ async def list_instance_holidays(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "ZEITSCHALTUHR":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für Zeitschaltuhr-Instanzen verfügbar")
 
@@ -605,13 +744,14 @@ def _build_tls_context(cfg: Any) -> Any:
 async def mqtt_browse_topics(
     instance_id: uuid.UUID,
     timeout: int = 5,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[str]:
     """Subscribe to # for up to `timeout` seconds (max 10) and return observed topics."""
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "MQTT":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für MQTT-Instanzen verfügbar")
 
@@ -664,13 +804,14 @@ async def mqtt_sample_payload(
     instance_id: uuid.UUID,
     topic: str,
     timeout: int = 5,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Subscribe to a specific topic and return the first received payload (useful for retained messages)."""
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "MQTT":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für MQTT-Instanzen verfügbar")
 
@@ -728,13 +869,14 @@ async def iobroker_browse_states(
     instance_id: uuid.UUID,
     q: str = Query("", max_length=200),
     limit: int = Query(50, ge=1, le=100),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[IoBrokerStateOut]:
     """Durchsuchbare ioBroker-State-Liste für Binding-Auswahl."""
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "IOBROKER":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
 
@@ -844,6 +986,25 @@ async def _iobroker_candidates(
     return result
 
 
+async def _ensure_iobroker_import_authority(
+    db: Database,
+    principal: Principal,
+    instance_id: str,
+) -> None:
+    await _ensure_instance_write_grant(db, principal, instance_id)
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (instance_id,))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "IOBROKER":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    _ensure_adapter_delegates_operation(
+        principal,
+        row["adapter_type"],
+        AdapterDelegationCapability.CREATE_DATAPOINT,
+        AdapterDelegationCapability.LINK_BINDING,
+    )
+
+
 @router.post(
     "/instances/{instance_id}/iobroker/import-preview",
     response_model=IoBrokerImportResult,
@@ -851,14 +1012,11 @@ async def _iobroker_candidates(
 async def iobroker_import_preview(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "IOBROKER":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    principal = _principal_from_dependency(_user)
+    await _ensure_iobroker_import_authority(db, principal, str(instance_id))
     return IoBrokerImportResult(preview=await _iobroker_candidates(str(instance_id), body, db))
 
 
@@ -866,14 +1024,11 @@ async def iobroker_import_preview(
 async def iobroker_import_states(
     instance_id: uuid.UUID,
     body: IoBrokerImportRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> IoBrokerImportResult:
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "IOBROKER":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für IOBROKER-Instanzen verfügbar")
+    principal = _principal_from_dependency(_user)
+    await _ensure_iobroker_import_authority(db, principal, str(instance_id))
 
     from obs.api.v1.bindings import create_binding
     from obs.core.registry import get_registry
@@ -901,6 +1056,13 @@ async def iobroker_import_states(
                 ),
             )
             result.created_datapoints += 1
+            if not principal.is_admin:
+                await db.execute_and_commit(
+                    """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect)
+                       VALUES ('user', ?, 'datapoint', ?, 'operator', 'allow')""",
+                    (principal.subject, str(dp.id)),
+                )
             config: dict[str, Any] = {"state_id": item.state_id}
             if source_type:
                 config["source_data_type"] = source_type
@@ -912,7 +1074,7 @@ async def iobroker_import_states(
                     config=config,
                     enabled=True,
                 ),
-                _user,
+                principal,
                 db,
             )
             result.created_bindings += 1
@@ -936,7 +1098,7 @@ class AnwesenheitHealthResult(BaseModel):
 @router.get("/instances/{instance_id}/anwesenheit/health", response_model=AnwesenheitHealthResult)
 async def anwesenheit_health(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AnwesenheitHealthResult:
     """Check whether history data is available for the configured offset window."""
@@ -946,6 +1108,8 @@ async def anwesenheit_health(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEITSSIMULATION-Instanzen verfügbar")
 
@@ -972,6 +1136,8 @@ async def anwesenheit_health(
         "SELECT id, datapoint_id FROM adapter_bindings WHERE adapter_instance_id=? AND direction='SOURCE' AND enabled=1",
         (str(instance_id),),
     )
+    allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, [row["datapoint_id"] for row in binding_rows])
+    binding_rows = [row for row in binding_rows if row["datapoint_id"] in allowed_dp_ids]
     total = len(binding_rows)
     if total == 0:
         return AnwesenheitHealthResult(
@@ -1041,13 +1207,15 @@ class AnwesenheitSyncResult(BaseModel):
 )
 async def anwesenheit_list_datapoints(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[AnwesenheitDatapointEntry]:
     """List all Boolean/Integer DataPoints with their binding status for this instance."""
     row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
 
@@ -1064,10 +1232,14 @@ async def anwesenheit_list_datapoints(
     bound_map: dict[str, str] = {r["datapoint_id"]: r["id"] for r in binding_rows}
 
     result: list[AnwesenheitDatapointEntry] = []
+    candidate_ids = [str(dp.id) for dp in all_dps if dp.data_type in ("BOOLEAN", "INTEGER")]
+    allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, candidate_ids)
     for dp in sorted(all_dps, key=lambda d: d.name.lower()):
         if dp.data_type not in ("BOOLEAN", "INTEGER"):
             continue
         dp_id_str = str(dp.id)
+        if dp_id_str not in allowed_dp_ids:
+            continue
         result.append(
             AnwesenheitDatapointEntry(
                 id=dp_id_str,
@@ -1087,15 +1259,22 @@ async def anwesenheit_list_datapoints(
 async def anwesenheit_sync_bindings(
     instance_id: uuid.UUID,
     body: AnwesenheitSyncRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AnwesenheitSyncResult:
     """Create missing bindings for selected DataPoints and remove bindings for deselected ones."""
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
     if row["adapter_type"] != "ANWESENHEITSSIMULATION":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ANWESENHEIT-Instanzen verfügbar")
+    _ensure_adapter_delegates_operation(
+        principal,
+        row["adapter_type"],
+        AdapterDelegationCapability.LINK_BINDING,
+    )
 
     from obs.api.v1.bindings import create_binding, delete_binding
     from obs.models.binding import AdapterBindingCreate
@@ -1124,7 +1303,7 @@ async def anwesenheit_sync_bindings(
                     config={},
                     enabled=True,
                 ),
-                _user,
+                principal,
                 db,
             )
             result.created += 1
@@ -1136,7 +1315,7 @@ async def anwesenheit_sync_bindings(
         try:
             binding_uuid = uuid.UUID(current[dp_id_str])
             dp_uuid = uuid.UUID(dp_id_str)
-            await delete_binding(dp_uuid, binding_uuid, _user, db)
+            await delete_binding(dp_uuid, binding_uuid, principal, db)
             result.removed += 1
         except Exception as exc:
             result.errors.append(f"{dp_id_str}: {exc}")
@@ -1172,7 +1351,7 @@ async def snmp_walk(
     timeout: float = Query(default=5.0, ge=0.5, le=30.0, description="Timeout pro Request (s)"),
     max_results: int = Query(default=50, ge=1, le=500, description="Einträge pro Seite"),
     start_oid: str | None = Query(default=None, description="Cursor für Paginierung (letzter OID der Vorseite)"),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[SnmpWalkEntry]:
     """SNMP-Walk über einen OID-Teilbaum — nützlich für OID-Discovery beim Binding-Anlegen.
@@ -1182,6 +1361,7 @@ async def snmp_walk(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     if row["adapter_type"] != "SNMP":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für SNMP-Instanzen verfügbar")
 
@@ -1283,7 +1463,7 @@ async def get_binding_schema(
 async def test_adapter(
     adapter_type: str,
     body: TestRequest,
-    _user: str = Depends(get_current_user),
+    _user: str = Depends(get_admin_user),
 ) -> TestResult:
     cls = adapter_registry.get_class(adapter_type)
     if cls is None:
