@@ -15,6 +15,7 @@ NodeTypeName = Literal[
     "logic_capability",
     "visu_page",
     "ringbuffer_filterset",
+    "adapter_instance",
 ]
 PrincipalTypeName = Literal["user", "api_key"]
 RoleName = Literal["owner", "resident", "operator", "guest"]

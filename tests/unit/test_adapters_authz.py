@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from obs.api.auth import Principal
 from obs.api.v1 import adapters as adapters_api
@@ -91,13 +93,27 @@ async def _insert_grant(db: Database, node_id: str) -> None:
     )
 
 
-async def _insert_instance(db: Database, instance_id: uuid.UUID) -> None:
+async def _insert_instance(
+    db: Database,
+    instance_id: uuid.UUID,
+    adapter_type: str = "ANWESENHEITSSIMULATION",
+) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO adapter_instances (id, adapter_type, name, config, enabled, created_at, updated_at)
-        VALUES (?, 'ANWESENHEITSSIMULATION', 'Presence', '{}', 0, ?, ?)
+        VALUES (?, ?, 'Presence', '{}', 0, ?, ?)
         """,
-        (str(instance_id), NOW, NOW),
+        (str(instance_id), adapter_type, NOW, NOW),
+    )
+
+
+async def _insert_instance_grant(db: Database, instance_id: uuid.UUID, role: str = "guest") -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('user', 'alice', 'adapter_instance', ?, ?, 'allow')
+        """,
+        (str(instance_id), role),
     )
 
 
@@ -122,6 +138,7 @@ async def test_list_instance_bindings_filters_unreadable_datapoints(db: Database
     await _insert_datapoint(db, blocked, "secret-room")
     await _insert_grant(db, "allowed-room")
     await _insert_instance(db, instance_id)
+    await _insert_instance_grant(db, instance_id)
     await _insert_binding(db, binding_id=uuid.uuid4(), dp_id=allowed.id, instance_id=instance_id)
     await _insert_binding(db, binding_id=uuid.uuid4(), dp_id=blocked.id, instance_id=instance_id)
 
@@ -157,6 +174,7 @@ async def test_anwesenheit_list_datapoints_filters_unreadable_candidates(monkeyp
     await _insert_datapoint(db, blocked, "secret-room")
     await _insert_grant(db, "allowed-room")
     await _insert_instance(db, instance_id)
+    await _insert_instance_grant(db, instance_id)
     await _insert_binding(db, binding_id=uuid.uuid4(), dp_id=allowed.id, instance_id=instance_id)
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub([allowed, blocked]))
 
@@ -164,3 +182,55 @@ async def test_anwesenheit_list_datapoints_filters_unreadable_candidates(monkeyp
 
     assert [datapoint.id for datapoint in datapoints] == [str(allowed.id)]
     assert datapoints[0].has_binding is True
+
+
+@pytest.mark.asyncio
+async def test_instance_read_is_filtered_by_central_instance_grant(db: Database):
+    allowed_id = uuid.uuid4()
+    blocked_id = uuid.uuid4()
+    await _insert_instance(db, allowed_id)
+    await _insert_instance(db, blocked_id)
+    await _insert_instance_grant(db, allowed_id)
+
+    visible = await adapters_api.list_instances(_user=_principal(), db=db)
+
+    assert [instance.id for instance in visible] == [allowed_id]
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.get_instance(blocked_id, _user=_principal(), db=db)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_instance_mutation_requires_operator_grant_and_code_declaration(monkeypatch, db: Database):
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.mqtt.adapter import MqttAdapter
+
+    mqtt_id = uuid.uuid4()
+    knx_id = uuid.uuid4()
+    unknown_id = uuid.uuid4()
+    await _insert_instance(db, mqtt_id, "MQTT")
+    await _insert_instance(db, knx_id, "KNX")
+    await _insert_instance(db, unknown_id, "UNKNOWN")
+    await _insert_instance_grant(db, mqtt_id, "operator")
+    await _insert_instance_grant(db, knx_id, "operator")
+    await _insert_instance_grant(db, unknown_id, "operator")
+    monkeypatch.setitem(adapter_registry._adapters, "MQTT", MqttAdapter)
+    monkeypatch.setattr(adapter_registry, "stop_instance", AsyncMock())
+
+    updated = await adapters_api.update_instance(
+        mqtt_id,
+        adapters_api.AdapterInstanceUpdate(name="Delegated MQTT", enabled=False),
+        _user=_principal(),
+        db=db,
+    )
+    assert updated.name == "Delegated MQTT"
+
+    for denied_id in (knx_id, unknown_id):
+        with pytest.raises(HTTPException) as exc_info:
+            await adapters_api.update_instance(
+                denied_id,
+                adapters_api.AdapterInstanceUpdate(name="Denied"),
+                _user=_principal(),
+                db=db,
+            )
+        assert exc_info.value.status_code == 403

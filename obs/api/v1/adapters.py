@@ -33,7 +33,7 @@ from obs.adapters import registry as adapter_registry
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
-from obs.api.authz_service import filter_authorized_datapoints
+from obs.api.authz_service import authorize_adapter_instance, filter_authorized_datapoints
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.db.database import Database, get_db
 
@@ -214,6 +214,53 @@ async def _filter_readable_datapoint_ids(
     return set(await filter_authorized_datapoints(db, principal, dp_ids, action=AuthzAction.READ))
 
 
+async def _ensure_instance_read(db: Database, principal: Principal, instance_id: str) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+    decision = await authorize_adapter_instance(
+        db,
+        principal,
+        instance_id,
+        action=AuthzAction.READ,
+        min_role="guest",
+    )
+    if not decision.allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+
+
+async def _ensure_instance_mutation(
+    db: Database,
+    principal: Principal,
+    instance_id: str,
+    adapter_type: str,
+) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+
+    from obs.adapters.base import AdapterDelegationCapability
+
+    await _ensure_instance_write_grant(db, principal, instance_id)
+    if not adapter_registry.supports_delegation(
+        adapter_type,
+        AdapterDelegationCapability.CONFIGURE_INSTANCE,
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Instanzänderung nicht erlaubt")
+
+
+async def _ensure_instance_write_grant(db: Database, principal: Principal, instance_id: str) -> None:
+    if principal.type == "user" and principal.is_admin:
+        return
+    decision = await authorize_adapter_instance(
+        db,
+        principal,
+        instance_id,
+        action=AuthzAction.WRITE,
+        min_role="operator",
+    )
+    if not decision.allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Instanzänderung nicht erlaubt")
+
+
 async def _validate_message_config_preserves_binding_targets(
     instance_id: str,
     config: dict[str, Any],
@@ -241,12 +288,17 @@ async def _validate_message_config_preserves_binding_targets(
 
 @router.get("/instances", response_model=list[AdapterInstanceOut])
 async def list_instances(
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[AdapterInstanceOut]:
     rows = await db.fetchall("SELECT * FROM adapter_instances ORDER BY adapter_type, name")
+    principal = _principal_from_dependency(_user)
     result = []
     for row in rows:
+        try:
+            await _ensure_instance_read(db, principal, row["id"])
+        except HTTPException:
+            continue
         instance = adapter_registry.get_instance_by_id(row["id"])
         result.append(_instance_out(row, instance))
     return result
@@ -312,12 +364,13 @@ async def create_instance(
 @router.get("/instances/{instance_id}", response_model=AdapterInstanceOut)
 async def get_instance(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     return _instance_out(row, instance)
 
@@ -326,12 +379,20 @@ async def get_instance(
 async def update_instance(
     instance_id: uuid.UUID,
     body: AdapterInstanceUpdate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     # Neue Werte bestimmen
     name_new = body.name if body.name is not None else row["name"]
@@ -375,16 +436,28 @@ async def update_instance(
 @router.delete("/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_instance(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
-    row = await db.fetchone("SELECT id FROM adapter_instances WHERE id=?", (str(instance_id),))
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
+    row = await db.fetchone("SELECT id, adapter_type FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     await adapter_registry.stop_instance(str(instance_id))
     # Bindings werden per DB (ON DELETE CASCADE via Trigger oder manuell) gelöscht
     await db.execute_and_commit("DELETE FROM adapter_bindings WHERE adapter_instance_id=?", (str(instance_id),))
+    await db.execute_and_commit(
+        "DELETE FROM authz_node_roles WHERE node_type='adapter_instance' AND node_id=?",
+        (str(instance_id),),
+    )
     await db.execute_and_commit("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
 
 
@@ -392,13 +465,21 @@ async def delete_instance(
 async def test_instance(
     instance_id: uuid.UUID,
     body: TestRequest | None = None,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> TestResult:
     """Verbindungstest mit aktuellem oder gegebenem Config (ephemer, kein Persist)."""
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     cls = adapter_registry.get_class(row["adapter_type"])
     if cls is None:
@@ -448,12 +529,20 @@ async def test_instance(
 @router.post("/instances/{instance_id}/restart", response_model=AdapterInstanceOut)
 async def restart_instance_route(
     instance_id: uuid.UUID,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    await _ensure_instance_mutation(
+        db,
+        principal,
+        str(instance_id),
+        row["adapter_type"],
+    )
 
     from obs.core.event_bus import get_event_bus
 
@@ -468,11 +557,14 @@ async def restart_instance_route(
 async def migrate_instance_bindings(
     source_instance_id: uuid.UUID,
     body: BindingMigrationRequest,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> BindingMigrationResult:
     source_id = str(source_instance_id)
     target_id = str(body.target_instance_id)
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_write_grant(db, principal, source_id)
+    await _ensure_instance_write_grant(db, principal, target_id)
     if source_id == target_id:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Quell- und Ziel-Instanz dürfen nicht identisch sein")
 
@@ -483,6 +575,9 @@ async def migrate_instance_bindings(
     target_row = await db.fetchone("SELECT id, adapter_type, config FROM adapter_instances WHERE id=?", (target_id,))
     if target_row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ziel-Instanz nicht gefunden")
+
+    await _ensure_instance_mutation(db, principal, source_id, source_row["adapter_type"])
+    await _ensure_instance_mutation(db, principal, target_id, target_row["adapter_type"])
 
     if source_row["adapter_type"] != target_row["adapter_type"]:
         raise HTTPException(
@@ -551,6 +646,11 @@ async def list_instance_bindings(
     db: Database = Depends(lambda: get_db()),
 ) -> list[InstanceBindingEntry]:
     """Alle Bindings einer Adapter-Instanz, angereichert mit Datenpunkt-Namen."""
+    instance_row = await db.fetchone("SELECT id FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if instance_row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     rows = await db.fetchall(
         """SELECT ab.id, ab.datapoint_id, dp.name AS dp_name, ab.enabled, ab.config
            FROM adapter_bindings ab
@@ -559,7 +659,6 @@ async def list_instance_bindings(
            ORDER BY dp.name, ab.created_at""",
         (str(instance_id),),
     )
-    principal = _principal_from_dependency(_user)
     allowed_dp_ids = await _filter_readable_datapoint_ids(db, principal, [row["datapoint_id"] for row in rows])
     return [
         InstanceBindingEntry(

@@ -92,6 +92,7 @@ async def _require_grant_targets(db: Database, grants: Sequence[AuthzPrincipalGr
         "logic_graph": "logic_graphs",
         "visu_page": "visu_nodes",
         "ringbuffer_filterset": "ringbuffer_filtersets",
+        "adapter_instance": "adapter_instances",
     }
     for node_type, table in table_by_type.items():
         node_ids = sorted({grant.node_id for grant in grants if grant.node_type == node_type})

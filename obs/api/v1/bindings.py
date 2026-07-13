@@ -21,7 +21,12 @@ from pydantic import BaseModel
 
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
-from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
+from obs.api.authz_service import (
+    authorize_adapter_instance,
+    filter_authorized_datapoints,
+    load_role_grants,
+    resolve_datapoint_targets,
+)
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.binding import (
@@ -148,6 +153,28 @@ def _ensure_adapter_delegates_binding(principal: Principal, adapter_type: str) -
 
     if not supports_delegation(adapter_type, AdapterDelegationCapability.LINK_BINDING):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Typ erlaubt keine delegierte Binding-Änderung")
+
+
+async def _ensure_adapter_instance_binding_scope(
+    db: Database,
+    principal: Principal,
+    instance_id: str | None,
+    adapter_type: str,
+) -> None:
+    if _is_admin_principal(principal):
+        return
+    if instance_id is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Instanz-Berechtigung erforderlich")
+    decision = await authorize_adapter_instance(
+        db,
+        principal,
+        instance_id,
+        action=AuthzAction.WRITE,
+        min_role="operator",
+    )
+    if not decision.allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Instanz-Berechtigung erforderlich")
+    _ensure_adapter_delegates_binding(principal, adapter_type)
 
 
 async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
@@ -286,7 +313,12 @@ async def create_binding(
             f"Adapter-Instanz '{body.adapter_instance_id}' nicht gefunden",
         )
     adapter_type = instance_row["adapter_type"]
-    _ensure_adapter_delegates_binding(principal, adapter_type)
+    await _ensure_adapter_instance_binding_scope(
+        db,
+        principal,
+        str(body.adapter_instance_id),
+        adapter_type,
+    )
 
     _validate_adapter_binding(
         adapter_type,
@@ -354,7 +386,12 @@ async def update_binding(
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Binding nicht gefunden")
-    _ensure_adapter_delegates_binding(principal, row["adapter_type"])
+    await _ensure_adapter_instance_binding_scope(
+        db,
+        principal,
+        row["adapter_instance_id"],
+        row["adapter_type"],
+    )
 
     updates = body.model_dump(exclude_unset=True)
     now = datetime.now(UTC).isoformat()
@@ -439,7 +476,12 @@ async def delete_binding(
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Binding nicht gefunden")
-    _ensure_adapter_delegates_binding(principal, row["adapter_type"])
+    await _ensure_adapter_instance_binding_scope(
+        db,
+        principal,
+        row["adapter_instance_id"],
+        row["adapter_type"],
+    )
 
     instance_id = row["adapter_instance_id"]
     await db.execute_and_commit("DELETE FROM adapter_bindings WHERE id=?", (str(binding_id),))

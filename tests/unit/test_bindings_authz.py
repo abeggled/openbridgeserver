@@ -112,6 +112,15 @@ async def _insert_instance(db: Database, instance_id: uuid.UUID, adapter_type: s
     )
 
 
+async def _insert_instance_grant(db: Database, instance_id: uuid.UUID, role: str = "operator") -> None:
+    await _insert_grant(
+        db,
+        node_type="adapter_instance",
+        node_id=str(instance_id),
+        role=role,
+    )
+
+
 async def _insert_binding(
     db: Database,
     *,
@@ -216,6 +225,7 @@ async def test_non_admin_create_binding_allows_delegable_mqtt_with_operator_scop
     await _insert_datapoint(db, dp_id, "allowed-room")
     await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
     await _insert_instance(db, instance_id, "MQTT")
+    await _insert_instance_grant(db, instance_id)
     monkeypatch.setitem(adapter_registry._adapters, "MQTT", MqttAdapter)
     monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
     monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
@@ -334,6 +344,7 @@ async def test_non_admin_update_and_delete_binding_allow_delegable_mqtt_with_ope
     await _insert_datapoint(db, dp_id, "allowed-room")
     await _insert_grant(db, node_id="allowed-room", role="operator")
     await _insert_instance(db, instance_id, "MQTT")
+    await _insert_instance_grant(db, instance_id)
     await _insert_binding(db, binding_id=binding_id, dp_id=dp_id, instance_id=instance_id, adapter_type="MQTT")
     monkeypatch.setitem(adapter_registry._adapters, "MQTT", MqttAdapter)
     monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))

@@ -22,6 +22,7 @@ class AdapterDelegationCapability(StrEnum):
     CREATE_DEVICE = "create_device"
     CREATE_DATAPOINT = "create_datapoint"
     LINK_BINDING = "link_binding"
+    CONFIGURE_INSTANCE = "configure_instance"
 
 
 class AdapterBase(ABC):

@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from obs.api.auth import Principal
-from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
+from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.db.database import Database
 
 
@@ -138,6 +138,24 @@ async def authorize_visu_page(
     targets = await resolve_visu_page_targets(db, [node_id])
     grants = await load_role_grants(db, principal, node_type="visu_page")
     return authorize(principal=principal, action=action, targets=targets, grants=grants).allowed
+
+
+async def authorize_adapter_instance(
+    db: Database,
+    principal: Principal,
+    instance_id: str,
+    *,
+    action: AuthzAction | str,
+    min_role: str | None = None,
+) -> AuthzDecision:
+    """Evaluate one explicit adapter-instance grant through the central policy."""
+    grants = await load_role_grants(db, principal, node_type="adapter_instance")
+    return authorize(
+        principal=principal,
+        action=action,
+        targets=[AuthzTarget(node_type="adapter_instance", node_id=instance_id, min_role=min_role)],
+        grants=grants,
+    )
 
 
 async def resolve_hierarchy_targets(db: Database, node_ids: Iterable[str]) -> list[AuthzTarget]:

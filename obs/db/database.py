@@ -806,6 +806,200 @@ async def _migration_v43(conn: aiosqlite.Connection) -> None:
     )
 
 
+async def _migration_v44(conn: aiosqlite.Connection) -> None:
+    """Materialize legacy bound-datapoint scope as adapter-instance grants.
+
+    The former adapter scope was implicit in the effective authorization of an
+    instance's bound datapoints.  Only unambiguous effective access is copied:
+    any readable bound datapoint yields ``guest`` while write access to every
+    bound datapoint yields ``operator``.  Unbound or malformed instances and
+    conflicting API-key aliases remain default-deny.
+    """
+    from obs.api.auth import Principal
+    from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
+
+    grant_rows = await (
+        await conn.execute(
+            """
+        SELECT principal_type, principal_id, node_type, node_id, role, effect
+        FROM authz_node_roles
+        WHERE node_type != 'adapter_instance'
+        ORDER BY principal_type, principal_id, node_type, node_id
+        """,
+        )
+    ).fetchall()
+    if not grant_rows:
+        return
+
+    user_rows = await (await conn.execute("SELECT username FROM users WHERE is_admin=0")).fetchall()
+    key_rows = await (await conn.execute("SELECT id FROM api_keys")).fetchall()
+    valid_principals = {
+        *(("user", row["username"]) for row in user_rows),
+        *(("api_key", row["id"]) for row in key_rows),
+    }
+
+    def canonical_principal(principal_type: str, principal_id: str) -> tuple[str, str]:
+        if principal_type == "api_key":
+            return principal_type, principal_id.removeprefix("api_key:")
+        return principal_type, principal_id
+
+    grants_by_principal: dict[tuple[str, str], dict[tuple[str, str], RoleGrant]] = {}
+    ambiguous_principals: set[tuple[str, str]] = set()
+
+    hierarchy_rows = await (await conn.execute("SELECT id, parent_id FROM hierarchy_nodes")).fetchall()
+    parents = {row["id"]: row["parent_id"] for row in hierarchy_rows}
+
+    def ancestors(node_id: str) -> tuple[str, ...] | None:
+        if node_id not in parents:
+            return None
+        result: list[str] = []
+        seen = {node_id}
+        current = parents[node_id]
+        while current is not None:
+            if current in seen or current not in parents:
+                return None
+            result.append(current)
+            seen.add(current)
+            current = parents[current]
+        result.reverse()
+        return tuple(result)
+
+    for row in grant_rows:
+        principal_key = canonical_principal(row["principal_type"], row["principal_id"])
+        if principal_key not in valid_principals:
+            ambiguous_principals.add(principal_key)
+            continue
+        target_key = (row["node_type"], row["node_id"])
+        grant_ancestors: tuple[str, ...] = ()
+        if row["node_type"] == "hierarchy":
+            resolved = ancestors(row["node_id"])
+            if resolved is None:
+                ambiguous_principals.add(principal_key)
+                continue
+            grant_ancestors = resolved
+        grant = RoleGrant(
+            principal_type=row["principal_type"],
+            principal_id=principal_key[1],
+            node_type=row["node_type"],
+            node_id=row["node_id"],
+            role=row["role"],
+            effect=row["effect"],
+            ancestors=grant_ancestors,
+        )
+        previous = grants_by_principal.setdefault(principal_key, {}).get(target_key)
+        if previous is not None and (previous.role != grant.role or previous.effect != grant.effect):
+            ambiguous_principals.add(principal_key)
+            continue
+        grants_by_principal[principal_key][target_key] = grant
+
+    instance_rows = await (await conn.execute("SELECT id, adapter_type FROM adapter_instances")).fetchall()
+    instance_types = {row["id"]: row["adapter_type"] for row in instance_rows}
+    binding_rows = await (
+        await conn.execute(
+            """
+        SELECT adapter_instance_id, adapter_type, datapoint_id
+        FROM adapter_bindings
+        WHERE adapter_instance_id IS NOT NULL
+        ORDER BY adapter_instance_id, datapoint_id
+        """,
+        )
+    ).fetchall()
+    datapoint_rows = await (await conn.execute("SELECT id FROM datapoints")).fetchall()
+    datapoint_ids = {row["id"] for row in datapoint_rows}
+    bindings_by_instance: dict[str, set[str]] = {}
+    ambiguous_instances: set[str] = set()
+    for row in binding_rows:
+        instance_id = row["adapter_instance_id"]
+        if instance_id not in instance_types or row["datapoint_id"] not in datapoint_ids:
+            ambiguous_instances.add(instance_id)
+            continue
+        if row["adapter_type"] != instance_types[instance_id]:
+            ambiguous_instances.add(instance_id)
+            continue
+        bindings_by_instance.setdefault(instance_id, set()).add(row["datapoint_id"])
+
+    link_rows = await (
+        await conn.execute(
+            "SELECT datapoint_id, node_id FROM hierarchy_datapoint_links ORDER BY datapoint_id, node_id",
+        )
+    ).fetchall()
+    node_ids_by_datapoint: dict[str, list[str]] = {}
+    ambiguous_datapoints: set[str] = set()
+    for row in link_rows:
+        if ancestors(row["node_id"]) is None:
+            ambiguous_datapoints.add(row["datapoint_id"])
+            continue
+        node_ids_by_datapoint.setdefault(row["datapoint_id"], []).append(row["node_id"])
+
+    def datapoint_targets(datapoint_id: str, grants: list[RoleGrant], *, write: bool) -> list[AuthzTarget]:
+        min_role = "operator" if write else None
+        targets = [
+            AuthzTarget(
+                node_type="hierarchy",
+                node_id=node_id,
+                ancestors=ancestors(node_id) or (),
+                min_role=min_role,
+            )
+            for node_id in node_ids_by_datapoint.get(datapoint_id, [])
+        ]
+        if any(grant.node_type == "datapoint" and grant.node_id == datapoint_id for grant in grants):
+            targets.append(AuthzTarget(node_type="datapoint", node_id=datapoint_id, min_role=min_role))
+        return targets
+
+    inserts: list[tuple[str, str, str, str, str, str]] = []
+    for principal_key, grants_by_target in grants_by_principal.items():
+        if principal_key in ambiguous_principals:
+            continue
+        principal_type, principal_id = principal_key
+        principal = Principal(
+            subject=f"api_key:{principal_id}" if principal_type == "api_key" else principal_id,
+            type=principal_type,
+            is_admin=False,
+        )
+        grants = list(grants_by_target.values())
+        for instance_id, bound_datapoints in bindings_by_instance.items():
+            if instance_id in ambiguous_instances or not bound_datapoints:
+                continue
+            if any(datapoint_id in ambiguous_datapoints for datapoint_id in bound_datapoints):
+                continue
+
+            readable = False
+            writable = True
+            for datapoint_id in bound_datapoints:
+                read_targets = datapoint_targets(datapoint_id, grants, write=False)
+                if authorize(
+                    principal=principal,
+                    action=AuthzAction.READ,
+                    targets=read_targets,
+                    grants=grants,
+                ).allowed:
+                    readable = True
+
+                write_targets = datapoint_targets(datapoint_id, grants, write=True)
+                write_decision = authorize(
+                    principal=principal,
+                    action=AuthzAction.WRITE,
+                    targets=write_targets,
+                    grants=grants,
+                )
+                if not write_decision.allowed:
+                    writable = False
+
+            role = "operator" if writable else "guest" if readable else None
+            if role is not None:
+                inserts.append((principal_type, principal_id, "adapter_instance", instance_id, role, "allow"))
+
+    if inserts:
+        await conn.executemany(
+            """
+            INSERT OR IGNORE INTO authz_node_roles
+                (principal_type, principal_id, node_type, node_id, role, effect)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            inserts,
+        )
+
+
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
     (1, _MIGRATION_V1),
@@ -853,6 +1047,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (41, _MIGRATION_V41),
     (42, _migration_v42),
     (43, _migration_v43),
+    (44, _migration_v44),
 ]
 
 
