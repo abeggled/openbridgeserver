@@ -1172,38 +1172,39 @@ async def import_config(
     # --- Central authorization grants ---
     for grant in body.authz_grants:
         try:
-            principal_id = _canonical_principal_id(grant.principal_type, grant.principal_id)
-            principal_table = "users" if grant.principal_type == "user" else "api_keys"
-            principal_column = "username" if grant.principal_type == "user" else "id"
-            principal = await db.fetchone(
-                f"SELECT 1 FROM {principal_table} WHERE {principal_column}=?",
-                (principal_id,),
-            )
-            if principal is None:
-                raise ValueError(f"principal {grant.principal_type}:{principal_id} does not exist")
-            target = AuthzPrincipalGrant(
-                node_type=grant.node_type,
-                node_id=grant.node_id,
-                role=grant.role,
-                effect=grant.effect,
-            )
-            await _require_grant_targets(db, [target])
-            await db.execute_and_commit(
-                """INSERT INTO authz_node_roles
-                       (principal_type, principal_id, node_type, node_id, role, effect)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE
-                   SET role=excluded.role, effect=excluded.effect,
-                       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
-                (
-                    grant.principal_type,
-                    principal_id,
-                    grant.node_type,
-                    grant.node_id,
-                    grant.role,
-                    grant.effect,
-                ),
-            )
+            async with db.transaction():
+                principal_id = _canonical_principal_id(grant.principal_type, grant.principal_id)
+                principal_table = "users" if grant.principal_type == "user" else "api_keys"
+                principal_column = "username" if grant.principal_type == "user" else "id"
+                principal = await db.fetchone(
+                    f"SELECT 1 FROM {principal_table} WHERE {principal_column}=?",
+                    (principal_id,),
+                )
+                if principal is None:
+                    raise ValueError(f"principal {grant.principal_type}:{principal_id} does not exist")
+                target = AuthzPrincipalGrant(
+                    node_type=grant.node_type,
+                    node_id=grant.node_id,
+                    role=grant.role,
+                    effect=grant.effect,
+                )
+                await _require_grant_targets(db, [target])
+                await db.execute(
+                    """INSERT INTO authz_node_roles
+                           (principal_type, principal_id, node_type, node_id, role, effect)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(principal_type, principal_id, node_type, node_id) DO UPDATE
+                       SET role=excluded.role, effect=excluded.effect,
+                           updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                    (
+                        grant.principal_type,
+                        principal_id,
+                        grant.node_type,
+                        grant.node_id,
+                        grant.role,
+                        grant.effect,
+                    ),
+                )
             result.authz_grants_upserted += 1
         except Exception as exc:
             result.errors.append(f"AuthzGrant {grant.principal_type}:{grant.principal_id}/{grant.node_type}:{grant.node_id}: {exc}")
@@ -1278,7 +1279,9 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
         result.datapoints_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM datapoints")
+        async with db.transaction():
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='datapoint'")
+            await db.execute("DELETE FROM datapoints")
         reg = get_registry()
         reg._points.clear()
         reg._values.clear()
@@ -1381,10 +1384,12 @@ async def clear_datapoints(
         await adapter_registry.stop_all()
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
         result.bindings_deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM adapter_bindings")
         row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
         result.deleted = row["n"] if row else 0
-        await db.execute_and_commit("DELETE FROM datapoints")
+        async with db.transaction():
+            await db.execute("DELETE FROM adapter_bindings")
+            await db.execute("DELETE FROM authz_node_roles WHERE node_type='datapoint'")
+            await db.execute("DELETE FROM datapoints")
         reg = get_registry()
         reg._points.clear()
         reg._values.clear()

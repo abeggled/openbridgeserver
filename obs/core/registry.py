@@ -249,7 +249,12 @@ class DataPointRegistry:
 
     async def delete(self, dp_id: uuid.UUID) -> None:
         self.get_or_raise(dp_id)  # raises KeyError if not found
-        await self._db.execute_and_commit("DELETE FROM datapoints WHERE id=?", (str(dp_id),))
+        async with self._db.transaction():
+            await self._db.execute(
+                "DELETE FROM authz_node_roles WHERE node_type='datapoint' AND node_id=?",
+                (str(dp_id),),
+            )
+            await self._db.execute("DELETE FROM datapoints WHERE id=?", (str(dp_id),))
         del self._points[dp_id]
         del self._values[dp_id]
         logger.debug("DataPoint deleted: %s", dp_id)

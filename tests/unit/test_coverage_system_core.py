@@ -7,6 +7,7 @@ All tests are self-contained (no Docker, no real DB, no network).
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -75,6 +76,10 @@ class _DbStub:
 
     async def commit(self):
         pass
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
 
 # ===========================================================================
