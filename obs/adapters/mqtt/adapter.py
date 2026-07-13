@@ -103,7 +103,14 @@ class MqttBindingConfig(BaseModel):
 @register
 class MqttAdapter(AdapterBase):
     adapter_type = "MQTT"
-    delegation_capabilities = frozenset(AdapterDelegationCapability)
+    delegation_capabilities = frozenset(
+        {
+            AdapterDelegationCapability.CREATE_DEVICE,
+            AdapterDelegationCapability.CREATE_DATAPOINT,
+            AdapterDelegationCapability.LINK_BINDING,
+            AdapterDelegationCapability.CONFIGURE_INSTANCE,
+        }
+    )
     config_schema = MqttAdapterConfig
     binding_config_schema = MqttBindingConfig
 

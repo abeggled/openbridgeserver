@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
+from obs.adapters.base import AdapterDelegationCapability
 from obs.api.auth import Principal
 from obs.api.v1 import adapters as adapters_api
+from obs.api.v1 import knxproj as knxproj_api
 from obs.db.database import Database
 from obs.models.datapoint import DataPoint
 
@@ -22,6 +26,9 @@ class _RegistryStub:
 
     def all(self) -> list[DataPoint]:
         return list(self._datapoints)
+
+    def get(self, dp_id: uuid.UUID) -> DataPoint | None:
+        return next((dp for dp in self._datapoints if dp.id == dp_id), None)
 
 
 @pytest.fixture
@@ -107,13 +114,19 @@ async def _insert_instance(
     )
 
 
-async def _insert_instance_grant(db: Database, instance_id: uuid.UUID, role: str = "guest") -> None:
+async def _insert_instance_grant(
+    db: Database,
+    instance_id: uuid.UUID,
+    role: str = "guest",
+    *,
+    effect: str = "allow",
+) -> None:
     await db.execute_and_commit(
         """
         INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
-        VALUES ('user', 'alice', 'adapter_instance', ?, ?, 'allow')
+        VALUES ('user', 'alice', 'adapter_instance', ?, ?, ?)
         """,
-        (str(instance_id), role),
+        (str(instance_id), role, effect),
     )
 
 
@@ -349,3 +362,219 @@ async def test_instance_mutation_requires_operator_grant_and_code_declaration(mo
                 db=db,
             )
         assert exc_info.value.status_code == 403
+
+
+def test_adapter_operation_delegation_requires_user_and_every_declared_capability(monkeypatch):
+    supported = {
+        AdapterDelegationCapability.CREATE_DATAPOINT,
+        AdapterDelegationCapability.LINK_BINDING,
+    }
+    monkeypatch.setattr(
+        adapters_api.adapter_registry,
+        "supports_delegation",
+        lambda adapter_type, capability: adapter_type == "DECLARED" and capability in supported,
+    )
+
+    adapters_api._ensure_adapter_delegates_operation(
+        _principal(),
+        "DECLARED",
+        AdapterDelegationCapability.CREATE_DATAPOINT,
+        AdapterDelegationCapability.LINK_BINDING,
+    )
+    adapters_api._ensure_adapter_delegates_operation(
+        _principal("admin", is_admin=True),
+        "UNKNOWN",
+    )
+
+    denied = [
+        (_principal(), "DECLARED", (AdapterDelegationCapability.CREATE_DEVICE,)),
+        (_principal(), "UNKNOWN", (AdapterDelegationCapability.CREATE_DATAPOINT,)),
+        (_principal(), "DECLARED", ()),
+        (Principal(subject="key", type="api_key", is_admin=False), "DECLARED", tuple(supported)),
+    ]
+    for principal, adapter_type, capabilities in denied:
+        with pytest.raises(HTTPException) as exc_info:
+            adapters_api._ensure_adapter_delegates_operation(principal, adapter_type, *capabilities)
+        assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_iobroker_import_requires_instance_write_and_declared_create_capabilities(monkeypatch, db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "IOBROKER")
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", lambda *_args: True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_import_states(
+            instance_id,
+            adapters_api.IoBrokerImportRequest(),
+            _user=_principal(),
+            db=db,
+        )
+    assert exc_info.value.status_code == 403
+
+    await _insert_instance_grant(db, instance_id, "operator")
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", lambda *_args: False)
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_import_states(
+            instance_id,
+            adapters_api.IoBrokerImportRequest(),
+            _user=_principal(),
+            db=db,
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_iobroker_import_declared_path_creates_datapoint_and_binding(monkeypatch, db: Database):
+    instance_id = uuid.uuid4()
+    datapoint_id = uuid.uuid4()
+    admin_datapoint_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "IOBROKER")
+    await _insert_instance_grant(db, instance_id, "operator")
+    instance = SimpleNamespace(
+        browse_states=AsyncMock(
+            return_value=[
+                {
+                    "id": "zigbee.0.lamp.state",
+                    "name": "Lamp",
+                    "type": "boolean",
+                    "role": "switch.light",
+                    "read": True,
+                    "write": True,
+                    "value": False,
+                    "unit": None,
+                }
+            ]
+        )
+    )
+    registry = SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id=datapoint_id)))
+    create_binding = AsyncMock()
+    monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _instance_id: instance)
+    monkeypatch.setattr(
+        adapters_api.adapter_registry,
+        "supports_delegation",
+        lambda adapter_type, capability: (
+            adapter_type == "IOBROKER" and capability in {AdapterDelegationCapability.CREATE_DATAPOINT, AdapterDelegationCapability.LINK_BINDING}
+        ),
+    )
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: registry)
+    monkeypatch.setattr("obs.api.v1.bindings.create_binding", create_binding)
+
+    result = await adapters_api.iobroker_import_states(
+        instance_id,
+        adapters_api.IoBrokerImportRequest(),
+        _user=_principal(),
+        db=db,
+    )
+
+    assert result.created_datapoints == 1
+    assert result.created_bindings == 1
+    registry.create.assert_awaited_once()
+    create_binding.assert_awaited_once()
+    operation_principal = create_binding.await_args.args[2]
+    assert operation_principal.subject == "alice"
+    assert operation_principal.is_admin is False
+    grant = await db.fetchone(
+        """SELECT role, effect FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='alice'
+             AND node_type='datapoint' AND node_id=?""",
+        (str(datapoint_id),),
+    )
+    assert dict(grant) == {"role": "operator", "effect": "allow"}
+
+    registry.create.reset_mock()
+    registry.create.return_value = SimpleNamespace(id=admin_datapoint_id)
+    create_binding.reset_mock()
+    admin_result = await adapters_api.iobroker_import_states(
+        instance_id,
+        adapters_api.IoBrokerImportRequest(),
+        _user=_principal("admin", is_admin=True),
+        db=db,
+    )
+    admin_grant = await db.fetchone(
+        """SELECT role FROM authz_node_roles
+           WHERE principal_type='user' AND principal_id='admin'
+             AND node_type='datapoint' AND node_id=?""",
+        (str(admin_datapoint_id),),
+    )
+
+    assert admin_result.created_datapoints == 1
+    assert admin_result.created_bindings == 1
+    assert create_binding.await_args.args[2] == _principal("admin", is_admin=True)
+    assert admin_grant is None
+
+
+@pytest.mark.asyncio
+async def test_adapter_instance_deny_wins_before_iobroker_import(monkeypatch, db: Database):
+    instance_id = uuid.uuid4()
+    await _insert_instance(db, instance_id, "IOBROKER")
+    await _insert_instance_grant(db, instance_id, "operator", effect="deny")
+    supports_delegation = AsyncMock(return_value=True)
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", supports_delegation)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.iobroker_import_states(
+            instance_id,
+            adapters_api.IoBrokerImportRequest(),
+            _user=_principal(),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    supports_delegation.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_anwesenheit_sync_declared_link_uses_callers_scoped_principal(monkeypatch, db: Database):
+    instance_id = uuid.uuid4()
+    existing_dp = _dp(uuid.uuid4(), "Existing")
+    added_dp = _dp(uuid.uuid4(), "Added")
+    existing_binding = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, existing_dp, "allowed-room")
+    await _insert_datapoint(db, added_dp, "allowed-room")
+    await _insert_instance(db, instance_id)
+    await _insert_instance_grant(db, instance_id, "operator")
+    await _insert_binding(
+        db,
+        binding_id=existing_binding,
+        dp_id=existing_dp.id,
+        instance_id=instance_id,
+    )
+    create_binding = AsyncMock()
+    delete_binding = AsyncMock()
+    monkeypatch.setattr(
+        adapters_api.adapter_registry,
+        "supports_delegation",
+        lambda adapter_type, capability: adapter_type == "ANWESENHEITSSIMULATION" and capability is AdapterDelegationCapability.LINK_BINDING,
+    )
+    monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _instance_id: None)
+    monkeypatch.setattr("obs.api.v1.bindings.create_binding", create_binding)
+    monkeypatch.setattr("obs.api.v1.bindings.delete_binding", delete_binding)
+
+    result = await adapters_api.anwesenheit_sync_bindings(
+        instance_id,
+        adapters_api.AnwesenheitSyncRequest(datapoint_ids=[str(added_dp.id)]),
+        _user=_principal(),
+        db=db,
+    )
+
+    assert result.created == 1
+    assert result.removed == 1
+    assert create_binding.await_args.args[2] == _principal()
+    assert delete_binding.await_args.args[2] == _principal()
+
+
+def test_device_creation_has_no_delegated_runtime_route_and_instance_create_stays_admin_only():
+    # CREATE_DEVICE is declaration-only until an adapter-owned runtime path
+    # exists; Wave 13 must not manufacture a generic route for it.
+    adapter_post_routes = [route for route in adapters_api.router.routes if isinstance(route, APIRoute) and "POST" in route.methods]
+    assert not any("/devices" in route.path for route in adapter_post_routes)
+
+    instance_create = next(route for route in adapter_post_routes if route.path == "/instances")
+    assert any(dependency.call is adapters_api.get_admin_user for dependency in instance_create.dependant.dependencies)
+
+    knx_import_routes = [route for route in knxproj_api.router.routes if isinstance(route, APIRoute) and route.path in {"/import", "/import-csv"}]
+    assert len(knx_import_routes) == 2
+    assert all(any(dependency.call is knxproj_api.get_admin_user for dependency in route.dependant.dependencies) for route in knx_import_routes)
