@@ -772,6 +772,11 @@ async def _migration_v43(conn: aiosqlite.Connection) -> None:
     Owner rows are inserted first so the subsequent read snapshot cannot
     downgrade them.  Empty and orphaned owner names never become principals.
     """
+    table_rows = await (await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    tables = {row[0] for row in table_rows}
+    if not {"authz_node_roles", "ringbuffer_filtersets", "users", "api_keys"} <= tables:
+        return
+
     await conn.execute(
         """
         INSERT INTO authz_node_roles
@@ -814,6 +819,11 @@ async def _migration_v44(conn: aiosqlite.Connection) -> None:
     bound datapoint yields ``operator``.  Unbound or malformed instances and
     conflicting API-key aliases remain default-deny.
     """
+    table_rows = await (await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    tables = {row[0] for row in table_rows}
+    if not {"authz_node_roles", "adapter_instances", "adapter_bindings", "users", "api_keys"} <= tables:
+        return
+
     from obs.api.auth import Principal
     from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
 

@@ -518,7 +518,7 @@ class TestListInstanceBindings:
             enabled=1,
             config=json.dumps({"group_address": "1/1/1"}),
         )
-        db = _DbStub(rows=[binding_row])
+        db = _DbStub(one=_inst_row(), rows=[binding_row])
         result = await adp_api.list_instance_bindings(instance_id=uuid.uuid4(), db=db, _user="admin")
         assert len(result) == 1
         assert result[0].datapoint_name == "Temperatur"
