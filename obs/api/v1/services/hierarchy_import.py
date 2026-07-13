@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 
+from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.db.database import Database
 
 _GA_SCOPE_CHUNK_SIZE = 500
@@ -49,19 +50,22 @@ def _chunks(values: list[str], size: int) -> list[list[str]]:
 async def _replace_existing_ets_trees(db: Database, mode: str) -> int:
     """Delete auto-created ETS hierarchy trees for one mode, leaving manual trees untouched."""
     source = _ets_import_description(mode)
-    rows = await db.fetchall(
-        "SELECT id FROM hierarchy_trees WHERE source=?",
-        (source,),
-    )
-    tree_ids = [row["id"] for row in rows]
-    if not tree_ids:
-        return 0
+    async with db.transaction():
+        rows = await db.fetchall(
+            "SELECT id FROM hierarchy_trees WHERE source=?",
+            (source,),
+        )
+        tree_ids = [row["id"] for row in rows]
+        if not tree_ids:
+            return 0
 
-    placeholders = ",".join("?" * len(tree_ids))
-    await db.execute_and_commit(
-        f"DELETE FROM hierarchy_trees WHERE id IN ({placeholders})",
-        tree_ids,
-    )
+        node_ids = await collect_hierarchy_tree_node_ids(db, tree_ids)
+        await delete_hierarchy_grants(db, node_ids)
+        placeholders = ",".join("?" * len(tree_ids))
+        await db.execute(
+            f"DELETE FROM hierarchy_trees WHERE id IN ({placeholders})",
+            tree_ids,
+        )
     return len(tree_ids)
 
 

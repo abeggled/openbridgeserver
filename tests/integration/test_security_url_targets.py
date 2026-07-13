@@ -111,7 +111,13 @@ async def test_url_target_allowlist_rejects_invalid_target_values(client, auth_h
     assert listed.json()["entries"] == before_entries
 
 
-async def test_url_target_check_allows_authenticated_non_admin_but_not_allowlist_write(client):
+async def test_url_target_check_allows_authenticated_non_admin_but_not_allowlist_write(client, auth_headers):
+    created_user = await client.post(
+        "/api/v1/auth/users",
+        json={"username": "graph-editor", "password": "GraphEditor123!", "is_admin": False},
+        headers=auth_headers,
+    )
+    assert created_user.status_code == 201
     headers = _headers_for("graph-editor")
 
     with patch("obs.security.url_targets.socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):

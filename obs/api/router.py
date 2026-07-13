@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from obs.api.auth import router as auth_router
+from obs.api.v1.authz import router as authz_router
 from obs.api.v1.adapters import router as adapters_router
 from obs.api.v1.bindings import router as bindings_router
 from obs.api.v1.camera import router as camera_router
@@ -33,6 +34,7 @@ from obs.api.v1.websocket import router as ws_router
 router = APIRouter()
 
 router.include_router(auth_router)
+router.include_router(authz_router, prefix="/authz")
 router.include_router(dp_router, prefix="/datapoints")
 router.include_router(bindings_router, prefix="/datapoints")
 router.include_router(search_router, prefix="/search")

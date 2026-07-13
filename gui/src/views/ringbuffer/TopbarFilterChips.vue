@@ -114,7 +114,6 @@
         >
           <!-- pinned "+ Neu" as the first option (#36 UX) -->
           <button
-            v-if="auth.isAdmin"
             type="button"
             data-testid="topbar-add-filter-new"
             class="block w-full text-left px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-700"
@@ -182,16 +181,12 @@ const searchInputRef = ref(null)
 const addMenuBtnRef = ref(null)
 const addMenuStyle = ref({})
 
-// Admin can edit every set; non-admin users only the sets they created
-// themselves (#478). All per-user state (is_active toggle, topbar pinning,
-// drag-reorder, +Add, ×Remove) stays open for everyone — only the chip body
-// (which jumps into the FilterEditor for editing/deleting) signals the lock
-// via the 🔒 marker.
+// The backend projects the central WRITE decision onto each visible set.
+// Keep the admin fallback for old cached responses during a rolling upgrade.
 function canEdit(set) {
   if (!set) return false
   if (auth.isAdmin) return true
-  const owner = set.created_by
-  return owner != null && owner === auth.username
+  return set.can_write === true
 }
 
 function isMine(set) {

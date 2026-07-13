@@ -20,7 +20,7 @@ import AuthButton from '@/components/AuthButton.vue'
 import IconPicker from '@/components/IconPicker.vue'
 import VisuIcon from '@/components/VisuIcon.vue'
 import { visu as visuApi, users as usersApi } from '@/api/client'
-import type { VisuNode, NodeType, AccessLevel, UserResponse } from '@/types'
+import type { VisuNode, VisuNodeUpdate, NodeType, AccessLevel, UserResponse } from '@/types'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -98,27 +98,44 @@ async function saveNode() {
   saving.value  = true
   errorMsg.value = ''
   try {
-    const patch: Partial<VisuNode> = {
+    const patch: VisuNodeUpdate = {
       name:   editName.value.trim(),
       icon:   editIcon.value || null,
       access: editAccess.value,
     }
     if (editPin.value) patch.access_pin = editPin.value
-    await store.updateNode(selectedId.value, patch)
-
-    // Benutzer-Zuweisung speichern (bei user-Access oder wenn vorher user war)
     if (editAccess.value === 'user' || nodeUsersDirty.value) {
-      const usersToSave = editAccess.value === 'user' ? nodeUsers.value : []
-      await visuApi.setNodeUsers(selectedId.value, usersToSave)
-      nodeUsersDirty.value = false
+      patch.usernames = editAccess.value === 'user' ? nodeUsers.value : []
     }
+    await store.updateNode(selectedId.value, patch)
+    nodeUsersDirty.value = false
 
     editPin.value        = ''
     editPinConfirm.value = ''
     flashOk.value        = true
     setTimeout(() => { flashOk.value = false }, 2000)
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('common.saveError')
+    const details = e && typeof e === 'object' && 'details' in e
+      ? (e as { details?: Record<string, unknown> }).details
+      : undefined
+    const code = e && typeof e === 'object' && 'code' in e
+      ? (e as { code?: unknown }).code
+      : undefined
+    if (code === 'visu_target_audience_datapoints_denied') {
+      const datapoints = Array.isArray(details?.datapoint_ids) ? details.datapoint_ids.map(String) : []
+      errorMsg.value = t('tree.targetDatapointsDenied', {
+        username: String(details?.username ?? ''),
+        count: datapoints.length,
+        datapoints: datapoints.join(', '),
+      })
+    } else if (code === 'visu_target_audience_invalid_users') {
+      const usernames = Array.isArray(details?.usernames) ? details.usernames.map(String) : []
+      errorMsg.value = t('tree.targetUsersInvalid', { usernames: usernames.join(', ') })
+    } else if (code === 'visu_target_audience_requires_user_access') {
+      errorMsg.value = t('tree.targetUsersRequireUserAccess')
+    } else {
+      errorMsg.value = e instanceof Error ? e.message : t('common.saveError')
+    }
   } finally {
     saving.value = false
   }
@@ -488,6 +505,7 @@ onMounted(async () => {
           <div
             v-for="{ node, depth } in flatTree"
             :key="node.id"
+            :data-testid="`tree-node-${node.id}`"
             class="group flex items-center gap-1 px-2 py-1.5 cursor-pointer transition-colors text-sm"
             :class="[
               selectedId === node.id
@@ -703,10 +721,11 @@ onMounted(async () => {
           </section>
 
           <!-- Fehler -->
-          <p v-if="errorMsg" class="text-sm text-red-500 dark:text-red-400 bg-red-500/10 px-3 py-2 rounded-lg">{{ errorMsg }}</p>
+          <p v-if="errorMsg" data-testid="save-error" class="text-sm text-red-500 dark:text-red-400 bg-red-500/10 px-3 py-2 rounded-lg">{{ errorMsg }}</p>
 
           <!-- Speichern -->
           <button
+            data-testid="save-node"
             class="w-full py-2 rounded-lg text-sm font-medium transition-colors"
             :class="flashOk
               ? 'bg-green-500 text-white'
