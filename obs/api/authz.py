@@ -165,6 +165,7 @@ def _grant_applies(*, action: AuthzAction, grant: RoleGrant, target: AuthzTarget
         return False
     if action == AuthzAction.READ:
         if grant.effect == GrantEffect.DENY:
+            # Deny cascades downward only; must not remove access to ancestor nodes via siblings.
             return grant.node_id in target.path
         return target.node_id in grant.path or grant.node_id in target.path
     return grant.node_id in target.path

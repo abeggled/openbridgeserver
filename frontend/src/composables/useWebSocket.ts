@@ -70,9 +70,7 @@ export function createWebSocketClient() {
     let url = WS_URL()
     if (jwt && !connectContext.preferPageScope) {
       if (connectContext.pageId) {
-        const params = new URLSearchParams({ page_id: connectContext.pageId })
-        if (connectContext.sessionToken) params.set('session_token', connectContext.sessionToken)
-        url = `${url}?${params.toString()}`
+        url = `${url}?${new URLSearchParams({ page_id: connectContext.pageId }).toString()}`
       }
       socket = new WebSocket(url, [`obs.jwt.${jwt}`])
     } else {

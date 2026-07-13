@@ -283,3 +283,37 @@ def test_api_key_principal_without_prefix_does_not_match_unrelated_grant():
 
     assert decision.allowed is False
     assert decision.reason == "missing_allow"
+
+
+def test_sibling_deny_does_not_block_allowed_ancestor():
+    """DENY on sibling B must not deny the common ancestor when ALLOW on sibling A covers it."""
+    # Hierarchy: root → A, root → B
+    allow_a = _grant("A", role=Role.GUEST, ancestors=("root",))
+    deny_b = _grant("B", role=Role.GUEST, effect=GrantEffect.DENY, ancestors=("root",))
+    target_root = _target("root")
+
+    decision = authorize(
+        principal=_user(),
+        action=AuthzAction.READ,
+        targets=[target_root],
+        grants=[allow_a, deny_b],
+    )
+
+    assert decision.allowed is True
+
+
+def test_deny_still_cascades_downward_to_descendants():
+    """A DENY on a parent must still deny descendants (downward cascade not broken)."""
+    deny_floor = _grant("floor", role=Role.GUEST, effect=GrantEffect.DENY, ancestors=("building",))
+    allow_floor = _grant("floor", role=Role.GUEST, ancestors=("building",))
+    target_room = _target("room", ancestors=("building", "floor"))
+
+    decision = authorize(
+        principal=_user(),
+        action=AuthzAction.READ,
+        targets=[target_room],
+        grants=[allow_floor, deny_floor],
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "explicit_deny"

@@ -438,7 +438,9 @@ def _parse_hierarchy_node_filter(value: str) -> list[str]:
     return node_ids
 
 
-async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> dict[str, list[KnxHierarchyLinkOut]]:
+async def _load_device_hierarchy_links(
+    db: Database, device_ids: list[str], principal: Principal | None = None
+) -> dict[str, list[KnxHierarchyLinkOut]]:
     if not device_ids:
         return {}
     placeholders = ",".join("?" * len(device_ids))
@@ -457,6 +459,10 @@ async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> d
            ORDER BY ht.name, hn.name""",
         device_ids,
     )
+    if principal is not None and not _is_admin_principal(principal):
+        link_node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
+        allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, link_node_ids, action=AuthzAction.READ))
+        rows = [row for row in rows if row["node_id"] in allowed_node_ids]
     node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
     node_paths: dict[str, list[str]] = {}
     if node_ids:
@@ -1179,7 +1185,9 @@ async def list_knx_devices(
 
     hierarchy_node_ids = _parse_hierarchy_node_filter(hierarchy_node_id)
     if hierarchy_node_ids and not _is_admin_principal(principal):
-        hierarchy_node_ids = await filter_authorized_hierarchy_nodes(db, principal, hierarchy_node_ids)
+        hierarchy_node_ids = await filter_authorized_hierarchy_nodes(
+            db, principal, hierarchy_node_ids, action=AuthzAction.READ
+        )
         if not hierarchy_node_ids:
             return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
     if hierarchy_node_ids:
@@ -1349,7 +1357,9 @@ async def set_knx_device_hierarchy_links(
         await db.commit()
     if request is not None:
         set_contract_audit_summary(request, resource_count=len(node_ids), payload=sorted(node_ids))
-    admin_principal = Principal(subject=_user, type="user", is_admin=True)
+    # get_admin_user already verified admin status; reconstruct as admin Principal so
+    # get_knx_device skips the non-admin GA-scope filter regardless of the username.
+    admin_principal = Principal(subject=_user, type="user", is_admin=True) if isinstance(_user, str) else _user
     return await get_knx_device(pa=pa, _user=admin_principal, db=db)
 
 
