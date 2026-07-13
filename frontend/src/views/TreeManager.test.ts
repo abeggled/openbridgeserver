@@ -117,7 +117,7 @@ describe('TreeManager access target updates', () => {
   })
 
   it('renders the stable datapoint policy error with actionable details', async () => {
-    mocks.updateNode.mockRejectedValue(Object.assign(new Error('request failed'), {
+    mocks.updateNode.mockRejectedValue(Object.assign(new Error(), {
       code: 'visu_target_audience_datapoints_denied',
       details: {
         username: 'alice',

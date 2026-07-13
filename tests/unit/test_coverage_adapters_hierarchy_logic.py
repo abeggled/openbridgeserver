@@ -73,10 +73,6 @@ class _DbStub:
     async def executemany(self, query, params_list):
         self.committed.append(("executemany", query))
 
-    @asynccontextmanager
-    async def transaction(self):
-        yield
-
 
 def _inst_row(*, adapter_type="KNX", name="Test", enabled=1, config=None, iid=None):
     iid = iid or str(uuid.uuid4())

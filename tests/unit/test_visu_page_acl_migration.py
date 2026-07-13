@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from obs.api.auth import Principal
 from obs.api.v1 import config as config_api
 from obs.api.v1 import visu as visu_api
 from obs.db.database import Database, _migration_v42
@@ -168,8 +169,9 @@ async def test_breadcrumb_and_children_preserve_explicit_page_access() -> None:
             _user="admin",
         )
 
-        breadcrumb = await visu_api.get_breadcrumb(page.id, db=db)
-        children = await visu_api.get_children(folder.id, db=db)
+        admin = Principal(subject="admin", type="user", is_admin=True)
+        breadcrumb = await visu_api.get_breadcrumb(page.id, db=db, user=admin)
+        children = await visu_api.get_children(folder.id, db=db, user=admin)
 
         assert [(node.id, node.access) for node in breadcrumb] == [
             (folder.id, "user"),

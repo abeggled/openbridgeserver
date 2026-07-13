@@ -732,8 +732,6 @@ async def test_factory_reset_removes_visu_page_grants_and_preserves_unrelated_gr
     assert result.visu_nodes_deleted == 2
     assert await db.fetchone("SELECT 1 FROM visu_nodes") is None
     assert await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_type='visu_page'") is None
-    unrelated = await db.fetchone(
-        "SELECT effect FROM authz_node_roles WHERE node_type='logic_capability' AND node_id='http_request'"
-    )
+    unrelated = await db.fetchone("SELECT effect FROM authz_node_roles WHERE node_type='logic_capability' AND node_id='http_request'")
     assert unrelated is not None
     assert unrelated["effect"] == "deny"
