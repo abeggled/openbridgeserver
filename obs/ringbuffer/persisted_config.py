@@ -274,14 +274,20 @@ async def finalize_committed_migration_decision(db: Database, rb) -> bool:
     if rb is None:
         return False
     decision = await load_legacy_migration_decision(db)
-    # Terminal (migrated/discarded) NICHT anfassen – und die bewusste ``keep``-Entscheidung
-    # ebenso wenig überschreiben (#968, Codex :285): der GLOBALE Commit-Zähler belegt bei
-    # mehreren Quellen nur, dass IRGENDEINE frühere Quelle migriert wurde. Wird die zuletzt
-    # ge-keepte Quelle danach von der FIFO-Retention zurückgewonnen (``has_attached_legacy``
-    # fällt auf False), dürfte der Assistent NICHT auf ``migrated`` springen – ``keep`` heißt
-    # „behalten, Budget-Rückgewinnung akzeptiert", nicht „migriert". Nur pending/skipped werden
-    # nachgezogen.
-    if decision in LEGACY_DECISIONS_TERMINAL or decision == LEGACY_DECISION_KEEP:
+    if decision in LEGACY_DECISIONS_TERMINAL:
+        return False
+    # Multi-Quellen-Reparatur (#968, Codex :2139): hat ein Commit committed UND bleibt noch eine
+    # Legacy-Quelle attached, MUSS die Entscheidung ``skipped`` (protected, non-terminal) sein –
+    # nicht ``keep`` (unprotected). ``on_success`` schreibt diesen Übergang best-effort; schlägt
+    # er fehl (app-DB locked/voll), lädt ein Neustart ``keep`` und die verbleibende Quelle startet
+    # ungeschützt. Hier idempotent nachholen: ``keep`` + committed + Legacy attached → ``skipped``.
+    # ``keep`` + kein Legacy (Retention-Rückgewinnung): NICHT anfassen – ``keep`` bedeutet
+    # „Budget-Rückgewinnung akzeptiert", nicht „migriert" (#968, Codex :285).
+    if decision == LEGACY_DECISION_KEEP:
+        if await rb.has_attached_legacy() and await rb.has_committed_migration():
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+            await rb.set_legacy_retention_protected(True)
+            return True
         return False
     # Solange noch eine (evtl. quarantänierte) Legacy-Quelle existiert, bleibt der Assistent
     # nicht-terminal – sonst versteckte eine terminale Entscheidung den verbleibenden Cleanup.

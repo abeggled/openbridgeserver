@@ -1234,6 +1234,56 @@ async def test_finalize_committed_migration_decision_branches(tmp_path: Path):
         await db.disconnect()
 
 
+async def test_finalize_committed_migration_decision_keep_multisource_repair(tmp_path: Path):
+    """keep + committed + verbleibende Legacy → skipped: best-effort on_success nach Multi-Quellen-
+    Commit fehlgeschlagen; finalize zieht Schutz state-basiert nach (#968, Codex :2139)."""
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_SKIPPED,
+        finalize_committed_migration_decision,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    protection_calls: list[bool] = []
+
+    class _RbKeep:
+        def __init__(self, attached: bool, committed: bool):
+            self._attached, self._committed = attached, committed
+
+        async def has_attached_legacy(self) -> bool:
+            return self._attached
+
+        async def has_committed_migration(self) -> bool:
+            return self._committed
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            protection_calls.append(value)
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        # keep + committed + verbleibende Legacy → skipped + Schutz gesetzt.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        assert await finalize_committed_migration_decision(db, _RbKeep(True, True)) is True
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_SKIPPED
+        assert protection_calls == [True]
+
+        # keep + KEIN Commit-Beleg → no-op (bewusste keep-Entscheidung ohne Migration).
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        protection_calls.clear()
+        assert await finalize_committed_migration_decision(db, _RbKeep(True, False)) is False
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+
+        # keep + committed + KEIN Legacy mehr → no-op (Retention entfernte, NICHT überschreiben).
+        protection_calls.clear()
+        assert await finalize_committed_migration_decision(db, _RbKeep(False, True)) is False
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+    finally:
+        await db.disconnect()
+
+
 async def test_resolve_cutoff_rowid_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Rand-Fälle der id-geordneten Cutoff-Ableitung (#968, Codex :156): nichts kopieren,
     mehr als vorhanden kopieren, N-te-neueste id, und unlesbare Quelle."""
