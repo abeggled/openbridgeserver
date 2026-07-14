@@ -276,18 +276,16 @@ async def finalize_committed_migration_decision(db: Database, rb) -> bool:
     decision = await load_legacy_migration_decision(db)
     if decision in LEGACY_DECISIONS_TERMINAL:
         return False
-    # Multi-Quellen-Reparatur (#968, Codex :2139): hat ein Commit committed UND bleibt noch eine
-    # Legacy-Quelle attached, MUSS die Entscheidung ``skipped`` (protected, non-terminal) sein –
-    # nicht ``keep`` (unprotected). ``on_success`` schreibt diesen Übergang best-effort; schlägt
-    # er fehl (app-DB locked/voll), lädt ein Neustart ``keep`` und die verbleibende Quelle startet
-    # ungeschützt. Hier idempotent nachholen: ``keep`` + committed + Legacy attached → ``skipped``.
-    # ``keep`` + kein Legacy (Retention-Rückgewinnung): NICHT anfassen – ``keep`` bedeutet
-    # „Budget-Rückgewinnung akzeptiert", nicht „migriert" (#968, Codex :285).
+    # ``keep`` ist eine BEWUSSTE non-terminale Entscheidung und wird hier NIE state-basiert
+    # überschrieben (#968, Q0qIJ): der Zustand ``keep`` + committed + attached ist NICHT eindeutig
+    # von einem gescheiterten ``on_success``-Bookkeeping-Write unterscheidbar. ``has_committed_migration``
+    # bleibt nach der ersten migrierten Quelle dauerhaft True – wählt der Admin danach für eine
+    # verbleibende Quelle bewusst ``keep``, sähe das identisch aus wie ein fehlgeschlagenes Nachziehen.
+    # Ein state-basierter Repair würde diesen frischen keep sofort wieder zu ``skipped`` drehen und die
+    # dokumentierte keep-Option für jede spätere Quelle unmöglich machen. Den keep→skipped-Übergang für
+    # eine nach einem Multi-Quellen-Commit verbleibende Quelle macht deshalb ausschließlich der
+    # ``on_success``-Pfad (``api/v1/ringbuffer.py``), der den Commit-Kontext besitzt.
     if decision == LEGACY_DECISION_KEEP:
-        if await rb.has_attached_legacy() and await rb.has_committed_migration():
-            await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
-            await rb.set_legacy_retention_protected(True)
-            return True
         return False
     # Solange noch eine (evtl. quarantänierte) Legacy-Quelle existiert, bleibt der Assistent
     # nicht-terminal – sonst versteckte eine terminale Entscheidung den verbleibenden Cleanup.

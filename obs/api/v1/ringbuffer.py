@@ -98,6 +98,11 @@ _CSV_EXPORT_HEADERS = (
 )
 
 _CONFIGURE_LOCK = asyncio.Lock()
+# Serialisiert konkurrierende Legacy-Migrations-Entscheidungen (#968, Q0qIM): sonst könnten
+# ein ``discard`` und ein ``keep`` aus zwei Admin-Tabs beide den initialen Terminal-Check
+# passieren, und der non-terminale keep-Write nach dem bereits durchgelaufenen discard die
+# terminale ``discarded``-Entscheidung wieder überschreiben.
+_LEGACY_DECISION_LOCK = asyncio.Lock()
 
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 _DEFAULT_COLOR = "#3b82f6"
@@ -2036,7 +2041,17 @@ async def legacy_migration_decision(
       darf die Legacy-Quelle als global ältestes Segment zurückgewinnen (revidierbar,
       solange die Quelle existiert).
     * ``discard``: Alt-Historie sofort und endgültig verwerfen (terminal).
+
+    Konkurrierende Entscheidungen werden serialisiert (#968, Q0qIM): der Terminal-Check,
+    die Aktion und die Persistenz laufen atomar unter ``_LEGACY_DECISION_LOCK``, sodass ein
+    ``keep`` nach einem parallel durchgelaufenen ``discard`` den frisch persistierten,
+    terminalen ``discarded``-Zustand sieht und mit 409 abgelehnt wird, statt ihn zu überschreiben.
     """
+    async with _LEGACY_DECISION_LOCK:
+        return await _legacy_migration_decision_locked(body, db)
+
+
+async def _legacy_migration_decision_locked(body: LegacyMigrationDecisionIn, db: Database) -> LegacyMigrationStatus:
     current = await load_legacy_migration_decision(db)
     if current in LEGACY_DECISIONS_TERMINAL:
         raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")

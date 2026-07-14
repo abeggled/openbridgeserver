@@ -1234,13 +1234,15 @@ async def test_finalize_committed_migration_decision_branches(tmp_path: Path):
         await db.disconnect()
 
 
-async def test_finalize_committed_migration_decision_keep_multisource_repair(tmp_path: Path):
-    """keep + committed + verbleibende Legacy → skipped: best-effort on_success nach Multi-Quellen-
-    Commit fehlgeschlagen; finalize zieht Schutz state-basiert nach (#968, Codex :2139)."""
+async def test_finalize_committed_migration_decision_keep_preserved(tmp_path: Path):
+    """keep wird NIE state-basiert überschrieben (#968, Q0qIJ): der Zustand keep + committed +
+    verbleibende Legacy ist nicht eindeutig von einem gescheiterten on_success-Write zu
+    unterscheiden. ``has_committed_migration`` bleibt nach der ersten migrierten Quelle dauerhaft
+    True – ein danach bewusst gewählter keep für eine verbleibende Quelle darf nicht zu skipped
+    repariert werden, sonst wäre die dokumentierte keep-Option für spätere Quellen unmöglich."""
     from obs.db.database import Database
     from obs.ringbuffer.persisted_config import (
         LEGACY_DECISION_KEEP,
-        LEGACY_DECISION_SKIPPED,
         finalize_committed_migration_decision,
         load_legacy_migration_decision,
         persist_legacy_migration_decision,
@@ -1264,22 +1266,102 @@ async def test_finalize_committed_migration_decision_keep_multisource_repair(tmp
     db = Database(":memory:")
     await db.connect()
     try:
-        # keep + committed + verbleibende Legacy → skipped + Schutz gesetzt.
+        # keep + committed + verbleibende Legacy → no-op: keep bleibt, KEIN Schutz-Umschalten
+        # (bewusste keep-Entscheidung für die verbleibende Quelle wird respektiert).
         await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
-        assert await finalize_committed_migration_decision(db, _RbKeep(True, True)) is True
-        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_SKIPPED
-        assert protection_calls == [True]
+        assert await finalize_committed_migration_decision(db, _RbKeep(True, True)) is False
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert protection_calls == []
 
         # keep + KEIN Commit-Beleg → no-op (bewusste keep-Entscheidung ohne Migration).
-        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
         protection_calls.clear()
         assert await finalize_committed_migration_decision(db, _RbKeep(True, False)) is False
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
 
-        # keep + committed + KEIN Legacy mehr → no-op (Retention entfernte, NICHT überschreiben).
+        # keep + committed + KEIN Legacy mehr → no-op (Retention-Rückgewinnung, NICHT überschreiben).
         protection_calls.clear()
         assert await finalize_committed_migration_decision(db, _RbKeep(False, True)) is False
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert protection_calls == []
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_decision_serialized_discard_vs_keep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Konkurrierende Entscheidungen werden serialisiert (#968, Q0qIM): läuft ein ``discard`` und
+    parallel ein ``keep``, darf der non-terminale keep-Write die terminale ``discarded``-Entscheidung
+    nicht überschreiben. ``_LEGACY_DECISION_LOCK`` zieht Terminal-Check, Aktion und Persistenz atomar
+    zusammen, sodass der zweite Request den terminalen Zustand des ersten sieht und mit 409 abbricht."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_DISCARDED,
+        LEGACY_DECISION_SKIPPED,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    entered_discard = asyncio.Event()
+    release_discard = asyncio.Event()
+
+    class _RaceRb:
+        def legacy_migration_in_progress(self) -> bool:
+            return False
+
+        async def has_missing_file_legacy(self) -> bool:
+            return False
+
+        async def discard_legacy(self) -> int:
+            # Hält den Lock offen, bis der Test das Race-Fenster geprüft hat.
+            entered_discard.set()
+            await release_discard.wait()
+            return 1
+
+        async def has_attached_legacy(self) -> bool:
+            return False
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            pass
+
+    rb = _RaceRb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _fake_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(rb_api, "_legacy_migration_status", _fake_status)
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+
+        task_discard = asyncio.create_task(
+            rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="discard"), _user="admin", db=db)
+        )
+        await asyncio.wait_for(entered_discard.wait(), timeout=2)
+
+        # discard hält den Lock (hängt in discard_legacy). Der parallele keep muss blockieren –
+        # die Entscheidung darf sich noch NICHT auf keep geändert haben.
+        task_keep = asyncio.create_task(rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_SKIPPED
+        assert not task_keep.done(), "keep darf nicht durchlaufen, solange discard den Lock hält"
+
+        # discard freigeben → persistiert terminal ``discarded``; danach läuft keep und sieht den
+        # terminalen Zustand → 409, ohne ihn zu überschreiben.
+        release_discard.set()
+        assert await task_discard == LEGACY_DECISION_DISCARDED
+        with pytest.raises(HTTPException) as exc:
+            await task_keep
+        assert exc.value.status_code == 409
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_DISCARDED
     finally:
         await db.disconnect()
 
