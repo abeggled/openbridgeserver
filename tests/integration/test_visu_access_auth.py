@@ -204,13 +204,22 @@ async def test_user_visu_allows_assigned_non_admin_user(client, auth_headers):
         )
         assert page_resp.status_code == 200, page_resp.text
 
+        # Page assignment keeps room-local controls interactive without a
+        # separate datapoint WRITE grant.
+        write_resp = await client.post(
+            f"/api/v1/datapoints/{dp_id}/value",
+            json={"value": 24.0},
+            headers={**user_headers, "X-Page-Id": page_id},
+        )
+        assert write_resp.status_code == 204, write_resp.text
+
         # Authenticated non-admin user can bootstrap values for visible widgets.
         value_resp = await client.get(
             f"/api/v1/datapoints/{dp_id}/value",
             headers=user_headers,
         )
         assert value_resp.status_code == 200, value_resp.text
-        assert value_resp.json()["value"] == pytest.approx(23.0)
+        assert value_resp.json()["value"] == pytest.approx(24.0)
     finally:
         await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
         await client.delete(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)

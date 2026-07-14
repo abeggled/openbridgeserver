@@ -421,6 +421,18 @@ async def test_change_password_wrong_current_returns_400(client, auth_headers):
             headers=user_headers,
         )
         assert resp.status_code == 400
+        from obs.db.database import get_db
+
+        audit = await get_db().fetchone(
+            """SELECT action, resource_id, principal_id, outcome, route_template
+               FROM audit_log_entries
+               WHERE action='auth.user.password_changed' AND principal_id=?
+               ORDER BY id DESC LIMIT 1""",
+            (user["username"],),
+        )
+        assert audit is not None
+        assert (audit["resource_id"], audit["outcome"]) == (user["username"], "denied")
+        assert audit["route_template"] == "/api/v1/auth/me/change-password"
     finally:
         await _delete_user(client, auth_headers, user["username"])
 

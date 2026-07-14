@@ -92,6 +92,7 @@ async function selectUserAccess(wrapper: ReturnType<typeof mountManager>) {
 describe('TreeManager access target updates', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.node.access = 'public'
     mocks.getNodeUsers.mockResolvedValue([])
     mocks.listUsers.mockResolvedValue([
       { id: 'user-1', username: 'alice', is_admin: false },
@@ -114,6 +115,23 @@ describe('TreeManager access target updates', () => {
       usernames: ['alice'],
     }))
     expect(mocks.setNodeUsers).not.toHaveBeenCalled()
+  })
+
+  it('preserves assignments when an existing user audience cannot be loaded', async () => {
+    mocks.node.access = 'user'
+    mocks.getNodeUsers.mockRejectedValue(new Error('Forbidden'))
+    const wrapper = mountManager()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="tree-node-node-1"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="save-node"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateNode).toHaveBeenCalledTimes(1)
+    const patch = mocks.updateNode.mock.calls[0][1]
+    expect(patch).toEqual(expect.objectContaining({ access: 'user' }))
+    expect(patch).not.toHaveProperty('usernames')
   })
 
   it('renders the stable datapoint policy error with actionable details', async () => {

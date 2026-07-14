@@ -453,15 +453,17 @@ async def test_write_value_explicit_deny_overrides_public_page_scope(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_write_value_user_page_assignment_does_not_replace_write_grant(monkeypatch, db: Database):
+@pytest.mark.parametrize(("username", "allowed"), [("alice", True), ("bob", False)])
+async def test_write_value_user_page_scope_requires_assignment(monkeypatch, db: Database, username: str, allowed: bool):
     datapoint = _dp("00000000-0000-0000-0000-000000000065", "User page write")
     await _insert_datapoint(db, datapoint)
     await db.execute_and_commit(
         """
         INSERT INTO users (id, username, password_hash, created_at, is_admin)
-        VALUES ('user-id', 'alice', 'hash', ?, 0)
+        VALUES ('user-id-alice', 'alice', 'hash', ?, 0),
+               ('user-id-bob', 'bob', 'hash', ?, 0)
         """,
-        (NOW,),
+        (NOW, NOW),
     )
     await db.execute_and_commit(
         """
@@ -492,17 +494,26 @@ async def test_write_value_user_page_assignment_does_not_replace_write_grant(mon
     request = MagicMock()
     request.headers.get = lambda key, default=None: {"X-Page-Id": "page-user-write"}.get(key, default)
 
-    with pytest.raises(HTTPException) as exc_info:
+    if allowed:
         await dp_api.write_value(
             dp_id=datapoint.id,
             body=dp_api.WriteValueIn(value=22.5),
             request=request,
-            user=Principal(subject="alice", type="user", is_admin=False),
+            user=Principal(subject=username, type="user", is_admin=False),
             db=db,
         )
-
-    assert exc_info.value.status_code == 403
-    event_bus.publish.assert_not_awaited()
+        event_bus.publish.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            await dp_api.write_value(
+                dp_id=datapoint.id,
+                body=dp_api.WriteValueIn(value=22.5),
+                request=request,
+                user=Principal(subject=username, type="user", is_admin=False),
+                db=db,
+            )
+        assert exc_info.value.status_code == 403
+        event_bus.publish.assert_not_awaited()
 
 
 @pytest.mark.asyncio

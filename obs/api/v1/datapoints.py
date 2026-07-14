@@ -663,7 +663,7 @@ async def write_value(
         if not await _page_has_datapoint(db, page_id, dp_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Datapoint is not part of the page")
 
-        from obs.api.v1.visu import _resolve_access_with_node
+        from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
 
         access, defining_node_id = await _resolve_access_with_node(db, page_id)
         if access == "readonly":
@@ -674,7 +674,8 @@ async def write_value(
             if not session_token or not validate_session(session_token, validate_id):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Valid session token required")
         elif access == "user":
-            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
+            if principal is None or principal.type != "user" or not await _check_user_access(db, page_id, principal.subject):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
         elif access not in ("public",):
             if user is not None:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")

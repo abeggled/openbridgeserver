@@ -80,6 +80,7 @@ const editPin        = ref('')
 const editPinConfirm = ref('')
 
 function selectNode(node: VisuNode) {
+  nodeUsersLoaded.value = false
   selectedId.value  = node.id
   editName.value    = node.name
   editIcon.value    = node.icon ?? ''
@@ -104,7 +105,7 @@ async function saveNode() {
       access: editAccess.value,
     }
     if (editPin.value) patch.access_pin = editPin.value
-    if (editAccess.value === 'user' || nodeUsersDirty.value) {
+    if (nodeUsersDirty.value || (editAccess.value === 'user' && nodeUsersLoaded.value)) {
       patch.usernames = editAccess.value === 'user' ? nodeUsers.value : []
     }
     await store.updateNode(selectedId.value, patch)
@@ -303,6 +304,7 @@ function accessLabel(access: AccessLevel | null) {
 const allUsers      = ref<UserResponse[]>([])
 const nodeUsers     = ref<string[]>([])   // aktuell zugewiesene Benutzernamen für den Knoten
 const nodeUsersDirty = ref(false)
+const nodeUsersLoaded = ref(false)
 
 // Nicht-Admin Benutzer für die Auswahl
 const selectableUsers = computed(() =>
@@ -317,10 +319,12 @@ async function loadUsersIfNeeded() {
 
 // Beim Wechsel auf 'user'-Access → Benutzer laden und bestehende Zuweisung abrufen
 watch(editAccess, async (val) => {
+  nodeUsersLoaded.value = false
   if (val === 'user' && selectedId.value) {
     await loadUsersIfNeeded()
     try {
       nodeUsers.value = await visuApi.getNodeUsers(selectedId.value)
+      nodeUsersLoaded.value = true
     } catch {
       nodeUsers.value = []
     }
@@ -330,12 +334,14 @@ watch(editAccess, async (val) => {
 
 // Beim Wechsel des ausgewählten Knotens auf 'user'-Access → Zuweisung laden
 watch(selectedId, async (id) => {
+  nodeUsersLoaded.value = false
   if (!id) { nodeUsers.value = []; return }
   const node = store.getNode(id)
   if (node?.access === 'user') {
     await loadUsersIfNeeded()
     try {
       nodeUsers.value = await visuApi.getNodeUsers(id)
+      nodeUsersLoaded.value = true
     } catch {
       nodeUsers.value = []
     }

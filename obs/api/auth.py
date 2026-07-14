@@ -1192,15 +1192,22 @@ async def change_password(
     current_user: str = Depends(get_current_user),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
+    from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+
+    writer = AuditLogWriter(db, build_audit_context(request, current_user))
     row = await db.fetchone("SELECT password_hash FROM users WHERE username=?", (current_user,))
     if not row or not verify_password(body.current_password, row["password_hash"]):
+        await writer.write_contract(
+            "POST",
+            "/api/v1/auth/me/change-password",
+            resource_id=current_user,
+            outcome=AuditOutcome.DENIED,
+        )
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
-    from obs.api.audit import AuditLogWriter, build_audit_context
 
     async with db.transaction():
         await db.execute(
             "UPDATE users SET password_hash=? WHERE username=?",
             (hash_password(body.new_password), current_user),
         )
-        writer = AuditLogWriter(db, build_audit_context(request, current_user))
         await writer.write_contract("POST", "/api/v1/auth/me/change-password", resource_id=current_user, commit=False)
