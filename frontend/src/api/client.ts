@@ -8,6 +8,14 @@
 
 const BASE = '/api/v1'
 
+/** Wird von request() geworfen — trägt den HTTP-Status, damit Aufrufer z.B. auf 403 reagieren können */
+export class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+  }
+}
+
 /** FastAPI gibt detail manchmal als Array zurück — immer zu String normalisieren */
 function extractDetail(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object') return fallback
@@ -118,12 +126,12 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       // Redirect zur Login-Seite — der Router fängt das auf
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     }
-    throw new Error('Unauthorized')
+    throw new ApiRequestError('Unauthorized', 401)
   }
 
   if (!res.ok) {
     const body = await res.json().catch(() => null)
-    throw new Error(extractDetail(body, res.statusText))
+    throw new ApiRequestError(extractDetail(body, res.statusText), res.status)
   }
 
   // 204 No Content

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { messageArchives, type MessageArchiveEntry } from '@/api/client'
+import { ApiRequestError, messageArchives, type MessageArchiveEntry } from '@/api/client'
 import MessageArchiveWidget from './Widget.vue'
 
 const wsHandlers = vi.hoisted(() => ({
@@ -14,6 +14,13 @@ const apiState = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/client', () => ({
+  ApiRequestError: class ApiRequestError extends Error {
+    status: number
+    constructor(message: string, status: number) {
+      super(message)
+      this.status = status
+    }
+  },
   getJwt: vi.fn(() => apiState.jwt),
   getWriteContext: vi.fn(() => apiState.writeContext),
   messageArchives: {
@@ -122,7 +129,7 @@ describe('MessageArchive Widget.vue', () => {
     apiState.jwt = 'stale-jwt'
     apiState.writeContext = { pageId: 'page-1' }
     vi.mocked(messageArchives.entries).mockResolvedValue({ items: [entry], total: 1, limit: 25, offset: 0 })
-    vi.mocked(messageArchives.markRead).mockRejectedValueOnce({ response: { status: 403 } })
+    vi.mocked(messageArchives.markRead).mockRejectedValueOnce(new ApiRequestError('Forbidden', 403))
 
     const wrapper = mount(MessageArchiveWidget, {
       props: {

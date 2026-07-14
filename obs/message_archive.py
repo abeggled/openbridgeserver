@@ -483,10 +483,12 @@ class MessageArchiveStore:
             ),
         )
         await self.conn.commit()
-        await self.enforce_retention(archive_id)
+        deleted = await self.enforce_retention(archive_id)
         entry = await self.get_entry(archive_id, entry_id)
         if entry is None:
             raise ValueError("Message archive entry was removed by retention before it could be returned")
+        if deleted:
+            await broadcast_message_archive_refresh(archive_id)
         return entry
 
     async def update_entry(self, archive_id: str, entry_id: str, body: EntryPatch) -> dict[str, Any] | None:

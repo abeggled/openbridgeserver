@@ -366,6 +366,34 @@ async def test_message_archive_store_enforces_max_entries_retention(tmp_path):
         await store.disconnect()
 
 
+async def test_message_archive_store_create_entry_broadcasts_refresh_on_pruning(tmp_path, monkeypatch):
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    refreshes: list[str | None] = []
+
+    class _WsManager:
+        async def broadcast_message_archive_entry(self, entry, previous_entry=None):
+            pass
+
+        async def broadcast_message_archive_refresh(self, archive_id=None):
+            refreshes.append(archive_id)
+
+    monkeypatch.setattr("obs.api.v1.websocket.get_ws_manager", lambda: _WsManager())
+    try:
+        await store.create_archive(ArchiveInput(id="system", name="System", retention_max_entries=2))
+
+        await store.create_entry(EntryInput(archive_id="system", title="Entry 0"))
+        assert refreshes == []
+
+        await store.create_entry(EntryInput(archive_id="system", title="Entry 1"))
+        assert refreshes == []
+
+        await store.create_entry(EntryInput(archive_id="system", title="Entry 2"))
+        assert refreshes == ["system"]
+    finally:
+        await store.disconnect()
+
+
 async def test_message_archive_store_enforce_retention_missing_archive(tmp_path):
     store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
     await store.connect()

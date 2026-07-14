@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getJwt, getWriteContext, messageArchives, type MessageArchiveEntry } from '@/api/client'
+import { ApiRequestError, getJwt, getWriteContext, messageArchives, type MessageArchiveEntry } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
 
 const props = defineProps<{
@@ -166,9 +166,7 @@ async function markRead(entry: MessageArchiveEntry) {
     entries.value = entries.value.map(item => item.id === updated.id ? updated : item)
     await load()
   } catch (err) {
-    const status = (err as { response?: { status?: number }, status?: number }).response?.status
-      ?? (err as { status?: number }).status
-    if (status === 403 && getWriteContext().pageId) readForbidden.value = true
+    if (err instanceof ApiRequestError && err.status === 403 && getWriteContext().pageId) readForbidden.value = true
   }
 }
 
