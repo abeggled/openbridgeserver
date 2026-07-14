@@ -37,9 +37,9 @@ const legacy = computed(() => status.value?.legacy ?? null)
 const job = computed(() => status.value?.job ?? null)
 const jobRunning = computed(() => RUNNING_JOB_PHASES.has(job.value?.phase))
 
-// Post-Commit-Retry-Fenster (#968, Codex :72): der Commit ist durch (Job ``done``, keine Legacy
-// mehr), aber die terminale Entscheidung wurde noch nicht persistiert (transienter app-DB-Fehler).
-// Der Status-Endpoint zieht sie beim nächsten Poll nach – deshalb muss weitergepollt werden, bis die
+// Post-Commit-Retry-Fenster (#968, Codex :72): der Commit ist durch (keine Legacy mehr), aber die
+// terminale Entscheidung wurde noch nicht persistiert (transienter app-DB-Fehler). Der Status-
+// Endpoint zieht sie beim nächsten Poll nach – deshalb muss weitergepollt werden, bis die
 // Entscheidung terminal ist. Sonst bliebe die bereits committete Migration als pending/skipped
 // hängen (Banner + Segment-Eintrag verschwinden bei ``legacy === null``, ein Reload/Neustart wäre
 // nötig).
@@ -49,9 +49,15 @@ const jobRunning = computed(() => RUNNING_JOB_PHASES.has(job.value?.phase))
 // Backend-Finalizer wandelt sie absichtlich NICHT in ``migrated`` um. Würde ``keep`` hier als
 // pending gewertet, liefe der 1-s-Poller nach einem retention-bedingten Entfernen der ge-keepten
 // Quelle (``legacy === null``) endlos weiter.
+// Nach einem Neustart mit Startup-Reconciler ist ``job.phase`` nicht mehr ``done`` (sondern
+// ``idle``/``null``) – der Poller muss dennoch laufen, wenn eine non-null RETRY-fähige Entscheidung
+// aussteht (#968, Codex :55). ``null``-decision (Fresh-Install) bleibt explizit ausgeschlossen.
 const RETRYABLE_PENDING_DECISIONS = new Set(['pending', 'skipped', null])
 const pendingFinalization = computed(
-  () => job.value?.phase === 'done' && legacy.value === null && RETRYABLE_PENDING_DECISIONS.has(decision.value),
+  () =>
+    legacy.value === null &&
+    RETRYABLE_PENDING_DECISIONS.has(decision.value) &&
+    (job.value?.phase === 'done' || decision.value != null),
 )
 
 // Banner nur solange KEINE informierte Entscheidung vorliegt und die

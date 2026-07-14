@@ -218,3 +218,26 @@ describe('useLegacyMigration — keep does not trigger endless polling (#968 Cod
     expect(api.jobRunning.value).toBe(false)
   })
 })
+
+describe('useLegacyMigration — pendingFinalization nach Startup-Reconciler (#968 Codex :55)', () => {
+  it('is pendingFinalization when job is idle but decision is still retryable after restart', async () => {
+    // Nach Startup-Reconciler: Job steht auf idle (kein done), Legacy weg, Entscheidung
+    // noch non-terminal → Poller muss weiter feuern, damit der Backend-Finalizer nachholt.
+    const api = await loadComposable()
+    migrationStatus.mockResolvedValue({
+      data: statusPayload({ decision: 'skipped', legacy: null, job: { phase: 'idle', error: null } }),
+    })
+    await api.refresh()
+    expect(api.pendingFinalization.value).toBe(true)
+  })
+
+  it('is not pendingFinalization for a fresh install with no decision and no legacy', async () => {
+    // Fresh-Install: decision null, legacy null, job idle → KEIN Poller (kein Commit ausstehend).
+    const api = await loadComposable()
+    migrationStatus.mockResolvedValue({
+      data: statusPayload({ decision: null, legacy: null, job: { phase: 'idle', error: null } }),
+    })
+    await api.refresh()
+    expect(api.pendingFinalization.value).toBe(false)
+  })
+})
