@@ -185,13 +185,17 @@ async def test_ringbuffer_config_rejects_memory_storage_mode(client, auth_header
 
 
 async def test_ringbuffer_config_accepts_retention_fields(client, auth_headers):
+    # ``segmented`` is now the deployed default; send ``segment_max_age`` at its
+    # technical minimum (300 s) with ``max_age`` satisfying the 3-segment age rule
+    # (max_age >= 3*segment_max_age): 900 >= 3*300.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
             "storage": "file",
             "max_entries": 100,
             "max_file_size_bytes": 4096,
-            "max_age": 60,
+            "max_age": 900,
+            "segment_max_age": 300,
         },
         headers=auth_headers,
     )
@@ -199,7 +203,7 @@ async def test_ringbuffer_config_accepts_retention_fields(client, auth_headers):
     body = resp.json()
     assert body["max_entries"] == 100
     assert body["max_file_size_bytes"] == 4096
-    assert body["max_age"] == 60
+    assert body["max_age"] == 900
 
     # Keep session-scoped integration app stable for subsequent tests.
     reset_resp = await client.post(
@@ -216,13 +220,16 @@ async def test_ringbuffer_config_accepts_retention_fields(client, auth_headers):
 
 
 async def test_ringbuffer_config_accepts_null_max_entries(client, auth_headers):
+    # ``segmented`` default: send ``segment_max_age`` at its technical minimum
+    # (300 s) with ``max_age`` satisfying the 3-segment age rule: 900 >= 3*300.
     resp = await client.post(
         "/api/v1/ringbuffer/config",
         json={
             "storage": "file",
             "max_entries": None,
             "max_file_size_bytes": 4096,
-            "max_age": 60,
+            "max_age": 900,
+            "segment_max_age": 300,
         },
         headers=auth_headers,
     )
@@ -230,7 +237,7 @@ async def test_ringbuffer_config_accepts_null_max_entries(client, auth_headers):
     body = resp.json()
     assert body["max_entries"] is None
     assert body["max_file_size_bytes"] == 4096
-    assert body["max_age"] == 60
+    assert body["max_age"] == 900
 
     # Keep session-scoped integration app stable for subsequent tests.
     reset_resp = await client.post(

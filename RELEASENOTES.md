@@ -1,4 +1,18 @@
 # Changes
+## 2026.8.0
+### Breaking changes 🚨
+* Monitor/RingBuffer: Storage is now automatically **segmented** instead of a single ever-growing SQLite file. On upgrade the existing ring-buffer database is attached **read-only** and new events are written to time-based segments (~6 h each). Retention is now **segment-granular** and enforced against the hard `max_file_size_bytes` budget: to protect disk space, whole old segments — including the pre-upgrade data — may be dropped **earlier than the configured age target** once the size budget is exceeded, so monitor history can be lost sooner than before. Operators who need to keep more history should raise the size/retention limits in the Monitor configuration promptly after upgrading, at the cost of higher disk usage. The fresh-install default for `max_file_size_bytes` has been raised from 10 MiB to **100 MiB** (existing installations are unchanged — only new-install defaults are affected). https://github.com/abeggled/openbridgeserver/issues/919
+
+### New features ✨
+
+### Fixes 🐞
+
+### Known Issues 🔔
+* none
+
+### Contributors ❤️
+* none
+
 
 ## 2026.8.0
 ### Breaking changes 🚨
