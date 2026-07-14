@@ -1,5 +1,19 @@
 # Changes
 
+## 2026.8.0
+### Breaking changes 🚨
+
+### New features ✨
+
+### Fixes 🐞
+
+### Known Issues 🔔
+* none
+
+### Contributors ❤️
+* none
+
+
 ## 2026.7.0
 ### Breaking changes 🚨
 * Security: `GET /api/v1/weather/fetch` now requires authenticated access and no longer accepts tokens in the URL query string. Weather widgets on PIN-protected Visu pages continue to work with their page-scoped session token, but unauthenticated public weather proxy calls are rejected; private/local weather endpoints still require an explicit URL Target Allowlist entry. https://github.com/abeggled/openbridgeserver/issues/791
