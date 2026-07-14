@@ -121,11 +121,13 @@ jobs:
               print(f"GitHub API error ({exc}) — skipping contributors section.")
               sys.exit(0)
 
+          FOUNDER_LOGIN = "abeggled"
+
           logins = sorted({
               c["author"]["login"]
               for c in data.get("commits", [])
               if c.get("author") and c["author"].get("type") != "Bot"
-          })
+          }, key=lambda login: (login != FOUNDER_LOGIN, login))
           if not logins:
               print("No human contributors found — skipping contributors section.")
               sys.exit(0)
@@ -147,7 +149,8 @@ jobs:
                   name = gh_get(f"users/{login}").get("name") or ""
               except urllib.error.URLError:
                   name = ""
-              display = f"{name} (@{login})" if name else f"@{login}"
+              nick = f"@{login}, founder" if login == FOUNDER_LOGIN else f"@{login}"
+              display = f"{name} ({nick})" if name else nick
               try:
                   prior = gh_get(
                       f"repos/{repo}/commits?author={login}&sha={prev_tag}&per_page=1"
@@ -158,7 +161,7 @@ jobs:
                   pass
               return display
 
-          lines = [f"- {get_display(login)}" for login in logins]
+          lines = [f"* {get_display(login)}" for login in logins]
 
           section = (
               "### Contributors 🤝\n\n"
