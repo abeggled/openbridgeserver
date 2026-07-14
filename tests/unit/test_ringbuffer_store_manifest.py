@@ -312,3 +312,15 @@ async def test_list_segments_for_query_only_from_ts(manifest: Manifest):
     b = await _seg_with_bounds(manifest, "b.sqlite", "2026-03-01T00:00:00.000Z", "2026-03-10T00:00:00.000Z")
     selected = await manifest.list_segments_for_query(from_ts="2026-02-01T00:00:00.000Z")
     assert [s.segment_id for s in selected] == [b.segment_id]
+
+
+async def test_list_segments_for_query_excludes_discarding(manifest: Manifest):
+    """``discarding``-Segmente werden aus Query-Reads ausgeschlossen (#968, Codex :576):
+    ihre Hauptdatei ist nach dem Intent-Marker-Setzen evtl. bereits gelöscht."""
+    a = await manifest.create_segment(filename="a.sqlite", schema_version=1)
+    await manifest.mark_discarding(a.segment_id)
+    b = await manifest.create_segment(filename="b.sqlite", schema_version=1)
+    selected = await manifest.list_segments_for_query()
+    ids = {s.segment_id for s in selected}
+    assert a.segment_id not in ids
+    assert b.segment_id in ids

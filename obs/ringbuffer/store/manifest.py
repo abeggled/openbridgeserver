@@ -570,9 +570,13 @@ class Manifest:
         # ``migrating``-Segmente (#965) sind bis zum atomaren Migrations-Commit
         # unsichtbar: ihre Zeilen existieren parallel noch in der attachten
         # Legacy-Quelle (autoritativ) – Einblenden ergäbe Doppel-Delivery.
+        # ``discarding``-Segmente (#968, Codex :576): Intent-Marker eines laufenden/
+        # fehlgeschlagenen discard; die Hauptdatei ist evtl. bereits gelöscht –
+        # Reads würden fehlschlagen oder veraltete Daten liefern.
         clauses: list[str] = [
             f"status != '{SEGMENT_STATUS_QUARANTINED}'",
             f"status != '{SEGMENT_STATUS_MIGRATING}'",
+            f"status != '{SEGMENT_STATUS_DISCARDING}'",
         ]
         params: list[str] = []
         if to_ts is not None:
