@@ -16,9 +16,12 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, field_serializer
 
-from obs.api.auth import get_admin_user, get_current_user, optional_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_principal, optional_current_user
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config
 from obs.api.v1.services.knx_traceability import KnxDatapointContextOut, build_datapoint_knx_context
 from obs.api.v1.sessions import validate_session
@@ -182,6 +185,91 @@ def _enrich(dp: Any) -> DataPointOut:
     )
 
 
+def _principal_from_dependency(value: Principal | str) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+async def _optional_current_principal(
+    request: Request,
+    db: Database = Depends(get_db),
+) -> Principal | None:
+    auth_header = request.headers.get("Authorization")
+    api_key = request.headers.get("X-API-Key")
+    credentials: HTTPAuthorizationCredentials | None = None
+    if auth_header:
+        scheme, _, token = auth_header.partition(" ")
+        if scheme.lower() == "bearer" and token:
+            credentials = HTTPAuthorizationCredentials(scheme=scheme, credentials=token)
+
+    if credentials is None and not api_key:
+        return None
+
+    try:
+        return await get_current_principal(credentials=credentials, api_key=api_key, db=db)
+    except HTTPException:
+        return None
+
+
+async def _readable_datapoint_ids(db: Database, principal: Principal, dps: list[Any]) -> list[str]:
+    ordered_ids = [str(dp.id) for dp in dps]
+    if principal.type == "user" and principal.is_admin:
+        return ordered_ids
+    return await filter_authorized_datapoints(db, principal, ordered_ids, action=AuthzAction.READ)
+
+
+async def _can_read_datapoint(db: Database, principal: Principal, dp_id: uuid.UUID) -> bool:
+    if principal.type == "user" and principal.is_admin:
+        return True
+    allowed = await filter_authorized_datapoints(db, principal, [str(dp_id)], action=AuthzAction.READ)
+    return bool(allowed)
+
+
+async def _user_visu_page_has_datapoint(db: Database, username: str, dp_id: uuid.UUID) -> bool:
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
+
+    rows = await db.fetchall("SELECT id FROM visu_nodes WHERE type = 'PAGE' AND page_config IS NOT NULL")
+    for row in rows:
+        page_id = row["id"]
+        access, _ = await _resolve_access_with_node(db, page_id)
+        if access != "user":
+            continue
+        if not await _check_user_access(db, page_id, username):
+            continue
+        if await _page_has_datapoint(db, page_id, dp_id):
+            return True
+    return False
+
+
+async def _page_context_allows_datapoint_read(
+    db: Database,
+    request: Request,
+    dp_id: uuid.UUID,
+    principal: Principal | None = None,
+) -> bool:
+    page_id = request.headers.get("X-Page-Id")
+    if not page_id or not await _page_has_datapoint(db, page_id, dp_id):
+        return False
+
+    from obs.api.v1.visu import _check_user_access, _resolve_access_with_node
+
+    access, defining_node_id = await _resolve_access_with_node(db, page_id)
+    if access in ("public", "readonly"):
+        return True
+    if access == "protected":
+        session_token = request.headers.get("X-Session-Token")
+        validate_id = defining_node_id or page_id
+        return bool(session_token and validate_session(session_token, validate_id))
+    if access == "user" and principal is not None and principal.type == "user":
+        return await _check_user_access(db, page_id, principal.subject)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -195,9 +283,15 @@ _SORT_KEYS = {
 
 
 @router.get("/tags", response_model=list[str])
-async def list_tags(_user: str = Depends(get_current_user)) -> list[str]:
+async def list_tags(
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
+) -> list[str]:
     reg = get_registry()
-    return sorted({t for dp in reg.all() for t in dp.tags})
+    all_dps = reg.all()
+    principal = _principal_from_dependency(_user)
+    allowed_ids = set(await _readable_datapoint_ids(db, principal, all_dps))
+    return sorted({t for dp in all_dps if str(dp.id) in allowed_ids for t in dp.tags})
 
 
 @router.get("/", response_model=DataPointPage)
@@ -206,13 +300,17 @@ async def list_datapoints(
     size: int = Query(50, ge=1, le=10000),
     sort: str = Query("created_at", pattern="^(name|data_type|created_at|updated_at)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
 ) -> DataPointPage:
+    principal = _principal_from_dependency(_user)
     reg = get_registry()
     all_dps = sorted(reg.all(), key=_SORT_KEYS[sort], reverse=(order == "desc"))
-    total = len(all_dps)
+    allowed_ids = set(await _readable_datapoint_ids(db, principal, all_dps))
+    readable_dps = [dp for dp in all_dps if str(dp.id) in allowed_ids]
+    total = len(readable_dps)
     offset = page * size
-    items = [_enrich(dp) for dp in all_dps[offset : offset + size]]
+    items = [_enrich(dp) for dp in readable_dps[offset : offset + size]]
     return DataPointPage(
         items=items,
         total=total,
@@ -242,10 +340,14 @@ async def create_datapoint(
 @router.get("/{dp_id}", response_model=DataPointOut)
 async def get_datapoint(
     dp_id: uuid.UUID,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(get_db),
 ) -> DataPointOut:
+    principal = _principal_from_dependency(_user)
     dp = get_registry().get(dp_id)
     if dp is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    if not await _can_read_datapoint(db, principal, dp_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
     return _enrich(dp)
 
@@ -329,7 +431,7 @@ async def delete_datapoint(
 async def get_value(
     dp_id: uuid.UUID,
     request: Request,
-    user: str | None = Depends(optional_current_user),
+    user: Principal | str | None = Depends(_optional_current_principal),
     db: Database = Depends(get_db),
 ) -> ValueOut:
     reg = get_registry()
@@ -357,6 +459,13 @@ async def get_value(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
         elif access not in ("public", "readonly"):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    else:
+        principal = _principal_from_dependency(user)
+        if not await _can_read_datapoint(db, principal, dp_id):
+            if not await _page_context_allows_datapoint_read(db, request, dp_id, principal) and (
+                principal.type != "user" or not await _user_visu_page_has_datapoint(db, principal.subject, dp_id)
+            ):
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
 
     state = reg.get_value(dp_id)
     return ValueOut(
