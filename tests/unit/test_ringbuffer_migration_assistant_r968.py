@@ -1366,6 +1366,162 @@ async def test_legacy_migration_decision_serialized_discard_vs_keep(tmp_path: Pa
         await db.disconnect()
 
 
+async def test_legacy_migration_status_finalizes_under_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Der GET-Status-Endpoint zieht die terminale ``migrated``-Entscheidung state-basiert nach –
+    jetzt serialisiert über ``_finalize_decision_under_lock`` (#968, Q10j0), damit ein Poll den
+    Finalizer nicht mehr unsynchronisiert mit dem Decision-Endpoint laufen lässt."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_MIGRATED,
+        LEGACY_DECISION_PENDING,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    class _Rb:
+        async def has_attached_legacy(self) -> bool:
+            return False
+
+        async def has_committed_migration(self) -> bool:
+            return True
+
+    rb = _Rb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _fake_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(rb_api, "_legacy_migration_status", _fake_status)
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        # Commit durch, letzte Quelle weg, aber on_success-migrated-Write schlug fehl → non-terminal.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
+        result = await rb_api.legacy_migration_status(_user="admin", db=db)
+        assert result == LEGACY_DECISION_MIGRATED
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_decision_keep_finalizes_when_committed_no_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """``keep`` zementiert einen abgeschlossenen Zustand nicht mehr (#968, Q10j-): ist eine Migration
+    committed und die letzte Quelle weg, aber die ``migrated``-Terminalisierung schlug fehl, zieht ein
+    keep-Request die ausstehende Finalisierung nach statt keep zu persistieren. In allen anderen Fällen
+    (Quelle noch da ODER nie migriert) bleibt keep die normale, gewollte Wahl."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_MIGRATED,
+        LEGACY_DECISION_SKIPPED,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    state = {"attached": False, "committed": True}
+
+    class _Rb:
+        def legacy_migration_in_progress(self) -> bool:
+            return False
+
+        async def has_missing_file_legacy(self) -> bool:
+            return False
+
+        async def has_attached_legacy(self) -> bool:
+            return state["attached"]
+
+        async def has_committed_migration(self) -> bool:
+            return state["committed"]
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            pass
+
+    rb = _Rb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _fake_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(rb_api, "_legacy_migration_status", _fake_status)
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        # committed + keine Legacy mehr → keep zieht die Finalisierung nach (migrated), kein keep.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        result = await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
+        assert result == LEGACY_DECISION_MIGRATED
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+
+        # keine Legacy, aber auch kein Commit-Beleg (frischer Zustand) → keep normal persistiert.
+        state["committed"] = False
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+
+        # Solange eine Quelle attached ist (auch mit Commit), wird keep normal persistiert (unprotected).
+        state["attached"] = True
+        state["committed"] = True
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_start_keep_preprotects_before_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Startet die Migration aus einer ``keep``-Entscheidung, wird die verbleibende Quelle VOR dem
+    Job auf ``skipped`` (protected) umgestellt (#968, Q10kE) – nicht erst im fehlbaren on_success-
+    Callback. Beim Aufruf von ``start_legacy_migration`` ist die Entscheidung bereits skipped."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_SKIPPED,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    seen: dict[str, object] = {}
+
+    class _Rb:
+        def legacy_migration_in_progress(self) -> bool:
+            return False
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            seen["protected"] = value
+
+        async def start_legacy_migration(self, *, on_success):
+            # Zustand zum Job-Start festhalten: die keep→skipped-Umstellung muss VORHER passiert sein.
+            seen["decision_at_start"] = await load_legacy_migration_decision(seen["db"])
+
+    rb = _Rb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _fake_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(rb_api, "_legacy_migration_status", _fake_status)
+
+    db = Database(":memory:")
+    await db.connect()
+    seen["db"] = db
+    try:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        result = await rb_api.legacy_migration_start(_user="admin", db=db)
+        assert seen["decision_at_start"] == LEGACY_DECISION_SKIPPED
+        assert seen["protected"] is True
+        assert result == LEGACY_DECISION_SKIPPED
+    finally:
+        await db.disconnect()
+
+
 async def test_resolve_cutoff_rowid_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Rand-Fälle der id-geordneten Cutoff-Ableitung (#968, Codex :156): nichts kopieren,
     mehr als vorhanden kopieren, N-te-neueste id, und unlesbare Quelle."""

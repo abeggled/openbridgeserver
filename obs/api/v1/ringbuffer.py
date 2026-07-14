@@ -1937,20 +1937,11 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     über Budget). ``None``, wenn keine Rate/kein Budget vorliegt.
     """
     rb = get_optional_ringbuffer()
-    # Post-Commit-Finalisierung als Retry-Pfad (#968, Codex :1273): schlug die ``on_success``-
-    # Persistenz der ``migrated``-Entscheidung nach einem erfolgreichen Commit fehl (app-DB
-    # locked/voll), zieht der nächste Status-Poll des Assistenten sie state-basiert nach –
-    # bevor ``decision`` gelesen wird, damit der zurückgegebene Status schon terminal ist.
-    if rb is not None and is_ringbuffer_enabled():
-        # Best-effort wie die Startup-/Runtime-Init-Finalizer (#968, Codex :1992): schlägt die
-        # Persistenz der terminalen Entscheidung noch fehl (app-DB weiter locked/voll), darf der
-        # Status-Endpoint NICHT mit 500 antworten – der Frontend-Poller stoppt sonst bei Refresh-
-        # Fehlern und der Assistent bliebe nach einem erfolgreichen destruktiven Commit stale.
-        # Der nächste Poll versucht es erneut.
-        try:
-            await finalize_committed_migration_decision(db, rb)
-        except Exception:
-            logger.exception("RingBuffer: Status-Poll-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Retry beim nächsten Poll)")
+    # Die Post-Commit-Finalisierung (state-basiertes Nachziehen von ``migrated``) läuft NICHT mehr
+    # hier, sondern in den Aufrufern unter ``_LEGACY_DECISION_LOCK`` (#968, Q10j0): dieser Helper
+    # wird auch aus dem Decision-/Start-Pfad aufgerufen, die den Lock bereits halten – ein zweiter
+    # (nicht-reentranter) Lock-Erwerb hier würde deadlocken. Der GET-Status-Endpoint und der
+    # Config-Runtime-Init serialisieren den Finalizer daher explizit vor ihrem Aufruf dieses Helpers.
     decision = await load_legacy_migration_decision(db)
     legacy: dict[str, Any] | None = None
     over_budget = False
@@ -2019,12 +2010,29 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     )
 
 
+async def _finalize_decision_under_lock(db: Database, rb) -> None:
+    """Serialisiert das state-basierte Nachziehen der terminalen ``migrated``-Entscheidung mit dem
+    Decision-Endpoint (#968, Q10j0). Ohne diese Serialisierung könnte ein Status-Poll die alte
+    non-terminale Entscheidung laden und – nachdem ein paralleler ``discard`` die letzte Quelle
+    entfernt und ``discarded`` persistiert hat – ``migrated`` darüberschreiben. Best-effort:
+    schlägt die Persistenz transient fehl (app-DB locked/voll), darf der Aufrufer NICHT mit 500
+    antworten – der Frontend-Poller stoppt sonst bei Refresh-Fehlern; der nächste Poll retryt."""
+    async with _LEGACY_DECISION_LOCK:
+        try:
+            await finalize_committed_migration_decision(db, rb)
+        except Exception:
+            logger.exception("RingBuffer: Finalisierung der Migrations-Entscheidung fehlgeschlagen (Retry beim nächsten Poll)")
+
+
 @router.get("/migration", response_model=LegacyMigrationStatus)
 async def legacy_migration_status(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> LegacyMigrationStatus:
     """Zustand des Legacy-Migrations-Assistenten inkl. Ist-Analyse (#964)."""
+    rb = get_optional_ringbuffer()
+    if rb is not None and is_ringbuffer_enabled():
+        await _finalize_decision_under_lock(db, rb)
     return await _legacy_migration_status(db)
 
 
@@ -2075,9 +2083,20 @@ async def _legacy_migration_decision_locked(body: LegacyMigrationDecisionIn, db:
         if rb is not None:
             await rb.set_legacy_retention_protected(True)
     elif body.decision == "keep":
-        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
-        if rb is not None:
-            await rb.set_legacy_retention_protected(False)
+        # Hat eine Migration bereits die letzte Quelle entfernt (committed), aber die
+        # ``on_success``-Terminalisierung von ``migrated`` schlug fehl (app-DB locked/voll), stünde
+        # die Entscheidung noch non-terminal (#968, Q10j-). Ein ``keep`` würde sie zementieren – und
+        # da ``finalize_committed_migration_decision`` einen expliziten ``keep`` bewusst respektiert
+        # (Q0qIJ), könnte der abgeschlossene Zustand nie mehr zu ``migrated`` repariert werden.
+        # Deshalb in genau diesem Fall (committed + keine Quelle mehr) die ausstehende Finalisierung
+        # nachziehen statt keep zu persistieren (läuft unter dem gehaltenen Decision-Lock). Sonst –
+        # solange eine Quelle da ist ODER nie migriert wurde – ist keep die normale, gewollte Wahl.
+        if rb is not None and await rb.has_committed_migration() and not await rb.has_attached_legacy():
+            await finalize_committed_migration_decision(db, rb)
+        else:
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+            if rb is not None:
+                await rb.set_legacy_retention_protected(False)
     else:  # discard
         # ``discard`` ist terminal UND destruktiv (entfernt die Legacy-Dateien). Läuft
         # der Monitor nicht (Singleton None/deaktiviert), würde ``discard_legacy()``
@@ -2123,7 +2142,18 @@ async def legacy_migration_start(
     Läuft als Hintergrund-Task; Fortschritt über ``GET /migration`` (``job``-Feld).
     Nach erfolgreichem Commit wird die Entscheidung ``migrated`` (terminal)
     persistiert und der Retention-Schutz aufgehoben.
+
+    Terminal-Check und Job-Reservierung laufen unter ``_LEGACY_DECISION_LOCK`` (#968, Q10j4):
+    sonst könnte ein parallel laufender ``/migration/decision``-``discard``, der seinen
+    Terminal-Check bereits passiert hat, dieselbe Quelle entfernen, während dieser Endpoint
+    die alte non-terminale Entscheidung liest und einen Job reserviert, dessen ``on_success``
+    dann ``migrated`` über das ``discarded``-Ergebnis schriebe.
     """
+    async with _LEGACY_DECISION_LOCK:
+        return await _legacy_migration_start_locked(db)
+
+
+async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
     from obs.ringbuffer.persisted_config import LEGACY_DECISION_MIGRATED
     from obs.ringbuffer.store.offline_migration import OfflineMigrationError
 
@@ -2133,6 +2163,16 @@ async def legacy_migration_start(
     rb = get_optional_ringbuffer()
     if rb is None or not is_ringbuffer_enabled():
         raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running")
+
+    # War die Start-Entscheidung ``keep`` (unprotected), die verbleibende(n) Quelle(n) VOR dem Job
+    # synchron auf ``skipped`` (protected) umstellen (#968, Q10kE): so muss der ``on_success``-
+    # Callback nach dem destruktiven Commit keinen fehlbaren keep→skipped-Write mehr machen (der bei
+    # app-DB-locked/voll nur geloggt würde und die verbleibende Quelle nach einem Restart ungeschützt
+    # ließe). Schlägt dieser Write hier fehl, bricht der Start ab, BEVOR etwas committed ist – der
+    # Zustand bleibt konsistent ``keep`` und der Admin retryt. Läuft unter dem gehaltenen Decision-Lock.
+    if current == LEGACY_DECISION_KEEP:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        await rb.set_legacy_retention_protected(True)
 
     async def _persist_migrated() -> None:
         # Nur terminal ``migrated``, wenn KEINE Legacy-Quelle mehr attached ist (#968,
@@ -2144,14 +2184,10 @@ async def legacy_migration_start(
         # (nicht migrierbares, nur verwerfbares) Legacy den Abschluss verhindert – der Admin
         # muss es über den weiterhin sichtbaren Assistenten discarden können.
         if await rb.has_attached_legacy():
-            # Verbleibende Quelle(n) nach einem Multi-Quellen-Lauf: eine PROTECTED non-terminale
-            # Entscheidung persistieren (#968, Codex :2184), analog zum partial-discard-Pfad. War die
-            # Start-Entscheidung ``keep`` (Schutz aus der Persistenz), bliebe die verbleibende Quelle
-            # nach einem Restart/Status-Reload ungeschützt (``legacy_retention_protected = decision in
-            # LEGACY_DECISIONS_PROTECTED``) und die FIFO-Retention könnte sie zurückgewinnen, bevor
-            # der Admin über sie entscheidet. ``skipped`` ist protected + non-terminal.
-            if await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP:
-                await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+            # Verbleibende Quelle(n) bleiben mit der non-terminalen, PROTECTED Start-Entscheidung
+            # (``pending``/``skipped``) sichtbar und geschützt. Eine ``keep``-Startentscheidung wurde
+            # bereits VOR dem Job auf ``skipped`` umgestellt (#968, Q10kE), sodass hier KEIN fehlbarer
+            # post-commit keep→skipped-Write mehr nötig ist.
             return
         await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
 
@@ -2457,17 +2493,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # Commit-Fenster, Monitor erst zur Laufzeit aktiviert): dann ist der Store promotet
             # und die Legacy-Datei weg, während die Entscheidung ``pending``/``skipped`` bliebe.
             # Wie der Startup-Finalizer state-basiert nachziehen (#968, Codex :2423) – aber NACH
-            # dem vollständigen Buffer-Setup (subscribed + enabled) und best-effort (#968, Codex
-            # :2436): schlägt die Decision-Persistenz transient fehl (app-DB locked/voll – genau
-            # der Fall, den dieser Retry-Pfad behandelt), darf das den bereits laufenden Buffer
-            # NICHT abbauen (created_rb/subscribed_new sind gesetzt, der except-Cleanup risse ihn
-            # sonst nieder). Der nächste Status-Poll zieht die Entscheidung nach. Nur loggen.
-            try:
-                await finalize_committed_migration_decision(db, rb)
-            except Exception:
-                logger.exception(
-                    "RingBuffer: Post-Init-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Buffer läuft, Retry beim nächsten Status-Poll)"
-                )
+            # dem vollständigen Buffer-Setup (subscribed + enabled), serialisiert mit dem Decision-
+            # Endpoint (#968, Q10j0) und best-effort (#968, Codex :2436): schlägt die Decision-
+            # Persistenz transient fehl (app-DB locked/voll – genau der Fall, den dieser Retry-Pfad
+            # behandelt), darf das den bereits laufenden Buffer NICHT abbauen (created_rb/
+            # subscribed_new sind gesetzt, der except-Cleanup risse ihn sonst nieder). Der nächste
+            # Status-Poll zieht die Entscheidung nach.
+            await _finalize_decision_under_lock(db, rb)
 
         reconfigure_kwargs: dict[str, Any] = {}
         if "max_entries" in body.model_fields_set:
