@@ -69,9 +69,11 @@ from obs.ringbuffer.store.interface import (
 )
 from obs.ringbuffer.store.manifest import (
     LEGACY_SCHEMA_VERSION,
+    MIGRATED_FILENAME_PREFIX,
     SEGMENT_STATUS_ACTIVE,
     SEGMENT_STATUS_CHECKPOINT_PENDING,
     SEGMENT_STATUS_CLOSED,
+    SEGMENT_STATUS_MIGRATING,
     SEGMENT_STATUS_QUARANTINED,
     Manifest,
     SegmentRecord,
@@ -195,6 +197,17 @@ def _is_legacy_segment(segment: SegmentRecord) -> bool:
     Read-Pfad unabhängig von der Manifest-Statusmaschine korrekt degradiert.
     """
     return segment.schema_version <= LEGACY_SCHEMA_VERSION
+
+
+def _is_migrated_segment(segment: SegmentRecord) -> bool:
+    """True für v2-Segmente, die aus der Offline-Legacy-Migration stammen (#968).
+
+    Diese Chunks sind sauber geschlossene v2-Segmente, tragen aber historische
+    ``from_ts``/``to_ts`` (Alt-Historie) und synthetische negative gids. Für die
+    Wachstumsprognose dürfen sie NICHT wie normale Live-Rotationen zählen, sonst
+    schätzte die Rate aus jahre-alter importierter Historie statt der Schreibrate.
+    """
+    return segment.filename.startswith(MIGRATED_FILENAME_PREFIX)
 
 
 def _is_missing_ringbuffer_table(exc: Exception) -> bool:
@@ -906,6 +919,17 @@ class SqliteSegmentStore(RingBufferStore):
         # werden (sonst meldete ``/stats`` fälschlich unter-Budget). Ein späterer
         # erfolgreicher Delete räumt die ID wieder aus.
         self._unlink_blocked_segment_ids: set[int] = set()
+        # Cache je immutable ``closed``-Segment, ob seine Zeilen NEGATIVE
+        # ``global_event_id``s tragen (#965): offline-MIGRIERTE Segmente haben
+        # HÖHERE segment_ids als ältere Live-Segmente, aber negative gids – die
+        # segment_id-DESC-Annahme des ``id desc``-Frühabbruchs gilt für sie
+        # nicht. Ein Negativ-Treffer ist je ``closed``-Segment stabil cachebar
+        # (Rotate schreibt nie mehr hinein); Delete räumt den Eintrag mit.
+        self._segment_negative_gid_cache: dict[int, bool] = {}
+        # Lazy-Schaetzung attachter Legacy-Segmente fuer /stats (#964-Follow-up):
+        # (row_estimate, from_ts, to_ts) je segment_id. Die Quelle ist read-only,
+        # der Wert damit stabil; beim Delete wird der Eintrag mitgeraeumt.
+        self._legacy_stats_cache: dict[int, tuple[int, str | None, str | None]] = {}
 
     def apply_config(
         self,
@@ -1002,11 +1026,27 @@ class SqliteSegmentStore(RingBufferStore):
             raise
 
     async def close(self) -> None:
+        # Die Writer-Lease MUSS auch dann fallen, wenn conn-/manifest-close wirft (#968,
+        # Codex :1033): sonst bliebe die ``writer.lock``-flock während shutdown/disable/
+        # mode-rebuild gehalten und ein späteres Re-Enable/Retry IM SELBEN PROZESS scheiterte
+        # mit ``WriterLockHeldError`` bis zum Neustart. Alle Ressourcen best-effort schließen,
+        # Lease immer freigeben, den ERSTEN Fehler dennoch propagieren (analog open-error-Pfad).
+        first_err: Exception | None = None
         if self._active_conn is not None:
-            await self._active_conn.close()
+            try:
+                await self._active_conn.close()
+            except Exception as exc:  # noqa: BLE001 - erster Fehler wird propagiert
+                first_err = first_err or exc
             self._active_conn = None
-        await self.manifest.close()
-        await self._lease.release()
+        self._active_segment = None
+        try:
+            await self.manifest.close()
+        except Exception as exc:  # noqa: BLE001
+            first_err = first_err or exc
+        with contextlib.suppress(Exception):
+            await self._lease.release()
+        if first_err is not None:
+            raise first_err
 
     async def _create_segment_locked(self) -> SegmentRecord:
         filename = f"rb_{_utc_now_compact()}.sqlite"
@@ -1328,7 +1368,29 @@ class SqliteSegmentStore(RingBufferStore):
             rows = await self._read_segment_rows(segment, query)
             if rows is not None:
                 collected.extend(rows)
+                # Offline-migrierte Segmente (#965) am gelesenen Ergebnis erkennen
+                # (kein zusätzlicher Open): tragen die Zeilen negative gids, ist der
+                # Frühabbruch für den Rest gesperrt – ältere Live-Segmente mit
+                # positiven gids müssen noch gelesen werden; der finale
+                # ``global_event_id``-Sort in ``query()`` ordnet positiv vor negativ.
+                if not entered_legacy_tail and self._rows_carry_negative_gid(segment, rows):
+                    entered_legacy_tail = True
         return collected
+
+    def _rows_carry_negative_gid(self, segment: SegmentRecord, rows: list[dict[str, Any]]) -> bool:
+        """True, wenn die gerade gelesenen Zeilen negative ``global_event_id``s tragen (#965).
+
+        Cache-Vorsicht: ``rows`` ist eine gefilterte/gebundene Teilmenge. Ein
+        NEGATIV-Treffer ist definitiv und wird je immutable ``closed``-Segment
+        gecacht. Ein leeres/rein-positives Filter-Ergebnis beweist NICHT, dass das
+        Segment keine negativen gids hält – ``False`` wird deshalb nie gecacht.
+        """
+        if segment.status == SEGMENT_STATUS_CLOSED and self._segment_negative_gid_cache.get(segment.segment_id):
+            return True
+        result = any(r.get("global_event_id", 0) < 0 for r in rows)
+        if result and segment.status == SEGMENT_STATUS_CLOSED:
+            self._segment_negative_gid_cache[segment.segment_id] = True
+        return result
 
     async def _read_segment_rows(self, segment: SegmentRecord, query: StoreQuery) -> list[dict[str, Any]] | None:
         """Liest ein einzelnes Segment; quarantäniert es on-the-fly bei Korruption (#919).
@@ -1525,6 +1587,15 @@ class SqliteSegmentStore(RingBufferStore):
         Manifest-Größe + Recovery-Status auf, #951 Codex :758), ``False`` bei Fehler
         oder BUSY.
         """
+        # Fehlt die Legacy-Hauptdatei, NICHT neu anlegen (#968, Codex :1575):
+        # ``aiosqlite.connect`` öffnet read/write und erzeugte sonst still eine leere
+        # SQLite-Datei. Genau das kann nach einem Offline-Migrations-Unlink (Datei weg,
+        # Manifest-Commit noch nicht vollendet) passieren, wenn die UI ``/migration``/
+        # ``/stats`` pollt und den Legacy-Checkpoint-Pfad triggert – der Startup-Reconciler
+        # sähe die fehlende Quelle dann nicht mehr, auf die er zum Promoten der fertigen
+        # ``migrating``-Kopien baut. Kein Checkpoint möglich → wie ein Fehler degradieren.
+        if not legacy_path.exists():
+            return False
         try:
             conn = await aiosqlite.connect(str(legacy_path))
             try:
@@ -2608,6 +2679,14 @@ class SqliteSegmentStore(RingBufferStore):
                     await self.manifest.close_segment_checkpoint_pending(old_segment.segment_id)
                     # Der ``checkpoint_pending``-Läufer räumt das Segment später ab (#936).
             except BaseException:
+                # Alte Connection best-effort schließen (#968, Codex :2685): erreichte der Fehler
+                # den Handler NACH dem Zuweisen von ``new_conn`` an ``_active_conn`` – aus
+                # ``_try_truncate_checkpoint`` oder einem partiellen ``old_conn.close()`` –, ist
+                # der retirierte Writer aus dem Store nicht mehr erreichbar. Ohne Close leakt die
+                # SQLite-Connection und hält WAL/Datei des geschlossenen Segments für spätere
+                # Retention gesperrt. Ein bereits erfolgtes ``close()`` ist idempotent (suppress).
+                with contextlib.suppress(Exception):
+                    await old_conn.close()
                 # Best-effort-Demote: das alte Segment darf nicht ``active`` bleiben.
                 # ``close_segment`` selbst kann bereits gelaufen sein (dann idempotent);
                 # ein erneuter Fehler beim Demote wird unterdrückt, damit der originale
@@ -2696,7 +2775,11 @@ class SqliteSegmentStore(RingBufferStore):
             "estimated_retention_seconds": None,
             "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
         }
-        closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s)]
+        # Offline migrierte Chunks (#968, Codex :2733) ausschließen: sie sind zwar
+        # geschlossene v2-Segmente, tragen aber die historischen Zeitspannen der
+        # Alt-Historie. In die Rate gerechnet, sagte das Dashboard die Retention aus
+        # jahre-alter importierter Historie statt der aktuellen Schreibrate voraus.
+        closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s) and not _is_migrated_segment(s)]
         if not closed_v2:
             return empty
 
@@ -2738,11 +2821,64 @@ class SqliteSegmentStore(RingBufferStore):
             "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
         }
 
+    async def _legacy_stats_estimate(self, segment: SegmentRecord) -> tuple[int, str | None, str | None]:
+        """Billige (row_estimate, from_ts, to_ts)-Schaetzung eines attachten Legacy-Segments.
+
+        MAX(rowid) plus ts der ersten/letzten rowid - drei Punkt-Lookups statt
+        COUNT/Scan (rowids einer append-only Legacy-DB sind monoton). Gecacht je
+        segment_id (die Quelle ist read-only). Unlesbare Quelle -> (0, None, None),
+        ebenfalls gecacht, damit ein kaputtes File nicht jeden /stats-Poll kostet.
+        """
+        cached = self._legacy_stats_cache.get(segment.segment_id)
+        if cached is not None:
+            return cached
+        estimate: tuple[int, str | None, str | None] = (0, None, None)
+        try:
+            conn = await self._connection_for_read(segment)
+        except Exception:
+            conn = None
+        if conn is not None:
+            try:
+                async with conn.execute("SELECT MAX(id) FROM ringbuffer") as cur:
+                    row = await cur.fetchone()
+                rows = int(row[0]) if row and row[0] is not None else 0
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id ASC LIMIT 1") as cur:
+                    first = await cur.fetchone()
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
+                    last = await cur.fetchone()
+                estimate = (rows, first[0] if first else None, last[0] if last else None)
+            except Exception:
+                estimate = (0, None, None)
+            finally:
+                await conn.close()
+        self._legacy_stats_cache[segment.segment_id] = estimate
+        return estimate
+
     async def stats(self) -> StoreStats:
         segments = await self.manifest.list_segments()
-        total = sum(s.row_count for s in segments)
-        oldest = min((s.from_ts for s in segments if s.from_ts), default=None)
-        newest = max((s.to_ts for s in segments if s.to_ts), default=None)
+        # Attached Legacy-Segmente tragen im Manifest row_count 0 / keine ts-Grenzen
+        # (Attach scannt bewusst nicht, #934). Fuer die STATS werden sie lazy und
+        # gecacht geschaetzt (#964-Follow-up): drei Punkt-Lookups (MAX(rowid),
+        # ts der ersten/letzten rowid) auf der read-only Connection - kein Scan.
+        # Bewusst NUR Anzeige-Anreicherung: die Manifest-Zeile bleibt unveraendert,
+        # damit die row-Budget-Retention ihr Verhalten nicht aendert.
+        # ``migrating``-Segmente sind vor Queries versteckt (list_segments_for_query
+        # schließt sie aus). Die sichtbaren Zeilen-/Zeit-Aggregate (#968, Codex :2819)
+        # müssen sie deshalb ebenfalls auslassen, sonst double-count't ``/stats`` die
+        # kopierten Legacy-Zeilen (Quelle noch attached) bzw. meldet nach einem
+        # gescheiterten Copy row/oldest/newest, die niemand abfragen kann. ``size_bytes``
+        # bleibt bewusst die physische Gesamtnutzung (die Kopien belegen real Platte).
+        # Auch quarantänierte Segmente (#968, Codex :2847) aus den sichtbaren Zeilen-/
+        # Zeit-Aggregaten auslassen: ``list_segments_for_query`` schließt sie aus Reads
+        # aus, also meldete ``/stats`` sonst Zeilen/Zeitspannen, die kein Query/Export
+        # liefern kann (irreführend für Dashboard und Retention/Prognose).
+        visible = [s for s in segments if s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)]
+        legacy_estimates = {s.segment_id: await self._legacy_stats_estimate(s) for s in visible if _is_legacy_segment(s) and s.row_count == 0}
+        total = sum(legacy_estimates.get(s.segment_id, (s.row_count, None, None))[0] or s.row_count for s in visible)
+        ts_lows = [s.from_ts for s in visible if s.from_ts] + [est[1] for est in legacy_estimates.values() if est[1]]
+        ts_highs = [s.to_ts for s in visible if s.to_ts] + [est[2] for est in legacy_estimates.values() if est[2]]
+        oldest = min(ts_lows, default=None)
+        newest = max(ts_highs, default=None)
         size_bytes = sum(s.size_bytes for s in segments)
         common = {
             "total": total,
@@ -2820,8 +2956,17 @@ class SqliteSegmentStore(RingBufferStore):
         zählt ebenfalls als undeletable. Sonst meldete ``/stats``
         ``retention_over_budget=false``, obwohl eine übergroße read-only Legacy-DB
         das Byte-Budget real überschreitet und ``enforce_retention()`` sie wegen
-        des Guards nicht freigeben kann. Der Guard-Check ist derselbe wie in
-        ``_next_size_retention_victim`` (``_has_nonlegacy_data_segment()``), damit
+        des Guards nicht freigeben kann.
+
+        #968 [P2]: Genauso zählt Legacy als undeletable, solange der Migrations-
+        Assistent es per ``protect_legacy`` schützt (Entscheidung pending/skipped).
+        In dem häufigen Upgrade-Fall (große geschützte Legacy-DB plus kleines
+        Live-Segment über Budget) greift der No-Zero-History-Guard nicht mehr –
+        ohne diese Bedingung meldete ``/stats`` fälschlich
+        ``retention_over_budget=false`` und Dashboard/Config eskalierten nie,
+        obwohl die Retention die geschützte Legacy-Datei bewusst nicht freigibt.
+        Beide Checks (``protect_legacy`` + ``_has_nonlegacy_data_segment()``)
+        spiegeln exakt die Ausschlussbedingungen in ``_retention_victims``, damit
         Meldung und Löschentscheidung konsistent bleiben.
         """
         budget = self._retention_config.max_file_size_bytes
@@ -2833,10 +2978,11 @@ class SqliteSegmentStore(RingBufferStore):
             if s.status in (SEGMENT_STATUS_ACTIVE, SEGMENT_STATUS_CHECKPOINT_PENDING):
                 undeletable += s.size_bytes
                 undeletable_ids.add(s.segment_id)
-        # Legacy zählt nur solange als undeletable, wie es NICHT freigebbar ist
-        # (Guard greift). Sobald ein nicht-Legacy-Segment Zeilen hält, ist Legacy
-        # per Size-Retention löschbar und darf das Budget nicht künstlich sprengen.
-        if not await self._has_nonlegacy_data_segment():
+        # Legacy zählt als undeletable, solange es NICHT freigebbar ist: entweder weil
+        # der Assistent es per ``protect_legacy`` schützt, oder weil der No-Zero-History-
+        # Guard greift (kein nicht-Legacy-Segment hält Zeilen). Nur wenn beides falsch ist,
+        # ist Legacy per Size-Retention löschbar und darf das Budget nicht künstlich sprengen.
+        if self._retention_config.protect_legacy or not await self._has_nonlegacy_data_segment():
             for s in segments:
                 if _is_legacy_segment(s) and s.segment_id not in undeletable_ids:
                     undeletable += s.size_bytes
@@ -3079,16 +3225,34 @@ class SqliteSegmentStore(RingBufferStore):
         return removed
 
     async def _total_size_bytes(self) -> int:
-        return sum(s.size_bytes for s in await self.manifest.list_segments())
+        # ``migrating``-Segmente (#965) sind unsichtbare, noch nicht committete
+        # Migrations-Kopien und NICHT retention-eligible. Ihre Bytes duerfen nicht
+        # ins Retention-Budget zaehlen (#968, Codex :3160), sonst loeschte die
+        # Live-Retention geschlossene Live-Segmente, um die in-progress-Kopie zu
+        # kompensieren – vermeidbarer Verlust frischer Historie vor dem Commit.
+        return sum(s.size_bytes for s in await self.manifest.list_segments() if s.status != SEGMENT_STATUS_MIGRATING)
 
     async def _total_row_count(self) -> int:
-        return sum(s.row_count for s in await self.manifest.list_segments())
+        # Analog ``_total_size_bytes`` (#968): unsichtbare ``migrating``-Kopien zaehlen
+        # nicht ins Row-Budget.
+        return sum(s.row_count for s in await self.manifest.list_segments() if s.status != SEGMENT_STATUS_MIGRATING)
 
     async def _enforce_size_budget(self, budget: int | None) -> int:
         if budget is None:
             return 0
+        # Entscheidungs-Guard (#964): eine GESCHÜTZTE Legacy-Quelle ist als
+        # Über-Budget-Zustand toleriert. Ihr Size-Anteil darf den Druck nicht auf
+        # die einzig ungeschützten Opfer umleiten – sonst frisst jeder Pass die
+        # JÜNGSTEN geschlossenen Live-Segmente, obwohl der Überschuss allein aus
+        # der Legacy stammt. Solange der Schutz aktiv ist, wird ihr Anteil dem
+        # Budget zugeschlagen; nach der Entscheidung (keep/discard/migrate) gilt
+        # wieder das harte Budget.
+        effective_budget = budget
+        if self._retention_config.protect_legacy:
+            segments = await self.manifest.list_segments()
+            effective_budget += sum(s.size_bytes for s in segments if _is_legacy_segment(s))
         removed = 0
-        while await self._total_size_bytes() > budget:
+        while await self._total_size_bytes() > effective_budget:
             victim = await self._next_size_retention_victim()
             if victim is None:
                 break  # kein löschbares Segment mehr → over_budget in stats sichtbar.
@@ -3154,9 +3318,14 @@ class SqliteSegmentStore(RingBufferStore):
         max_age/max_entries NIE zurückgewonnen, WÄHREND ein quarantäniertes Legacy
         fälschlich – am Guard vorbei – gelöscht werden könnte.
         """
+        # Entscheidungs-Guard (#964): solange der Migrations-Assistent keine
+        # informierte Entscheidung hat (``protect_legacy``), ist das Legacy-Segment
+        # KEIN Löschkandidat – unabhängig vom No-Zero-History-Guard. Der Store darf
+        # dann über Budget bleiben; ``/stats`` weist das aus und die GUI eskaliert.
+        protect_legacy = self._retention_config.protect_legacy
         has_nonlegacy_data = await self._has_nonlegacy_data_segment()
         victims: list[SegmentRecord] = []
-        legacy_segments = [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
+        legacy_segments = [] if protect_legacy else [s for s in await self.manifest.list_segments() if _is_legacy_segment(s)]
         if legacy_segments and has_nonlegacy_data:
             # ältestes Legacy zuerst (#951, Codex :2267): segment_id steigt mit der
             # Registrierung, list_legacy_segments dokumentiert ascending = ältestes
@@ -3188,7 +3357,13 @@ class SqliteSegmentStore(RingBufferStore):
         → letzte lesbare Kopie der Historie verloren. Die Existenzprüfung ist konsistent
         zum missing-file-Skip des Read-Pfads (``_segment_read_file_missing``).
         """
-        hidden_statuses = {SEGMENT_STATUS_QUARANTINED}
+        # ``migrating`` (#965) ebenfalls ausblenden (#968, Codex :3286): eine
+        # unsichtbare, noch nicht committete Migrations-Kopie ist KEINE lesbare
+        # nicht-Legacy-Historie. Zaehlte sie hier, hoebe der No-Zero-History-Guard ab
+        # und die attachte LESBARE Legacy-Quelle koennte unter Druck geloescht werden,
+        # bevor die Migration committet – nach einem Crash verwirft der Reconciler die
+        # partielle Kopie und die Legacy-Historie waere verloren.
+        hidden_statuses = {SEGMENT_STATUS_QUARANTINED, SEGMENT_STATUS_MIGRATING}
         for segment in await self.manifest.list_segments():
             if _is_legacy_segment(segment) or segment.status in hidden_statuses:
                 continue
@@ -3316,6 +3491,8 @@ class SqliteSegmentStore(RingBufferStore):
             return False
         # Erfolgreich gelöscht → evtl. früherer unlink-blocked-Zustand ist aufgehoben.
         self._unlink_blocked_segment_ids.discard(segment.segment_id)
+        self._legacy_stats_cache.pop(segment.segment_id, None)
+        self._segment_negative_gid_cache.pop(segment.segment_id, None)
         await self.manifest.delete_segment(segment.segment_id)
         return True
 

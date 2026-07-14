@@ -1467,3 +1467,28 @@ async def test_legacy_monitor_cap_stays_bounded_below_offset_plus_limit(store: S
     query = StoreQuery(limit=5, offset=0, candidate_cap=10, sort_field="id", sort_order="desc", value_filters=value_filters)
     rows = await store.query(query)
     assert rows == []
+
+
+async def test_rotate_closes_old_conn_on_checkpoint_failure(store: SqliteSegmentStore, monkeypatch):
+    """Wirft der Checkpoint beim Rotieren – nachdem ``_active_conn`` bereits auf den neuen Writer
+    zeigt –, muss der Fehlerpfad die alte Connection best-effort schließen (#968, Codex :2685):
+    sonst leakt sie und hält WAL/Datei des geschlossenen Segments für spätere Retention gesperrt."""
+    await store.append([_event(1, "2026-01-01T00:00:00.000Z")])
+    old_conn = store._active_conn
+    closed = {"v": False}
+    orig_close = old_conn.close
+
+    async def _spy_close():
+        closed["v"] = True
+        await orig_close()
+
+    old_conn.close = _spy_close
+
+    async def _boom(_conn):
+        raise OSError("checkpoint failed")
+
+    monkeypatch.setattr(store, "_try_truncate_checkpoint", _boom)
+
+    with pytest.raises(OSError):
+        await store.rotate()
+    assert closed["v"] is True, "alte Connection muss im Rotation-Fehlerpfad geschlossen werden"

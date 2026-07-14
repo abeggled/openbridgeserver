@@ -77,8 +77,20 @@ async function mountCard(statsData, { isAdmin = true } = {}) {
         },
         SegmentStatsPanel: { template: '<div data-testid="segment-stats-panel-stub" />', props: ['store'] },
         MonitorConfigModal: {
-          template: '<div class="config-modal-stub" v-if="modelValue" data-testid="config-modal-open" />',
+          template:
+            '<div class="config-modal-stub" v-if="modelValue" data-testid="config-modal-open"><button data-testid="config-close-stub" @click="$emit(\'update:modelValue\', false)" /></div>',
           props: ['modelValue'],
+          emits: ['update:modelValue'],
+        },
+        LegacyMigrationBanner: {
+          template: '<button data-testid="banner-open-stub" @click="$emit(\'open\')" />',
+          emits: ['open'],
+        },
+        LegacyMigrationWizard: {
+          template:
+            '<div v-if="modelValue" data-testid="wizard-open"><button data-testid="wizard-openconfig-stub" @click="$emit(\'open-config\')" /></div>',
+          props: ['modelValue'],
+          emits: ['update:modelValue', 'open-config'],
         },
       },
     },
@@ -283,5 +295,34 @@ describe('RingBufferCard — error state', () => {
     })
     await flushPromises()
     expect(wrapper.find('[data-testid="rb-card-error"]').exists()).toBe(true)
+  })
+})
+
+// ── Wizard ↔ Konfigurator-Wechselspiel ──────────────────────────────────────
+describe('RingBufferCard — Wizard/Konfig-Wechselspiel', () => {
+  it('schließt den Wizard, solange die Konfig offen ist, und öffnet ihn danach wieder', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments }))
+
+    // Wizard über den Banner öffnen.
+    await wrapper.find('[data-testid="banner-open-stub"]').trigger('click')
+    expect(wrapper.find('[data-testid="wizard-open"]').exists()).toBe(true)
+
+    // "Konfiguration öffnen" im Wizard: Konfig-Modal auf, Wizard ZU
+    // (sonst läge das Konfig-Modal hinter dem Wizard).
+    await wrapper.find('[data-testid="wizard-openconfig-stub"]').trigger('click')
+    expect(wrapper.find('[data-testid="config-modal-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="wizard-open"]').exists()).toBe(false)
+
+    // Konfig schließen: Wizard kommt automatisch zurück (lädt Status frisch).
+    await wrapper.find('[data-testid="config-close-stub"]').trigger('click')
+    expect(wrapper.find('[data-testid="config-modal-open"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="wizard-open"]').exists()).toBe(true)
+  })
+
+  it('normales Konfig-Öffnen (ohne Wizard) öffnet den Wizard NICHT beim Schließen', async () => {
+    const wrapper = await mountCard(segmentedPayload({ segments: healthySegments }))
+    await wrapper.find('[data-testid="rb-card-configure"]').trigger('click')
+    await wrapper.find('[data-testid="config-close-stub"]').trigger('click')
+    expect(wrapper.find('[data-testid="wizard-open"]').exists()).toBe(false)
   })
 })

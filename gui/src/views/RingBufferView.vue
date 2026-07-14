@@ -57,6 +57,10 @@
       </div>
     </div>
 
+    <!-- Migrations-Assistent (#966): dezenter Hinweis-Balken, solange die
+         Entscheidung zum Legacy-Altbestand aussteht (admin-only, self-gated). -->
+    <LegacyMigrationBanner class="shrink-0" @open="showMigrationWizard = true" />
+
     <!-- Sticky filter topbar (#435) — drag/toggle/remove set chips, TimeFilterPopover (#432) in the left slot. -->
     <div class="sticky top-0 z-20 -mx-5 px-5 py-2 bg-surface-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700/60">
       <TopbarFilterChips
@@ -115,8 +119,12 @@
     <!-- Segment-Status/Stats (#938) — nicht mehr inline, sondern in einem Modal
          hinter dem Toolbar-Button. Nur im segmentierten Modus (stats.store != null). -->
     <Modal v-model="showSegments" :title="$t('ringbuffer.segmentSectionTitle')" max-width="2xl">
-      <SegmentStatsPanel v-if="storeStats" :store="storeStats" />
+      <SegmentStatsPanel v-if="storeStats" :store="storeStats" @open-migration="onOpenMigrationFromSegments" />
     </Modal>
+
+    <!-- Migrations-Assistent-Modal (#966); „Budget prüfen" öffnet das
+         bestehende MonitorConfigModal. -->
+    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="openConfigFromWizard" />
 
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
@@ -172,7 +180,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
@@ -192,6 +200,8 @@ import FilterEditor from '@/views/ringbuffer/FilterEditor.vue'
 import ExportDialog from '@/views/ringbuffer/ExportDialog.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
 import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
+import LegacyMigrationBanner from '@/components/ringbuffer/LegacyMigrationBanner.vue'
+import LegacyMigrationWizard from '@/views/ringbuffer/LegacyMigrationWizard.vue'
 import Modal from '@/components/ui/Modal.vue'
 
 const DEFAULT_QUERY_LIMIT = 500
@@ -223,7 +233,23 @@ const entries = ref([])
 const loading = ref(false)
 const listError = ref('')
 const showConfig = ref(false)
+// Konfigurator aus dem Migrations-Assistenten heraus: der Wizard schließt sich,
+// damit das Konfig-Modal nicht hinter ihm liegt, und öffnet sich nach dem
+// Schließen der Konfig wieder (lädt den Status dann frisch, inkl. neuem Budget).
+const configOpenedFromWizard = ref(false)
+function openConfigFromWizard() {
+  configOpenedFromWizard.value = true
+  showMigrationWizard.value = false
+  showConfig.value = true
+}
+watch(showConfig, (open) => {
+  if (!open && configOpenedFromWizard.value) {
+    configOpenedFromWizard.value = false
+    showMigrationWizard.value = true
+  }
+})
 const showSegments = ref(false)
+const showMigrationWizard = ref(false)
 const showFilterEditor = ref(false)
 const showExportDialog = ref(false)
 const editorTargetId = ref(null)
@@ -254,6 +280,13 @@ function onEditSet(id) {
 function onNewSet() {
   editorTargetId.value = null
   showFilterEditor.value = true
+}
+
+// Einstieg aus dem Segment-Status-Modal (#966): Segment-Modal schließen,
+// Assistent öffnen.
+function onOpenMigrationFromSegments() {
+  showSegments.value = false
+  showMigrationWizard.value = true
 }
 
 function openExportDialog() {

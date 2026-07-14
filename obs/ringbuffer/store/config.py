@@ -102,11 +102,19 @@ class SegmentConfig:
 
 @dataclass(frozen=True)
 class StoreRetentionConfig:
-    """Retention-Aufbewahrungsziele bzw. -Budgets (portabel gemeint)."""
+    """Retention-Aufbewahrungsziele bzw. -Budgets (portabel gemeint).
+
+    ``protect_legacy`` (#964): solange der Legacy-Migrations-Assistent keine
+    informierte Entscheidung hat (``pending``/``skipped``), wird das read-only
+    attachte Legacy-Segment von der FIFO-Löschung ausgenommen – der Store darf
+    dann über Budget bleiben (wird in den Stats ausgewiesen), statt die
+    Alt-Historie ohne Entscheidung als Ganzes zu verwerfen.
+    """
 
     max_file_size_bytes: int | None = None
     max_entries: int | None = None
     max_age: int | None = None
+    protect_legacy: bool = False
 
     def __post_init__(self) -> None:
         _require_positive("max_file_size_bytes", self.max_file_size_bytes)

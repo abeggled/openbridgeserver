@@ -20,10 +20,12 @@ import csv
 import json
 import logging
 import re
+import shutil
 import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -33,7 +35,19 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.services.knx_traceability import resolve_device_pas_to_group_addresses
 from obs.db.database import Database, get_db
-from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config, persist_ringbuffer_config
+from obs.ringbuffer.persisted_config import (
+    LEGACY_DECISION_DISCARDED,
+    LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_SKIPPED,
+    LEGACY_DECISIONS_PROTECTED,
+    LEGACY_DECISIONS_TERMINAL,
+    ensure_legacy_migration_decision,
+    finalize_committed_migration_decision,
+    load_legacy_migration_decision,
+    load_persisted_ringbuffer_config,
+    persist_legacy_migration_decision,
+    persist_ringbuffer_config,
+)
 from obs.ringbuffer.store.config import (
     SEGMENT_MAX_AGE_MIN,
     SegmentConfig,
@@ -44,6 +58,7 @@ from obs.ringbuffer.store.config import (
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     RowLazyExportCursor,
+    _is_sqlite_memory_path,
     default_ringbuffer_disk_path,
     delete_ringbuffer_storage_files,
     get_optional_ringbuffer,
@@ -83,6 +98,11 @@ _CSV_EXPORT_HEADERS = (
 )
 
 _CONFIGURE_LOCK = asyncio.Lock()
+# Serialisiert konkurrierende Legacy-Migrations-Entscheidungen (#968, Q0qIM): sonst könnten
+# ein ``discard`` und ein ``keep`` aus zwei Admin-Tabs beide den initialen Terminal-Check
+# passieren, und der non-terminale keep-Write nach dem bereits durchgelaufenen discard die
+# terminale ``discarded``-Entscheidung wieder überschreiben.
+_LEGACY_DECISION_LOCK = asyncio.Lock()
 
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 _DEFAULT_COLOR = "#3b82f6"
@@ -1888,6 +1908,260 @@ async def put_ringbuffer_export_settings(
 # ---------------------------------------------------------------------------
 
 
+class LegacyMigrationDecisionIn(BaseModel):
+    """Entscheidung des Migrations-Assistenten (#964). ``migrate`` startet den Job (#965)."""
+
+    decision: Literal["keep", "discard", "skip"]
+
+
+class LegacyMigrationStatus(BaseModel):
+    """Zustand + Ist-Analyse für den Migrations-Assistenten (#964)."""
+
+    decision: str | None
+    retention_protected: bool
+    legacy: dict[str, Any] | None
+    disk_free_bytes: int | None
+    budget_bytes: int | None
+    estimated_copy_bytes: int | None
+    over_budget: bool
+    estimated_seconds_until_budget: float | None
+    job: dict[str, Any] | None
+
+
+async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
+    """Baut den Assistenten-Status aus Decision-State, Legacy-Overview und Prognose (#964).
+
+    Eskalations-Signal: ``estimated_seconds_until_budget`` prognostiziert aus der
+    Wachstumsrate (``prognosis.bytes_per_hour``), wann das Size-Budget erschöpft ist
+    und die FIFO-Retention das Legacy-Segment zurückgewinnen MÜSSTE (0 = bereits
+    über Budget). ``None``, wenn keine Rate/kein Budget vorliegt.
+    """
+    rb = get_optional_ringbuffer()
+    # Post-Commit-Finalisierung als Retry-Pfad (#968, Codex :1273): schlug die ``on_success``-
+    # Persistenz der ``migrated``-Entscheidung nach einem erfolgreichen Commit fehl (app-DB
+    # locked/voll), zieht der nächste Status-Poll des Assistenten sie state-basiert nach –
+    # bevor ``decision`` gelesen wird, damit der zurückgegebene Status schon terminal ist.
+    if rb is not None and is_ringbuffer_enabled():
+        # Best-effort wie die Startup-/Runtime-Init-Finalizer (#968, Codex :1992): schlägt die
+        # Persistenz der terminalen Entscheidung noch fehl (app-DB weiter locked/voll), darf der
+        # Status-Endpoint NICHT mit 500 antworten – der Frontend-Poller stoppt sonst bei Refresh-
+        # Fehlern und der Assistent bliebe nach einem erfolgreichen destruktiven Commit stale.
+        # Der nächste Poll versucht es erneut.
+        try:
+            await finalize_committed_migration_decision(db, rb)
+        except Exception:
+            logger.exception("RingBuffer: Status-Poll-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Retry beim nächsten Poll)")
+    decision = await load_legacy_migration_decision(db)
+    legacy: dict[str, Any] | None = None
+    over_budget = False
+    budget: int | None = None
+    eta: float | None = None
+    estimated_copy: int | None = None
+    protected = decision in LEGACY_DECISIONS_PROTECTED
+    job: dict[str, Any] | None = None
+    if rb is not None and is_ringbuffer_enabled():
+        job = rb.legacy_migration_progress()
+        legacy = await rb.legacy_migration_overview()
+        stats = await rb.stats()
+        budget = stats.get("max_file_size_bytes")
+        # ``retention_over_budget`` liegt unter ``store.backend_extra`` und die Gesamt-
+        # Nutzung als Top-Level ``file_size_bytes`` (#968, Codex :1999) – nicht als
+        # Top-Level ``retention_over_budget``/``size_bytes``. Ohne die korrekten Pfade
+        # war ``over_budget`` immer False und ``size`` None, sodass genau der attachte-
+        # Legacy-Upgrade-Fall (fuer den die Eskalation gebaut wurde) nie eskalierte.
+        over_budget = bool(((stats.get("store") or {}).get("backend_extra") or {}).get("retention_over_budget"))
+        if legacy is not None and not over_budget and budget:
+            rate = (stats.get("prognosis") or {}).get("bytes_per_hour")
+            size = stats.get("file_size_bytes")
+            if rate and size is not None and rate > 0:
+                eta = max(0.0, (budget - size) / rate * 3600.0)
+        elif legacy is not None and over_budget:
+            eta = 0.0
+        # Copy-Obergrenze fuer den Disk-Precheck (#968, Codex :278/:2020): der Job kopiert
+        # nur das v2-Aequivalent der Legacy-Daten, gekappt auf das TATSAECHLICHE
+        # Ziel-Volumen des Migrators – ``budget - headroom - live_bytes`` – NICHT auf das
+        # ganze Budget. Verbrauchen vorhandene Live-Segmente bereits den Grossteil des
+        # Budgets, kopiert der Job entsprechend weniger; ein UI-Block anhand des vollen
+        # Budgets wuerde eine valide Migration grundlos verhindern. Konservativ mit
+        # ``2x Legacy-Groesse`` gedeckelt (v2-Zeilen sind groesser als ihre v1-Quelle).
+        legacy_size = (legacy or {}).get("size_bytes")
+        if isinstance(legacy_size, int) and legacy_size > 0:
+            v2_estimate = 2 * legacy_size
+            if budget:
+                headroom = ((stats.get("prognosis") or {}).get("effective_segment_max_bytes")) or 0
+                total_size = stats.get("file_size_bytes") or 0
+                # ALLE Legacy-Quellen aus den Live-Bytes herausrechnen (#968, Codex :2032), nicht
+                # nur die angezeigte: der Migrator schließt in ``_target_copy_volume`` jedes
+                # Legacy-Segment aus. Bei mehreren attachten Quellen zählten die übrigen sonst als
+                # Live-Bestand, senkten ``target_volume``/``estimated_copy`` und ließen eine
+                # Migration zu, die der Backend-Precheck dann ablehnt.
+                total_legacy_bytes = await rb.attached_legacy_total_bytes()
+                live_bytes = max(0, total_size - total_legacy_bytes)
+                target_volume = max(0, budget - headroom - live_bytes)
+                estimated_copy = min(v2_estimate, target_volume)
+            else:
+                estimated_copy = v2_estimate
+    disk_free: int | None = None
+    try:
+        disk_free = shutil.disk_usage(str(Path(_ringbuffer_disk_path()).parent)).free
+    except OSError:
+        disk_free = None
+    return LegacyMigrationStatus(
+        decision=decision,
+        retention_protected=protected,
+        legacy=legacy,
+        disk_free_bytes=disk_free,
+        budget_bytes=budget,
+        estimated_copy_bytes=estimated_copy,
+        over_budget=over_budget,
+        estimated_seconds_until_budget=eta,
+        job=job,
+    )
+
+
+@router.get("/migration", response_model=LegacyMigrationStatus)
+async def legacy_migration_status(
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> LegacyMigrationStatus:
+    """Zustand des Legacy-Migrations-Assistenten inkl. Ist-Analyse (#964)."""
+    return await _legacy_migration_status(db)
+
+
+@router.post("/migration/decision", response_model=LegacyMigrationStatus)
+async def legacy_migration_decision(
+    body: LegacyMigrationDecisionIn,
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> LegacyMigrationStatus:
+    """Setzt die Assistenten-Entscheidung (#964).
+
+    * ``skip``: später entscheiden – Legacy bleibt retention-geschützt (revidierbar).
+    * ``keep``: bewusst read-only behalten – der Schutz fällt, die FIFO-Retention
+      darf die Legacy-Quelle als global ältestes Segment zurückgewinnen (revidierbar,
+      solange die Quelle existiert).
+    * ``discard``: Alt-Historie sofort und endgültig verwerfen (terminal).
+
+    Konkurrierende Entscheidungen werden serialisiert (#968, Q0qIM): der Terminal-Check,
+    die Aktion und die Persistenz laufen atomar unter ``_LEGACY_DECISION_LOCK``, sodass ein
+    ``keep`` nach einem parallel durchgelaufenen ``discard`` den frisch persistierten,
+    terminalen ``discarded``-Zustand sieht und mit 409 abgelehnt wird, statt ihn zu überschreiben.
+    """
+    async with _LEGACY_DECISION_LOCK:
+        return await _legacy_migration_decision_locked(body, db)
+
+
+async def _legacy_migration_decision_locked(body: LegacyMigrationDecisionIn, db: Database) -> LegacyMigrationStatus:
+    current = await load_legacy_migration_decision(db)
+    if current in LEGACY_DECISIONS_TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
+    rb = get_optional_ringbuffer()
+    # Keine Entscheidung, solange ein Migrationsjob laeuft (#968, Codex :2047/:2078): ein
+    # ``discard`` waehrend ``starting``/``copying``/``committing`` koennte die Legacy-
+    # Quelle entfernen, waehrend die Copy-Task noch laeuft und danach ``migrated``
+    # persistiert. ``legacy_migration_in_progress`` deckt auch das START-FENSTER ab
+    # (synchrone Reservierung vor den awaited Prechecks, Phase noch nicht ``starting``).
+    if rb is not None and rb.legacy_migration_in_progress():
+        raise HTTPException(status.HTTP_409_CONFLICT, "a legacy migration job is currently running")
+    # Auch einen im Commit-Fenster unterbrochenen Commit abwarten (#968, Codex :2110): eine
+    # schema-legacy Row mit fehlender Datei bedeutet, dass die (noch unsichtbaren) migrating-
+    # Kopien die einzige Quelle sind. Ein ``keep``/``discard`` würde ihren Retention-Schutz jetzt
+    # aufheben, sodass die nächste Retention die Row löscht und der Reconciler die Kopien als
+    # orphan verwirft. Erst der nächste ``/migration/start`` oder Startup vollendet den Commit.
+    if rb is not None and await rb.has_missing_file_legacy():
+        raise HTTPException(status.HTTP_409_CONFLICT, "an interrupted legacy migration commit awaits recovery; retry after it is reconciled")
+    if body.decision == "skip":
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        if rb is not None:
+            await rb.set_legacy_retention_protected(True)
+    elif body.decision == "keep":
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        if rb is not None:
+            await rb.set_legacy_retention_protected(False)
+    else:  # discard
+        # ``discard`` ist terminal UND destruktiv (entfernt die Legacy-Dateien). Läuft
+        # der Monitor nicht (Singleton None/deaktiviert), würde ``discard_legacy()``
+        # übersprungen, aber ``discarded`` dennoch persistiert (#968, Codex :2084): die
+        # Legacy-DB bliebe auf der Platte, würde beim nächsten Start wieder attached –
+        # während der Assistent wegen der terminalen Entscheidung versteckt ist. Deshalb
+        # 409, bis der Monitor läuft und die Quelle wirklich gelöscht werden kann.
+        if rb is None or not is_ringbuffer_enabled():
+            raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running; cannot discard legacy data")
+        # ZUERST verwerfen, DANN den Schutz aufheben (#968, Codex :2099): würde der Schutz
+        # vorher fallen und ``discard_legacy()`` danach fehlschlagen (Legacy-DB nicht
+        # unlinkbar), bliebe die Entscheidung ``pending``/``skipped``, aber die ungeschützte
+        # Legacy-Quelle könnte von der nächsten Retention zurückgewonnen werden, obwohl der
+        # Admin nie eine terminale ``discarded``-Entscheidung erreicht hat. discard_legacy()
+        # läuft unter dem Schutz; erst nach erfolgreichem Unlink fällt er.
+        await rb.discard_legacy()
+        # ``discarded`` nur terminal setzen + Schutz aufheben, wenn KEINE Legacy-Quelle mehr bleibt
+        # (#968, Codex :1095): ``discard_legacy`` verwirft nur die angezeigte (älteste) Quelle;
+        # bleiben weitere, muss der Assistent für sie sichtbar/entscheidbar bleiben.
+        if not await rb.has_attached_legacy():
+            await rb.set_legacy_retention_protected(False)
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_DISCARDED)
+        else:
+            # Verbleibende Quelle(n) AKTIV schützen UND eine PROTECTED non-terminale Entscheidung
+            # persistieren (#968, Codex :2141/:2145): nur das in-memory-Flag zu setzen genügt nicht –
+            # der Status-Endpoint und der nächste Startup lesen die Persistenz
+            # (``legacy_retention_protected = decision in LEGACY_DECISIONS_PROTECTED``); eine
+            # ``keep``-Entscheidung ließe die verbleibende Quelle dann ungeschützt. ``skipped`` ist
+            # protected + non-terminal, sodass der Assistent für die verbleibende Quelle sichtbar und
+            # geschützt bleibt.
+            await rb.set_legacy_retention_protected(True)
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+    return await _legacy_migration_status(db)
+
+
+@router.post("/migration/start", response_model=LegacyMigrationStatus)
+async def legacy_migration_start(
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> LegacyMigrationStatus:
+    """Startet den budget-gebundenen Offline-Migrationsjob (#965).
+
+    Läuft als Hintergrund-Task; Fortschritt über ``GET /migration`` (``job``-Feld).
+    Nach erfolgreichem Commit wird die Entscheidung ``migrated`` (terminal)
+    persistiert und der Retention-Schutz aufgehoben.
+    """
+    from obs.ringbuffer.persisted_config import LEGACY_DECISION_MIGRATED
+    from obs.ringbuffer.store.offline_migration import OfflineMigrationError
+
+    current = await load_legacy_migration_decision(db)
+    if current in LEGACY_DECISIONS_TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
+    rb = get_optional_ringbuffer()
+    if rb is None or not is_ringbuffer_enabled():
+        raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running")
+
+    async def _persist_migrated() -> None:
+        # Nur terminal ``migrated``, wenn KEINE Legacy-Quelle mehr attached ist (#968,
+        # Codex :441/:2142): bei mehreren attachten Legacy-DBs behandelt EIN Lauf nur die
+        # erste Quelle. Würde die Entscheidung sofort terminal, versteckte sie den Assistenten
+        # und weitere ``/migration/start``/``/decision`` würden als finalisiert abgelehnt –
+        # die restliche Alt-Historie könnte dann nur von der Retention verworfen werden. Der
+        # Check ist schema-basiert (``has_attached_legacy``), sodass auch ein quarantäniertes
+        # (nicht migrierbares, nur verwerfbares) Legacy den Abschluss verhindert – der Admin
+        # muss es über den weiterhin sichtbaren Assistenten discarden können.
+        if await rb.has_attached_legacy():
+            # Verbleibende Quelle(n) nach einem Multi-Quellen-Lauf: eine PROTECTED non-terminale
+            # Entscheidung persistieren (#968, Codex :2184), analog zum partial-discard-Pfad. War die
+            # Start-Entscheidung ``keep`` (Schutz aus der Persistenz), bliebe die verbleibende Quelle
+            # nach einem Restart/Status-Reload ungeschützt (``legacy_retention_protected = decision in
+            # LEGACY_DECISIONS_PROTECTED``) und die FIFO-Retention könnte sie zurückgewinnen, bevor
+            # der Admin über sie entscheidet. ``skipped`` ist protected + non-terminal.
+            if await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP:
+                await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+            return
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+
+    try:
+        await rb.start_legacy_migration(on_success=_persist_migrated)
+    except OfflineMigrationError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return await _legacy_migration_status(db)
+
+
 @router.get("/stats", response_model=RingBufferStats)
 async def ringbuffer_stats(
     _user: str = Depends(get_current_user),
@@ -1973,7 +2247,16 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # ``storage`` zu ``memory`` auf, wird die Segmentierung daher normalisiert
     # abgeschaltet; der ``file``-Pfad bleibt unverändert (segmentiert per Default).
     resolved_storage = body.storage if "storage" in body.model_fields_set else current_config.get("storage", "file")
-    if resolved_storage == "memory":
+    # Eine in-memory-DB (``storage='file'`` mit ``disk_path`` wie ``:memory:``) kann NICHT
+    # segmentiert werden – ``init_ringbuffer()`` leitete sonst ein reales
+    # ``:memory:_segments``-Verzeichnis auf die Platte ab (Widerspruch zur memory-Semantik).
+    # Wie der Startup-Pfad (``main.py``: ``not _is_sqlite_memory_path(rb_path)``) wird die
+    # Segmentierung daher IMMER abgeschaltet, auch bei explizit gepostetem ``segmented=true``
+    # (#968, Codex :2221/:2470): der implizite Default überlebte sonst beim Runtime-Enable,
+    # und Clients wie das Config-Modal senden ``segmented`` stets explizit, was einen reinen
+    # ``body.segmented is None``-Guard umginge. Die Bounds-Validierung expliziter Segment-
+    # Werte bleibt unberührt (sie hängt nicht an ``resolved_segmented``).
+    if resolved_storage == "memory" or _is_sqlite_memory_path(_ringbuffer_disk_path()):
         resolved_segmented = False
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
@@ -2110,6 +2393,9 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             "segment_max_bytes": rb._segment_max_bytes_config,
             "segment_max_rows": rb._segment_max_rows,
             "segment_max_age": rb._segment_max_age,
+            # Retention-Schutz des Legacy-Segments mitsichern (#968, Codex :2443),
+            # damit ein Rollback nach fehlgeschlagenem Rebuild den Schutz nicht verliert.
+            "legacy_retention_protected": rb._legacy_retention_protected,
         }
         _unsubscribe_ringbuffer(rb)
         await rb.stop()
@@ -2127,8 +2413,26 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
 
     created_rb = False
     subscribed_new = False
+    # Vor dem Attach merken, ob die Ringbuffer-DB bereits existierte (#968, Codex :2518/:2429):
+    # ist sie pre-existing (Upgrade-Install, Monitor-Enable-aus-deaktiviert), hat ``init_ringbuffer``
+    # nur eine vorhandene DB geöffnet – NICHT erstellt. Ein Rollback nach einem transienten Save-
+    # Fehler darf sie dann nicht löschen (sonst irreversibler Verlust der Alt-Historie). UNABHÄNGIG
+    # vom Modus (#968, Codex :2429): auch der explizite Legacy-Pfad (``segmented=false``) nutzt die
+    # ``obs_ringbuffer.db`` direkt als Storage und ist gleichermaßen schützenswert. Gleiches gilt für
+    # einen bereits vorhandenen Segment-Root (#968, Codex :2527): dessen retenierte v2-Historie darf
+    # ein Rollback ebenso wenig entfernen.
+    _rb_disk_path = _ringbuffer_disk_path()
+    legacy_preexisting = Path(_rb_disk_path).exists()
+    segment_root_preexisting = Path(_rb_disk_path).with_name(f"{Path(_rb_disk_path).stem}_segments").exists()
     try:
         if rb is None:
+            # Migrations-Assistent (#968, Codex :2369): der Runtime-Init (Monitor-Enable
+            # oder Mode-Rebuild via POST /config) muss das Decision/Protection-Setup des
+            # Startups spiegeln. Sonst bliebe bei einem Upgrade, bei dem der Monitor erst
+            # zur Laufzeit aktiviert wird, die Entscheidung ``None`` (Banner versteckt) und
+            # die ersten non-legacy-Daten könnten die FIFO-Retention das Legacy-Segment
+            # zurückgewinnen lassen, bevor der Assistent den pending/skipped-Schutz greift.
+            decision = await ensure_legacy_migration_decision(db, legacy_db_path=_ringbuffer_disk_path() if resolved_segmented else None)
             rb = await init_ringbuffer(
                 storage="file",
                 max_entries=resolved_max_entries,
@@ -2139,6 +2443,7 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 segment_max_bytes=resolved_segment_max_bytes,
                 segment_max_rows=resolved_segment_max_rows,
                 segment_max_age=resolved_segment_max_age,
+                legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
             )
             _subscribe_ringbuffer(rb)
             subscribed_new = True
@@ -2148,6 +2453,21 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # Enable-aus-deaktiviert-Pfad setzt seinen Enable-State an anderer Stelle.
             if switch_prev_config is not None:
                 set_ringbuffer_enabled(True)
+            # Der Runtime-Init kann den Offline-Migrations-Reconciler laufen (Crash im
+            # Commit-Fenster, Monitor erst zur Laufzeit aktiviert): dann ist der Store promotet
+            # und die Legacy-Datei weg, während die Entscheidung ``pending``/``skipped`` bliebe.
+            # Wie der Startup-Finalizer state-basiert nachziehen (#968, Codex :2423) – aber NACH
+            # dem vollständigen Buffer-Setup (subscribed + enabled) und best-effort (#968, Codex
+            # :2436): schlägt die Decision-Persistenz transient fehl (app-DB locked/voll – genau
+            # der Fall, den dieser Retry-Pfad behandelt), darf das den bereits laufenden Buffer
+            # NICHT abbauen (created_rb/subscribed_new sind gesetzt, der except-Cleanup risse ihn
+            # sonst nieder). Der nächste Status-Poll zieht die Entscheidung nach. Nur loggen.
+            try:
+                await finalize_committed_migration_decision(db, rb)
+            except Exception:
+                logger.exception(
+                    "RingBuffer: Post-Init-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Buffer läuft, Retry beim nächsten Status-Poll)"
+                )
 
         reconfigure_kwargs: dict[str, Any] = {}
         if "max_entries" in body.model_fields_set:
@@ -2198,7 +2518,15 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # deaktivierten Zustand) und wird sauber wieder abgebaut.
             if switch_prev_config is None:
                 with suppress(Exception):
-                    delete_ringbuffer_storage_files(_ringbuffer_disk_path())
+                    # Pre-existing Storage NICHT löschen (#968, Codex :2518/:2527): weder die
+                    # attachte Legacy-DB noch einen bereits vorhandenen Segment-Root – nur was
+                    # dieser Request neu erzeugt hat. Ein transienter Save-Fehler darf keine
+                    # bestehende v1-/v2-Historie irreversibel entfernen.
+                    delete_ringbuffer_storage_files(
+                        _ringbuffer_disk_path(),
+                        keep_legacy_db=legacy_preexisting,
+                        keep_segment_root=segment_root_preexisting,
+                    )
         # Modus-Switch-Rebuild gescheitert (#951, Pkt 2): der alte Buffer wurde
         # bereits abgebaut. Damit immer ein funktionierender Buffer läuft, den
         # vorherigen Zustand im ALTEN Modus re-initialisieren und neu subscriben.
@@ -2214,6 +2542,11 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                     segment_max_bytes=switch_prev_config["segment_max_bytes"],
                     segment_max_rows=switch_prev_config["segment_max_rows"],
                     segment_max_age=switch_prev_config["segment_max_age"],
+                    # Legacy-Schutz aus dem vorherigen Zustand wiederherstellen (#968,
+                    # Codex :2443): sonst defaultet ``protect_legacy`` auf false und die
+                    # FIFO-Retention könnte die über-budget Legacy-Quelle löschen, bevor
+                    # der Admin eine informierte Entscheidung getroffen hat.
+                    legacy_retention_protected=switch_prev_config["legacy_retention_protected"],
                 )
                 _subscribe_ringbuffer(restored)
                 set_ringbuffer_enabled(True)

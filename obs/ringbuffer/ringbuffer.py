@@ -243,6 +243,7 @@ class RingBuffer:
         segment_max_bytes: int | None = None,
         segment_max_rows: int | None = None,
         segment_max_age: int | None = None,
+        legacy_retention_protected: bool = False,
     ) -> None:
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
@@ -254,6 +255,18 @@ class RingBuffer:
         self._max_file_size_bytes = max_file_size_bytes
         self._max_age = max_age
         self._conn: aiosqlite.Connection | None = None
+        # Entscheidungs-Guard des Migrations-Assistenten (#964): solange keine
+        # informierte Entscheidung vorliegt (pending/skipped), nimmt die Store-
+        # Retention das attachte Legacy-Segment nicht als FIFO-Opfer.
+        self._legacy_retention_protected = bool(legacy_retention_protected)
+        # Offline-Migrationsjob (#965): genau EIN Lauf gleichzeitig; der Fortschritt
+        # wird live in dieses dict geschrieben (API-Progress-Endpoint).
+        self._legacy_migration_task: asyncio.Task | None = None
+        # Synchrones Reservierungs-Flag (#968, Codex :1126): der Task wird erst nach
+        # mehreren awaited Prechecks gesetzt; das Flag schließt das Race-Fenster
+        # zwischen zwei fast-gleichzeitigen ``start_legacy_migration``-Aufrufen.
+        self._legacy_migration_starting = False
+        self._legacy_migration_progress: dict[str, Any] = {"phase": "idle"}
         self._last_values: dict[str, Any] = {}  # dp_id → last recorded value
         self._last_recovery_at: str | None = None
         self._last_recovery_files: list[str] = []
@@ -347,6 +360,7 @@ class RingBuffer:
                 max_file_size_bytes=effective_max_file_size,
                 max_entries=self._max_entries,
                 max_age=self._max_age,
+                protect_legacy=self._legacy_retention_protected,
             ),
         )
         await store.open()
@@ -427,6 +441,26 @@ class RingBuffer:
                         # Attach-Identität für die spätere F2-Revalidierung festhalten.
                         self._write_legacy_attach_identity(legacy_fs_path, migrator._current_identity_fields())
 
+            # Offline-Migrations-Reconciler (#965): vollendet einen im Commit-Fenster
+            # unterbrochenen Migrations-Commit bzw. verwirft verwaiste unsichtbare
+            # Kopien – deterministisch, bevor die Startup-Retention läuft.
+            from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+            # Einen im Commit-Fenster unterbrochenen Offline-Migrations-Commit vollenden
+            # (#968, Codex :449): der Reconciler promotet die Kopien und detacht die Legacy-
+            # Zeile. Das terminale Persistieren der ``migrated``-Entscheidung übernimmt danach
+            # der state-basierte Finalizer im Aufrufer (``finalize_committed_migration_decision``
+            # über den durablen ``has_committed_migration``-State), nicht ein transientes Flag.
+            await reconcile_offline_migration(store)
+
+            # Alt-Manifeste (vor dem ``migration_state``-Zähler) belegen einen Commit nur über das
+            # promotete ``rb_migrated_*``-Segment (#968, Codex :459). Die Start-Retention unten
+            # könnte genau dieses – über Budget/Alter liegende – Segment trimmen, BEVOR der
+            # Finalizer im Aufrufer läuft; danach sähe er Zähler 0 UND kein Fallback-Segment und
+            # ließe die Entscheidung non-terminal, obwohl die Legacy-Quelle detached ist. Den
+            # Zähler deshalb VOR der Retention aus dem Segment-Beleg backfillen.
+            await self._backfill_committed_migration_counter(store)
+
             # Retention einmal beim Start ausführen (manifestbasiert, kein Scan): ein
             # über Budget liegender Legacy-Blob wird so nach dem ersten neuen Segment
             # zügig getrimmt (No-Zero-History-Guard beachtet, siehe Store).
@@ -503,9 +537,26 @@ class RingBuffer:
             return False
 
     async def stop(self) -> None:
+        if self._legacy_migration_task is not None and not self._legacy_migration_task.done():
+            self._legacy_migration_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._legacy_migration_task
+        self._legacy_migration_task = None
         if self._store is not None:
-            await self._store.close()
-            self._store = None
+            try:
+                await self._store.close()
+            except Exception:
+                # ``close()`` gibt alle Ressourcen best-effort frei und die Writer-Lease (#968,
+                # Codex :1033); den Fehler NUR loggen, NICHT propagieren (#968, Codex :547): ein
+                # propagierter close()-Fehler brach die Aufrufer (config-disable/mode-switch) ab,
+                # BEVOR sie den Singleton zurücksetzten oder neu aufbauten – zurück blieb ein
+                # enabled RingBuffer mit ``_store is None``, der neue Records still verwarf. Ein
+                # sauber gestoppter Buffer (Store gelöst) erlaubt den Aufrufern reset/rebuild.
+                logger.exception("RingBuffer: Store-Close beim Stop fehlgeschlagen (Ressourcen best-effort freigegeben)")
+            finally:
+                # ``_store`` IMMER lösen (#968, Codex :543): der Buffer ist gestoppt; ein
+                # Re-Subscribe/Reuse des alten Singleton mit geschlossenem Store scheiterte sonst.
+                self._store = None
         await self._close_connection()
 
     # ------------------------------------------------------------------
@@ -725,6 +776,7 @@ class RingBuffer:
                 max_file_size_bytes=effective_max_file_size,
                 max_entries=self._max_entries,
                 max_age=self._max_age,
+                protect_legacy=self._legacy_retention_protected,
             ),
         )
 
@@ -933,9 +985,437 @@ class RingBuffer:
         No-Zero-History-Guard bereits erfüllen. Ein retention-bedingter Delete entfernt
         die Zeile ganz; danach ``False`` (Normalbetrieb ohne Extra-Enforce).
         """
-        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
+        return bool(await self._store.manifest.list_schema_legacy_segments())
 
-        return any(s.schema_version <= LEGACY_SCHEMA_VERSION for s in await self._store.manifest.list_segments())
+    # ------------------------------------------------------------------
+    # Legacy-Migrations-Assistent (#964)
+    # ------------------------------------------------------------------
+
+    async def set_legacy_retention_protected(self, protected: bool) -> None:
+        """Schaltet den Entscheidungs-Guard live um (#964).
+
+        Wird von ``POST /ringbuffer/migration/decision`` aufgerufen: ``keep``/
+        ``discard`` heben den Schutz auf, ein Zurück auf ``skipped`` setzt ihn
+        wieder. Wirkt ab dem nächsten Retention-Pass (``apply_config`` liest die
+        Retention-Config live).
+        """
+        self._legacy_retention_protected = bool(protected)
+        if self._store is None:
+            return
+        from obs.ringbuffer.store.config import StoreRetentionConfig
+
+        current = self._store._retention_config
+        self._store.apply_config(
+            retention=StoreRetentionConfig(
+                max_file_size_bytes=current.max_file_size_bytes,
+                max_entries=current.max_entries,
+                max_age=current.max_age,
+                protect_legacy=self._legacy_retention_protected,
+            )
+        )
+
+    async def legacy_migration_overview(self) -> dict[str, Any] | None:
+        """Billige Ist-Analyse der attachten Legacy-Quelle für den Wizard (#964).
+
+        ``None``, wenn kein Legacy-Segment (mehr) attached ist. Bewusst KEIN
+        Vollscan: Größe kommt aus dem Manifest (inkl. WAL/SHM, siehe
+        ``attach_readonly``), die Zeilenzahl wird über ``MAX(rowid)`` geschätzt
+        (rowids sind in der append-only Legacy-DB monoton) und die Zeitspanne über
+        die ts der ersten/letzten rowid – drei Punkt-Lookups statt COUNT/Scan über
+        eine potenziell 20–30 GB große Datei.
+        """
+        if not self._segmented or self._store is None:
+            return None
+        # Schema-basiert (#968, Codex :1003, analog R49-C): ein nach einem Read-Fehler
+        # quarantaeniertes Legacy behaelt sein Legacy-Schema, faellt aber aus
+        # ``list_legacy_segments()`` (nur ``status='legacy'``). Der Assistent muss es
+        # weiterhin sehen, damit ein Admin die nun unlesbare, Platz belegende Quelle
+        # verwerfen kann. Aeltestes zuerst.
+        legacy_segments = await self._store.manifest.list_schema_legacy_segments()
+        if not legacy_segments:
+            return None
+        segment = legacy_segments[0]
+        row_estimate: int | None = None
+        from_ts: str | None = None
+        to_ts: str | None = None
+        try:
+            conn = await self._store._connection_for_read(segment)
+        except Exception:
+            conn = None
+        if conn is not None:
+            try:
+                async with conn.execute("SELECT MAX(id) FROM ringbuffer") as cur:
+                    row = await cur.fetchone()
+                row_estimate = int(row[0]) if row and row[0] is not None else 0
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id ASC LIMIT 1") as cur:
+                    row = await cur.fetchone()
+                from_ts = row[0] if row else None
+                async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
+                    row = await cur.fetchone()
+                to_ts = row[0] if row else None
+            except Exception:
+                logger.warning("RingBuffer: Legacy-Analyse unlesbar (%s) – Overview liefert nur Manifest-Daten", segment.filename)
+            finally:
+                await conn.close()
+        return {
+            "path": segment.filename,
+            "status": segment.status,
+            "size_bytes": segment.size_bytes,
+            "row_estimate": row_estimate,
+            "from_ts": from_ts,
+            "to_ts": to_ts,
+            "retention_protected": self._legacy_retention_protected,
+        }
+
+    async def discard_legacy(self) -> dict[str, Any]:
+        """Verwirft die attachte Legacy-Quelle sofort und endgültig (#964, ``discard``).
+
+        Entfernt die Legacy-Manifest-Zeile(n) und löscht die Original-Dateien
+        (Haupt-DB, ``-wal``/``-shm``, Attach-Identity-Sidecar). Läuft unter dem
+        Write-Lock, damit kein Append/Rotate parallel den Manifest-Zustand
+        verändert; laufende read-only Queries auf der alten Datei lesen per
+        POSIX-Unlink-Semantik ihren Snapshot zu Ende.
+        """
+        if not self._segmented or self._store is None:
+            return {"removed_segments": 0, "freed_bytes": 0}
+        from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_DISCARDING
+
+        async with self._lock:
+            freed = 0
+            removed = 0
+            # 1. Etwaige ``discarding``-Leftovers eines FRÜHER fehlgeschlagenen discard zu Ende
+            #    verwerfen (#968, Codex :1148): egal ob damals der Datei-Unlink oder der Manifest-
+            #    Delete scheiterte, die Marker-Zeile erlaubt hier den sauberen Abschluss.
+            for segment in await self._store.manifest.list_discarding_segments():
+                freed += await self._finish_discard_row(Path(segment.filename), segment.segment_id)
+                removed += 1
+            # 2. Älteste AKTIVE schema-legacy Quelle als Ziel (``discarding``-Reste ausgeschlossen).
+            #    NUR die älteste (vom Overview angezeigte) verwerfen (#968, Codex :1095): spätere,
+            #    nie previewte gesunde Quellen bleiben für eine separate Entscheidung erhalten.
+            legacy_segments = sorted(
+                (
+                    s
+                    for s in await self._store.manifest.list_segments()
+                    if s.schema_version <= LEGACY_SCHEMA_VERSION and s.status != SEGMENT_STATUS_DISCARDING
+                ),
+                key=lambda s: s.segment_id,
+            )
+            if not legacy_segments:
+                return {"removed_segments": removed, "freed_bytes": freed}
+            target = legacy_segments[0]
+            multi_source = len(legacy_segments) > 1
+            # Verwaiste ``migrating``-Kopien der Zielquelle ZUERST räumen (#968, Codex :1110).
+            # Source-scoped: nur die der Zielquelle; unscoped NULL-Reste nur bei Single-Source.
+            for segment in await self._store.manifest.list_migrating_segments():
+                if segment.legacy_source_id != target.segment_id and not (segment.legacy_source_id is None and not multi_source):
+                    continue
+                base = self._store._segments_dir / segment.filename
+                for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm")):
+                    try:
+                        freed += candidate.stat().st_size
+                    except OSError:
+                        pass
+                    try:
+                        candidate.unlink()
+                    except OSError:
+                        pass
+                try:
+                    freed += base.stat().st_size
+                except OSError:
+                    pass
+                base.unlink(missing_ok=True)
+                await self._store.manifest.delete_segment(segment.segment_id)
+            # 3. Intent-Marker setzen, DANN Datei, DANN Manifest-Zeile (#968, Codex :1144/:1148):
+            #    egal welcher Schritt fehlschlägt, die ``discarding``-Zeile hinterlässt weder einen
+            #    missing-file-Legacy-Zustand (den der Reconciler fälschlich als ``migrated``
+            #    finalisierte) noch einen row-weg-datei-da-Zustand (den ein Retry fälschlich als
+            #    ``discarded`` bei tatsächlich verbliebener Datei quittierte). Schritt 1 eines
+            #    Retrys (oder der Startup-Reconciler) vollendet den discard sauber.
+            await self._store.manifest.mark_discarding(target.segment_id)
+            freed += await self._finish_discard_row(Path(target.filename), target.segment_id)
+            removed += 1
+            return {"removed_segments": removed, "freed_bytes": freed}
+
+    async def _finish_discard_row(self, base: Path, segment_id: int) -> int:
+        """Vollendet den discard einer (``discarding``/Legacy-)Zeile: Datei + Sidecars, dann
+        Manifest-Zeile (#968, Codex :1148). Der Haupt-Datei-Unlink propagiert bei Permission/Lock –
+        die (weiterhin ``discarding``) Zeile bleibt dann für einen Retry erhalten. Gelingt der
+        Unlink, wird die Manifest-Zeile entfernt. Gibt die freigegebenen Bytes zurück."""
+        freed = 0
+        try:
+            freed += base.stat().st_size
+        except OSError:
+            pass
+        base.unlink(missing_ok=True)
+        for candidate in (Path(f"{base}-wal"), Path(f"{base}-shm"), self._legacy_attach_identity_path(str(base))):
+            try:
+                freed += candidate.stat().st_size
+                candidate.unlink()
+            except OSError:
+                continue
+        await self._store.manifest.delete_segment(segment_id)
+        return freed
+
+    def legacy_migration_progress(self) -> dict[str, Any]:
+        """Aktueller Fortschritt des Offline-Migrationsjobs (#965) – Kopie, nie live-Referenz."""
+        return dict(self._legacy_migration_progress)
+
+    async def has_attached_legacy(self) -> bool:
+        """True, wenn (noch) IRGENDEINE Legacy-Quelle attached ist – schema-basiert.
+
+        Grundlage für den Multi-Quellen-Abschluss (#968, Codex :441/:2142): ein
+        Migrationslauf behandelt nur die erste Quelle; die ``migrated``-Entscheidung darf
+        erst terminal werden und der Retention-Schutz erst fallen, wenn KEINE Legacy-Quelle
+        mehr existiert. Schema-basiert (``schema_version <= LEGACY_SCHEMA_VERSION``), damit
+        auch ein quarantäniertes (unlesbares) Legacy zählt: es ist nicht migrierbar, aber
+        der Assistent muss sichtbar bleiben, damit der Admin es verwerfen kann – eine
+        terminale Entscheidung würde diesen Cleanup-Pfad verstecken.
+        """
+        if not self._segmented or self._store is None:
+            return False
+        return bool(await self._store.manifest.list_schema_legacy_segments())
+
+    async def attached_legacy_total_bytes(self) -> int:
+        """Summe der Größen ALLER attachten Legacy-Quellen (#968, Codex :2032).
+
+        Schema-basiert (zählt auch quarantänierte Legacy), damit die Copy-Estimate im Status-
+        Endpoint – wie ``_target_copy_volume`` – jede Legacy-Quelle aus dem Live-Bestand
+        ausschließt: bei mehreren attachten Quellen zählten die übrigen sonst als Live-Daten und
+        senkten das geschätzte Ziel-Volumen unter den Backend-Precheck.
+        """
+        if not self._segmented or self._store is None:
+            return 0
+        return sum(s.size_bytes for s in await self._store.manifest.list_schema_legacy_segments())
+
+    async def has_missing_file_legacy(self) -> bool:
+        """True, wenn eine schema-legacy Manifest-Row eine FEHLENDE Datei hat (#968, Codex :2110).
+
+        Der Marker eines im Commit-Fenster unterbrochenen Offline-Commits, den der Reconciler beim
+        nächsten Start/Startup vollendet. Bis dahin sind etwaige migrating-Kopien die einzige
+        Quelle – eine ``keep``/``discard``-Entscheidung würde ihren Retention-Schutz aufheben und
+        die Kopien der nächsten Retention/dem Orphan-Cleanup ausliefern. Der Assistent muss solche
+        Entscheidungen deshalb bis zur Reconciler-Vollendung ablehnen.
+        """
+        if not self._segmented or self._store is None:
+            return False
+        # ``discarding``-Zeilen ausgeschlossen (#968, Codex :1148): eine fehlende Datei dort ist ein
+        # laufender/fehlgeschlagener discard, KEIN unterbrochener Migrations-Commit.
+        return any(not Path(s.filename).exists() for s in await self._store.manifest.list_schema_legacy_segments())
+
+    async def committed_migration_count(self) -> int:
+        """Durabler Zähler abgeschlossener Offline-Migrations-Commits (#968, Codex :1175/:1263).
+
+        ``0`` ohne segmentierten Store. Ein Anstieg über einen Migrationslauf belegt job-lokal,
+        dass genau DIESER Lauf committed hat – Grundlage des Cancel-Handlers (robust auch bei
+        mehreren attachten Legacy-Quellen, wo ein globaler Beleg einen früheren Commit sähe).
+        """
+        if not self._segmented or self._store is None:
+            return 0
+        return await self._store.manifest.committed_migration_count()
+
+    @staticmethod
+    async def _backfill_committed_migration_counter(store) -> None:
+        """Alt-Manifest-Migration: den durablen Commit-Zähler aus dem promoteten Segment-Beleg
+        nachziehen, bevor die Start-Retention ihn löschen kann (#968, Codex :459). Idempotent –
+        no-op, sobald der Zähler bereits > 0 ist (regulärer Fall nach einem neuen Commit)."""
+        if await store.manifest.committed_migration_count() > 0:
+            return
+        from obs.ringbuffer.store.manifest import MIGRATED_FILENAME_PREFIX, SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED
+
+        has_promoted = any(
+            s.filename.startswith(MIGRATED_FILENAME_PREFIX) and s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)
+            for s in await store.manifest.list_segments()
+        )
+        if has_promoted:
+            await store.manifest.record_committed_migration()
+
+    async def has_committed_migration(self) -> bool:
+        """True, wenn durabel ein Offline-Migrations-Commit belegt ist.
+
+        Primär über den durablen Manifest-Zähler (#968, Codex :1175): erfasst auch drop-only-
+        Commits (``rows_to_copy == 0``, keine ``rb_migrated_*``-Segmente) und Commits, deren
+        einziges migriertes Segment die Retention NACH dem Commit getrimmt hat – beides ließ der
+        rein segment-basierte Check fälschlich als „nicht committed" erscheinen und die
+        Entscheidung non-terminal. Grundlage der Post-Commit-Finalisierung (#968, Codex
+        :326/:2423/:1273/:1175). Promotete ``rb_migrated_*``-Segmente als Fallback für Commits
+        von vor der Einführung des Zählers.
+        """
+        if not self._segmented or self._store is None:
+            return False
+        if await self._store.manifest.committed_migration_count() > 0:
+            return True
+        from obs.ringbuffer.store.manifest import MIGRATED_FILENAME_PREFIX, SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED
+
+        return any(
+            s.filename.startswith(MIGRATED_FILENAME_PREFIX) and s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)
+            for s in await self._store.manifest.list_segments()
+        )
+
+    def legacy_migration_in_progress(self) -> bool:
+        """True, solange ein Migrationsjob reserviert ist ODER in einer aktiven Phase läuft.
+
+        Deckt auch das START-FENSTER ab (#968, Codex :2078): zwischen der synchronen
+        Reservierung (``_legacy_migration_starting``, gesetzt VOR den awaited Prechecks)
+        und dem Setzen von ``phase='starting'`` ist die Progress-Phase noch der vorherige
+        idle/failed-Wert. Eine parallele ``keep``/``discard``-Entscheidung dürfte in
+        genau diesem Fenster NICHT durchgehen – ``keep`` könnte den Schutz vor dem
+        Copy-Start aufheben, ``discard`` die Quelle nach akzeptiertem Start entfernen.
+        """
+        if self._legacy_migration_starting:
+            return True
+        # Auch das POST-COMMIT-Fenster abdecken (#968, Codex :385): ``migrator.run`` setzt
+        # ``phase='done'``, aber der ``_run``-Wrapper führt danach noch ``_post_commit_bookkeeping``
+        # aus (Schutz aufheben + ``migrated`` persistieren). Solange der Task nicht abgeschlossen
+        # ist, läuft dieser Abschluss noch – eine parallele ``keep``/``discard``-Entscheidung dürfte
+        # in diesem Fenster NICHT durchgehen, sonst bliebe der Assistenten-Zustand inkonsistent mit
+        # den bereits migrierten Daten (der Finalizer überschreibt keep/terminal bewusst nicht).
+        if self._legacy_migration_task is not None and not self._legacy_migration_task.done():
+            return True
+        return (self._legacy_migration_progress or {}).get("phase") in ("starting", "precheck", "copying", "committing")
+
+    async def start_legacy_migration(self, *, on_success=None) -> dict[str, Any]:
+        """Startet den budget-gebundenen Offline-Migrationsjob (#965) als Hintergrund-Task.
+
+        Genau EIN Lauf gleichzeitig. Der Job setzt das Legacy-Segment für seine
+        Laufzeit unter Retention-Schutz (die Quelle muss bis zum Commit autoritativ
+        bleiben). ``on_success`` (optional, async) läuft nach erfolgreichem Commit –
+        die API persistiert darüber die Entscheidung ``migrated``.
+        """
+        from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator, OfflineMigrationError
+
+        if not self._segmented or self._store is None:
+            raise OfflineMigrationError("segmented store is not running")
+        # Doppelstart-Guard (#968, Codex :1126): NEBEN dem Task auch das synchrone
+        # ``_legacy_migration_starting``-Flag prüfen. Der Task wird erst nach mehreren
+        # awaited Prechecks gesetzt; ohne das Flag sähen zwei fast-gleichzeitige Aufrufe
+        # beide ``_legacy_migration_task is None`` und starteten zwei Migrator-Tasks gegen
+        # dieselbe Quelle (racende Copy-Phasen; der Commit promotet alle migrating-Segmente).
+        if self._legacy_migration_starting or (self._legacy_migration_task is not None and not self._legacy_migration_task.done()):
+            raise OfflineMigrationError("legacy migration already running")
+        # Sofort reservieren – synchron, VOR dem ersten await (kein Context-Switch dazwischen).
+        self._legacy_migration_starting = True
+        protected_activated = False
+        from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY
+
+        try:
+            # Der Wizard/Overview zeigt die ÄLTESTE schema-legacy Quelle (inkl. quarantänierte).
+            # Der Migrator MUSS genau diese Quelle betreffen (#968, Codex :1279/:1110): der frühere
+            # Guard ließ Migrate durch, sobald IRGENDEINE spätere status='legacy' Row existierte –
+            # war die angezeigte älteste Quelle quarantäniert, migrierte der Job dann eine ANDERE,
+            # versteckte Quelle (``_attached_legacy`` = erste status='legacy'). Deshalb hier die
+            # schema-geordnete älteste Row prüfen: fehlt sie ganz → nichts zu migrieren; ist sie
+            # quarantäniert (status != 'legacy') → ablehnen, der Admin verwirft sie zuerst. Ist sie
+            # migrierbar, ist sie garantiert auch die erste status='legacy' Row (kein kleineres
+            # segment_id davor), sodass Start und Migrator dieselbe Quelle betreffen.
+            legacy_segments = await self._store.manifest.list_schema_legacy_segments()
+            if not legacy_segments:
+                raise OfflineMigrationError("no attached legacy source to migrate")
+            oldest = legacy_segments[0]
+            # Eine quarantänierte älteste Quelle mit VORHANDENER Datei ablehnen. Fehlt ihre Datei
+            # dagegen, ist es ein im Commit-Fenster unterbrochener Commit (#968, Codex :1288):
+            # durchlassen, damit ``run()`` → ``reconcile_offline_migration`` die migrating-Kopien
+            # promotet, statt den Operator zu einem Neustart/destruktiven discard zu zwingen.
+            if oldest.status != SEGMENT_STATUS_LEGACY and Path(oldest.filename).exists():
+                raise OfflineMigrationError("the oldest legacy source is quarantined or unreadable; discard it before migrating")
+
+            # Während der Kopie MUSS die Quelle erhalten bleiben – unabhängig vom
+            # Entscheidungszustand den Retention-Schutz aktivieren. Den VORHERIGEN Zustand
+            # merken (#968, Codex :1101): bei einem Fehlschlag muss er wiederhergestellt
+            # werden, sonst bleibt eine ``keep``-Installation (die Budget-Rueckgewinnung
+            # akzeptiert hat) nach einem gescheiterten Migrationsversuch dauerhaft
+            # geschuetzt und ueber Budget, bis zum Neustart.
+            prev_protected = self._legacy_retention_protected
+            await self.set_legacy_retention_protected(True)
+            protected_activated = True
+            # Durablen Commit-Zähler VOR dem Lauf merken (#968, Codex :1263): steigt er während
+            # des Jobs, hat DIESER Lauf committed – ein job-lokaler Beleg, der auch dann trägt,
+            # wenn eine weitere Legacy-Quelle attached bleibt (Multi-Quellen). Dieser await MUSS
+            # NOCH im reservierten Fenster liegen (#968, Codex :1291): läge er nach dem ``finally``,
+            # sähe ein zweiter fast-gleichzeitiger Start ``_legacy_migration_starting == False`` UND
+            # noch keinen Task und startete einen zweiten Migrator gegen dieselbe Quelle.
+            commit_count_before = await self.committed_migration_count()
+        except BaseException:
+            # Fehler NACH dem Schutz-Aktivieren, aber VOR der Task-Erstellung (#968, Codex :1294):
+            # z. B. ``committed_migration_count`` wirft (transienter Manifest-/SQLite-Lesefehler).
+            # Der ``_run``-Handler, der ``prev_protected`` zurückrollt, läuft dann nie – den Schutz
+            # hier wiederherstellen, sonst bliebe eine ``keep``-Quelle dauerhaft geschützt und der
+            # Store über Budget bis zum Neustart.
+            if protected_activated:
+                with suppress(Exception):
+                    await self.set_legacy_retention_protected(prev_protected)
+            raise
+        finally:
+            # Reservierung freigeben: ab jetzt schützt entweder der laufende Task
+            # (Erfolgsfall) oder – bei einem Precheck-Fehler – ist kein Job aktiv.
+            self._legacy_migration_starting = False
+        # Ab hier KEIN await mehr bis ``create_task`` (#968, Codex :1291): der Doppelstart-Guard
+        # ist lückenlos – die Reservierung deckt bis hierher, danach der gesetzte Task.
+        migrator = OfflineLegacyMigrator(self._store, write_lock=self._lock)
+        progress = self._legacy_migration_progress = {"phase": "starting", "error": None}
+
+        async def _post_commit_bookkeeping() -> None:
+            # Der DESTRUKTIVE Commit ist durch (Legacy-Quelle entfernt, Segmente promotet).
+            # Schutz nur aufheben, wenn KEINE Legacy-Quelle mehr attached ist (#968, Codex
+            # :1240): migriert ein Lauf bei mehreren Quellen nur die erste, bleibt die
+            # Entscheidung non-terminal (``on_success`` persistiert kein ``migrated``) – die
+            # verbleibende Quelle MUSS geschützt bleiben, sonst gewänne die nächste
+            # FIFO-Retention sie zurück, bevor der Admin sie migrieren/keep/discard kann.
+            if not await self.has_attached_legacy():
+                await self.set_legacy_retention_protected(False)
+            if on_success is not None:
+                await on_success()
+
+        async def _run() -> None:
+            try:
+                await migrator.run(progress)
+            except asyncio.CancelledError:
+                # Marker ODER durabler Zähler-Anstieg (#968, Codex :326/:1263): der Cancel kann das
+                # schmale Fenster IM Commit-await getroffen haben – der SQLite-Commit war bereits
+                # durch, aber ``progress['committed']`` noch nicht gesetzt. Das DELTA des durablen
+                # Commit-Zählers belegt job-lokal, dass DIESER Lauf committed hat – auch bei
+                # mehreren Legacy-Quellen (wo ``has_attached_legacy`` weiter True meldet). Sonst
+                # nähme der Handler fälschlich den pre-commit-Failure-Pfad, rollte den Schutz der
+                # verbleibenden Quelle zurück und ließe die Entscheidung non-terminal.
+                committed = bool(progress.get("committed")) or (await self.committed_migration_count() > commit_count_before)
+                if committed:
+                    # Der Cancel kam NACH dem Commit (Shutdown während der Post-Commit-
+                    # Retention, #968, Codex :1239/:326): die Migration ist terminal. NICHT den
+                    # Schutz zurückrollen oder ``failed`` melden, sondern dem Post-Commit-
+                    # Bookkeeping folgen (best-effort), dann für sauberes Shutdown re-raisen.
+                    progress.update(phase="done", error=None, committed=True)
+                    try:
+                        await _post_commit_bookkeeping()
+                    except Exception:
+                        logger.exception("RingBuffer: Post-Commit-Bookkeeping nach Cancellation fehlgeschlagen (Migration ist dennoch committed)")
+                    raise
+                # Schutz nur zurückrollen, solange die Legacy NOCH autoritativ ist (#968, Codex
+                # :1356): nach dem Unlink (Commit-Crash zwischen Unlink und Manifest-Transaktion)
+                # sind die unsichtbaren migrating-Segmente die einzige Kopie – der Schutz MUSS
+                # bleiben, sonst löscht die nächste Retention die missing-legacy-Row als
+                # ungeschütztes Opfer und der Reconciler verwürfe die recoverbaren Kopien als orphan.
+                if not progress.get("legacy_unlinked"):
+                    await self.set_legacy_retention_protected(prev_protected)
+                progress.update(phase="failed", error="cancelled")
+                raise
+            except Exception as exc:
+                logger.exception("RingBuffer: Offline-Migration fehlgeschlagen")
+                # Wie im Cancel-Pfad (#968, Codex :1356): nach dem Legacy-Unlink den Schutz halten,
+                # damit die recoverbare missing-legacy-Row + migrating-Kopien bis zum Reconciler
+                # überleben und nicht von der Retention gelöscht werden.
+                if not progress.get("legacy_unlinked"):
+                    await self.set_legacy_retention_protected(prev_protected)
+                progress.update(phase="failed", error=str(exc))
+                return
+            # Ein Fehler im Post-Commit-Bookkeeping (Schutz-Update / ``on_success``-Persistenz,
+            # z. B. app-DB locked/voll) darf die committete Migration NICHT ``failed`` melden
+            # (#968, Codex :1153): ``migrator.run`` hat bereits ``phase='done'`` gesetzt.
+            try:
+                await _post_commit_bookkeeping()
+            except Exception:
+                logger.exception("RingBuffer: Post-Commit-Bookkeeping der Migration fehlgeschlagen (Migration ist dennoch committed)")
+
+        self._legacy_migration_task = asyncio.create_task(_run())
+        return dict(progress)
 
     async def _segment_rotation_due(self) -> bool:
         """True, wenn das aktive Segment eine ``segment_max_*``-Schwelle reißt."""
@@ -1933,7 +2413,7 @@ def default_ringbuffer_disk_path(database_path: str) -> str:
     return str(path.with_name(f"{path.stem}_ringbuffer.db"))
 
 
-def delete_ringbuffer_storage_files(disk_path: str) -> None:
+def delete_ringbuffer_storage_files(disk_path: str, *, keep_legacy_db: bool = False, keep_segment_root: bool = False) -> None:
     """Remove the file-backed ringbuffer database and SQLite sidecar files.
 
     Im segmentierten Store (#919) liegen Manifest und Segment-DBs NICHT in der
@@ -1943,11 +2423,22 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
     wieder statt frei zu starten. Daher zusätzlich das Segment-Store-Root
     rekursiv entfernen (best effort — schlägt es fehl, blockiert das nicht die
     Legacy-Löschung).
+
+    ``keep_legacy_db`` (#968, Codex :2518): beim Rollback eines Enable-aus-deaktiviert
+    auf einem Upgrade-Install ist ``disk_path`` die BEREITS vorhandene Legacy-Quelle, die
+    ``init_ringbuffer`` nur attached (nicht erstellt) hat. Ein transienter Save-Fehler darf
+    diese Historie NICHT löschen – dann nur den (von diesem Request erzeugten) Segment-Root
+    entfernen, die Legacy-DB + Sidecars unangetastet lassen.
+
+    ``keep_segment_root`` (#968, Codex :2527): analog für einen bereits vorhandenen
+    ``<stem>_segments``-Root. Öffnet ``init_ringbuffer`` beim Enable-aus-deaktiviert einen
+    PRE-EXISTING Segment-Store, darf ein Rollback dessen bereits retenierte v2-Historie nicht
+    entfernen – dann bleibt auch der Segment-Root unangetastet.
     """
     if _is_sqlite_memory_path(disk_path):
         return
     disk_path = _sqlite_filesystem_path(disk_path)
-    storage_paths = (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
+    storage_paths = () if keep_legacy_db else (f"{disk_path}-wal", f"{disk_path}-shm", disk_path)
     existing_paths = [Path(path) for path in storage_paths if Path(path).exists()]
     renamed_paths: list[tuple[Path, Path]] = []
     delete_suffix = f".deleting-{os.getpid()}-{uuid4().hex}"
@@ -1993,7 +2484,7 @@ def delete_ringbuffer_storage_files(disk_path: str) -> None:
     # ``RingBufferStorageDeleteIncompleteError`` gemeldet, sodass der Aufrufer den
     # unvollständigen Zustand erkennt. Bei Erfolg bleibt das saubere Abräumen unverändert.
     segments_root = Path(disk_path).with_name(f"{Path(disk_path).stem}_segments")
-    if segments_root.exists():
+    if not keep_segment_root and segments_root.exists():
         rmtree_errors: list[BaseException] = []
         shutil.rmtree(segments_root, onexc=lambda _func, _path, exc: rmtree_errors.append(exc))
         if segments_root.exists():
@@ -2260,6 +2751,7 @@ async def init_ringbuffer(
     segment_max_bytes: int | None = None,
     segment_max_rows: int | None = None,
     segment_max_age: int | None = None,
+    legacy_retention_protected: bool = False,
 ) -> RingBuffer:
     global _rb, _enabled
     rb = RingBuffer(
@@ -2272,6 +2764,7 @@ async def init_ringbuffer(
         segment_max_bytes=segment_max_bytes,
         segment_max_rows=segment_max_rows,
         segment_max_age=segment_max_age,
+        legacy_retention_protected=legacy_retention_protected,
     )
     await rb.start()
     _rb = rb

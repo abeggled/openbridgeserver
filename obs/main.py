@@ -172,7 +172,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_event_type) -> None:
-    from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISIONS_PROTECTED,
+        ensure_legacy_migration_decision,
+        finalize_committed_migration_decision,
+        load_persisted_ringbuffer_config,
+    )
     from obs.ringbuffer.ringbuffer import (
         _is_sqlite_memory_path,
         default_ringbuffer_disk_path,
@@ -199,6 +204,11 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
     # API-seitigen Normalisierung (memory ⇒ nicht segmentiert) hier erzwingen.
     segmented = rb_cfg.get("segmented", False) and not _is_sqlite_memory_path(rb_path)
 
+    # Migrations-Assistent (#964): liegt eine Legacy-Single-DB vor und wurde noch
+    # nie entschieden, wird ``pending`` persistiert. Ohne informierte Entscheidung
+    # (pending/skipped) bleibt das attachte Legacy-Segment retention-geschützt.
+    decision = await ensure_legacy_migration_decision(db, legacy_db_path=rb_path if segmented else None)
+
     rb = await init_ringbuffer(
         storage="file",
         max_entries=rb_cfg["max_entries"],
@@ -210,7 +220,22 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         segment_max_bytes=rb_cfg.get("segment_max_bytes"),
         segment_max_rows=rb_cfg.get("segment_max_rows"),
         segment_max_age=rb_cfg.get("segment_max_age"),
+        legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
     )
+    # Ist ein Offline-Migrations-Commit durch (Kopien promotet, Legacy detached), aber die
+    # ``migrated``-Entscheidung wurde nie terminal persistiert (im Commit-Fenster unterbrochen
+    # und vom Startup-Reconciler vollendet, oder eine frühere ``on_success``-Persistenz schlug
+    # fehl), state-basiert nachziehen (#968, Codex :449/:326). No-op, wenn bereits terminal oder
+    # noch eine Legacy-Quelle attached ist. Best-effort wie der Runtime-Config-Pfad (#968, Codex
+    # :231): ein transienter app-DB-Schreibfehler (locked/voll) darf den Boot NICHT blockieren –
+    # der Datenpfad ist bereits committed, der nächste ``/migration``-Poll zieht die Entscheidung
+    # nach.
+    try:
+        await finalize_committed_migration_decision(db, rb)
+    except Exception:
+        logger.exception(
+            "RingBuffer: Startup-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Server startet, Retry beim nächsten Status-Poll)"
+        )
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 
 

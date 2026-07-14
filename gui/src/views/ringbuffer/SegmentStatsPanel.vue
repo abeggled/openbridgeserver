@@ -11,6 +11,15 @@
     kompakten Probleme-Zeile oben; Details stehen im Tooltip.
   -->
   <section class="flex flex-col gap-4" data-testid="segment-stats-panel">
+    <!-- Einstieg in den Migrations-Assistenten (#966): sichtbar, solange die
+         Legacy-Quelle existiert – auch bei Entscheidung skipped/keep (beide
+         revidierbar). Admin-only, weil die Migration-API admin-only ist. -->
+    <div v-if="showMigrationEntry" class="flex justify-end">
+      <button type="button" class="btn-secondary btn-sm" data-testid="segment-open-migration" @click="$emit('open-migration')">
+        {{ $t('ringbuffer.migration.assistantButton') }}
+      </button>
+    </div>
+
     <!-- Überblick -->
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="segment-overview">
       <div class="flex flex-col gap-0.5">
@@ -135,10 +144,12 @@
  * Anzeigen daraus ab. Segmentierung ist im aktuellen Design immer aktiv; es
  * gibt hier daher keinen Aktivierungs-Zustand.
  */
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTz } from '@/composables/useTz'
 import { useSegmentProblems } from '@/composables/useSegmentProblems'
+import { useLegacyMigration } from '@/composables/useLegacyMigration'
+import { useAuthStore } from '@/stores/auth'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Badge from '@/components/ui/Badge.vue'
 
@@ -146,6 +157,20 @@ const props = defineProps({
   // { common: {...}, backend_extra: {...} } — nie null, der Aufrufer mountet
   // die Sektion nur im segmentierten Modus.
   store: { type: Object, required: true },
+})
+defineEmits(['open-migration'])
+
+// Migrations-Einstieg (#966): geteilter Assistenten-Status; admin-gated, weil
+// GET /ringbuffer/migration Nicht-Admins mit 403 abweist.
+const auth = useAuthStore()
+const { legacy: migrationLegacy, refresh: refreshMigration } = useLegacyMigration()
+const showMigrationEntry = computed(() => auth.isAdmin && migrationLegacy.value != null)
+onMounted(() => {
+  if (auth.isAdmin) {
+    refreshMigration().catch(() => {
+      // Kein Status → kein Einstiegs-Button; Fehler zeigt der Wizard selbst.
+    })
+  }
 })
 
 const { t } = useI18n()
