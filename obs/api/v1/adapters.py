@@ -33,6 +33,7 @@ from obs.adapters import registry as adapter_registry
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.v1.redaction import REDACTED
 from obs.db.database import Database, get_db
 
 router = APIRouter(tags=["adapters"])
@@ -170,13 +171,173 @@ class ConfigPatch(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+_MESSAGE_PROVIDER_SECRET_FIELDS = {
+    "pushover": ("api_token",),
+    "telegram": ("bot_token",),
+    "seven.io": ("api_key",),
+}
+_MESSAGE_PROVIDER_TARGET_SECRET_FIELDS = {
+    "pushover": ("user_key",),
+    "telegram": ("chat_id",),
+    "seven.io": ("to",),
+}
+
+
+def _redact_message_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Redact MESSAGE provider credentials and recipient identifiers for API output."""
+    redacted = dict(config)
+    providers = redacted.get("providers")
+    if not isinstance(providers, dict):
+        return redacted
+
+    redacted_providers = dict(providers)
+    redacted["providers"] = redacted_providers
+
+    for provider_name, provider_fields in _MESSAGE_PROVIDER_SECRET_FIELDS.items():
+        provider_config = redacted_providers.get(provider_name)
+        if not isinstance(provider_config, dict):
+            continue
+        provider_redacted = dict(provider_config)
+        redacted_providers[provider_name] = provider_redacted
+        for field in provider_fields:
+            if provider_redacted.get(field):
+                provider_redacted[field] = REDACTED
+
+        targets = provider_redacted.get("targets")
+        if not isinstance(targets, dict):
+            continue
+        targets_redacted = dict(targets)
+        provider_redacted["targets"] = targets_redacted
+        for target_name, target_config in targets.items():
+            if not isinstance(target_config, dict):
+                continue
+            target_redacted = dict(target_config)
+            targets_redacted[target_name] = target_redacted
+            for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name]:
+                if target_redacted.get(field):
+                    target_redacted[field] = REDACTED
+
+    return redacted
+
+
+def _message_target_has_redacted_secret(provider_name: str, target_config: dict[str, Any]) -> bool:
+    return any(target_config.get(field) == REDACTED for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name])
+
+
+def _message_redacted_secret_paths(config: dict[str, Any]) -> list[str]:
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        return []
+
+    paths: list[str] = []
+    for provider_name, provider_fields in _MESSAGE_PROVIDER_SECRET_FIELDS.items():
+        provider_config = providers.get(provider_name)
+        if not isinstance(provider_config, dict):
+            continue
+        for field in provider_fields:
+            if provider_config.get(field) == REDACTED:
+                paths.append(f"providers.{provider_name}.{field}")
+
+        targets = provider_config.get("targets")
+        if not isinstance(targets, dict):
+            continue
+        for target_name, target_config in targets.items():
+            if not isinstance(target_config, dict):
+                continue
+            for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name]:
+                if target_config.get(field) == REDACTED:
+                    paths.append(f"providers.{provider_name}.targets.{target_name}.{field}")
+    return paths
+
+
+def _reject_unresolved_redacted_message_config(config: dict[str, Any]) -> None:
+    paths = _message_redacted_secret_paths(config)
+    if paths:
+        raise ValueError("Unresolved redacted MESSAGE secrets: " + ", ".join(paths) + "; please re-enter credentials")
+
+
+def _message_redacted_target_rename_candidates(
+    provider_name: str,
+    stored_targets: dict[str, Any],
+    incoming_targets: dict[str, Any],
+) -> list[dict[str, Any]]:
+    removed_targets = [target for target_name, target in stored_targets.items() if target_name not in incoming_targets and isinstance(target, dict)]
+    added_redacted_targets = [
+        target
+        for target_name, target in incoming_targets.items()
+        if target_name not in stored_targets and isinstance(target, dict) and _message_target_has_redacted_secret(provider_name, target)
+    ]
+    # Only handle single renames: FIFO matching for multiple renames would assign secrets in
+    # stored-dict order, but the GUI appends renamed keys at the end, so the incoming order
+    # reflects the user's edit sequence rather than the stored order — silently swapping secrets.
+    if len(removed_targets) != 1 or len(added_redacted_targets) != 1:
+        return []
+    return removed_targets
+
+
+def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], incoming_config: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(incoming_config)
+    stored_providers = stored_config.get("providers")
+    incoming_providers = incoming_config.get("providers")
+    if not isinstance(stored_providers, dict) or not isinstance(incoming_providers, dict):
+        return merged
+
+    merged_providers = dict(incoming_providers)
+    merged["providers"] = merged_providers
+
+    for provider_name, provider_fields in _MESSAGE_PROVIDER_SECRET_FIELDS.items():
+        stored_provider = stored_providers.get(provider_name)
+        incoming_provider = incoming_providers.get(provider_name)
+        if not isinstance(stored_provider, dict) or not isinstance(incoming_provider, dict):
+            continue
+
+        merged_provider = dict(incoming_provider)
+        merged_providers[provider_name] = merged_provider
+        for field in provider_fields:
+            if merged_provider.get(field) == REDACTED and field in stored_provider:
+                merged_provider[field] = stored_provider[field]
+
+        stored_targets = stored_provider.get("targets")
+        incoming_targets = incoming_provider.get("targets")
+        if not isinstance(stored_targets, dict) or not isinstance(incoming_targets, dict):
+            continue
+
+        merged_targets = dict(incoming_targets)
+        merged_provider["targets"] = merged_targets
+        removed_targets_queue = _message_redacted_target_rename_candidates(provider_name, stored_targets, incoming_targets)
+        for target_name, incoming_target in incoming_targets.items():
+            stored_target = stored_targets.get(target_name)
+            if not isinstance(stored_target, dict) or not isinstance(incoming_target, dict):
+                if not isinstance(incoming_target, dict) or not _message_target_has_redacted_secret(provider_name, incoming_target):
+                    continue
+                if not removed_targets_queue:
+                    raise ValueError(
+                        f"Unresolvable redacted secret in target '{target_name}' of provider "
+                        f"'{provider_name}': cannot determine mapping — please re-enter credentials"
+                    )
+                stored_target = removed_targets_queue.pop(0)
+            merged_target = dict(incoming_target)
+            merged_targets[target_name] = merged_target
+            for field in _MESSAGE_PROVIDER_TARGET_SECRET_FIELDS[provider_name]:
+                if merged_target.get(field) == REDACTED and field in stored_target:
+                    merged_target[field] = stored_target[field]
+
+    return merged
+
+
+def _redact_instance_config(adapter_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    if adapter_type == "MESSAGE":
+        return _redact_message_config(config)
+    return config
+
+
 def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
     cls = adapter_registry.get_class(row["adapter_type"])
     return AdapterInstanceOut(
         id=uuid.UUID(row["id"]),
         adapter_type=row["adapter_type"],
         name=row["name"],
-        config=json.loads(row["config"]) if row["config"] else {},
+        config=_redact_instance_config(row["adapter_type"], json.loads(row["config"]) if row["config"] else {}),
         enabled=bool(row["enabled"]),
         registered=cls is not None,
         running=instance is not None,
@@ -245,6 +406,11 @@ async def create_instance(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Adapter-Typ '{body.adapter_type}' nicht registriert",
         )
+    if body.adapter_type == "MESSAGE":
+        try:
+            _reject_unresolved_redacted_message_config(body.config)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     # Config validieren
     try:
         cls.config_schema(**body.config)
@@ -315,18 +481,26 @@ async def update_instance(
     enabled_new = body.enabled if body.enabled is not None else bool(row["enabled"])
     config_raw = row["config"]
     if body.config is not None:
+        config_new = body.config
+        if row["adapter_type"] == "MESSAGE":
+            stored_config = json.loads(config_raw) if config_raw else {}
+            try:
+                config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+                _reject_unresolved_redacted_message_config(config_new)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         cls = adapter_registry.get_class(row["adapter_type"])
         if cls:
             try:
-                cls.config_schema(**body.config)
+                cls.config_schema(**config_new)
             except Exception as exc:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_CONTENT,
                     f"Config-Validierungsfehler: {exc}",
                 ) from exc
         if row["adapter_type"] == "MESSAGE":
-            await _validate_message_config_preserves_binding_targets(str(instance_id), body.config, db)
-        config_raw = json.dumps(body.config)
+            await _validate_message_config_preserves_binding_targets(str(instance_id), config_new, db)
+        config_raw = json.dumps(config_new)
 
     now = datetime.now(UTC).isoformat()
     await db.execute_and_commit(
@@ -1333,8 +1507,17 @@ async def update_adapter_config(
     cls = adapter_registry.get_class(adapter_type)
     if cls is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Adapter '{adapter_type}' nicht registriert")
+    config_new = body.config
+    if adapter_type == "MESSAGE":
+        row = await db.fetchone("SELECT * FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
+        stored_config = json.loads(row["config"]) if row is not None and row["config"] else {}
+        try:
+            config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+            _reject_unresolved_redacted_message_config(config_new)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     try:
-        cls.config_schema(**body.config)
+        cls.config_schema(**config_new)
     except Exception as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1347,11 +1530,11 @@ async def update_adapter_config(
            VALUES (?,?,?,?)
            ON CONFLICT(adapter_type) DO UPDATE
            SET config=excluded.config, enabled=excluded.enabled, updated_at=excluded.updated_at""",
-        (adapter_type, json.dumps(body.config), int(body.enabled), now),
+        (adapter_type, json.dumps(config_new), int(body.enabled), now),
     )
     return AdapterConfigOut(
         adapter_type=adapter_type,
-        config=body.config,
+        config=_redact_instance_config(adapter_type, config_new),
         enabled=body.enabled,
         updated_at=now,
     )
@@ -1368,7 +1551,7 @@ async def get_adapter_config(
         return AdapterConfigOut(adapter_type=adapter_type, config={}, enabled=True, updated_at=None)
     return AdapterConfigOut(
         adapter_type=adapter_type,
-        config=json.loads(row["config"]),
+        config=_redact_instance_config(adapter_type, json.loads(row["config"])),
         enabled=bool(row["enabled"]),
         updated_at=row["updated_at"],
     )

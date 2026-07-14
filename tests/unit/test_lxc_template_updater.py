@@ -1,4 +1,5 @@
 import io
+import json
 import re
 import sys
 import textwrap
@@ -20,6 +21,13 @@ def _extract_checksum_injection_script(workflow: str) -> str:
     m = re.search(r"python3 <<'PYEOF'[^\n]*\n(.*?)\n[ \t]*PYEOF", workflow, re.DOTALL)
     assert m, "Could not find PYEOF block"
     return textwrap.dedent(m.group(1))
+
+
+def _extract_asset_info_script(obs_update: str, target: str) -> str:
+    """Extract the asset-selection Python snippet embedded in `python3 -c "..."`."""
+    m = re.search(r'ASSET_INFO=\$\(echo "\$ALL_RELEASES" \| python3 -c "\n(.*?)\n"\)', obs_update, re.DOTALL)
+    assert m, "Could not find ASSET_INFO python block"
+    return m.group(1).replace("'${TARGET}'", repr(target))
 
 
 def test_updater_uses_release_bundle_filename_for_download_and_extract():
@@ -95,6 +103,33 @@ def test_updater_fails_closed_when_sha256_missing():
     assert "exit 1" in obs_update
 
 
+def test_asset_info_script_does_not_crash_when_bundle_asset_missing():
+    """A release with no app-bundle asset (e.g. still uploading) must degrade to
+    empty output, not crash with an unhandled TypeError on bundle['name']."""
+    obs_update = _obs_update_text()
+    script = _extract_asset_info_script(obs_update, "1.2.3")
+
+    releases = [
+        {
+            "tag_name": "1.2.3",
+            "assets": [{"name": "openbridgeserver-lxc_1.2.3_amd64.tar.zst", "browser_download_url": "https://example/x"}],
+            "body": "Release notes without an embedded sha256 block",
+        }
+    ]
+
+    old_stdin, old_stdout = sys.stdin, sys.stdout
+    sys.stdin = io.StringIO(json.dumps(releases))
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        exec(script, {})  # noqa: S102
+    finally:
+        sys.stdin, sys.stdout = old_stdin, old_stdout
+
+    lines = buf.getvalue().splitlines()
+    assert lines == ["", ""], "missing bundle asset must yield empty BUNDLE_URL/CHECKSUM_LINE, not a crash"
+
+
 def test_checksum_injection_is_idempotent(tmp_path):
     """Running the checksum injection step twice must not produce duplicate sections."""
     workflow = _workflow_text()
@@ -131,6 +166,8 @@ def test_checksum_injection_is_idempotent(tmp_path):
 
     first_run = run_script(f"# Release\n\n{marker}\n")
     assert first_run.count("### Checksums") == 1
+    assert first_run.count("**App Bundle**") == 1
+    assert re.search(r"App Bundle.*?```\s*" + fake_hash, first_run, re.DOTALL)
     assert first_run.count(fake_hash) == 1
 
     second_run = run_script(first_run)

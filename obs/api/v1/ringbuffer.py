@@ -33,6 +33,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from obs.api.auth import get_admin_user, get_current_user
+from obs.api.v1.services.knx_traceability import resolve_device_pas_to_group_addresses
 from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import (
     LEGACY_DECISION_DISCARDED,
@@ -652,11 +653,6 @@ def _normalize_nonempty(values: list[str]) -> list[str]:
     return out
 
 
-async def _table_columns(db: Database, table_name: str) -> set[str]:
-    rows = await db.fetchall(f"PRAGMA table_info({table_name})")
-    return {str(row["name"]) for row in rows if "name" in row.keys()}
-
-
 async def _resolve_device_pas_to_group_addresses(
     device_pas: list[str],
     db: Database,
@@ -666,55 +662,7 @@ async def _resolve_device_pas_to_group_addresses(
     The helper is schema-tolerant so it keeps working while the KNX device
     import tables are introduced incrementally across sub-issues.
     """
-    normalized_pas = _normalize_nonempty(device_pas)
-    if not normalized_pas:
-        return []
-
-    co_cols = await _table_columns(db, "knx_comm_objects")
-    link_cols = await _table_columns(db, "knx_co_ga_links")
-    dev_cols = await _table_columns(db, "knx_devices")
-
-    ga_col = next((c for c in ("group_address", "ga_address", "ga", "address") if c in link_cols), None)
-    if not ga_col:
-        return []
-
-    placeholders = ",".join("?" * len(normalized_pas))
-    co_id_col = next((c for c in ("id", "comm_object_id", "communication_object_id", "co_id") if c in co_cols), None)
-    link_co_col = next((c for c in ("comm_object_id", "communication_object_id", "co_id") if c in link_cols), None)
-
-    # Most direct shape: knx_comm_objects holds the device physical address.
-    co_pa_col = next(
-        (c for c in ("physical_address", "device_physical_address", "device_pa", "pa", "address") if c in co_cols),
-        None,
-    )
-    if co_id_col and link_co_col and co_pa_col:
-        rows = await db.fetchall(
-            f"""SELECT DISTINCT l.{ga_col} AS ga
-                   FROM knx_comm_objects co
-                   JOIN knx_co_ga_links l ON l.{link_co_col} = co.{co_id_col}
-                  WHERE co.{co_pa_col} IN ({placeholders})""",
-            tuple(normalized_pas),
-        )
-        resolved = _normalize_nonempty([str(row["ga"]) for row in rows if row["ga"] is not None])
-        if resolved:
-            return resolved
-
-    # Fallback shape: knx_devices linked via device_id in knx_comm_objects.
-    dev_id_col = next((c for c in ("id", "device_id") if c in dev_cols), None)
-    dev_pa_col = next((c for c in ("individual_address", "physical_address", "pa", "address") if c in dev_cols), None)
-    co_dev_id_col = next((c for c in ("device_id", "knx_device_id") if c in co_cols), None)
-    if dev_id_col and dev_pa_col and co_id_col and link_co_col and co_dev_id_col:
-        rows = await db.fetchall(
-            f"""SELECT DISTINCT l.{ga_col} AS ga
-                   FROM knx_devices d
-                   JOIN knx_comm_objects co ON co.{co_dev_id_col} = d.{dev_id_col}
-                   JOIN knx_co_ga_links l ON l.{link_co_col} = co.{co_id_col}
-                  WHERE d.{dev_pa_col} IN ({placeholders})""",
-            tuple(normalized_pas),
-        )
-        return _normalize_nonempty([str(row["ga"]) for row in rows if row["ga"] is not None])
-
-    return []
+    return await resolve_device_pas_to_group_addresses(device_pas, db)
 
 
 def _apply_group_addresses_to_filter_query(
