@@ -809,7 +809,7 @@ class LogicManager:
             repetitions = 1
         try:
             while True:
-                yielded = False
+                slept = False
                 for step in steps:
                     if config.get("cancel_when_condition_false") and not self._sequence_conditions.get(key, True):
                         logger.info("Value sequence cancelled: graph=%s node=%s", graph_id[:8], node_id[:8])
@@ -830,7 +830,6 @@ class LogicManager:
                                     logic_depth=logic_depth + 1,
                                 )
                             )
-                            yielded = True
                         except Exception as exc:
                             logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
                     try:
@@ -839,12 +838,12 @@ class LogicManager:
                         delay_s = 0.0
                     if delay_s:
                         await asyncio.sleep(delay_s)
-                        yielded = True
+                        slept = True
                 if mode == "while_condition":
                     if not self._sequence_conditions.get(key, True):
                         return
-                    if not yielded:
-                        logger.warning("Value sequence graph=%s node=%s has no runnable steps", graph_id[:8], node_id[:8])
+                    if not slept:
+                        logger.warning("Value sequence graph=%s node=%s needs a positive pause in while mode", graph_id[:8], node_id[:8])
                         return
                     continue
                 repetitions -= 1
@@ -1119,6 +1118,13 @@ class LogicManager:
                 if variables_changed:
                     node.data["variables"] = variables
                     changed = True
+                if node.type == "value_sequence":
+                    steps = self._sequence_steps(node.data.get("steps"))
+                    for step in steps:
+                        if step.get("datapoint_id") == dp_id_str and step.get("datapoint_name") != event.new_name:
+                            step["datapoint_name"] = event.new_name
+                            changed = True
+                    node.data["steps"] = steps
             if changed:
                 current = self._graphs.get(graph_id)
                 if current is None or current[2] is not flow:

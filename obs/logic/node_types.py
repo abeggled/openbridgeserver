@@ -638,7 +638,6 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             "repeat_count": {"type": "number", "default": 2, "min": 1},
             "restart_policy": {"type": "string", "enum": ["ignore", "restart", "queue"], "default": "ignore"},
             "cancel_when_condition_false": {"type": "boolean", "default": False},
-            "restore_on_restart": {"type": "boolean", "default": False},
             "steps": {"type": "array", "default": []},
         },
         color="#b45309",

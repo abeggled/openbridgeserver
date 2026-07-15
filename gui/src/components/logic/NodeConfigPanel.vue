@@ -313,7 +313,7 @@
         </div>
         <div v-for="(step, index) in sequenceSteps" :key="index" class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2" :data-testid="`sequence-step-${index}`">
           <div class="flex justify-between items-center"><span class="text-xs font-semibold text-amber-400">{{ $t('logic.nodeConfig.value_sequence.step', { n: index + 1 }) }}</span><div class="flex gap-2"><button class="text-xs" @click="moveSequenceStep(index, -1)">↑</button><button class="text-xs" @click="moveSequenceStep(index, 1)">↓</button><button class="text-xs text-teal-400" @click="duplicateSequenceStep(index)">{{ $t('logic.nodeConfig.value_sequence.duplicate') }}</button><button class="text-xs text-red-400" @click="removeSequenceStep(index)">×</button></div></div>
-          <input :value="step.datapoint_name" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="searchSequenceDps(index, $event.target.value)" />
+          <input v-model="sequenceSearches[index]" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="searchSequenceDps(index, sequenceSearches[index])" />
           <div v-if="sequenceDpResults[index]?.length" class="max-h-24 overflow-y-auto border border-slate-700 rounded">
             <button v-for="dp in sequenceDpResults[index]" :key="dp.id" class="block w-full text-left px-2 py-1 text-xs hover:bg-slate-700" @click="selectSequenceDp(index, dp)">{{ dp.name }} <span class="text-slate-500">{{ dp.data_type }}</span></button>
           </div>
@@ -1262,6 +1262,8 @@ const activeTab          = ref('connection')
 const valueMapPreset     = ref('')
 const valueMapCustom     = ref('')
 const valueMapCustomError = ref('')
+const sequenceDpResults = ref([])
+const sequenceSearches = ref([])
 const urlTargetChecking = ref(false)
 const urlTargetSaving = ref(false)
 const urlTargetDecision = ref(null)
@@ -2059,6 +2061,11 @@ watch(() => props.node, (n) => {
       if (localData.value.archive_id) localData.value.archive_id = String(localData.value.archive_id).toLowerCase()
       loadMessageArchives()
     }
+    if (n.type === 'value_sequence') {
+      localData.value.steps = Array.isArray(n.data.steps) ? n.data.steps : []
+      sequenceSearches.value = localData.value.steps.map(step => step.datapoint_name || '')
+      sequenceDpResults.value = localData.value.steps.map(() => [])
+    }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
       // Restore value_map UI state — but don't overwrite if user just picked 'custom'
@@ -2180,7 +2187,6 @@ function selectDp(dp) {
   emitUpdate()
 }
 
-const sequenceDpResults = ref([])
 function saveSequenceSteps() { localData.value.steps = sequenceSteps.value; emitUpdate() }
 function addSequenceStep() { localData.value.steps = [...sequenceSteps.value, { datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }]; emitUpdate() }
 function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index, 1); localData.value.steps = steps; emitUpdate() }
@@ -2188,7 +2194,7 @@ function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; 
 function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; emitUpdate() }
 function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; emitUpdate() }
 async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
-function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
+function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function addApiVariable() {
   const variables = normaliseApiVariables(localData.value.variables)
