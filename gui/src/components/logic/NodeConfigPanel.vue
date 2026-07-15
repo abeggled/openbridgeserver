@@ -698,6 +698,7 @@
                 :value="entry.path"
                 @input="updateJsonPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
+                @blur="onExtractorPathBlur"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
@@ -773,6 +774,7 @@
                 :value="entry.path"
                 @input="updateXmlPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
+                @blur="onExtractorPathBlur"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
@@ -2090,6 +2092,13 @@ function onExtractorPathSelect(e) {
     activeExtractorRow.value = 0
   }
   e.target.value = ''
+}
+
+function onExtractorPathBlur(e) {
+  // Keep the selected row while moving focus to the shared picker. Any other
+  // focus change should clear it so a later picker selection uses its default.
+  if (e.relatedTarget?.matches?.('[data-testid="extractor-path-select"]')) return
+  activeExtractorRow.value = null
 }
 
 function onValueMapCustomInput(e) {
