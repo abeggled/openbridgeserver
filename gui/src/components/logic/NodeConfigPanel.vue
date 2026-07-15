@@ -396,7 +396,7 @@
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.timeoutLabel') }}</label>
-          <input v-model.number="localData.timeout_s" type="number" min="1" step="any" class="input text-sm" @change="emitBoundedUpdate('timeout_s', { min: 1 })" />
+          <input v-model="localData.timeout_s" type="number" class="input text-sm" @change="emitUpdate" />
         </div>
         <label class="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" v-model="localData.verify_ssl" @change="emitUpdate" class="accent-teal-500" />

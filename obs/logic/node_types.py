@@ -998,7 +998,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": [],
                 "label": "Variablen",
             },
-            "timeout_s": {"type": "number", "default": 10, "min": 1, "label": "Timeout (s)"},
+            "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
             "auth_type": {
                 "type": "string",
                 "enum": ["none", "basic", "digest", "bearer"],
