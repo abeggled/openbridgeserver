@@ -13,6 +13,13 @@
         "vue-draggable-plus"
       ],
       "groupName": "frontend-deps (monitor phase 2)"
+    },
+    {
+      "description": "Hold typescript major bumps: TypeScript 7 replaced typescript/lib/tsc with a new exports map (only ./unstable/*), which vue-tsc (used by frontend/'s `npm run build`) cannot resolve yet (ERR_PACKAGE_PATH_NOT_EXPORTED). Re-enable once vue-tsc ships TS7 support (see PR #972).",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["typescript"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
     }
   ]
 }
