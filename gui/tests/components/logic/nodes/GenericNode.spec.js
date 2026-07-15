@@ -134,6 +134,14 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toContain('5')
   })
 
+  it('shows value-sequence step summary and its control handles', async () => {
+    const w = await mountGN('value_sequence', { run_mode: 'repeat_count', steps: [{}, {}] })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toContain('2')
+    expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')).toHaveLength(2)
+    expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')).toHaveLength(3)
+  })
+
   it('shows decision rule count summary', async () => {
     const w = await mountGN('decision', {
       conditions: JSON.stringify([

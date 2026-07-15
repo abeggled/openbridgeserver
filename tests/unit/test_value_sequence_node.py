@@ -124,3 +124,53 @@ def test_value_sequence_restart_and_queue_policies() -> None:
         assert manager._event_bus.publish.await_count == 3
 
     asyncio.run(exercise())
+
+
+def test_value_sequence_handles_pause_invalid_values_and_while_condition() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        key = ("graph", "node")
+        manager._sequence_conditions[key] = True
+
+        async def publish(event):
+            manager._sequence_conditions[key] = False
+
+        manager._event_bus.publish.side_effect = publish
+        await manager._run_value_sequence(
+            "graph",
+            "node",
+            {
+                "run_mode": "while_condition",
+                "steps": [
+                    {"delay_ms": "invalid"},
+                    {"datapoint_id": "not-a-uuid", "value": 1},
+                    {"datapoint_id": str(target), "value": 2},
+                ],
+            },
+        )
+        manager._event_bus.publish.assert_awaited_once()
+
+        assert LogicManager._sequence_steps("not json") == []
+        assert LogicManager._sequence_steps('[{"value": 1}]') == [{"value": 1}]
+
+    asyncio.run(exercise())
+
+
+def test_sequence_task_cancellation_clears_graph_runtime_state() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        node = SimpleNamespace(
+            id="node",
+            data={"steps": [{"datapoint_id": str(target), "value": 1, "delay_ms": 1000}]},
+        )
+        manager._start_value_sequence("graph", node, True)
+        task = manager._sequence_tasks[("graph", "node")]
+        manager._cancel_sequence_tasks("graph")
+        assert task.cancelled() is False
+        await asyncio.gather(task, return_exceptions=True)
+        assert not manager._sequence_tasks
+        assert not manager._sequence_conditions
+
+    asyncio.run(exercise())
