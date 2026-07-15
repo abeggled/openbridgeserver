@@ -7,6 +7,7 @@
 ### New features ✨
 
 ### Fixes 🐞
+* Logic/History: Consumption counters now reset daily, weekly, monthly, and yearly values in the configured application timezone. SQLite history aggregate buckets now carry explicit UTC (`Z`) timestamps, and the Chart widget continues to interpret legacy timezone-less buckets as UTC. https://github.com/abeggled/openbridgeserver/issues/975 https://github.com/abeggled/openbridgeserver/issues/909
 
 ### Known Issues 🔔
 * none

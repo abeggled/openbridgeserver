@@ -2188,10 +2188,7 @@ class TestConsumptionCounter:
         # Choose a timezone whose calendar date differs from UTC right now,
         # so this cannot accidentally pass by using the server clock.
         utc_today = datetime.now(UTC).date()
-        timezone = next(
-            name for name in ("Pacific/Kiritimati", "Etc/GMT+12")
-            if datetime.now(ZoneInfo(name)).date() != utc_today
-        )
+        timezone = next(name for name in ("Pacific/Kiritimati", "Etc/GMT+12") if datetime.now(ZoneInfo(name)).date() != utc_today)
         expected_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
         state = {}
         n1 = node("c", "consumption_counter", {})
