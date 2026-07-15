@@ -1452,8 +1452,17 @@ async def test_legacy_migration_decision_keep_finalizes_when_committed_no_legacy
     db = Database(":memory:")
     await db.connect()
     try:
-        # committed + keine Legacy mehr → keep zieht die Finalisierung nach (migrated), kein keep.
+        # committed + keine Legacy mehr → keep terminalisiert direkt zu migrated, kein keep.
         await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        result = await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
+        assert result == LEGACY_DECISION_MIGRATED
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+
+        # Der exakt-stale Fall (#1010): gespeicherte Entscheidung ist BEREITS keep (aus einem früher
+        # gescheiterten on_success), committed + keine Legacy. Ein erneutes keep muss trotzdem direkt
+        # migrated terminalisieren – der generische Finalizer würde einen gespeicherten keep bewusst
+        # respektieren (Q0qIJ) und den abgeschlossenen Zustand nie reparieren.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
         result = await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
         assert result == LEGACY_DECISION_MIGRATED
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
@@ -1522,10 +1531,11 @@ async def test_legacy_migration_start_keep_preprotects_before_job(tmp_path: Path
         await db.disconnect()
 
 
-async def test_legacy_migration_start_keep_rolls_back_on_sync_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Schlägt der Start SYNCHRON fehl (Precheck-Ablehnung), wird der pre-job keep→skipped-Übergang
-    zurückgerollt (#1010): ein gescheiterter Migrate-Versuch darf die bewusste keep-Entscheidung
-    (unprotected) nicht in skipped/protected zementieren."""
+async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Schlägt der Start fehl, BEVOR die Background-Task läuft, wird der pre-job keep→skipped-Übergang
+    zurückgerollt (#1010): nicht nur beim typisierten ``OfflineMigrationError`` (Precheck), sondern auch
+    bei einem awaited Manifest-Fehler (z. B. transienter SQLite-Lesefehler) VOR der Task-Erstellung –
+    sonst zementierte ein gescheiterter Migrate-Versuch die bewusste keep-Entscheidung (unprotected)."""
     import obs.api.v1.ringbuffer as rb_api
     from fastapi import HTTPException
 
@@ -1537,6 +1547,7 @@ async def test_legacy_migration_start_keep_rolls_back_on_sync_failure(tmp_path: 
     )
     from obs.ringbuffer.store.offline_migration import OfflineMigrationError
 
+    boom: dict[str, BaseException] = {}
     protect_calls: list[bool] = []
 
     class _Rb:
@@ -1547,7 +1558,7 @@ async def test_legacy_migration_start_keep_rolls_back_on_sync_failure(tmp_path: 
             protect_calls.append(value)
 
         async def start_legacy_migration(self, *, on_success):
-            raise OfflineMigrationError("no attached legacy source to migrate")
+            raise boom["exc"]
 
     rb = _Rb()
     monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
@@ -1556,11 +1567,23 @@ async def test_legacy_migration_start_keep_rolls_back_on_sync_failure(tmp_path: 
     db = Database(":memory:")
     await db.connect()
     try:
+        # Typisierter Precheck-Fehler → 409, keep + unprotected wiederhergestellt.
+        boom["exc"] = OfflineMigrationError("no attached legacy source to migrate")
+        protect_calls.clear()
         await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
         with pytest.raises(HTTPException) as exc:
             await rb_api.legacy_migration_start(_user="admin", db=db)
         assert exc.value.status_code == 409
-        # keep wiederhergestellt, Protection zuletzt wieder aus (True beim pre-job, dann False im Rollback).
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert protect_calls == [True, False]
+
+        # NICHT-OfflineMigrationError vor der Task-Erstellung (z. B. Manifest-Lesefehler) → durchgereicht,
+        # aber keep + unprotected ebenfalls zurückgerollt.
+        boom["exc"] = RuntimeError("manifest read failed")
+        protect_calls.clear()
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        with pytest.raises(RuntimeError):
+            await rb_api.legacy_migration_start(_user="admin", db=db)
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
         assert protect_calls == [True, False]
     finally:

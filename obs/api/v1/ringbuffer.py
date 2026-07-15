@@ -38,6 +38,7 @@ from obs.db.database import Database, get_db
 from obs.ringbuffer.persisted_config import (
     LEGACY_DECISION_DISCARDED,
     LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_MIGRATED,
     LEGACY_DECISION_SKIPPED,
     LEGACY_DECISIONS_PROTECTED,
     LEGACY_DECISIONS_TERMINAL,
@@ -2085,14 +2086,15 @@ async def _legacy_migration_decision_locked(body: LegacyMigrationDecisionIn, db:
     elif body.decision == "keep":
         # Hat eine Migration bereits die letzte Quelle entfernt (committed), aber die
         # ``on_success``-Terminalisierung von ``migrated`` schlug fehl (app-DB locked/voll), stünde
-        # die Entscheidung noch non-terminal (#968, Q10j-). Ein ``keep`` würde sie zementieren – und
-        # da ``finalize_committed_migration_decision`` einen expliziten ``keep`` bewusst respektiert
-        # (Q0qIJ), könnte der abgeschlossene Zustand nie mehr zu ``migrated`` repariert werden.
-        # Deshalb in genau diesem Fall (committed + keine Quelle mehr) die ausstehende Finalisierung
-        # nachziehen statt keep zu persistieren (läuft unter dem gehaltenen Decision-Lock). Sonst –
-        # solange eine Quelle da ist ODER nie migriert wurde – ist keep die normale, gewollte Wahl.
+        # die Entscheidung noch non-terminal (#968, Q10j-). Ein ``keep`` würde sie zementieren.
+        # In genau diesem Fall (committed + keine Quelle mehr) direkt ``migrated`` terminalisieren
+        # statt keep zu persistieren. NICHT über ``finalize_committed_migration_decision`` gehen
+        # (#1010): der Finalizer respektiert einen bereits gespeicherten expliziten ``keep`` bewusst
+        # (Q0qIJ) und würde den exakt-stale Zustand (``keep`` + committed + keine Legacy, aus einem
+        # früher gescheiterten ``on_success``) nie reparieren – ein erneutes ``keep`` bliebe non-terminal.
+        # Sonst – solange eine Quelle da ist ODER nie migriert wurde – ist keep die normale, gewollte Wahl.
         if rb is not None and await rb.has_committed_migration() and not await rb.has_attached_legacy():
-            await finalize_committed_migration_decision(db, rb)
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
         else:
             await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
             if rb is not None:
@@ -2154,7 +2156,6 @@ async def legacy_migration_start(
 
 
 async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
-    from obs.ringbuffer.persisted_config import LEGACY_DECISION_MIGRATED
     from obs.ringbuffer.store.offline_migration import OfflineMigrationError
 
     current = await load_legacy_migration_decision(db)
@@ -2193,19 +2194,24 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
 
     try:
         await rb.start_legacy_migration(on_success=_persist_migrated)
-    except OfflineMigrationError as exc:
-        # Synchroner Start-Fehler (#1010): ein Precheck (keine/quarantänierte Quelle, Disk-Precheck)
-        # oder der Doppelstart-Guard hat abgelehnt, BEVOR ein Job lief oder etwas committet wurde.
-        # Der pre-job keep→skipped-Übergang muss zurückgerollt werden, sonst zementiert ein
-        # gescheiterter Migrate-Versuch die bewusste ``keep``-Entscheidung (unprotected) fälschlich
-        # in ``skipped``/protected. (Ein BACKGROUND-Fehler NACH erfolgreichem Start ist anders: dort
-        # lässt ``start_legacy_migration`` ``skipped``+protected konsistent bestehen – es rollt die
-        # Protection auf den vor dem Job gemerkten Wert, der jetzt korrekt protected=True ist.)
+    except Exception as exc:
+        # JEDER Fehler aus ``start_legacy_migration`` bedeutet: keine Background-Task gestartet und
+        # nichts committet (#1010) – der Aufruf wirft ausschließlich VOR ``create_task`` (Prechecks,
+        # aber auch awaited Manifest-Ops wie ``list_schema_legacy_segments``/``committed_migration_count``,
+        # die mit NICHT-``OfflineMigrationError`` fehlschlagen können; danach reserviert der Task und der
+        # Aufruf returnt normal). Deshalb den pre-job keep→skipped-Übergang bei ALLEN pre-task-Fehlern
+        # zurückrollen, nicht nur bei den typisierten Prechecks, sonst zementiert ein gescheiterter
+        # Migrate-Versuch die bewusste ``keep``-Entscheidung (unprotected) fälschlich in ``skipped``/
+        # protected. (Ein BACKGROUND-Fehler NACH erfolgreichem Start ist anders: dort lässt
+        # ``start_legacy_migration`` ``skipped``+protected konsistent bestehen – es rollt die Protection
+        # auf den vor dem Job gemerkten Wert, der jetzt korrekt protected=True ist.)
         if current == LEGACY_DECISION_KEEP:
             with suppress(Exception):
                 await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
                 await rb.set_legacy_retention_protected(False)
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        if isinstance(exc, OfflineMigrationError):
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        raise
     return await _legacy_migration_status(db)
 
 
