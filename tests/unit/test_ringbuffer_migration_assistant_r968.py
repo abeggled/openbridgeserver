@@ -1138,6 +1138,72 @@ async def test_cancel_in_commit_window_detected_by_state(tmp_path: Path, monkeyp
         await rb.stop()
 
 
+async def test_start_legacy_migration_on_failure_after_precommit_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Scheitert der Migrator-Lauf VOR dem Commit (Exception, kein Unlink), ruft ``_run`` nach dem
+    Protection-Rollback den ``on_failure``-Callback (#1010, RCOhx) – so kann die API eine keep-
+    Startentscheidung wiederherstellen, die durch den nie abgeschlossenen Lauf hinfällig wurde."""
+    from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)
+    await rb.start()
+    try:
+
+        async def _boom_run(self, progress):
+            raise RuntimeError("migrator failed before commit")
+
+        monkeypatch.setattr(OfflineLegacyMigrator, "run", _boom_run)
+        called = {"failure": False, "success": False}
+
+        async def _on_failure():
+            called["failure"] = True
+
+        async def _on_success():
+            called["success"] = True
+
+        await rb.start_legacy_migration(on_success=_on_success, on_failure=_on_failure)
+        await rb._legacy_migration_task  # Exception-Pfad returnt (kein re-raise)
+
+        assert rb.legacy_migration_progress()["phase"] == "failed"
+        assert legacy.exists(), "Legacy nicht unlinked (Lauf scheiterte vor dem Commit)"
+        assert called["failure"] is True, "on_failure muss nach pre-commit-Fehler laufen"
+        assert called["success"] is False, "on_success darf bei Fehler NICHT laufen"
+    finally:
+        await rb.stop()
+
+
+async def test_start_legacy_migration_on_failure_after_precommit_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wird der Lauf VOR dem Commit gecancelt (kein durabler Commit-Beleg, kein Unlink), ruft ``_run``
+    nach dem Protection-Rollback ebenfalls ``on_failure`` und re-raist den Cancel (#1010, RCOhx)."""
+    from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(20)))
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)
+    await rb.start()
+    try:
+
+        async def _cancel_run(self, progress):
+            raise asyncio.CancelledError()  # VOR dem echten Commit
+
+        monkeypatch.setattr(OfflineLegacyMigrator, "run", _cancel_run)
+        called = {"failure": False}
+
+        async def _on_failure():
+            called["failure"] = True
+
+        await rb.start_legacy_migration(on_failure=_on_failure)
+        with pytest.raises(asyncio.CancelledError):
+            await rb._legacy_migration_task
+
+        assert rb.legacy_migration_progress()["phase"] == "failed"
+        assert legacy.exists(), "Legacy nicht unlinked (Cancel vor Commit)"
+        assert called["failure"] is True, "on_failure muss nach pre-commit-Cancel laufen"
+    finally:
+        await rb.stop()
+
+
 async def test_has_committed_migration_reflects_promoted_segments(tmp_path: Path):
     """``has_committed_migration`` ist der durable Beleg des Commits: False solange nur Legacy
     (bzw. migrating) existiert, True sobald ``rb_migrated_*`` promotet sind (#968, Codex :326)."""
@@ -1458,14 +1524,13 @@ async def test_legacy_migration_decision_keep_finalizes_when_committed_no_legacy
         assert result == LEGACY_DECISION_MIGRATED
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
 
-        # Der exakt-stale Fall (#1010): gespeicherte Entscheidung ist BEREITS keep (aus einem früher
-        # gescheiterten on_success), committed + keine Legacy. Ein erneutes keep muss trotzdem direkt
-        # migrated terminalisieren – der generische Finalizer würde einen gespeicherten keep bewusst
-        # respektieren (Q0qIJ) und den abgeschlossenen Zustand nie reparieren.
+        # RCOh6 (#1010): gespeicherte Entscheidung ist BEREITS keep + committed + keine Legacy → dieser
+        # Zustand ist MEHRDEUTIG (gescheitertes on_success vs. bewusst ge-keepte, von Retention
+        # zurückgewonnene Quelle). Wie der Finalizer (Q0qIJ) nicht raten – keep bleibt keep, NICHT migrated.
         await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
         result = await rb_api.legacy_migration_decision(rb_api.LegacyMigrationDecisionIn(decision="keep"), _user="admin", db=db)
-        assert result == LEGACY_DECISION_MIGRATED
-        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+        assert result == LEGACY_DECISION_KEEP
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
 
         # keine Legacy, aber auch kein Commit-Beleg (frischer Zustand) → keep normal persistiert.
         state["committed"] = False
@@ -1483,10 +1548,11 @@ async def test_legacy_migration_decision_keep_finalizes_when_committed_no_legacy
         await db.disconnect()
 
 
-async def test_legacy_migration_start_keep_preprotects_before_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Startet die Migration aus einer ``keep``-Entscheidung, wird die verbleibende Quelle VOR dem
-    Job auf ``skipped`` (protected) umgestellt (#968, Q10kE) – nicht erst im fehlbaren on_success-
-    Callback. Beim Aufruf von ``start_legacy_migration`` ist die Entscheidung bereits skipped."""
+async def test_legacy_migration_start_keep_switches_decision_before_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Startet die Migration aus einer ``keep``-Entscheidung, wird die verbleibende Quelle VOR dem Job
+    auf ``skipped`` umgestellt (#968, Q10kE) – nicht erst im fehlbaren on_success-Callback. NUR die
+    Decision, NICHT der Retention-Schutz (#1010, RCOhx): den aktiviert ``start_legacy_migration`` selbst
+    mit dem korrekten Vorzustand. Beim Job-Start ist die Entscheidung bereits skipped."""
     import obs.api.v1.ringbuffer as rb_api
     from obs.db.database import Database
     from obs.ringbuffer.persisted_config import (
@@ -1497,15 +1563,16 @@ async def test_legacy_migration_start_keep_preprotects_before_job(tmp_path: Path
     )
 
     seen: dict[str, object] = {}
+    protect_calls: list[bool] = []
 
     class _Rb:
         def legacy_migration_in_progress(self) -> bool:
             return False
 
         async def set_legacy_retention_protected(self, value: bool) -> None:
-            seen["protected"] = value
+            protect_calls.append(value)
 
-        async def start_legacy_migration(self, *, on_success):
+        async def start_legacy_migration(self, *, on_success, on_failure=None):
             # Zustand zum Job-Start festhalten: die keep→skipped-Umstellung muss VORHER passiert sein.
             seen["decision_at_start"] = await load_legacy_migration_decision(seen["db"])
 
@@ -1525,7 +1592,8 @@ async def test_legacy_migration_start_keep_preprotects_before_job(tmp_path: Path
         await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
         result = await rb_api.legacy_migration_start(_user="admin", db=db)
         assert seen["decision_at_start"] == LEGACY_DECISION_SKIPPED
-        assert seen["protected"] is True
+        # Der Endpoint fasst den Schutz NICHT mehr an (start_legacy_migration verwaltet ihn).
+        assert protect_calls == []
         assert result == LEGACY_DECISION_SKIPPED
     finally:
         await db.disconnect()
@@ -1557,7 +1625,7 @@ async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp
         async def set_legacy_retention_protected(self, value: bool) -> None:
             protect_calls.append(value)
 
-        async def start_legacy_migration(self, *, on_success):
+        async def start_legacy_migration(self, *, on_success, on_failure=None):
             raise boom["exc"]
 
     rb = _Rb()
@@ -1575,7 +1643,7 @@ async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp
             await rb_api.legacy_migration_start(_user="admin", db=db)
         assert exc.value.status_code == 409
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
-        assert protect_calls == [True, False]
+        assert protect_calls == [False]
 
         # NICHT-OfflineMigrationError vor der Task-Erstellung (z. B. Manifest-Lesefehler) → durchgereicht,
         # aber keep + unprotected ebenfalls zurückgerollt.
@@ -1585,7 +1653,7 @@ async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp
         with pytest.raises(RuntimeError):
             await rb_api.legacy_migration_start(_user="admin", db=db)
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
-        assert protect_calls == [True, False]
+        assert protect_calls == [False]
 
         # Cancellation während der pre-task-Prechecks (#1010): erbt von BaseException, muss den
         # Rollback ebenfalls auslösen und dann sauber re-raisen (kein zementiertes keep→skipped).
@@ -1597,40 +1665,89 @@ async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp
         with pytest.raises(asyncio.CancelledError):
             await rb_api.legacy_migration_start(_user="admin", db=db)
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
-        assert protect_calls == [True, False]
+        assert protect_calls == [False]
     finally:
         await db.disconnect()
 
 
-async def test_legacy_migration_start_keep_rolls_back_on_prejob_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Wird der Request gecancelt ZWISCHEN dem pre-job keep→skipped-Write und ``start_legacy_migration``
-    (kein Job gestartet), muss der Rollback trotzdem greifen (#1010, RBViv): der pre-job-Write liegt jetzt
-    INNERHALB des try/except-Blocks, sodass ein Cancel an dieser Stelle keep+unprotected wiederherstellt."""
-    import asyncio
-
+async def test_legacy_migration_start_keep_restored_on_background_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Scheitert der Hintergrund-Lauf VOR dem Commit, wird die keep-Startentscheidung über den
+    ``on_failure``-Callback wiederhergestellt (#1010, RCOhx): der Endpoint stellt die Decision pre-job
+    nur auf ``skipped`` (ohne Protection), sodass ``start_legacy_migration`` den unprotected Vorzustand
+    erfasst; sein Background-Fehlerpfad rollt Protection zurück UND ruft ``on_failure`` → keep zurück."""
     import obs.api.v1.ringbuffer as rb_api
     from obs.db.database import Database
     from obs.ringbuffer.persisted_config import (
         LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_SKIPPED,
         load_legacy_migration_decision,
         persist_legacy_migration_decision,
     )
 
-    protect_calls: list[bool] = []
-    seen: dict[str, bool] = {"started": False}
+    seen: dict[str, object] = {}
 
     class _Rb:
         def legacy_migration_in_progress(self) -> bool:
             return False
 
         async def set_legacy_retention_protected(self, value: bool) -> None:
-            protect_calls.append(value)
-            if value is True:
-                # Cancel exakt im pre-job Protection-Update, VOR start_legacy_migration.
-                raise asyncio.CancelledError()
+            pass
 
-        async def start_legacy_migration(self, *, on_success):
-            seen["started"] = True
+        async def start_legacy_migration(self, *, on_success, on_failure=None):
+            # Decision beim Job-Start ist skipped; der Endpoint hat KEINE Protection gesetzt.
+            seen["decision_at_start"] = await load_legacy_migration_decision(seen["db"])
+            seen["on_failure"] = on_failure
+            # Background-Fehler VOR Commit simulieren: der reale _run ruft on_failure nach dem
+            # Protection-Rollback. Hier direkt aufrufen.
+            if on_failure is not None:
+                await on_failure()
+
+    rb = _Rb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _fake_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(rb_api, "_legacy_migration_status", _fake_status)
+
+    db = Database(":memory:")
+    await db.connect()
+    seen["db"] = db
+    try:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        result = await rb_api.legacy_migration_start(_user="admin", db=db)
+        assert seen["decision_at_start"] == LEGACY_DECISION_SKIPPED
+        assert seen["on_failure"] is not None, "on_failure muss bei keep-Start übergeben werden"
+        # Nach dem simulierten Background-Fehler ist die keep-Entscheidung wiederhergestellt.
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert result == LEGACY_DECISION_KEEP
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_start_no_on_failure_for_non_keep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Startet die Migration NICHT aus ``keep`` (z. B. ``skipped``), wird kein ``on_failure`` übergeben
+    (#1010, RCOhx): es gibt keine keep-Entscheidung, die wiederhergestellt werden müsste."""
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_SKIPPED,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    seen: dict[str, object] = {}
+
+    class _Rb:
+        def legacy_migration_in_progress(self) -> bool:
+            return False
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            pass
+
+        async def start_legacy_migration(self, *, on_success, on_failure=None):
+            seen["on_failure"] = on_failure
 
     rb = _Rb()
     monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
@@ -1644,12 +1761,9 @@ async def test_legacy_migration_start_keep_rolls_back_on_prejob_cancellation(tmp
     db = Database(":memory:")
     await db.connect()
     try:
-        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
-        with pytest.raises(asyncio.CancelledError):
-            await rb_api.legacy_migration_start(_user="admin", db=db)
-        assert seen["started"] is False, "der Job darf gar nicht gestartet worden sein"
-        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
-        assert protect_calls == [True, False]
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+        await rb_api.legacy_migration_start(_user="admin", db=db)
+        assert seen["on_failure"] is None
     finally:
         await db.disconnect()
 

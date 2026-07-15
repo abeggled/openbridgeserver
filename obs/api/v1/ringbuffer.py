@@ -2084,16 +2084,16 @@ async def _legacy_migration_decision_locked(body: LegacyMigrationDecisionIn, db:
         if rb is not None:
             await rb.set_legacy_retention_protected(True)
     elif body.decision == "keep":
-        # Hat eine Migration bereits die letzte Quelle entfernt (committed), aber die
-        # ``on_success``-Terminalisierung von ``migrated`` schlug fehl (app-DB locked/voll), stünde
-        # die Entscheidung noch non-terminal (#968, Q10j-). Ein ``keep`` würde sie zementieren.
-        # In genau diesem Fall (committed + keine Quelle mehr) direkt ``migrated`` terminalisieren
-        # statt keep zu persistieren. NICHT über ``finalize_committed_migration_decision`` gehen
-        # (#1010): der Finalizer respektiert einen bereits gespeicherten expliziten ``keep`` bewusst
-        # (Q0qIJ) und würde den exakt-stale Zustand (``keep`` + committed + keine Legacy, aus einem
-        # früher gescheiterten ``on_success``) nie reparieren – ein erneutes ``keep`` bliebe non-terminal.
-        # Sonst – solange eine Quelle da ist ODER nie migriert wurde – ist keep die normale, gewollte Wahl.
-        if rb is not None and await rb.has_committed_migration() and not await rb.has_attached_legacy():
+        # War die gespeicherte Entscheidung NON-TERMINAL (skipped/pending) und eine Migration hat bereits
+        # die letzte Quelle entfernt (committed), aber die ``migrated``-Terminalisierung schlug fehl
+        # (#968, Q10j-), dann ist ``committed`` + keine Legacy ein eindeutiger Beleg: die Migration ist
+        # durch, nur das Bookkeeping non-terminal → direkt ``migrated`` terminalisieren (NICHT über
+        # ``finalize_committed_migration_decision``, der einen keep bewusst respektiert, Q0qIJ).
+        # War die gespeicherte Entscheidung dagegen BEREITS ``keep`` (#1010, RCOh6), ist derselbe Zustand
+        # (``keep`` + committed + keine Legacy) MEHRDEUTIG: er entsteht sowohl aus einem gescheiterten
+        # ``on_success`` ALS AUCH aus einer bewusst ge-keepten Quelle, die die Retention danach
+        # zurückgewonnen hat. Wie der Finalizer nicht raten – einen bereits expliziten ``keep`` behalten.
+        if rb is not None and current != LEGACY_DECISION_KEEP and await rb.has_committed_migration() and not await rb.has_attached_legacy():
             await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
         else:
             await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
@@ -2182,18 +2182,33 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
             return
         await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
 
+    async def _restore_keep_on_failure() -> None:
+        # Background-Fehler VOR dem Commit (#1010, RCOhx): der Lauf ist gescheitert/gecancelt, nichts
+        # committet. ``start_legacy_migration`` hat den Retention-Schutz bereits auf den vor dem Job
+        # gemerkten (unprotected) Wert zurückgerollt – hier nur die pre-job auf ``skipped`` umgestellte
+        # Decision auf ``keep`` zurücksetzen, damit die bewusst ge-keepte Quelle nicht als skipped
+        # zementiert bleibt. Best-effort (der Aufrufer schluckt Fehler); der nächste Status-Poll/Retry
+        # korrigiert einen transienten Persistenzfehler.
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+
     try:
         # War die Start-Entscheidung ``keep`` (unprotected), die verbleibende(n) Quelle(n) VOR dem Job
-        # synchron auf ``skipped`` (protected) umstellen (#968, Q10kE): so muss der ``on_success``-Callback
-        # nach dem destruktiven Commit keinen fehlbaren keep→skipped-Write mehr machen (der bei app-DB-
-        # locked/voll nur geloggt würde und die verbleibende Quelle nach einem Restart ungeschützt ließe).
-        # INNERHALB des try (#1010, RBViv): ein Abbruch – auch ``asyncio.CancelledError`` – ZWISCHEN diesem
-        # Write und ``start_legacy_migration`` darf keep nicht als skipped/protected zementieren; der
-        # except-Handler stellt dann keep+unprotected wieder her. Läuft unter dem gehaltenen Decision-Lock.
+        # auf ``skipped`` umstellen (#968, Q10kE): so muss der ``on_success``-Callback nach dem
+        # destruktiven Commit keinen fehlbaren keep→skipped-Write mehr machen (der bei app-DB-locked/voll
+        # nur geloggt würde und die verbleibende Quelle nach einem Restart ungeschützt ließe). NUR die
+        # Decision umstellen, NICHT den Retention-Schutz (#1010, RCOhx): ``start_legacy_migration`` merkt
+        # sich den Schutz-Vorzustand direkt nach diesen Zeilen und aktiviert ihn selbst für die Job-Dauer.
+        # Würde hier protected=True gesetzt, erfasste es diesen Wert als ``prev_protected`` und rollte bei
+        # einem Background-Fehler VOR dem Commit fälschlich auf protected=True zurück statt auf die
+        # keep-Semantik (unprotected). INNERHALB des try (#1010, RBViv): ein Abbruch – auch
+        # ``asyncio.CancelledError`` – ZWISCHEN diesem Write und ``start_legacy_migration`` darf keep nicht
+        # als skipped zementieren; der except-Handler stellt keep wieder her.
         if current == LEGACY_DECISION_KEEP:
             await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
-            await rb.set_legacy_retention_protected(True)
-        await rb.start_legacy_migration(on_success=_persist_migrated)
+        await rb.start_legacy_migration(
+            on_success=_persist_migrated,
+            on_failure=_restore_keep_on_failure if current == LEGACY_DECISION_KEEP else None,
+        )
     except BaseException as exc:
         # JEDER Fehler aus ``start_legacy_migration`` bedeutet: keine Background-Task gestartet und
         # nichts committet (#1010) – der Aufruf wirft ausschließlich VOR ``create_task`` (Prechecks,
@@ -2202,10 +2217,10 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
         # Aufruf returnt normal). Deshalb den pre-job keep→skipped-Übergang bei ALLEN pre-task-Abbrüchen
         # zurückrollen – auch bei ``asyncio.CancelledError`` (Shutdown/Client-Cancel während der awaited
         # Prechecks; erbt von ``BaseException``, nicht ``Exception``), sonst zementiert ein nie gestarteter
-        # Migrate-Versuch die bewusste ``keep``-Entscheidung (unprotected) fälschlich in ``skipped``/
-        # protected. (Ein BACKGROUND-Fehler NACH erfolgreichem Start ist anders: dort lässt
-        # ``start_legacy_migration`` ``skipped``+protected konsistent bestehen – es rollt die Protection
-        # auf den vor dem Job gemerkten Wert, der jetzt korrekt protected=True ist.)
+        # Migrate-Versuch die bewusste ``keep``-Entscheidung fälschlich in ``skipped``. (Ein BACKGROUND-
+        # Fehler NACH erfolgreichem Start läuft dagegen über ``on_failure`` oben.) Der Schutz wird bei
+        # pre-task-Fehlern von ``start_legacy_migration`` selbst auf den unprotected Vorzustand gerollt;
+        # das ``set_legacy_retention_protected(False)`` hier ist nur eine idempotente Absicherung.
         if current == LEGACY_DECISION_KEEP:
             with suppress(Exception):
                 await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
