@@ -16,7 +16,7 @@ from tests.unit.conftest import edge, node
 
 def _manager() -> LogicManager:
     registry = MagicMock()
-    registry.get.return_value = object()
+    registry.get.return_value = SimpleNamespace(data_type="UNKNOWN")
     return LogicManager(AsyncMock(), AsyncMock(), registry)
 
 
@@ -65,6 +65,16 @@ def test_value_sequence_skips_missing_target() -> None:
     asyncio.run(manager._run_value_sequence("graph", "node", {"steps": [{"datapoint_id": str(uuid.uuid4()), "value": 1}]}))
 
     manager._event_bus.publish.assert_not_awaited()
+
+
+def test_value_sequence_coerces_text_editor_values_to_target_type() -> None:
+    manager = _manager()
+    target = uuid.uuid4()
+    manager._registry.get.return_value = SimpleNamespace(data_type="BOOLEAN")
+
+    asyncio.run(manager._run_value_sequence("graph", "node", {"steps": [{"datapoint_id": str(target), "value": "true"}]}))
+
+    assert manager._event_bus.publish.await_args.args[0].value is True
 
 
 def test_value_sequence_repeats_and_stops_when_condition_is_false() -> None:

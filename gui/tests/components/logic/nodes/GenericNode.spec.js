@@ -139,7 +139,7 @@ describe('GenericNode — summary', () => {
     await flushPromises()
     expect(w.find('.gn-summary').text()).toContain('2')
     expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')).toHaveLength(2)
-    expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')).toHaveLength(3)
+    expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')).toHaveLength(0)
   })
 
   it('shows decision rule count summary', async () => {

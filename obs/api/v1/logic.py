@@ -411,6 +411,16 @@ async def get_datapoint_logic_usages(
                 if not any(variable["datapoint_id"] == dp_id for variable in variables.values()):
                     continue
                 direction = "SOURCE"
+            elif node.type == "value_sequence":
+                steps = node.data.get("steps") or []
+                if isinstance(steps, str):
+                    try:
+                        steps = json.loads(steps)
+                    except json.JSONDecodeError:
+                        steps = []
+                if not isinstance(steps, list) or not any(isinstance(step, dict) and step.get("datapoint_id") == dp_id for step in steps):
+                    continue
+                direction = "DEST"
             else:
                 continue
             usages.append(

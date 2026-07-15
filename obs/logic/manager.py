@@ -752,7 +752,6 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
-        self._cancel_sequence_tasks()
         await self._load_graphs()
         self._start_cron_tasks()
 
@@ -775,6 +774,23 @@ class LogicManager:
                 raw = []
         return [step for step in raw if isinstance(step, dict)] if isinstance(raw, list) else []
 
+    @staticmethod
+    def _coerce_sequence_value(value: Any, data_type: str) -> Any:
+        if not isinstance(value, str):
+            return value
+        if data_type == "BOOLEAN":
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+            raise ValueError(f"invalid boolean value {value!r}")
+        if data_type == "INTEGER":
+            return int(value)
+        if data_type == "FLOAT":
+            return float(value)
+        return value
+
     async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
         """Publish configured writes without blocking the graph executor."""
         from obs.core.event_bus import DataValueEvent
@@ -785,6 +801,8 @@ class LogicManager:
             logger.warning("Value sequence graph=%s node=%s has no steps", graph_id[:8], node_id[:8])
             return
         mode = config.get("run_mode", "once")
+        if mode == "while_condition" and not self._sequence_conditions.get(key, True):
+            return
         try:
             repetitions = max(1, int(config.get("repeat_count") or 1)) if mode == "repeat_count" else 1
         except (TypeError, ValueError):
@@ -800,12 +818,13 @@ class LogicManager:
                     if target:
                         try:
                             datapoint_id = uuid.UUID(target)
-                            if self._registry.get(datapoint_id) is None:
+                            target_dp = self._registry.get(datapoint_id)
+                            if target_dp is None:
                                 raise ValueError("target object no longer exists")
                             await self._event_bus.publish(
                                 DataValueEvent(
                                     datapoint_id=datapoint_id,
-                                    value=step.get("value"),
+                                    value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
                                     quality="good",
                                     source_adapter="logic_sequence",
                                     logic_depth=logic_depth + 1,
@@ -2920,7 +2939,7 @@ class LogicManager:
             triggered = GraphExecutor._to_bool(output.get("_triggered"))
             was_triggered = state.get("sequence_prev_trigger", False)
             state["sequence_prev_trigger"] = triggered
-            if triggered and not was_triggered:
+            if triggered and (not was_triggered or node.id in cron_reachable):
                 self._start_value_sequence(graph_id, node, condition, logic_depth)
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,

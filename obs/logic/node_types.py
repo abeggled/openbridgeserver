@@ -632,7 +632,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         category="timer",
         description="Schreibt eine Folge von Werten mit konfigurierbaren Pausen.",
         inputs=[_port("trigger", "Trigger", "trigger"), _port("condition", "Bedingung")],
-        outputs=[_port("running", "Läuft"), _port("done", "Fertig", "trigger"), _port("cancelled", "Abgebrochen", "trigger")],
+        outputs=[],
         config_schema={
             "run_mode": {"type": "string", "enum": ["once", "repeat_count", "while_condition"], "default": "once"},
             "repeat_count": {"type": "number", "default": 2, "min": 1},
