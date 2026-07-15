@@ -927,6 +927,38 @@ class TestGetDatapointLogicUsages:
         assert result[0].direction == "DEST"
 
     @pytest.mark.asyncio
+    async def test_finds_value_sequence_target_usage(self):
+        from obs.api.v1.logic import get_datapoint_logic_usages
+
+        from obs.logic.models import FlowData, LogicNode, NodePosition
+
+        dp_id = str(uuid.uuid4())
+        node = LogicNode(
+            id="n1",
+            type="value_sequence",
+            position=NodePosition(x=0, y=0),
+            data={"steps": [{"datapoint_id": dp_id, "value": "on"}]},
+        )
+        row = _make_graph_row(name="G", flow_data=FlowData(nodes=[node]).model_dump_json())
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=_DbStub(rows=[row]))
+
+        assert len(result) == 1
+        assert result[0].node_type == "value_sequence"
+        assert result[0].direction == "DEST"
+
+    @pytest.mark.asyncio
+    async def test_ignores_invalid_or_unrelated_sequence_steps(self):
+        from obs.api.v1.logic import get_datapoint_logic_usages
+
+        from obs.logic.models import FlowData, LogicNode, NodePosition
+
+        dp_id = str(uuid.uuid4())
+        node = LogicNode(id="n1", type="value_sequence", position=NodePosition(x=0, y=0), data={"steps": "not json"})
+        row = _make_graph_row(name="G", flow_data=FlowData(nodes=[node]).model_dump_json())
+
+        assert await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=_DbStub(rows=[row])) == []
+
+    @pytest.mark.asyncio
     async def test_ignores_other_node_types(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
 
