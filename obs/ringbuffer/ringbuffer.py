@@ -1273,21 +1273,13 @@ class RingBuffer:
             return True
         return (self._legacy_migration_progress or {}).get("phase") in ("starting", "precheck", "copying", "committing")
 
-    async def start_legacy_migration(self, *, on_success=None, on_failure=None) -> dict[str, Any]:
+    async def start_legacy_migration(self, *, on_success=None) -> dict[str, Any]:
         """Startet den budget-gebundenen Offline-Migrationsjob (#965) als Hintergrund-Task.
 
         Genau EIN Lauf gleichzeitig. Der Job setzt das Legacy-Segment für seine
         Laufzeit unter Retention-Schutz (die Quelle muss bis zum Commit autoritativ
         bleiben). ``on_success`` (optional, async) läuft nach erfolgreichem Commit –
         die API persistiert darüber die Entscheidung ``migrated``.
-
-        ``on_failure`` (optional, async) läuft best-effort, wenn der Hintergrund-Lauf
-        VOR dem Commit scheitert oder gecancelt wird und der Retention-Schutz auf den
-        vor dem Job gemerkten Wert zurückgerollt wird (#1010, RCOhx). Die API stellt
-        darüber eine ``keep``-Startentscheidung wieder her, deren pre-job-Umstellung auf
-        ``skipped`` durch den nie abgeschlossenen Lauf hinfällig wird. Läuft NICHT nach
-        einem erfolgreichen Commit und NICHT im Post-Unlink-Recovery-Fenster (dort bleibt
-        der Schutz und der Reconciler übernimmt).
         """
         from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator, OfflineMigrationError
 
@@ -1403,9 +1395,6 @@ class RingBuffer:
                 # ungeschütztes Opfer und der Reconciler verwürfe die recoverbaren Kopien als orphan.
                 if not progress.get("legacy_unlinked"):
                     await self.set_legacy_retention_protected(prev_protected)
-                    if on_failure is not None:
-                        with suppress(Exception):
-                            await on_failure()
                 progress.update(phase="failed", error="cancelled")
                 raise
             except Exception as exc:
@@ -1415,9 +1404,6 @@ class RingBuffer:
                 # überleben und nicht von der Retention gelöscht werden.
                 if not progress.get("legacy_unlinked"):
                     await self.set_legacy_retention_protected(prev_protected)
-                    if on_failure is not None:
-                        with suppress(Exception):
-                            await on_failure()
                 progress.update(phase="failed", error=str(exc))
                 return
             # Ein Fehler im Post-Commit-Bookkeeping (Schutz-Update / ``on_success``-Persistenz,
