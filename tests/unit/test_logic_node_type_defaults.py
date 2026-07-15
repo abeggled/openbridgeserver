@@ -27,3 +27,8 @@ def test_value_mapping_default_rules_do_not_persist_localized_names():
         {"operator": "eq", "result": ""},
         {"operator": "eq", "result": ""},
     ]
+
+
+def test_timer_durations_are_non_negative():
+    assert _node_type("timer_delay").config_schema["delay_s"]["min"] == 0
+    assert _node_type("timer_pulse").config_schema["duration_s"]["min"] == 0
