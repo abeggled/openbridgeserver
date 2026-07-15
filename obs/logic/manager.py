@@ -753,6 +753,13 @@ class LogicManager:
             task.cancel()
         self._cron_tasks.clear()
         await self._load_graphs()
+        # A config import/reset can remove graphs without first calling
+        # invalidate_cache().  Cancel only sequences whose graph no longer
+        # exists or is disabled; unrelated live graphs keep running.
+        for graph_id, _node_id in list(self._sequence_tasks):
+            entry = self._graphs.get(graph_id)
+            if entry is None or not entry[1]:
+                self._cancel_sequence_tasks(graph_id)
         self._start_cron_tasks()
 
     # ── App Config ────────────────────────────────────────────────────────
@@ -2945,7 +2952,10 @@ class LogicManager:
             triggered = GraphExecutor._to_bool(output.get("_triggered"))
             was_triggered = state.get("sequence_prev_trigger", False)
             state["sequence_prev_trigger"] = triggered
-            if triggered and (not was_triggered or node.id in cron_reachable):
+            cron_triggered = any(
+                edge.target == node.id and (edge.targetHandle or "in") == "trigger" and edge.source in cron_reachable for edge in flow.edges
+            )
+            if triggered and (not was_triggered or cron_triggered):
                 self._start_value_sequence(graph_id, node, condition, logic_depth)
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
