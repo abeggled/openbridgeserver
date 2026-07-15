@@ -15,7 +15,7 @@ afterEach(() => {
   vi.doUnmock('@/api/client')
 })
 
-async function mountTimer(type, key) {
+async function mountPanel(type, data, configSchema) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const { useAuthStore } = await import('@/stores/auth')
@@ -24,11 +24,11 @@ async function mountTimer(type, key) {
   const mod = await import('@/components/logic/NodeConfigPanel.vue')
   return mount(mod.default, {
     props: {
-      node: { id: 'timer1', type, data: { [key]: 1 } },
+      node: { id: 'node1', type, data },
       nodeTypes: [{
         type,
         label: type,
-        config_schema: { [key]: { type: 'number', default: 1, min: 0 } },
+        config_schema: configSchema,
       }],
       nodeOutputs: {},
     },
@@ -42,7 +42,9 @@ describe('NodeConfigPanel timer durations', () => {
     ['timer_delay', 'delay_s'],
     ['timer_pulse', 'duration_s'],
   ])('disallows negative values for %s', async (type, key) => {
-    const wrapper = await mountTimer(type, key)
+    const wrapper = await mountPanel(type, { [key]: 1 }, {
+      [key]: { type: 'number', default: 1, min: 0 },
+    })
     await flushPromises()
 
     const input = wrapper.find('input[type="number"]')
@@ -51,6 +53,36 @@ describe('NodeConfigPanel timer durations', () => {
     await input.setValue(-1)
     await input.trigger('change')
     expect(wrapper.emitted('update').at(-1)[0][key]).toBe(0)
+
+    wrapper.unmount()
+  })
+
+  it('clamps an upper bound declared with the JSON Schema alias', async () => {
+    const wrapper = await mountPanel('bounded_number', { value: 1 }, {
+      value: { type: 'number', default: 1, minimum: 0, maximum: 3 },
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="number"]')
+    expect(input.attributes('min')).toBe('0')
+    expect(input.attributes('max')).toBe('3')
+    await input.setValue(4)
+    await input.trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].value).toBe(3)
+
+    wrapper.unmount()
+  })
+
+  it('preserves a cleared numeric value', async () => {
+    const wrapper = await mountPanel('timer_delay', { delay_s: 1 }, {
+      delay_s: { type: 'number', default: 1, min: 0 },
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="number"]')
+    await input.setValue('')
+    await input.trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].delay_s).toBe('')
 
     wrapper.unmount()
   })

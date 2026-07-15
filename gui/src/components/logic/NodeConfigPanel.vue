@@ -2267,7 +2267,13 @@ function onSchemaFieldChange(key, schema) {
 }
 
 function emitBoundedUpdate(key, schema) {
-  const value = Number(localData.value[key])
+  const rawValue = localData.value[key]
+  if (rawValue === '' || rawValue === null || rawValue === undefined) {
+    emitUpdate()
+    return
+  }
+
+  const value = Number(rawValue)
   if (Number.isFinite(value)) {
     const minimum = schema.min ?? schema.minimum
     const maximum = schema.max ?? schema.maximum
