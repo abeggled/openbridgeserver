@@ -1602,6 +1602,58 @@ async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp
         await db.disconnect()
 
 
+async def test_legacy_migration_start_keep_rolls_back_on_prejob_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Wird der Request gecancelt ZWISCHEN dem pre-job keep→skipped-Write und ``start_legacy_migration``
+    (kein Job gestartet), muss der Rollback trotzdem greifen (#1010, RBViv): der pre-job-Write liegt jetzt
+    INNERHALB des try/except-Blocks, sodass ein Cancel an dieser Stelle keep+unprotected wiederherstellt."""
+    import asyncio
+
+    import obs.api.v1.ringbuffer as rb_api
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    protect_calls: list[bool] = []
+    seen: dict[str, bool] = {"started": False}
+
+    class _Rb:
+        def legacy_migration_in_progress(self) -> bool:
+            return False
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            protect_calls.append(value)
+            if value is True:
+                # Cancel exakt im pre-job Protection-Update, VOR start_legacy_migration.
+                raise asyncio.CancelledError()
+
+        async def start_legacy_migration(self, *, on_success):
+            seen["started"] = True
+
+    rb = _Rb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _fake_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(rb_api, "_legacy_migration_status", _fake_status)
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        with pytest.raises(asyncio.CancelledError):
+            await rb_api.legacy_migration_start(_user="admin", db=db)
+        assert seen["started"] is False, "der Job darf gar nicht gestartet worden sein"
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert protect_calls == [True, False]
+    finally:
+        await db.disconnect()
+
+
 async def test_resolve_cutoff_rowid_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Rand-Fälle der id-geordneten Cutoff-Ableitung (#968, Codex :156): nichts kopieren,
     mehr als vorhanden kopieren, N-te-neueste id, und unlesbare Quelle."""

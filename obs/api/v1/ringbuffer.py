@@ -2165,16 +2165,6 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
     if rb is None or not is_ringbuffer_enabled():
         raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running")
 
-    # War die Start-Entscheidung ``keep`` (unprotected), die verbleibende(n) Quelle(n) VOR dem Job
-    # synchron auf ``skipped`` (protected) umstellen (#968, Q10kE): so muss der ``on_success``-
-    # Callback nach dem destruktiven Commit keinen fehlbaren keep→skipped-Write mehr machen (der bei
-    # app-DB-locked/voll nur geloggt würde und die verbleibende Quelle nach einem Restart ungeschützt
-    # ließe). Schlägt dieser Write hier fehl, bricht der Start ab, BEVOR etwas committed ist – der
-    # Zustand bleibt konsistent ``keep`` und der Admin retryt. Läuft unter dem gehaltenen Decision-Lock.
-    if current == LEGACY_DECISION_KEEP:
-        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
-        await rb.set_legacy_retention_protected(True)
-
     async def _persist_migrated() -> None:
         # Nur terminal ``migrated``, wenn KEINE Legacy-Quelle mehr attached ist (#968,
         # Codex :441/:2142): bei mehreren attachten Legacy-DBs behandelt EIN Lauf nur die
@@ -2193,6 +2183,16 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
         await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
 
     try:
+        # War die Start-Entscheidung ``keep`` (unprotected), die verbleibende(n) Quelle(n) VOR dem Job
+        # synchron auf ``skipped`` (protected) umstellen (#968, Q10kE): so muss der ``on_success``-Callback
+        # nach dem destruktiven Commit keinen fehlbaren keep→skipped-Write mehr machen (der bei app-DB-
+        # locked/voll nur geloggt würde und die verbleibende Quelle nach einem Restart ungeschützt ließe).
+        # INNERHALB des try (#1010, RBViv): ein Abbruch – auch ``asyncio.CancelledError`` – ZWISCHEN diesem
+        # Write und ``start_legacy_migration`` darf keep nicht als skipped/protected zementieren; der
+        # except-Handler stellt dann keep+unprotected wieder her. Läuft unter dem gehaltenen Decision-Lock.
+        if current == LEGACY_DECISION_KEEP:
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+            await rb.set_legacy_retention_protected(True)
         await rb.start_legacy_migration(on_success=_persist_migrated)
     except BaseException as exc:
         # JEDER Fehler aus ``start_legacy_migration`` bedeutet: keine Background-Task gestartet und
