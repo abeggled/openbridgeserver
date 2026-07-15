@@ -50,4 +50,14 @@ describe('NodeConfigPanel value sequence', () => {
     expect(update.steps[0]).toMatchObject({ datapoint_id: 'dp-1', datapoint_name: 'Lamp', value: true, delay_ms: 500 })
     w.unmount()
   })
+
+  it('keeps a sequence object search query visible while results update', async () => {
+    const w = await mountPanel({ steps: [{ datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }] })
+    const input = w.get('[data-testid="sequence-step-0"]').find('input')
+    await input.setValue('Lamp')
+    await flushPromises()
+    expect(input.element.value).toBe('Lamp')
+    expect(search).toHaveBeenCalledWith({ q: 'Lamp', size: 50 })
+    w.unmount()
+  })
 })

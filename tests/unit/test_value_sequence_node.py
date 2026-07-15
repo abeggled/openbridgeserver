@@ -77,6 +77,19 @@ def test_value_sequence_coerces_text_editor_values_to_target_type() -> None:
     assert manager._event_bus.publish.await_args.args[0].value is True
 
 
+def test_value_sequence_coercion_supports_numbers_and_rejects_invalid_booleans() -> None:
+    manager = _manager()
+    assert manager._coerce_sequence_value("12", "INTEGER") == 12
+    assert manager._coerce_sequence_value("1.5", "FLOAT") == 1.5
+    assert manager._coerce_sequence_value("text", "STRING") == "text"
+    try:
+        manager._coerce_sequence_value("perhaps", "BOOLEAN")
+    except ValueError as exc:
+        assert "invalid boolean" in str(exc)
+    else:
+        raise AssertionError("invalid boolean must be rejected")
+
+
 def test_value_sequence_repeats_and_stops_when_condition_is_false() -> None:
     manager = _manager()
     target = uuid.uuid4()
@@ -243,5 +256,20 @@ def test_value_sequence_ignores_a_trigger_while_already_running() -> None:
         assert manager._sequence_tasks[("graph", "node")] is original
         manager._cancel_sequence_tasks()
         await asyncio.gather(original, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_datapoint_rename_updates_sequence_step_labels() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        dp_id = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {"nodes": [node("sequence", "value_sequence", {"steps": [{"datapoint_id": str(dp_id), "datapoint_name": "Old"}]})], "edges": []},
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        await manager._on_datapoint_renamed(SimpleNamespace(dp_id=dp_id, old_name="Old", new_name="New"))
+        assert flow.nodes[0].data["steps"][0]["datapoint_name"] == "New"
+        manager._db.execute_and_commit.assert_awaited_once()
 
     asyncio.run(exercise())
