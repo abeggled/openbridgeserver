@@ -308,10 +308,10 @@
         </div>
         <label class="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><input v-model="localData.cancel_when_condition_false" type="checkbox" @change="emitUpdate" />{{ $t('logic.nodeConfig.value_sequence.cancel_when_condition_false') }}</label>
         <div class="flex gap-2">
-          <button type="button" class="btn-secondary btn-sm" @click="addSequenceStep">{{ $t('logic.nodeConfig.value_sequence.add') }}</button>
-          <button type="button" class="btn-secondary btn-sm" @click="applySequencePreset">{{ $t('logic.nodeConfig.value_sequence.blink') }}</button>
+          <button type="button" class="btn-secondary btn-sm" data-testid="sequence-add" @click="addSequenceStep">{{ $t('logic.nodeConfig.value_sequence.add') }}</button>
+          <button type="button" class="btn-secondary btn-sm" data-testid="sequence-blink" @click="applySequencePreset">{{ $t('logic.nodeConfig.value_sequence.blink') }}</button>
         </div>
-        <div v-for="(step, index) in sequenceSteps" :key="index" class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2">
+        <div v-for="(step, index) in sequenceSteps" :key="index" class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2" :data-testid="`sequence-step-${index}`">
           <div class="flex justify-between items-center"><span class="text-xs font-semibold text-amber-400">{{ $t('logic.nodeConfig.value_sequence.step', { n: index + 1 }) }}</span><div class="flex gap-2"><button class="text-xs" @click="moveSequenceStep(index, -1)">↑</button><button class="text-xs" @click="moveSequenceStep(index, 1)">↓</button><button class="text-xs text-teal-400" @click="duplicateSequenceStep(index)">{{ $t('logic.nodeConfig.value_sequence.duplicate') }}</button><button class="text-xs text-red-400" @click="removeSequenceStep(index)">×</button></div></div>
           <input :value="step.datapoint_name" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="searchSequenceDps(index, $event.target.value)" />
           <div v-if="sequenceDpResults[index]?.length" class="max-h-24 overflow-y-auto border border-slate-700 rounded">

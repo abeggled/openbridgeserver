@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from obs.logic.manager import LogicManager
@@ -49,3 +50,64 @@ def test_value_sequence_skips_missing_target() -> None:
     asyncio.run(manager._run_value_sequence("graph", "node", {"steps": [{"datapoint_id": str(uuid.uuid4()), "value": 1}]}))
 
     manager._event_bus.publish.assert_not_awaited()
+
+
+def test_value_sequence_repeats_and_stops_when_condition_is_false() -> None:
+    manager = _manager()
+    target = uuid.uuid4()
+
+    asyncio.run(
+        manager._run_value_sequence(
+            "graph",
+            "node",
+            {
+                "run_mode": "repeat_count",
+                "repeat_count": 2,
+                "steps": [{"datapoint_id": str(target), "value": 1}],
+            },
+        ),
+    )
+    assert manager._event_bus.publish.await_count == 2
+
+    manager._event_bus.publish.reset_mock()
+    manager._sequence_conditions[("graph", "cancelled")] = False
+    asyncio.run(
+        manager._run_value_sequence(
+            "graph",
+            "cancelled",
+            {
+                "cancel_when_condition_false": True,
+                "steps": [{"datapoint_id": str(target), "value": 1}],
+            },
+        ),
+    )
+    manager._event_bus.publish.assert_not_awaited()
+
+
+def test_value_sequence_restart_and_queue_policies() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        node = SimpleNamespace(
+            id="node",
+            data={
+                "restart_policy": "restart",
+                "steps": [{"datapoint_id": str(target), "value": 1, "delay_ms": 10}],
+            },
+        )
+        manager._start_value_sequence("graph", node, True)
+        original = manager._sequence_tasks[("graph", "node")]
+        manager._start_value_sequence("graph", node, True)
+        restarted = manager._sequence_tasks[("graph", "node")]
+        assert restarted is not original
+        await restarted
+
+        node.data["restart_policy"] = "queue"
+        manager._start_value_sequence("graph", node, True)
+        manager._start_value_sequence("graph", node, True)
+        assert manager._sequence_queues[("graph", "node")] == 1
+        await manager._sequence_tasks[("graph", "node")]
+        await manager._sequence_tasks[("graph", "node")]
+        assert manager._event_bus.publish.await_count == 3
+
+    asyncio.run(exercise())
