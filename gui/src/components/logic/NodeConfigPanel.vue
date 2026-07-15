@@ -2092,6 +2092,7 @@ function onExtractorPathSelect(e) {
     activeExtractorRow.value = 0
   }
   e.target.value = ''
+  activeExtractorRow.value = null
 }
 
 function onExtractorPathBlur(e) {
