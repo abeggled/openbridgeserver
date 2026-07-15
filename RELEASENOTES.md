@@ -7,6 +7,7 @@
 ### New features ✨
 
 ### Fixes 🐞
+* Logic engine: JSON Extractor path selection now assigns the chosen path to the selected output instead of incorrectly overwriting the last output. https://github.com/abeggled/openbridgeserver/issues/980
 
 ### Known Issues 🔔
 * none

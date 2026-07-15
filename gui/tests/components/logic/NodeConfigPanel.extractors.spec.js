@@ -297,6 +297,30 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
     w.unmount()
   })
 
+  it('keeps the selected row when it loses focus to the path picker', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    await inputs[0].trigger('focus')
+    await inputs[0].trigger('blur')
+
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await pathSelect.setValue('temperature')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('temperature')
+    expect(updated[1].path).toBe('')
+    w.unmount()
+  })
+
   it('selecting a path when no rows exist creates a new row', async () => {
     const nodeOutputs = { n1: { _preview: '{"humidity": 60}' } }
     const w = await mountPanel('json_extractor', { json_paths: '[]' }, nodeOutputs)
