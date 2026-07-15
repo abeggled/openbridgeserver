@@ -905,7 +905,12 @@
       "widget": "Widget (Name)",
       "selectWidget": "— Widget wählen —",
       "noNamedWidgets": "— keine benannten Widgets —",
-      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben."
+      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben.",
+      "reference": "Referenz",
+      "selectReference": "Referenz wählen …",
+      "noReference": "Keine Referenz",
+      "sourceUnavailable": "Quell-Seite nicht erreichbar",
+      "widgetNotFound": "Widget „{name}“ nicht gefunden"
     },
     "zeitschaltuhr": {
       "title": "Zeitschaltuhr",
@@ -987,6 +992,55 @@
     },
     "horizontalbar": {
       "title": "Balkenanzeige"
+    },
+    "messageArchive": {
+      "title": "Meldungsarchiv",
+      "archives": "Archive",
+      "loadArchivesError": "Archive konnten nicht geladen werden.",
+      "loadError": "Meldungen konnten nicht geladen werden.",
+      "limit": "Anzahl Einträge",
+      "severity": "Schweregrad",
+      "status": "Status",
+      "allArchives": "Alle Archive",
+      "allSeverities": "Alle Schweregrade",
+      "allStatuses": "Alle Status",
+      "allTypes": "Alle Typen",
+      "allSources": "Alle Quellen",
+      "clearFilter": "Filter zurücksetzen",
+      "selectedCount": "{count} ausgewählt",
+      "noSources": "Keine Quellen gefunden",
+      "type": "Typ",
+      "source": "Quelle",
+      "showArchive": "Archiv anzeigen",
+      "showSource": "Quelle anzeigen",
+      "allowRead": "Als gelesen markieren erlauben",
+      "allowAcknowledge": "Quittieren erlauben",
+      "refresh": "Aktualisieren",
+      "empty": "Keine Meldungen",
+      "unread": "neu",
+      "markRead": "Gelesen",
+      "acknowledge": "Quittieren",
+      "statuses": {
+        "new": "Neu",
+        "open": "Offen",
+        "acknowledged": "Quittiert",
+        "closed": "Geschlossen"
+      },
+      "types": {
+        "system": "System",
+        "security": "Sicherheit",
+        "notification": "Benachrichtigung",
+        "automation": "Automatisierung",
+        "adapter": "Adapter",
+        "diagnostic": "Diagnose"
+      },
+      "severities": {
+        "info": "Info",
+        "success": "Erfolg",
+        "warning": "Warnung",
+        "error": "Fehler",
+        "critical": "Kritisch"
+      }
     },
     "missing": {
       "title": "Unbekannt",

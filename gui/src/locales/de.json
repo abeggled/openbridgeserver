@@ -6,12 +6,16 @@
     "knxDevices": "KNX-Geräte",
     "history": "Historie",
     "ringbuffer": "Monitor",
+    "messageArchives": "Meldungsarchive",
     "logs": "Logs",
     "logic": "Logikmodul",
     "settings": "Einstellungen",
     "visu": "Visu"
   },
   "sidebar": {
+    "productName": "open bridge server",
+    "adapterWarningsTitle": "{label} — {count} Warnung(en)",
+    "visu": "Visu",
     "liveConnected": "Live verbunden",
     "disconnected": "Getrennt",
     "live": "Live",
@@ -595,6 +599,13 @@
       "messageTemplateLabel": "Nachrichtenvorlage",
       "targetsLabel": "Ziele",
       "addTarget": "Ziel hinzufügen",
+      "messageArchiveStrategyLabel": "Aktion",
+      "messageArchiveStrategyNone": "Deaktiviert",
+      "messageArchiveStrategySendOnly": "Nur senden",
+      "messageArchiveStrategySendAndArchive": "Senden und archivieren",
+      "messageArchiveStrategyArchiveOnly": "Nur archivieren",
+      "messageArchiveLabel": "Meldungsarchiv",
+      "messageArchivePlaceholder": "Meldungsarchiv auswählen",
       "messageSendOnChange": "Nur beim Wechsel in den erfüllten Zustand senden",
       "snmpHostLabel": "Gerät (IP/DNS) *",
       "snmpHostPlaceholder": "z.B. 192.168.1.100 oder switch.local",
@@ -1035,6 +1046,7 @@
       "knxTunnelStable": "Tunnel-Pool wieder stabil.",
       "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
       "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
+      "messageArchiveWriteFailed": "Meldungsarchiv konnte nicht geschrieben werden",
       "messageSent": "MESSAGE gesendet"
     },
     "testResult": {
@@ -1483,6 +1495,7 @@
       "astro_sun": "Astro Sonne",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "message_archive": "Meldungsarchiv",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
       "json_extractor": "JSON Extraktor",
@@ -1569,6 +1582,7 @@
       "body": "Body",
       "done": "Fertig",
       "sent": "Gesendet",
+      "stored": "Gespeichert",
       "active": "Aktiv",
       "reset": "Reset",
       "message": "Nachricht",
@@ -2012,6 +2026,17 @@
         "sender": "Absender (max 11 Zeichen)",
         "message": "Nachricht (Fallback)"
       },
+      "messageArchive": {
+        "archive": "Meldungsarchiv",
+        "selectArchive": "Meldungsarchiv auswählen",
+        "missingArchive": "Meldungsarchiv nicht gefunden",
+        "type": "Meldungstyp",
+        "severity": "Schweregrad",
+        "title": "Titel (Fallback)",
+        "titlePlaceholder": "Optional, kann über Eingang überschrieben werden",
+        "message": "Nachricht (Fallback)",
+        "messagePlaceholder": "Wird verwendet, wenn kein Nachricht-Eingang verbunden ist"
+      },
       "host_check": {
         "host": "Host / IP-Adresse",
         "hostPlaceholder": "z.B. 192.168.1.1 oder hostname.local",
@@ -2082,6 +2107,7 @@
       "sunset": "Untergang",
       "isDay": "Tagsüber",
       "urlTitle": "URL-Titel",
+      "title": "Titel",
       "imageUrl": "Bild-URL",
       "avgNow": "∅ aktuell",
       "avg1m": "∅ 1 min",
@@ -2151,6 +2177,7 @@
       "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
+      "message_archive": "Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
       "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
       "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird bei steigender Flanke am Trigger-Eingang ausgeführt. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
       "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
@@ -2384,6 +2411,14 @@
       "dbImportWarning2": "Die Historiendaten werden durch den Inhalt der hochgeladenen Datei ersetzt",
       "dbImportWarning3": "Adapter und Logik-Engine werden nach dem Restore neu gestartet",
       "dbImportWarning4": "Nicht in der Sicherung enthaltene Daten gehen verloren",
+      "messageArchiveDbExportTitle": "Meldungsarchiv sichern (download)",
+      "messageArchiveDbExportDesc": "Die separate SQLite-Datenbank der Meldungsarchive als Datei sichern.",
+      "messageArchiveDbExportButton": "Meldungsarchiv-SQLite herunterladen",
+      "messageArchiveDbImportTitle": "Meldungsarchiv wiederherstellen (upload)",
+      "messageArchiveDbImportDesc": "SQLite-Datenbankdatei der Meldungsarchive hochladen und einspielen.",
+      "messageArchiveDbImportWarning": "⚠ Achtung — diese Aktion überschreibt alle aktuellen Meldungsarchive!",
+      "messageArchiveDbImportWarning1": "Alle aktuellen Meldungsarchive und Meldungen werden ersetzt",
+      "messageArchiveDbImportWarning2": "Die OBS-Konfigurationsdatenbank bleibt unverändert",
       "autobackupTitle": "Autobackup",
       "autobackupDesc": "Täglich automatische JSON-Sicherung aller Konfigurationsdaten (Adapter, Objekte, Logikmodul, Visu, Icons usw.). Die Sicherungen werden lokal im Datenverzeichnis gespeichert.",
       "autobackupEnable": "Autobackup aktivieren",
@@ -2451,7 +2486,9 @@
       "error_NO_GROUP_ADDRESSES": "Keine Gruppenadressen gefunden. Bitte das richtige ETS-Projekt exportieren.",
       "error_PARSE_ERROR": "Fehler beim Parsen der .knxproj-Datei.",
       "dbImportResultOk": "Datenbankwiederherstellung OK: {message} ({adapters} Adapter neu gestartet). Bitte Seite neu laden.",
-      "dbImportFailed": "Datenbankwiederherstellung fehlgeschlagen"
+      "dbImportFailed": "Datenbankwiederherstellung fehlgeschlagen",
+      "messageArchiveDbImportResultOk": "Meldungsarchiv-Wiederherstellung OK: {message}",
+      "messageArchiveDbImportFailed": "Meldungsarchiv-Wiederherstellung fehlgeschlagen"
     },
     "history": {
       "dbTitle": "Historie DB",
@@ -2789,5 +2826,73 @@
   },
   "topbar": {
     "logout": "Abmelden"
+  },
+  "messageArchives": {
+    "title": "Meldungsarchive",
+    "subtitle": "Administrative Verwaltung der separaten Archiv-Datenbank",
+    "newArchive": "Neues Archiv",
+    "archives": "Archive",
+    "noArchives": "Keine Archive vorhanden",
+    "loadError": "Meldungsarchive konnten nicht geladen werden",
+    "selectArchive": "Archiv auswählen oder neu erstellen.",
+    "dbPath": "Archiv-DB",
+    "integrityCheck": "Integrität prüfen",
+    "integrityResult": "Integritätsprüfung",
+    "exportJsonl": "JSONL exportieren",
+    "exportCsv": "CSV exportieren",
+    "clear": "Leeren",
+    "refresh": "Aktualisieren",
+    "entries": "Einträge",
+    "noEntries": "Keine Meldungen gefunden",
+    "confirmClear": "{count} Einträge endgültig aus diesem Archiv löschen?",
+    "confirmDelete": "Archiv und {count} Einträge endgültig löschen?",
+    "form": {
+      "id": "Archiv-ID",
+      "name": "Name",
+      "description": "Beschreibung",
+      "defaultType": "Standard-Meldungstyp",
+      "defaultTypeNone": "Kein Standard",
+      "defaultTypeCustom": "Benutzerdefiniert …",
+      "defaultTypeCustomPlaceholder": "z.B. maintenance",
+      "defaultTypeHint": "Optionaler Default für neue Einträge, z.B. system, security oder notification.",
+      "color": "Farbe",
+      "maxEntries": "Maximale Einträge",
+      "maxAgeDays": "Maximales Alter (Tage)"
+    },
+    "filters": {
+      "search": "Titel oder Text suchen …",
+      "allSeverities": "Alle Schweregrade",
+      "allStatuses": "Alle Status",
+      "allTypes": "Alle Typen"
+    },
+    "table": {
+      "time": "Zeit",
+      "message": "Meldung",
+      "type": "Typ",
+      "severity": "Schweregrad",
+      "status": "Status",
+      "source": "Quelle"
+    },
+    "types": {
+      "system": "System",
+      "security": "Sicherheit",
+      "notification": "Benachrichtigung",
+      "automation": "Automatisierung",
+      "adapter": "Adapter",
+      "diagnostic": "Diagnose"
+    },
+    "severities": {
+      "info": "Info",
+      "success": "Erfolg",
+      "warning": "Warnung",
+      "error": "Fehler",
+      "critical": "Kritisch"
+    },
+    "statuses": {
+      "new": "Neu",
+      "open": "Offen",
+      "acknowledged": "Quittiert",
+      "closed": "Geschlossen"
+    }
   }
 }

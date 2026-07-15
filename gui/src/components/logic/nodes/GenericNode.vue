@@ -130,6 +130,7 @@ const NODE_DEFS = computed(() => ({
   // Notification
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
+  message_archive:    { label: t('logic.nodeTypes.message_archive'), color: '#2563eb', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'title',label:t('logic.portLabels.title')}], outputs: [{id:'stored', label:t('logic.ports.stored')}] },
   wake_on_lan:        { label: 'Wake on LAN',    color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                              outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   host_check:         { label: t('logic.nodeTypes.host_check'), color: '#0369a1', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                              outputs: [{id:'reachable',label:t('logic.portLabels.reachable')},{id:'latency_ms',label:t('logic.portLabels.latencyMs')}] },
   // Math — avg_multi (dynamic inputs, fixed outputs)

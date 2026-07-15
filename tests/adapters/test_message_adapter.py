@@ -23,6 +23,7 @@ from obs.adapters.message.providers.registry import register_provider
 from obs.adapters.message.providers.sevenio import SevenIoProvider
 from obs.adapters.message.providers.telegram import TelegramProvider
 from obs.core.event_bus import DataValueEvent
+from obs.message_archive import EntryQuery, MessageArchiveService, MessageArchiveStore
 from tests.adapters.conftest import make_binding
 
 
@@ -178,6 +179,16 @@ def test_enabled_binding_requires_message_target():
     cfg = MessageBindingConfig(enabled=False, providers=[])
 
     assert cfg.enabled is False
+
+
+def test_archive_only_binding_requires_archive_but_no_provider_target():
+    with pytest.raises(ValueError, match="archive_id"):
+        MessageBindingConfig(providers=[], archive_strategy="archive_only")
+
+    cfg = MessageBindingConfig(providers=[], archive_strategy="archive_only", archive_id="notifications")
+
+    assert cfg.archive_strategy == "archive_only"
+    assert cfg.archive_id == "notifications"
 
 
 def test_binding_rejects_blank_message_body():
@@ -586,6 +597,125 @@ async def test_write_path_sends_message_to_provider(bus, dummy_provider, monkeyp
 
     dummy_provider.send.assert_awaited_once()
     assert dummy_provider.send.await_args.kwargs["message"] == "Temperatur kritisch: manual "
+
+
+@pytest.mark.asyncio
+async def test_archive_only_binding_writes_message_archive(bus, dummy_provider, monkeypatch, tmp_path):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    store = MessageArchiveStore(str(tmp_path / "messages.sqlite3"))
+    await store.connect()
+    monkeypatch.setattr("obs.message_archive.get_message_archive_service", lambda: MessageArchiveService(store))
+    adapter = MessageAdapter(event_bus=bus, config={"providers": {}})
+    binding = _message_binding(
+        dp_id,
+        providers=[],
+        archive_strategy="archive_only",
+        archive_id="notifications",
+    )
+    await adapter.reload_bindings([binding])
+
+    try:
+        await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+        await _drain_sends(adapter)
+
+        dummy_provider.send.assert_not_awaited()
+        result = await store.query_entries(EntryQuery(archive_ids=["notifications"], username="admin"))
+        assert result["total"] == 1
+        entry = result["items"][0]
+        assert entry["type"] == "notification"
+        assert entry["title"] == "OBS Alarm"
+        assert entry["message"] == "Temperatur kritisch: 31 °C"
+        assert entry["payload"]["delivery_status"] == "archived"
+        assert "target" not in entry["payload"]
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_archive_only_binding_does_not_mark_failed_archive_write_as_sent(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+
+    class _FailingArchiveService:
+        async def record(self, *_args, **_kwargs):
+            raise RuntimeError("archive down")
+
+    monkeypatch.setattr("obs.message_archive.get_message_archive_service", lambda: _FailingArchiveService())
+    adapter = MessageAdapter(event_bus=bus, config={"providers": {}})
+    binding = _message_binding(
+        dp_id,
+        providers=[],
+        archive_strategy="archive_only",
+        archive_id="notifications",
+    )
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    state = adapter._states[binding.id]
+    assert state.last_sent_monotonic is None
+    assert state.last_condition is False
+    dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_none_archive_strategy_consumes_successful_event(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    adapter = MessageAdapter(event_bus=bus, config={"providers": {}})
+    binding = _message_binding(dp_id, providers=[], archive_strategy="none")
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    state = adapter._states[binding.id]
+    assert state.last_sent_monotonic is not None
+    assert state.last_condition is True
+    assert state.last_value == 31
+    dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_and_archive_binding_preserves_throttle_when_archive_write_fails(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+
+    class _FailingArchiveService:
+        async def record(self, *_args, **_kwargs):
+            raise RuntimeError("archive down")
+
+    monkeypatch.setattr("obs.message_archive.get_message_archive_service", lambda: _FailingArchiveService())
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    statuses: list[dict] = []
+
+    async def capture_status(connected, detail="", severity="ok", *, code=None, params=None):
+        statuses.append({"connected": connected, "detail": detail, "severity": severity, "code": code, "params": params})
+
+    adapter._publish_status = capture_status
+    binding = _message_binding(
+        dp_id,
+        archive_strategy="send_and_archive",
+        archive_id="notifications",
+    )
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=31, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    state = adapter._states[binding.id]
+    assert state.last_sent_monotonic is not None
+    assert state.last_condition is True
+    dummy_provider.send.assert_awaited_once()
+    assert statuses[-1]["code"] == "messageArchiveWriteFailed"
+    assert all(status["code"] != "messageSent" for status in statuses)
 
 
 @pytest.mark.asyncio

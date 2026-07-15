@@ -259,6 +259,23 @@ export const ringbufferApi = {
   migrationStart:    ()             => api.post('/ringbuffer/migration/start'),
 }
 
+// ── Message Archives ─────────────────────────────────────────────────────
+export const messageArchivesApi = {
+  list: () => api.get('/message-archives'),
+  create: (body) => api.post('/message-archives', body),
+  update: (id, body) => api.patch(`/message-archives/${id}`, body),
+  delete: (id, confirm = false) => api.delete(`/message-archives/${id}`, { params: { confirm } }),
+  clear: (id, confirm = false) => api.post(`/message-archives/${id}/clear`, null, { params: { confirm } }),
+  integrityCheck: () => api.post('/message-archives/integrity-check'),
+  entries: (params) => api.get('/message-archives/entries', { params }),
+  export: (id, format = 'jsonl') => api.get(`/message-archives/${id}/export`, { params: { format }, responseType: 'blob' }),
+  exportDb: () => api.get('/message-archives/export/db', { responseType: 'blob' }),
+  importDb: (file) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/message-archives/import/db', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+}
+
 // ── Config Import/Export ──────────────────────────────────────────────────
 export const configApi = {
   export:          ()     => api.get('/config/export'),

@@ -118,6 +118,42 @@ async def test_public_visu_allows_unauth_page_and_value_bootstrap(client, auth_h
         await client.delete(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
 
 
+async def test_widget_ref_marks_readonly_source_pages(client, auth_headers):
+    page_id = await _create_page(client, auth_headers, f"readonly-widget-ref-{uuid.uuid4().hex[:8]}", "readonly")
+    try:
+        resp = await client.put(
+            f"/api/v1/visu/pages/{page_id}",
+            json={
+                "grid_cols": 12,
+                "grid_row_height": 80,
+                "grid_cell_width": 80,
+                "background": None,
+                "widgets": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "name": "Readonly Target",
+                        "type": "MessageArchive",
+                        "datapoint_id": None,
+                        "status_datapoint_id": None,
+                        "x": 0,
+                        "y": 0,
+                        "w": 4,
+                        "h": 3,
+                        "config": {},
+                    },
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code in (200, 204), resp.text
+
+        ref_resp = await client.get(f"/api/v1/visu/widget-ref/{page_id}")
+        assert ref_resp.status_code == 200, ref_resp.text
+        assert ref_resp.json()[0]["source_page_readonly"] is True
+    finally:
+        await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+
+
 async def test_protected_visu_requires_session_token_for_unauth_access(client, auth_headers):
     pin = "1234"
     dp_id = await _create_dp(client, auth_headers, f"protected-visu-dp-{uuid.uuid4().hex[:8]}")

@@ -30,7 +30,10 @@ async function mountBindingForm(props) {
     mqttBrowseTopics: vi.fn().mockResolvedValue({ data: [] }),
     mqttSamplePayload: vi.fn().mockResolvedValue({ data: { payload: '{}' } }),
   }
-  vi.doMock('@/api/client', () => ({ dpApi, adapterApi }))
+  const messageArchivesApi = {
+    list: vi.fn().mockResolvedValue({ data: { archives: [] } }),
+  }
+  vi.doMock('@/api/client', () => ({ dpApi, adapterApi, messageArchivesApi }))
   const mod = await import('@/components/datapoints/BindingForm.vue')
   const wrapper = mount(mod.default, {
     props: {

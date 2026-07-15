@@ -12,6 +12,11 @@ mqtt:
 database:
   path: /data/obs.db
 
+message_archive:
+  # Separate SQLite database for all message archives.
+  # Default when omitted: <database directory>/archives/messages.sqlite3
+  path: /data/archives/messages.sqlite3
+
 # History backend is configured through the Admin UI (Settings → History Backend).
 # The active plugin and its credentials are stored in the database (app_settings table).
 # Defaults to the built-in SQLite backend when no history settings exist.

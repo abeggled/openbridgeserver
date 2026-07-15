@@ -905,7 +905,12 @@
       "widget": "Widget (name)",
       "selectWidget": "— Select widget —",
       "noNamedWidgets": "— no named widgets —",
-      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor."
+      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor.",
+      "reference": "Reference",
+      "selectReference": "Select reference …",
+      "noReference": "No reference",
+      "sourceUnavailable": "Source page unavailable",
+      "widgetNotFound": "Widget “{name}” not found"
     },
     "zeitschaltuhr": {
       "title": "Timer",
@@ -987,6 +992,55 @@
     },
     "horizontalbar": {
       "title": "Bar display"
+    },
+    "messageArchive": {
+      "title": "Message Archive",
+      "archives": "Archives",
+      "loadArchivesError": "Archives could not be loaded.",
+      "loadError": "Messages could not be loaded.",
+      "limit": "Entry count",
+      "severity": "Severity",
+      "status": "Status",
+      "allArchives": "All archives",
+      "allSeverities": "All severities",
+      "allStatuses": "All statuses",
+      "allTypes": "All types",
+      "allSources": "All sources",
+      "clearFilter": "Clear filter",
+      "selectedCount": "{count} selected",
+      "noSources": "No sources found",
+      "type": "Type",
+      "source": "Source",
+      "showArchive": "Show archive",
+      "showSource": "Show source",
+      "allowRead": "Allow mark as read",
+      "allowAcknowledge": "Allow acknowledge",
+      "refresh": "Refresh",
+      "empty": "No messages",
+      "unread": "new",
+      "markRead": "Read",
+      "acknowledge": "Acknowledge",
+      "statuses": {
+        "new": "New",
+        "open": "Open",
+        "acknowledged": "Acknowledged",
+        "closed": "Closed"
+      },
+      "types": {
+        "system": "System",
+        "security": "Security",
+        "notification": "Notification",
+        "automation": "Automation",
+        "adapter": "Adapter",
+        "diagnostic": "Diagnostic"
+      },
+      "severities": {
+        "info": "Info",
+        "success": "Success",
+        "warning": "Warning",
+        "error": "Error",
+        "critical": "Critical"
+      }
     },
     "missing": {
       "title": "Unknown",

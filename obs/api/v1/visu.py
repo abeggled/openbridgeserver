@@ -42,7 +42,7 @@ from obs.models.visu import (
     VisuNodeCreate,
     VisuNodeUpdate,
     VisuNodeUsersUpdate,
-    WidgetInstance,
+    WidgetRefInstance,
 )
 
 router = APIRouter(tags=["visu"])
@@ -521,7 +521,7 @@ async def get_page(
     return node.page_config or PageConfig()
 
 
-@router.get("/widget-ref/{page_id}", response_model=list[WidgetInstance])
+@router.get("/widget-ref/{page_id}", response_model=list[WidgetRefInstance])
 async def get_widget_ref(
     page_id: str,
     request: Request,
@@ -556,7 +556,8 @@ async def get_widget_ref(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
 
     pc = node.page_config or PageConfig()
-    return pc.widgets
+    source_page_readonly = access == "readonly"
+    return [WidgetRefInstance(**widget.model_dump(), source_page_readonly=source_page_readonly) for widget in pc.widgets]
 
 
 @router.put("/pages/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
