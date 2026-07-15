@@ -7,8 +7,11 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from obs.logic.executor import GraphExecutor
 from obs.logic.manager import LogicManager
+from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
+from tests.unit.conftest import node
 
 
 def _manager() -> LogicManager:
@@ -24,6 +27,16 @@ def test_value_sequence_node_type_is_registered() -> None:
     assert node_type.category == "timer"
     assert {port.id for port in node_type.inputs} == {"trigger", "condition"}
     assert node_type.config_schema["restart_policy"]["enum"] == ["ignore", "restart", "queue"]
+
+
+def test_value_sequence_executor_exposes_control_inputs_without_waiting() -> None:
+    flow = FlowData.model_validate({"nodes": [node("sequence", "value_sequence")], "edges": []})
+
+    outputs = GraphExecutor(flow).execute(
+        {"sequence": {"trigger": True, "condition": False}},
+    )
+
+    assert outputs["sequence"] == {"_triggered": True, "_condition": False}
 
 
 def test_value_sequence_publishes_values_and_pauses() -> None:

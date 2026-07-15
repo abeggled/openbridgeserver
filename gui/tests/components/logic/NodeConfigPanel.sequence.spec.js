@@ -30,6 +30,8 @@ describe('NodeConfigPanel value sequence', () => {
     await buttons[2].trigger('click')
     await flushPromises()
     expect(w.findAll('[data-testid^="sequence-step-"]')).toHaveLength(2)
+    await w.get('[data-testid="sequence-step-0"]').findAll('button')[1].trigger('click')
+    await flushPromises()
     await w.get('[data-testid="sequence-step-0"]').findAll('button')[3].trigger('click')
     expect(w.findAll('[data-testid^="sequence-step-"]')).toHaveLength(1)
     w.unmount()
