@@ -14,6 +14,8 @@ Covers:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -2181,6 +2183,23 @@ class TestConsumptionCounter:
         out, _ = self._run(60.0, state)
         assert out["prev_daily"] == pytest.approx(50.0)
         assert out["daily"] == pytest.approx(10.0)
+
+    def test_periods_use_configured_application_timezone(self):
+        # Choose a timezone whose calendar date differs from UTC right now,
+        # so this cannot accidentally pass by using the server clock.
+        utc_today = datetime.now(UTC).date()
+        timezone = next(
+            name for name in ("Pacific/Kiritimati", "Etc/GMT+12")
+            if datetime.now(ZoneInfo(name)).date() != utc_today
+        )
+        expected_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
+        state = {}
+        n1 = node("c", "consumption_counter", {})
+        exc = make_executor([n1], hysteresis_state=state, app_config={"timezone": timezone})
+
+        exc.execute({"c": {"value": 100.0}})
+
+        assert state["c"]["last_day"] == expected_day
 
     def test_no_value_returns_current_state(self):
         state = {}

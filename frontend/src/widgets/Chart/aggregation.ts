@@ -18,6 +18,12 @@ const AGGREGATE_INTERVAL_MS: Record<string, number> = {
   '1d': 24 * 3_600_000,
 }
 
+/** Parse history timestamps as UTC when a backend omits the timezone suffix. */
+function timestampMs(timestamp: string): number {
+  const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(timestamp)
+  return new Date(hasTimezone ? timestamp : `${timestamp}Z`).getTime()
+}
+
 export function weightedAverage(points: WeightedChartPoint[]): number | null {
   const weighted = points.reduce((acc, p) => {
     const value = Number(p.v)
@@ -30,7 +36,7 @@ export function weightedAverage(points: WeightedChartPoint[]): number | null {
 }
 
 export function sortedUniqueTimestamps(series: TimedWeightedChartPoint[][]): number[] {
-  return [...new Set(series.flatMap(points => points.map(p => new Date(p.ts).getTime()).filter(Number.isFinite)))]
+  return [...new Set(series.flatMap(points => points.map(p => timestampMs(p.ts)).filter(Number.isFinite)))]
     .sort((a, b) => a - b)
 }
 
@@ -38,7 +44,7 @@ export function weightedValuesByTimestamp(points: TimedWeightedChartPoint[], tim
   const grouped = new Map<number, TimedWeightedChartPoint[]>()
 
   for (const point of points) {
-    const ts = new Date(point.ts).getTime()
+    const ts = timestampMs(point.ts)
     if (!Number.isFinite(ts)) continue
     const bucket = grouped.get(ts) ?? []
     bucket.push(point)
@@ -57,7 +63,7 @@ export function aggregateBucketEndTimestamp(
   fromMs: number,
   toMs: number,
 ): number {
-  const bucketStartMs = new Date(bucketTimestamp).getTime()
+  const bucketStartMs = timestampMs(bucketTimestamp)
   const intervalMs = AGGREGATE_INTERVAL_MS[interval]
 
   if (!Number.isFinite(bucketStartMs) || !Number.isFinite(intervalMs)) return bucketStartMs

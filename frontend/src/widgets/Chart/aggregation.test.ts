@@ -38,6 +38,14 @@ describe('aggregated bar bucket alignment', () => {
     expect(timestamps).toEqual([t0, t1, t2])
   })
 
+  it('treats timezone-less SQLite aggregate buckets as UTC', () => {
+    const timestamps = sortedUniqueTimestamps([
+      [{ ts: '2026-06-03T10:00:00', v: 10 }],
+    ])
+
+    expect(timestamps).toEqual([t0])
+  })
+
   it('does not create empty frontend buckets between hourly aggregate buckets', () => {
     const timestamps = [t0, t1]
     const values = weightedValuesByTimestamp([
@@ -80,5 +88,13 @@ describe('aggregateBucketEndTimestamp', () => {
 
     expect(aggregateBucketEndTimestamp('2026-06-03T06:00:00Z', '6h', fromMs, toMs))
       .toBe(fromMs)
+  })
+
+  it('treats a timezone-less aggregate bucket as UTC', () => {
+    const fromMs = Date.parse('2026-06-03T12:34:00Z')
+    const toMs = Date.parse('2026-06-10T12:34:00Z')
+
+    expect(aggregateBucketEndTimestamp('2026-06-03T12:00:00', '1h', fromMs, toMs))
+      .toBe(Date.parse('2026-06-03T13:00:00Z'))
   })
 })

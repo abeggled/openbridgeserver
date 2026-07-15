@@ -99,15 +99,15 @@ class TestSafeLoads:
 class TestBucketKey:
     def test_5m_bucket(self):
         ts = "2024-01-01T12:07:30Z"
-        assert _bucket_key(ts, 5) == "2024-01-01T12:05:00"
+        assert _bucket_key(ts, 5) == "2024-01-01T12:05:00Z"
 
     def test_15m_bucket(self):
         ts = "2024-01-01T12:22:00Z"
-        assert _bucket_key(ts, 15) == "2024-01-01T12:15:00"
+        assert _bucket_key(ts, 15) == "2024-01-01T12:15:00Z"
 
     def test_30m_bucket_upper_half(self):
         ts = "2024-01-01T12:45:00Z"
-        assert _bucket_key(ts, 30) == "2024-01-01T12:30:00"
+        assert _bucket_key(ts, 30) == "2024-01-01T12:30:00Z"
 
     def test_invalid_ts_returns_truncated(self):
         result = _bucket_key("bad-ts-string-xyz", 5)
@@ -120,7 +120,7 @@ class TestSqliteBucketExpr:
         assert "strftime('%H'" in _sqlite_bucket_expr("%Y-%m-%dT%H:00:00", 360)
 
     def test_1h_bucket_expr(self):
-        assert _sqlite_bucket_expr("%Y-%m-%dT%H:00:00", 60) == "strftime('%Y-%m-%dT%H:00:00', ts)"
+        assert _sqlite_bucket_expr("%Y-%m-%dT%H:00:00", 60) == "strftime('%Y-%m-%dT%H:00:00', ts) || 'Z'"
 
 
 class TestAggregatePython:
@@ -329,7 +329,7 @@ class TestSQLiteAggregate:
         dp_id = uuid.uuid4()
         await self._write_series(plugin, dp_id, [(0, 10.0), (300, 20.0), (360, 30.0)])
         result = await plugin.aggregate(dp_id, "avg", "6h", _ts(-1), _ts(420))
-        assert [r["bucket"] for r in result] == ["2024-01-01T12:00:00", "2024-01-01T18:00:00"]
+        assert [r["bucket"] for r in result] == ["2024-01-01T12:00:00Z", "2024-01-01T18:00:00Z"]
         assert result[0]["v"] == pytest.approx(15.0)
         assert result[0]["n"] == 2
 
@@ -337,7 +337,7 @@ class TestSQLiteAggregate:
         dp_id = uuid.uuid4()
         await self._write_series(plugin, dp_id, [(-720, 10.0), (-60, 20.0), (0, 30.0), (660, 40.0)])
         result = await plugin.aggregate(dp_id, "avg", "12h", _ts(-721), _ts(720))
-        assert [r["bucket"] for r in result] == ["2024-01-01T00:00:00", "2024-01-01T12:00:00"]
+        assert [r["bucket"] for r in result] == ["2024-01-01T00:00:00Z", "2024-01-01T12:00:00Z"]
         assert result[0]["v"] == pytest.approx(15.0)
         assert result[1]["v"] == pytest.approx(35.0)
 
@@ -345,7 +345,7 @@ class TestSQLiteAggregate:
         dp_id = uuid.uuid4()
         await self._write_series(plugin, dp_id, [(0, 10.0), (300, 20.0), (360, 30.0)])
         result = await plugin.aggregate(dp_id, "last", "6h", _ts(-1), _ts(420))
-        assert [r["bucket"] for r in result] == ["2024-01-01T12:00:00", "2024-01-01T18:00:00"]
+        assert [r["bucket"] for r in result] == ["2024-01-01T12:00:00Z", "2024-01-01T18:00:00Z"]
         assert result[0]["v"] == pytest.approx(20.0)
         assert result[1]["v"] == pytest.approx(30.0)
 
