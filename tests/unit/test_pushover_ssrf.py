@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from obs.logic.manager import LogicManager, _resolve_safe_image_url
+from obs.logic.manager import LogicManager, _read_secret_name, _resolve_safe_image_url
 from obs.logic.models import FlowData
 from obs.security.url_targets import ResolvedUrlTarget, UrlTargetDecision
 from tests.unit.conftest import node
@@ -71,6 +71,97 @@ class TestResolveSafeImageUrl:
 
 
 class TestNotifyPushoverPinnedFetch:
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_secret_names_supply_app_token_and_user_key(self, mock_client_cls, tmp_path, monkeypatch):
+        captured_payloads: list[dict] = []
+
+        post_resp = MagicMock()
+        post_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+
+        async def _capture_post(_url, *, data=None, **_kwargs):
+            captured_payloads.append(data or {})
+            return post_resp
+
+        mock_client.post = _capture_post
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        root = tmp_path / "secrets"
+        root.mkdir()
+        (root / "pushover-app-token").write_text(" app-token-from-file \n", encoding="utf-8")
+        (root / "pushover-user-key").write_text(" user-key-from-file \n", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        manager = _make_manager()
+        flow = _flow(
+            [
+                node(
+                    "push",
+                    "notify_pushover",
+                    {
+                        "app_token": "inline-token",
+                        "user_key": "inline-user",
+                        "app_token_secret": "pushover-app-token",
+                        "user_key_secret": "pushover-user-key",
+                        "title": "t",
+                    },
+                ),
+            ],
+        )
+        graph_id = "g"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"push": {"trigger": True, "message": "msg"}},
+                ),
+            )
+
+        assert outputs["push"]["sent"] is True
+        assert captured_payloads == [
+            {
+                "token": "app-token-from-file",
+                "user": "user-key-from-file",
+                "title": "t",
+                "message": "msg",
+                "priority": 0,
+            },
+        ]
+
+    def test_secret_name_rejects_path_traversal(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        outside = tmp_path / "outside-token"
+        outside.write_text("outside", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        assert _read_secret_name("../outside-token") == ""
+
+    def test_secret_name_rejects_unsafe_names(self, tmp_path, monkeypatch):
+        root = tmp_path / "secrets"
+        root.mkdir()
+        (root / "token").write_text("token", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        unsafe_names = [
+            "",
+            ".",
+            "..",
+            "/token",
+            "nested/token",
+            "nested\\token",
+        ]
+
+        for name in unsafe_names:
+            assert _read_secret_name(name) == ""
+
     @patch("obs.logic.manager._resolve_safe_image_url", new_callable=AsyncMock)
     @patch("obs.logic.manager.httpx.AsyncClient")
     def test_fetch_uses_pinned_ip_and_sni(self, mock_client_cls, mock_resolve):
