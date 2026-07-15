@@ -31,7 +31,8 @@ def test_value_sequence_publishes_values_and_pauses() -> None:
 
     asyncio.run(
         manager._run_value_sequence(
-            "graph", "node",
+            "graph",
+            "node",
             {"steps": [{"datapoint_id": str(target), "value": "blue", "delay_ms": 0}, {"datapoint_id": str(target), "value": True, "delay_ms": 0}]},
         ),
     )

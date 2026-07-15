@@ -798,10 +798,14 @@ class LogicManager:
                             datapoint_id = uuid.UUID(target)
                             if self._registry.get(datapoint_id) is None:
                                 raise ValueError("target object no longer exists")
-                            await self._event_bus.publish(DataValueEvent(
-                                datapoint_id=datapoint_id, value=step.get("value"), quality="good",
-                                source_adapter="logic_sequence",
-                            ))
+                            await self._event_bus.publish(
+                                DataValueEvent(
+                                    datapoint_id=datapoint_id,
+                                    value=step.get("value"),
+                                    quality="good",
+                                    source_adapter="logic_sequence",
+                                )
+                            )
                         except Exception as exc:
                             logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
                     try:
