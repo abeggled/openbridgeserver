@@ -11,7 +11,7 @@ from obs.logic.executor import GraphExecutor
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
-from tests.unit.conftest import node
+from tests.unit.conftest import edge, node
 
 
 def _manager() -> LogicManager:
@@ -172,5 +172,54 @@ def test_sequence_task_cancellation_clears_graph_runtime_state() -> None:
         await asyncio.gather(task, return_exceptions=True)
         assert not manager._sequence_tasks
         assert not manager._sequence_conditions
+
+    asyncio.run(exercise())
+
+
+def test_graph_execution_starts_and_cancels_a_conditioned_sequence() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("trigger", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("condition", "const_value", {"value": "false", "data_type": "bool"}),
+                    node(
+                        "sequence",
+                        "value_sequence",
+                        {
+                            "cancel_when_condition_false": True,
+                            "steps": [{"datapoint_id": str(target), "value": 1, "delay_ms": 1000}],
+                        },
+                    ),
+                ],
+                "edges": [edge("trigger", "sequence", "value", "trigger"), edge("condition", "sequence", "value", "condition")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        await manager._execute_graph("graph", "Graph", flow, {})
+        task = manager._sequence_tasks[("graph", "sequence")]
+        await asyncio.gather(task, return_exceptions=True)
+        manager._event_bus.publish.assert_not_awaited()
+
+        # The level trigger stays high, so the manager records it but does not
+        # launch a duplicate task until it sees a new rising edge.
+        await manager._execute_graph("graph", "Graph", flow, {})
+        assert ("graph", "sequence") not in manager._sequence_tasks
+
+    asyncio.run(exercise())
+
+
+def test_value_sequence_ignores_a_trigger_while_already_running() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        node = SimpleNamespace(id="node", data={"restart_policy": "ignore", "steps": [{"delay_ms": 1000}]})
+        manager._start_value_sequence("graph", node, True)
+        original = manager._sequence_tasks[("graph", "node")]
+        manager._start_value_sequence("graph", node, True)
+        assert manager._sequence_tasks[("graph", "node")] is original
+        manager._cancel_sequence_tasks()
+        await asyncio.gather(original, return_exceptions=True)
 
     asyncio.run(exercise())
