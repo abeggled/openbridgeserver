@@ -83,13 +83,13 @@ jobs:
       - name: Build Admin GUI
         run: |
           cd gui
-          npm install --prefer-offline
+          npm ci --prefer-offline
           npm run build
 
       - name: Build Visu Frontend
         run: |
           cd frontend
-          npm install --prefer-offline
+          npm ci --prefer-offline
           npm run build
 
       - name: Write obs-update script
