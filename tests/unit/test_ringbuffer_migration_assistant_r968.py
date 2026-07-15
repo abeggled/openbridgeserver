@@ -1522,6 +1522,51 @@ async def test_legacy_migration_start_keep_preprotects_before_job(tmp_path: Path
         await db.disconnect()
 
 
+async def test_legacy_migration_start_keep_rolls_back_on_sync_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Schlägt der Start SYNCHRON fehl (Precheck-Ablehnung), wird der pre-job keep→skipped-Übergang
+    zurückgerollt (#1010): ein gescheiterter Migrate-Versuch darf die bewusste keep-Entscheidung
+    (unprotected) nicht in skipped/protected zementieren."""
+    import obs.api.v1.ringbuffer as rb_api
+    from fastapi import HTTPException
+
+    from obs.db.database import Database
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+    from obs.ringbuffer.store.offline_migration import OfflineMigrationError
+
+    protect_calls: list[bool] = []
+
+    class _Rb:
+        def legacy_migration_in_progress(self) -> bool:
+            return False
+
+        async def set_legacy_retention_protected(self, value: bool) -> None:
+            protect_calls.append(value)
+
+        async def start_legacy_migration(self, *, on_success):
+            raise OfflineMigrationError("no attached legacy source to migrate")
+
+    rb = _Rb()
+    monkeypatch.setattr(rb_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(rb_api, "is_ringbuffer_enabled", lambda: True)
+
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        with pytest.raises(HTTPException) as exc:
+            await rb_api.legacy_migration_start(_user="admin", db=db)
+        assert exc.value.status_code == 409
+        # keep wiederhergestellt, Protection zuletzt wieder aus (True beim pre-job, dann False im Rollback).
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert protect_calls == [True, False]
+    finally:
+        await db.disconnect()
+
+
 async def test_resolve_cutoff_rowid_edge_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Rand-Fälle der id-geordneten Cutoff-Ableitung (#968, Codex :156): nichts kopieren,
     mehr als vorhanden kopieren, N-te-neueste id, und unlesbare Quelle."""

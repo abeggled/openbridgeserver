@@ -2194,6 +2194,17 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
     try:
         await rb.start_legacy_migration(on_success=_persist_migrated)
     except OfflineMigrationError as exc:
+        # Synchroner Start-Fehler (#1010): ein Precheck (keine/quarantänierte Quelle, Disk-Precheck)
+        # oder der Doppelstart-Guard hat abgelehnt, BEVOR ein Job lief oder etwas committet wurde.
+        # Der pre-job keep→skipped-Übergang muss zurückgerollt werden, sonst zementiert ein
+        # gescheiterter Migrate-Versuch die bewusste ``keep``-Entscheidung (unprotected) fälschlich
+        # in ``skipped``/protected. (Ein BACKGROUND-Fehler NACH erfolgreichem Start ist anders: dort
+        # lässt ``start_legacy_migration`` ``skipped``+protected konsistent bestehen – es rollt die
+        # Protection auf den vor dem Job gemerkten Wert, der jetzt korrekt protected=True ist.)
+        if current == LEGACY_DECISION_KEEP:
+            with suppress(Exception):
+                await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+                await rb.set_legacy_retention_protected(False)
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return await _legacy_migration_status(db)
 
