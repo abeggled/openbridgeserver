@@ -2194,13 +2194,14 @@ async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
 
     try:
         await rb.start_legacy_migration(on_success=_persist_migrated)
-    except Exception as exc:
+    except BaseException as exc:
         # JEDER Fehler aus ``start_legacy_migration`` bedeutet: keine Background-Task gestartet und
         # nichts committet (#1010) – der Aufruf wirft ausschließlich VOR ``create_task`` (Prechecks,
         # aber auch awaited Manifest-Ops wie ``list_schema_legacy_segments``/``committed_migration_count``,
         # die mit NICHT-``OfflineMigrationError`` fehlschlagen können; danach reserviert der Task und der
-        # Aufruf returnt normal). Deshalb den pre-job keep→skipped-Übergang bei ALLEN pre-task-Fehlern
-        # zurückrollen, nicht nur bei den typisierten Prechecks, sonst zementiert ein gescheiterter
+        # Aufruf returnt normal). Deshalb den pre-job keep→skipped-Übergang bei ALLEN pre-task-Abbrüchen
+        # zurückrollen – auch bei ``asyncio.CancelledError`` (Shutdown/Client-Cancel während der awaited
+        # Prechecks; erbt von ``BaseException``, nicht ``Exception``), sonst zementiert ein nie gestarteter
         # Migrate-Versuch die bewusste ``keep``-Entscheidung (unprotected) fälschlich in ``skipped``/
         # protected. (Ein BACKGROUND-Fehler NACH erfolgreichem Start ist anders: dort lässt
         # ``start_legacy_migration`` ``skipped``+protected konsistent bestehen – es rollt die Protection

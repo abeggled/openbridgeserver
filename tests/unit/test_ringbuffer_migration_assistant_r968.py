@@ -1586,6 +1586,18 @@ async def test_legacy_migration_start_keep_rolls_back_on_any_pretask_failure(tmp
             await rb_api.legacy_migration_start(_user="admin", db=db)
         assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
         assert protect_calls == [True, False]
+
+        # Cancellation während der pre-task-Prechecks (#1010): erbt von BaseException, muss den
+        # Rollback ebenfalls auslösen und dann sauber re-raisen (kein zementiertes keep→skipped).
+        import asyncio
+
+        boom["exc"] = asyncio.CancelledError()
+        protect_calls.clear()
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
+        with pytest.raises(asyncio.CancelledError):
+            await rb_api.legacy_migration_start(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+        assert protect_calls == [True, False]
     finally:
         await db.disconnect()
 
