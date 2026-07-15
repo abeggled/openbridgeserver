@@ -7,6 +7,7 @@
 ### New features ✨
 
 ### Fixes 🐞
+* Logic Engine/Admin GUI: Delay- und Pulse-Funktionsblöcke akzeptieren keine negativen Zeitwerte mehr. https://github.com/abeggled/openbridgeserver/issues/1002
 
 ### Known Issues 🔔
 * none
