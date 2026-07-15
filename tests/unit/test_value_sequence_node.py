@@ -48,12 +48,14 @@ def test_value_sequence_publishes_values_and_pauses() -> None:
             "graph",
             "node",
             {"steps": [{"datapoint_id": str(target), "value": "blue", "delay_ms": 0}, {"datapoint_id": str(target), "value": True, "delay_ms": 0}]},
+            4,
         ),
     )
 
     assert manager._event_bus.publish.await_count == 2
     assert [call.args[0].value for call in manager._event_bus.publish.await_args_list] == ["blue", True]
     assert all(call.args[0].source_adapter == "logic_sequence" for call in manager._event_bus.publish.await_args_list)
+    assert all(call.args[0].logic_depth == 5 for call in manager._event_bus.publish.await_args_list)
 
 
 def test_value_sequence_skips_missing_target() -> None:
@@ -153,6 +155,16 @@ def test_value_sequence_handles_pause_invalid_values_and_while_condition() -> No
 
         assert LogicManager._sequence_steps("not json") == []
         assert LogicManager._sequence_steps('[{"value": 1}]') == [{"value": 1}]
+
+    asyncio.run(exercise())
+
+
+def test_while_sequence_with_no_steps_or_noop_steps_returns_without_spinning() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        await asyncio.wait_for(manager._run_value_sequence("graph", "empty", {"run_mode": "while_condition", "steps": []}), timeout=0.1)
+        await asyncio.wait_for(manager._run_value_sequence("graph", "noop", {"run_mode": "while_condition", "steps": [{"delay_ms": 0}]}), timeout=0.1)
+        manager._event_bus.publish.assert_not_awaited()
 
     asyncio.run(exercise())
 

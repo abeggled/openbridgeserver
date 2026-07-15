@@ -775,12 +775,15 @@ class LogicManager:
                 raw = []
         return [step for step in raw if isinstance(step, dict)] if isinstance(raw, list) else []
 
-    async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any]) -> None:
+    async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
         """Publish configured writes without blocking the graph executor."""
         from obs.core.event_bus import DataValueEvent
 
         key = (graph_id, node_id)
         steps = self._sequence_steps(config.get("steps"))
+        if not steps:
+            logger.warning("Value sequence graph=%s node=%s has no steps", graph_id[:8], node_id[:8])
+            return
         mode = config.get("run_mode", "once")
         try:
             repetitions = max(1, int(config.get("repeat_count") or 1)) if mode == "repeat_count" else 1
@@ -788,6 +791,7 @@ class LogicManager:
             repetitions = 1
         try:
             while True:
+                yielded = False
                 for step in steps:
                     if config.get("cancel_when_condition_false") and not self._sequence_conditions.get(key, True):
                         logger.info("Value sequence cancelled: graph=%s node=%s", graph_id[:8], node_id[:8])
@@ -804,8 +808,10 @@ class LogicManager:
                                     value=step.get("value"),
                                     quality="good",
                                     source_adapter="logic_sequence",
+                                    logic_depth=logic_depth + 1,
                                 )
                             )
+                            yielded = True
                         except Exception as exc:
                             logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
                     try:
@@ -814,8 +820,12 @@ class LogicManager:
                         delay_s = 0.0
                     if delay_s:
                         await asyncio.sleep(delay_s)
+                        yielded = True
                 if mode == "while_condition":
                     if not self._sequence_conditions.get(key, True):
+                        return
+                    if not yielded:
+                        logger.warning("Value sequence graph=%s node=%s has no runnable steps", graph_id[:8], node_id[:8])
                         return
                     continue
                 repetitions -= 1
@@ -830,10 +840,13 @@ class LogicManager:
                 if queued:
                     if queued > 1:
                         self._sequence_queues[key] = queued - 1
-                    task = asyncio.create_task(self._run_value_sequence(graph_id, node_id, config), name=f"sequence-{graph_id[:8]}-{node_id[:8]}")
+                    task = asyncio.create_task(
+                        self._run_value_sequence(graph_id, node_id, config, logic_depth),
+                        name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+                    )
                     self._sequence_tasks[key] = task
 
-    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool) -> None:
+    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0) -> None:
         key = (graph_id, node.id)
         self._sequence_conditions[key] = condition
         active = self._sequence_tasks.get(key)
@@ -846,7 +859,10 @@ class LogicManager:
                 return
             else:
                 return
-        task = asyncio.create_task(self._run_value_sequence(graph_id, node.id, dict(node.data)), name=f"sequence-{graph_id[:8]}-{node.id[:8]}")
+        task = asyncio.create_task(
+            self._run_value_sequence(graph_id, node.id, dict(node.data), logic_depth),
+            name=f"sequence-{graph_id[:8]}-{node.id[:8]}",
+        )
         self._sequence_tasks[key] = task
 
     async def _load_app_config(self) -> None:
@@ -2905,7 +2921,7 @@ class LogicManager:
             was_triggered = state.get("sequence_prev_trigger", False)
             state["sequence_prev_trigger"] = triggered
             if triggered and not was_triggered:
-                self._start_value_sequence(graph_id, node, condition)
+                self._start_value_sequence(graph_id, node, condition, logic_depth)
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
