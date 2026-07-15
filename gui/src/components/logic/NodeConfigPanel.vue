@@ -282,6 +282,47 @@
       </div>
     </template>
 
+    <!-- ── value_sequence: GUI-first step editor ─────────────────────── -->
+    <template v-else-if="isValueSequenceNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.value_sequence.run_mode') }}</label>
+          <select v-model="localData.run_mode" class="input text-sm" @change="emitUpdate">
+            <option value="once">{{ $t('logic.nodeConfig.value_sequence.modes.once') }}</option>
+            <option value="repeat_count">{{ $t('logic.nodeConfig.value_sequence.modes.repeat_count') }}</option>
+            <option value="while_condition">{{ $t('logic.nodeConfig.value_sequence.modes.while_condition') }}</option>
+          </select>
+        </div>
+        <div v-if="localData.run_mode === 'repeat_count'" class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.value_sequence.repeat_count') }}</label>
+          <input v-model.number="localData.repeat_count" type="number" min="1" class="input text-sm" @change="emitUpdate" />
+        </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.value_sequence.restart_policy') }}</label>
+          <select v-model="localData.restart_policy" class="input text-sm" @change="emitUpdate">
+            <option value="ignore">{{ $t('logic.nodeConfig.value_sequence.policies.ignore') }}</option>
+            <option value="restart">{{ $t('logic.nodeConfig.value_sequence.policies.restart') }}</option>
+            <option value="queue">{{ $t('logic.nodeConfig.value_sequence.policies.queue') }}</option>
+          </select>
+        </div>
+        <label class="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><input v-model="localData.cancel_when_condition_false" type="checkbox" @change="emitUpdate" />{{ $t('logic.nodeConfig.value_sequence.cancel_when_condition_false') }}</label>
+        <div class="flex gap-2">
+          <button type="button" class="btn-secondary btn-sm" @click="addSequenceStep">{{ $t('logic.nodeConfig.value_sequence.add') }}</button>
+          <button type="button" class="btn-secondary btn-sm" @click="applySequencePreset">{{ $t('logic.nodeConfig.value_sequence.blink') }}</button>
+        </div>
+        <div v-for="(step, index) in sequenceSteps" :key="index" class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2">
+          <div class="flex justify-between items-center"><span class="text-xs font-semibold text-amber-400">{{ $t('logic.nodeConfig.value_sequence.step', { n: index + 1 }) }}</span><div class="flex gap-2"><button class="text-xs" @click="moveSequenceStep(index, -1)">↑</button><button class="text-xs" @click="moveSequenceStep(index, 1)">↓</button><button class="text-xs text-teal-400" @click="duplicateSequenceStep(index)">{{ $t('logic.nodeConfig.value_sequence.duplicate') }}</button><button class="text-xs text-red-400" @click="removeSequenceStep(index)">×</button></div></div>
+          <input :value="step.datapoint_name" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="searchSequenceDps(index, $event.target.value)" />
+          <div v-if="sequenceDpResults[index]?.length" class="max-h-24 overflow-y-auto border border-slate-700 rounded">
+            <button v-for="dp in sequenceDpResults[index]" :key="dp.id" class="block w-full text-left px-2 py-1 text-xs hover:bg-slate-700" @click="selectSequenceDp(index, dp)">{{ dp.name }} <span class="text-slate-500">{{ dp.data_type }}</span></button>
+          </div>
+          <input v-model="step.value" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.value')" @change="saveSequenceSteps" />
+          <div class="flex gap-2"><input v-model.number="step.delay_ms" type="number" min="0" class="input text-xs" @change="saveSequenceSteps" /><span class="text-xs self-center">ms</span></div>
+        </div>
+      </div>
+    </template>
+
     <!-- ── api_client: special rendering with conditional auth fields ──── -->
     <template v-else-if="isApiClientNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1410,6 +1451,8 @@ const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
 const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
+const isValueSequenceNode = computed(() => props.node?.type === 'value_sequence')
+const sequenceSteps = computed(() => Array.isArray(localData.value.steps) ? localData.value.steps : [])
 const selectedMessageArchiveMissing = computed(() => {
   const id = localData.value.archive_id
   return !!id && !messageArchives.value.some((archive) => archive.id === id)
@@ -2136,6 +2179,16 @@ function selectDp(dp) {
   dpResults.value = []
   emitUpdate()
 }
+
+const sequenceDpResults = ref([])
+function saveSequenceSteps() { localData.value.steps = sequenceSteps.value; emitUpdate() }
+function addSequenceStep() { localData.value.steps = [...sequenceSteps.value, { datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }]; emitUpdate() }
+function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index, 1); localData.value.steps = steps; emitUpdate() }
+function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index + 1, 0, { ...steps[index] }); localData.value.steps = steps; emitUpdate() }
+function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; emitUpdate() }
+function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; emitUpdate() }
+async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
+function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function addApiVariable() {
   const variables = normaliseApiVariables(localData.value.variables)

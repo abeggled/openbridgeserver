@@ -718,6 +718,11 @@ class LogicManager:
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # Running value sequences, keyed per graph/node.  They are deliberately
+        # separate from cron tasks because they are short-lived and user-triggered.
+        self._sequence_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        self._sequence_conditions: dict[tuple[str, str], bool] = {}
+        self._sequence_queues: dict[tuple[str, str], int] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -740,16 +745,105 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
         """Reload graph cache from DB and restart cron schedulers."""
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._cancel_sequence_tasks()
         await self._load_graphs()
         self._start_cron_tasks()
 
     # ── App Config ────────────────────────────────────────────────────────
+
+    def _cancel_sequence_tasks(self, graph_id: str | None = None) -> None:
+        """Cancel active sequences, for shutdown/reload/delete semantics."""
+        keys = [key for key in self._sequence_tasks if graph_id is None or key[0] == graph_id]
+        for key in keys:
+            self._sequence_tasks.pop(key).cancel()
+            self._sequence_conditions.pop(key, None)
+            self._sequence_queues.pop(key, None)
+
+    @staticmethod
+    def _sequence_steps(raw: Any) -> list[dict[str, Any]]:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = []
+        return [step for step in raw if isinstance(step, dict)] if isinstance(raw, list) else []
+
+    async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any]) -> None:
+        """Publish configured writes without blocking the graph executor."""
+        from obs.core.event_bus import DataValueEvent
+
+        key = (graph_id, node_id)
+        steps = self._sequence_steps(config.get("steps"))
+        mode = config.get("run_mode", "once")
+        try:
+            repetitions = max(1, int(config.get("repeat_count") or 1)) if mode == "repeat_count" else 1
+        except (TypeError, ValueError):
+            repetitions = 1
+        try:
+            while True:
+                for step in steps:
+                    if config.get("cancel_when_condition_false") and not self._sequence_conditions.get(key, True):
+                        logger.info("Value sequence cancelled: graph=%s node=%s", graph_id[:8], node_id[:8])
+                        return
+                    target = str(step.get("datapoint_id") or "").strip()
+                    if target:
+                        try:
+                            datapoint_id = uuid.UUID(target)
+                            if self._registry.get(datapoint_id) is None:
+                                raise ValueError("target object no longer exists")
+                            await self._event_bus.publish(DataValueEvent(
+                                datapoint_id=datapoint_id, value=step.get("value"), quality="good",
+                                source_adapter="logic_sequence",
+                            ))
+                        except Exception as exc:
+                            logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
+                    try:
+                        delay_s = max(0.0, float(step.get("delay_ms") or 0) / 1000)
+                    except (TypeError, ValueError):
+                        delay_s = 0.0
+                    if delay_s:
+                        await asyncio.sleep(delay_s)
+                if mode == "while_condition":
+                    if not self._sequence_conditions.get(key, True):
+                        return
+                    continue
+                repetitions -= 1
+                if repetitions <= 0:
+                    return
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._sequence_tasks.get(key) is asyncio.current_task():
+                self._sequence_tasks.pop(key, None)
+                queued = self._sequence_queues.pop(key, 0)
+                if queued:
+                    if queued > 1:
+                        self._sequence_queues[key] = queued - 1
+                    task = asyncio.create_task(self._run_value_sequence(graph_id, node_id, config), name=f"sequence-{graph_id[:8]}-{node_id[:8]}")
+                    self._sequence_tasks[key] = task
+
+    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool) -> None:
+        key = (graph_id, node.id)
+        self._sequence_conditions[key] = condition
+        active = self._sequence_tasks.get(key)
+        if active and not active.done():
+            policy = node.data.get("restart_policy", "ignore")
+            if policy == "restart":
+                active.cancel()
+            elif policy == "queue":
+                self._sequence_queues[key] = self._sequence_queues.get(key, 0) + 1
+                return
+            else:
+                return
+        task = asyncio.create_task(self._run_value_sequence(graph_id, node.id, dict(node.data)), name=f"sequence-{graph_id[:8]}-{node.id[:8]}")
+        self._sequence_tasks[key] = task
 
     async def _load_app_config(self) -> None:
         """Load app-level settings (e.g. timezone) from the database."""
@@ -2790,6 +2884,25 @@ class LogicManager:
         # the final graph outputs, not executor placeholders from an earlier pass.
         executor.commit_memory_inputs(outputs, aug_overrides)
 
+        # ── Start/cancel value sequences ──────────────────────────────────
+        wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
+        for node in flow.nodes:
+            if node.type != "value_sequence":
+                continue
+            output = outputs.get(node.id, {})
+            key = (graph_id, node.id)
+            condition = GraphExecutor._to_bool(output.get("_condition")) if (node.id, "condition") in wired_inputs else True
+            self._sequence_conditions[key] = condition
+            active = self._sequence_tasks.get(key)
+            if node.data.get("cancel_when_condition_false") and not condition and active and not active.done():
+                active.cancel()
+            state = graph_state.setdefault(node.id, {})
+            triggered = GraphExecutor._to_bool(output.get("_triggered"))
+            was_triggered = state.get("sequence_prev_trigger", False)
+            state["sequence_prev_trigger"] = triggered
+            if triggered and not was_triggered:
+                self._start_value_sequence(graph_id, node, condition)
+
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         from obs.core.event_bus import DataValueEvent
@@ -2797,8 +2910,6 @@ class LogicManager:
         write_now = execute_now
 
         # Build set of node+handle pairs that have an incoming edge (= are wired)
-        wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
-
         for node in flow.nodes:
             if node.type != "datapoint_write":
                 continue
@@ -2950,6 +3061,7 @@ class LogicManager:
         # On DELETE the graph row is gone from DB so no persistence concerns remain;
         # the in-memory entry is a no-op and will be GC'd naturally.
         self._node_state.pop(graph_id, None)
+        self._cancel_sequence_tasks(graph_id)
         # Cancel cron tasks for this specific graph
         to_remove = [k for k in list(self._cron_tasks) if k[0] == graph_id]
         for k in to_remove:
