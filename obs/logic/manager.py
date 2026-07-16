@@ -2971,6 +2971,7 @@ class LogicManager:
 
         # ── Start/cancel value sequences ──────────────────────────────────
         wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
+        pending_sequence_starts: list[tuple[Any, bool]] = []
         for node in flow.nodes:
             if node.type != "value_sequence":
                 continue
@@ -2999,7 +3000,10 @@ class LogicManager:
                 edge.target == node.id and (edge.targetHandle or "in") == "trigger" and edge.source in cron_reachable for edge in flow.edges
             )
             if triggered and (not was_triggered or cron_triggered):
-                self._start_value_sequence(graph_id, node, condition, logic_depth, flow.model_dump_json())
+                # Defer creating the task until ordinary datapoint writes have
+                # been published below.  A task created here can otherwise run
+                # at the write loop's first await and invert graph-local order.
+                pending_sequence_starts.append((node, condition))
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
@@ -3075,6 +3079,11 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception as exc:
                 logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
+
+        # Value sequences are intentionally started after synchronous graph
+        # writes, so an execution that triggers both has deterministic order.
+        for node, condition in pending_sequence_starts:
+            self._start_value_sequence(graph_id, node, condition, logic_depth, flow.model_dump_json())
 
         # ── Persist node state (statistics / hysteresis) to DB ───────────
         # Nodes with persist_state=False are excluded from the saved snapshot

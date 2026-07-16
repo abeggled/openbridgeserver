@@ -262,6 +262,36 @@ def test_graph_execution_starts_and_cancels_a_conditioned_sequence() -> None:
     asyncio.run(exercise())
 
 
+def test_graph_execution_writes_datapoints_before_starting_sequences() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        write_target = uuid.uuid4()
+        sequence_target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("trigger", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("value", "const_value", {"value": "7", "data_type": "number"}),
+                    node("write", "datapoint_write", {"datapoint_id": str(write_target)}),
+                    node("sequence", "value_sequence", {"steps": [{"datapoint_id": str(sequence_target), "value": 9}]}),
+                ],
+                "edges": [
+                    edge("trigger", "write", "value", "trigger"),
+                    edge("value", "write", "value", "value"),
+                    edge("trigger", "sequence", "value", "trigger"),
+                ],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+
+        await manager._execute_graph("graph", "Graph", flow, {})
+        await manager._sequence_tasks[("graph", "sequence")]
+
+        assert [call.args[0].source_adapter for call in manager._event_bus.publish.await_args_list] == ["logic", "logic_sequence"]
+
+    asyncio.run(exercise())
+
+
 def test_value_sequence_ignores_a_trigger_while_already_running() -> None:
     async def exercise() -> None:
         manager = _manager()
