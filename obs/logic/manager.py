@@ -841,13 +841,15 @@ class LogicManager:
                             target_dp = self._registry.get(datapoint_id)
                             if target_dp is None:
                                 raise ValueError("target object no longer exists")
-                            await self._event_bus.publish(
-                                DataValueEvent(
-                                    datapoint_id=datapoint_id,
-                                    value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
-                                    quality="good",
-                                    source_adapter="logic_sequence",
-                                    logic_depth=logic_depth + 1,
+                            await asyncio.shield(
+                                self._event_bus.publish(
+                                    DataValueEvent(
+                                        datapoint_id=datapoint_id,
+                                        value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
+                                        quality="good",
+                                        source_adapter="logic_sequence",
+                                        logic_depth=logic_depth + 1,
+                                    )
                                 )
                             )
                         except Exception as exc:
