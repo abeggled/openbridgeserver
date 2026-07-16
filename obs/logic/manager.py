@@ -728,6 +728,7 @@ class LogicManager:
         self._sequence_configs: dict[tuple[str, str], dict[str, Any]] = {}
         self._sequence_graph_signatures: dict[str, str] = {}
         self._sequence_restarts: set[tuple[str, str]] = set()
+        self._sequence_restart_sources: dict[tuple[str, str], asyncio.Task] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -781,11 +782,21 @@ class LogicManager:
         """Cancel active sequences, for shutdown/reload/delete semantics."""
         keys = [key for key in self._sequence_tasks if graph_id is None or key[0] == graph_id]
         for key in keys:
-            self._sequence_tasks.pop(key).cancel()
+            self._cancel_sequence_task(key)
             self._sequence_conditions.pop(key, None)
             self._sequence_queues.pop(key, None)
             self._sequence_queue_depths.pop(key, None)
             self._sequence_configs.pop(key, None)
+
+    def _cancel_sequence_task(self, key: tuple[str, str]) -> None:
+        """Cancel a tracked task and the source it may be restarting."""
+        task = self._sequence_tasks.pop(key, None)
+        source = self._sequence_restart_sources.pop(key, None)
+        self._sequence_restarts.discard(key)
+        if task:
+            task.cancel()
+        if source and source is not task:
+            source.cancel()
 
     @staticmethod
     def _sequence_steps(raw: Any) -> list[dict[str, Any]]:
@@ -935,6 +946,8 @@ class LogicManager:
             self._sequence_tasks[key] = task
         finally:
             self._sequence_restarts.discard(key)
+            if self._sequence_restart_sources.get(key) is active:
+                self._sequence_restart_sources.pop(key, None)
 
     def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0, graph_signature: str = "") -> None:
         key = (graph_id, node.id)
@@ -951,6 +964,7 @@ class LogicManager:
                 if key in self._sequence_restarts:
                     return
                 self._sequence_restarts.add(key)
+                self._sequence_restart_sources[key] = active
                 restart = asyncio.create_task(
                     self._restart_value_sequence(graph_id, node.id, dict(node.data), logic_depth, active),
                     name=f"sequence-restart-{graph_id[:8]}-{node.id[:8]}",
@@ -3033,7 +3047,7 @@ class LogicManager:
                 and not active.done()
                 and active is not asyncio.current_task()
             ):
-                active.cancel()
+                self._cancel_sequence_task(key)
             state = graph_state.setdefault(node.id, {})
             triggered = GraphExecutor._to_bool(output.get("_triggered"))
             # A wired condition gates every sequence mode.  The cancellation
@@ -3131,6 +3145,8 @@ class LogicManager:
         # Value sequences are intentionally started after synchronous graph
         # writes, so an execution that triggers both has deterministic order.
         for node, condition in pending_sequence_starts:
+            if not graph_state.get(node.id, {}).get("sequence_prev_trigger", False):
+                continue
             current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
             if current_condition:
                 self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())

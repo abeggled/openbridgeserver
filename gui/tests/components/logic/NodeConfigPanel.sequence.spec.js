@@ -65,6 +65,16 @@ describe('NodeConfigPanel value sequence', () => {
     w.unmount()
   })
 
+  it('clears the old target when a selected object search is edited', async () => {
+    const w = await mountPanel({ steps: [{ datapoint_id: 'dp-1', datapoint_name: 'Lamp', value: true, delay_ms: 0 }] })
+    const input = w.get('[data-testid="sequence-step-0"]').find('input')
+    await input.setValue('Other Lamp')
+    await flushPromises()
+    const update = w.emitted('update').at(-1)[0]
+    expect(update.steps[0]).toMatchObject({ datapoint_id: '', datapoint_name: '' })
+    w.unmount()
+  })
+
   it('normalises saved JSON steps and keeps edited step values', async () => {
     const w = await mountPanel()
     await w.setProps({ node: { id: 'n1', type: 'value_sequence', data: { steps: JSON.stringify([{ datapoint_id: 'dp-1', datapoint_name: 'Lamp', value: 'off', delay_ms: 0 }]) } } })

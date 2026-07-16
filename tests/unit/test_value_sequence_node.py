@@ -437,6 +437,54 @@ def test_graph_execution_rechecks_sequence_condition_after_datapoint_writes() ->
     asyncio.run(exercise())
 
 
+def test_graph_execution_rechecks_sequence_trigger_after_datapoint_writes() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        write_target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("trigger", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("value", "const_value", {"value": "7", "data_type": "number"}),
+                    node("write", "datapoint_write", {"datapoint_id": str(write_target)}),
+                    node("sequence", "value_sequence", {"steps": [{"datapoint_id": str(uuid.uuid4()), "value": 9}]}),
+                ],
+                "edges": [
+                    edge("trigger", "write", "value", "trigger"),
+                    edge("value", "write", "value", "value"),
+                    edge("trigger", "sequence", "value", "trigger"),
+                ],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+
+        async def publish(event) -> None:
+            if event.source_adapter == "logic":
+                manager._node_state.setdefault("graph", {}).setdefault("sequence", {})["sequence_prev_trigger"] = False
+
+        manager._event_bus.publish.side_effect = publish
+        await manager._execute_graph("graph", "Graph", flow, {})
+        assert ("graph", "sequence") not in manager._sequence_tasks
+
+    asyncio.run(exercise())
+
+
+def test_cancelling_a_restart_also_cancels_its_original_sequence() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        node = SimpleNamespace(id="node", data={"restart_policy": "restart", "steps": [{"delay_ms": 1000}]})
+        manager._start_value_sequence("graph", node, True)
+        original = manager._sequence_tasks[("graph", "node")]
+        manager._start_value_sequence("graph", node, True)
+        restart = manager._sequence_tasks[("graph", "node")]
+        manager._cancel_sequence_tasks("graph")
+        await asyncio.gather(original, restart, return_exceptions=True)
+        assert original.cancelled()
+        assert ("graph", "node") not in manager._sequence_tasks
+
+    asyncio.run(exercise())
+
+
 def test_queued_sequence_does_not_run_after_condition_turns_false() -> None:
     async def exercise() -> None:
         manager = _manager()
