@@ -557,6 +557,19 @@ def test_update_cached_graph_name_preserves_the_running_flow() -> None:
     assert manager._graphs["graph"] == ("New", True, flow)
 
 
+def test_update_cached_graph_refreshes_sequence_signature_for_layout_saves() -> None:
+    manager = _manager()
+    old_flow = FlowData.model_validate({"nodes": [], "edges": []})
+    new_flow = FlowData.model_validate({"nodes": [node("sequence", "value_sequence")], "edges": []})
+    manager._graphs["graph"] = ("Old", True, old_flow)
+
+    manager.update_cached_graph("graph", "New", True, new_flow)
+    manager.update_cached_graph("missing", "Ignored", True, new_flow)
+
+    assert manager._graphs["graph"] == ("New", True, new_flow)
+    assert manager._sequence_graph_signatures["graph"] == new_flow.model_dump_json()
+
+
 def test_value_sequence_ignores_a_trigger_while_already_running() -> None:
     async def exercise() -> None:
         manager = _manager()
