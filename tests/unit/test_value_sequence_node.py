@@ -89,6 +89,9 @@ def test_value_sequence_coercion_supports_numbers_and_rejects_invalid_booleans()
     else:
         raise AssertionError("invalid boolean must be rejected")
 
+    assert manager._coerce_sequence_value(1, "BOOLEAN") is True
+    assert manager._coerce_sequence_value(0, "BOOLEAN") is False
+
 
 def test_value_sequence_repeats_and_stops_when_condition_is_false() -> None:
     manager = _manager()
@@ -120,6 +123,13 @@ def test_value_sequence_repeats_and_stops_when_condition_is_false() -> None:
         ),
     )
     manager._event_bus.publish.assert_not_awaited()
+
+
+def test_repeat_count_uses_the_schema_default_when_omitted() -> None:
+    manager = _manager()
+    target = uuid.uuid4()
+    asyncio.run(manager._run_value_sequence("graph", "node", {"run_mode": "repeat_count", "steps": [{"datapoint_id": str(target), "value": 1}]}))
+    assert manager._event_bus.publish.await_count == 2
 
 
 def test_value_sequence_restart_and_queue_policies() -> None:

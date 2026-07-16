@@ -796,9 +796,9 @@ class LogicManager:
 
     @staticmethod
     def _coerce_sequence_value(value: Any, data_type: str) -> Any:
-        if not isinstance(value, str):
-            return value
         if data_type == "BOOLEAN":
+            if not isinstance(value, str):
+                return bool(value)
             lowered = value.strip().lower()
             if lowered in {"true", "1", "yes", "on"}:
                 return True
@@ -806,15 +806,15 @@ class LogicManager:
                 return False
             raise ValueError(f"invalid boolean value {value!r}")
         if data_type == "INTEGER":
-            return int(value)
+            return int(value) if not isinstance(value, bool) else int(value)
         if data_type == "FLOAT":
             return float(value)
         if data_type == "DATE":
-            return date.fromisoformat(value)
+            return date.fromisoformat(value) if isinstance(value, str) else value
         if data_type == "TIME":
-            return time.fromisoformat(value)
+            return time.fromisoformat(value) if isinstance(value, str) else value
         if data_type == "DATETIME":
-            return datetime.fromisoformat(value)
+            return datetime.fromisoformat(value) if isinstance(value, str) else value
         return value
 
     async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
@@ -830,7 +830,7 @@ class LogicManager:
         if mode == "while_condition" and not self._sequence_conditions.get(key, True):
             return
         try:
-            repetitions = max(1, int(config.get("repeat_count") or 1)) if mode == "repeat_count" else 1
+            repetitions = max(1, int(config.get("repeat_count") or 2)) if mode == "repeat_count" else 1
         except (TypeError, ValueError):
             repetitions = 1
         try:
