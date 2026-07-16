@@ -91,6 +91,13 @@ def test_value_sequence_coercion_supports_numbers_and_rejects_invalid_booleans()
 
     assert manager._coerce_sequence_value(1, "BOOLEAN") is True
     assert manager._coerce_sequence_value(0, "BOOLEAN") is False
+    assert manager._coerce_sequence_value(True, "STRING") == "True"
+    try:
+        manager._coerce_sequence_value(1.5, "INTEGER")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("fractional integers must be rejected")
 
 
 def test_value_sequence_repeats_and_stops_when_condition_is_false() -> None:

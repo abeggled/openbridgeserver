@@ -56,6 +56,7 @@ _THROTTLE_UNITS: dict[str, float] = {
     "h": 3_600_000.0,
 }
 _MAX_LOGIC_CASCADE_DEPTH = 10
+_MAX_SEQUENCE_REPEAT_COUNT = 10_000
 
 _ICAL_MAX_BYTES = 1_048_576
 _ICAL_MAX_REDIRECTS = 5
@@ -806,7 +807,9 @@ class LogicManager:
                 return False
             raise ValueError(f"invalid boolean value {value!r}")
         if data_type == "INTEGER":
-            return int(value) if not isinstance(value, bool) else int(value)
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError(f"fractional integer value {value!r}")
+            return int(value)
         if data_type == "FLOAT":
             return float(value)
         if data_type == "DATE":
@@ -815,6 +818,8 @@ class LogicManager:
             return time.fromisoformat(value) if isinstance(value, str) else value
         if data_type == "DATETIME":
             return datetime.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "STRING":
+            return str(value)
         return value
 
     async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
@@ -830,7 +835,7 @@ class LogicManager:
         if mode == "while_condition" and not self._sequence_conditions.get(key, True):
             return
         try:
-            repetitions = max(1, int(config.get("repeat_count") or 2)) if mode == "repeat_count" else 1
+            repetitions = min(_MAX_SEQUENCE_REPEAT_COUNT, max(1, int(config.get("repeat_count") or 2))) if mode == "repeat_count" else 1
         except (TypeError, ValueError):
             repetitions = 1
         try:
@@ -877,6 +882,8 @@ class LogicManager:
                 repetitions -= 1
                 if repetitions <= 0:
                     return
+                if mode == "repeat_count" and not slept:
+                    await asyncio.sleep(0)
         except asyncio.CancelledError:
             raise
         finally:
