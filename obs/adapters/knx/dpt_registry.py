@@ -880,6 +880,24 @@ def _register_builtin_dpts() -> None:
             _dpt13_encode,
             _dpt13_decode,
         ),
+        DPTDefinition(
+            "DPT13.012",
+            "Reactive Energy (VARh)",
+            "INTEGER",
+            "VARh",
+            4,
+            _dpt13_encode,
+            _dpt13_decode,
+        ),
+        DPTDefinition(
+            "DPT13.015",
+            "Reactive Energy (kVARh)",
+            "INTEGER",
+            "kVARh",
+            4,
+            _dpt13_encode,
+            _dpt13_decode,
+        ),
         # DPT 14 — 32-bit IEEE float (vollständig nach KNX-Spec v02.02.01)
         DPTDefinition(
             "DPT14.000",
