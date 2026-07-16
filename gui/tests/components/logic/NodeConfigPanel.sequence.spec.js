@@ -3,11 +3,13 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 const search = vi.fn()
+const list = vi.fn()
 beforeEach(() => {
   vi.resetModules()
   search.mockResolvedValue({ data: { items: [{ id: 'dp-1', name: 'Lamp', data_type: 'bool' }] } })
+  list.mockResolvedValue({ data: { items: [] } })
   vi.doMock('@/api/client', () => ({
-    dpApi: { list: vi.fn().mockResolvedValue({ data: { items: [] } }) },
+    dpApi: { list },
     searchApi: { search }, securityApi: { checkUrlTarget: vi.fn(), addUrlTarget: vi.fn() },
     messageArchivesApi: { list: vi.fn().mockResolvedValue({ data: [] }) },
     messageArchivesApi: { list: vi.fn().mockResolvedValue({ data: [] }) },
@@ -60,6 +62,38 @@ describe('NodeConfigPanel value sequence', () => {
     await flushPromises()
     expect(input.element.value).toBe('Lamp')
     expect(search).toHaveBeenCalledWith({ q: 'Lamp', size: 50 })
+    w.unmount()
+  })
+
+  it('normalises saved JSON steps and keeps edited step values', async () => {
+    const w = await mountPanel()
+    await w.setProps({ node: { id: 'n1', type: 'value_sequence', data: { steps: JSON.stringify([{ datapoint_id: 'dp-1', datapoint_name: 'Lamp', value: 'off', delay_ms: 0 }]) } } })
+    await flushPromises()
+    const inputs = w.get('[data-testid="sequence-step-0"]').findAll('input')
+    await inputs[1].setValue('on')
+    await inputs[2].setValue(250)
+    await flushPromises()
+
+    const update = w.emitted('update').at(-1)[0]
+    expect(update.steps[0]).toMatchObject({ datapoint_id: 'dp-1', value: 'on', delay_ms: 250 })
+    w.unmount()
+  })
+
+  it('handles malformed steps and empty or failed object searches', async () => {
+    const w = await mountPanel()
+    await w.setProps({ node: { id: 'n1', type: 'value_sequence', data: { steps: 'not valid JSON' } } })
+    await flushPromises()
+    expect(w.findAll('[data-testid^="sequence-step-"]')).toHaveLength(0)
+    await w.get('[data-testid="sequence-add"]').trigger('click')
+    const input = w.get('[data-testid="sequence-step-0"]').find('input')
+    await input.setValue('')
+    await flushPromises()
+    expect(list).toHaveBeenCalledWith(0, 50)
+
+    search.mockRejectedValueOnce(new Error('search unavailable'))
+    await input.setValue('Lamp')
+    await flushPromises()
+    expect(w.get('[data-testid="sequence-step-0"]').findAll('button')).toHaveLength(4)
     w.unmount()
   })
 })

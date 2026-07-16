@@ -142,6 +142,12 @@ describe('GenericNode — summary', () => {
     expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')).toHaveLength(0)
   })
 
+  it('falls back to the configured value-sequence mode when it is not translated', async () => {
+    const w = await mountGN('value_sequence', { run_mode: 'custom', steps: JSON.stringify([{}]) })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toContain('custom')
+  })
+
   it('shows decision rule count summary', async () => {
     const w = await mountGN('decision', {
       conditions: JSON.stringify([
