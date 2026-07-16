@@ -213,6 +213,8 @@ def test_value_sequence_restart_waits_for_the_cancelled_task() -> None:
         restart = manager._sequence_tasks[("graph", "node")]
         await asyncio.sleep(0)
         assert not restart.done()
+        manager._start_value_sequence("graph", node, True)
+        assert manager._sequence_tasks[("graph", "node")] is restart
         allow_first_publish.set()
         await restart
         replacement = manager._sequence_tasks[("graph", "node")]

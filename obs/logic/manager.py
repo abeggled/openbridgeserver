@@ -727,6 +727,7 @@ class LogicManager:
         self._sequence_queue_depths: dict[tuple[str, str], int] = {}
         self._sequence_configs: dict[tuple[str, str], dict[str, Any]] = {}
         self._sequence_graph_signatures: dict[str, str] = {}
+        self._sequence_restarts: set[tuple[str, str]] = set()
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -919,18 +920,21 @@ class LogicManager:
     async def _restart_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int, active: asyncio.Task) -> None:
         """Stop a sequence completely before launching its restart replacement."""
         key = (graph_id, node_id)
-        active.cancel()
         try:
-            await active
-        except asyncio.CancelledError:
-            pass
-        if self._sequence_tasks.get(key) is not asyncio.current_task():
-            return
-        task = asyncio.create_task(
-            self._run_value_sequence(graph_id, node_id, config, logic_depth),
-            name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
-        )
-        self._sequence_tasks[key] = task
+            active.cancel()
+            try:
+                await active
+            except asyncio.CancelledError:
+                pass
+            if self._sequence_tasks.get(key) is not asyncio.current_task():
+                return
+            task = asyncio.create_task(
+                self._run_value_sequence(graph_id, node_id, config, logic_depth),
+                name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+            )
+            self._sequence_tasks[key] = task
+        finally:
+            self._sequence_restarts.discard(key)
 
     def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0, graph_signature: str = "") -> None:
         key = (graph_id, node.id)
@@ -941,6 +945,12 @@ class LogicManager:
         if active and not active.done():
             policy = node.data.get("restart_policy", "ignore")
             if policy == "restart":
+                # The task slot holds the restart helper while it awaits the
+                # original task.  Coalesce rapid retriggers so they cannot
+                # cancel the helper and detach from that original publish.
+                if key in self._sequence_restarts:
+                    return
+                self._sequence_restarts.add(key)
                 restart = asyncio.create_task(
                     self._restart_value_sequence(graph_id, node.id, dict(node.data), logic_depth, active),
                     name=f"sequence-restart-{graph_id[:8]}-{node.id[:8]}",
