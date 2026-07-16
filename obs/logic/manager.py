@@ -859,7 +859,7 @@ class LogicManager:
             while True:
                 slept = False
                 for step in steps:
-                    if config.get("cancel_when_condition_false") and not self._sequence_conditions.get(key, True):
+                    if (mode == "while_condition" or config.get("cancel_when_condition_false")) and not self._sequence_conditions.get(key, True):
                         logger.info("Value sequence cancelled: graph=%s node=%s", graph_id[:8], node_id[:8])
                         return
                     target = str(step.get("datapoint_id") or "").strip()
@@ -3076,7 +3076,12 @@ class LogicManager:
                     if edge.target != target_id:
                         continue
                     source = node_by_id.get(edge.source)
-                    if source and source.type == "datapoint_read" and (edge.sourceHandle or "out") == "changed":
+                    if (
+                        source
+                        and source.type == "datapoint_read"
+                        and (edge.sourceHandle or "out") == "changed"
+                        and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                    ):
                         datapoint_change_triggered = True
                         break
                     pulse_sources.append(edge.source)
@@ -3273,3 +3278,4 @@ class LogicManager:
         """Apply a layout-only save without interrupting active sequences."""
         if graph_id in self._graphs:
             self._graphs[graph_id] = (name, enabled, flow)
+            self._sequence_graph_signatures[graph_id] = flow.model_dump_json()
