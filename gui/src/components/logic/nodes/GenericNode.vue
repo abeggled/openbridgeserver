@@ -279,7 +279,11 @@ const summary = computed(() => {
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`
   if (props.type === 'timer_delay')  return `${d.delay_s ?? 1} s`
   if (props.type === 'timer_pulse')  return `${d.duration_s ?? 1} s`
-  if (props.type === 'value_sequence') return t('logic.summary.sequence', { n: parseRowList(d.steps).length, mode: d.run_mode || 'once' })
+  if (props.type === 'value_sequence') {
+    const mode = d.run_mode || 'once'
+    const key = `logic.nodeConfig.value_sequence.modes.${mode}`
+    return t('logic.summary.sequence', { n: parseRowList(d.steps).length, mode: te(key) ? t(key) : mode })
+  }
   if (props.type === 'timer_cron')   return d.cron || '0 7 * * *'
   if (props.type === 'mcp_tool')     return d.tool_name || '—'
   if (props.type === 'astro_sun')       return `${d.latitude ?? 47.37}° N  ${d.longitude ?? 8.54}° E`
