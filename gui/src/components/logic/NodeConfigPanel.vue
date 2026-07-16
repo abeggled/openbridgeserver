@@ -2062,7 +2062,11 @@ watch(() => props.node, (n) => {
       loadMessageArchives()
     }
     if (n.type === 'value_sequence') {
-      localData.value.steps = Array.isArray(n.data.steps) ? n.data.steps : []
+      let steps = n.data.steps
+      if (typeof steps === 'string') {
+        try { steps = JSON.parse(steps) } catch { steps = [] }
+      }
+      localData.value.steps = Array.isArray(steps) ? steps : []
       sequenceSearches.value = localData.value.steps.map(step => step.datapoint_name || '')
       sequenceDpResults.value = localData.value.steps.map(() => [])
     }

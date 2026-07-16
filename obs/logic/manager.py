@@ -2964,7 +2964,7 @@ class LogicManager:
             condition = GraphExecutor._to_bool(output.get("_condition")) if (node.id, "condition") in wired_inputs else True
             self._sequence_conditions[key] = condition
             active = self._sequence_tasks.get(key)
-            if node.data.get("cancel_when_condition_false") and not condition and active and not active.done():
+            if node.data.get("cancel_when_condition_false") and not condition and active and not active.done() and active is not asyncio.current_task():
                 active.cancel()
             state = graph_state.setdefault(node.id, {})
             triggered = GraphExecutor._to_bool(output.get("_triggered"))
