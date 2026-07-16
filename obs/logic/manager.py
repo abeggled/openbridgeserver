@@ -723,7 +723,9 @@ class LogicManager:
         self._sequence_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         self._sequence_conditions: dict[tuple[str, str], bool] = {}
         self._sequence_queues: dict[tuple[str, str], int] = {}
+        self._sequence_queue_depths: dict[tuple[str, str], int] = {}
         self._sequence_configs: dict[tuple[str, str], dict[str, Any]] = {}
+        self._sequence_graph_signatures: dict[str, str] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -766,6 +768,7 @@ class LogicManager:
                 or node is None
                 or node.type != "value_sequence"
                 or node.data != self._sequence_configs.get((graph_id, node_id))
+                or entry[2].model_dump_json() != self._sequence_graph_signatures.get(graph_id)
             ):
                 self._cancel_sequence_tasks(graph_id)
         self._start_cron_tasks()
@@ -779,6 +782,7 @@ class LogicManager:
             self._sequence_tasks.pop(key).cancel()
             self._sequence_conditions.pop(key, None)
             self._sequence_queues.pop(key, None)
+            self._sequence_queue_depths.pop(key, None)
             self._sequence_configs.pop(key, None)
 
     @staticmethod
@@ -871,19 +875,22 @@ class LogicManager:
             if self._sequence_tasks.get(key) is asyncio.current_task():
                 self._sequence_tasks.pop(key, None)
                 queued = self._sequence_queues.pop(key, 0)
+                queued_depth = self._sequence_queue_depths.pop(key, logic_depth)
                 if queued:
                     if queued > 1:
                         self._sequence_queues[key] = queued - 1
+                        self._sequence_queue_depths[key] = queued_depth
                     task = asyncio.create_task(
-                        self._run_value_sequence(graph_id, node_id, config, logic_depth),
+                        self._run_value_sequence(graph_id, node_id, config, queued_depth),
                         name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
                     )
                     self._sequence_tasks[key] = task
 
-    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0) -> None:
+    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0, graph_signature: str = "") -> None:
         key = (graph_id, node.id)
         self._sequence_conditions[key] = condition
         self._sequence_configs[key] = dict(node.data)
+        self._sequence_graph_signatures[graph_id] = graph_signature
         active = self._sequence_tasks.get(key)
         if active and not active.done():
             policy = node.data.get("restart_policy", "ignore")
@@ -891,6 +898,7 @@ class LogicManager:
                 active.cancel()
             elif policy == "queue":
                 self._sequence_queues[key] = self._sequence_queues.get(key, 0) + 1
+                self._sequence_queue_depths[key] = max(self._sequence_queue_depths.get(key, 0), logic_depth)
                 return
             else:
                 return
@@ -2966,7 +2974,7 @@ class LogicManager:
                 edge.target == node.id and (edge.targetHandle or "in") == "trigger" and edge.source in cron_reachable for edge in flow.edges
             )
             if triggered and (not was_triggered or cron_triggered):
-                self._start_value_sequence(graph_id, node, condition, logic_depth)
+                self._start_value_sequence(graph_id, node, condition, logic_depth, flow.model_dump_json())
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
