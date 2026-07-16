@@ -1264,6 +1264,8 @@ const valueMapCustom     = ref('')
 const valueMapCustomError = ref('')
 const sequenceDpResults = ref([])
 const sequenceSearches = ref([])
+const sequenceSearchDrafts = ref([])
+const sequenceSearchNodeId = ref(null)
 const urlTargetChecking = ref(false)
 const urlTargetSaving = ref(false)
 const urlTargetDecision = ref(null)
@@ -2062,12 +2064,16 @@ watch(() => props.node, (n) => {
       loadMessageArchives()
     }
     if (n.type === 'value_sequence') {
+      if (sequenceSearchNodeId.value !== n.id) {
+        sequenceSearchNodeId.value = n.id
+        sequenceSearchDrafts.value = []
+      }
       let steps = n.data.steps
       if (typeof steps === 'string') {
         try { steps = JSON.parse(steps) } catch { steps = [] }
       }
       localData.value.steps = Array.isArray(steps) ? steps : []
-      sequenceSearches.value = localData.value.steps.map(step => step.datapoint_name || '')
+      sequenceSearches.value = localData.value.steps.map((step, index) => step.datapoint_name || sequenceSearchDrafts.value[index] || '')
       sequenceDpResults.value = localData.value.steps.map(() => [])
     }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
@@ -2192,7 +2198,7 @@ function selectDp(dp) {
 }
 
 function syncSequencePickerState() { sequenceSearches.value = sequenceSteps.value.map(step => step.datapoint_name || ''); sequenceDpResults.value = sequenceSteps.value.map(() => []) }
-function onSequenceSearchInput(index) { const steps = [...sequenceSteps.value]; if (steps[index]?.datapoint_id && sequenceSearches.value[index] !== steps[index].datapoint_name) { steps[index] = { ...steps[index], datapoint_id: '', datapoint_name: '' }; localData.value.steps = steps }; searchSequenceDps(index, sequenceSearches.value[index]) }
+function onSequenceSearchInput(index) { const steps = [...sequenceSteps.value]; if (steps[index]?.datapoint_id && sequenceSearches.value[index] !== steps[index].datapoint_name) { sequenceSearchDrafts.value[index] = sequenceSearches.value[index]; steps[index] = { ...steps[index], datapoint_id: '', datapoint_name: '' }; localData.value.steps = steps; emitUpdate() }; searchSequenceDps(index, sequenceSearches.value[index]) }
 function saveSequenceSteps() { localData.value.steps = sequenceSteps.value; syncSequencePickerState(); emitUpdate() }
 function addSequenceStep() { localData.value.steps = [...sequenceSteps.value, { datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }]; syncSequencePickerState(); emitUpdate() }
 function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index, 1); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
@@ -2200,7 +2206,7 @@ function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; 
 function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; syncSequencePickerState(); emitUpdate() }
 async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
-function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
+function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearchDrafts.value[index] = ''; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function addApiVariable() {
   const variables = normaliseApiVariables(localData.value.variables)

@@ -3033,6 +3033,7 @@ class LogicManager:
 
         # ── Start/cancel value sequences ──────────────────────────────────
         wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
+        node_by_id = {node.id: node for node in flow.nodes}
         pending_sequence_starts: list[tuple[Any, bool]] = []
         for node in flow.nodes:
             if node.type != "value_sequence":
@@ -3063,7 +3064,15 @@ class LogicManager:
             cron_triggered = any(
                 edge.target == node.id and (edge.targetHandle or "in") == "trigger" and edge.source in cron_reachable for edge in flow.edges
             )
-            if triggered and (not was_triggered or cron_triggered):
+            datapoint_change_triggered = any(
+                edge.target == node.id
+                and (edge.targetHandle or "in") == "trigger"
+                and (edge.sourceHandle or "out") == "changed"
+                and node_by_id.get(edge.source) is not None
+                and node_by_id[edge.source].type == "datapoint_read"
+                for edge in flow.edges
+            )
+            if triggered and (not was_triggered or cron_triggered or datapoint_change_triggered):
                 # Defer creating the task until ordinary datapoint writes have
                 # been published below.  A task created here can otherwise run
                 # at the write loop's first await and invert graph-local order.

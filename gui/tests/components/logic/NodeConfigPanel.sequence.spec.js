@@ -68,11 +68,13 @@ describe('NodeConfigPanel value sequence', () => {
   it('clears the old target when a selected object search is edited', async () => {
     const w = await mountPanel({ steps: [{ datapoint_id: 'dp-1', datapoint_name: 'Lamp', value: true, delay_ms: 0 }] })
     const input = w.get('[data-testid="sequence-step-0"]').find('input')
-    const updates = w.emitted('update')?.length ?? 0
     await input.setValue('Other Lamp')
     await flushPromises()
-    expect(input.element.value).toBe('Other Lamp')
-    expect(w.emitted('update')?.length ?? 0).toBe(updates)
+    const update = w.emitted('update').at(-1)[0]
+    expect(update.steps[0]).toMatchObject({ datapoint_id: '', datapoint_name: '' })
+    await w.setProps({ node: { id: 'n1', type: 'value_sequence', data: update } })
+    await flushPromises()
+    expect(w.get('[data-testid="sequence-step-0"]').find('input').element.value).toBe('Other Lamp')
     w.unmount()
   })
 

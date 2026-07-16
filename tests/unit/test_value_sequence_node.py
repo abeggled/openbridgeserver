@@ -469,6 +469,31 @@ def test_graph_execution_rechecks_sequence_trigger_after_datapoint_writes() -> N
     asyncio.run(exercise())
 
 
+def test_datapoint_change_pulses_retrigger_a_sequence() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("read", "datapoint_read", {"datapoint_id": str(uuid.uuid4())}),
+                    node("sequence", "value_sequence", {"restart_policy": "queue", "steps": [{"datapoint_id": str(target), "value": 1}]}),
+                ],
+                "edges": [edge("read", "sequence", "changed", "trigger")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+
+        await manager._execute_graph("graph", "Graph", flow, {"read": {"value": 1, "changed": True}})
+        await manager._sequence_tasks[("graph", "sequence")]
+        await manager._execute_graph("graph", "Graph", flow, {"read": {"value": 2, "changed": True}})
+        await manager._sequence_tasks[("graph", "sequence")]
+
+        assert manager._event_bus.publish.await_count == 2
+
+    asyncio.run(exercise())
+
+
 def test_cancelling_a_restart_also_cancels_its_original_sequence() -> None:
     async def exercise() -> None:
         manager = _manager()
