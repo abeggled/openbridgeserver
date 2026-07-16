@@ -634,11 +634,15 @@ class TestUpdateGraphPartial:
         db = _DbStub()
         db.fetchone = _fetchone
 
-        with patch("obs.logic.manager.get_logic_manager", side_effect=RuntimeError("no manager")):
+        manager = MagicMock()
+        manager.reload = AsyncMock()
+        with patch("obs.logic.manager.get_logic_manager", return_value=manager):
             result = await update_graph_partial(graph_id=gid, body=body, _user="user", db=db)
 
         assert result.name == "New"
         assert result.description == "Desc"
+        manager.invalidate_cache.assert_not_called()
+        manager.reload.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_partial_update_enabled_only(self):

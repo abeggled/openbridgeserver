@@ -200,13 +200,17 @@ async def update_graph_partial(
            WHERE id=?""",
         (name, description, int(enabled), flow_json, now, graph_id),
     )
-    try:
-        from obs.logic.manager import get_logic_manager
+    # A title/description change does not alter execution.  Keeping the cache
+    # intact preserves in-flight value sequences; flow or enabled changes need
+    # the normal reload and cancellation semantics.
+    if body.flow_data is not None or body.enabled is not None:
+        try:
+            from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().invalidate_cache(graph_id)
-        await get_logic_manager().reload()
-    except Exception:
-        pass
+            get_logic_manager().invalidate_cache(graph_id)
+            await get_logic_manager().reload()
+        except Exception:
+            pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     return _row_to_out(row)
 

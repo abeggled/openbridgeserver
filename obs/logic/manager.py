@@ -835,7 +835,10 @@ class LogicManager:
         if mode == "while_condition" and not self._sequence_conditions.get(key, True):
             return
         try:
-            repetitions = min(_MAX_SEQUENCE_REPEAT_COUNT, max(1, int(config.get("repeat_count") or 2))) if mode == "repeat_count" else 1
+            raw_repeat_count = config.get("repeat_count", 2)
+            repetitions = (
+                min(_MAX_SEQUENCE_REPEAT_COUNT, max(1, int(2 if raw_repeat_count is None else raw_repeat_count))) if mode == "repeat_count" else 1
+            )
         except (TypeError, ValueError):
             repetitions = 1
         try:
@@ -852,15 +855,13 @@ class LogicManager:
                             target_dp = self._registry.get(datapoint_id)
                             if target_dp is None:
                                 raise ValueError("target object no longer exists")
-                            await asyncio.shield(
-                                self._event_bus.publish(
-                                    DataValueEvent(
-                                        datapoint_id=datapoint_id,
-                                        value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
-                                        quality="good",
-                                        source_adapter="logic_sequence",
-                                        logic_depth=logic_depth + 1,
-                                    )
+                            await self._event_bus.publish(
+                                DataValueEvent(
+                                    datapoint_id=datapoint_id,
+                                    value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
+                                    quality="good",
+                                    source_adapter="logic_sequence",
+                                    logic_depth=logic_depth + 1,
                                 )
                             )
                         except Exception as exc:
@@ -901,6 +902,22 @@ class LogicManager:
                     )
                     self._sequence_tasks[key] = task
 
+    async def _restart_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int, active: asyncio.Task) -> None:
+        """Stop a sequence completely before launching its restart replacement."""
+        key = (graph_id, node_id)
+        active.cancel()
+        try:
+            await active
+        except asyncio.CancelledError:
+            pass
+        if self._sequence_tasks.get(key) is not asyncio.current_task():
+            return
+        task = asyncio.create_task(
+            self._run_value_sequence(graph_id, node_id, config, logic_depth),
+            name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+        )
+        self._sequence_tasks[key] = task
+
     def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0, graph_signature: str = "") -> None:
         key = (graph_id, node.id)
         self._sequence_conditions[key] = condition
@@ -910,7 +927,12 @@ class LogicManager:
         if active and not active.done():
             policy = node.data.get("restart_policy", "ignore")
             if policy == "restart":
-                active.cancel()
+                restart = asyncio.create_task(
+                    self._restart_value_sequence(graph_id, node.id, dict(node.data), logic_depth, active),
+                    name=f"sequence-restart-{graph_id[:8]}-{node.id[:8]}",
+                )
+                self._sequence_tasks[key] = restart
+                return
             elif policy == "queue":
                 self._sequence_queues[key] = self._sequence_queues.get(key, 0) + 1
                 self._sequence_queue_depths[key] = max(self._sequence_queue_depths.get(key, 0), logic_depth)
@@ -2990,7 +3012,9 @@ class LogicManager:
                 active.cancel()
             state = graph_state.setdefault(node.id, {})
             triggered = GraphExecutor._to_bool(output.get("_triggered"))
-            blocked = not condition and (node.data.get("run_mode") == "while_condition" or node.data.get("cancel_when_condition_false"))
+            # A wired condition gates every sequence mode.  The cancellation
+            # setting controls only whether an already-running task is stopped.
+            blocked = not condition
             if blocked:
                 state["sequence_prev_trigger"] = False
                 continue

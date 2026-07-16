@@ -139,6 +139,17 @@ def test_repeat_count_uses_the_schema_default_when_omitted() -> None:
     assert manager._event_bus.publish.await_count == 2
 
 
+def test_repeat_count_clamps_zero_to_one() -> None:
+    manager = _manager()
+    target = uuid.uuid4()
+    asyncio.run(
+        manager._run_value_sequence(
+            "graph", "node", {"run_mode": "repeat_count", "repeat_count": 0, "steps": [{"datapoint_id": str(target), "value": 1}]}
+        )
+    )
+    manager._event_bus.publish.assert_awaited_once()
+
+
 def test_value_sequence_restart_and_queue_policies() -> None:
     async def exercise() -> None:
         manager = _manager()
@@ -156,14 +167,52 @@ def test_value_sequence_restart_and_queue_policies() -> None:
         restarted = manager._sequence_tasks[("graph", "node")]
         assert restarted is not original
         await restarted
+        restarted = manager._sequence_tasks[("graph", "node")]
+        await restarted
 
+        manager._event_bus.publish.reset_mock()
         node.data["restart_policy"] = "queue"
         manager._start_value_sequence("graph", node, True)
         manager._start_value_sequence("graph", node, True)
         assert manager._sequence_queues[("graph", "node")] == 1
         await manager._sequence_tasks[("graph", "node")]
         await manager._sequence_tasks[("graph", "node")]
-        assert manager._event_bus.publish.await_count == 3
+        assert manager._event_bus.publish.await_count == 2
+
+    asyncio.run(exercise())
+
+
+def test_value_sequence_restart_waits_for_the_cancelled_task() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        first_publish_started = asyncio.Event()
+        allow_publish = asyncio.Event()
+        active_publishes = 0
+        max_active_publishes = 0
+
+        async def publish(event) -> None:
+            nonlocal active_publishes, max_active_publishes
+            active_publishes += 1
+            max_active_publishes = max(max_active_publishes, active_publishes)
+            first_publish_started.set()
+            try:
+                await allow_publish.wait()
+            finally:
+                active_publishes -= 1
+
+        manager._event_bus.publish.side_effect = publish
+        node = SimpleNamespace(id="node", data={"restart_policy": "restart", "steps": [{"datapoint_id": str(target), "value": 1}]})
+        manager._start_value_sequence("graph", node, True)
+        await first_publish_started.wait()
+        manager._start_value_sequence("graph", node, True)
+        restart = manager._sequence_tasks[("graph", "node")]
+        await restart
+        replacement = manager._sequence_tasks[("graph", "node")]
+        assert replacement is not restart
+        assert max_active_publishes == 1
+        allow_publish.set()
+        await replacement
 
     asyncio.run(exercise())
 
@@ -258,6 +307,27 @@ def test_graph_execution_starts_and_cancels_a_conditioned_sequence() -> None:
         # launch a duplicate task until it sees a new rising edge.
         await manager._execute_graph("graph", "Graph", flow, {})
         assert ("graph", "sequence") not in manager._sequence_tasks
+
+    asyncio.run(exercise())
+
+
+def test_graph_execution_does_not_start_sequence_when_condition_is_false() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("trigger", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("condition", "const_value", {"value": "false", "data_type": "bool"}),
+                    node("sequence", "value_sequence", {"steps": [{"datapoint_id": str(uuid.uuid4()), "value": 1}]}),
+                ],
+                "edges": [edge("trigger", "sequence", "value", "trigger"), edge("condition", "sequence", "value", "condition")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        await manager._execute_graph("graph", "Graph", flow, {})
+        assert ("graph", "sequence") not in manager._sequence_tasks
+        manager._event_bus.publish.assert_not_awaited()
 
     asyncio.run(exercise())
 
