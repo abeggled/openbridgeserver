@@ -2423,7 +2423,7 @@
       "autobackupDesc": "Daily automatic JSON backup of all configuration data (adapters, objects, logic module, Visu, icons, etc.). Backups are stored locally in the data directory.",
       "autobackupEnable": "Enable Autobackup",
       "autobackupTime": "Time of daily backup",
-      "autobackupUhr": "",
+      "autobackupUhr": "O'clock",
       "autobackupRetention": "Number of backups to keep (days)",
       "retentionDay": "day",
       "retentionDays": "days",
