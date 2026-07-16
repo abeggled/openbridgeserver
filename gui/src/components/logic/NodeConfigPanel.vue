@@ -313,7 +313,7 @@
         </div>
         <div v-for="(step, index) in sequenceSteps" :key="index" class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2" :data-testid="`sequence-step-${index}`">
           <div class="flex justify-between items-center"><span class="text-xs font-semibold text-amber-400">{{ $t('logic.nodeConfig.value_sequence.step', { n: index + 1 }) }}</span><div class="flex gap-2"><button class="text-xs" @click="moveSequenceStep(index, -1)">↑</button><button class="text-xs" @click="moveSequenceStep(index, 1)">↓</button><button class="text-xs text-teal-400" @click="duplicateSequenceStep(index)">{{ $t('logic.nodeConfig.value_sequence.duplicate') }}</button><button class="text-xs text-red-400" @click="removeSequenceStep(index)">×</button></div></div>
-          <input v-model="sequenceSearches[index]" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="searchSequenceDps(index, sequenceSearches[index])" />
+          <input v-model="sequenceSearches[index]" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="onSequenceSearchInput(index)" />
           <div v-if="sequenceDpResults[index]?.length" class="max-h-24 overflow-y-auto border border-slate-700 rounded">
             <button v-for="dp in sequenceDpResults[index]" :key="dp.id" class="block w-full text-left px-2 py-1 text-xs hover:bg-slate-700" @click="selectSequenceDp(index, dp)">{{ dp.name }} <span class="text-slate-500">{{ dp.data_type }}</span></button>
           </div>
@@ -2192,6 +2192,7 @@ function selectDp(dp) {
 }
 
 function syncSequencePickerState() { sequenceSearches.value = sequenceSteps.value.map(step => step.datapoint_name || ''); sequenceDpResults.value = sequenceSteps.value.map(() => []) }
+function onSequenceSearchInput(index) { if (!sequenceSearches.value[index]) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: '', datapoint_name: '' }; localData.value.steps = steps; emitUpdate() }; searchSequenceDps(index, sequenceSearches.value[index]) }
 function saveSequenceSteps() { localData.value.steps = sequenceSteps.value; syncSequencePickerState(); emitUpdate() }
 function addSequenceStep() { localData.value.steps = [...sequenceSteps.value, { datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }]; syncSequencePickerState(); emitUpdate() }
 function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index, 1); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }

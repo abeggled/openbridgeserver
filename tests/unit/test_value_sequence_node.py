@@ -234,8 +234,7 @@ def test_graph_execution_starts_and_cancels_a_conditioned_sequence() -> None:
         )
         manager._graphs["graph"] = ("Graph", True, flow)
         await manager._execute_graph("graph", "Graph", flow, {})
-        task = manager._sequence_tasks[("graph", "sequence")]
-        await asyncio.gather(task, return_exceptions=True)
+        assert ("graph", "sequence") not in manager._sequence_tasks
         manager._event_bus.publish.assert_not_awaited()
 
         # The level trigger stays high, so the manager records it but does not

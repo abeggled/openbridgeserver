@@ -21,7 +21,7 @@ import re
 import socket
 import stat
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
@@ -809,6 +809,12 @@ class LogicManager:
             return int(value)
         if data_type == "FLOAT":
             return float(value)
+        if data_type == "DATE":
+            return date.fromisoformat(value)
+        if data_type == "TIME":
+            return time.fromisoformat(value)
+        if data_type == "DATETIME":
+            return datetime.fromisoformat(value)
         return value
 
     async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
@@ -2976,6 +2982,10 @@ class LogicManager:
                 active.cancel()
             state = graph_state.setdefault(node.id, {})
             triggered = GraphExecutor._to_bool(output.get("_triggered"))
+            blocked = not condition and (node.data.get("run_mode") == "while_condition" or node.data.get("cancel_when_condition_false"))
+            if blocked:
+                state["sequence_prev_trigger"] = False
+                continue
             was_triggered = state.get("sequence_prev_trigger", False)
             state["sequence_prev_trigger"] = triggered
             cron_triggered = any(
