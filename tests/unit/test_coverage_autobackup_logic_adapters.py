@@ -643,6 +643,7 @@ class TestUpdateGraphPartial:
         assert result.description == "Desc"
         manager.invalidate_cache.assert_not_called()
         manager.reload.assert_not_awaited()
+        manager.update_cached_graph_name.assert_called_once_with(gid, "New")
 
     @pytest.mark.asyncio
     async def test_partial_update_enabled_only(self):

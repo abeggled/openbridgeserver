@@ -211,6 +211,13 @@ async def update_graph_partial(
             await get_logic_manager().reload()
         except Exception:
             pass
+    else:
+        try:
+            from obs.logic.manager import get_logic_manager
+
+            get_logic_manager().update_cached_graph_name(graph_id, name)
+        except Exception:
+            pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     return _row_to_out(row)
 

@@ -855,15 +855,29 @@ class LogicManager:
                             target_dp = self._registry.get(datapoint_id)
                             if target_dp is None:
                                 raise ValueError("target object no longer exists")
-                            await self._event_bus.publish(
-                                DataValueEvent(
-                                    datapoint_id=datapoint_id,
-                                    value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
-                                    quality="good",
-                                    source_adapter="logic_sequence",
-                                    logic_depth=logic_depth + 1,
+                            publish_task = asyncio.create_task(
+                                self._event_bus.publish(
+                                    DataValueEvent(
+                                        datapoint_id=datapoint_id,
+                                        value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
+                                        quality="good",
+                                        source_adapter="logic_sequence",
+                                        logic_depth=logic_depth + 1,
+                                    )
                                 )
                             )
+                            try:
+                                await asyncio.shield(publish_task)
+                            except asyncio.CancelledError:
+                                # A write can synchronously re-run this graph
+                                # and cancel its own sequence.  Complete the
+                                # already-emitted event before stopping so all
+                                # EventBus subscribers see the write.
+                                try:
+                                    await asyncio.shield(publish_task)
+                                except Exception:
+                                    pass
+                                raise
                         except Exception as exc:
                             logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
                     try:
@@ -892,7 +906,7 @@ class LogicManager:
                 self._sequence_tasks.pop(key, None)
                 queued = self._sequence_queues.pop(key, 0)
                 queued_depth = self._sequence_queue_depths.pop(key, logic_depth)
-                if queued:
+                if queued and self._sequence_conditions.get(key, True):
                     if queued > 1:
                         self._sequence_queues[key] = queued - 1
                         self._sequence_queue_depths[key] = queued_depth
@@ -3107,7 +3121,9 @@ class LogicManager:
         # Value sequences are intentionally started after synchronous graph
         # writes, so an execution that triggers both has deterministic order.
         for node, condition in pending_sequence_starts:
-            self._start_value_sequence(graph_id, node, condition, logic_depth, flow.model_dump_json())
+            current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
+            if current_condition:
+                self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
 
         # ── Persist node state (statistics / hysteresis) to DB ───────────
         # Nodes with persist_state=False are excluded from the saved snapshot
@@ -3198,3 +3214,10 @@ class LogicManager:
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]
+
+    def update_cached_graph_name(self, graph_id: str, name: str) -> None:
+        """Refresh metadata without invalidating active graph execution."""
+        graph = self._graphs.get(graph_id)
+        if graph:
+            _, enabled, flow = graph
+            self._graphs[graph_id] = (name, enabled, flow)

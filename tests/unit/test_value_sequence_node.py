@@ -187,17 +187,21 @@ def test_value_sequence_restart_waits_for_the_cancelled_task() -> None:
         manager = _manager()
         target = uuid.uuid4()
         first_publish_started = asyncio.Event()
-        allow_publish = asyncio.Event()
+        allow_first_publish = asyncio.Event()
+        allow_replacement_publish = asyncio.Event()
         active_publishes = 0
         max_active_publishes = 0
+        publish_count = 0
 
         async def publish(event) -> None:
-            nonlocal active_publishes, max_active_publishes
+            nonlocal active_publishes, max_active_publishes, publish_count
             active_publishes += 1
             max_active_publishes = max(max_active_publishes, active_publishes)
-            first_publish_started.set()
+            publish_count += 1
+            if publish_count == 1:
+                first_publish_started.set()
             try:
-                await allow_publish.wait()
+                await (allow_first_publish if publish_count == 1 else allow_replacement_publish).wait()
             finally:
                 active_publishes -= 1
 
@@ -207,12 +211,47 @@ def test_value_sequence_restart_waits_for_the_cancelled_task() -> None:
         await first_publish_started.wait()
         manager._start_value_sequence("graph", node, True)
         restart = manager._sequence_tasks[("graph", "node")]
+        await asyncio.sleep(0)
+        assert not restart.done()
+        allow_first_publish.set()
         await restart
         replacement = manager._sequence_tasks[("graph", "node")]
         assert replacement is not restart
         assert max_active_publishes == 1
-        allow_publish.set()
+        allow_replacement_publish.set()
         await replacement
+
+    asyncio.run(exercise())
+
+
+def test_sequence_publish_finishes_before_self_cancellation() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        publish_started = asyncio.Event()
+        allow_publish = asyncio.Event()
+        publish_completed = False
+
+        async def publish(event) -> None:
+            nonlocal publish_completed
+            publish_started.set()
+            await allow_publish.wait()
+            publish_completed = True
+
+        manager._event_bus.publish.side_effect = publish
+        task = asyncio.create_task(manager._run_value_sequence("graph", "node", {"steps": [{"datapoint_id": str(target), "value": 1}]}))
+        await publish_started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        allow_publish.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("sequence task must remain cancelled")
+        assert publish_completed
 
     asyncio.run(exercise())
 
@@ -360,6 +399,68 @@ def test_graph_execution_writes_datapoints_before_starting_sequences() -> None:
         assert [call.args[0].source_adapter for call in manager._event_bus.publish.await_args_list] == ["logic", "logic_sequence"]
 
     asyncio.run(exercise())
+
+
+def test_graph_execution_rechecks_sequence_condition_after_datapoint_writes() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        write_target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("trigger", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("condition", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("value", "const_value", {"value": "7", "data_type": "number"}),
+                    node("write", "datapoint_write", {"datapoint_id": str(write_target)}),
+                    node("sequence", "value_sequence", {"steps": [{"datapoint_id": str(uuid.uuid4()), "value": 9}]}),
+                ],
+                "edges": [
+                    edge("trigger", "write", "value", "trigger"),
+                    edge("value", "write", "value", "value"),
+                    edge("trigger", "sequence", "value", "trigger"),
+                    edge("condition", "sequence", "value", "condition"),
+                ],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+
+        async def publish(event) -> None:
+            if event.source_adapter == "logic":
+                manager._sequence_conditions[("graph", "sequence")] = False
+
+        manager._event_bus.publish.side_effect = publish
+        await manager._execute_graph("graph", "Graph", flow, {})
+        assert ("graph", "sequence") not in manager._sequence_tasks
+
+    asyncio.run(exercise())
+
+
+def test_queued_sequence_does_not_run_after_condition_turns_false() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        key = ("graph", "node")
+        manager._sequence_conditions[key] = True
+        node = SimpleNamespace(id="node", data={"restart_policy": "queue", "steps": [{"datapoint_id": str(target), "value": 1, "delay_ms": 10}]})
+        manager._start_value_sequence("graph", node, True)
+        manager._start_value_sequence("graph", node, True)
+        manager._sequence_conditions[key] = False
+        await manager._sequence_tasks[key]
+        assert key not in manager._sequence_tasks
+        manager._event_bus.publish.assert_awaited_once()
+
+    asyncio.run(exercise())
+
+
+def test_update_cached_graph_name_preserves_the_running_flow() -> None:
+    manager = _manager()
+    flow = FlowData.model_validate({"nodes": [], "edges": []})
+    manager._graphs["graph"] = ("Old", True, flow)
+
+    manager.update_cached_graph_name("graph", "New")
+    manager.update_cached_graph_name("missing", "Ignored")
+
+    assert manager._graphs["graph"] == ("New", True, flow)
 
 
 def test_value_sequence_ignores_a_trigger_while_already_running() -> None:
