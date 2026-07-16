@@ -793,6 +793,8 @@ class LogicManager:
         task = self._sequence_tasks.pop(key, None)
         source = self._sequence_restart_sources.pop(key, None)
         self._sequence_restarts.discard(key)
+        self._sequence_queues.pop(key, None)
+        self._sequence_queue_depths.pop(key, None)
         if task:
             task.cancel()
         if source and source is not task:

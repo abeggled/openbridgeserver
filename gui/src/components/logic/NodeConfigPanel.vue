@@ -2192,7 +2192,7 @@ function selectDp(dp) {
 }
 
 function syncSequencePickerState() { sequenceSearches.value = sequenceSteps.value.map(step => step.datapoint_name || ''); sequenceDpResults.value = sequenceSteps.value.map(() => []) }
-function onSequenceSearchInput(index) { const steps = [...sequenceSteps.value]; if (sequenceSearches.value[index] !== steps[index]?.datapoint_name) { steps[index] = { ...steps[index], datapoint_id: '', datapoint_name: '' }; localData.value.steps = steps; emitUpdate() }; searchSequenceDps(index, sequenceSearches.value[index]) }
+function onSequenceSearchInput(index) { const steps = [...sequenceSteps.value]; if (steps[index]?.datapoint_id && sequenceSearches.value[index] !== steps[index].datapoint_name) { steps[index] = { ...steps[index], datapoint_id: '', datapoint_name: '' }; localData.value.steps = steps }; searchSequenceDps(index, sequenceSearches.value[index]) }
 function saveSequenceSteps() { localData.value.steps = sequenceSteps.value; syncSequencePickerState(); emitUpdate() }
 function addSequenceStep() { localData.value.steps = [...sequenceSteps.value, { datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }]; syncSequencePickerState(); emitUpdate() }
 function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index, 1); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }

@@ -485,6 +485,25 @@ def test_cancelling_a_restart_also_cancels_its_original_sequence() -> None:
     asyncio.run(exercise())
 
 
+def test_cancelling_a_sequence_clears_queued_runs() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        key = ("graph", "node")
+        node = SimpleNamespace(id="node", data={"restart_policy": "queue", "steps": [{"delay_ms": 1000}]})
+        manager._start_value_sequence("graph", node, True)
+        active = manager._sequence_tasks[key]
+        manager._start_value_sequence("graph", node, True)
+        assert manager._sequence_queues[key] == 1
+
+        manager._cancel_sequence_task(key)
+        await asyncio.gather(active, return_exceptions=True)
+
+        assert key not in manager._sequence_queues
+        assert key not in manager._sequence_queue_depths
+
+    asyncio.run(exercise())
+
+
 def test_queued_sequence_does_not_run_after_condition_turns_false() -> None:
     async def exercise() -> None:
         manager = _manager()
