@@ -2072,7 +2072,7 @@ watch(() => props.node, (n) => {
       if (typeof steps === 'string') {
         try { steps = JSON.parse(steps) } catch { steps = [] }
       }
-      localData.value.steps = Array.isArray(steps) ? steps : []
+      localData.value.steps = Array.isArray(steps) ? steps.filter(step => step && typeof step === 'object' && !Array.isArray(step)) : []
       sequenceSearches.value = localData.value.steps.map((step, index) => step.datapoint_name || sequenceSearchDrafts.value[index] || '')
       sequenceDpResults.value = localData.value.steps.map(() => [])
     }

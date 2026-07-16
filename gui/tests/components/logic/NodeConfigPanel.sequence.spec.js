@@ -109,4 +109,12 @@ describe('NodeConfigPanel value sequence', () => {
     expect(w.get('[data-testid="sequence-step-0"]').findAll('button')).toHaveLength(4)
     w.unmount()
   })
+
+  it('filters invalid imported sequence steps before rendering', async () => {
+    const w = await mountPanel()
+    await w.setProps({ node: { id: 'n1', type: 'value_sequence', data: { steps: '[null, 1, {"value":"ok"}]' } } })
+    await flushPromises()
+    expect(w.findAll('[data-testid^="sequence-step-"]')).toHaveLength(1)
+    w.unmount()
+  })
 })

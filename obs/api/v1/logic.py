@@ -148,7 +148,7 @@ async def update_graph_full(
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
     await db.execute_and_commit(
@@ -164,12 +164,29 @@ async def update_graph_full(
             graph_id,
         ),
     )
-    # Invalidate executor cache
+
+    def _without_positions(raw: dict) -> dict:
+        raw = dict(raw)
+        raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", [])]
+        return raw
+
+    try:
+        layout_only = bool(row["enabled"]) == body.enabled and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(
+            json.loads(body.flow_data.model_dump_json())
+        )
+    except (TypeError, ValueError):
+        layout_only = False
+
+    # Invalidate executor cache only when execution semantics changed.
     try:
         from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().invalidate_cache(graph_id)
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        if layout_only:
+            manager.update_cached_graph(graph_id, body.name, body.enabled, body.flow_data)
+        else:
+            manager.invalidate_cache(graph_id)
+            await manager.reload()
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
@@ -285,6 +302,18 @@ async def import_graph(
                         node.data["datapoint_name"] = dp.name
                 except Exception:
                     pass
+            if _registry is not None and node.type == "value_sequence":
+                steps = node.data.get("steps", [])
+                if isinstance(steps, list):
+                    for step in steps:
+                        if not isinstance(step, dict) or not step.get("datapoint_id"):
+                            continue
+                        try:
+                            dp = _registry.get(uuid.UUID(str(step["datapoint_id"])))
+                            if dp is not None:
+                                step["datapoint_name"] = dp.name
+                        except Exception:
+                            pass
             processed_nodes.append(node)
 
     processed_flow = FlowData(nodes=processed_nodes, edges=body.flow_data.edges)
