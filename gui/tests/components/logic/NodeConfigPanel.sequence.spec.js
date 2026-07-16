@@ -9,6 +9,7 @@ beforeEach(() => {
   vi.doMock('@/api/client', () => ({
     dpApi: { list: vi.fn().mockResolvedValue({ data: { items: [] } }) },
     searchApi: { search }, securityApi: { checkUrlTarget: vi.fn(), addUrlTarget: vi.fn() },
+    messageArchivesApi: { list: vi.fn().mockResolvedValue({ data: [] }) },
   }))
 })
 afterEach(() => vi.doUnmock('@/api/client'))

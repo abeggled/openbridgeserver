@@ -723,6 +723,7 @@ class LogicManager:
         self._sequence_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         self._sequence_conditions: dict[tuple[str, str], bool] = {}
         self._sequence_queues: dict[tuple[str, str], int] = {}
+        self._sequence_configs: dict[tuple[str, str], dict[str, Any]] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -756,9 +757,16 @@ class LogicManager:
         # A config import/reset can remove graphs without first calling
         # invalidate_cache().  Cancel only sequences whose graph no longer
         # exists or is disabled; unrelated live graphs keep running.
-        for graph_id, _node_id in list(self._sequence_tasks):
+        for graph_id, node_id in list(self._sequence_tasks):
             entry = self._graphs.get(graph_id)
-            if entry is None or not entry[1]:
+            node = next((node for node in entry[2].nodes if node.id == node_id), None) if entry else None
+            if (
+                entry is None
+                or not entry[1]
+                or node is None
+                or node.type != "value_sequence"
+                or node.data != self._sequence_configs.get((graph_id, node_id))
+            ):
                 self._cancel_sequence_tasks(graph_id)
         self._start_cron_tasks()
 
@@ -771,6 +779,7 @@ class LogicManager:
             self._sequence_tasks.pop(key).cancel()
             self._sequence_conditions.pop(key, None)
             self._sequence_queues.pop(key, None)
+            self._sequence_configs.pop(key, None)
 
     @staticmethod
     def _sequence_steps(raw: Any) -> list[dict[str, Any]]:
@@ -874,6 +883,7 @@ class LogicManager:
     def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0) -> None:
         key = (graph_id, node.id)
         self._sequence_conditions[key] = condition
+        self._sequence_configs[key] = dict(node.data)
         active = self._sequence_tasks.get(key)
         if active and not active.done():
             policy = node.data.get("restart_policy", "ignore")
