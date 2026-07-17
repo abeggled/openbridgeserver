@@ -16,6 +16,7 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -139,6 +140,73 @@ class TestApplicationTimezone:
         db = _DbStub(one=_make_row(value="not/a-timezone"))
 
         assert (await _application_timezone(db)).key == "Europe/Zurich"
+
+    @pytest.mark.asyncio
+    async def test_application_now_uses_the_configured_timezone(self):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub(one=_make_row(value="Pacific/Kiritimati"))
+
+        assert (await ab._application_now(db)).tzinfo == ZoneInfo("Pacific/Kiritimati")
+
+    @pytest.mark.asyncio
+    async def test_backup_name_uses_application_local_time(self, tmp_path):
+        from obs.api.v1 import autobackup as ab
+        from obs.api.v1 import config as config_api
+
+        export = MagicMock()
+        export.model_dump.return_value = {"version": 1}
+        local_time = datetime(2026, 7, 17, 3, 4, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        db = _DbStub()
+
+        with (
+            patch.object(config_api, "export_config", AsyncMock(return_value=export)),
+            patch.object(ab, "_application_now", AsyncMock(return_value=local_time)),
+            patch.object(ab, "_autobackup_dir", return_value=tmp_path),
+        ):
+            assert await ab._create_backup_now(db) == "20260717-0304"
+
+        assert (tmp_path / "20260717-0304.json").exists()
+
+
+class TestAutobackupSchedulerTimezone:
+    @pytest.mark.asyncio
+    async def test_scheduler_uses_application_date_for_daily_backup(self, monkeypatch):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        now = datetime(2026, 7, 17, 3, 1, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        scheduler = ab.AutobackupScheduler(db)
+        event = asyncio.Event()
+        monkeypatch.setattr(ab, "_config_changed_event", event)
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(return_value=ab.AutobackupConfig(enabled=True, hour=3, retention_days=7)))
+        monkeypatch.setattr(ab, "_application_now", AsyncMock(return_value=now))
+        create_backup = AsyncMock(return_value="20260717-0301")
+        monkeypatch.setattr(ab, "_create_backup_now", create_backup)
+        monkeypatch.setattr(ab, "_prune_old_backups", lambda _retention_days: 0)
+        monkeypatch.setattr(ab.asyncio, "wait_for", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+        create_backup.assert_awaited_once_with(db)
+
+    @pytest.mark.asyncio
+    async def test_scheduler_waits_until_tomorrow_after_local_backup(self, monkeypatch):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        now = datetime(2026, 7, 17, 3, 1, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        scheduler = ab.AutobackupScheduler(db)
+        monkeypatch.setattr(ab, "_config_changed_event", asyncio.Event())
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(return_value=ab.AutobackupConfig(enabled=True, hour=3, retention_days=7)))
+        monkeypatch.setattr(ab, "_application_now", AsyncMock(return_value=now))
+        monkeypatch.setattr(ab, "_create_backup_now", AsyncMock(return_value="20260717-0301"))
+        monkeypatch.setattr(ab, "_prune_old_backups", lambda _retention_days: 0)
+        monkeypatch.setattr(ab.asyncio, "wait_for", AsyncMock(side_effect=[asyncio.TimeoutError, asyncio.CancelledError]))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
 
 
 class TestListBackups:

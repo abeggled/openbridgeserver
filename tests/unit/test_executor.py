@@ -2099,6 +2099,11 @@ class TestMinMaxTracker:
 
         assert state["m"]["last_day"] == expected_day
 
+    def test_invalid_application_timezone_falls_back_to_default(self):
+        _, state = self._run(42.0, app_config={"timezone": "not/a-timezone"})
+
+        assert state["m"]["last_day"] == datetime.now(ZoneInfo("Europe/Zurich")).date().isoformat()
+
     def test_seed_abs_min_max_applied_once(self):
         """Startwerte für abs_min/abs_max werden einmalig übernommen."""
         cfg = {"init_abs_min": -10.0, "init_abs_max": 999.0}
