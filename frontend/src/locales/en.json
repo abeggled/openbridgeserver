@@ -98,6 +98,7 @@
     "hintDrag": "Drag → move",
     "hintResize": "↘ Handle → resize",
     "hintDelete": "Del → delete widget",
+    "hintMultiSelect": "Shift/Ctrl+click or drag on empty space → select multiple",
     "removeWidget": "Remove",
     "widgetName": "Name",
     "widgetNamePlaceholder": "e.g. Living room dimmer",
@@ -110,6 +111,11 @@
     "configuration": "Configuration",
     "hintEmpty": "Insert a widget from the palette on the left",
     "hintNoSelection": "Click a widget on the canvas\nor insert from the palette",
+    "multiSelect": {
+      "count": "{n} widgets selected",
+      "removeAll": "Delete all",
+      "hint": "Configuration editing isn't available for multiple widgets. Select just one to edit its settings."
+    },
     "widgetCountSingular": "widget on this page",
     "widgetCountPlural": "widgets on this page",
     "brokenDpRef": "At least one datapoint reference was not found",

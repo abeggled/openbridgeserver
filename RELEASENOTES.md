@@ -6,6 +6,7 @@
 
 ### New features ✨
 * Logic Engine/Admin GUI: Added a Sequence node for state-triggered, non-blocking value-write and pause sequences. Sequences are configured with a visual step editor (including object picker, reordering, duplication, pauses and a blink preset), configurable repeat/restart policies, and normal object values such as colours, switches or dimmer levels. https://github.com/abeggled/openbridgeserver/issues/1021
+* Visu: The page editor now supports selecting multiple widgets at once — Shift/Ctrl+click toggles individual widgets, dragging on empty canvas draws a selection box, and dragging any selected widget moves the whole selection together; Delete/Backspace removes all selected widgets. https://github.com/abeggled/openbridgeserver/issues/1036
 
 ### Fixes 🐞
 
