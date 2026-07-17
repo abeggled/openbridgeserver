@@ -310,7 +310,7 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
     await inputs[0].trigger('focus')
 
     const pathSelect = w.find('[data-testid="extractor-path-select"]')
-    await inputs[0].trigger('blur', { relatedTarget: pathSelect.element })
+    await inputs[0].trigger('focusout', { relatedTarget: pathSelect.element })
     await pathSelect.setValue('temperature')
     await pathSelect.trigger('change')
     await flushPromises()
@@ -331,12 +331,17 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
     await flushPromises()
 
     const inputs = w.findAll('[data-testid="extractor-path-input"]')
-    const row = inputs[0].element.closest('.extractor-output-row')
-    const removeButton = row.querySelector('.extractor-output-remove')
+    const row = w.findAll('.extractor-output-row')[0]
+    const labelInput = row.find('input:not([data-testid])')
+    const removeButton = row.find('.extractor-output-remove')
+    const addButton = w.findAll('button').find(button => button.text() === '+').element
     await inputs[0].trigger('focus')
-    await inputs[0].trigger('blur', { relatedTarget: removeButton })
+    await inputs[0].trigger('focusout', { relatedTarget: removeButton.element })
+    await removeButton.trigger('focusout', { relatedTarget: labelInput.element })
+    await labelInput.trigger('focusout', { relatedTarget: addButton })
 
     const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await w.findAll('button').find(button => button.text() === '+').trigger('focusout', { relatedTarget: pathSelect.element })
     await pathSelect.setValue('temperature')
     await pathSelect.trigger('change')
     await flushPromises()
@@ -347,7 +352,7 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
     w.unmount()
   })
 
-  it('clears the selected row when focus moves away from the picker', async () => {
+  it('clears the selected row when focus leaves its controls', async () => {
     const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
     const paths = JSON.stringify([
       { label: 'Temperatur', path: '' },
@@ -358,7 +363,9 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
 
     const inputs = w.findAll('[data-testid="extractor-path-input"]')
     await inputs[0].trigger('focus')
-    await inputs[0].trigger('blur')
+    const removeButton = w.findAll('.extractor-output-remove')[0]
+    await inputs[0].trigger('focusout', { relatedTarget: removeButton.element })
+    await removeButton.trigger('focusout', { relatedTarget: w.find('[data-testid="extractor-preview"]').element })
 
     const pathSelect = w.find('[data-testid="extractor-path-select"]')
     await pathSelect.setValue('humidity')
@@ -383,7 +390,7 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
     const inputs = w.findAll('[data-testid="extractor-path-input"]')
     const pathSelect = w.find('[data-testid="extractor-path-select"]')
     await inputs[0].trigger('focus')
-    await inputs[0].trigger('blur', { relatedTarget: pathSelect.element })
+    await inputs[0].trigger('focusout', { relatedTarget: pathSelect.element })
     await pathSelect.setValue('temperature')
     await pathSelect.trigger('change')
     await pathSelect.setValue('humidity')

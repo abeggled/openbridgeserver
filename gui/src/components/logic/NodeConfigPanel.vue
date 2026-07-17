@@ -653,6 +653,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -698,7 +699,6 @@
                 :value="entry.path"
                 @input="updateJsonPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="onExtractorPathBlur"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
@@ -712,6 +712,7 @@
             <p v-if="!jsonPaths.length && !localData.json_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               Klicke <strong>+</strong> um Ausgänge hinzuzufügen.
             </p>
+          </div>
           </div>
         </template>
 
@@ -729,6 +730,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -774,7 +776,6 @@
                 :value="entry.path"
                 @input="updateXmlPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="onExtractorPathBlur"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
@@ -788,6 +789,7 @@
             <p v-if="!xmlPaths.length && !localData.xml_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               {{ $t('logic.nodeConfig.extractor.clickPlusToAddOutputs') }}
             </p>
+          </div>
           </div>
         </template>
       </div>
@@ -2095,16 +2097,11 @@ function onExtractorPathSelect(e) {
   activeExtractorRow.value = null
 }
 
-function onExtractorPathBlur(e) {
-  // Keep the selected row while moving through controls in the same output row
-  // (keyboard users reach the shared picker this way) or to the shared picker.
-  // Any other focus change should clear it so a later picker selection uses its
-  // default row.
-  const nextFocus = e.relatedTarget
-  if (
-    nextFocus?.matches?.('[data-testid="extractor-path-select"]') ||
-    nextFocus?.closest?.('.extractor-output-row')
-  ) return
+function onExtractorControlsFocusOut(e) {
+  // Keep the selected row while focus moves between the shared picker and any
+  // output controls, including reverse keyboard traversal through a row.
+  // Clear it once focus leaves the complete control group.
+  if (e.currentTarget.contains(e.relatedTarget)) return
   activeExtractorRow.value = null
 }
 
