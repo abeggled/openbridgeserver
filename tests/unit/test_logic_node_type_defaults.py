@@ -36,6 +36,9 @@ def test_timer_durations_are_non_negative():
     assert _node_type("timer_delay").config_schema["delay_s"]["min"] == 0
     assert _node_type("timer_pulse").config_schema["duration_s"]["min"] == 0
     assert _node_type("api_client").config_schema["timeout_s"]["min"] == 1
+    assert _node_type("and").config_schema["input_count"]["type"] == "integer"
+    assert _node_type("or").config_schema["input_count"]["type"] == "integer"
+    assert _node_type("xor").config_schema["input_count"]["type"] == "integer"
 
 
 @pytest.mark.parametrize(
@@ -45,6 +48,8 @@ def test_timer_durations_are_non_negative():
         ("timer_pulse", {"duration_s": "-0.5"}, "greater than or equal to 0"),
         ("api_client", {"timeout_s": 0}, "greater than or equal to 1"),
         ("api_client", {"timeout_s": "bad"}, "must be a number"),
+        ("api_client", {"timeout_s": " "}, "must be a number"),
+        ("timer_delay", {"delay_s": "bad"}, "must be a number"),
         ("timer_delay", {"delay_s": 10**400}, "must be a finite number"),
     ],
 )

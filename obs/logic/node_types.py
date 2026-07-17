@@ -47,7 +47,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -65,7 +65,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -92,7 +92,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,

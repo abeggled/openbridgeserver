@@ -26,9 +26,9 @@ def validate_timer_durations(flow_data: FlowData) -> None:
         try:
             duration = float(value)
         except (TypeError, ValueError) as exc:
-            if node.type == "api_client" and not (isinstance(value, str) and not value.strip()):
-                raise ValueError(f"{field} must be a number") from exc
-            continue
+            if value == "":
+                continue
+            raise ValueError(f"{field} must be a number") from exc
         except OverflowError as exc:
             raise ValueError(f"{field} must be a finite number") from exc
 
