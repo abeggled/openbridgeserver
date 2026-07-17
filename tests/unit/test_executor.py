@@ -2092,10 +2092,7 @@ class TestMinMaxTracker:
 
     def test_periods_use_configured_application_timezone(self):
         utc_today = datetime.now(UTC).date()
-        timezone = next(
-            name for name in ("Pacific/Kiritimati", "Etc/GMT+12")
-            if datetime.now(ZoneInfo(name)).date() != utc_today
-        )
+        timezone = next(name for name in ("Pacific/Kiritimati", "Etc/GMT+12") if datetime.now(ZoneInfo(name)).date() != utc_today)
         expected_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
 
         _, state = self._run(42.0, app_config={"timezone": timezone})
