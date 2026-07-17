@@ -123,6 +123,24 @@ class TestSaveConfig:
         assert enabled_call[1][1] == "0"
 
 
+class TestApplicationTimezone:
+    @pytest.mark.asyncio
+    async def test_uses_configured_application_timezone(self):
+        from obs.api.v1.autobackup import _application_timezone
+
+        db = _DbStub(one=_make_row(value="Pacific/Kiritimati"))
+
+        assert (await _application_timezone(db)).key == "Pacific/Kiritimati"
+
+    @pytest.mark.asyncio
+    async def test_invalid_timezone_falls_back_to_default(self):
+        from obs.api.v1.autobackup import _application_timezone
+
+        db = _DbStub(one=_make_row(value="not/a-timezone"))
+
+        assert (await _application_timezone(db)).key == "Europe/Zurich"
+
+
 class TestListBackups:
     def test_returns_empty_list_for_empty_dir(self, tmp_path):
         from obs.api.v1.autobackup import _list_backups

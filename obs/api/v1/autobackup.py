@@ -17,8 +17,9 @@ import asyncio
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -83,6 +84,19 @@ async def _save_config(db: Database, cfg: AutobackupConfig) -> None:
         )
 
 
+async def _application_timezone(db: Database) -> ZoneInfo:
+    """Return the configured application timezone, with a safe default."""
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
+    try:
+        return ZoneInfo(row["value"] if row else "Europe/Zurich")
+    except Exception:
+        return ZoneInfo("Europe/Zurich")
+
+
+async def _application_now(db: Database) -> datetime:
+    return datetime.now(UTC).astimezone(await _application_timezone(db))
+
+
 def _list_backups() -> list[AutobackupEntry]:
     backup_dir = _autobackup_dir()
     entries: list[AutobackupEntry] = []
@@ -135,7 +149,9 @@ async def _create_backup_now(db: Database) -> str:
     # Export-Funktion direkt aufrufen (ohne HTTP-Request)
     export = await export_config(_user="autobackup", db=db)
 
-    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    # Names shown in the UI should reflect the same application-local time as
+    # the configured scheduler hour.
+    ts = (await _application_now(db)).strftime("%Y%m%d-%H%M")
     backup_path = _autobackup_dir() / f"{ts}.json"
     backup_path.write_text(json.dumps(export.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Autobackup erstellt: %s (%d Bytes)", backup_path.name, backup_path.stat().st_size)
@@ -295,7 +311,7 @@ class AutobackupScheduler:
         logger.info("Autobackup-Scheduler gestoppt.")
 
     async def _loop(self) -> None:
-        last_backup_day: int | None = None
+        last_backup_day: str | None = None
 
         while True:
             try:
@@ -315,24 +331,13 @@ class AutobackupScheduler:
                             raise
                     continue
 
-                now = datetime.now(UTC)
-                today = now.day
+                now = await _application_now(self._db)
+                today = now.date().isoformat()
 
                 # Prüfen ob heute schon gesichert wurde
                 if last_backup_day == today and now.hour >= cfg.hour:
                     # Warten bis morgen um cfg.hour
-                    tomorrow = datetime(now.year, now.month, now.day, cfg.hour, 0, tzinfo=UTC)
-                    if tomorrow <= now:
-                        # Nächsten Monat / Jahr berücksichtigen
-                        import calendar
-
-                        days_in_month = calendar.monthrange(now.year, now.month)[1]
-                        if now.day < days_in_month:
-                            tomorrow = datetime(now.year, now.month, now.day + 1, cfg.hour, 0, tzinfo=UTC)
-                        elif now.month < 12:
-                            tomorrow = datetime(now.year, now.month + 1, 1, cfg.hour, 0, tzinfo=UTC)
-                        else:
-                            tomorrow = datetime(now.year + 1, 1, 1, cfg.hour, 0, tzinfo=UTC)
+                    tomorrow = (now + timedelta(days=1)).replace(hour=cfg.hour, minute=0, second=0, microsecond=0)
 
                     wait_s = max(60.0, (tomorrow - now).total_seconds())
                     logger.debug("Autobackup: nächste Sicherung in %.0fs um %s", wait_s, tomorrow.isoformat())
