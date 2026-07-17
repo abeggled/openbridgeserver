@@ -1,5 +1,11 @@
 <template>
-  <div v-if="node" class="h-full flex flex-col bg-surface-800 border-l border-slate-200 dark:border-slate-700/60 w-72">
+  <div v-if="node" class="h-full flex flex-col bg-surface-800 border-l border-slate-200 dark:border-slate-700/60 relative flex-shrink-0" :style="{ width: panelWidth + 'px' }">
+    <div
+      class="absolute top-0 left-0 h-full w-1.5 -translate-x-1/2 cursor-ew-resize z-10 hover:bg-teal-500/40"
+      :class="{ 'bg-teal-500/40': isResizingPanel }"
+      @pointerdown="startPanelResize"
+      :title="$t('logic.nodeConfig.resizeHandle')"
+    />
 
     <!-- Header -->
     <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
@@ -1236,9 +1242,13 @@ import { useI18n } from 'vue-i18n'
 import { dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import { useResizablePanel } from '@/composables/useResizablePanel'
 
 const { t, te } = useI18n()
 const auth = useAuthStore()
+
+const { width: panelWidth, isResizing: isResizingPanel, startResize: startPanelResize } =
+  useResizablePanel({ storageKey: 'obs.logic.nodeConfigPanelWidth', defaultWidth: 288, min: 260, max: 800 })
 
 const props = defineProps({
   node:        { type: Object, default: null },

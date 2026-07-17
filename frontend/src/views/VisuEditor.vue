@@ -38,6 +38,7 @@ import AuthButton from '@/components/AuthButton.vue'
 import { datapoints as dpApi, visuBackgrounds as bgApi } from '@/api/client'
 import { useLocalizedText } from '@/composables/useLocalizedText'
 import { useVisuBackgrounds } from '@/composables/useVisuBackgrounds'
+import { useResizablePanel } from '@/composables/useResizablePanel'
 import {
   cssBackgroundPosition,
   cssBackgroundRepeat,
@@ -82,6 +83,8 @@ const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
 const theme = useThemeStore()
+const { width: configPanelWidth, isResizing: isResizingConfigPanel, startResize: startConfigPanelResize } =
+  useResizablePanel({ storageKey: 'obs.visu.configPanelWidth', defaultWidth: 288, min: 260, max: 800 })
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const isNew   = computed(() => props.id === 'new')
@@ -924,10 +927,17 @@ const showSettings = ref(false)
       <!-- ── Config-Panel (rechts) ───────────────────────────────────────── -->
       <aside
         class="w-72 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 overflow-y-auto flex flex-col
-               fixed lg:static inset-y-0 right-0 z-40 lg:z-auto transform transition-transform duration-200
+               fixed lg:relative inset-y-0 right-0 z-40 lg:z-auto transform transition-transform duration-200
                lg:translate-x-0"
-        :class="showConfigMobile ? 'translate-x-0 w-80 max-w-[90vw]' : 'translate-x-full lg:w-72'"
+        :class="showConfigMobile ? 'translate-x-0 w-80 max-w-[90vw]' : 'translate-x-full lg:w-[var(--config-panel-w)]'"
+        :style="{ '--config-panel-w': configPanelWidth + 'px' }"
       >
+        <div
+          class="hidden lg:block absolute top-0 left-0 h-full w-1.5 -translate-x-1/2 cursor-ew-resize z-10 hover:bg-blue-500/40"
+          :class="{ 'bg-blue-500/40': isResizingConfigPanel }"
+          @pointerdown="startConfigPanelResize"
+          :title="$t('editor.resizeConfigPanel')"
+        />
         <div class="lg:hidden flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
           <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">{{ $t('editor.configuration') }}</span>
           <button class="text-xs text-gray-500 dark:text-gray-300" @click="showConfigMobile = false">✕</button>

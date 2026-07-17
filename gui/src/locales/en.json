@@ -2103,7 +2103,8 @@
         "in_max": "Input max",
         "out_min": "Output min",
         "out_max": "Output max"
-      }
+      },
+      "resizeHandle": "Drag to resize panel"
     },
     "portLabels": {
       "heizmode": "Heating mode",
