@@ -86,4 +86,18 @@ describe('NodeConfigPanel timer durations', () => {
 
     wrapper.unmount()
   })
+
+  it('emits non-numeric schema fields unchanged', async () => {
+    const wrapper = await mountPanel('text_config', { label: 'before' }, {
+      label: { type: 'string', default: '' },
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="text"]')
+    await input.setValue('after')
+    await input.trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].label).toBe('after')
+
+    wrapper.unmount()
+  })
 })

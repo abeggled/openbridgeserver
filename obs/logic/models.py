@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+
+_TIMER_DURATION_FIELDS = {
+    "timer_delay": "delay_s",
+    "timer_pulse": "duration_s",
+}
 
 
 class NodePosition(BaseModel):
@@ -25,6 +31,22 @@ class LogicNode(BaseModel):
     type: str  # e.g. "and", "or", "datapoint_read"
     position: NodePosition
     data: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def validate_timer_duration(self) -> "LogicNode":
+        """Reject negative timer durations submitted outside the GUI."""
+        field = _TIMER_DURATION_FIELDS.get(self.type)
+        if field is None or (value := self.data.get(field)) is None:
+            return self
+
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            return self
+
+        if duration < 0:
+            raise ValueError(f"{field} must be greater than or equal to 0")
+        return self
 
 
 class LogicEdge(BaseModel):
