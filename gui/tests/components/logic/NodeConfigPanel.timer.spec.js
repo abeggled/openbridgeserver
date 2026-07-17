@@ -112,4 +112,18 @@ describe('NodeConfigPanel timer durations', () => {
 
     wrapper.unmount()
   })
+
+  it('emits an unbounded numeric value unchanged', async () => {
+    const wrapper = await mountPanel('unbounded_number', { value: 1 }, {
+      value: { type: 'number', default: 1 },
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="number"]')
+    await input.setValue(7)
+    await input.trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].value).toBe(7)
+
+    wrapper.unmount()
+  })
 })

@@ -861,6 +861,26 @@ class TestDuplicateGraph:
         assert result.name == "Kopie von Original"
         assert len(db.execute_calls) == 1
 
+    @pytest.mark.asyncio
+    async def test_rejects_copy_of_graph_with_negative_timer_duration(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import duplicate_graph
+
+        from obs.logic.models import FlowData, LogicNode, NodePosition
+
+        flow = FlowData(
+            nodes=[LogicNode(id="timer", type="timer_delay", position=NodePosition(x=0, y=0), data={"delay_s": -1})]
+        )
+        original_row = _make_graph_row(flow_data=flow.model_dump_json())
+        db = _DbStub(one=original_row)
+
+        with pytest.raises(HTTPException, match="must be greater than or equal to 0") as exc_info:
+            await duplicate_graph(graph_id=original_row["id"], _user="user", db=db)
+
+        assert exc_info.value.status_code == 422
+        assert db.execute_calls == []
+
 
 class TestExportGraph:
     @pytest.mark.asyncio

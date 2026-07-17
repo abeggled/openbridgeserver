@@ -39,32 +39,16 @@ from obs.logic.models import (
 )
 from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.node_types import list_node_types
+from obs.logic.validation import validate_timer_durations
 
 router = APIRouter(tags=["logic"])
 
-_TIMER_DURATION_FIELDS = {
-    "timer_delay": "delay_s",
-    "timer_pulse": "duration_s",
-}
-
-
 def _validate_timer_durations(flow_data: FlowData) -> None:
-    """Reject negative timer durations before persisting graph data."""
-    for node in flow_data.nodes:
-        field = _TIMER_DURATION_FIELDS.get(node.type)
-        if field is None or (value := node.data.get(field)) is None:
-            continue
-
-        try:
-            duration = float(value)
-        except (TypeError, ValueError):
-            continue
-
-        if duration < 0:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"{field} must be greater than or equal to 0",
-            )
+    """Translate shared persistence validation to an API error."""
+    try:
+        validate_timer_durations(flow_data)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
@@ -383,6 +367,7 @@ async def duplicate_graph(
         for e in flow.edges
     ]
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
+    _validate_timer_durations(new_flow)
 
     now = datetime.now(UTC).isoformat()
     new_id = str(uuid.uuid4())
