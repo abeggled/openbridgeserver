@@ -2096,9 +2096,15 @@ function onExtractorPathSelect(e) {
 }
 
 function onExtractorPathBlur(e) {
-  // Keep the selected row while moving focus to the shared picker. Any other
-  // focus change should clear it so a later picker selection uses its default.
-  if (e.relatedTarget?.matches?.('[data-testid="extractor-path-select"]')) return
+  // Keep the selected row while moving through controls in the same output row
+  // (keyboard users reach the shared picker this way) or to the shared picker.
+  // Any other focus change should clear it so a later picker selection uses its
+  // default row.
+  const nextFocus = e.relatedTarget
+  if (
+    nextFocus?.matches?.('[data-testid="extractor-path-select"]') ||
+    nextFocus?.closest?.('.extractor-output-row')
+  ) return
   activeExtractorRow.value = null
 }
 
