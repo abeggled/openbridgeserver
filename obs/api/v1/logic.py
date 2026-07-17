@@ -206,6 +206,8 @@ async def update_graph_partial(
         flow_json = body.flow_data.model_dump_json()
     else:
         flow_json = row["flow_data"]
+        if body.enabled is True:
+            _validate_timer_durations(FlowData.model_validate(json.loads(flow_json) if flow_json else {}))
     await db.execute_and_commit(
         """UPDATE logic_graphs
            SET name=?, description=?, enabled=?, flow_data=?, updated_at=?

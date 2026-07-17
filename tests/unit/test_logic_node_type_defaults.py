@@ -44,6 +44,7 @@ def test_timer_durations_are_non_negative():
         ("timer_delay", {"delay_s": -1}, "greater than or equal to 0"),
         ("timer_pulse", {"duration_s": "-0.5"}, "greater than or equal to 0"),
         ("api_client", {"timeout_s": 0}, "greater than or equal to 1"),
+        ("api_client", {"timeout_s": "bad"}, "must be a number"),
         ("timer_delay", {"delay_s": 10**400}, "must be a finite number"),
     ],
 )
@@ -68,6 +69,7 @@ def test_write_validation_rejects_invalid_durations(node_type, data, message):
         ("timer_delay", {"delay_s": None}),
         ("timer_cron", {"delay_s": -1}),
         ("api_client", {"timeout_s": 1}),
+        ("api_client", {"timeout_s": ""}),
     ],
 )
 def test_write_validation_allows_non_negative_or_unrelated_timer_values(node_type, data):

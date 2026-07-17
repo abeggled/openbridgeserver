@@ -667,6 +667,37 @@ class TestUpdateGraphPartial:
 
         assert result.enabled is False
 
+    @pytest.mark.asyncio
+    async def test_partial_update_rejects_enabling_legacy_invalid_duration(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import update_graph_partial
+        from obs.logic.models import LogicGraphUpdate
+
+        row = _make_graph_row(
+            enabled=0,
+            flow_data=json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": "timer",
+                            "type": "timer_delay",
+                            "position": {"x": 0, "y": 0},
+                            "data": {"delay_s": -1},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ),
+        )
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException, match="greater than or equal to 0") as exc_info:
+            await update_graph_partial(graph_id=row["id"], body=LogicGraphUpdate(enabled=True), _user="user", db=db)
+
+        assert exc_info.value.status_code == 422
+        assert db.execute_calls == []
+
 
 class TestDeleteGraph:
     @pytest.mark.asyncio
