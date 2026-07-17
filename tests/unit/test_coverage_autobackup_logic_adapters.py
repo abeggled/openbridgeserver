@@ -869,9 +869,7 @@ class TestDuplicateGraph:
 
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
-        flow = FlowData(
-            nodes=[LogicNode(id="timer", type="timer_delay", position=NodePosition(x=0, y=0), data={"delay_s": -1})]
-        )
+        flow = FlowData(nodes=[LogicNode(id="timer", type="timer_delay", position=NodePosition(x=0, y=0), data={"delay_s": -1})])
         original_row = _make_graph_row(flow_data=flow.model_dump_json())
         db = _DbStub(one=original_row)
 

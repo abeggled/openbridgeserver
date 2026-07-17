@@ -43,6 +43,7 @@ from obs.logic.validation import validate_timer_durations
 
 router = APIRouter(tags=["logic"])
 
+
 def _validate_timer_durations(flow_data: FlowData) -> None:
     """Translate shared persistence validation to an API error."""
     try:
