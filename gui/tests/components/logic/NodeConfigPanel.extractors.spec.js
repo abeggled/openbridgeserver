@@ -352,6 +352,32 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
     w.unmount()
   })
 
+  it('updates the selected row when focus moves to another output row', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    const secondLabel = w.findAll('.extractor-output-row')[1].find('input:not([data-testid])')
+    await inputs[0].trigger('focus')
+    await inputs[0].trigger('focusout', { relatedTarget: secondLabel.element })
+    await secondLabel.trigger('focusin')
+
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await pathSelect.setValue('humidity')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('')
+    expect(updated[1].path).toBe('humidity')
+    w.unmount()
+  })
+
   it('clears the selected row when focus leaves its controls', async () => {
     const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
     const paths = JSON.stringify([
