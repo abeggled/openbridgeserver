@@ -226,6 +226,7 @@ const nodeTypeComponents = {
   math_formula: _generic, math_map: _generic,
   // Timer
   timer_delay: _generic, timer_pulse: _generic, timer_cron: _generic,
+  value_sequence: _generic,
   // AI
   ai_logic: _generic,
   // Astro
