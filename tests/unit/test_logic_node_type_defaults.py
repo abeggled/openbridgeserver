@@ -35,23 +35,26 @@ def test_value_mapping_default_rules_do_not_persist_localized_names():
 def test_timer_durations_are_non_negative():
     assert _node_type("timer_delay").config_schema["delay_s"]["min"] == 0
     assert _node_type("timer_pulse").config_schema["duration_s"]["min"] == 0
+    assert _node_type("api_client").config_schema["timeout_s"]["min"] == 1
 
 
 @pytest.mark.parametrize(
-    ("node_type", "data"),
+    ("node_type", "data", "message"),
     [
-        ("timer_delay", {"delay_s": -1}),
-        ("timer_pulse", {"duration_s": "-0.5"}),
+        ("timer_delay", {"delay_s": -1}, "greater than or equal to 0"),
+        ("timer_pulse", {"duration_s": "-0.5"}, "greater than or equal to 0"),
+        ("api_client", {"timeout_s": 0}, "greater than or equal to 1"),
+        ("timer_delay", {"delay_s": 10**400}, "must be a finite number"),
     ],
 )
-def test_write_validation_rejects_negative_timer_durations(node_type, data):
+def test_write_validation_rejects_invalid_durations(node_type, data, message):
     from fastapi import HTTPException
 
     from obs.api.v1.logic import _validate_timer_durations
 
     flow_data = FlowData(nodes=[LogicNode(id="node", type=node_type, position={"x": 0, "y": 0}, data=data)])
 
-    with pytest.raises(HTTPException, match="must be greater than or equal to 0") as exc_info:
+    with pytest.raises(HTTPException, match=message) as exc_info:
         _validate_timer_durations(flow_data)
     assert exc_info.value.status_code == 422
 
@@ -64,6 +67,7 @@ def test_write_validation_rejects_negative_timer_durations(node_type, data):
         ("timer_delay", {"delay_s": ""}),
         ("timer_delay", {"delay_s": None}),
         ("timer_cron", {"delay_s": -1}),
+        ("api_client", {"timeout_s": 1}),
     ],
 )
 def test_write_validation_allows_non_negative_or_unrelated_timer_values(node_type, data):

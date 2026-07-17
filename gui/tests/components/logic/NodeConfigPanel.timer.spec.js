@@ -126,4 +126,31 @@ describe('NodeConfigPanel timer durations', () => {
 
     wrapper.unmount()
   })
+
+  it('rounds fractional integer schema values before emitting', async () => {
+    const wrapper = await mountPanel('integer_config', { value: 1 }, {
+      value: { type: 'integer', default: 1 },
+    })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="number"]')
+    await input.setValue(2.5)
+    await input.trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].value).toBe(3)
+
+    wrapper.unmount()
+  })
+
+  it('clamps the custom API client timeout to one second', async () => {
+    const wrapper = await mountPanel('api_client', { timeout_s: 10 }, {})
+    await flushPromises()
+
+    const input = wrapper.get('[data-testid="api-client-timeout"]')
+    expect(input.attributes('min')).toBe('1')
+    await input.setValue(0)
+    await input.trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].timeout_s).toBe(1)
+
+    wrapper.unmount()
+  })
 })
