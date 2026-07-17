@@ -248,6 +248,22 @@ describe('NodeConfigPanel xml_extractor — remove path', () => {
     expect(remaining).toHaveLength(0)
     w.unmount()
   })
+
+  it('selects a row when one of its controls receives focus', async () => {
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('xml_extractor', { xml_paths: paths })
+    await flushPromises()
+
+    const secondRow = w.findAll('.extractor-output-row')[1]
+    await secondRow.find('input:not([data-testid])').trigger('focusin')
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="extractor-path-input"]')[1].classes()).toContain('ring-1')
+    w.unmount()
+  })
 })
 
 describe('NodeConfigPanel xml_extractor — legacy migration', () => {
