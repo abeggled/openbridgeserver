@@ -100,4 +100,16 @@ describe('NodeConfigPanel timer durations', () => {
 
     wrapper.unmount()
   })
+
+  it('leaves non-finite numeric values unchanged', async () => {
+    const wrapper = await mountPanel('invalid_number', { value: 'not-a-number' }, {
+      value: { type: 'number', default: 1, min: 0 },
+    })
+    await flushPromises()
+
+    await wrapper.find('input[type="number"]').trigger('change')
+    expect(wrapper.emitted('update').at(-1)[0].value).toBe('not-a-number')
+
+    wrapper.unmount()
+  })
 })

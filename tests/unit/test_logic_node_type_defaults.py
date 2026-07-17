@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from pydantic import ValidationError
 
-from obs.logic.models import LogicGraphCreate, LogicGraphImport, LogicGraphUpdate, LogicNode
+from obs.logic.models import FlowData, LogicGraphCreate, LogicGraphImport, LogicGraphUpdate, LogicNode
 from obs.logic.node_types import BUILTIN_NODE_TYPES
 
 
@@ -41,28 +40,38 @@ def test_timer_durations_are_non_negative():
 @pytest.mark.parametrize(
     ("node_type", "data"),
     [
-        ("timer_delay", {"delay_s": 0}),
-        ("timer_pulse", {"duration_s": "1.5"}),
-        ("timer_delay", {"delay_s": ""}),
-        ("timer_cron", {"delay_s": -1}),
+        ("timer_delay", {"delay_s": -1}),
+        ("timer_pulse", {"duration_s": "-0.5"}),
     ],
 )
-def test_timer_duration_validation_allows_non_negative_or_unrelated_values(node_type, data):
-    node = LogicNode(id="node", type=node_type, position={"x": 0, "y": 0}, data=data)
+def test_write_validation_rejects_negative_timer_durations(node_type, data):
+    from fastapi import HTTPException
 
-    assert node.data == data
+    from obs.api.v1.logic import _validate_timer_durations
+
+    flow_data = FlowData(nodes=[LogicNode(id="node", type=node_type, position={"x": 0, "y": 0}, data=data)])
+
+    with pytest.raises(HTTPException, match="must be greater than or equal to 0") as exc_info:
+        _validate_timer_durations(flow_data)
+    assert exc_info.value.status_code == 422
 
 
 @pytest.mark.parametrize(
     ("node_type", "data"),
     [
-        ("timer_delay", {"delay_s": -1}),
-        ("timer_pulse", {"duration_s": "-0.5"}),
+        ("timer_delay", {"delay_s": 0}),
+        ("timer_pulse", {"duration_s": "1.5"}),
+        ("timer_delay", {"delay_s": ""}),
+        ("timer_delay", {"delay_s": None}),
+        ("timer_cron", {"delay_s": -1}),
     ],
 )
-def test_timer_duration_validation_rejects_negative_values(node_type, data):
-    with pytest.raises(ValidationError, match="must be greater than or equal to 0"):
-        LogicNode(id="node", type=node_type, position={"x": 0, "y": 0}, data=data)
+def test_write_validation_allows_non_negative_or_unrelated_timer_values(node_type, data):
+    from obs.api.v1.logic import _validate_timer_durations
+
+    flow_data = FlowData(nodes=[LogicNode(id="node", type=node_type, position={"x": 0, "y": 0}, data=data)])
+
+    _validate_timer_durations(flow_data)
 
 
 @pytest.mark.parametrize(
@@ -73,7 +82,7 @@ def test_timer_duration_validation_rejects_negative_values(node_type, data):
         (LogicGraphImport, {"obs_export": "logic_graph", "version": 1, "name": "Graph"}),
     ],
 )
-def test_api_graph_request_models_reject_negative_timer_durations(request_model, payload):
+def test_graph_request_models_allow_existing_negative_timer_durations(request_model, payload):
     payload["flow_data"] = {
         "nodes": [
             {
@@ -85,5 +94,35 @@ def test_api_graph_request_models_reject_negative_timer_durations(request_model,
         ]
     }
 
-    with pytest.raises(ValidationError, match="must be greater than or equal to 0"):
-        request_model.model_validate(payload)
+    graph = request_model.model_validate(payload)
+
+    assert graph.flow_data.nodes[0].data["delay_s"] == -1
+
+
+def test_persisted_negative_timer_durations_remain_readable():
+    from obs.api.v1.logic import _row_to_out
+
+    graph = _row_to_out(
+        {
+            "id": "graph",
+            "name": "Graph",
+            "description": "",
+            "enabled": 1,
+            "flow_data": json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": "timer",
+                            "type": "timer_pulse",
+                            "position": {"x": 0, "y": 0},
+                            "data": {"duration_s": -1},
+                        }
+                    ]
+                }
+            ),
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+    )
+
+    assert graph.flow_data.nodes[0].data["duration_s"] == -1

@@ -42,6 +42,30 @@ from obs.logic.node_types import list_node_types
 
 router = APIRouter(tags=["logic"])
 
+_TIMER_DURATION_FIELDS = {
+    "timer_delay": "delay_s",
+    "timer_pulse": "duration_s",
+}
+
+
+def _validate_timer_durations(flow_data: FlowData) -> None:
+    """Reject negative timer durations before persisting graph data."""
+    for node in flow_data.nodes:
+        field = _TIMER_DURATION_FIELDS.get(node.type)
+        if field is None or (value := node.data.get(field)) is None:
+            continue
+
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if duration < 0:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"{field} must be greater than or equal to 0",
+            )
+
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
@@ -102,6 +126,7 @@ async def create_graph(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    _validate_timer_durations(body.flow_data)
     now = datetime.now(UTC).isoformat()
     gid = str(uuid.uuid4())
     await db.execute_and_commit(
@@ -151,6 +176,7 @@ async def update_graph_full(
     row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    _validate_timer_durations(body.flow_data)
     await db.execute_and_commit(
         """UPDATE logic_graphs
            SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
@@ -191,6 +217,7 @@ async def update_graph_partial(
     description = body.description if body.description is not None else row["description"]
     enabled = body.enabled if body.enabled is not None else bool(row["enabled"])
     if body.flow_data is not None:
+        _validate_timer_durations(body.flow_data)
         flow_json = body.flow_data.model_dump_json()
     else:
         flow_json = row["flow_data"]
@@ -240,6 +267,8 @@ async def import_graph(
             status.HTTP_400_BAD_REQUEST,
             "Ungültiges Export-Format (erwartet 'logic_graph')",
         )
+
+    _validate_timer_durations(body.flow_data)
 
     known_types = {nt.type for nt in list_node_types()}
 
