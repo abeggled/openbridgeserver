@@ -416,6 +416,37 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(api.config).toHaveBeenCalledTimes(1)
   })
 
+  it('treats an enabled zero retention value as unbounded and saves null after confirmation', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: null,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 60 * 60,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('#retention-enabled').setValue(true)
+    await wrapper.find('[data-testid="rb-config-retention-value"]').setValue('0')
+    expect(wrapper.find('[data-testid="rb-config-unbounded-warning"]').exists()).toBe(true)
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    const confirms = wrapper.findAll('[data-testid="btn-confirm"]')
+    await confirms.at(-1).trigger('click')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+    expect(api.config.mock.calls[0][0].max_age).toBeNull()
+  })
+
   it('does not warn or confirm when any total retention dimension is active', async () => {
     const api = makeApi({
       stats: vi.fn().mockResolvedValue({

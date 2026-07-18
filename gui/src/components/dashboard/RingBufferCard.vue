@@ -74,7 +74,10 @@
         <PrognosisBlock
           :prognosis="stats?.prognosis ?? null"
           :segment-age-hours="segmentAgeHours"
+          :segment-max-bytes="stats?.effective_segment_max_bytes ?? stats?.prognosis?.effective_segment_max_bytes ?? null"
+          :segment-max-rows="stats?.effective_segment_max_rows ?? null"
           :max-file-size-bytes="stats?.max_file_size_bytes ?? null"
+          :retention-unbounded="stats?.retention_unbounded"
         />
 
         <!-- Problem-Hinweis (deutlich) -->
@@ -274,7 +277,7 @@ const segmentCount = computed(() => fmtInt(common.value.segment_count ?? segment
 // Segment-Alter (Sekunden → Stunden) für die Budget-Empfehlung der Prognose.
 // null → PrognosisBlock lässt die Budget-Zeile weg.
 const segmentAgeHours = computed(() => {
-  const seconds = Number(stats.value?.segment_max_age)
+  const seconds = Number(stats.value?.effective_segment_max_age ?? stats.value?.segment_max_age)
   return Number.isFinite(seconds) && seconds > 0 ? seconds / 3600 : null
 })
 
