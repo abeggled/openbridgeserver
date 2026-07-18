@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
@@ -257,6 +258,22 @@ class TestPruneOldBackups:
         assert deleted == 2
         remaining = list(tmp_path.glob("*.json"))
         assert len(remaining) == 3
+
+    def test_keeps_most_recently_created_backup_when_names_are_out_of_order(self, tmp_path):
+        from obs.api.v1.autobackup import _prune_old_backups
+
+        older = tmp_path / "20260102-0300.json"
+        newer = tmp_path / "20260101-0300.json"
+        older.write_text("{}")
+        newer.write_text("{}")
+        os.utime(older, (1_000, 1_000))
+        os.utime(newer, (2_000, 2_000))
+
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
+            assert _prune_old_backups(retention_days=1) == 1
+
+        assert newer.exists()
+        assert not older.exists()
 
     def test_no_deletion_when_within_retention(self, tmp_path):
         from obs.api.v1.autobackup import _prune_old_backups

@@ -121,8 +121,11 @@ def _list_backups() -> list[AutobackupEntry]:
 
 def _prune_old_backups(retention_days: int) -> int:
     backup_dir = _autobackup_dir()
-    files = sorted(backup_dir.glob("*.json"), reverse=True)
-    files = [f for f in files if re.fullmatch(r"\d{8}-\d{4}", f.stem)]
+    # Filenames use application-local time for display and can therefore be
+    # non-monotonic after a timezone change or during a repeated DST hour.
+    # Retention must instead use the actual creation/write order.
+    files = [f for f in backup_dir.glob("*.json") if re.fullmatch(r"\d{8}-\d{4}", f.stem)]
+    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     deleted = 0
     for f in files[retention_days:]:
         deleted += _delete_backup_files(f.stem)
