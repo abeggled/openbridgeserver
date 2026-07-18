@@ -435,4 +435,35 @@ sudo systemctl disable testdata-generator
 Der Service startet bei einem Absturz automatisch neu (`Restart=on-failure`).
 Bei einem sauberen Stop via `systemctl stop` wird er **nicht** neu gestartet.
 
+---
+
+## onewire_smoke_test.py — 1-Wire/owserver Hardware-Diagnose
+
+Führt den echten `OneWireAdapter`-Code (`obs/adapters/onewire/adapter.py`) gegen eine laufende
+`owserver`-Instanz aus — verbindet, scannt den Gerätebaum und liest jede gefundene Property einmal
+aus. Nützlich, um einen realen Busmaster (USB-Stick, ElabNET PBM) zu validieren, da Hersteller-
+dokumentation spärlich oder gar nicht vorhanden sein kann. Greift nicht auf die OBS-Datenbank oder
+den Event-Bus zu.
+
+### Verwendung
+
+```bash
+# Scannen und jede Property einmal auslesen
+tools/with-venv python tools/onewire_smoke_test.py --host localhost --port 4304
+
+# Einen einzelnen Schreibvorgang testen (fragt nach Bestätigung — betrifft echte Hardware)
+tools/with-venv python tools/onewire_smoke_test.py --write 29.1122334455AA PIO.0 1
+```
+
+### Testen ohne echte Hardware
+
+`owserver` besitzt einen eingebauten Fake-Device-Treiber, nützlich um den Adapter/das Skript ohne
+angeschlossene 1-Wire-Hardware zu validieren:
+
+```bash
+brew install owfs                                    # oder: apt install owfs
+owserver --fake=DS18B20,DS2408,DS2438 -p 4304 &
+tools/with-venv python tools/onewire_smoke_test.py
+```
+
 

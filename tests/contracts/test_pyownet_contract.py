@@ -25,8 +25,7 @@ class TestProxyFactory:
         assert "host" in params, "pyownet.protocol.proxy() no longer accepts 'host'"
         assert "port" in params, "pyownet.protocol.proxy() no longer accepts 'port'"
         assert "persistent" in params, (
-            "pyownet.protocol.proxy() no longer accepts 'persistent'. "
-            "obs/adapters/onewire/adapter.py relies on persistent=True for connection reuse."
+            "pyownet.protocol.proxy() no longer accepts 'persistent'. obs/adapters/onewire/adapter.py relies on persistent=True for connection reuse."
         )
 
 
@@ -55,9 +54,7 @@ class TestProxyMethods:
         sig = inspect.signature(self._proxy_class().write)
         params = sig.parameters
         assert "path" in params
-        assert "data" in params, (
-            "pyownet proxy.write() no longer accepts 'data'. obs/adapters/onewire/adapter.py calls write(path, data)."
-        )
+        assert "data" in params, "pyownet proxy.write() no longer accepts 'data'. obs/adapters/onewire/adapter.py calls write(path, data)."
 
 
 class TestPersistentProxyClose:

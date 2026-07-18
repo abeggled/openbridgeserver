@@ -450,6 +450,31 @@ class TestBrowseSensors:
         assert result[0]["family"] == "28"
 
     @pytest.mark.asyncio
+    async def test_handles_real_owserver_trailing_slash_directories(self, mock_bus):
+        """Regression test (issue #6 smoke test against a real owserver, fake DS18B20/DS2408):
+        owserver's default DIRALLSLASH form appends "/" to directory entries — both the
+        ROM-ID itself at the root, and nested sub-groups per sensor (e.g. DS18B20's
+        "errata/") that are not readable leaf properties and must be excluded."""
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/28.A7F1D92A82C8/"]
+            return [
+                "/28.A7F1D92A82C8/errata/",
+                "/28.A7F1D92A82C8/temperature",
+                "/28.A7F1D92A82C8/power",
+            ]
+
+        adapter._proxy.dir.side_effect = fake_dir
+
+        result = await adapter.browse_sensors()
+
+        assert len(result) == 1
+        assert result[0]["rom_id"] == "28.A7F1D92A82C8"
+        assert result[0]["properties"] == ["power", "temperature"]
+
+    @pytest.mark.asyncio
     async def test_filters_structural_properties(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
 

@@ -39,7 +39,7 @@ from obs.core.event_bus import DataValueEvent
 
 logger = logging.getLogger(__name__)
 
-_ROM_ID_RE = re.compile(r"^/([0-9A-Fa-f]{2}\.[0-9A-Fa-f]{12})$")
+_ROM_ID_RE = re.compile(r"^/([0-9A-Fa-f]{2}\.[0-9A-Fa-f]{12})/?$")
 # Structural/metadata OWFS entries — not sensor readings, hidden from the browse picker.
 _STRUCTURAL_PROPERTIES = frozenset(
     {"address", "alias", "crc8", "id", "locator", "r_address", "r_id", "r_locator", "type", "version", "family"},
@@ -249,6 +249,9 @@ class OneWireAdapter(AdapterBase):
         if self._proxy is None:
             return []
 
+        # slash=True (owserver's default) marks directory entries with a trailing "/" —
+        # used both to recognize ROM-ID devices and, per-sensor, to drop nested
+        # sub-directories (e.g. DS18B20's "errata/") that aren't readable leaf values.
         async with self._owlock:
             entries = await asyncio.get_event_loop().run_in_executor(None, self._proxy.dir, "/")
 
@@ -259,8 +262,8 @@ class OneWireAdapter(AdapterBase):
                 continue
             rom_id = match.group(1)
             async with self._owlock:
-                props = await asyncio.get_event_loop().run_in_executor(None, self._proxy.dir, f"/{rom_id}")
-            properties = sorted(p.rsplit("/", 1)[-1] for p in props if p.rsplit("/", 1)[-1] not in _STRUCTURAL_PROPERTIES)
+                props = await asyncio.get_event_loop().run_in_executor(None, lambda p=rom_id: self._proxy.dir(f"/{p}"))
+            properties = sorted(p.rsplit("/", 1)[-1] for p in props if not p.endswith("/") and p.rsplit("/", 1)[-1] not in _STRUCTURAL_PROPERTIES)
             sensors.append(
                 {
                     "rom_id": rom_id,
