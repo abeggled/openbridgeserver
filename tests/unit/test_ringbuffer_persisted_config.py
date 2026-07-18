@@ -36,6 +36,20 @@ def test_default_max_file_size_is_hundred_mebibytes():
     assert DEFAULT_MAX_FILE_SIZE_BYTES == 100 * 1024 * 1024
 
 
+def _ringbuffer_from_runtime_config(tmp_path, cfg):
+    return RingBuffer(
+        storage="file",
+        disk_path=str(tmp_path / "obs_ringbuffer.db"),
+        max_entries=cfg["max_entries"],
+        max_file_size_bytes=cfg["max_file_size_bytes"],
+        max_age=cfg["max_age"],
+        segmented=cfg["segmented"],
+        segment_max_bytes=cfg["segment_max_bytes"],
+        segment_max_rows=cfg["segment_max_rows"],
+        segment_max_age=cfg["segment_max_age"],
+    )
+
+
 def test_default_segment_max_age_is_six_hours():
     assert DEFAULT_SEGMENT_MAX_AGE_SECONDS == 6 * 60 * 60
 
@@ -309,20 +323,70 @@ async def test_migrated_config_with_sub_three_second_max_age_does_not_crash_star
             SegmentConfig(segment_max_age=cfg["segment_max_age"]),
             StoreRetentionConfig(max_age=cfg["max_age"]),
         )
-        rb = RingBuffer(
-            storage="file",
-            disk_path=str(tmp_path / "obs_ringbuffer.db"),
-            max_entries=cfg["max_entries"],
-            max_file_size_bytes=cfg["max_file_size_bytes"],
-            max_age=cfg["max_age"],
-            segmented=cfg["segmented"],
-            segment_max_bytes=cfg["segment_max_bytes"],
-            segment_max_rows=cfg["segment_max_rows"],
-            segment_max_age=cfg["segment_max_age"],
-        )
+        rb = _ringbuffer_from_runtime_config(tmp_path, cfg)
         await rb.start()
         try:
             assert rb.store._segment_config.segment_max_age is None
+        finally:
+            await rb.stop()
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tiny_max_age", [1, 2])
+async def test_migrated_age_only_sub_three_config_gets_smallest_valid_trigger(tmp_path, tiny_max_age):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (
+                PERSISTED_CONFIG_KEY,
+                json.dumps(
+                    {
+                        "max_entries": None,
+                        "max_file_size_bytes": None,
+                        "max_age": tiny_max_age,
+                    }
+                ),
+            ),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["max_age"] == 3
+        assert cfg["segment_max_age"] == 1
+
+        rb = _ringbuffer_from_runtime_config(tmp_path, cfg)
+        await rb.start()
+        try:
+            assert rb.store._segment_config.segment_max_age == 1
+        finally:
+            await rb.stop()
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total_key", ["max_entries", "max_file_size_bytes"])
+@pytest.mark.parametrize("tiny_total", [1, 2])
+async def test_migrated_tiny_row_or_size_total_gets_smallest_valid_budget(tmp_path, total_key, tiny_total):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps({total_key: tiny_total})),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg[total_key] == 3
+
+        rb = _ringbuffer_from_runtime_config(tmp_path, cfg)
+        await rb.start()
+        try:
+            segment_key = "segment_max_rows" if total_key == "max_entries" else "segment_max_bytes"
+            assert getattr(rb.store._segment_config, segment_key) == 1
         finally:
             await rb.stop()
     finally:
