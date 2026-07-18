@@ -783,6 +783,25 @@ async def test_import_config_app_settings(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_import_config_invalid_timezone_does_not_hot_update_logic(monkeypatch):
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub()
+    body = _make_config_export(app_settings=[config_api.ExportedAppSetting(key="timezone", value="not/a-timezone")])
+    logic_manager = MagicMock()
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
+    ):
+        await config_api.import_config(body=body, _user="u", db=db)
+
+    logic_manager.update_app_config.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_import_config_hierarchy_trees_and_nodes(monkeypatch):
     """import_config upserts hierarchy trees, nodes and dp links."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())

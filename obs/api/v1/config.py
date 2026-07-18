@@ -16,6 +16,7 @@ import sqlite3
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -984,6 +985,7 @@ async def import_config(
     imported_timezone = next((s.value for s in body.app_settings if s.key == "timezone"), None)
     if imported_timezone is not None:
         try:
+            ZoneInfo(imported_timezone)
             from obs.logic.manager import get_logic_manager
 
             get_logic_manager().update_app_config({"timezone": imported_timezone})

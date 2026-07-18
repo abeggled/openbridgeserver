@@ -309,6 +309,22 @@ class TestPruneOldBackups:
         assert newer.exists()
         assert not older.exists()
 
+    def test_keeps_suffixed_backup_when_mtimes_are_equal(self, tmp_path):
+        from obs.api.v1.autobackup import _prune_old_backups
+
+        older = tmp_path / "20260717-0304.json"
+        newer = tmp_path / "20260717-0304-1.json"
+        older.write_text("{}")
+        newer.write_text("{}")
+        os.utime(older, (1_000, 1_000))
+        os.utime(newer, (1_000, 1_000))
+
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
+            assert _prune_old_backups(retention_days=1) == 1
+
+        assert newer.exists()
+        assert not older.exists()
+
     def test_no_deletion_when_within_retention(self, tmp_path):
         from obs.api.v1.autobackup import _prune_old_backups
 

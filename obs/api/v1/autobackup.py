@@ -105,7 +105,7 @@ def _list_backups() -> list[AutobackupEntry]:
     # Prefer write time so suffixed backups from the same local minute appear
     # newest first.  The name provides a deterministic fallback for files
     # whose filesystem timestamps are identical.
-    for f in sorted(backup_dir.glob("*.json"), key=lambda f: (f.stat().st_mtime_ns, f.name), reverse=True):
+    for f in sorted(backup_dir.glob("*.json"), key=lambda f: (f.stat().st_mtime_ns, f.stem), reverse=True):
         stem = f.stem  # z.B. "20240506-0300"
         if not _BACKUP_STEM_RE.fullmatch(stem):
             continue
@@ -130,7 +130,7 @@ def _prune_old_backups(retention_days: int) -> int:
     # non-monotonic after a timezone change or during a repeated DST hour.
     # Retention must instead use the actual creation/write order.
     files = [f for f in backup_dir.glob("*.json") if _BACKUP_STEM_RE.fullmatch(f.stem)]
-    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    files.sort(key=lambda f: (f.stat().st_mtime_ns, f.stem), reverse=True)
     deleted = 0
     for f in files[retention_days:]:
         deleted += _delete_backup_files(f.stem)
