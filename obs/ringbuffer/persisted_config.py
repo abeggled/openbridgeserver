@@ -69,10 +69,9 @@ DEFAULT_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MiB (Fresh-Install-Defaul
 # ``load_persisted_ringbuffer_config`` (#951 [P3]).
 DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MiB (Upgrade-ohne-Config-Default)
 
-# Deployter Default für die zeitgetriebene Rotation (#919): alle 6 Stunden ein
-# neues Segment. Zeit ist im Normalbetrieb der PRIMÄRE Rotations-Trigger; die aus
-# ``max_file_size_bytes`` abgeleitete ``segment_max_bytes`` ist nur die Größen-
-# Notbremse. ``segment_max_rows`` bleibt None (kein row-getriebener Trigger).
+# Deployter expliziter Startwert für die zeitgetriebene Rotation (#919): alle
+# 6 Stunden ein neues Segment. Andere Dimensionen bleiben roh ``None`` und werden
+# nur bei einer passenden Gesamtgrenze abgeleitet.
 DEFAULT_SEGMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # 21600 s (6 h)
 
 
@@ -87,9 +86,9 @@ def _defaults() -> dict[str, Any]:
         # automatisch segmentiert; der Legacy-Single-File-Pfad bleibt nur intern
         # (Tests/Legacy) über ``segmented=False`` erreichbar.
         "segmented": True,
-        # Segment-Parameter (#930/#919): ``segment_max_bytes`` wird beim Start aus
-        # ``max_file_size_bytes`` abgeleitet, wenn hier None (siehe RingBuffer).
-        # ``segment_max_age`` ist der zeitgetriebene Default-Trigger (6 h).
+        # Segment-Parameter (#930/#919): ``None`` wird nur aus der passenden
+        # Gesamtgrenze abgeleitet; ohne passende Grenze bleibt der Trigger aus.
+        # ``segment_max_age`` ist der sichtbare explizite Startwert (6 h).
         "segment_max_bytes": None,
         "segment_max_rows": None,
         "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
@@ -198,7 +197,7 @@ async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | 
         default_segment_max_age=defaults["segment_max_age"],
         max_age=max_age,
     )
-    return {
+    resolved = {
         "enabled": bool(data.get("enabled", defaults["enabled"])),
         "max_entries": data.get("max_entries", defaults["max_entries"]),
         "max_file_size_bytes": data.get("max_file_size_bytes", defaults["max_file_size_bytes"]),
@@ -208,6 +207,21 @@ async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | 
         "segment_max_rows": data.get("segment_max_rows", defaults["segment_max_rows"]),
         "segment_max_age": segment_max_age,
     }
+    # Compatibility migration for configs that previously relied on hidden
+    # runtime fallbacks: an all-unbounded segmented store must not restart with
+    # no rotation trigger at all. Materialize the documented 6-hour age value so
+    # stats and the next UI save expose the effective choice explicitly.
+    if (
+        resolved["segmented"]
+        and resolved["max_entries"] is None
+        and resolved["max_file_size_bytes"] is None
+        and resolved["max_age"] is None
+        and resolved["segment_max_bytes"] is None
+        and resolved["segment_max_rows"] is None
+        and resolved["segment_max_age"] is None
+    ):
+        resolved["segment_max_age"] = DEFAULT_SEGMENT_MAX_AGE_SECONDS
+    return resolved
 
 
 async def load_legacy_migration_decision(db: Database) -> str | None:

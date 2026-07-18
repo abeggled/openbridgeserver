@@ -212,6 +212,41 @@ async def test_persist_then_load_segment_params_roundtrip():
 
 
 @pytest.mark.asyncio
+async def test_load_migrates_legacy_all_unbounded_config_to_visible_age_rotation():
+    """An old all-null segmented config must not restart without any rotation trigger."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (
+                PERSISTED_CONFIG_KEY,
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "max_entries": None,
+                        "max_file_size_bytes": None,
+                        "max_age": None,
+                        "segmented": True,
+                        "segment_max_bytes": None,
+                        "segment_max_rows": None,
+                        "segment_max_age": None,
+                    }
+                ),
+            ),
+        )
+        await db.commit()
+
+        cfg = await load_persisted_ringbuffer_config(db)
+
+        assert cfg["segment_max_bytes"] is None
+        assert cfg["segment_max_rows"] is None
+        assert cfg["segment_max_age"] == DEFAULT_SEGMENT_MAX_AGE_SECONDS
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_migrated_old_config_with_short_max_age_clamps_segment_max_age():
     """#951: Alt-Config mit ``max_age`` aber ohne Segment-Keys darf den Startup nicht crashen.
 

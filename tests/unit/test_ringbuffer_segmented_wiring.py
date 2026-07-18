@@ -22,7 +22,9 @@ from obs.ringbuffer.ringbuffer import (
     RingBuffer,
     RingBufferStorageDeleteIncompleteError,
     delete_ringbuffer_storage_files,
+    derive_segment_max_age,
     derive_segment_max_bytes,
+    derive_segment_max_rows,
 )
 from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO, SegmentConfig, StoreRetentionConfig, validate_store_config
 
@@ -490,61 +492,35 @@ async def test_segmented_query_supports_core_filters(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "max_file_size_bytes",
+    ("derive", "retention_value"),
     [
-        None,  # unbegrenzt → fester Default (budget-unabhängig)
-        3,  # kleinste Größe, für die die 3-Segment-Regel überhaupt erfüllbar ist
-        1024,  # winziges Budget: KEIN Floor, damit Auto-Start nie 422 auslöst
-        10 * 1024 * 1024,  # 10 MiB
-        100 * 1024 * 1024,  # 100 MiB (der deployte Default)
-        4 * 1024 * 1024 * 1024,  # 4 GiB (Ceil = 256 MiB greift)
+        (derive_segment_max_bytes, 3),
+        (derive_segment_max_bytes, 1024),
+        (derive_segment_max_bytes, 4 * 1024 * 1024 * 1024),
+        (derive_segment_max_rows, 3000),
+        (derive_segment_max_rows, 30_001),
+        (derive_segment_max_age, 900),
+        (derive_segment_max_age, 30 * 24 * 60 * 60),
     ],
 )
-def test_derive_segment_max_bytes_satisfies_three_segment_rule(max_file_size_bytes):
-    derived = derive_segment_max_bytes(max_file_size_bytes)
-    assert derived >= 1
-    if max_file_size_bytes is None:
-        # Kein Size-Budget → fester Default von 256 MiB, NICHT budgetabhängig.
-        assert derived == 256 * 1024 * 1024
-        return
-    # Ableitung ist immer <= budget // 3 → die 3-Segment-Regel hält automatisch,
-    # kein 422 im Auto-Startpfad, auch für winzige Budgets.
-    assert derived == max(1, min(256 * 1024 * 1024, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
-    assert max_file_size_bytes >= RETENTION_SEGMENT_RATIO * derived
-    validate_store_config(
-        SegmentConfig(segment_max_bytes=derived),
-        StoreRetentionConfig(max_file_size_bytes=max_file_size_bytes),
-    )
+def test_matching_retention_limit_derives_exactly_three_segments(derive, retention_value):
+    assert derive(retention_value) == retention_value // RETENTION_SEGMENT_RATIO
+
+
+@pytest.mark.parametrize("derive", [derive_segment_max_bytes, derive_segment_max_rows, derive_segment_max_age])
+def test_missing_retention_limit_disables_matching_segment_dimension(derive):
+    assert derive(None) is None
 
 
 @pytest.mark.parametrize("max_file_size_bytes", [1, 2])
-def test_derive_segment_max_bytes_sub_floor_budget_stays_rule_conform(max_file_size_bytes):
-    """Winzige Budgets < RETENTION_SEGMENT_RATIO Bytes (#951 P2).
-
-    ``max_file_size_bytes`` ist per API-Modell ``ge=1`` – Budgets von 1 oder 2
-    Byte sind also gültige (wenn auch degenerierte) Eingaben. Für sie ist die
-    3-Segment-Regel mit einem POSITIVEN Segment mathematisch unerfüllbar
-    (``3 * 1 = 3 > 2``). Die Auto-Ableitung muss trotzdem ein positives Segment
-    liefern, das ``validate_store_config`` NICHT scheitern lässt (kein Startup-
-    Crash): dazu wird das effektive Budget für die Regel auf die technische
-    Untergrenze ``RETENTION_SEGMENT_RATIO`` gehoben.
-    """
+def test_sub_three_size_budget_is_not_silently_increased(max_file_size_bytes):
     derived = derive_segment_max_bytes(max_file_size_bytes)
-    assert derived >= 1
-    # Regel gegen das auf die technische Untergrenze angehobene Budget: der
-    # abgeleitete Wert scheitert NIE an validate_store_config im Auto-Start.
-    effective_budget = max(max_file_size_bytes, RETENTION_SEGMENT_RATIO)
-    assert RETENTION_SEGMENT_RATIO * derived <= effective_budget
-    validate_store_config(
-        SegmentConfig(segment_max_bytes=derived),
-        StoreRetentionConfig(max_file_size_bytes=effective_budget),
-    )
-
-
-def test_derive_segment_max_bytes_ceiling_for_large_budget():
-    # 4 GiB // 3 = ~1.33 GiB → auf 256 MiB gedeckelt, und 4 GiB >= 3*256 MiB.
-    derived = derive_segment_max_bytes(4 * 1024 * 1024 * 1024)
-    assert derived == 256 * 1024 * 1024
+    assert derived == 1
+    with pytest.raises(ValueError, match="max_file_size_bytes"):
+        validate_store_config(
+            SegmentConfig(segment_max_bytes=derived),
+            StoreRetentionConfig(max_file_size_bytes=max_file_size_bytes),
+        )
 
 
 def test_derive_segment_max_bytes_small_budget_has_no_floor():
@@ -556,30 +532,44 @@ def test_derive_segment_max_bytes_small_budget_has_no_floor():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("max_file_size_bytes", [1, 2])
-async def test_segmented_start_does_not_crash_for_sub_floor_budget(tmp_path: Path, max_file_size_bytes):
-    """Persistiertes Winzig-Budget (1/2 Byte) darf den Startup NICHT crashen (#951 P2).
-
-    Der API-Layer akzeptiert ``max_file_size_bytes >= 1`` bei Auto-Segment
-    (``segment_max_bytes=None``, ratio-Check übersprungen). Ein solcher Wert
-    landet persistiert und muss beim segmentierten Start über die Auto-Ableitung
-    OHNE ``validate_store_config``-Crash öffnen.
-    """
+async def test_segmented_start_rejects_sub_three_size_budget(tmp_path: Path, max_file_size_bytes):
     rb = _rb(tmp_path, segmented=True, max_file_size_bytes=max_file_size_bytes)
+    with pytest.raises(ValueError, match="max_file_size_bytes"):
+        await rb.start()
+
+
+@pytest.mark.asyncio
+async def test_segmented_start_derives_segment_max_bytes_from_file_size(tmp_path: Path):
+    # Ein gesetztes Gesamtbudget wird transparent auf drei Segmente aufgeteilt.
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=2 * 1024 * 1024 * 1024)
     await rb.start()
     try:
-        assert rb.store is not None
-        assert rb._segment_max_bytes >= 1
+        assert rb._segment_max_bytes == (2 * 1024 * 1024 * 1024) // RETENTION_SEGMENT_RATIO
     finally:
         await rb.stop()
 
 
 @pytest.mark.asyncio
-async def test_segmented_start_derives_segment_max_bytes_from_file_size(tmp_path: Path):
-    # 2 GiB Size-Budget → derived = min(256 MiB, 2GiB//3) = 256 MiB.
-    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=2 * 1024 * 1024 * 1024)
+async def test_segmented_start_without_size_budget_has_no_effective_byte_cap(tmp_path: Path):
+    rb = _rb(tmp_path, segmented=True, max_file_size_bytes=None, segment_max_bytes=None, segment_max_age=24 * 60 * 60)
     await rb.start()
     try:
-        assert rb._segment_max_bytes == 256 * 1024 * 1024
+        assert rb._segment_max_bytes is None
+        assert rb.store._segment_config.segment_max_bytes is None
+        assert rb.store._segment_config.segment_max_age == 24 * 60 * 60
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_start_derives_rows_and_age_from_matching_total_limits(tmp_path: Path):
+    rb = _rb(tmp_path, segmented=True, max_entries=30_000, max_age=30 * 24 * 60 * 60)
+    await rb.start()
+    try:
+        assert rb._segment_max_rows == 10_000
+        assert rb._segment_max_age == 10 * 24 * 60 * 60
+        assert rb.store._segment_config.segment_max_rows == 10_000
+        assert rb.store._segment_config.segment_max_age == 10 * 24 * 60 * 60
     finally:
         await rb.stop()
 

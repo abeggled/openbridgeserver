@@ -8,6 +8,7 @@
 * Logic Engine/Admin GUI: Added a Sequence node for state-triggered, non-blocking value-write and pause sequences. Sequences are configured with a visual step editor (including object picker, reordering, duplication, pauses and a blink preset), configurable repeat/restart policies, and normal object values such as colours, switches or dimmer levels. https://github.com/abeggled/openbridgeserver/issues/1021
 
 ### Fixes 🐞
+* Monitor/RingBuffer: Segment rotation no longer falls back to an unexplained fixed 256 MiB size cap. Each segment threshold is now either explicit, derived as one third of its matching total retention limit, or disabled; configurations without any effective rotation trigger are rejected. The Admin UI shows the effective source per dimension, warns and asks for confirmation when total retention is unbounded, and forecasts disk growth for that case. A 30-day retention with explicit 24-hour segments and no disk budget therefore rotates by age without an implicit size cap. https://github.com/abeggled/openbridgeserver/issues/919
 
 ### Known Issues 🔔
 * none

@@ -206,6 +206,48 @@ async def test_config_post_segment_max_age_applies_live_to_running_store(client,
     await _reset_to_defaults(client, auth_headers)
 
 
+async def test_thirty_day_retention_with_explicit_daily_segments_has_no_hidden_size_cap(client, auth_headers):
+    """Regression: unlimited total size must not imply the former fixed 256 MiB segment cap."""
+    from obs.ringbuffer.ringbuffer import get_optional_ringbuffer
+
+    max_age = 30 * 24 * 60 * 60
+    segment_age = 24 * 60 * 60
+    resp = await client.post(
+        "/api/v1/ringbuffer/config",
+        json={
+            "max_entries": None,
+            "max_file_size_bytes": None,
+            "max_age": max_age,
+            "segment_max_bytes": None,
+            "segment_max_rows": None,
+            "segment_max_age": segment_age,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["retention_unbounded"] is False
+    assert payload["effective_segment_max_bytes"] is None
+    assert payload["segment_max_bytes_source"] == "disabled"
+    assert payload["effective_segment_max_rows"] is None
+    assert payload["segment_max_rows_source"] == "disabled"
+    assert payload["effective_segment_max_age"] == segment_age
+    assert payload["segment_max_age_source"] == "explicit"
+
+    rb = get_optional_ringbuffer()
+    assert rb is not None and rb.store is not None
+    assert rb.store._segment_config.segment_max_bytes is None
+    assert rb.store._segment_config.segment_max_rows is None
+    assert rb.store._segment_config.segment_max_age == segment_age
+
+    stats = await client.get("/api/v1/ringbuffer/stats", headers=auth_headers)
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["effective_segment_max_bytes"] is None
+    assert stats.json()["effective_segment_max_age"] == segment_age
+
+    await _reset_to_defaults(client, auth_headers)
+
+
 async def test_config_post_segmentation_toggle_rebuilds_running_instance(client, auth_headers):
     """Ein Wechsel von ``segmented`` muss den laufenden RingBuffer neu aufbauen (#951).
 
