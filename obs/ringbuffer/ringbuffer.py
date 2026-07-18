@@ -65,6 +65,13 @@ def derive_segment_max_rows(max_entries: int | None) -> int | None:
 
 
 def derive_segment_max_age(max_age: int | None) -> int | None:
+    # Persisted pre-segmentation configs may contain a 1- or 2-second total
+    # retention.  No positive integer segment age can satisfy the three-segment
+    # ratio for those values, so keep the migrated time trigger disabled and let
+    # the matching size/row trigger rotate the store.  Size and row totals retain
+    # their strict tiny-budget validation through ``_derive_segment_limit``.
+    if max_age is not None and max_age < 3:
+        return None
     return _derive_segment_limit(max_age)
 
 

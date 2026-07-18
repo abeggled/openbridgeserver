@@ -417,7 +417,11 @@ const effectiveSegmentBytes = computed(() => explicitSegmentBytes.value ?? (
 const effectiveSegmentRows = computed(() => explicitSegmentRows.value ?? (
   totalMaxEntries.value === null ? null : Math.floor(totalMaxEntries.value / 3)
 ))
-const retentionUnbounded = computed(() => !configForm.maxEntriesEnabled && !configForm.maxSizeEnabled && !configForm.retentionEnabled)
+const retentionUnbounded = computed(() => (
+  totalMaxEntries.value === null &&
+  totalMaxBytes.value === null &&
+  totalMaxAgeSeconds.value === null
+))
 const maxFileSizeForPrognosis = computed(() => totalMaxBytes.value)
 
 function formatSegmentAge(seconds) {
@@ -599,7 +603,9 @@ function buildPayload() {
   if (configForm.retentionEnabled) {
     const retentionValue = parseNonNegativeInteger(configForm.retentionValue)
     if (retentionValue === null) throw new Error(t('ringbuffer.validationRetentionNaN'))
-    payload.max_age = retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
+    payload.max_age = retentionValue > 0
+      ? retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
+      : null
   }
 
   // Segmentierung ist automatisch aktiv (#938): dieses Modal zeigt ausschliesslich

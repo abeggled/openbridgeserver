@@ -20,7 +20,7 @@ afterEach(() => {
   vi.doUnmock('@/stores/auth')
 })
 
-function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600, maxAge = null } = {}) {
+function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600, maxAge = null, statsOverrides = {} } = {}) {
   return {
     enabled: true,
     total: 800,
@@ -35,6 +35,7 @@ function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024,
       common: { segment_count: segments.length, size_bytes: sizeBytes, oldest_ts: null, newest_ts: null },
       backend_extra: { segments, retention_over_budget: overBudget, retention_pressure_reason: null },
     },
+    ...statsOverrides,
   }
 }
 
@@ -140,6 +141,33 @@ describe('RingBufferCard — segmented state', () => {
     expect(wrapper.find('[data-testid="prognosis-rotation"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="prognosis-history"]').text()).toContain('Tage')
     expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(true)
+  })
+
+  it('feeds effective row and derived-age limits into the dashboard prognosis', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      segmentMaxAge: null,
+      prognosis: { ...fullPrognosis, effective_segment_max_bytes: null },
+      statsOverrides: {
+        effective_segment_max_age: 12 * 3600,
+        effective_segment_max_bytes: null,
+        effective_segment_max_rows: 6000,
+      },
+    }))
+    expect(wrapper.find('[data-testid="prognosis-rotation"]').text()).toContain('Zeilen')
+    expect(wrapper.find('[data-testid="prognosis-budget"]').text()).toContain('12')
+  })
+
+  it('shows other retention limits instead of unlimited growth without a disk budget', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      maxFileSizeBytes: null,
+      prognosis: fullPrognosis,
+      statsOverrides: { retention_unbounded: false },
+    }))
+    const history = wrapper.find('[data-testid="prognosis-history"]').text()
+    expect(history).toContain('andere Gesamtgrenzen')
+    expect(history).not.toContain('Historie wächst')
   })
 
   it('shows the warming-up hint when prognosis rate fields are unavailable', async () => {

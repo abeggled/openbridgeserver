@@ -21,6 +21,7 @@ import json
 import pytest
 
 from obs.db.database import Database
+from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.persisted_config import (
     DEFAULT_MAX_FILE_SIZE_BYTES,
     DEFAULT_SEGMENT_MAX_AGE_SECONDS,
@@ -280,7 +281,7 @@ async def test_migrated_old_config_with_short_max_age_clamps_segment_max_age():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tiny_max_age", [1, 2])
-async def test_migrated_config_with_sub_three_second_max_age_does_not_crash_startup(tiny_max_age):
+async def test_migrated_config_with_sub_three_second_max_age_does_not_crash_startup(tmp_path, tiny_max_age):
     """#951: Alt-Config mit ``max_age`` = 1 oder 2 s (ohne Segment-Keys) darf nicht crashen.
 
     ``max_age // 3`` ist hier 0; das frühere ``max(1, 0)`` = 1 setzte
@@ -308,6 +309,22 @@ async def test_migrated_config_with_sub_three_second_max_age_does_not_crash_star
             SegmentConfig(segment_max_age=cfg["segment_max_age"]),
             StoreRetentionConfig(max_age=cfg["max_age"]),
         )
+        rb = RingBuffer(
+            storage="file",
+            disk_path=str(tmp_path / "obs_ringbuffer.db"),
+            max_entries=cfg["max_entries"],
+            max_file_size_bytes=cfg["max_file_size_bytes"],
+            max_age=cfg["max_age"],
+            segmented=cfg["segmented"],
+            segment_max_bytes=cfg["segment_max_bytes"],
+            segment_max_rows=cfg["segment_max_rows"],
+            segment_max_age=cfg["segment_max_age"],
+        )
+        await rb.start()
+        try:
+            assert rb.store._segment_config.segment_max_age is None
+        finally:
+            await rb.stop()
     finally:
         await db.disconnect()
 
