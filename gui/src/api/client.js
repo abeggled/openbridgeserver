@@ -120,6 +120,8 @@ export const adapterApi = {
   mqttBrowseTopics:   (id, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/browse`, { params: { timeout }, timeout: (timeout + 3) * 1000 }),
   mqttSamplePayload:  (id, topic, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/sample`, { params: { topic, timeout }, timeout: (timeout + 3) * 1000 }),
   iobrokerBrowseStates: (id, q = '', limit = 50) => api.get(`/adapters/instances/${id}/iobroker/states`, { params: { q, limit } }),
+  onewireBrowseSensors: (id) => api.get(`/adapters/instances/${id}/onewire/browse`),
+  onewireSetAlias:      (id, romId, label) => api.patch(`/adapters/instances/${id}/onewire/aliases`, { rom_id: romId, label }),
   iobrokerImportPreview: (id, data) => api.post(`/adapters/instances/${id}/iobroker/import-preview`, data),
   iobrokerImport:        (id, data) => api.post(`/adapters/instances/${id}/iobroker/import`, data),
   getZsuHolidays:        (id, year = 0) => api.get(`/adapters/instances/${id}/holidays`, { params: year ? { year } : {} }),

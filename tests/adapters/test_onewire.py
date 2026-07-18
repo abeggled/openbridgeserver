@@ -1,17 +1,18 @@
-"""Unit tests for the 1-Wire adapter — filesystem functions and adapter lifecycle.
-Uses tmp_path and mocked EventBus; no hardware required.
+"""Unit tests for the 1-Wire adapter — owserver/pyownet client.
+No real owserver connection; pyownet.protocol.proxy() and the proxy's dir/read/write
+are mocked. Uses mocked EventBus; no hardware required.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 import asyncio
+import sys
 import unittest.mock as mock
 
-from obs.adapters.onewire.adapter import OneWireAdapter, _read_sensor_file, scan_sensors
+import pyownet.protocol as owprotocol
+import pytest
+
+from obs.adapters.onewire.adapter import OneWireAdapter
 from tests.adapters.conftest import make_binding
 
 # ---------------------------------------------------------------------------
@@ -19,146 +20,19 @@ from tests.adapters.conftest import make_binding
 # ---------------------------------------------------------------------------
 
 
-def _make_sensor(base: Path, sensor_id: str, line0: str, line1: str) -> Path:
-    """Create a fake sysfs sensor directory."""
-    sensor_dir = base / sensor_id
-    sensor_dir.mkdir(parents=True)
-    w1_slave = sensor_dir / "w1_slave"
-    w1_slave.write_text(f"{line0}\n{line1}\n", encoding="ascii")
-    return sensor_dir
-
-
-# ---------------------------------------------------------------------------
-# _read_sensor_file — happy path
-# ---------------------------------------------------------------------------
-
-
-class TestReadSensorFileHappyPath:
-    def test_valid_ds18b20_21_degrees(self, tmp_path):
-        _make_sensor(
-            tmp_path,
-            "28-000000000001",
-            "50 05 4b 46 7f ff 0c 10 1c : crc=1c YES",
-            "50 05 4b 46 7f ff 0c 10 1c t=21312",
-        )
-        result = _read_sensor_file(tmp_path / "28-000000000001")
-        assert result == pytest.approx(21.312, abs=1e-6)
-
-    def test_zero_degrees(self, tmp_path):
-        _make_sensor(
-            tmp_path,
-            "28-zero",
-            "xx xx xx xx : crc=xx YES",
-            "xx xx xx xx t=0",
-        )
-        result = _read_sensor_file(tmp_path / "28-zero")
-        assert result == 0.0
-
-    def test_negative_temperature(self, tmp_path):
-        _make_sensor(
-            tmp_path,
-            "28-negative",
-            "xx : crc=xx YES",
-            "xx t=-5000",
-        )
-        result = _read_sensor_file(tmp_path / "28-negative")
-        assert result == pytest.approx(-5.0, abs=1e-6)
-
-    def test_rounding_to_3_decimals(self, tmp_path):
-        _make_sensor(
-            tmp_path,
-            "28-precise",
-            "xx : crc=xx YES",
-            "xx t=21875",  # 21.875 exactly
-        )
-        result = _read_sensor_file(tmp_path / "28-precise")
-        assert result == pytest.approx(21.875, abs=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# _read_sensor_file — error paths
-# ---------------------------------------------------------------------------
-
-
-class TestReadSensorFileErrors:
-    def test_missing_w1_slave_returns_none(self, tmp_path):
-        sensor_dir = tmp_path / "28-missing"
-        sensor_dir.mkdir()
-        # w1_slave NOT created
-        result = _read_sensor_file(sensor_dir)
-        assert result is None
-
-    def test_nonexistent_sensor_dir_returns_none(self, tmp_path):
-        result = _read_sensor_file(tmp_path / "28-ghost" / "ghost")
-        assert result is None
-
-    def test_crc_error_returns_none(self, tmp_path):
-        _make_sensor(
-            tmp_path,
-            "28-crcfail",
-            "50 05 4b 46 7f ff 0c 10 1c : crc=1c NO",  # NO instead of YES
-            "50 05 4b 46 7f ff 0c 10 1c t=21312",
-        )
-        result = _read_sensor_file(tmp_path / "28-crcfail")
-        assert result is None
-
-    def test_only_one_line_returns_none(self, tmp_path):
-        sensor_dir = tmp_path / "28-short"
-        sensor_dir.mkdir()
-        (sensor_dir / "w1_slave").write_text("only one line\n", encoding="ascii")
-        result = _read_sensor_file(sensor_dir)
-        assert result is None
-
-    def test_missing_t_field_returns_none(self, tmp_path):
-        _make_sensor(
-            tmp_path,
-            "28-nofield",
-            "xx : crc=xx YES",
-            "xx no_temperature_here",
-        )
-        result = _read_sensor_file(tmp_path / "28-nofield")
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# scan_sensors
-# ---------------------------------------------------------------------------
-
-
-class TestScanSensors:
-    def test_empty_path_returns_empty(self, tmp_path):
-        result = scan_sensors(str(tmp_path))
-        assert result == []
-
-    def test_nonexistent_path_returns_empty(self, tmp_path):
-        result = scan_sensors(str(tmp_path / "does_not_exist"))
-        assert result == []
-
-    def test_finds_sensor_dirs(self, tmp_path):
-        (tmp_path / "28-000000000001").mkdir()
-        (tmp_path / "28-000000000002").mkdir()
-        result = sorted(scan_sensors(str(tmp_path)))
-        assert result == ["28-000000000001", "28-000000000002"]
-
-    def test_excludes_w1_bus_master1(self, tmp_path):
-        (tmp_path / "28-000000000001").mkdir()
-        (tmp_path / "w1_bus_master1").mkdir()
-        result = scan_sensors(str(tmp_path))
-        assert "w1_bus_master1" not in result
-        assert "28-000000000001" in result
-
-    def test_ignores_files(self, tmp_path):
-        (tmp_path / "28-sensor").mkdir()
-        (tmp_path / "somefile.txt").write_text("data")
-        result = scan_sensors(str(tmp_path))
-        assert "somefile.txt" not in result
-        assert "28-sensor" in result
-
-
 def _mock_create_task(coro, *, name=None, context=None):
+    """Side-effect for patched asyncio.create_task — closes the coroutine so Python
+    does not emit 'coroutine was never awaited' RuntimeWarnings during GC."""
     if asyncio.iscoroutine(coro):
         coro.close()
     return mock.MagicMock()
+
+
+def _connected_adapter(mock_bus, **config) -> OneWireAdapter:
+    """An adapter with a fake, already-connected proxy — bypasses connect()."""
+    adapter = OneWireAdapter(event_bus=mock_bus, config=config)
+    adapter._proxy = mock.MagicMock()
+    return adapter
 
 
 # ---------------------------------------------------------------------------
@@ -167,15 +41,24 @@ def _mock_create_task(coro, *, name=None, context=None):
 
 
 class TestInit:
-    def test_default_initial_state(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        assert adapter._poll_tasks == []
-        assert adapter._available is False
-
-    def test_config_defaults_applied(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
+    def test_default_config_applied(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+        assert adapter._cfg.host == "localhost"
+        assert adapter._cfg.port == 4304
         assert adapter._cfg.poll_interval == 30.0
-        assert adapter._cfg.w1_path == str(tmp_path)
+        assert adapter._cfg.aliases == {}
+        assert adapter._poll_tasks == []
+        assert adapter._proxy is None
+
+    def test_config_overrides_applied(self, mock_bus):
+        adapter = OneWireAdapter(
+            event_bus=mock_bus,
+            config={"host": "owserver.local", "port": 4305, "poll_interval": 5.0, "aliases": {"28.AA": "Gästebad"}},
+        )
+        assert adapter._cfg.host == "owserver.local"
+        assert adapter._cfg.port == 4305
+        assert adapter._cfg.poll_interval == 5.0
+        assert adapter._cfg.aliases == {"28.AA": "Gästebad"}
 
 
 # ---------------------------------------------------------------------------
@@ -185,21 +68,34 @@ class TestInit:
 
 class TestConnect:
     @pytest.mark.asyncio
-    async def test_path_not_found_disables_adapter(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"w1_path": str(tmp_path / "nonexistent")},
-        )
-        await adapter.connect()
-        assert adapter._available is False
-        assert mock_bus.publish.called
+    async def test_lib_not_installed_disables_adapter(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+        with mock.patch.dict(sys.modules, {"pyownet": None, "pyownet.protocol": None}):
+            await adapter.connect()
+        assert adapter._proxy is None
+        assert adapter.connected is False
+        assert adapter.last_detail_code == "libNotInstalled"
 
     @pytest.mark.asyncio
-    async def test_path_found_enables_adapter(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        await adapter.connect()
-        assert adapter._available is True
+    async def test_connection_success_marks_connected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        fake_proxy = mock.MagicMock()
+        with mock.patch.object(owprotocol, "proxy", return_value=fake_proxy) as proxy_fn:
+            await adapter.connect()
+        proxy_fn.assert_called_once_with(host="owserver.local", port=4304, persistent=True)
+        assert adapter._proxy is fake_proxy
         assert adapter.connected is True
+        assert adapter.last_detail_code == "connectedTo"
+        assert adapter.last_detail_params == {"host": "owserver.local", "port": 4304}
+
+    @pytest.mark.asyncio
+    async def test_conn_error_leaves_adapter_disconnected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.ConnError("refused")):
+            await adapter.connect()
+        assert adapter._proxy is None
+        assert adapter.connected is False
+        assert adapter.last_detail_code == "couldNotConnectTo"
 
 
 # ---------------------------------------------------------------------------
@@ -209,27 +105,43 @@ class TestConnect:
 
 class TestDisconnect:
     @pytest.mark.asyncio
-    async def test_cancels_poll_tasks_and_publishes_status(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
+    async def test_cancels_poll_tasks_and_publishes_status(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
 
         async def sleeper():
             await asyncio.sleep(100)
 
-        adapter._poll_tasks = [
-            asyncio.create_task(sleeper()),
-            asyncio.create_task(sleeper()),
-        ]
+        adapter._poll_tasks = [asyncio.create_task(sleeper()), asyncio.create_task(sleeper())]
 
         await adapter.disconnect()
 
         assert adapter._poll_tasks == []
+        assert adapter._proxy is None
         assert mock_bus.publish.called
 
     @pytest.mark.asyncio
-    async def test_disconnect_with_no_tasks(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
+    async def test_closes_persistent_connection_when_available(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        close_connection = adapter._proxy.close_connection
+
+        await adapter.disconnect()
+
+        close_connection.assert_called_once()
+        assert adapter._proxy is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_with_no_proxy(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
         await adapter.disconnect()
         assert adapter._poll_tasks == []
+        assert adapter._proxy is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_without_close_connection_attr(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+        adapter._proxy = object()  # no close_connection attribute
+        await adapter.disconnect()
+        assert adapter._proxy is None
 
 
 # ---------------------------------------------------------------------------
@@ -239,45 +151,43 @@ class TestDisconnect:
 
 class TestOnBindingsReloaded:
     @pytest.mark.asyncio
-    async def test_cancels_old_tasks_before_reload(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
+    async def test_cancels_old_tasks_before_reload(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
 
         async def sleeper():
             await asyncio.sleep(100)
 
         old_task = asyncio.create_task(sleeper())
         adapter._poll_tasks = [old_task]
-        # _available is False so no new tasks are created
 
         await adapter._on_bindings_reloaded()
-        await asyncio.sleep(0)  # let event loop process the cancellation
+        await asyncio.sleep(0)
 
         assert old_task.cancelled()
         assert adapter._poll_tasks == []
 
     @pytest.mark.asyncio
-    async def test_returns_early_when_not_available(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        adapter._bindings = [make_binding({"sensor_id": "28-001"})]
+    async def test_returns_early_when_not_connected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+        adapter._bindings = [make_binding({"sensor_id": "28.AA"})]
 
         await adapter._on_bindings_reloaded()
 
         assert adapter._poll_tasks == []
 
     @pytest.mark.asyncio
-    async def test_creates_tasks_for_source_and_both_only(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        adapter._available = True
+    async def test_creates_tasks_for_source_and_both_only(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
         adapter._bindings = [
-            make_binding({"sensor_id": "28-001"}, direction="SOURCE"),
-            make_binding({"sensor_id": "28-002"}, direction="BOTH"),
-            make_binding({"sensor_id": "28-003"}, direction="DEST"),
+            make_binding({"sensor_id": "28.AA"}, direction="SOURCE"),
+            make_binding({"sensor_id": "28.BB"}, direction="BOTH"),
+            make_binding({"sensor_id": "28.CC"}, direction="DEST"),
         ]
 
         with mock.patch.object(asyncio, "create_task", side_effect=_mock_create_task):
             await adapter._on_bindings_reloaded()
 
-        assert len(adapter._poll_tasks) == 2  # SOURCE + BOTH, not DEST
+        assert len(adapter._poll_tasks) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +197,8 @@ class TestOnBindingsReloaded:
 
 class TestPollLoop:
     @pytest.mark.asyncio
-    async def test_invalid_binding_config_returns_immediately(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
+    async def test_invalid_binding_config_returns_immediately(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
         bad_binding = make_binding({})  # missing sensor_id -> ValidationError
 
         await adapter._poll_loop(bad_binding)
@@ -296,12 +206,9 @@ class TestPollLoop:
         mock_bus.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_publishes_good_quality_event_on_valid_read(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"poll_interval": 0.0, "w1_path": str(tmp_path)},
-        )
-        binding = make_binding({"sensor_id": "28-001"})
+    async def test_publishes_good_quality_event_on_valid_read(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        binding = make_binding({"sensor_id": "28.AA", "property": "temperature"})
 
         published = asyncio.Event()
 
@@ -310,7 +217,7 @@ class TestPollLoop:
 
         mock_bus.publish.side_effect = track
 
-        with mock.patch("obs.adapters.onewire.adapter._read_sensor_file", return_value=21.5):
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(return_value=21.5)):
             task = asyncio.create_task(adapter._poll_loop(binding))
             await asyncio.wait_for(published.wait(), timeout=2.0)
             task.cancel()
@@ -324,12 +231,9 @@ class TestPollLoop:
         assert event.quality == "good"
 
     @pytest.mark.asyncio
-    async def test_publishes_bad_quality_when_sensor_returns_none(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"poll_interval": 0.0, "w1_path": str(tmp_path)},
-        )
-        binding = make_binding({"sensor_id": "28-001"})
+    async def test_publishes_bad_quality_when_read_raises(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        binding = make_binding({"sensor_id": "28.AA"})
 
         published = asyncio.Event()
 
@@ -338,7 +242,7 @@ class TestPollLoop:
 
         mock_bus.publish.side_effect = track
 
-        with mock.patch("obs.adapters.onewire.adapter._read_sensor_file", return_value=None):
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(side_effect=owprotocol.OwnetError(1, "no such path", "/28.AA/temperature"))):
             task = asyncio.create_task(adapter._poll_loop(binding))
             await asyncio.wait_for(published.wait(), timeout=2.0)
             task.cancel()
@@ -352,12 +256,9 @@ class TestPollLoop:
         assert event.value is None
 
     @pytest.mark.asyncio
-    async def test_formula_applied_when_set(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"poll_interval": 0.0, "w1_path": str(tmp_path)},
-        )
-        binding = make_binding({"sensor_id": "28-001"}, value_formula="x * 2")
+    async def test_formula_applied_when_set(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        binding = make_binding({"sensor_id": "28.AA"}, value_formula="x * 2")
 
         published = asyncio.Event()
 
@@ -366,7 +267,7 @@ class TestPollLoop:
 
         mock_bus.publish.side_effect = track
 
-        with mock.patch("obs.adapters.onewire.adapter._read_sensor_file", return_value=10.0):
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(return_value=10.0)):
             task = asyncio.create_task(adapter._poll_loop(binding))
             await asyncio.wait_for(published.wait(), timeout=2.0)
             task.cancel()
@@ -379,12 +280,9 @@ class TestPollLoop:
         assert event.value == pytest.approx(20.0)
 
     @pytest.mark.asyncio
-    async def test_value_map_applied_when_set(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"poll_interval": 0.0, "w1_path": str(tmp_path)},
-        )
-        binding = make_binding({"sensor_id": "28-001"}, value_map={"21.5": "warm"})
+    async def test_value_map_applied_when_set(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        binding = make_binding({"sensor_id": "28.AA"}, value_map={"21.5": "warm"})
 
         published = asyncio.Event()
 
@@ -393,7 +291,7 @@ class TestPollLoop:
 
         mock_bus.publish.side_effect = track
 
-        with mock.patch("obs.adapters.onewire.adapter._read_sensor_file", return_value=21.5):
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(return_value=21.5)):
             task = asyncio.create_task(adapter._poll_loop(binding))
             await asyncio.wait_for(published.wait(), timeout=2.0)
             task.cancel()
@@ -406,54 +304,45 @@ class TestPollLoop:
         assert event.value == "warm"
 
     @pytest.mark.asyncio
-    async def test_read_error_publishes_bad_quality_and_continues(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"poll_interval": 0.0, "w1_path": str(tmp_path)},
-        )
-        binding = make_binding({"sensor_id": "28-001"})
-
-        published = asyncio.Event()
-
-        async def track(ev):
-            published.set()
-
-        mock_bus.publish.side_effect = track
-
-        with mock.patch(
-            "obs.adapters.onewire.adapter._read_sensor_file",
-            side_effect=OSError("sensor read failed"),
-        ):
-            task = asyncio.create_task(adapter._poll_loop(binding))
-            await asyncio.wait_for(published.wait(), timeout=2.0)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        event = mock_bus.publish.call_args[0][0]
-        assert event.quality == "bad"
-        assert event.value is None
-
-    @pytest.mark.asyncio
-    async def test_cancelled_error_inside_try_exits_loop_cleanly(self, mock_bus, tmp_path):
-        """CancelledError raised inside the try block is caught and the loop returns."""
-        adapter = OneWireAdapter(
-            event_bus=mock_bus,
-            config={"poll_interval": 0.0, "w1_path": str(tmp_path)},
-        )
-        binding = make_binding({"sensor_id": "28-001"})
+    async def test_cancelled_error_inside_try_exits_loop_cleanly(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        binding = make_binding({"sensor_id": "28.AA"})
 
         async def raise_cancelled(ev):
             raise asyncio.CancelledError()
 
         mock_bus.publish.side_effect = raise_cancelled
 
-        with mock.patch("obs.adapters.onewire.adapter._read_sensor_file", return_value=21.5):
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(return_value=21.5)):
             result = await adapter._poll_loop(binding)
 
-        assert result is None  # coroutine returned normally (no exception propagated)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _read_property()
+# ---------------------------------------------------------------------------
+
+
+class TestReadProperty:
+    @pytest.mark.asyncio
+    async def test_numeric_property_parsed_as_float(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"    21.312"
+
+        result = await adapter._read_property("28.AA", "temperature")
+
+        assert result == pytest.approx(21.312)
+        adapter._proxy.read.assert_called_once_with("/28.AA/temperature")
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_property_returned_as_string(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"DS18B20"
+
+        result = await adapter._read_property("28.AA", "type")
+
+        assert result == "DS18B20"
 
 
 # ---------------------------------------------------------------------------
@@ -463,29 +352,27 @@ class TestPollLoop:
 
 class TestRead:
     @pytest.mark.asyncio
-    async def test_returns_none_when_not_available(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        binding = make_binding({"sensor_id": "28-001"})
+    async def test_returns_none_when_not_connected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+        binding = make_binding({"sensor_id": "28.AA"})
 
         result = await adapter.read(binding)
 
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_sensor_value_when_available(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        adapter._available = True
-        binding = make_binding({"sensor_id": "28-001"})
+    async def test_returns_sensor_value_when_connected(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        binding = make_binding({"sensor_id": "28.AA"})
 
-        with mock.patch("obs.adapters.onewire.adapter._read_sensor_file", return_value=22.5):
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(return_value=22.5)):
             result = await adapter.read(binding)
 
         assert result == pytest.approx(22.5)
 
     @pytest.mark.asyncio
-    async def test_exception_in_read_returns_none(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        adapter._available = True
+    async def test_exception_in_read_returns_none(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
         bad_binding = make_binding({})  # missing sensor_id -> ValidationError
 
         result = await adapter.read(bad_binding)
@@ -500,30 +387,140 @@ class TestRead:
 
 class TestWrite:
     @pytest.mark.asyncio
-    async def test_write_is_a_no_op(self, mock_bus, tmp_path):
-        adapter = OneWireAdapter(event_bus=mock_bus, config={"w1_path": str(tmp_path)})
-        binding = make_binding({"sensor_id": "28-001"})
+    async def test_write_skipped_when_not_connected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
 
-        await adapter.write(binding, 42.0)
+        await adapter.write(binding, 1)  # should not raise
 
-        mock_bus.publish.assert_not_called()
+    @pytest.mark.asyncio
+    async def test_write_calls_proxy_write_with_encoded_value(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
+
+        await adapter.write(binding, 1)
+
+        adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", b"1")
+
+    @pytest.mark.asyncio
+    async def test_write_error_is_caught_and_logged(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.write.side_effect = owprotocol.OwnetError(1, "read-only", "/28.AA/temperature")
+        binding = make_binding({"sensor_id": "28.AA", "property": "temperature"})
+
+        await adapter.write(binding, 1)  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_write_invalid_binding_config_is_caught(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        bad_binding = make_binding({})  # missing sensor_id -> ValidationError
+
+        await adapter.write(bad_binding, 1)  # should not raise
 
 
 # ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# _read_sensor_file — exception path (lines 212-213)
+# browse_sensors()
 # ---------------------------------------------------------------------------
 
 
-class TestReadSensorFileExceptionPath:
-    def test_non_numeric_t_value_returns_none(self, tmp_path):
-        # int("not_a_number") triggers except Exception: return None
-        _make_sensor(
-            tmp_path,
-            "28-parsefail",
-            "xx : crc=xx YES",
-            "xx t=not_a_number",
-        )
-        result = _read_sensor_file(tmp_path / "28-parsefail")
-        assert result is None
+class TestBrowseSensors:
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_not_connected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={})
+
+        result = await adapter.browse_sensors()
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_non_rom_id_entries(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/28.4B057F0A1C10", "/settings", "/uncached", "/statistics"]
+            return ["/28.4B057F0A1C10/temperature"]
+
+        adapter._proxy.dir.side_effect = fake_dir
+
+        result = await adapter.browse_sensors()
+
+        assert len(result) == 1
+        assert result[0]["rom_id"] == "28.4B057F0A1C10"
+        assert result[0]["family"] == "28"
+
+    @pytest.mark.asyncio
+    async def test_filters_structural_properties(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/28.4B057F0A1C10"]
+            return [
+                "/28.4B057F0A1C10/address",
+                "/28.4B057F0A1C10/alias",
+                "/28.4B057F0A1C10/crc8",
+                "/28.4B057F0A1C10/family",
+                "/28.4B057F0A1C10/id",
+                "/28.4B057F0A1C10/locator",
+                "/28.4B057F0A1C10/r_address",
+                "/28.4B057F0A1C10/r_id",
+                "/28.4B057F0A1C10/r_locator",
+                "/28.4B057F0A1C10/type",
+                "/28.4B057F0A1C10/version",
+                "/28.4B057F0A1C10/temperature",
+            ]
+
+        adapter._proxy.dir.side_effect = fake_dir
+
+        result = await adapter.browse_sensors()
+
+        assert result[0]["properties"] == ["temperature"]
+
+    @pytest.mark.asyncio
+    async def test_includes_persisted_alias(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, aliases={"28.4B057F0A1C10": "Gästebad Estrich"})
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/28.4B057F0A1C10"]
+            return ["/28.4B057F0A1C10/temperature"]
+
+        adapter._proxy.dir.side_effect = fake_dir
+
+        result = await adapter.browse_sensors()
+
+        assert result[0]["alias"] == "Gästebad Estrich"
+
+    @pytest.mark.asyncio
+    async def test_alias_is_none_when_not_set(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/28.4B057F0A1C10"]
+            return ["/28.4B057F0A1C10/temperature"]
+
+        adapter._proxy.dir.side_effect = fake_dir
+
+        result = await adapter.browse_sensors()
+
+        assert result[0]["alias"] is None
+
+    @pytest.mark.asyncio
+    async def test_multiple_sensors(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/28.4B057F0A1C10", "/29.1122334455AA"]
+            if path == "/28.4B057F0A1C10":
+                return ["/28.4B057F0A1C10/temperature"]
+            return ["/29.1122334455AA/PIO.0", "/29.1122334455AA/PIO.1"]
+
+        adapter._proxy.dir.side_effect = fake_dir
+
+        result = await adapter.browse_sensors()
+
+        rom_ids = {s["rom_id"] for s in result}
+        assert rom_ids == {"28.4B057F0A1C10", "29.1122334455AA"}

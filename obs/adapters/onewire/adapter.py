@@ -1,24 +1,34 @@
-"""1-Wire Adapter — Phase 3
+"""1-Wire Adapter — owserver/OWFS client (issue #6)
 
-Liest Temperatursensoren vom Linux 1-Wire Bus (/sys/bus/w1/).
-Funktioniert nur auf Linux (Raspberry Pi, etc.). Auf anderen Systemen
-wird der Adapter deaktiviert, ohne den Start zu blockieren.
+Connects to an external `owserver` process (OWFS project) via the `pyownet` TCP
+protocol client — the same "OBS is a client of an external service" relationship
+the MQTT adapter has with Mosquitto. `owserver` abstracts USB busmasters (simple
+DS9490-style sticks, the ElabNET PBM's multiple channels) and the native kernel
+1-Wire bus behind one uniform device tree, so this adapter never needs to know
+which hardware is actually behind it.
 
-Adapter-Konfiguration (adapter_configs.config):
-  poll_interval: float  (Sekunden zwischen Messungen, default: 30.0)
-  w1_path:       str    (default: "/sys/bus/w1/devices")
+Adapter-Konfiguration (adapter_instances.config):
+  host:     str            — owserver host (default: "localhost")
+  port:     int             — owserver port (default: 4304)
+  poll_interval: float       — Sekunden zwischen Messungen (default: 30.0)
+  aliases:  dict[str, str]  — persistenter ROM-ID → Klartext-Label Map, gepflegt
+                              über die Binding-Scan-UI (issue #6, Punkt 2)
 
 Binding-Konfiguration (AdapterBinding.config):
-  sensor_id:  str   — z.B. "28-000000000001"
-  sensor_type: str  — "DS18B20" | "DS18S20" | "DS1822" (default: "DS18B20")
+  sensor_id: str  — ROM-ID, z.B. "28.4B057F0A1C10"
+  property:  str  — OWFS-Property/"Datei", z.B. "temperature", "humidity", "PIO.0"
+                     (default: "temperature")
+
+pyownet's OwnetProxy performs blocking socket I/O and is not concurrency-safe, so
+all proxy calls are serialized through a single asyncio.Lock and run in an
+executor thread.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from pathlib import Path
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -29,7 +39,11 @@ from obs.core.event_bus import DataValueEvent
 
 logger = logging.getLogger(__name__)
 
-_W1_BASE = Path("/sys/bus/w1/devices")
+_ROM_ID_RE = re.compile(r"^/([0-9A-Fa-f]{2}\.[0-9A-Fa-f]{12})$")
+# Structural/metadata OWFS entries — not sensor readings, hidden from the browse picker.
+_STRUCTURAL_PROPERTIES = frozenset(
+    {"address", "alias", "crc8", "id", "locator", "r_address", "r_id", "r_locator", "type", "version", "family"},
+)
 
 
 # ---------------------------------------------------------------------------
@@ -38,13 +52,15 @@ _W1_BASE = Path("/sys/bus/w1/devices")
 
 
 class OneWireAdapterConfig(BaseModel):
+    host: str = "localhost"
+    port: int = 4304
     poll_interval: float = 30.0
-    w1_path: str = "/sys/bus/w1/devices"
+    aliases: dict[str, str] = {}
 
 
 class OneWireBindingConfig(BaseModel):
-    sensor_id: str  # z.B. "28-000000000001"
-    sensor_type: str = "DS18B20"
+    sensor_id: str  # ROM-ID, z.B. "28.4B057F0A1C10"
+    property: str = "temperature"
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +71,6 @@ class OneWireBindingConfig(BaseModel):
 @register
 class OneWireAdapter(AdapterBase):
     adapter_type = "ONEWIRE"
-    hidden = True
     config_schema = OneWireAdapterConfig
     binding_config_schema = OneWireBindingConfig
 
@@ -63,7 +78,8 @@ class OneWireAdapter(AdapterBase):
         super().__init__(event_bus, config, **kwargs)
         self._poll_tasks: list[asyncio.Task] = []
         self._cfg = OneWireAdapterConfig(**(config or {}))
-        self._available: bool = False
+        self._proxy: Any = None
+        self._owlock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -71,24 +87,46 @@ class OneWireAdapter(AdapterBase):
 
     async def connect(self) -> None:
         self._cfg = OneWireAdapterConfig(**self._config)
-        w1_path = Path(self._cfg.w1_path)
 
-        if not os.path.exists(w1_path):
-            logger.warning(
-                "1-Wire path %s not found — adapter disabled (Linux only, needs w1-therm kernel module)",
-                w1_path,
-            )
-            await self._publish_status(False, f"{w1_path} not found", code="pathNotFound", params={"path": w1_path})
+        try:
+            import pyownet.protocol as owprotocol
+        except ImportError:
+            logger.error("pyownet not installed — 1-Wire adapter disabled")
+            await self._publish_status(False, "pyownet not installed", code="libNotInstalled", params={"lib": "pyownet"})
             return
 
-        self._available = True
-        await self._publish_status(True, f"1-Wire bus at {w1_path}", code="onewireBusAt", params={"path": w1_path})
-        logger.info("1-Wire adapter connected: %s", w1_path)
+        try:
+            self._proxy = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: owprotocol.proxy(host=self._cfg.host, port=self._cfg.port, persistent=True),
+            )
+        except owprotocol.ConnError as exc:
+            logger.warning("1-Wire adapter: owserver connection failed (%s:%d): %s", self._cfg.host, self._cfg.port, exc)
+            await self._publish_status(
+                False,
+                f"Could not connect to {self._cfg.host}:{self._cfg.port}: {exc}",
+                code="couldNotConnectTo",
+                params={"host": self._cfg.host, "port": self._cfg.port},
+            )
+            return
+
+        await self._publish_status(
+            True,
+            f"Connected to {self._cfg.host}:{self._cfg.port}",
+            code="connectedTo",
+            params={"host": self._cfg.host, "port": self._cfg.port},
+        )
+        logger.info("1-Wire adapter connected: owserver %s:%d", self._cfg.host, self._cfg.port)
 
     async def disconnect(self) -> None:
         for t in self._poll_tasks:
             t.cancel()
         self._poll_tasks.clear()
+        if self._proxy is not None:
+            close = getattr(self._proxy, "close_connection", None)
+            if close is not None:
+                await asyncio.get_event_loop().run_in_executor(None, close)
+        self._proxy = None
         await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------
@@ -100,7 +138,7 @@ class OneWireAdapter(AdapterBase):
             t.cancel()
         self._poll_tasks.clear()
 
-        if not self._available:
+        if self._proxy is None:
             return
 
         for binding in self._bindings:
@@ -127,7 +165,7 @@ class OneWireAdapter(AdapterBase):
 
         while True:
             try:
-                value = await asyncio.get_event_loop().run_in_executor(None, _read_sensor_file, Path(self._cfg.w1_path) / bc.sensor_id)
+                value = await self._read_property(bc.sensor_id, bc.property)
                 quality = "good" if value is not None else "bad"
                 if quality == "good":
                     if binding.value_formula:
@@ -150,7 +188,7 @@ class OneWireAdapter(AdapterBase):
             except asyncio.CancelledError:
                 return
             except Exception as exc:
-                logger.warning("1-Wire poll error (sensor %s): %s", bc.sensor_id, exc)
+                logger.warning("1-Wire poll error (sensor %s/%s): %s", bc.sensor_id, bc.property, exc)
                 await self._bus.publish(
                     DataValueEvent(
                         datapoint_id=binding.datapoint_id,
@@ -167,55 +205,68 @@ class OneWireAdapter(AdapterBase):
     # ------------------------------------------------------------------
 
     async def read(self, binding: Any) -> Any:
-        if not self._available:
+        if self._proxy is None:
             return None
         try:
             bc = OneWireBindingConfig(**binding.config)
-            return await asyncio.get_event_loop().run_in_executor(None, _read_sensor_file, Path(self._cfg.w1_path) / bc.sensor_id)
+            return await self._read_property(bc.sensor_id, bc.property)
         except Exception:
             logger.exception("1-Wire read failed for binding %s", binding.id)
             return None
 
     async def write(self, binding: Any, value: Any) -> None:
-        # 1-Wire Sensoren sind read-only
-        logger.debug("1-Wire write ignored — sensors are read-only (binding %s)", binding.id)
+        if self._proxy is None:
+            logger.debug("1-Wire write skipped — not connected (binding %s)", binding.id)
+            return
+        path = None
+        try:
+            bc = OneWireBindingConfig(**binding.config)
+            path = f"/{bc.sensor_id}/{bc.property}"
+            data = str(value).encode()
+            async with self._owlock:
+                await asyncio.get_event_loop().run_in_executor(None, self._proxy.write, path, data)
+        except Exception as exc:
+            # No adapter-side writability allowlist is maintained — owserver's own
+            # error is the source of truth for whether a property is writable.
+            logger.warning("1-Wire write failed for binding %s (%s): %s", binding.id, path, exc)
 
+    async def _read_property(self, sensor_id: str, property_name: str) -> float | str | None:
+        path = f"/{sensor_id}/{property_name}"
+        async with self._owlock:
+            raw = await asyncio.get_event_loop().run_in_executor(None, self._proxy.read, path)
+        text = raw.decode("utf-8", errors="replace").strip()
+        try:
+            return float(text)
+        except ValueError:
+            return text
 
-# ---------------------------------------------------------------------------
-# Sensor file reader (synchronous, run in executor)
-# ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Browse (binding-form sensor/property picker, issue #6)
+    # ------------------------------------------------------------------
 
+    async def browse_sensors(self) -> list[dict[str, Any]]:
+        """Scan owserver's root directory for ROM-ID devices and their properties."""
+        if self._proxy is None:
+            return []
 
-def _read_sensor_file(sensor_path: Path) -> float | None:
-    """Liest den Temperatursensor direkt aus dem sysfs (w1_slave Datei).
-    Format:
-      50 05 4b 46 7f ff 0c 10 1c : crc=1c YES
-      50 05 4b 46 7f ff 0c 10 1c t=21312
-    """
-    w1_slave = sensor_path / "w1_slave"
-    if not w1_slave.exists():
-        return None
+        async with self._owlock:
+            entries = await asyncio.get_event_loop().run_in_executor(None, self._proxy.dir, "/")
 
-    try:
-        text = w1_slave.read_text(encoding="ascii", errors="ignore")
-        lines = text.strip().splitlines()
-        if len(lines) < 2:
-            return None
-        if "YES" not in lines[0]:
-            return None  # CRC error
-        # Extract temperature
-        t_part = [p for p in lines[1].split() if p.startswith("t=")]
-        if not t_part:
-            return None
-        raw_temp = int(t_part[0][2:])
-        return round(raw_temp / 1000.0, 3)
-    except Exception:
-        return None
-
-
-def scan_sensors(w1_path: str = "/sys/bus/w1/devices") -> list[str]:
-    """Return list of available 1-Wire sensor IDs (e.g. ['28-000000000001'])."""
-    base = Path(w1_path)
-    if not base.exists():
-        return []
-    return [p.name for p in base.iterdir() if p.is_dir() and p.name != "w1_bus_master1"]
+        sensors: list[dict[str, Any]] = []
+        for entry in entries:
+            match = _ROM_ID_RE.match(entry)
+            if not match:
+                continue
+            rom_id = match.group(1)
+            async with self._owlock:
+                props = await asyncio.get_event_loop().run_in_executor(None, self._proxy.dir, f"/{rom_id}")
+            properties = sorted(p.rsplit("/", 1)[-1] for p in props if p.rsplit("/", 1)[-1] not in _STRUCTURAL_PROPERTIES)
+            sensors.append(
+                {
+                    "rom_id": rom_id,
+                    "family": rom_id.split(".", 1)[0],
+                    "properties": properties,
+                    "alias": self._cfg.aliases.get(rom_id),
+                },
+            )
+        return sensors

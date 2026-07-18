@@ -9,7 +9,7 @@ afterEach(() => {
   vi.doUnmock('@/api/client')
 })
 
-async function mountBindingForm(props) {
+async function mountBindingForm(props, apiOverrides = {}) {
   const dpApi = {
     createBinding: vi.fn().mockResolvedValue({}),
     updateBinding: vi.fn().mockResolvedValue({}),
@@ -18,6 +18,7 @@ async function mountBindingForm(props) {
     listInstances: vi.fn().mockResolvedValue({
       data: [
         { id: 'mqtt-inst-1', name: 'MQTT Test', adapter_type: 'MQTT' },
+        { id: 'ow-1', name: 'Onewire Test', adapter_type: 'ONEWIRE' },
         {
           id: 'message-inst-1',
           name: 'Notifications',
@@ -29,6 +30,9 @@ async function mountBindingForm(props) {
     knxDpts: vi.fn().mockResolvedValue({ data: [] }),
     mqttBrowseTopics: vi.fn().mockResolvedValue({ data: [] }),
     mqttSamplePayload: vi.fn().mockResolvedValue({ data: { payload: '{}' } }),
+    onewireBrowseSensors: vi.fn().mockResolvedValue({ data: [] }),
+    onewireSetAlias: vi.fn().mockResolvedValue({ data: {} }),
+    ...apiOverrides,
   }
   const messageArchivesApi = {
     list: vi.fn().mockResolvedValue({ data: { archives: [] } }),
@@ -45,7 +49,7 @@ async function mountBindingForm(props) {
     attachTo: document.body,
   })
   await flushPromises()
-  return { wrapper }
+  return { wrapper, adapterApi }
 }
 
 describe('BindingForm', () => {
@@ -81,5 +85,53 @@ describe('BindingForm', () => {
     expect(wrapper.text()).toContain('MESSAGE Binding')
     expect(wrapper.find('[data-testid="select-direction"]').exists()).toBe(false)
     expect(wrapper.findAll('.tab-btn').map(button => button.text())).toEqual(['Verbindung'])
+  })
+})
+
+describe('BindingForm — 1-Wire sensor scan/select/alias flow', () => {
+  it('scans sensors and fills sensor_id/property when a property is selected', async () => {
+    const onewireBrowseSensors = vi.fn().mockResolvedValue({
+      data: [{ rom_id: '28.4B057F0A1C10', family: '28', properties: ['temperature', 'humidity'], alias: null }],
+    })
+    const { wrapper } = await mountBindingForm({}, { onewireBrowseSensors })
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-1')
+    await flushPromises()
+
+    const scanBtn = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn.trigger('click')
+    await flushPromises()
+
+    expect(onewireBrowseSensors).toHaveBeenCalledWith('ow-1')
+    expect(wrapper.text()).toContain('28.4B057F0A1C10')
+
+    const propertyBtn = wrapper.findAll('button').find(b => b.text() === 'humidity')
+    await propertyBtn.trigger('click')
+
+    const sensorIdInput = wrapper.findAll('input').find(i => i.element.value === '28.4B057F0A1C10')
+    expect(sensorIdInput).toBeTruthy()
+    const propertyInput = wrapper.findAll('input').find(i => i.element.value === 'humidity')
+    expect(propertyInput).toBeTruthy()
+  })
+
+  it('saves an alias for a scanned sensor', async () => {
+    const onewireBrowseSensors = vi.fn().mockResolvedValue({
+      data: [{ rom_id: '28.4B057F0A1C10', family: '28', properties: ['temperature'], alias: null }],
+    })
+    const onewireSetAlias = vi.fn().mockResolvedValue({ data: { rom_id: '28.4B057F0A1C10', label: 'Gästebad' } })
+    const { wrapper } = await mountBindingForm({}, { onewireBrowseSensors, onewireSetAlias })
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-1')
+    await flushPromises()
+
+    const scanBtn = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn.trigger('click')
+    await flushPromises()
+
+    const aliasInput = wrapper.findAll('input').find(i => i.attributes('placeholder')?.includes('Label'))
+    await aliasInput.setValue('Gästebad')
+    const saveBtn = wrapper.findAll('button').find(b => b.text().includes('Speichern'))
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(onewireSetAlias).toHaveBeenCalledWith('ow-1', '28.4B057F0A1C10', 'Gästebad')
   })
 })

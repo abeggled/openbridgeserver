@@ -9,6 +9,8 @@ Instanz-Routen (NEU):
   POST   /api/v1/adapters/instances/{id}/test      test connection (ephemeral)
   POST   /api/v1/adapters/instances/{id}/restart   stop + reconnect
   GET    /api/v1/adapters/instances/{id}/mqtt/browse  MQTT topic browser (scan broker)
+  GET    /api/v1/adapters/instances/{id}/onewire/browse    1-Wire sensor/property browser (scan owserver)
+  PATCH  /api/v1/adapters/instances/{id}/onewire/aliases   persist a ROM-ID → label alias
 
 Typ-Routen (unverändert):
   GET    /api/v1/adapters                          list registered types
@@ -130,6 +132,18 @@ class IoBrokerStateOut(BaseModel):
     write: bool = False
     value: Any = None
     unit: str | None = None
+
+
+class OneWireSensorOut(BaseModel):
+    rom_id: str
+    family: str
+    properties: list[str]
+    alias: str | None = None
+
+
+class OneWireAliasRequest(BaseModel):
+    rom_id: str
+    label: str
 
 
 class IoBrokerImportRequest(BaseModel):
@@ -925,6 +939,76 @@ async def iobroker_browse_states(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             f"ioBroker-State-Suche fehlgeschlagen: {exc}",
         ) from exc
+
+
+@router.get("/instances/{instance_id}/onewire/browse", response_model=list[OneWireSensorOut])
+async def onewire_browse_sensors(
+    instance_id: uuid.UUID,
+    _user: str = Depends(get_current_user),
+    db: Database = Depends(lambda: get_db()),
+) -> list[OneWireSensorOut]:
+    """Live-Scan des owserver-Gerätebaums für die Binding-Sensor/Property-Auswahl (issue #6)."""
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ONEWIRE":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ONEWIRE-Instanzen verfügbar")
+
+    instance = adapter_registry.get_instance_by_id(str(instance_id))
+    if instance is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "1-Wire-Instanz ist nicht verbunden")
+    if not hasattr(instance, "browse_sensors"):
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "1-Wire-Sensor-Browser nicht verfügbar")
+
+    try:
+        return [OneWireSensorOut(**item) for item in await instance.browse_sensors()]
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"1-Wire-Sensor-Scan fehlgeschlagen: {exc}",
+        ) from exc
+
+
+@router.patch("/instances/{instance_id}/onewire/aliases", response_model=OneWireAliasRequest)
+async def onewire_set_alias(
+    instance_id: uuid.UUID,
+    body: OneWireAliasRequest,
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(lambda: get_db()),
+) -> OneWireAliasRequest:
+    """Persistiert einen ROM-ID → Klartext-Label Alias, gepflegt aus der Binding-Scan-UI (issue #6)."""
+    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "ONEWIRE":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ONEWIRE-Instanzen verfügbar")
+
+    config = json.loads(row["config"]) if row["config"] else {}
+    aliases = dict(config.get("aliases") or {})
+    aliases[body.rom_id] = body.label
+    config["aliases"] = aliases
+
+    cls = adapter_registry.get_class(row["adapter_type"])
+    if cls:
+        try:
+            cls.config_schema(**config)
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Config-Validierungsfehler: {exc}",
+            ) from exc
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute_and_commit(
+        "UPDATE adapter_instances SET config=?, updated_at=? WHERE id=?",
+        (json.dumps(config), now, str(instance_id)),
+    )
+
+    from obs.core.event_bus import get_event_bus
+
+    await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
+
+    return body
 
 
 def _iobroker_obs_type(state_type: str | None) -> tuple[str, str | None]:

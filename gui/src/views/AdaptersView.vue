@@ -67,7 +67,7 @@
                 :schema="newSchema"
                 v-model="newForm.config"
                 :adapter-type="newForm.adapter_type"
-                :exclude="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+                :exclude="excludedSchemaFields(newForm.adapter_type)"
               />
               <ZeitschaltuhrCustomHolidaysEditor
                 v-if="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr'"
@@ -184,7 +184,7 @@
                   :schema="schemas[a.adapter_type]"
                   v-model="drafts[a.id].config"
                   :adapter-type="a.adapter_type"
-                  :exclude="a.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+                  :exclude="excludedSchemaFields(a.adapter_type)"
                 />
                 <ZeitschaltuhrCustomHolidaysEditor
                   v-if="a.adapter_type.toLowerCase() === 'zeitschaltuhr'"
@@ -416,6 +416,13 @@ import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant,
 
 const { t, te } = useI18n()
 const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
+// Fields rendered by a dedicated component instead of the generic SchemaForm.
+function excludedSchemaFields(adapterType) {
+  const type = (adapterType || '').toLowerCase()
+  if (type === 'zeitschaltuhr') return ['custom_holidays']
+  if (type === 'onewire') return ['aliases'] // edited inline via the binding-form sensor scan
+  return []
+}
 // Issue #779: TestResult / action feedback may carry a backend detail_code
 // (adapters.testResult.*) with params; translate it, else show the raw detail.
 function feedbackText(fb) {
