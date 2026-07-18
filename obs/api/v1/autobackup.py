@@ -102,7 +102,10 @@ async def _application_now(db: Database) -> datetime:
 def _list_backups() -> list[AutobackupEntry]:
     backup_dir = _autobackup_dir()
     entries: list[AutobackupEntry] = []
-    for f in sorted(backup_dir.glob("*.json"), reverse=True):
+    # Prefer write time so suffixed backups from the same local minute appear
+    # newest first.  The name provides a deterministic fallback for files
+    # whose filesystem timestamps are identical.
+    for f in sorted(backup_dir.glob("*.json"), key=lambda f: (f.stat().st_mtime_ns, f.name), reverse=True):
         stem = f.stem  # z.B. "20240506-0300"
         if not _BACKUP_STEM_RE.fullmatch(stem):
             continue

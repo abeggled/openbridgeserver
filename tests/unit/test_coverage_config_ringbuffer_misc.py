@@ -768,15 +768,18 @@ async def test_import_config_app_settings(monkeypatch):
         ]
     )
 
+    logic_manager = MagicMock()
     with (
         patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
         patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
         patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
         patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
     ):
         result = await config_api.import_config(body=body, _user="u", db=db)
 
     assert result.app_settings_upserted == 2
+    logic_manager.update_app_config.assert_called_once_with({"timezone": "Europe/Berlin"})
 
 
 @pytest.mark.asyncio

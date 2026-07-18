@@ -250,6 +250,19 @@ class TestListBackups:
         assert result[0].name == "20240507-0300"
         assert result[1].name == "20240506-0300"
 
+    def test_lists_suffixed_backup_before_older_backup_from_same_local_minute(self, tmp_path):
+        from obs.api.v1.autobackup import _list_backups
+
+        older = tmp_path / "20260717-0304.json"
+        newer = tmp_path / "20260717-0304-1.json"
+        older.write_text("{}")
+        newer.write_text("{}")
+        os.utime(older, (1_000, 1_000))
+        os.utime(newer, (2_000, 2_000))
+
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
+            assert [entry.name for entry in _list_backups()] == ["20260717-0304-1", "20260717-0304"]
+
     def test_parses_valid_datetime_from_stem(self, tmp_path):
         from obs.api.v1.autobackup import _list_backups
 
