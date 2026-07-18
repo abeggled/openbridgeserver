@@ -169,6 +169,27 @@ class TestApplicationTimezone:
 
         assert (tmp_path / "20260717-0304.json").exists()
 
+    @pytest.mark.asyncio
+    async def test_backup_name_adds_suffix_without_overwriting_existing_local_minute(self, tmp_path):
+        from obs.api.v1 import autobackup as ab
+        from obs.api.v1 import config as config_api
+
+        export = MagicMock()
+        export.model_dump.return_value = {"version": 2}
+        existing = tmp_path / "20260717-0304.json"
+        existing.write_text('{"version": 1}')
+        local_time = datetime(2026, 7, 17, 3, 4, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+
+        with (
+            patch.object(config_api, "export_config", AsyncMock(return_value=export)),
+            patch.object(ab, "_application_now", AsyncMock(return_value=local_time)),
+            patch.object(ab, "_autobackup_dir", return_value=tmp_path),
+        ):
+            assert await ab._create_backup_now(_DbStub()) == "20260717-0304-1"
+
+        assert existing.read_text() == '{"version": 1}'
+        assert (tmp_path / "20260717-0304-1.json").exists()
+
 
 class TestAutobackupSchedulerTimezone:
     @pytest.mark.asyncio

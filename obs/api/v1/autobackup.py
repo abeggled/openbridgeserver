@@ -8,7 +8,7 @@ Einstellungen werden in app_settings gespeichert:
   autobackup.hour           = "0" … "23"  (Uhrzeit der täglichen Sicherung)
   autobackup.retention_days = "1" … "30"  (Anzahl Sicherungen aufbewahren)
 
-Sicherungsdateien liegen in {db_dir}/autobackup/YYYYMMDD-HHMM.json
+Sicherungsdateien liegen in {db_dir}/autobackup/YYYYMMDD-HHMM[-N].json
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ from obs.db.database import Database, get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"])
+
+_BACKUP_STEM_RE = re.compile(r"\d{8}-\d{4}(?:-\d+)?")
 
 # ---------------------------------------------------------------------------
 # Modelle
@@ -102,10 +104,10 @@ def _list_backups() -> list[AutobackupEntry]:
     entries: list[AutobackupEntry] = []
     for f in sorted(backup_dir.glob("*.json"), reverse=True):
         stem = f.stem  # z.B. "20240506-0300"
-        if not re.fullmatch(r"\d{8}-\d{4}", stem):
+        if not _BACKUP_STEM_RE.fullmatch(stem):
             continue
         try:
-            dt = datetime.strptime(stem, "%Y%m%d-%H%M")
+            dt = datetime.strptime(stem[:13], "%Y%m%d-%H%M")
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
@@ -124,7 +126,7 @@ def _prune_old_backups(retention_days: int) -> int:
     # Filenames use application-local time for display and can therefore be
     # non-monotonic after a timezone change or during a repeated DST hour.
     # Retention must instead use the actual creation/write order.
-    files = [f for f in backup_dir.glob("*.json") if re.fullmatch(r"\d{8}-\d{4}", f.stem)]
+    files = [f for f in backup_dir.glob("*.json") if _BACKUP_STEM_RE.fullmatch(f.stem)]
     files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     deleted = 0
     for f in files[retention_days:]:
@@ -155,10 +157,19 @@ async def _create_backup_now(db: Database) -> str:
     # Names shown in the UI should reflect the same application-local time as
     # the configured scheduler hour.
     ts = (await _application_now(db)).strftime("%Y%m%d-%H%M")
-    backup_path = _autobackup_dir() / f"{ts}.json"
-    backup_path.write_text(json.dumps(export.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    backup_dir = _autobackup_dir()
+    suffix = 0
+    while True:
+        name = ts if suffix == 0 else f"{ts}-{suffix}"
+        backup_path = backup_dir / f"{name}.json"
+        try:
+            with backup_path.open("x", encoding="utf-8") as f:
+                f.write(json.dumps(export.model_dump(), ensure_ascii=False, indent=2))
+            break
+        except FileExistsError:
+            suffix += 1
     logger.info("Autobackup erstellt: %s (%d Bytes)", backup_path.name, backup_path.stat().st_size)
-    return ts
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -216,13 +227,13 @@ async def restore_autobackup(
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Autobackup-Sicherung wiederherstellen (Upsert-Semantik, wie JSON-Import)."""
-    # Dateinamen strikt validieren (erwartetes Format: YYYYMMDD-HHMM)
+    # Dateinamen strikt validieren (erwartetes Format: YYYYMMDD-HHMM[-N])
     safe_name = Path(name).name
-    if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+    if not _BACKUP_STEM_RE.fullmatch(safe_name):
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     base_dir = _autobackup_dir().resolve()
-    allowed_backups = {p.stem: p for p in base_dir.glob("*.json") if p.is_file() and re.fullmatch(r"\d{8}-\d{4}", p.stem)}
+    allowed_backups = {p.stem: p for p in base_dir.glob("*.json") if p.is_file() and _BACKUP_STEM_RE.fullmatch(p.stem)}
     backup_path = allowed_backups.get(safe_name)
     if backup_path is None:
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
@@ -257,7 +268,7 @@ async def delete_autobackup(
 ) -> dict:
     """Eine einzelne Autobackup-Sicherung löschen."""
     safe_name = Path(name).name
-    if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+    if not _BACKUP_STEM_RE.fullmatch(safe_name):
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     # Allowlist: nur Namen löschen, die als vorhandene Backups gelistet sind.
