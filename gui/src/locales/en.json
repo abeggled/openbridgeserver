@@ -1488,6 +1488,7 @@
       "consumption_counter": "Energy counter",
       "timer_delay": "Delay",
       "timer_pulse": "Pulse",
+      "value_sequence": "Sequence",
       "timer_cron": "Trigger",
       "operating_hours": "Op. Hours",
       "python_script": "Python Script",
@@ -1581,6 +1582,9 @@
       "data": "Data",
       "body": "Body",
       "done": "Done",
+      "running": "Running",
+      "cancelled": "Cancelled",
+      "condition": "Condition",
       "sent": "Sent",
       "stored": "Stored",
       "active": "Active",
@@ -1600,6 +1604,7 @@
       "inputs": "{n} Inputs",
       "parts": "{n} Parts",
       "rules": "{n} Rules",
+      "sequence": "{n} steps · {mode}",
       "hold": "→ hold",
       "filters": "{n} Filters",
       "negateEnable": "¬Enable",
@@ -1997,6 +2002,9 @@
       "timer_pulse": {
         "duration_s": "Duration (s)"
       },
+      "value_sequence": {
+        "run_mode": "Run mode", "repeat_count": "Repeat count", "restart_policy": "On new trigger", "cancel_when_condition_false": "Cancel when condition becomes false", "add": "Add step", "blink": "Blink preset", "step": "Step {n}", "duplicate": "Duplicate", "object": "Object (empty = pause)", "value": "Value", "modes": { "once": "Once", "repeat_count": "Repeat a fixed count", "while_condition": "Repeat while condition is true" }, "policies": { "ignore": "Ignore", "restart": "Restart", "queue": "Queue" }
+      },
       "timer_cron": {
         "cron": "Cron expression"
       },
@@ -2171,6 +2179,7 @@
       "consumption_counter": "Calculates consumption values (daily, weekly, monthly, yearly) from a continuously incrementing counter value. Also stores the previous period's consumption for comparisons.",
       "timer_delay": "Delays a signal by N seconds",
       "timer_pulse": "Outputs a pulse for N seconds",
+      "value_sequence": "Writes configured values and pauses in sequence without blocking logic execution.",
       "timer_cron": "Fires automatically on a cron schedule (minute hour day month weekday).",
       "operating_hours": "Counts operating hours while 'Active' is true. Reset clears the counter.",
       "python_script": "Executes a Python script. Available: inputs dict → return value",
@@ -2423,7 +2432,7 @@
       "autobackupDesc": "Daily automatic JSON backup of all configuration data (adapters, objects, logic module, Visu, icons, etc.). Backups are stored locally in the data directory.",
       "autobackupEnable": "Enable Autobackup",
       "autobackupTime": "Time of daily backup",
-      "autobackupUhr": "",
+      "autobackupUhr": "O'clock",
       "autobackupRetention": "Number of backups to keep (days)",
       "retentionDay": "day",
       "retentionDays": "days",
