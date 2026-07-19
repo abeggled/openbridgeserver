@@ -8,6 +8,7 @@
 * Logic Engine/Admin GUI: Added a Sequence node for state-triggered, non-blocking value-write and pause sequences. Sequences are configured with a visual step editor (including object picker, reordering, duplication, pauses and a blink preset), configurable repeat/restart policies, and normal object values such as colours, switches or dimmer levels. https://github.com/abeggled/openbridgeserver/issues/1021
 
 ### Fixes 🐞
+* KNX: Added the reactive-energy datapoint types DPT 13.012 (VARh) and DPT 13.015 (kVARh) to the DPT registry. Bindings configured with these DPTs previously fell back to the UNKNOWN definition and produced no decoded value. https://github.com/abeggled/openbridgeserver/pull/1030
 
 ### Known Issues 🔔
 * none
