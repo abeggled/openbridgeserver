@@ -2875,7 +2875,11 @@ class SqliteSegmentStore(RingBufferStore):
             # Bis zum ersten verwertbaren regulären Segment die wachsende
             # Live-Stichprobe verwenden. Legacy/migrierte Chunks bleiben außen vor.
             active = next((s for s in segments if s.status == SEGMENT_STATUS_ACTIVE), None)
-            return self._compute_live_prognosis(active, sample_count=sample_count) if active is not None else {**empty, "sample_segment_count": sample_count}
+            return (
+                self._compute_live_prognosis(active, sample_count=sample_count)
+                if active is not None
+                else {**empty, "sample_segment_count": sample_count}
+            )
 
         bytes_per_hour = total_bytes / total_seconds * 3600
         rows_per_hour = total_rows / total_seconds * 3600
