@@ -582,6 +582,44 @@ Mosquitto is installed as a systemd service alongside OBS. Key paths:
 
 OBS reloads Mosquitto after passwd file changes via `OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto`.
 
+#### owserver (1-Wire) in the LXC template — issue #1040
+
+`owserver` (the OWFS 1-Wire bus server the `ONEWIRE` adapter talks to via `pyownet`, see #6) is
+installed alongside Mosquitto but, unlike Mosquitto, is **opt-in**: an idle, unconfigured `owserver`
+wastes resources on the small hosts OBS often runs on, so the packaged `owserver.service` only
+actually starts once an admin has configured a 1-Wire bus master.
+
+| Path | Purpose |
+|---|---|
+| `/etc/systemd/system/owserver.service.d/override.conf` | Drop-in that gates the packaged unit — does not replace its `ExecStart=`, so package upgrades keep working |
+| `scripts/obs-onewire-should-run.sh` | `ExecCondition=` — exits 0 only if `OBS_ONEWIRE__USB_ALL=true` or `OBS_ONEWIRE__PBM_DEVICES` is set in `/etc/obs.env` |
+| `scripts/obs-onewire-configure.sh` | `ExecStartPre=` — (re)generates `/etc/owfs.conf` from those same env vars on every start attempt |
+| `/etc/obs.env` | Same file as the MQTT credentials; `OBS_ONEWIRE__*` lines ship commented out |
+
+Both scripts are shared verbatim with the Docker sidecar image (`tools/docker/owserver.Dockerfile`)
+— one script, two consumers. To enable 1-Wire on an installed LXC: uncomment/add the relevant
+`OBS_ONEWIRE__*` lines in `/etc/obs.env`, then `systemctl restart owserver` (systemd re-evaluates
+`ExecCondition` on every start attempt, so there is no first-boot-only flag file to worry about).
+
+**Env vars:**
+- `OBS_ONEWIRE__USB_ALL=true` → `server: usb = all` (plain USB busmasters, e.g. DS9490)
+- `OBS_ONEWIRE__PBM_DEVICES=/dev/serial/by-id/...` → one `server: pbm = <path>` line per
+  comma-separated entry (ElabNET PBM). Use a stable `/dev/serial/by-id/...` path, not
+  `/dev/ttyUSB0` — the latter can shift across reboots or when other serial devices are attached.
+- `OBS_ONEWIRE__PORT` → optional, defaults to `4304` (owserver's own historical default, matches the
+  `ONEWIRE` adapter's default `port` config field)
+
+**Proxmox host-side USB/serial passthrough** (not automatable from inside the container — hardware
+topology is host-specific): both a `lxc.mount.entry` **and** the matching `lxc.cgroup2.devices.allow`
+cgroup rule are required — the mount alone is not sufficient and this is easy to forget. Confirmed
+against real hardware: a plain USB busmaster needs its `/dev/bus/usb/BBB/DDD` node passed through; the
+ElabNET PBM enumerates as an FTDI serial device and needs its `/dev/serial/by-id/...` path passed
+through (mapped to e.g. `/dev/ttyUSB0` inside the container).
+
+**Docker Compose equivalent:** the `owserver` service in `docker-compose.yml` is gated by a Compose
+profile (`profiles: ["onewire"]`) instead of `ExecCondition`, activated via
+`COMPOSE_PROFILES=onewire`. See the comments in `docker-compose.yml` and `.env.example`.
+
 ### Release Notes
 
 `RELEASENOTES_FOOTER.md` contains an invisible HTML comment `<!-- LXC_INSERT -->` that marks where the LXC checksum block is injected by `lxc-template.yml`. Do not remove this marker.
