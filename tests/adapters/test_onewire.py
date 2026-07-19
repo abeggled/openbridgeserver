@@ -479,7 +479,7 @@ class TestReadProperty:
         assert result == "DS18B20"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("property_name", ["PIO.0", "pio.1", "sensed.0", "latch.1", "power"])
+    @pytest.mark.parametrize("property_name", ["PIO.0", "pio.1", "sensed.0", "latch.1", "power", "present"])
     @pytest.mark.parametrize("raw, expected", [(b"1", True), (b"0", False)])
     async def test_yesno_properties_parsed_as_bool(self, mock_bus, property_name, raw, expected):
         adapter = _connected_adapter(mock_bus)
@@ -568,6 +568,18 @@ class TestWrite:
         await adapter.write(binding, 1)
 
         adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", b"1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value, expected", [(True, b"1"), (False, b"0")])
+    async def test_write_encodes_bool_as_1_or_0(self, mock_bus, value, expected):
+        # str(True)/str(False) would send the literal words "True"/"False",
+        # which owserver would reject or misinterpret for a yes/no property.
+        adapter = _connected_adapter(mock_bus)
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
+
+        await adapter.write(binding, value)
+
+        adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", expected)
 
     @pytest.mark.asyncio
     async def test_write_error_is_caught_and_logged(self, mock_bus):

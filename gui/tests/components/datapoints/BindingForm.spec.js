@@ -19,6 +19,7 @@ async function mountBindingForm(props, apiOverrides = {}) {
       data: [
         { id: 'mqtt-inst-1', name: 'MQTT Test', adapter_type: 'MQTT' },
         { id: 'ow-1', name: 'Onewire Test', adapter_type: 'ONEWIRE' },
+        { id: 'ow-2', name: 'Onewire Test 2', adapter_type: 'ONEWIRE' },
         {
           id: 'message-inst-1',
           name: 'Notifications',
@@ -133,5 +134,57 @@ describe('BindingForm — 1-Wire sensor scan/select/alias flow', () => {
     await flushPromises()
 
     expect(onewireSetAlias).toHaveBeenCalledWith('ow-1', '28.4B057F0A1C10', 'Gästebad')
+  })
+
+  it('clears stale scan results when switching to a different 1-Wire instance', async () => {
+    const onewireBrowseSensors = vi.fn().mockResolvedValue({
+      data: [{ rom_id: '28.4B057F0A1C10', family: '28', properties: ['temperature'], alias: null }],
+    })
+    const { wrapper } = await mountBindingForm({}, { onewireBrowseSensors })
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-1')
+    await flushPromises()
+
+    const scanBtn = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('28.4B057F0A1C10')
+
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-2')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('28.4B057F0A1C10')
+  })
+
+  it('discards a late scan response for an instance that is no longer selected', async () => {
+    let resolveFirstScan
+    const firstScan = new Promise(resolve => { resolveFirstScan = resolve })
+    const onewireBrowseSensors = vi.fn()
+      .mockImplementationOnce(() => firstScan)
+      .mockResolvedValueOnce({
+        data: [{ rom_id: '29.SECOND', family: '29', properties: ['temperature'], alias: null }],
+      })
+    const { wrapper } = await mountBindingForm({}, { onewireBrowseSensors })
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-1')
+    await flushPromises()
+
+    const scanBtn = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn.trigger('click') // scan for ow-1 — stays pending
+
+    // Switch to ow-2 before the ow-1 scan resolves, and scan it too.
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-2')
+    await flushPromises()
+    const scanBtn2 = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn2.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('29.SECOND')
+
+    // The stale ow-1 scan now resolves — must not overwrite ow-2's results.
+    resolveFirstScan({
+      data: [{ rom_id: '28.STALE', family: '28', properties: ['temperature'], alias: null }],
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('29.SECOND')
+    expect(wrapper.text()).not.toContain('28.STALE')
   })
 })

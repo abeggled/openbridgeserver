@@ -30,6 +30,7 @@ INSTANCE_ID = "96f4d53c-455d-47ff-a9d0-a9def24951ff"
 @pytest.mark.asyncio
 async def test_browse_sensors_returns_scan_result(monkeypatch):
     fake_instance = type("FakeOneWireInstance", (), {})()
+    fake_instance.connected = True
     fake_instance.browse_sensors = AsyncMock(
         return_value=[
             {"rom_id": "28.4B057F0A1C10", "family": "28", "properties": ["temperature"], "alias": "Gästebad"},
@@ -101,6 +102,7 @@ async def test_browse_sensors_501_when_not_implemented(monkeypatch):
 @pytest.mark.asyncio
 async def test_browse_sensors_503_when_scan_raises(monkeypatch):
     fake_instance = type("FakeOneWireInstance", (), {})()
+    fake_instance.connected = True
     fake_instance.browse_sensors = AsyncMock(side_effect=RuntimeError("owserver unreachable"))
     monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _id: fake_instance)
 
@@ -111,6 +113,26 @@ async def test_browse_sensors_503_when_scan_raises(monkeypatch):
             db=_FakeDb({"adapter_type": "ONEWIRE"}),
         )
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_browse_sensors_503_when_instance_not_connected(monkeypatch):
+    """The instance is registered/running but connect() never got a live proxy
+    (e.g. owserver was unreachable at startup) — must surface 503, not an empty
+    scan result that looks identical to "connected, zero devices"."""
+    fake_instance = type("FakeOneWireInstance", (), {})()
+    fake_instance.connected = False
+    fake_instance.browse_sensors = AsyncMock(return_value=[])
+    monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _id: fake_instance)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapters_api.onewire_browse_sensors(
+            instance_id=INSTANCE_ID,
+            _user="admin",
+            db=_FakeDb({"adapter_type": "ONEWIRE"}),
+        )
+    assert exc_info.value.status_code == 503
+    fake_instance.browse_sensors.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

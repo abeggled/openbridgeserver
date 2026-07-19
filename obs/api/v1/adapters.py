@@ -959,6 +959,13 @@ async def onewire_browse_sensors(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "1-Wire-Instanz ist nicht verbunden")
     if not hasattr(instance, "browse_sensors"):
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "1-Wire-Sensor-Browser nicht verfügbar")
+    if not instance.connected:
+        # The instance is registered/running but connect() left it without a
+        # live owserver proxy (e.g. owserver was unreachable at startup) —
+        # browse_sensors() would otherwise just return [], which looks
+        # identical to "connected, zero devices" instead of surfacing the
+        # actual connectivity problem.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "1-Wire-Instanz ist nicht verbunden")
 
     try:
         return [OneWireSensorOut(**item) for item in await instance.browse_sensors()]

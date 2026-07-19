@@ -50,7 +50,7 @@ _ROM_ID_SHAPE_RE = re.compile(r"[0-9A-Fa-f]{2}\.[0-9A-Fa-f]{12}")
 # "0"/"1", parsed as bool rather than float so BOOLEAN datapoints don't reject
 # them as a type mismatch downstream (WriteRouter only allows float values
 # through for FLOAT datapoints, not BOOLEAN).
-_YESNO_PROPERTY_RE = re.compile(r"^(?:PIO|sensed|latch|power)(?:\.\d+)?$", re.IGNORECASE)
+_YESNO_PROPERTY_RE = re.compile(r"^(?:PIO|sensed|latch|power|present)(?:\.\d+)?$", re.IGNORECASE)
 # Structural/metadata OWFS entries — not sensor readings, hidden from the browse picker.
 _STRUCTURAL_PROPERTIES = frozenset(
     {"address", "alias", "crc8", "id", "locator", "r_address", "r_id", "r_locator", "type", "version", "family"},
@@ -273,7 +273,10 @@ class OneWireAdapter(AdapterBase):
         try:
             bc = OneWireBindingConfig(**binding.config)
             path = f"/{bc.sensor_id}/{bc.property}"
-            data = str(value).encode()
+            # OWFS yes/no properties expect "1"/"0" — str(True)/str(False) would
+            # send the literal words "True"/"False", which owserver would reject
+            # or misinterpret (mirrors the "0"/"1" parsing in _read_property()).
+            data = (b"1" if value else b"0") if isinstance(value, bool) else str(value).encode()
             async with self._owlock:
                 await asyncio.get_event_loop().run_in_executor(None, self._proxy.write, path, data)
         except Exception as exc:
