@@ -634,11 +634,16 @@ class TestUpdateGraphPartial:
         db = _DbStub()
         db.fetchone = _fetchone
 
-        with patch("obs.logic.manager.get_logic_manager", side_effect=RuntimeError("no manager")):
+        manager = MagicMock()
+        manager.reload = AsyncMock()
+        with patch("obs.logic.manager.get_logic_manager", return_value=manager):
             result = await update_graph_partial(graph_id=gid, body=body, _user="user", db=db)
 
         assert result.name == "New"
         assert result.description == "Desc"
+        manager.invalidate_cache.assert_not_called()
+        manager.reload.assert_not_awaited()
+        manager.update_cached_graph_name.assert_called_once_with(gid, "New")
 
     @pytest.mark.asyncio
     async def test_partial_update_enabled_only(self):
@@ -974,6 +979,38 @@ class TestGetDatapointLogicUsages:
         result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
         assert len(result) == 1
         assert result[0].direction == "DEST"
+
+    @pytest.mark.asyncio
+    async def test_finds_value_sequence_target_usage(self):
+        from obs.api.v1.logic import get_datapoint_logic_usages
+
+        from obs.logic.models import FlowData, LogicNode, NodePosition
+
+        dp_id = str(uuid.uuid4())
+        node = LogicNode(
+            id="n1",
+            type="value_sequence",
+            position=NodePosition(x=0, y=0),
+            data={"steps": [{"datapoint_id": dp_id, "value": "on"}]},
+        )
+        row = _make_graph_row(name="G", flow_data=FlowData(nodes=[node]).model_dump_json())
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=_DbStub(rows=[row]))
+
+        assert len(result) == 1
+        assert result[0].node_type == "value_sequence"
+        assert result[0].direction == "DEST"
+
+    @pytest.mark.asyncio
+    async def test_ignores_invalid_or_unrelated_sequence_steps(self):
+        from obs.api.v1.logic import get_datapoint_logic_usages
+
+        from obs.logic.models import FlowData, LogicNode, NodePosition
+
+        dp_id = str(uuid.uuid4())
+        node = LogicNode(id="n1", type="value_sequence", position=NodePosition(x=0, y=0), data={"steps": "not json"})
+        row = _make_graph_row(name="G", flow_data=FlowData(nodes=[node]).model_dump_json())
+
+        assert await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=_DbStub(rows=[row])) == []
 
     @pytest.mark.asyncio
     async def test_ignores_other_node_types(self):

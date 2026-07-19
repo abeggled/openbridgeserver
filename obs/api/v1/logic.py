@@ -158,7 +158,7 @@ async def update_graph_full(
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
     _validate_timer_durations(body.flow_data)
@@ -175,12 +175,29 @@ async def update_graph_full(
             graph_id,
         ),
     )
-    # Invalidate executor cache
+
+    def _without_positions(raw: dict) -> dict:
+        raw = dict(raw)
+        raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", [])]
+        return raw
+
+    try:
+        layout_only = bool(row["enabled"]) == body.enabled and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(
+            json.loads(body.flow_data.model_dump_json())
+        )
+    except (TypeError, ValueError):
+        layout_only = False
+
+    # Invalidate executor cache only when execution semantics changed.
     try:
         from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().invalidate_cache(graph_id)
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        if layout_only:
+            manager.update_cached_graph(graph_id, body.name, body.enabled, body.flow_data)
+        else:
+            manager.invalidate_cache(graph_id)
+            await manager.reload()
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
@@ -214,13 +231,24 @@ async def update_graph_partial(
            WHERE id=?""",
         (name, description, int(enabled), flow_json, now, graph_id),
     )
-    try:
-        from obs.logic.manager import get_logic_manager
+    # A title/description change does not alter execution.  Keeping the cache
+    # intact preserves in-flight value sequences; flow or enabled changes need
+    # the normal reload and cancellation semantics.
+    if body.flow_data is not None or body.enabled is not None:
+        try:
+            from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().invalidate_cache(graph_id)
-        await get_logic_manager().reload()
-    except Exception:
-        pass
+            get_logic_manager().invalidate_cache(graph_id)
+            await get_logic_manager().reload()
+        except Exception:
+            pass
+    else:
+        try:
+            from obs.logic.manager import get_logic_manager
+
+            get_logic_manager().update_cached_graph_name(graph_id, name)
+        except Exception:
+            pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     return _row_to_out(row)
 
@@ -290,6 +318,18 @@ async def import_graph(
                         node.data["datapoint_name"] = dp.name
                 except Exception:
                     pass
+            if _registry is not None and node.type == "value_sequence":
+                steps = node.data.get("steps", [])
+                if isinstance(steps, list):
+                    for step in steps:
+                        if not isinstance(step, dict) or not step.get("datapoint_id"):
+                            continue
+                        try:
+                            dp = _registry.get(uuid.UUID(str(step["datapoint_id"])))
+                            if dp is not None:
+                                step["datapoint_name"] = dp.name
+                        except Exception:
+                            pass
             processed_nodes.append(node)
 
     processed_flow = FlowData(nodes=processed_nodes, edges=body.flow_data.edges)
@@ -428,6 +468,16 @@ async def get_datapoint_logic_usages(
                 if not any(variable["datapoint_id"] == dp_id for variable in variables.values()):
                     continue
                 direction = "SOURCE"
+            elif node.type == "value_sequence":
+                steps = node.data.get("steps") or []
+                if isinstance(steps, str):
+                    try:
+                        steps = json.loads(steps)
+                    except json.JSONDecodeError:
+                        steps = []
+                if not isinstance(steps, list) or not any(isinstance(step, dict) and step.get("datapoint_id") == dp_id for step in steps):
+                    continue
+                direction = "DEST"
             else:
                 continue
             usages.append(

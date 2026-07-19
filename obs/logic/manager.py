@@ -21,7 +21,7 @@ import re
 import socket
 import stat
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
@@ -56,6 +56,7 @@ _THROTTLE_UNITS: dict[str, float] = {
     "h": 3_600_000.0,
 }
 _MAX_LOGIC_CASCADE_DEPTH = 10
+_MAX_SEQUENCE_REPEAT_COUNT = 10_000
 
 _ICAL_MAX_BYTES = 1_048_576
 _ICAL_MAX_REDIRECTS = 5
@@ -718,6 +719,16 @@ class LogicManager:
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # Running value sequences, keyed per graph/node.  They are deliberately
+        # separate from cron tasks because they are short-lived and user-triggered.
+        self._sequence_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        self._sequence_conditions: dict[tuple[str, str], bool] = {}
+        self._sequence_queues: dict[tuple[str, str], int] = {}
+        self._sequence_queue_depths: dict[tuple[str, str], int] = {}
+        self._sequence_configs: dict[tuple[str, str], dict[str, Any]] = {}
+        self._sequence_graph_signatures: dict[str, str] = {}
+        self._sequence_restarts: set[tuple[str, str]] = set()
+        self._sequence_restart_sources: dict[tuple[str, str], asyncio.Task] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -740,6 +751,7 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
         """Reload graph cache from DB and restart cron schedulers."""
@@ -747,9 +759,231 @@ class LogicManager:
             task.cancel()
         self._cron_tasks.clear()
         await self._load_graphs()
+        # A config import/reset can remove graphs without first calling
+        # invalidate_cache().  Cancel only sequences whose graph no longer
+        # exists or is disabled; unrelated live graphs keep running.
+        for graph_id, node_id in list(self._sequence_tasks):
+            entry = self._graphs.get(graph_id)
+            node = next((node for node in entry[2].nodes if node.id == node_id), None) if entry else None
+            if (
+                entry is None
+                or not entry[1]
+                or node is None
+                or node.type != "value_sequence"
+                or node.data != self._sequence_configs.get((graph_id, node_id))
+                or entry[2].model_dump_json() != self._sequence_graph_signatures.get(graph_id)
+            ):
+                self._cancel_sequence_tasks(graph_id)
         self._start_cron_tasks()
 
     # ── App Config ────────────────────────────────────────────────────────
+
+    def _cancel_sequence_tasks(self, graph_id: str | None = None) -> None:
+        """Cancel active sequences, for shutdown/reload/delete semantics."""
+        keys = [key for key in self._sequence_tasks if graph_id is None or key[0] == graph_id]
+        for key in keys:
+            self._cancel_sequence_task(key)
+            self._sequence_conditions.pop(key, None)
+            self._sequence_queues.pop(key, None)
+            self._sequence_queue_depths.pop(key, None)
+            self._sequence_configs.pop(key, None)
+
+    def _cancel_sequence_task(self, key: tuple[str, str]) -> None:
+        """Cancel a tracked task and the source it may be restarting."""
+        task = self._sequence_tasks.pop(key, None)
+        source = self._sequence_restart_sources.pop(key, None)
+        self._sequence_restarts.discard(key)
+        self._sequence_queues.pop(key, None)
+        self._sequence_queue_depths.pop(key, None)
+        if task:
+            task.cancel()
+        if source and source is not task:
+            source.cancel()
+
+    @staticmethod
+    def _sequence_steps(raw: Any) -> list[dict[str, Any]]:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = []
+        return [step for step in raw if isinstance(step, dict)] if isinstance(raw, list) else []
+
+    @staticmethod
+    def _coerce_sequence_value(value: Any, data_type: str) -> Any:
+        if data_type == "BOOLEAN":
+            if not isinstance(value, str):
+                return bool(value)
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+            raise ValueError(f"invalid boolean value {value!r}")
+        if data_type == "INTEGER":
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError(f"fractional integer value {value!r}")
+            return int(value)
+        if data_type == "FLOAT":
+            return float(value)
+        if data_type == "DATE":
+            return date.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "TIME":
+            return time.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "DATETIME":
+            return datetime.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "STRING":
+            return str(value)
+        return value
+
+    async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
+        """Publish configured writes without blocking the graph executor."""
+        from obs.core.event_bus import DataValueEvent
+
+        key = (graph_id, node_id)
+        steps = self._sequence_steps(config.get("steps"))
+        if not steps:
+            logger.warning("Value sequence graph=%s node=%s has no steps", graph_id[:8], node_id[:8])
+            return
+        mode = config.get("run_mode", "once")
+        if mode == "while_condition" and not self._sequence_conditions.get(key, True):
+            return
+        try:
+            raw_repeat_count = config.get("repeat_count", 2)
+            repetitions = (
+                min(_MAX_SEQUENCE_REPEAT_COUNT, max(1, int(2 if raw_repeat_count is None else raw_repeat_count))) if mode == "repeat_count" else 1
+            )
+        except (TypeError, ValueError):
+            repetitions = 1
+        try:
+            while True:
+                slept = False
+                for step in steps:
+                    if (mode == "while_condition" or config.get("cancel_when_condition_false")) and not self._sequence_conditions.get(key, True):
+                        logger.info("Value sequence cancelled: graph=%s node=%s", graph_id[:8], node_id[:8])
+                        return
+                    target = str(step.get("datapoint_id") or "").strip()
+                    if target:
+                        try:
+                            datapoint_id = uuid.UUID(target)
+                            target_dp = self._registry.get(datapoint_id)
+                            if target_dp is None:
+                                raise ValueError("target object no longer exists")
+                            publish_task = asyncio.create_task(
+                                self._event_bus.publish(
+                                    DataValueEvent(
+                                        datapoint_id=datapoint_id,
+                                        value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
+                                        quality="good",
+                                        source_adapter="logic_sequence",
+                                        logic_depth=logic_depth + 1,
+                                    )
+                                )
+                            )
+                            try:
+                                await asyncio.shield(publish_task)
+                            except asyncio.CancelledError:
+                                # A write can synchronously re-run this graph
+                                # and cancel its own sequence.  Complete the
+                                # already-emitted event before stopping so all
+                                # EventBus subscribers see the write.
+                                try:
+                                    await asyncio.shield(publish_task)
+                                except Exception:
+                                    pass
+                                raise
+                        except Exception as exc:
+                            logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
+                    try:
+                        delay_s = max(0.0, float(step.get("delay_ms") or 0) / 1000)
+                    except (TypeError, ValueError):
+                        delay_s = 0.0
+                    if delay_s:
+                        await asyncio.sleep(delay_s)
+                        slept = True
+                if mode == "while_condition":
+                    if not self._sequence_conditions.get(key, True):
+                        return
+                    if not slept:
+                        logger.warning("Value sequence graph=%s node=%s needs a positive pause in while mode", graph_id[:8], node_id[:8])
+                        return
+                    continue
+                repetitions -= 1
+                if repetitions <= 0:
+                    return
+                if mode == "repeat_count" and not slept:
+                    await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._sequence_tasks.get(key) is asyncio.current_task():
+                self._sequence_tasks.pop(key, None)
+                queued = self._sequence_queues.pop(key, 0)
+                queued_depth = self._sequence_queue_depths.pop(key, logic_depth)
+                if queued and self._sequence_conditions.get(key, True):
+                    if queued > 1:
+                        self._sequence_queues[key] = queued - 1
+                        self._sequence_queue_depths[key] = queued_depth
+                    task = asyncio.create_task(
+                        self._run_value_sequence(graph_id, node_id, config, queued_depth),
+                        name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+                    )
+                    self._sequence_tasks[key] = task
+
+    async def _restart_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int, active: asyncio.Task) -> None:
+        """Stop a sequence completely before launching its restart replacement."""
+        key = (graph_id, node_id)
+        try:
+            active.cancel()
+            try:
+                await active
+            except asyncio.CancelledError:
+                pass
+            if self._sequence_tasks.get(key) is not asyncio.current_task():
+                return
+            task = asyncio.create_task(
+                self._run_value_sequence(graph_id, node_id, config, logic_depth),
+                name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+            )
+            self._sequence_tasks[key] = task
+        finally:
+            self._sequence_restarts.discard(key)
+            if self._sequence_restart_sources.get(key) is active:
+                self._sequence_restart_sources.pop(key, None)
+
+    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0, graph_signature: str = "") -> None:
+        key = (graph_id, node.id)
+        self._sequence_conditions[key] = condition
+        self._sequence_configs[key] = dict(node.data)
+        self._sequence_graph_signatures[graph_id] = graph_signature
+        active = self._sequence_tasks.get(key)
+        if active and not active.done():
+            policy = node.data.get("restart_policy", "ignore")
+            if policy == "restart":
+                # The task slot holds the restart helper while it awaits the
+                # original task.  Coalesce rapid retriggers so they cannot
+                # cancel the helper and detach from that original publish.
+                if key in self._sequence_restarts:
+                    return
+                self._sequence_restarts.add(key)
+                self._sequence_restart_sources[key] = active
+                restart = asyncio.create_task(
+                    self._restart_value_sequence(graph_id, node.id, dict(node.data), logic_depth, active),
+                    name=f"sequence-restart-{graph_id[:8]}-{node.id[:8]}",
+                )
+                self._sequence_tasks[key] = restart
+                return
+            elif policy == "queue":
+                self._sequence_queues[key] = self._sequence_queues.get(key, 0) + 1
+                self._sequence_queue_depths[key] = max(self._sequence_queue_depths.get(key, 0), logic_depth)
+                return
+            else:
+                return
+        task = asyncio.create_task(
+            self._run_value_sequence(graph_id, node.id, dict(node.data), logic_depth),
+            name=f"sequence-{graph_id[:8]}-{node.id[:8]}",
+        )
+        self._sequence_tasks[key] = task
 
     async def _load_app_config(self) -> None:
         """Load app-level settings (e.g. timezone) from the database."""
@@ -986,6 +1220,13 @@ class LogicManager:
                 if variables_changed:
                     node.data["variables"] = variables
                     changed = True
+                if node.type == "value_sequence":
+                    steps = self._sequence_steps(node.data.get("steps"))
+                    for step in steps:
+                        if step.get("datapoint_id") == dp_id_str and step.get("datapoint_name") != event.new_name:
+                            step["datapoint_name"] = event.new_name
+                            changed = True
+                    node.data["steps"] = steps
             if changed:
                 current = self._graphs.get(graph_id)
                 if current is None or current[2] is not flow:
@@ -2790,6 +3031,68 @@ class LogicManager:
         # the final graph outputs, not executor placeholders from an earlier pass.
         executor.commit_memory_inputs(outputs, aug_overrides)
 
+        # ── Start/cancel value sequences ──────────────────────────────────
+        wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
+        node_by_id = {node.id: node for node in flow.nodes}
+        pending_sequence_starts: list[tuple[Any, bool]] = []
+        for node in flow.nodes:
+            if node.type != "value_sequence":
+                continue
+            output = outputs.get(node.id, {})
+            key = (graph_id, node.id)
+            condition = GraphExecutor._to_bool(output.get("_condition")) if (node.id, "condition") in wired_inputs else True
+            self._sequence_conditions[key] = condition
+            active = self._sequence_tasks.get(key)
+            if (
+                node.data.get("cancel_when_condition_false")
+                and not condition
+                and active
+                and not active.done()
+                and active is not asyncio.current_task()
+            ):
+                self._cancel_sequence_task(key)
+            state = graph_state.setdefault(node.id, {})
+            triggered = GraphExecutor._to_bool(output.get("_triggered"))
+            # A wired condition gates every sequence mode.  The cancellation
+            # setting controls only whether an already-running task is stopped.
+            blocked = not condition
+            if blocked:
+                state["sequence_prev_trigger"] = False
+                continue
+            was_triggered = state.get("sequence_prev_trigger", False)
+            state["sequence_prev_trigger"] = triggered
+            cron_triggered = any(
+                edge.target == node.id and (edge.targetHandle or "in") == "trigger" and edge.source in cron_reachable for edge in flow.edges
+            )
+            pulse_sources = [node.id]
+            pulse_seen: set[str] = set()
+            datapoint_change_triggered = False
+            while pulse_sources:
+                target_id = pulse_sources.pop()
+                if target_id in pulse_seen:
+                    continue
+                pulse_seen.add(target_id)
+                for edge in flow.edges:
+                    if edge.target != target_id:
+                        continue
+                    source = node_by_id.get(edge.source)
+                    if (
+                        source
+                        and source.type == "datapoint_read"
+                        and (edge.sourceHandle or "out") == "changed"
+                        and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                    ):
+                        datapoint_change_triggered = True
+                        break
+                    pulse_sources.append(edge.source)
+                if datapoint_change_triggered:
+                    break
+            if triggered and (not was_triggered or cron_triggered or datapoint_change_triggered):
+                # Defer creating the task until ordinary datapoint writes have
+                # been published below.  A task created here can otherwise run
+                # at the write loop's first await and invert graph-local order.
+                pending_sequence_starts.append((node, condition))
+
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         from obs.core.event_bus import DataValueEvent
@@ -2797,8 +3100,6 @@ class LogicManager:
         write_now = execute_now
 
         # Build set of node+handle pairs that have an incoming edge (= are wired)
-        wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
-
         for node in flow.nodes:
             if node.type != "datapoint_write":
                 continue
@@ -2866,6 +3167,15 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception as exc:
                 logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
+
+        # Value sequences are intentionally started after synchronous graph
+        # writes, so an execution that triggers both has deterministic order.
+        for node, condition in pending_sequence_starts:
+            if not graph_state.get(node.id, {}).get("sequence_prev_trigger", False):
+                continue
+            current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
+            if current_condition:
+                self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
 
         # ── Persist node state (statistics / hysteresis) to DB ───────────
         # Nodes with persist_state=False are excluded from the saved snapshot
@@ -2950,8 +3260,22 @@ class LogicManager:
         # On DELETE the graph row is gone from DB so no persistence concerns remain;
         # the in-memory entry is a no-op and will be GC'd naturally.
         self._node_state.pop(graph_id, None)
+        self._cancel_sequence_tasks(graph_id)
         # Cancel cron tasks for this specific graph
         to_remove = [k for k in list(self._cron_tasks) if k[0] == graph_id]
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]
+
+    def update_cached_graph_name(self, graph_id: str, name: str) -> None:
+        """Refresh metadata without invalidating active graph execution."""
+        graph = self._graphs.get(graph_id)
+        if graph:
+            _, enabled, flow = graph
+            self._graphs[graph_id] = (name, enabled, flow)
+
+    def update_cached_graph(self, graph_id: str, name: str, enabled: bool, flow: FlowData) -> None:
+        """Apply a layout-only save without interrupting active sequences."""
+        if graph_id in self._graphs:
+            self._graphs[graph_id] = (name, enabled, flow)
+            self._sequence_graph_signatures[graph_id] = flow.model_dump_json()
