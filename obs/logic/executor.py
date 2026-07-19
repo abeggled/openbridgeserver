@@ -899,6 +899,11 @@ class GraphExecutor:
                 # Async nodes — handled by manager, not executor
                 return {}
 
+            case "value_sequence":
+                # The manager owns the async task; execution only exposes the
+                # current control values and never sleeps in this synchronous pass.
+                return {"_triggered": inputs.get("trigger"), "_condition": inputs.get("condition", True)}
+
             case "heating_circuit":
                 # Mannheimer Methode (DIN 4710): Sommer/Winter-Umschaltung anhand Tagesmittel.
                 # Messzeitpunkte (Erste-Kreuzung-Semantik — kein exakter Sensor-Takt nötig):

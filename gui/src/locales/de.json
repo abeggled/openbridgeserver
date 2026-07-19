@@ -1488,6 +1488,7 @@
       "consumption_counter": "Verbrauchszähler",
       "timer_delay": "Verzögerung",
       "timer_pulse": "Impuls",
+      "value_sequence": "Sequenz",
       "timer_cron": "Trigger",
       "operating_hours": "Betriebsstd.",
       "python_script": "Python Script",
@@ -1581,6 +1582,9 @@
       "data": "Daten",
       "body": "Body",
       "done": "Fertig",
+      "running": "Läuft",
+      "cancelled": "Abgebrochen",
+      "condition": "Bedingung",
       "sent": "Gesendet",
       "stored": "Gespeichert",
       "active": "Aktiv",
@@ -1600,6 +1604,7 @@
       "inputs": "{n} Eingänge",
       "parts": "{n} Teile",
       "rules": "{n} Regeln",
+      "sequence": "{n} Schritte · {mode}",
       "hold": "→ halten",
       "filters": "{n} Filter",
       "negateEnable": "¬Freigabe",
@@ -1997,6 +2002,9 @@
       "timer_pulse": {
         "duration_s": "Dauer (s)"
       },
+      "value_sequence": {
+        "run_mode": "Ausführung", "repeat_count": "Wiederholungen", "restart_policy": "Bei neuem Trigger", "cancel_when_condition_false": "Abbrechen, wenn Bedingung false wird", "add": "Schritt hinzufügen", "blink": "Blink-Vorlage", "step": "Schritt {n}", "duplicate": "Duplizieren", "object": "Objekt (leer = Pause)", "value": "Wert", "modes": { "once": "Einmal", "repeat_count": "Feste Anzahl", "while_condition": "Solange Bedingung wahr ist" }, "policies": { "ignore": "Ignorieren", "restart": "Neu starten", "queue": "Einreihen" }
+      },
       "timer_cron": {
         "cron": "Cron-Ausdruck"
       },
@@ -2171,6 +2179,7 @@
       "consumption_counter": "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) aus einem fortlaufenden Zählerwert. Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche.",
       "timer_delay": "Verzögert ein Signal um N Sekunden",
       "timer_pulse": "Gibt einen Impuls für N Sekunden aus",
+      "value_sequence": "Schreibt konfigurierte Werte und Pausen als Sequenz ohne die Logikausführung zu blockieren.",
       "timer_cron": "Löst automatisch nach einem Cron-Zeitplan aus (Minute Stunde Tag Monat Wochentag).",
       "operating_hours": "Zählt Betriebsstunden solange 'Aktiv' wahr ist. Reset setzt den Zähler zurück.",
       "python_script": "Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
