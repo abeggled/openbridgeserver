@@ -170,6 +170,18 @@ class TestConstValue:
 
 
 # ===========================================================================
+# comment node — purely visual, no executor case (falls through to the
+# "unknown node type" no-op branch, same as ai_logic)
+# ===========================================================================
+
+
+class TestCommentNode:
+    def test_is_a_no_op(self):
+        out = run_single("comment", {"text": "Hysterese-Gating: siehe #1043", "width": 220, "height": 140})
+        assert out == {}
+
+
+# ===========================================================================
 # Logic nodes: and, or, not, xor
 # ===========================================================================
 

@@ -27,3 +27,13 @@ def test_value_mapping_default_rules_do_not_persist_localized_names():
         {"operator": "eq", "result": ""},
         {"operator": "eq", "result": ""},
     ]
+
+
+def test_comment_node_has_no_ports():
+    comment = _node_type("comment")
+
+    assert comment.inputs == []
+    assert comment.outputs == []
+    assert comment.config_schema["text"]["default"] == ""
+    assert comment.config_schema["width"]["default"] == 220
+    assert comment.config_schema["height"]["default"] == 140

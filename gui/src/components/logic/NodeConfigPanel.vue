@@ -1200,6 +1200,20 @@
       </div>
     </template>
 
+    <template v-else-if="isCommentNode">
+      <div class="flex-1 overflow-hidden p-4 flex flex-col gap-2">
+        <p class="text-xs text-slate-500 shrink-0">{{ nodeDescription(nodeDef) }}</p>
+        <label class="label shrink-0">{{ $t('logic.nodeConfig.comment.text') }}</label>
+        <textarea
+          v-model="localData.text"
+          class="input text-sm flex-1 resize-none"
+          :placeholder="$t('logic.nodeConfig.comment.textPlaceholder')"
+          data-testid="comment-text"
+          @change="emitUpdate"
+        />
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1456,6 +1470,7 @@ const isMessageArchiveNode = computed(() => props.node?.type === 'message_archiv
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
 const isValueSequenceNode = computed(() => props.node?.type === 'value_sequence')
+const isCommentNode       = computed(() => props.node?.type === 'comment')
 const sequenceSteps = computed(() => Array.isArray(localData.value.steps) ? localData.value.steps : [])
 const selectedMessageArchiveMissing = computed(() => {
   const id = localData.value.archive_id
