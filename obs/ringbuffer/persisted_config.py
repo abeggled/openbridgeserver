@@ -212,9 +212,9 @@ async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | 
     # three positive integer segments; lift only these legacy degenerate values
     # to the smallest valid total.  The matching raw segment value stays
     # ``None`` so runtime derivation remains visible as ``derived`` in /stats.
-    if resolved["segment_max_rows"] is None and resolved["max_entries"] in (1, 2):
+    if resolved["segmented"] and resolved["segment_max_rows"] is None and resolved["max_entries"] in (1, 2):
         resolved["max_entries"] = _RETENTION_SEGMENT_RATIO
-    if resolved["segment_max_bytes"] is None and resolved["max_file_size_bytes"] in (1, 2):
+    if resolved["segmented"] and resolved["segment_max_bytes"] is None and resolved["max_file_size_bytes"] in (1, 2):
         resolved["max_file_size_bytes"] = _RETENTION_SEGMENT_RATIO
 
     # A legacy age-only total of one or two seconds has no positive segment age
@@ -232,7 +232,7 @@ async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | 
             resolved["segment_max_bytes"],
         )
     )
-    if resolved["max_age"] in (1, 2) and resolved["segment_max_age"] is None and not has_size_or_row_trigger:
+    if resolved["segmented"] and resolved["max_age"] in (1, 2) and resolved["segment_max_age"] is None and not has_size_or_row_trigger:
         resolved["max_age"] = _RETENTION_SEGMENT_RATIO
         resolved["segment_max_age"] = 1
 
