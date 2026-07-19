@@ -37,6 +37,22 @@ describe('CommentNode', () => {
     expect(w.find('.cn-title').text()).toBe('Kommentar')
   })
 
+  it('falls back to the raw type string when no translation exists', async () => {
+    const w = await mountCN({}, { type: 'mystery_node' })
+    await flushPromises()
+    expect(w.find('.cn-title').text()).toBe('mystery_node')
+  })
+
+  it('hides the delete button until hovered', async () => {
+    const w = await mountCN()
+    await flushPromises()
+    expect(w.find('.cn-del').attributes('style')).toContain('visibility: hidden')
+    await w.find('.cn-root').trigger('mouseenter')
+    expect(w.find('.cn-del').attributes('style')).toContain('visibility: visible')
+    await w.find('.cn-root').trigger('mouseleave')
+    expect(w.find('.cn-del').attributes('style')).toContain('visibility: hidden')
+  })
+
   it('renders the note text when present', async () => {
     const w = await mountCN({ text: 'Hysterese-Gating: siehe #1043' })
     await flushPromises()
