@@ -8,7 +8,7 @@ Einstellungen werden in app_settings gespeichert:
   autobackup.hour           = "0" … "23"  (Uhrzeit der täglichen Sicherung)
   autobackup.retention_days = "1" … "30"  (Anzahl Sicherungen aufbewahren)
 
-Sicherungsdateien liegen in {db_dir}/autobackup/YYYYMMDD-HHMM.json
+Sicherungsdateien liegen in {db_dir}/autobackup/YYYYMMDD-HHMM[-N].json
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ import asyncio
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -29,6 +30,8 @@ from obs.db.database import Database, get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"])
+
+_BACKUP_STEM_RE = re.compile(r"\d{8}-\d{4}(?:-\d+)?")
 
 # ---------------------------------------------------------------------------
 # Modelle
@@ -83,15 +86,31 @@ async def _save_config(db: Database, cfg: AutobackupConfig) -> None:
         )
 
 
+async def _application_timezone(db: Database) -> ZoneInfo:
+    """Return the configured application timezone, with a safe default."""
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
+    try:
+        return ZoneInfo(row["value"] if row else "Europe/Zurich")
+    except Exception:
+        return ZoneInfo("Europe/Zurich")
+
+
+async def _application_now(db: Database) -> datetime:
+    return datetime.now(UTC).astimezone(await _application_timezone(db))
+
+
 def _list_backups() -> list[AutobackupEntry]:
     backup_dir = _autobackup_dir()
     entries: list[AutobackupEntry] = []
-    for f in sorted(backup_dir.glob("*.json"), reverse=True):
+    # Prefer write time so suffixed backups from the same local minute appear
+    # newest first.  The name provides a deterministic fallback for files
+    # whose filesystem timestamps are identical.
+    for f in sorted(backup_dir.glob("*.json"), key=lambda f: (f.stat().st_mtime_ns, f.stem), reverse=True):
         stem = f.stem  # z.B. "20240506-0300"
-        if not re.fullmatch(r"\d{8}-\d{4}", stem):
+        if not _BACKUP_STEM_RE.fullmatch(stem):
             continue
         try:
-            dt = datetime.strptime(stem, "%Y%m%d-%H%M")
+            dt = datetime.strptime(stem[:13], "%Y%m%d-%H%M")
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
@@ -107,8 +126,11 @@ def _list_backups() -> list[AutobackupEntry]:
 
 def _prune_old_backups(retention_days: int) -> int:
     backup_dir = _autobackup_dir()
-    files = sorted(backup_dir.glob("*.json"), reverse=True)
-    files = [f for f in files if re.fullmatch(r"\d{8}-\d{4}", f.stem)]
+    # Filenames use application-local time for display and can therefore be
+    # non-monotonic after a timezone change or during a repeated DST hour.
+    # Retention must instead use the actual creation/write order.
+    files = [f for f in backup_dir.glob("*.json") if _BACKUP_STEM_RE.fullmatch(f.stem)]
+    files.sort(key=lambda f: (f.stat().st_mtime_ns, f.stem), reverse=True)
     deleted = 0
     for f in files[retention_days:]:
         deleted += _delete_backup_files(f.stem)
@@ -135,11 +157,22 @@ async def _create_backup_now(db: Database) -> str:
     # Export-Funktion direkt aufrufen (ohne HTTP-Request)
     export = await export_config(_user="autobackup", db=db)
 
-    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M")
-    backup_path = _autobackup_dir() / f"{ts}.json"
-    backup_path.write_text(json.dumps(export.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    # Names shown in the UI should reflect the same application-local time as
+    # the configured scheduler hour.
+    ts = (await _application_now(db)).strftime("%Y%m%d-%H%M")
+    backup_dir = _autobackup_dir()
+    suffix = 0
+    while True:
+        name = ts if suffix == 0 else f"{ts}-{suffix}"
+        backup_path = backup_dir / f"{name}.json"
+        try:
+            with backup_path.open("x", encoding="utf-8") as f:
+                f.write(json.dumps(export.model_dump(), ensure_ascii=False, indent=2))
+            break
+        except FileExistsError:
+            suffix += 1
     logger.info("Autobackup erstellt: %s (%d Bytes)", backup_path.name, backup_path.stat().st_size)
-    return ts
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -197,13 +230,13 @@ async def restore_autobackup(
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
     """Autobackup-Sicherung wiederherstellen (Upsert-Semantik, wie JSON-Import)."""
-    # Dateinamen strikt validieren (erwartetes Format: YYYYMMDD-HHMM)
+    # Dateinamen strikt validieren (erwartetes Format: YYYYMMDD-HHMM[-N])
     safe_name = Path(name).name
-    if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+    if not _BACKUP_STEM_RE.fullmatch(safe_name):
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     base_dir = _autobackup_dir().resolve()
-    allowed_backups = {p.stem: p for p in base_dir.glob("*.json") if p.is_file() and re.fullmatch(r"\d{8}-\d{4}", p.stem)}
+    allowed_backups = {p.stem: p for p in base_dir.glob("*.json") if p.is_file() and _BACKUP_STEM_RE.fullmatch(p.stem)}
     backup_path = allowed_backups.get(safe_name)
     if backup_path is None:
         raise HTTPException(status_code=404, detail=f"Sicherung '{safe_name}' nicht gefunden.")
@@ -238,7 +271,7 @@ async def delete_autobackup(
 ) -> dict:
     """Eine einzelne Autobackup-Sicherung löschen."""
     safe_name = Path(name).name
-    if not re.fullmatch(r"\d{8}-\d{4}", safe_name):
+    if not _BACKUP_STEM_RE.fullmatch(safe_name):
         raise HTTPException(status_code=400, detail="Ungültiger Sicherungsname.")
 
     # Allowlist: nur Namen löschen, die als vorhandene Backups gelistet sind.
@@ -295,7 +328,7 @@ class AutobackupScheduler:
         logger.info("Autobackup-Scheduler gestoppt.")
 
     async def _loop(self) -> None:
-        last_backup_day: int | None = None
+        last_backup_day: str | None = None
 
         while True:
             try:
@@ -315,24 +348,13 @@ class AutobackupScheduler:
                             raise
                     continue
 
-                now = datetime.now(UTC)
-                today = now.day
+                now = await _application_now(self._db)
+                today = now.date().isoformat()
 
                 # Prüfen ob heute schon gesichert wurde
                 if last_backup_day == today and now.hour >= cfg.hour:
                     # Warten bis morgen um cfg.hour
-                    tomorrow = datetime(now.year, now.month, now.day, cfg.hour, 0, tzinfo=UTC)
-                    if tomorrow <= now:
-                        # Nächsten Monat / Jahr berücksichtigen
-                        import calendar
-
-                        days_in_month = calendar.monthrange(now.year, now.month)[1]
-                        if now.day < days_in_month:
-                            tomorrow = datetime(now.year, now.month, now.day + 1, cfg.hour, 0, tzinfo=UTC)
-                        elif now.month < 12:
-                            tomorrow = datetime(now.year, now.month + 1, 1, cfg.hour, 0, tzinfo=UTC)
-                        else:
-                            tomorrow = datetime(now.year + 1, 1, 1, cfg.hour, 0, tzinfo=UTC)
+                    tomorrow = (now + timedelta(days=1)).replace(hour=cfg.hour, minute=0, second=0, microsecond=0)
 
                     wait_s = max(60.0, (tomorrow - now).total_seconds())
                     logger.debug("Autobackup: nächste Sicherung in %.0fs um %s", wait_s, tomorrow.isoformat())
