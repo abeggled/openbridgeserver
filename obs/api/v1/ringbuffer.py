@@ -136,10 +136,10 @@ def _unsubscribe_ringbuffer(rb: Any) -> None:
         pass
 
 
-def _segment_limit_source(configured: int | None, retention: int | None) -> Literal["explicit", "derived", "disabled"]:
+def _segment_limit_source(configured: int | None, effective: int | None) -> Literal["explicit", "derived", "disabled"]:
     if configured is not None:
         return "explicit"
-    if retention is not None:
+    if effective is not None:
         return "derived"
     return "disabled"
 
@@ -153,13 +153,16 @@ def _segment_contract_stats(
     segment_max_rows: int | None,
     segment_max_age: int | None,
 ) -> dict[str, Any]:
+    effective_segment_max_bytes = segment_max_bytes if segment_max_bytes is not None else derive_segment_max_bytes(max_file_size_bytes)
+    effective_segment_max_rows = segment_max_rows if segment_max_rows is not None else derive_segment_max_rows(max_entries)
+    effective_segment_max_age = segment_max_age if segment_max_age is not None else derive_segment_max_age(max_age)
     return {
-        "effective_segment_max_bytes": segment_max_bytes if segment_max_bytes is not None else derive_segment_max_bytes(max_file_size_bytes),
-        "effective_segment_max_rows": segment_max_rows if segment_max_rows is not None else derive_segment_max_rows(max_entries),
-        "effective_segment_max_age": segment_max_age if segment_max_age is not None else derive_segment_max_age(max_age),
-        "segment_max_bytes_source": _segment_limit_source(segment_max_bytes, max_file_size_bytes),
-        "segment_max_rows_source": _segment_limit_source(segment_max_rows, max_entries),
-        "segment_max_age_source": _segment_limit_source(segment_max_age, max_age),
+        "effective_segment_max_bytes": effective_segment_max_bytes,
+        "effective_segment_max_rows": effective_segment_max_rows,
+        "effective_segment_max_age": effective_segment_max_age,
+        "segment_max_bytes_source": _segment_limit_source(segment_max_bytes, effective_segment_max_bytes),
+        "segment_max_rows_source": _segment_limit_source(segment_max_rows, effective_segment_max_rows),
+        "segment_max_age_source": _segment_limit_source(segment_max_age, effective_segment_max_age),
         "retention_unbounded": max_entries is None and max_file_size_bytes is None and max_age is None,
     }
 
