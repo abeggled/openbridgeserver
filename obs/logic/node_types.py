@@ -47,7 +47,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -65,7 +65,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -92,7 +92,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -613,7 +613,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         description="Verzögert ein Signal um N Sekunden",
         inputs=[_port("trigger", "Trigger", "trigger")],
         outputs=[_port("trigger", "Trigger", "trigger")],
-        config_schema={"delay_s": {"type": "number", "default": 1.0}},
+        config_schema={"delay_s": {"type": "number", "default": 1.0, "min": 0}},
         color="#b45309",
     ),
     NodeTypeDef(
@@ -623,7 +623,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         description="Gibt einen Impuls für N Sekunden aus",
         inputs=[_port("trigger", "Trigger", "trigger")],
         outputs=[_port("out", "Out")],
-        config_schema={"duration_s": {"type": "number", "default": 1.0}},
+        config_schema={"duration_s": {"type": "number", "default": 1.0, "min": 0}},
         color="#b45309",
     ),
     NodeTypeDef(
@@ -1014,7 +1014,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": [],
                 "label": "Variablen",
             },
-            "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
+            "timeout_s": {"type": "number", "default": 10, "min": 1, "label": "Timeout (s)"},
             "auth_type": {
                 "type": "string",
                 "enum": ["none", "basic", "digest", "bearer"],
