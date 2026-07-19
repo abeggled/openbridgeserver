@@ -232,16 +232,23 @@ class RingBufferMultiEntryOut(RingBufferEntryOut):
 class RingBufferPrognosis(BaseModel):
     """Datengetriebene Wachstums-/Retention-Prognose (#919).
 
-    Reine Momentaufnahme aus den geschlossenen v2-Segmenten. Alle Raten-Felder
-    sind ``None``, wenn zu wenig Daten vorliegen (< 1 geschlossenes v2-Segment).
+    Bis zum ersten verwertbaren geschlossenen v2-Segment stammt sie aus einer
+    vorläufigen, mindestens fünf Sekunden langen Live-Stichprobe des aktiven
+    Segments; danach aus den stabileren geschlossenen Segmenten.
     """
 
     sample_segment_count: int = 0
+    source: Literal["active", "closed"] | None = None
+    provisional: bool = False
     bytes_per_hour: float | None = None
     rows_per_hour: float | None = None
     avg_segment_seconds: float | None = None
     estimated_retention_seconds: float | None = None
     effective_segment_max_bytes: float | None = None
+    observed_seconds: float | None = None
+    observed_rows: int | None = None
+    ready_after_seconds: float | None = None
+    idle_seconds: float | None = None
 
 
 class RingBufferStats(BaseModel):

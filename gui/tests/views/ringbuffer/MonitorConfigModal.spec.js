@@ -778,6 +778,49 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
 })
 
 describe('MonitorConfigModal prognosis (#919/#938)', () => {
+  it('reloads at the end of live warmup without overwriting edited form fields', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = makeApi()
+      api.stats.mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: 50000,
+          max_file_size_bytes: null,
+          max_age: null,
+          segment_max_age: 24 * 3600,
+          file_size_bytes: 1,
+          prognosis: { source: 'active', provisional: true, ready_after_seconds: 5, rows_per_hour: null, bytes_per_hour: null },
+        },
+      })
+      const { wrapper } = await mountModal({ api })
+      await wrapper.find('[data-testid="rb-config-max-entries"]').setValue('77777')
+
+      api.stats.mockResolvedValue({
+        data: {
+          total: 2,
+          enabled: true,
+          max_entries: 50000,
+          max_file_size_bytes: null,
+          max_age: null,
+          segment_max_age: 24 * 3600,
+          file_size_bytes: 2,
+          prognosis: { source: 'active', provisional: true, observed_seconds: 5, ready_after_seconds: 0, rows_per_hour: 3600, bytes_per_hour: 1024 },
+        },
+      })
+      await vi.advanceTimersByTimeAsync(5_100)
+      await flushPromises()
+
+      expect(api.stats).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[data-testid="prognosis-rate"]').text()).toContain('1,0 Events/s')
+      expect(wrapper.find('[data-testid="rb-config-max-entries"]').element.value).toBe('77777')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // Der Prognose-Block ist in die gemeinsame PrognosisBlock-Komponente
   // ausgelagert (DRY). Die Integrationstests hier prüfen, dass das Modal ihn
   // korrekt mit stats.prognosis + Segment-Alter füttert (data-testid prognosis-*).
@@ -803,7 +846,7 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     const rate = wrapper.find('[data-testid="prognosis-rate"]').text()
     expect(rate).toContain('50')
     expect(rate).toContain('MiB/h')
-    expect(rate).toContain('12.000') // Events/h, de-DE grouping
+    expect(rate).toContain('3,3') // Events/s, de-DE decimal separator
     expect(wrapper.find('[data-testid="prognosis-rotation"]').exists()).toBe(true)
     const history = wrapper.find('[data-testid="prognosis-history"]').text()
     expect(history).toContain('5 Tage')
@@ -812,6 +855,33 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     expect(budget).toContain('900 MiB')
     expect(budget).toContain('6') // current segment age in hours
     expect(budget).toContain('mind. 3 Segmente')
+  })
+
+  it('uses the configured 30-day retention for the live budget forecast', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 100,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: null,
+          max_age: 30 * 24 * 3600,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 3600,
+          prognosis: {
+            bytes_per_hour: 50 * 1024 * 1024,
+            rows_per_hour: 12000,
+            estimated_retention_seconds: null,
+            effective_segment_max_bytes: null,
+          },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('30 Tage Retention')
+    expect(budget).toContain('35,2 GiB')
+    expect(budget).not.toContain('mind. 3 Segmente')
   })
 
   it('shows the warming-up hint when prognosis fields are null (too few segments)', async () => {

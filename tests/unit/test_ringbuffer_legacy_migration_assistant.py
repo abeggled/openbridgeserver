@@ -207,10 +207,33 @@ async def test_stats_estimate_attached_legacy_rows_and_span(tmp_path: Path):
         assert stats.common["total"] == 5, "4 Legacy-Events (geschaetzt) + 1 Live-Event"
         assert stats.common["oldest_ts"] == _iso(0), "aelteste ts kommt aus der Legacy-Historie"
         assert stats.common["newest_ts"] == _iso(50)
+        legacy_stat = next(segment for segment in stats.backend_extra["segments"] if segment["status"] == "legacy")
+        assert legacy_stat["row_count"] == 4
+        assert legacy_stat["row_count_accuracy"] == "estimated"
 
         # Cache greift: zweiter Aufruf identisch (und guenstig).
         stats2 = await store.stats()
         assert stats2.common["total"] == 5
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_stats_marks_unreadable_legacy_row_count_unknown_instead_of_empty(tmp_path: Path):
+    """Ein fehlgeschlagener Lazy-Lookup darf nicht als echte 0 erscheinen."""
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        legacy = tmp_path / "obs_ringbuffer.db"
+        await _seed_legacy_db(legacy, [10, 11])
+        migrator = LegacyMigrator(store, legacy)
+        await migrator.attach_readonly(migrator.classify())
+        legacy.unlink()
+
+        stats = await store.stats()
+        legacy_stat = next(segment for segment in stats.backend_extra["segments"] if segment["status"] == "legacy")
+        assert legacy_stat["row_count"] is None
+        assert legacy_stat["row_count_accuracy"] == "unknown"
     finally:
         await store.close()
 

@@ -5,13 +5,13 @@
     RingBufferCard verwendet (DRY). Rendert abgestimmte Zeilen aus
     ``prognosis`` (stats.prognosis) plus Budget-Kontext:
 
-      1. Durchsatz  — MiB/h + Events/h (bytes_per_hour / rows_per_hour)
+      1. Durchsatz  — MiB/h + Events/s (bytes_per_hour / rows_per_hour)
       2. Rotation   — ~alle N h; Minimum aus Alter, Größe und Zeilen samt Auslöser
       3. Historie   — Budget reicht für ~X; bei vollständig unbegrenzter
                       Gesamt-Retention zusätzlich 30-Tage-/Jahreswachstum
-      4. Budget-Empfehlung — Budget ≥ V für ~{segmentAgeHours}-h-Segmente; V wird
-                      IM FRONTEND berechnet (bytes_per_hour * age * 3), damit Label
-                      und Wert live beim Tippen zusammenpassen.
+      4. Budget-Empfehlung — deckt die vollständige Zeit-Retention ab; die
+                      technische Untergrenze von drei Segmenten greift nur,
+                      wenn sie größer ist oder keine Zeit-Retention existiert.
 
     None-robust: jedes einzelne fehlende Feld blendet nur seine eigene Zeile aus,
     ohne NaN/undefined zu rendern. Fehlen alle Raten → „läuft sich noch ein".
@@ -21,10 +21,12 @@
     data-testid="prognosis"
   >
     <h4 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ $t('ringbuffer.prognosis.title') }}</h4>
-    <p v-if="!ready" class="text-xs text-slate-500" data-testid="prognosis-warming">
-      {{ $t('ringbuffer.prognosis.warming') }}
+    <p v-if="warmingLine" class="text-xs text-slate-500" data-testid="prognosis-warming">
+      {{ warmingLine }}
     </p>
     <template v-else>
+      <p v-if="provisionalLine" class="text-xs font-medium text-blue-700 dark:text-blue-300" data-testid="prognosis-provisional">{{ provisionalLine }}</p>
+      <p v-if="idleLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-idle">{{ idleLine }}</p>
       <p v-if="rateLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-rate">{{ rateLine }}</p>
       <p v-if="rotationLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-rotation">{{ rotationLine }}</p>
       <p v-if="historyLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-history">{{ historyLine }}</p>
@@ -61,6 +63,9 @@ const props = defineProps({
   // Aktuell konfiguriertes Segment-Alter in Stunden. null → Budget-Zeile weg
   // (der Consumer kennt kein Segment-Alter).
   segmentAgeHours: { type: [Number, String], default: null },
+  // Konfigurierte Gesamt-Retention nach Alter in Sekunden. Sie ist das primäre
+  // Ziel der Budget-Empfehlung; null → nur die Drei-Segment-Untergrenze.
+  retentionAgeSeconds: { type: [Number, String], default: null },
   // Effektive weitere Rotationsschwellen. undefined nutzt als Abwärtskompatibilität
   // den Prognosewert; null bedeutet ausdrücklich: dieser Trigger ist deaktiviert.
   segmentMaxBytes: { type: [Number, String], default: undefined },
@@ -112,15 +117,40 @@ const ready = computed(() => {
   return posNumber(p.bytes_per_hour) !== null || posNumber(p.rows_per_hour) !== null || posNumber(p.avg_segment_seconds) !== null
 })
 
+const idleLine = computed(() => {
+  const seconds = posNumber(props.prognosis?.idle_seconds)
+  if (seconds === null) return ''
+  return t('ringbuffer.prognosis.idle', { seconds: fmtNum(seconds, 0) })
+})
+
+const warmingLine = computed(() => {
+  if (ready.value || idleLine.value) return ''
+  const remaining = posNumber(props.prognosis?.ready_after_seconds)
+  if (props.prognosis?.source === 'active' && remaining !== null) {
+    return t('ringbuffer.prognosis.warmingLive', { seconds: Math.max(1, Math.ceil(remaining)) })
+  }
+  return t('ringbuffer.prognosis.warming')
+})
+
+const provisionalLine = computed(() => {
+  if (props.prognosis?.provisional !== true) return ''
+  const seconds = posNumber(props.prognosis?.observed_seconds)
+  if (seconds === null) return ''
+  return t('ringbuffer.prognosis.provisional', { seconds: fmtNum(seconds, 0) })
+})
+
 // 1. Durchsatz.
 const rateLine = computed(() => {
   const bytesPerHour = posNumber(props.prognosis?.bytes_per_hour)
   const rowsPerHour = posNumber(props.prognosis?.rows_per_hour)
-  if (bytesPerHour === null || rowsPerHour === null) return ''
-  return t('ringbuffer.prognosis.rate', {
-    mib: fmtNum(bytesPerHour / MIB, 1),
-    rows: fmtNum(rowsPerHour, 0),
-  })
+  if (bytesPerHour === null && rowsPerHour === null) return ''
+  const values = {
+    mib: bytesPerHour === null ? '' : fmtNum(bytesPerHour / MIB, 1),
+    rows: rowsPerHour === null ? '' : fmtNum(rowsPerHour / 3600, 1),
+  }
+  if (bytesPerHour === null) return t('ringbuffer.prognosis.eventRateOnly', values)
+  if (rowsPerHour === null) return t('ringbuffer.prognosis.storageRateOnly', values)
+  return t('ringbuffer.prognosis.rate', values)
 })
 
 // 2. Rotation — erwartetes Intervall als Minimum aller wirksamen Trigger.
@@ -178,13 +208,27 @@ const unboundedGrowthLine = computed(() => {
   })
 })
 
-// 4. Budget-Empfehlung — V IM FRONTEND berechnet (bytes_per_hour * age * 3),
-// damit Label (age) und Wert live beim Tippen zusammenpassen.
+// 4. Budget-Empfehlung — die vollständige Zeit-Retention ist das Ziel. Drei
+// Segmente bleiben die technische Untergrenze, falls sie mehr Platz benötigt.
+// Die Berechnung bleibt im Frontend, damit Formularänderungen sofort wirken.
 const budgetLine = computed(() => {
   const age = posNumber(props.segmentAgeHours)
+  const retentionSeconds = posNumber(props.retentionAgeSeconds)
   const bytesPerHour = posNumber(props.prognosis?.bytes_per_hour)
-  if (age === null || bytesPerHour === null) return ''
-  const recommended = bytesPerHour * age * MIN_SEGMENTS
+  if (bytesPerHour === null) return ''
+  const segmentFloorHours = age === null ? null : age * MIN_SEGMENTS
+  const retentionHours = retentionSeconds === null ? null : retentionSeconds / 3600
+  if (segmentFloorHours === null && retentionHours === null) return ''
+
+  const retentionWins = retentionHours !== null && (segmentFloorHours === null || retentionHours >= segmentFloorHours)
+  const recommendedHours = retentionWins ? retentionHours : segmentFloorHours
+  const recommended = bytesPerHour * recommendedHours
+  if (retentionWins) {
+    return t('ringbuffer.prognosis.budgetRetention', {
+      retention: humanDuration(retentionSeconds),
+      budget: formatBytesBinary(recommended),
+    })
+  }
   return t('ringbuffer.prognosis.budget', {
     age: fmtNum(age, age < 10 ? 1 : 0),
     budget: formatBytesBinary(recommended),

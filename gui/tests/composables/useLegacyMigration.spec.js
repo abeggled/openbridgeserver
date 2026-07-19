@@ -146,6 +146,36 @@ describe('useLegacyMigration — actions', () => {
 })
 
 describe('useLegacyMigration — polling', () => {
+  it('signals a completed migration exactly once when a running job reaches done', async () => {
+    const api = await loadComposable()
+
+    // Ein beim ersten Laden bereits abgeschlossener alter Job ist kein neuer
+    // Abschluss dieser Browser-Session.
+    migrationStatus.mockResolvedValueOnce({
+      data: statusPayload({ decision: 'migrated', legacy: null, job: { phase: 'done' } }),
+    })
+    await api.refresh()
+    expect(api.completionRevision.value).toBe(0)
+
+    migrationStart.mockResolvedValueOnce({
+      data: statusPayload({ job: { phase: 'copying', copied_rows: 10, total_rows: 100 } }),
+    })
+    await api.startMigration()
+
+    migrationStatus.mockResolvedValueOnce({
+      data: statusPayload({ decision: 'migrated', legacy: null, job: { phase: 'done', copied_rows: 100, total_rows: 100 } }),
+    })
+    await api.refresh()
+    expect(api.completionRevision.value).toBe(1)
+
+    // Wiederholte terminale Polls dürfen kein zweites Stats-Reload auslösen.
+    migrationStatus.mockResolvedValueOnce({
+      data: statusPayload({ decision: 'migrated', legacy: null, job: { phase: 'done', copied_rows: 100, total_rows: 100 } }),
+    })
+    await api.refresh()
+    expect(api.completionRevision.value).toBe(1)
+  })
+
   it('polls every second while the job runs and stops once it is done', async () => {
     vi.useFakeTimers()
     const api = await loadComposable()
