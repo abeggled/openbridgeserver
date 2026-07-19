@@ -7,6 +7,7 @@
 ### New features ✨
 
 ### Fixes 🐞
+* KNX: Added the reactive-energy datapoint types DPT 13.012 (VARh) and DPT 13.015 (kVARh) to the DPT registry. Bindings configured with these DPTs previously fell back to the UNKNOWN definition and produced no decoded value. https://github.com/abeggled/openbridgeserver/pull/1030
 
 ### Known Issues 🔔
 * none
