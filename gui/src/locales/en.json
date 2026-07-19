@@ -1008,7 +1008,7 @@
       "ONEWIRE": {
         "host": {
           "title": "Host",
-          "description": "Hostname or IP address of the owserver process"
+          "description": "Hostname or IP address of a running owserver process (local sidecar/service or external — this adapter doesn't start it)"
         },
         "port": {
           "title": "Port",
