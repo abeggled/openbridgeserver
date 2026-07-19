@@ -38,6 +38,9 @@ from obs.core.json import json_dumps
 logger = logging.getLogger(__name__)
 _UNSET = object()
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
+_MISSING_SEGMENT_ROTATION_LIMIT_ERROR = (
+    "At least one effective segment rotation limit is required; configure a segment limit or a matching total retention limit"
+)
 
 
 def _derive_segment_limit(retention_limit: int | None) -> int | None:
@@ -73,6 +76,15 @@ def derive_segment_max_age(max_age: int | None) -> int | None:
     if max_age is not None and max_age < 3:
         return None
     return _derive_segment_limit(max_age)
+
+
+def _validate_effective_segment_rotation_limits(
+    segment_max_bytes: int | None,
+    segment_max_rows: int | None,
+    segment_max_age: int | None,
+) -> None:
+    if segment_max_bytes is None and segment_max_rows is None and segment_max_age is None:
+        raise ValueError(_MISSING_SEGMENT_ROTATION_LIMIT_ERROR)
 
 
 def _effective_store_max_file_size_bytes(
@@ -317,6 +329,12 @@ class RingBuffer:
             self._segment_max_rows = derive_segment_max_rows(self._max_entries)
         if self._segment_max_age_config is None:
             self._segment_max_age = derive_segment_max_age(self._max_age)
+
+        _validate_effective_segment_rotation_limits(
+            self._segment_max_bytes,
+            self._segment_max_rows,
+            self._segment_max_age,
+        )
 
         # The configured total remains unchanged; invalid tiny budgets must fail
         # the three-segment validation instead of being silently increased.
@@ -736,6 +754,12 @@ class RingBuffer:
             segment_max_rows = derive_segment_max_rows(self._max_entries)
         if segment_max_age is None:
             segment_max_age = derive_segment_max_age(self._max_age)
+
+        _validate_effective_segment_rotation_limits(
+            segment_max_bytes,
+            segment_max_rows,
+            segment_max_age,
+        )
 
         self._segment_max_bytes = segment_max_bytes
         self._segment_max_rows = segment_max_rows
