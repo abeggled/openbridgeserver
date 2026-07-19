@@ -9,6 +9,7 @@
 
 ### Fixes 🐞
 * Monitor/RingBuffer: Segment rotation no longer falls back to an unexplained fixed 256 MiB size cap. Each segment threshold is now either explicit, derived as one third of its matching total retention limit, or disabled; configurations without any effective rotation trigger are rejected. The Admin UI shows the effective source per dimension, warns and asks for confirmation when total retention is unbounded, and forecasts disk growth for that case. A 30-day retention with explicit 24-hour segments and no disk budget therefore rotates by age without an implicit size cap. https://github.com/abeggled/openbridgeserver/issues/919
+* KNX: Added the reactive-energy datapoint types DPT 13.012 (VARh) and DPT 13.015 (kVARh) to the DPT registry. Bindings configured with these DPTs previously fell back to the UNKNOWN definition and produced no decoded value. https://github.com/abeggled/openbridgeserver/pull/1030
 
 ### Known Issues 🔔
 * none
