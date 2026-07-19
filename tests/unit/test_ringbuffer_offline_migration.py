@@ -53,6 +53,24 @@ async def _seed_legacy_db(path: Path, count: int) -> None:
         await rb.stop()
 
 
+async def _seed_legacy_timestamps(path: Path, timestamps: list[str]) -> None:
+    rb = RingBuffer(storage="disk", disk_path=str(path), max_entries=None)
+    await rb.start()
+    try:
+        for i, ts in enumerate(timestamps):
+            await rb.record(
+                ts=ts,
+                datapoint_id="dp-leg",
+                topic="dp/dp-leg/value",
+                old_value=None,
+                new_value=100 + i,
+                source_adapter="api",
+                quality="good",
+            )
+    finally:
+        await rb.stop()
+
+
 def _segmented_rb(tmp_path: Path, **kwargs) -> RingBuffer:
     return RingBuffer(
         storage="file",
@@ -110,6 +128,68 @@ async def test_full_migration_preserves_ids_and_history(tmp_path: Path):
         assert all(ids_after[100 + i] < 0 for i in range(6))
         values_desc = [r["new_value"] for r in after]
         assert values_desc[0] == 1, "Live-Zeile (positive gid) sortiert vor allen migrierten"
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.parametrize(
+    ("timestamps", "expected_rows"),
+    [
+        # Exakt 24 h bleiben zulässig; erst das nächste Event rotiert.
+        (["2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z", "2026-01-02T00:00:01.000Z"], [2, 1]),
+        # Große Lücke darf kein Segment mit mehr als 24 h Datenspanne erzeugen.
+        (["2026-01-01T00:00:00.000Z", "2026-01-04T00:00:00.000Z"], [1, 1]),
+        # Gleiche Zeitstempel altern das Segment nicht künstlich.
+        (["2026-01-01T00:00:00.000Z"] * 3, [3]),
+        # Nicht monotone Quellen werden über min/max der Segmentdaten begrenzt.
+        (["2026-01-02T00:00:00.000Z", "2026-01-03T12:00:00.000Z", "2026-01-01T00:00:00.000Z"], [1, 1, 1]),
+        # Kurze Historie bleibt zusammen.
+        (["2026-01-01T00:00:00.000Z", "2026-01-01T23:59:59.000Z"], [2]),
+    ],
+)
+async def test_copy_phase_honors_segment_age_for_historical_timestamps(
+    tmp_path: Path,
+    timestamps: list[str],
+    expected_rows: list[int],
+):
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy_timestamps(legacy, timestamps)
+    rb = _segmented_rb(tmp_path, segment_max_age=24 * 60 * 60)
+    await rb.start()
+    try:
+        migrator = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        plan = await migrator.plan()
+        legacy_segment = (await rb._store.manifest.list_legacy_segments())[0]
+        await migrator._copy_phase(plan, legacy_segment, {"copied_rows": 0})
+
+        migrated = await rb._store.manifest.list_migrating_segments()
+        assert [segment.row_count for segment in migrated] == expected_rows
+        assert sum(segment.row_count for segment in migrated) == len(timestamps)
+    finally:
+        await rb.stop()
+
+
+async def test_copy_phase_uses_first_of_age_and_row_limits(tmp_path: Path):
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy_timestamps(
+        legacy,
+        [
+            "2026-01-01T00:00:00.000Z",
+            "2026-01-03T00:00:00.000Z",
+            "2026-01-03T00:00:01.000Z",
+            "2026-01-03T00:00:02.000Z",
+        ],
+    )
+    rb = _segmented_rb(tmp_path, segment_max_age=24 * 60 * 60, segment_max_rows=2)
+    await rb.start()
+    try:
+        migrator = OfflineLegacyMigrator(rb._store, write_lock=rb._lock)
+        plan = await migrator.plan()
+        legacy_segment = (await rb._store.manifest.list_legacy_segments())[0]
+        await migrator._copy_phase(plan, legacy_segment, {"copied_rows": 0})
+
+        migrated = await rb._store.manifest.list_migrating_segments()
+        assert [segment.row_count for segment in migrated] == [1, 2, 1]
     finally:
         await rb.stop()
 

@@ -35,6 +35,7 @@
       <PrognosisBlock
         :prognosis="stats?.prognosis ?? null"
         :segment-age-hours="segmentAgeHoursForPrognosis"
+        :retention-age-seconds="totalMaxAgeSeconds"
         :segment-max-bytes="effectiveSegmentBytes"
         :segment-max-rows="effectiveSegmentRows"
         :max-file-size-bytes="maxFileSizeForPrognosis"
@@ -363,6 +364,7 @@ const pendingDisablePayload = ref(null)
 const showUnboundedConfirm = ref(false)
 const pendingUnboundedPayload = ref(null)
 let closeTimer = null
+let warmupTimer = null
 const configForm = reactive({
   enabled: true,
   maxEntriesEnabled: false,
@@ -697,11 +699,23 @@ function extractConfigError(error) {
   return error?.message || t('ringbuffer.saveFailed')
 }
 
-async function loadStats() {
+function scheduleWarmupRefresh(data) {
+  if (warmupTimer) clearTimeout(warmupTimer)
+  warmupTimer = null
+  const seconds = Number(data?.prognosis?.ready_after_seconds)
+  if (!Number.isFinite(seconds) || seconds <= 0) return
+  warmupTimer = setTimeout(() => {
+    warmupTimer = null
+    void loadStats(false)
+  }, Math.ceil(seconds * 1000) + 50)
+}
+
+async function loadStats(hydrate = true) {
   try {
     const { data } = await ringbufferApi.stats()
     stats.value = data
-    hydrateForm(data)
+    if (hydrate) hydrateForm(data)
+    scheduleWarmupRefresh(data)
   } catch {
     // Silent on failure; the modal still renders with the configForm defaults.
   }
@@ -774,9 +788,15 @@ watch(open, (val) => {
   if (val) {
     configMsg.value = null
     void loadStats()
-  } else if (closeTimer) {
-    clearTimeout(closeTimer)
-    closeTimer = null
+  } else {
+    if (closeTimer) {
+      clearTimeout(closeTimer)
+      closeTimer = null
+    }
+    if (warmupTimer) {
+      clearTimeout(warmupTimer)
+      warmupTimer = null
+    }
   }
   if (!val) {
     pendingDisablePayload.value = null
@@ -790,6 +810,10 @@ onUnmounted(() => {
   if (closeTimer) {
     clearTimeout(closeTimer)
     closeTimer = null
+  }
+  if (warmupTimer) {
+    clearTimeout(warmupTimer)
+    warmupTimer = null
   }
 })
 </script>

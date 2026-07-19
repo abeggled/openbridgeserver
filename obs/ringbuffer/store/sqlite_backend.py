@@ -45,6 +45,7 @@ import json
 import logging
 import os
 import re
+from time import monotonic as _monotonic
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -81,6 +82,7 @@ from obs.ringbuffer.store.manifest import (
 from obs.ringbuffer.store.writer_lock import WriterLease
 
 _LOGGER = logging.getLogger(__name__)
+_LIVE_PROGNOSIS_WARMUP_SECONDS = 5.0
 
 
 class LegacyScanPlan(NamedTuple):
@@ -929,7 +931,14 @@ class SqliteSegmentStore(RingBufferStore):
         # Lazy-Schaetzung attachter Legacy-Segmente fuer /stats (#964-Follow-up):
         # (row_estimate, from_ts, to_ts) je segment_id. Die Quelle ist read-only,
         # der Wert damit stabil; beim Delete wird der Eintrag mitgeraeumt.
-        self._legacy_stats_cache: dict[int, tuple[int, str | None, str | None]] = {}
+        self._legacy_stats_cache: dict[int, tuple[int | None, str | None, str | None]] = {}
+        # Vorlaeufige Wachstumsprobe des aktiven Segments. Sie beginnt beim
+        # Store-Start bzw. bei jeder Rotation neu und wird nach 5 s sichtbar.
+        self._prognosis_segment_id: int | None = None
+        self._prognosis_started_at = 0.0
+        self._prognosis_start_rows = 0
+        self._prognosis_size_started_at = 0.0
+        self._prognosis_start_size = 0
 
     def apply_config(
         self,
@@ -1005,6 +1014,8 @@ class SqliteSegmentStore(RingBufferStore):
             # abfragbar wird. Für ein frisch angelegtes (leeres) aktives Segment ist der
             # Refresh idempotent (row_count=0, Grenzen NULL) und schadet nicht.
             await self._refresh_active_segment_stats()
+            active_snapshot = await self.manifest.get_segment(active.segment_id)
+            self._reset_live_prognosis(active_snapshot or active)
         except Exception:
             # Scheitert ein Schritt NACH erfolgreichem manifest.open() (z.B. ein korruptes/
             # nicht schreibbares aktives Segment in _create_segment_locked/_open_segment_conn),
@@ -1039,6 +1050,7 @@ class SqliteSegmentStore(RingBufferStore):
                 first_err = first_err or exc
             self._active_conn = None
         self._active_segment = None
+        self._prognosis_segment_id = None
         try:
             await self.manifest.close()
         except Exception as exc:  # noqa: BLE001
@@ -2645,6 +2657,7 @@ class SqliteSegmentStore(RingBufferStore):
             raise
         self._active_segment = new_segment
         self._active_conn = new_conn
+        self._reset_live_prognosis(new_segment)
 
         if old_segment is not None and old_conn is not None:
             # Post-switch-Schritte (#951, Codex :2574): der Writer zeigt hier bereits auf
@@ -2743,14 +2756,83 @@ class SqliteSegmentStore(RingBufferStore):
     # Contract: stats
     # ------------------------------------------------------------------
 
+    def _empty_prognosis(self) -> dict[str, Any]:
+        return {
+            "source": None,
+            "provisional": False,
+            "sample_segment_count": 0,
+            "bytes_per_hour": None,
+            "rows_per_hour": None,
+            "avg_segment_seconds": None,
+            "estimated_retention_seconds": None,
+            "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
+            "observed_seconds": None,
+            "observed_rows": None,
+            "ready_after_seconds": None,
+            "idle_seconds": None,
+        }
+
+    def _reset_live_prognosis(self, segment: SegmentRecord) -> None:
+        now = _monotonic()
+        self._prognosis_segment_id = segment.segment_id
+        self._prognosis_started_at = now
+        self._prognosis_start_rows = segment.row_count
+        self._prognosis_size_started_at = now
+        self._prognosis_start_size = self._segment_file_size(segment.filename)
+
+    def _compute_live_prognosis(self, active: SegmentRecord, *, sample_count: int = 0) -> dict[str, Any]:
+        if self._prognosis_segment_id != active.segment_id:
+            self._reset_live_prognosis(active)
+
+        now = _monotonic()
+        if active.row_count < self._prognosis_start_rows:
+            # Recovery/Truncate des aktiven Segments: keine negative Zeilenrate.
+            self._reset_live_prognosis(active)
+            now = _monotonic()
+
+        observed_seconds = max(0.0, now - self._prognosis_started_at)
+        observed_rows = max(0, active.row_count - self._prognosis_start_rows)
+        ready_after = max(0.0, _LIVE_PROGNOSIS_WARMUP_SECONDS - observed_seconds)
+        result = {
+            **self._empty_prognosis(),
+            "source": "active",
+            "provisional": True,
+            "sample_segment_count": sample_count,
+            "observed_seconds": observed_seconds,
+            "observed_rows": observed_rows,
+            "ready_after_seconds": ready_after,
+        }
+        if ready_after > 0:
+            return result
+        if observed_rows <= 0:
+            result["idle_seconds"] = observed_seconds
+            return result
+
+        result["rows_per_hour"] = observed_rows / observed_seconds * 3600 if observed_seconds > 0 else None
+
+        current_size = active.size_bytes
+        if current_size < self._prognosis_start_size:
+            # WAL-Checkpoint/Truncate kann die physische Groesse verkleinern. Die
+            # Speicherprobe ab hier neu beginnen, die Zeilenprobe aber behalten.
+            self._prognosis_start_size = current_size
+            self._prognosis_size_started_at = now
+            return result
+        size_seconds = max(0.0, now - self._prognosis_size_started_at)
+        size_growth = current_size - self._prognosis_start_size
+        if size_growth > 0 and size_seconds >= _LIVE_PROGNOSIS_WARMUP_SECONDS:
+            result["bytes_per_hour"] = size_growth / size_seconds * 3600
+            budget = self._retention_config.max_file_size_bytes
+            if budget is not None:
+                result["estimated_retention_seconds"] = budget / result["bytes_per_hour"] * 3600
+        return result
+
     def _compute_prognosis(self, segments: list[SegmentRecord]) -> dict[str, Any]:
         """Datengetriebene Wachstums-/Retention-Prognose aus geschlossenen v2-Segmenten (#919).
 
-        Reine Momentaufnahme: die Rate wird ausschließlich aus den geschlossenen
-        v2-Segmenten (nicht Legacy, nicht aktiv) im Manifest geschätzt. Sie wird
-        genauer, je mehr geschlossene Segmente vorliegen. Alle Felder fallen robust
-        auf ``None`` zurück, wenn zu wenig Daten vorliegen (< 1 geschlossenes
-        v2-Segment) oder eine Division durch 0 drohte.
+        Bis ein verwertbares geschlossenes v2-Segment vorliegt, wird eine nach
+        fünf Sekunden sichtbare, wachsende Live-Stichprobe des aktiven Segments
+        verwendet. Danach wird ausschließlich aus geschlossenen regulären
+        v2-Segmenten (nicht Legacy, nicht migriert) geschätzt.
 
         Felder:
 
@@ -2767,22 +2849,12 @@ class SqliteSegmentStore(RingBufferStore):
           Die Budget-Empfehlung wird nicht mehr hier berechnet, sondern im
           Frontend, damit Label und Wert live beim Tippen zusammenpassen.
         """
-        empty = {
-            "sample_segment_count": 0,
-            "bytes_per_hour": None,
-            "rows_per_hour": None,
-            "avg_segment_seconds": None,
-            "estimated_retention_seconds": None,
-            "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
-        }
+        empty = self._empty_prognosis()
         # Offline migrierte Chunks (#968, Codex :2733) ausschließen: sie sind zwar
         # geschlossene v2-Segmente, tragen aber die historischen Zeitspannen der
         # Alt-Historie. In die Rate gerechnet, sagte das Dashboard die Retention aus
         # jahre-alter importierter Historie statt der aktuellen Schreibrate voraus.
         closed_v2 = [s for s in segments if s.status == SEGMENT_STATUS_CLOSED and not _is_legacy_segment(s) and not _is_migrated_segment(s)]
-        if not closed_v2:
-            return empty
-
         total_seconds = 0.0
         total_bytes = 0
         total_rows = 0
@@ -2800,8 +2872,10 @@ class SqliteSegmentStore(RingBufferStore):
 
         sample_count = len(closed_v2)
         if total_seconds <= 0:
-            # Genug Segmente, aber keine verwertbare Dauer (fehlende/degenerierte ts).
-            return {**empty, "sample_segment_count": sample_count}
+            # Bis zum ersten verwertbaren regulären Segment die wachsende
+            # Live-Stichprobe verwenden. Legacy/migrierte Chunks bleiben außen vor.
+            active = next((s for s in segments if s.status == SEGMENT_STATUS_ACTIVE), None)
+            return self._compute_live_prognosis(active, sample_count=sample_count) if active is not None else {**empty, "sample_segment_count": sample_count}
 
         bytes_per_hour = total_bytes / total_seconds * 3600
         rows_per_hour = total_rows / total_seconds * 3600
@@ -2813,26 +2887,33 @@ class SqliteSegmentStore(RingBufferStore):
             estimated_retention_seconds = budget / bytes_per_hour * 3600
 
         return {
+            "source": "closed",
+            "provisional": False,
             "sample_segment_count": sample_count,
             "bytes_per_hour": bytes_per_hour,
             "rows_per_hour": rows_per_hour,
             "avg_segment_seconds": avg_segment_seconds,
             "estimated_retention_seconds": estimated_retention_seconds,
             "effective_segment_max_bytes": self._segment_config.segment_max_bytes,
+            "observed_seconds": total_seconds,
+            "observed_rows": total_rows,
+            "ready_after_seconds": 0,
+            "idle_seconds": None,
         }
 
-    async def _legacy_stats_estimate(self, segment: SegmentRecord) -> tuple[int, str | None, str | None]:
+    async def _legacy_stats_estimate(self, segment: SegmentRecord) -> tuple[int | None, str | None, str | None]:
         """Billige (row_estimate, from_ts, to_ts)-Schaetzung eines attachten Legacy-Segments.
 
         MAX(rowid) plus ts der ersten/letzten rowid - drei Punkt-Lookups statt
         COUNT/Scan (rowids einer append-only Legacy-DB sind monoton). Gecacht je
-        segment_id (die Quelle ist read-only). Unlesbare Quelle -> (0, None, None),
-        ebenfalls gecacht, damit ein kaputtes File nicht jeden /stats-Poll kostet.
+        segment_id (die Quelle ist read-only). Unlesbare Quelle -> (None, None,
+        None), ebenfalls gecacht, damit ein kaputtes File nicht jeden /stats-Poll
+        kostet und nicht als wirklich leere Historie erscheint.
         """
         cached = self._legacy_stats_cache.get(segment.segment_id)
         if cached is not None:
             return cached
-        estimate: tuple[int, str | None, str | None] = (0, None, None)
+        estimate: tuple[int | None, str | None, str | None] = (None, None, None)
         try:
             conn = await self._connection_for_read(segment)
         except Exception:
@@ -2848,7 +2929,7 @@ class SqliteSegmentStore(RingBufferStore):
                     last = await cur.fetchone()
                 estimate = (rows, first[0] if first else None, last[0] if last else None)
             except Exception:
-                estimate = (0, None, None)
+                estimate = (None, None, None)
             finally:
                 await conn.close()
         self._legacy_stats_cache[segment.segment_id] = estimate
@@ -2874,7 +2955,10 @@ class SqliteSegmentStore(RingBufferStore):
         # liefern kann (irreführend für Dashboard und Retention/Prognose).
         visible = [s for s in segments if s.status not in (SEGMENT_STATUS_MIGRATING, SEGMENT_STATUS_QUARANTINED)]
         legacy_estimates = {s.segment_id: await self._legacy_stats_estimate(s) for s in visible if _is_legacy_segment(s) and s.row_count == 0}
-        total = sum(legacy_estimates.get(s.segment_id, (s.row_count, None, None))[0] or s.row_count for s in visible)
+        total = 0
+        for segment in visible:
+            estimate = legacy_estimates.get(segment.segment_id)
+            total += estimate[0] if estimate is not None and estimate[0] is not None else segment.row_count
         ts_lows = [s.from_ts for s in visible if s.from_ts] + [est[1] for est in legacy_estimates.values() if est[1]]
         ts_highs = [s.to_ts for s in visible if s.to_ts] + [est[2] for est in legacy_estimates.values() if est[2]]
         oldest = min(ts_lows, default=None)
@@ -2909,16 +2993,29 @@ class SqliteSegmentStore(RingBufferStore):
             # blockierten Retention-Zustand erkennt (nicht nur das aggregierte Flag).
             "unlink_blocked_segment_ids": sorted(sid for sid in self._unlink_blocked_segment_ids if any(s.segment_id == sid for s in segments)),
             "storage_on_network_drive": self._storage_on_network_drive(),
-            "segments": [self._segment_stat(s) for s in segments],
+            "segments": [self._segment_stat(s, legacy_estimates.get(s.segment_id)) for s in segments],
         }
         return StoreStats(common=common, backend_extra=backend_extra)
 
     @staticmethod
-    def _segment_stat(segment: SegmentRecord) -> dict[str, Any]:
+    def _segment_stat(
+        segment: SegmentRecord,
+        legacy_estimate: tuple[int | None, str | None, str | None] | None = None,
+    ) -> dict[str, Any]:
+        row_count: int | None = segment.row_count
+        row_count_accuracy = "exact"
+        if _is_legacy_segment(segment) and segment.row_count == 0:
+            if legacy_estimate is None or legacy_estimate[0] is None:
+                row_count = None
+                row_count_accuracy = "unknown"
+            else:
+                row_count = legacy_estimate[0]
+                row_count_accuracy = "exact" if row_count == 0 else "estimated"
         return {
             "segment_id": segment.segment_id,
             "status": segment.status,
-            "row_count": segment.row_count,
+            "row_count": row_count,
+            "row_count_accuracy": row_count_accuracy,
             "size_bytes": segment.size_bytes,
             "from_ts": segment.from_ts,
             "to_ts": segment.to_ts,

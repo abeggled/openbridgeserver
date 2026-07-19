@@ -44,7 +44,7 @@ describe('PrognosisBlock — fully populated', () => {
     const rate = wrapper.find('[data-testid="prognosis-rate"]').text()
     expect(rate).toContain('50')
     expect(rate).toContain('MiB/h')
-    expect(rate).toContain('12.000') // Events/h, de-DE grouping
+    expect(rate).toContain('3,3') // Events/s, de-DE decimal separator
 
     // 2. Rotation (Zeit greift zuerst → nur der erste Teil, kein Cap-Zusatz)
     const rotation = wrapper.find('[data-testid="prognosis-rotation"]').text()
@@ -97,6 +97,43 @@ describe('PrognosisBlock — rotation size cap', () => {
 })
 
 describe('PrognosisBlock — frontend budget calculation', () => {
+  it('derives the budget from the full 30-day retention instead of only three daily segments', () => {
+    // 50 MiB/h * 30 d * 24 h = 36,000 MiB = 35.2 GiB.
+    const wrapper = mountBlock({
+      prognosis: { ...fullPrognosis, bytes_per_hour: 50 * 1024 * 1024 },
+      segmentAgeHours: 24,
+      retentionAgeSeconds: 30 * 24 * 3600,
+      maxFileSizeBytes: 20 * GIB,
+    })
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('30 Tage Retention')
+    expect(budget).toContain('35,2 GiB')
+    expect(budget).not.toContain('mind. 3 Segmente')
+  })
+
+  it('uses the retention target even when no segment age is available', () => {
+    const wrapper = mountBlock({
+      prognosis: { ...fullPrognosis, bytes_per_hour: 50 * 1024 * 1024 },
+      segmentAgeHours: null,
+      retentionAgeSeconds: 30 * 24 * 3600,
+    })
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('30 Tage Retention')
+    expect(budget).toContain('35,2 GiB')
+  })
+
+  it('keeps the three-segment floor when it exceeds the configured retention target', () => {
+    // 48 h Retention is smaller than the 72 h floor for three 24 h segments.
+    const wrapper = mountBlock({
+      prognosis: { ...fullPrognosis, bytes_per_hour: 50 * 1024 * 1024 },
+      segmentAgeHours: 24,
+      retentionAgeSeconds: 48 * 3600,
+    })
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('3,5 GiB')
+    expect(budget).toContain('mind. 3 Segmente')
+  })
+
   it('computes the recommended budget from bytes_per_hour * age * 3', () => {
     // 50 MiB/h * 4 h * 3 = 600 MiB → formatBytesBinary → "600 MiB".
     const wrapper = mountBlock({
@@ -203,6 +240,68 @@ describe('PrognosisBlock — winning rotation trigger', () => {
 })
 
 describe('PrognosisBlock — warming up', () => {
+  it('shows a five-second live countdown and then labels the rate provisional', async () => {
+    const wrapper = mountBlock({
+      prognosis: {
+        source: 'active',
+        provisional: true,
+        observed_seconds: 3,
+        ready_after_seconds: 2,
+        bytes_per_hour: null,
+        rows_per_hour: null,
+      },
+      segmentAgeHours: 24,
+    })
+    expect(wrapper.find('[data-testid="prognosis-warming"]').text()).toContain('2')
+
+    await wrapper.setProps({
+      prognosis: {
+        source: 'active',
+        provisional: true,
+        observed_seconds: 5,
+        ready_after_seconds: 0,
+        observed_rows: 10,
+        bytes_per_hour: 18.5 * 1024 * 1024,
+        rows_per_hour: 7200,
+      },
+    })
+    expect(wrapper.find('[data-testid="prognosis-provisional"]').text()).toContain('5')
+    expect(wrapper.find('[data-testid="prognosis-rate"]').text()).toContain('2,0 Events/s')
+    expect(wrapper.find('[data-testid="prognosis-rate"]').text()).toContain('18,5 MiB/h')
+  })
+
+  it('shows an idle message after warmup instead of a zero projection', () => {
+    const wrapper = mountBlock({
+      prognosis: {
+        source: 'active',
+        provisional: true,
+        observed_seconds: 6,
+        ready_after_seconds: 0,
+        idle_seconds: 6,
+        bytes_per_hour: null,
+        rows_per_hour: null,
+      },
+    })
+    expect(wrapper.find('[data-testid="prognosis-idle"]').text()).toContain('6 Sekunden keine neuen Events')
+    expect(wrapper.find('[data-testid="prognosis-warming"]').exists()).toBe(false)
+  })
+
+  it('shows the event rate while storage growth is not measurable yet', () => {
+    const wrapper = mountBlock({
+      prognosis: {
+        source: 'active',
+        provisional: true,
+        observed_seconds: 7,
+        ready_after_seconds: 0,
+        rows_per_hour: 3600,
+        bytes_per_hour: null,
+      },
+    })
+    const rate = wrapper.find('[data-testid="prognosis-rate"]').text()
+    expect(rate).toContain('1,0 Events/s')
+    expect(rate).toContain('Speicherwachstum wird noch gemessen')
+  })
+
   it('shows the warming hint when all rate fields are null (too few segments)', () => {
     const wrapper = mountBlock({
       prognosis: {

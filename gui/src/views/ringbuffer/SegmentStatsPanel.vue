@@ -126,7 +126,7 @@
                 data-testid="segment-legacy-note"
               >{{ $t('ringbuffer.segmentLegacyNote') }}</span>
             </td>
-            <td class="text-right tabular-nums text-slate-600 dark:text-slate-300">{{ fmtInt(seg.row_count) }}</td>
+            <td class="text-right tabular-nums text-slate-600 dark:text-slate-300" data-testid="segment-row-count">{{ fmtSegmentRowCount(seg) }}</td>
             <td class="text-right tabular-nums text-slate-600 dark:text-slate-300">{{ fmtBytes(seg.size_bytes) }}</td>
             <td class="text-slate-500 whitespace-nowrap">{{ fmtTimespan(seg.from_ts, seg.to_ts) }}</td>
           </tr>
@@ -212,6 +212,12 @@ function fmtInt(n) {
   } catch {
     return String(value)
   }
+}
+
+function fmtSegmentRowCount(segment) {
+  if (segment?.row_count_accuracy === 'unknown' || segment?.row_count == null) return '—'
+  const formatted = fmtInt(segment.row_count)
+  return segment.row_count_accuracy === 'estimated' ? `≈ ${formatted}` : formatted
 }
 
 function fmtBytes(rawBytes) {

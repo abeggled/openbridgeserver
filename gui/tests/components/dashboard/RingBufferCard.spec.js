@@ -181,6 +181,19 @@ describe('RingBufferCard — segmented state', () => {
     expect(wrapper.find('[data-testid="prognosis-budget"]').text()).toContain('12')
   })
 
+  it('feeds the full age-retention target into the dashboard budget forecast', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      segmentMaxAge: 24 * 3600,
+      maxAge: 30 * 24 * 3600,
+      prognosis: { ...fullPrognosis, bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('30 Tage Retention')
+    expect(budget).toContain('35,2 GiB')
+    expect(budget).not.toContain('mind. 3 Segmente')
+  })
+
   it('shows other retention limits instead of unlimited growth without a disk budget', async () => {
     const wrapper = await mountCard(segmentedPayload({
       segments: healthySegments,
@@ -196,6 +209,33 @@ describe('RingBufferCard — segmented state', () => {
   it('shows the warming-up hint when prognosis rate fields are unavailable', async () => {
     const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: { estimated_retention_seconds: null } }))
     expect(wrapper.find('[data-testid="prognosis-warming"]').text()).toContain('läuft sich noch ein')
+  })
+
+  it('reloads once when the five-second live prognosis becomes available', async () => {
+    vi.useFakeTimers()
+    try {
+      const warming = segmentedPayload({
+        segments: healthySegments,
+        prognosis: { source: 'active', provisional: true, ready_after_seconds: 5, rows_per_hour: null, bytes_per_hour: null },
+      })
+      const wrapper = await mountCard(warming)
+      expect(statsMock).toHaveBeenCalledTimes(1)
+
+      statsMock.mockResolvedValue({
+        data: segmentedPayload({
+          segments: healthySegments,
+          prognosis: { source: 'active', provisional: true, observed_seconds: 5, ready_after_seconds: 0, rows_per_hour: 3600, bytes_per_hour: 1024 },
+        }),
+      })
+      await vi.advanceTimersByTimeAsync(5_100)
+      await flushPromises()
+
+      expect(statsMock).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[data-testid="prognosis-rate"]').text()).toContain('1,0 Events/s')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('omits the prognosis budget line when segment_max_age is missing', async () => {
