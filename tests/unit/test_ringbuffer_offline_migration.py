@@ -72,6 +72,7 @@ async def _seed_legacy_timestamps(path: Path, timestamps: list[str]) -> None:
 
 
 def _segmented_rb(tmp_path: Path, **kwargs) -> RingBuffer:
+    kwargs.setdefault("segment_max_age", 24 * 60 * 60)
     return RingBuffer(
         storage="file",
         disk_path=str(tmp_path / "obs_ringbuffer.db"),

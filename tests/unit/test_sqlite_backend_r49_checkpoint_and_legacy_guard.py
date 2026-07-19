@@ -137,7 +137,13 @@ async def test_C_quarantined_legacy_still_counts_for_first_append_guard(tmp_path
     legacy = tmp_path / "obs_ringbuffer.db"
     await _seed_legacy(legacy, [10, 11])
 
-    rb = RingBuffer(storage="file", disk_path=str(tmp_path / "obs_ringbuffer.db"), max_entries=None, segmented=True)
+    rb = RingBuffer(
+        storage="file",
+        disk_path=str(tmp_path / "obs_ringbuffer.db"),
+        max_entries=None,
+        segmented=True,
+        segment_max_age=24 * 60 * 60,
+    )
     await rb.start()
     try:
         assert await rb._has_attached_legacy_segment() is True

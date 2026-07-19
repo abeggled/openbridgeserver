@@ -42,6 +42,7 @@ async def _seed_legacy(path: Path, values: list[int]) -> None:
 
 
 def _seg_rb(tmp_path: Path, **kw) -> RingBuffer:
+    kw.setdefault("segment_max_age", 24 * 60 * 60)
     return RingBuffer(storage="file", disk_path=str(tmp_path / "obs_ringbuffer.db"), max_entries=None, segmented=True, **kw)
 
 
