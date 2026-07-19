@@ -702,6 +702,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -726,6 +727,7 @@
 
             <div
               v-for="(entry, i) in jsonPaths" :key="i"
+              @focusin="activeExtractorRow = i"
               class="extractor-output-row mt-2 p-2 rounded-lg border border-slate-700/50 flex flex-col gap-1"
               :style="extractorOutputRowStyle"
             >
@@ -747,7 +749,6 @@
                 :value="entry.path"
                 @input="updateJsonPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
@@ -761,6 +762,7 @@
             <p v-if="!jsonPaths.length && !localData.json_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               Klicke <strong>+</strong> um Ausgänge hinzuzufügen.
             </p>
+          </div>
           </div>
         </template>
 
@@ -778,6 +780,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -802,6 +805,7 @@
 
             <div
               v-for="(entry, i) in xmlPaths" :key="i"
+              @focusin="activeExtractorRow = i"
               class="extractor-output-row mt-2 p-2 rounded-lg border border-slate-700/50 flex flex-col gap-1"
               :style="extractorOutputRowStyle"
             >
@@ -823,7 +827,6 @@
                 :value="entry.path"
                 @input="updateXmlPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
@@ -837,6 +840,7 @@
             <p v-if="!xmlPaths.length && !localData.xml_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               {{ $t('logic.nodeConfig.extractor.clickPlusToAddOutputs') }}
             </p>
+          </div>
           </div>
         </template>
       </div>
@@ -2163,6 +2167,15 @@ function onExtractorPathSelect(e) {
     activeExtractorRow.value = 0
   }
   e.target.value = ''
+  activeExtractorRow.value = null
+}
+
+function onExtractorControlsFocusOut(e) {
+  // Keep the selected row while focus moves between the shared picker and any
+  // output controls, including reverse keyboard traversal through a row.
+  // Clear it once focus leaves the complete control group.
+  if (e.currentTarget.contains(e.relatedTarget)) return
+  activeExtractorRow.value = null
 }
 
 function onValueMapCustomInput(e) {
