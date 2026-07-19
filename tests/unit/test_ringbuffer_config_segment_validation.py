@@ -261,6 +261,22 @@ async def test_config_reports_per_dimension_derived_effective_limits(db, monkeyp
         reset_ringbuffer()
 
 
+@pytest.mark.parametrize("max_age", [1, 2])
+def test_stats_reports_non_derivable_tiny_age_limit_as_disabled(max_age):
+    stats = rb_api._segment_contract_stats(
+        max_entries=30_000,
+        max_file_size_bytes=None,
+        max_age=max_age,
+        segment_max_bytes=None,
+        segment_max_rows=None,
+        segment_max_age=None,
+    )
+
+    assert stats["effective_segment_max_age"] is None
+    assert stats["segment_max_age_source"] == "disabled"
+    assert stats["segment_max_rows_source"] == "derived"
+
+
 @pytest.mark.asyncio
 async def test_config_segmented_false_with_short_max_age_is_accepted(db, monkeypatch, tmp_path):
     """#951: ``segmented=false`` + kurze ``max_age`` darf NICHT mit 422 abgelehnt werden.
