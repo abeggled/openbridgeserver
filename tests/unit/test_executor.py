@@ -14,6 +14,8 @@ Covers:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -2023,11 +2025,11 @@ class TestHeatingCircuit:
 
 
 class TestMinMaxTracker:
-    def _run(self, value, state=None):
+    def _run(self, value, state=None, app_config=None):
         if state is None:
             state = {}
         n1 = node("m", "min_max_tracker", {})
-        exc = make_executor([n1], hysteresis_state=state)
+        exc = make_executor([n1], hysteresis_state=state, app_config=app_config)
         return exc.execute({"m": {"value": value}})["m"], state
 
     def test_first_value_sets_min_and_max(self):
@@ -2087,6 +2089,20 @@ class TestMinMaxTracker:
         assert out["max_daily"] == pytest.approx(5.0)
         assert out["min_abs"] == pytest.approx(5.0)  # 5 < 100
         assert out["max_abs"] == pytest.approx(100.0)
+
+    def test_periods_use_configured_application_timezone(self):
+        utc_today = datetime.now(UTC).date()
+        timezone = next(name for name in ("Pacific/Kiritimati", "Etc/GMT+12") if datetime.now(ZoneInfo(name)).date() != utc_today)
+        expected_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
+
+        _, state = self._run(42.0, app_config={"timezone": timezone})
+
+        assert state["m"]["last_day"] == expected_day
+
+    def test_invalid_application_timezone_falls_back_to_default(self):
+        _, state = self._run(42.0, app_config={"timezone": "not/a-timezone"})
+
+        assert state["m"]["last_day"] == datetime.now(ZoneInfo("Europe/Zurich")).date().isoformat()
 
     def test_seed_abs_min_max_applied_once(self):
         """Startwerte für abs_min/abs_max werden einmalig übernommen."""
@@ -2181,6 +2197,20 @@ class TestConsumptionCounter:
         out, _ = self._run(60.0, state)
         assert out["prev_daily"] == pytest.approx(50.0)
         assert out["daily"] == pytest.approx(10.0)
+
+    def test_periods_use_configured_application_timezone(self):
+        # Choose a timezone whose calendar date differs from UTC right now,
+        # so this cannot accidentally pass by using the server clock.
+        utc_today = datetime.now(UTC).date()
+        timezone = next(name for name in ("Pacific/Kiritimati", "Etc/GMT+12") if datetime.now(ZoneInfo(name)).date() != utc_today)
+        expected_day = datetime.now(ZoneInfo(timezone)).date().isoformat()
+        state = {}
+        n1 = node("c", "consumption_counter", {})
+        exc = make_executor([n1], hysteresis_state=state, app_config={"timezone": timezone})
+
+        exc.execute({"c": {"value": 100.0}})
+
+        assert state["c"]["last_day"] == expected_day
 
     def test_no_value_returns_current_state(self):
         state = {}
