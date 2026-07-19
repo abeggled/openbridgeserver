@@ -14,7 +14,7 @@
         <span class="cn-title">{{ label }}</span>
         <button class="cn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
-      <div class="cn-body">
+      <div class="cn-body nowheel">
         <pre v-if="data.text" class="cn-text">{{ data.text }}</pre>
         <span v-else class="cn-placeholder">{{ $t('logic.nodeConfig.comment.empty') }}</span>
       </div>

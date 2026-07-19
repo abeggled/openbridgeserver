@@ -47,13 +47,17 @@ describe('NodeConfigPanel comment', () => {
     wrapper.unmount()
   })
 
-  it('emits update with the edited text, preserving width/height', async () => {
+  it('emits only the edited text, not the (possibly stale) width/height', async () => {
+    // Regression test: width/height can be updated directly on the canvas
+    // (CommentNode's resize handler) while the panel is open, bypassing
+    // localData entirely. Emitting the whole localData object here would
+    // clobber a fresh resize with the panel's stale snapshot.
     const wrapper = await mountCommentPanel({ text: '', width: 300, height: 180 })
     await flushPromises()
     const textarea = wrapper.find('[data-testid="comment-text"]')
     await textarea.setValue('New note text')
     await textarea.trigger('change')
-    expect(wrapper.emitted('update')[0][0]).toEqual({ text: 'New note text', width: 300, height: 180 })
+    expect(wrapper.emitted('update')[0][0]).toEqual({ text: 'New note text' })
     wrapper.unmount()
   })
 

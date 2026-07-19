@@ -1209,7 +1209,7 @@
           class="input text-sm flex-1 resize-none"
           :placeholder="$t('logic.nodeConfig.comment.textPlaceholder')"
           data-testid="comment-text"
-          @change="emitUpdate"
+          @change="emit('update', { text: localData.text })"
         />
       </div>
     </template>

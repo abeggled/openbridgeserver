@@ -1,17 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
-const { removeNodesMock, updateNodeDataMock } = vi.hoisted(() => ({
+const { removeNodesMock, updateNodeDataMock, NODE_RESIZER_STUB } = vi.hoisted(() => ({
   removeNodesMock:    vi.fn(),
   updateNodeDataMock: vi.fn(),
+  NODE_RESIZER_STUB: {
+    name: 'NodeResizer',
+    props: ['minWidth', 'minHeight', 'isVisible', 'lineClassName', 'handleClassName'],
+    emits: ['resize', 'resizeStart', 'resizeEnd'],
+    template: '<div class="node-resizer-stub" />',
+  },
 }))
-
-const NODE_RESIZER_STUB = {
-  name: 'NodeResizer',
-  props: ['minWidth', 'minHeight', 'isVisible', 'lineClassName', 'handleClassName'],
-  emits: ['resize', 'resizeStart', 'resizeEnd'],
-  template: '<div class="node-resizer-stub" />',
-}
 
 vi.mock('@vue-flow/core', () => ({
   useVueFlow: () => ({ removeNodes: removeNodesMock, updateNodeData: updateNodeDataMock }),
