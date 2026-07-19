@@ -97,6 +97,33 @@ class TestConnect:
         assert adapter.connected is False
         assert adapter.last_detail_code == "couldNotConnectTo"
 
+    @pytest.mark.asyncio
+    async def test_protocol_error_leaves_adapter_disconnected(self, mock_bus):
+        """host:port reachable but not actually owserver — pyownet raises a
+        ProtocolError subclass (MalformedHeader), not ConnError."""
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.MalformedHeader("garbage", b"garbage")):
+            await adapter.connect()
+        assert adapter._proxy is None
+        assert adapter.connected is False
+        assert adapter.last_detail_code == "couldNotConnectTo"
+
+    @pytest.mark.asyncio
+    async def test_timeout_leaves_adapter_disconnected(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.OwnetTimeout(1.0, 1.0)):
+            await adapter.connect()
+        assert adapter._proxy is None
+        assert adapter.connected is False
+        assert adapter.last_detail_code == "couldNotConnectTo"
+
+    @pytest.mark.asyncio
+    async def test_successful_connect_stores_owprotocol_module(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with mock.patch.object(owprotocol, "proxy", return_value=mock.MagicMock()):
+            await adapter.connect()
+        assert adapter._owprotocol is owprotocol
+
 
 # ---------------------------------------------------------------------------
 # disconnect()
@@ -142,6 +169,28 @@ class TestDisconnect:
         adapter._proxy = object()  # no close_connection attribute
         await adapter.disconnect()
         assert adapter._proxy is None
+
+    @pytest.mark.asyncio
+    async def test_close_waits_for_in_flight_owlock_holder(self, mock_bus):
+        """pyownet's proxy is not concurrency-safe — close_connection() must not
+        run while another task still holds _owlock for an in-flight read/write."""
+        adapter = _connected_adapter(mock_bus)
+        events: list[str] = []
+
+        async def hold_lock_briefly():
+            async with adapter._owlock:
+                events.append("lock_acquired")
+                await asyncio.sleep(0.05)
+                events.append("lock_released")
+
+        adapter._proxy.close_connection = mock.Mock(side_effect=lambda: events.append("close_called"))
+
+        holder = asyncio.create_task(hold_lock_briefly())
+        await asyncio.sleep(0.01)  # let the holder acquire the lock first
+        await adapter.disconnect()
+        await holder
+
+        assert events == ["lock_acquired", "lock_released", "close_called"]
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +367,91 @@ class TestPollLoop:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_marks_adapter_disconnected_on_connection_level_error(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(True, "connected", code="connectedTo", params={"host": "h", "port": 1})
+        binding = make_binding({"sensor_id": "28.AA"})
+
+        published = asyncio.Event()
+
+        async def track(ev):
+            published.set()
+
+        mock_bus.publish.side_effect = track
+
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(side_effect=owprotocol.ConnError("gone"))):
+            task = asyncio.create_task(adapter._poll_loop(binding))
+            await asyncio.wait_for(published.wait(), timeout=2.0)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert adapter.connected is False
+        assert adapter.last_detail_code == "couldNotConnectTo"
+
+    @pytest.mark.asyncio
+    async def test_per_property_ownet_error_does_not_mark_adapter_disconnected(self, mock_bus):
+        """OwnetError means owserver answered with an error for this one path
+        (e.g. sensor unplugged) — owserver itself is fine, so the adapter must
+        stay marked connected."""
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(True, "connected", code="connectedTo", params={"host": "h", "port": 1})
+        binding = make_binding({"sensor_id": "28.AA"})
+
+        published = asyncio.Event()
+
+        async def track(ev):
+            published.set()
+
+        mock_bus.publish.side_effect = track
+
+        with mock.patch.object(
+            adapter,
+            "_read_property",
+            mock.AsyncMock(side_effect=owprotocol.OwnetError(1, "no such path", "/28.AA/temperature")),
+        ):
+            task = asyncio.create_task(adapter._poll_loop(binding))
+            await asyncio.wait_for(published.wait(), timeout=2.0)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert adapter.connected is True
+
+    @pytest.mark.asyncio
+    async def test_republishes_connected_after_recovering_from_connection_loss(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, poll_interval=0.0)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(False, "lost", code="couldNotConnectTo", params={"host": "h", "port": 1})
+        binding = make_binding({"sensor_id": "28.AA"})
+        assert adapter.connected is False
+
+        published = asyncio.Event()
+
+        async def track(ev):
+            published.set()
+
+        mock_bus.publish.side_effect = track
+
+        with mock.patch.object(adapter, "_read_property", mock.AsyncMock(return_value=21.5)):
+            task = asyncio.create_task(adapter._poll_loop(binding))
+            await asyncio.wait_for(published.wait(), timeout=2.0)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert adapter.connected is True
+        assert adapter.last_detail_code == "connectedTo"
+
 
 # ---------------------------------------------------------------------------
 # _read_property()
@@ -343,6 +477,39 @@ class TestReadProperty:
         result = await adapter._read_property("28.AA", "type")
 
         assert result == "DS18B20"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("property_name", ["PIO.0", "pio.1", "sensed.0", "latch.1", "power"])
+    @pytest.mark.parametrize("raw, expected", [(b"1", True), (b"0", False)])
+    async def test_yesno_properties_parsed_as_bool(self, mock_bus, property_name, raw, expected):
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = raw
+
+        result = await adapter._read_property("29.AA", property_name)
+
+        assert result is expected
+
+    @pytest.mark.asyncio
+    async def test_non_yesno_property_still_parsed_as_float(self, mock_bus):
+        # A DS18B20 "temperature" containing "1" would previously and still
+        # parses as a numeric float — only known yes/no property names take
+        # the bool branch.
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"1"
+
+        result = await adapter._read_property("28.AA", "temperature")
+
+        assert result == pytest.approx(1.0)
+        assert not isinstance(result, bool)
+
+    @pytest.mark.asyncio
+    async def test_yesno_property_falls_back_to_string_when_not_parseable_as_int(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"unexpected"
+
+        result = await adapter._read_property("29.AA", "PIO.0")
+
+        assert result == "unexpected"
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +609,57 @@ class TestBrowseSensors:
             return ["/28.4B057F0A1C10/temperature"]
 
         adapter._proxy.dir.side_effect = fake_dir
+        # Real owserver: these are system/meta directories, not devices — reading
+        # their "address" property fails with OwnetError, same as a real server.
+        adapter._proxy.read.side_effect = owprotocol.OwnetError(1, "no such path", "/settings/address")
 
         result = await adapter.browse_sensors()
 
         assert len(result) == 1
         assert result[0]["rom_id"] == "28.4B057F0A1C10"
         assert result[0]["family"] == "28"
+
+    @pytest.mark.asyncio
+    async def test_resolves_owfs_alias_via_address_property(self, mock_bus):
+        """If OWFS aliases are configured (/etc/owfs.conf), the root directory can
+        show an alias name (e.g. "/boiler/") instead of the bare ROM-ID — resolve
+        it via the device's own "address" property rather than skipping it."""
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/boiler"]
+            return ["/boiler/temperature"]
+
+        def fake_read(path):
+            assert path == "/boiler/address"
+            return b"28.4B057F0A1C10"
+
+        adapter._proxy.dir.side_effect = fake_dir
+        adapter._proxy.read.side_effect = fake_read
+
+        result = await adapter.browse_sensors()
+
+        assert len(result) == 1
+        assert result[0]["rom_id"] == "boiler"
+        assert result[0]["family"] == "28"
+        assert result[0]["properties"] == ["temperature"]
+
+    @pytest.mark.asyncio
+    async def test_skips_entries_with_non_rom_id_shaped_address(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path):
+            if path == "/":
+                return ["/structure"]
+            return []
+
+        adapter._proxy.dir.side_effect = fake_dir
+        adapter._proxy.read.return_value = b"not-a-rom-id"
+
+        result = await adapter.browse_sensors()
+
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_handles_real_owserver_trailing_slash_directories(self, mock_bus):

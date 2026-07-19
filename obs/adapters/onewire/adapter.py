@@ -20,8 +20,13 @@ Binding-Konfiguration (AdapterBinding.config):
                      (default: "temperature")
 
 pyownet's OwnetProxy performs blocking socket I/O and is not concurrency-safe, so
-all proxy calls are serialized through a single asyncio.Lock and run in an
-executor thread.
+all proxy calls — including disconnect()'s close_connection() — are serialized
+through a single asyncio.Lock and run in an executor thread.
+
+OWFS yes/no properties (DS2408 PIO.x, sensed.x, latch.x, ...) are parsed as bool,
+not float, so BOOLEAN datapoints don't reject them downstream as a type mismatch.
+browse_sensors() also resolves OWFS aliases (root entries that aren't bare ROM-IDs)
+via their "address" property, so an aliased device still shows up in a scan.
 """
 
 from __future__ import annotations
@@ -40,6 +45,12 @@ from obs.core.event_bus import DataValueEvent
 logger = logging.getLogger(__name__)
 
 _ROM_ID_RE = re.compile(r"^/([0-9A-Fa-f]{2}\.[0-9A-Fa-f]{12})/?$")
+_ROM_ID_SHAPE_RE = re.compile(r"[0-9A-Fa-f]{2}\.[0-9A-Fa-f]{12}")
+# OWFS yes/no properties (DS2408 PIO.x, sensed.x, latch.x, ...) — read back as
+# "0"/"1", parsed as bool rather than float so BOOLEAN datapoints don't reject
+# them as a type mismatch downstream (WriteRouter only allows float values
+# through for FLOAT datapoints, not BOOLEAN).
+_YESNO_PROPERTY_RE = re.compile(r"^(?:PIO|sensed|latch|power)(?:\.\d+)?$", re.IGNORECASE)
 # Structural/metadata OWFS entries — not sensor readings, hidden from the browse picker.
 _STRUCTURAL_PROPERTIES = frozenset(
     {"address", "alias", "crc8", "id", "locator", "r_address", "r_id", "r_locator", "type", "version", "family"},
@@ -80,6 +91,10 @@ class OneWireAdapter(AdapterBase):
         self._cfg = OneWireAdapterConfig(**(config or {}))
         self._proxy: Any = None
         self._owlock = asyncio.Lock()
+        # Set on successful connect() — lets _poll_loop distinguish connection-level
+        # pyownet errors (ConnError/OwnetTimeout/ProtocolError) from per-property
+        # OwnetError (owserver reachable, just an error for that one path).
+        self._owprotocol: Any = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -95,12 +110,17 @@ class OneWireAdapter(AdapterBase):
             await self._publish_status(False, "pyownet not installed", code="libNotInstalled", params={"lib": "pyownet"})
             return
 
+        self._owprotocol = owprotocol
+
         try:
             self._proxy = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: owprotocol.proxy(host=self._cfg.host, port=self._cfg.port, persistent=True),
             )
-        except owprotocol.ConnError as exc:
+        except owprotocol.Error as exc:
+            # Covers ConnError (socket-level refusal/unreachable), OwnetTimeout,
+            # and ProtocolError subclasses (MalformedHeader/ShortRead/ShortWrite —
+            # host:port is reachable but isn't actually owserver).
             logger.warning("1-Wire adapter: owserver connection failed (%s:%d): %s", self._cfg.host, self._cfg.port, exc)
             await self._publish_status(
                 False,
@@ -125,7 +145,13 @@ class OneWireAdapter(AdapterBase):
         if self._proxy is not None:
             close = getattr(self._proxy, "close_connection", None)
             if close is not None:
-                await asyncio.get_event_loop().run_in_executor(None, close)
+                # Cancelling poll tasks above does not stop an in-flight blocking
+                # read/write already handed to the executor — serialize the close
+                # through the same lock so it waits for that call to finish
+                # instead of racing it (pyownet's proxy is not concurrency-safe,
+                # see module docstring).
+                async with self._owlock:
+                    await asyncio.get_event_loop().run_in_executor(None, close)
         self._proxy = None
         await self._publish_status(False, "Disconnected", code="disconnected")
 
@@ -168,6 +194,15 @@ class OneWireAdapter(AdapterBase):
                 value = await self._read_property(bc.sensor_id, bc.property)
                 quality = "good" if value is not None else "bad"
                 if quality == "good":
+                    if not self.connected:
+                        # Recovered after a connection-level failure below.
+                        await self._publish_status(
+                            True,
+                            f"Connected to {self._cfg.host}:{self._cfg.port}",
+                            code="connectedTo",
+                            params={"host": self._cfg.host, "port": self._cfg.port},
+                        )
+                        logger.info("1-Wire adapter: connection to owserver recovered")
                     if binding.value_formula:
                         from obs.core.formula import apply_formula
 
@@ -188,6 +223,22 @@ class OneWireAdapter(AdapterBase):
             except asyncio.CancelledError:
                 return
             except Exception as exc:
+                if (
+                    self._owprotocol is not None
+                    and isinstance(exc, (self._owprotocol.ConnError, self._owprotocol.OwnetTimeout, self._owprotocol.ProtocolError))
+                    and self.connected
+                ):
+                    # Connection-level failure (owserver gone/unreachable), as
+                    # opposed to a per-property OwnetError (owserver is fine,
+                    # just an error for this one path) — surface it on the
+                    # adapter itself, not just as bad quality on this one event.
+                    await self._publish_status(
+                        False,
+                        f"Lost connection to {self._cfg.host}:{self._cfg.port}: {exc}",
+                        code="couldNotConnectTo",
+                        params={"host": self._cfg.host, "port": self._cfg.port},
+                    )
+                    logger.warning("1-Wire adapter: connection to owserver lost: %s", exc)
                 logger.warning("1-Wire poll error (sensor %s/%s): %s", bc.sensor_id, bc.property, exc)
                 await self._bus.publish(
                     DataValueEvent(
@@ -230,11 +281,16 @@ class OneWireAdapter(AdapterBase):
             # error is the source of truth for whether a property is writable.
             logger.warning("1-Wire write failed for binding %s (%s): %s", binding.id, path, exc)
 
-    async def _read_property(self, sensor_id: str, property_name: str) -> float | str | None:
+    async def _read_property(self, sensor_id: str, property_name: str) -> float | bool | str | None:
         path = f"/{sensor_id}/{property_name}"
         async with self._owlock:
             raw = await asyncio.get_event_loop().run_in_executor(None, self._proxy.read, path)
         text = raw.decode("utf-8", errors="replace").strip()
+        if _YESNO_PROPERTY_RE.match(property_name):
+            try:
+                return bool(int(text))
+            except ValueError:
+                return text
         try:
             return float(text)
         except ValueError:
@@ -258,16 +314,39 @@ class OneWireAdapter(AdapterBase):
         sensors: list[dict[str, Any]] = []
         for entry in entries:
             match = _ROM_ID_RE.match(entry)
-            if not match:
-                continue
-            rom_id = match.group(1)
+            if match:
+                rom_id = match.group(1)
+                family = rom_id.split(".", 1)[0]
+            else:
+                # Not a bare ROM-ID entry — could be an OWFS alias (e.g. "/boiler/",
+                # configured in /etc/owfs.conf) or one of owserver's own system/meta
+                # directories ("settings", "structure", "uncached", ...). The
+                # "address" property exists on every real device directory (aliased
+                # or not) but not on system directories, so use it to resolve real
+                # devices without needing to parse OWFS's alias syntax ourselves.
+                name = entry.strip("/")
+                try:
+                    async with self._owlock:
+                        address = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self._proxy.read,
+                            f"/{name}/address",
+                        )
+                    resolved = address.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    continue
+                if not _ROM_ID_SHAPE_RE.fullmatch(resolved):
+                    continue
+                rom_id = name
+                family = resolved.split(".", 1)[0]
+
             async with self._owlock:
                 props = await asyncio.get_event_loop().run_in_executor(None, lambda p=rom_id: self._proxy.dir(f"/{p}"))
             properties = sorted(p.rsplit("/", 1)[-1] for p in props if not p.endswith("/") and p.rsplit("/", 1)[-1] not in _STRUCTURAL_PROPERTIES)
             sensors.append(
                 {
                     "rom_id": rom_id,
-                    "family": rom_id.split(".", 1)[0],
+                    "family": family,
                     "properties": properties,
                     "alias": self._cfg.aliases.get(rom_id),
                 },
