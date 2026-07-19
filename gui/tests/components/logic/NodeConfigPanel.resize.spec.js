@@ -47,7 +47,7 @@ describe('NodeConfigPanel — resizable width (issue #1034)', () => {
     const w = await mountPanel()
     await flushPromises()
 
-    const handle = w.findAll('div')[1]
+    const handle = w.find('[title]')
     await handle.trigger('pointerdown', { clientX: 500 })
 
     document.dispatchEvent(new MouseEvent('pointermove', { clientX: 400, bubbles: true }))
