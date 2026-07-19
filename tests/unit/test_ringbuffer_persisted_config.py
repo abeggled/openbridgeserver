@@ -394,6 +394,68 @@ async def test_migrated_tiny_row_or_size_total_gets_smallest_valid_budget(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("total_key", ["max_entries", "max_file_size_bytes"])
+@pytest.mark.parametrize("tiny_total", [1, 2])
+async def test_legacy_mode_preserves_tiny_row_or_size_total(total_key, tiny_total):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (
+                PERSISTED_CONFIG_KEY,
+                json.dumps(
+                    {
+                        "segmented": False,
+                        "max_entries": tiny_total if total_key == "max_entries" else None,
+                        "max_file_size_bytes": tiny_total if total_key == "max_file_size_bytes" else None,
+                        "max_age": None,
+                    }
+                ),
+            ),
+        )
+        await db.commit()
+
+        cfg = await load_persisted_ringbuffer_config(db)
+
+        assert cfg["segmented"] is False
+        assert cfg[total_key] == tiny_total
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tiny_max_age", [1, 2])
+async def test_legacy_mode_preserves_tiny_age_retention(tiny_max_age):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (
+                PERSISTED_CONFIG_KEY,
+                json.dumps(
+                    {
+                        "segmented": False,
+                        "max_entries": None,
+                        "max_file_size_bytes": None,
+                        "max_age": tiny_max_age,
+                    }
+                ),
+            ),
+        )
+        await db.commit()
+
+        cfg = await load_persisted_ringbuffer_config(db)
+
+        assert cfg["segmented"] is False
+        assert cfg["max_age"] == tiny_max_age
+        assert cfg["segment_max_age"] is None
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_migrated_config_with_max_age_three_derives_one_second_segment():
     """Grenzfall ``max_age`` = 3 s: ``3 // 3`` = 1 erfüllt die Regel (``3 >= 3 * 1``) noch."""
     from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig, validate_store_config
