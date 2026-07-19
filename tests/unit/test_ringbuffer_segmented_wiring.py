@@ -85,6 +85,23 @@ async def test_segmented_query_returns_empty_when_not_started(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_segmented_start_rejects_missing_effective_rotation_limit(tmp_path: Path):
+    rb = _rb(
+        tmp_path,
+        segmented=True,
+        max_entries=None,
+        max_file_size_bytes=None,
+        max_age=None,
+    )
+
+    with pytest.raises(ValueError, match="At least one effective segment rotation limit is required"):
+        await rb.start()
+
+    assert rb.store is None
+    assert not Path(rb._segment_store_root()).exists()
+
+
+@pytest.mark.asyncio
 async def test_segmented_write_goes_to_store_and_reads_back(tmp_path: Path):
     rb = _rb(tmp_path, segmented=True)
     await rb.start()
@@ -862,6 +879,28 @@ async def test_reconfigure_segment_max_bytes_none_rederives_from_file_size(tmp_p
         assert rb._segment_max_bytes == expected
         assert rb.store._segment_config.segment_max_bytes == expected
         assert rb.store._retention_config.max_file_size_bytes == 30 * 1024 * 1024
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_segmented_reconfigure_rejects_removing_last_rotation_limit(tmp_path: Path):
+    rb = _rb(tmp_path, segmented=True, max_entries=None, segment_max_age=3600)
+    await rb.start()
+    try:
+        with pytest.raises(ValueError, match="At least one effective segment rotation limit is required"):
+            await rb.reconfigure(
+                "file",
+                max_entries=None,
+                max_file_size_bytes=None,
+                max_age=None,
+                segment_max_bytes=None,
+                segment_max_rows=None,
+                segment_max_age=None,
+            )
+
+        assert rb._segment_max_age == 3600
+        assert rb.store._segment_config.segment_max_age == 3600
     finally:
         await rb.stop()
 
