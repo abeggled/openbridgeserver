@@ -24,6 +24,24 @@
            Entscheidung zum Legacy-Altbestand aussteht (admin-only, self-gated). -->
       <LegacyMigrationBanner compact @open="showMigrationWizard = true" />
 
+      <!-- Eine unbegrenzte Gesamt-Retention ist auch außerhalb des
+           Konfigurators betriebsrelevant und muss im Dashboard auffallen. -->
+      <div
+        v-if="showUnboundedWarning"
+        class="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2"
+        data-testid="rb-card-unbounded-warning"
+        role="alert"
+      >
+        <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <div>
+          <p class="font-semibold">{{ $t('ringbuffer.unboundedWarningTitle') }}</p>
+          <p class="mt-0.5">{{ $t('ringbuffer.unboundedWarningBody') }}</p>
+        </div>
+      </div>
+
       <!-- Ladezustand -->
       <div v-if="loading" class="flex justify-center py-6" data-testid="rb-card-loading"><Spinner /></div>
 
@@ -234,6 +252,12 @@ onUnmounted(() => {
 })
 
 const disabled = computed(() => stats.value?.enabled === false)
+const showUnboundedWarning = computed(() => (
+  !loading.value
+  && !loadError.value
+  && !disabled.value
+  && stats.value?.retention_unbounded === true
+))
 const store = computed(() => stats.value?.store ?? null)
 const segmented = computed(() => !disabled.value && store.value != null)
 

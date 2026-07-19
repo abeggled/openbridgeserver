@@ -103,10 +103,11 @@ async function mountCard(statsData, { isAdmin = true } = {}) {
 // ── Zustand: Monitor deaktiviert ───────────────────────────────────────────
 describe('RingBufferCard — disabled state', () => {
   it('shows the disabled block and no retention numbers', async () => {
-    const wrapper = await mountCard({ enabled: false })
+    const wrapper = await mountCard({ enabled: false, retention_unbounded: true })
     expect(wrapper.find('[data-testid="rb-card-disabled"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="rb-card-budget"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="rb-card-segments"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="rb-card-unbounded-warning"]').exists()).toBe(false)
   })
 
   it('opens the config modal via the Konfigurieren button', async () => {
@@ -131,6 +132,28 @@ describe('RingBufferCard — segmented state', () => {
     const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, maxFileSizeBytes: null }))
     expect(wrapper.find('[data-testid="rb-card-budget-bar"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="rb-card-budget-unlimited"]').text()).toContain('unbegrenzt')
+  })
+
+  it('shows a prominent warning when total retention is unbounded', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      maxFileSizeBytes: null,
+      statsOverrides: { retention_unbounded: true },
+    }))
+    const warning = wrapper.find('[data-testid="rb-card-unbounded-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.attributes('role')).toBe('alert')
+    expect(warning.text()).toContain('Gesamt-Retention unbegrenzt')
+    expect(warning.text()).toContain('unbegrenzt wachsen')
+  })
+
+  it('does not warn when another total retention limit is active', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      maxFileSizeBytes: null,
+      statsOverrides: { retention_unbounded: false },
+    }))
+    expect(wrapper.find('[data-testid="rb-card-unbounded-warning"]').exists()).toBe(false)
   })
 
   it('shows segment count and the full prognosis block', async () => {
@@ -263,6 +286,17 @@ describe('RingBufferCard — legacy state', () => {
     const wrapper = await mountCard({ enabled: true, store: null, total: 10, file_size_bytes: 0 })
     await wrapper.find('[data-testid="rb-card-configure"]').trigger('click')
     expect(wrapper.find('[data-testid="config-modal-open"]').exists()).toBe(true)
+  })
+
+  it('shows the unbounded-retention warning in legacy mode too', async () => {
+    const wrapper = await mountCard({
+      enabled: true,
+      store: null,
+      total: 10,
+      file_size_bytes: 0,
+      retention_unbounded: true,
+    })
+    expect(wrapper.find('[data-testid="rb-card-unbounded-warning"]').exists()).toBe(true)
   })
 })
 
