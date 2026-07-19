@@ -437,7 +437,15 @@
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.timeoutLabel') }}</label>
-          <input v-model="localData.timeout_s" type="number" class="input text-sm" @change="emitUpdate" />
+          <input
+            v-model="localData.timeout_s"
+            type="number"
+            min="1"
+            step="any"
+            class="input text-sm"
+            data-testid="api-client-timeout"
+            @change="emitBoundedUpdate('timeout_s', { type: 'number', min: 1 })"
+          />
         </div>
         <label class="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" v-model="localData.verify_ssl" @change="emitUpdate" class="accent-teal-500" />
@@ -1223,8 +1231,11 @@
               class="text-sm" @change="emitUpdate" />
             <input v-else
               v-model="localData[key]"
-              :type="schema.subtype === 'password' ? 'password' : schema.type === 'number' ? 'number' : 'text'"
-              class="input text-sm" @change="emitUpdate" />
+              :type="schema.subtype === 'password' ? 'password' : ['number', 'integer'].includes(schema.type) ? 'number' : 'text'"
+              :min="schema.min ?? schema.minimum"
+              :max="schema.max ?? schema.maximum"
+              :step="schema.step ?? (schema.type === 'integer' ? 1 : schema.type === 'number' ? 'any' : undefined)"
+              class="input text-sm" @change="onSchemaFieldChange(key, schema)" />
           </div>
 
         </template>
@@ -2337,6 +2348,34 @@ async function loadMessageArchives() {
 // ── Emit ───────────────────────────────────────────────────────────────────
 function emitUpdate() {
   emit('update', { ...localData.value })
+}
+
+function onSchemaFieldChange(key, schema) {
+  if (schema.type === 'number' || schema.type === 'integer') {
+    emitBoundedUpdate(key, schema)
+    return
+  }
+  emitUpdate()
+}
+
+function emitBoundedUpdate(key, schema) {
+  const rawValue = localData.value[key]
+  if (rawValue === '' || rawValue === null || rawValue === undefined) {
+    emitUpdate()
+    return
+  }
+
+  const value = Number(rawValue)
+  if (Number.isFinite(value)) {
+    const minimum = schema.min ?? schema.minimum
+    const maximum = schema.max ?? schema.maximum
+    let bounded = value
+    if (minimum !== undefined) bounded = Math.max(minimum, bounded)
+    if (maximum !== undefined) bounded = Math.min(maximum, bounded)
+    if (schema.type === 'integer') bounded = Math.round(bounded)
+    localData.value[key] = bounded
+  }
+  emitUpdate()
 }
 </script>
 

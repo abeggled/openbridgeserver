@@ -27,6 +27,8 @@ from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
+from obs.logic.models import FlowData
+from obs.logic.validation import validate_timer_durations
 from obs.models.datapoint import DataPoint
 
 router = APIRouter(tags=["config"])
@@ -811,6 +813,7 @@ async def import_config(
     for lg in body.logic_graphs:
         try:
             row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (lg.id,))
+            validate_timer_durations(FlowData.model_validate(lg.flow_data))
             flow_json = json.dumps(lg.flow_data)
             if row:
                 await db.execute_and_commit(

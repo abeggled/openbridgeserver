@@ -39,8 +39,17 @@ from obs.logic.models import (
 )
 from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.node_types import list_node_types
+from obs.logic.validation import validate_timer_durations
 
 router = APIRouter(tags=["logic"])
+
+
+def _validate_timer_durations(flow_data: FlowData) -> None:
+    """Translate shared persistence validation to an API error."""
+    try:
+        validate_timer_durations(flow_data)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
@@ -102,6 +111,7 @@ async def create_graph(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    _validate_timer_durations(body.flow_data)
     now = datetime.now(UTC).isoformat()
     gid = str(uuid.uuid4())
     await db.execute_and_commit(
@@ -151,6 +161,7 @@ async def update_graph_full(
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    _validate_timer_durations(body.flow_data)
     await db.execute_and_commit(
         """UPDATE logic_graphs
            SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
@@ -208,9 +219,12 @@ async def update_graph_partial(
     description = body.description if body.description is not None else row["description"]
     enabled = body.enabled if body.enabled is not None else bool(row["enabled"])
     if body.flow_data is not None:
+        _validate_timer_durations(body.flow_data)
         flow_json = body.flow_data.model_dump_json()
     else:
         flow_json = row["flow_data"]
+        if body.enabled is True:
+            _validate_timer_durations(FlowData.model_validate(json.loads(flow_json) if flow_json else {}))
     await db.execute_and_commit(
         """UPDATE logic_graphs
            SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
@@ -268,6 +282,8 @@ async def import_graph(
             status.HTTP_400_BAD_REQUEST,
             "Ungültiges Export-Format (erwartet 'logic_graph')",
         )
+
+    _validate_timer_durations(body.flow_data)
 
     known_types = {nt.type for nt in list_node_types()}
 
@@ -394,6 +410,7 @@ async def duplicate_graph(
         for e in flow.edges
     ]
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
+    _validate_timer_durations(new_flow)
 
     now = datetime.now(UTC).isoformat()
     new_id = str(uuid.uuid4())

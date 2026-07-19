@@ -9,6 +9,7 @@
 
 ### Fixes 🐞
 * Logic/History: Consumption counters now reset daily, weekly, monthly, and yearly values in the configured application timezone. SQLite history aggregate buckets now carry explicit UTC (`Z`) timestamps, and the Chart widget continues to interpret legacy timezone-less buckets as UTC. https://github.com/abeggled/openbridgeserver/issues/975 https://github.com/abeggled/openbridgeserver/issues/909
+* Logic Engine/Admin GUI: Delay and Pulse function blocks no longer accept negative time values. https://github.com/abeggled/openbridgeserver/issues/1002
 * Logic engine: JSON Extractor path selection now assigns the chosen path to the selected output instead of incorrectly overwriting the last output. https://github.com/abeggled/openbridgeserver/issues/980
 * KNX: Added the reactive-energy datapoint types DPT 13.012 (VARh) and DPT 13.015 (kVARh) to the DPT registry. Bindings configured with these DPTs previously fell back to the UNKNOWN definition and produced no decoded value. https://github.com/abeggled/openbridgeserver/pull/1030
 
