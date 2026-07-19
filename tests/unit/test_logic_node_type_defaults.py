@@ -40,6 +40,8 @@ def test_comment_node_has_no_ports():
     assert comment.config_schema["text"]["default"] == ""
     assert comment.config_schema["width"]["default"] == 220
     assert comment.config_schema["height"]["default"] == 140
+
+
 def test_timer_durations_are_non_negative():
     assert _node_type("timer_delay").config_schema["delay_s"]["min"] == 0
     assert _node_type("timer_pulse").config_schema["duration_s"]["min"] == 0
