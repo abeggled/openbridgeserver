@@ -1489,6 +1489,7 @@
     "nodeTypes": {
       "divide": "Divide",
       "const_value": "Constant",
+      "comment": "Comment",
       "and": "AND",
       "or": "OR",
       "not": "NOT",
@@ -1646,6 +1647,11 @@
       "ariaLabel": "Unknown block type"
     },
     "nodeConfig": {
+      "comment": {
+        "text": "Text",
+        "textPlaceholder": "Note text…",
+        "empty": "Empty comment — edit in the panel"
+      },
       "tabs": {
         "connection": "Connection",
         "transform": "Transformation",
@@ -2128,7 +2134,8 @@
         "in_max": "Input max",
         "out_min": "Output min",
         "out_max": "Output max"
-      }
+      },
+      "resizeHandle": "Drag to resize panel"
     },
     "portLabels": {
       "heizmode": "Heating mode",
@@ -2180,6 +2187,7 @@
     },
     "nodeDescriptions": {
       "const_value": "Outputs a fixed value — number, bool or text. Useful as threshold or reference.",
+      "comment": "Free-form multi-line note placed directly on the canvas for documentation. Purely visual — has no effect on execution.",
       "and": "Output is true when ALL inputs are true. Inputs (2–30) and output can be individually negated.",
       "or": "Output is true when AT LEAST ONE input is true. Inputs (2–30) and output can be individually negated.",
       "not": "Inverts the input",
