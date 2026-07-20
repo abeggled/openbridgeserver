@@ -846,7 +846,13 @@ async def import_config(
         try:
             from obs.logic.manager import get_logic_manager
 
-            await get_logic_manager().reload()
+            manager = get_logic_manager()
+            await manager.reload()
+            # Seed Read Object nodes of the restored graphs with the current
+            # registry values (issue #1031); initialize_graph is a no-op for
+            # disabled graphs and never raises.
+            for lg in body.logic_graphs:
+                await manager.initialize_graph(lg.id)
         except Exception as exc:
             result.errors.append(f"Logic manager reload: {exc}")
 

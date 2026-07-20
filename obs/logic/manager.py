@@ -58,6 +58,42 @@ _THROTTLE_UNITS: dict[str, float] = {
 _MAX_LOGIC_CASCADE_DEPTH = 10
 _MAX_SEQUENCE_REPEAT_COUNT = 10_000
 
+# Node types the side-effect-free initialization pass (initialize_graph) must
+# not publish through: action nodes are not executed there, so their executor
+# outputs are placeholders (e.g. api_client.success=False); per-sample
+# accumulators run on a throwaway state copy, so their outputs would include
+# the seed while the persisted state stays untouched.
+_INIT_EXCLUDED_NODE_TYPES = frozenset(
+    {
+        "api_client",
+        "host_check",
+        "notify_pushover",
+        "notify_sms",
+        "message_archive",
+        "wake_on_lan",
+        "value_sequence",
+        "statistics",
+        "avg_multi",
+        "min_max_tracker",
+        "consumption_counter",
+        "heating_circuit",
+    }
+)
+
+
+def _downstream_closure(start: set[str], flow: FlowData) -> set[str]:
+    """Node ids reachable from *start* (inclusive) following edges forward."""
+    reached = set(start)
+    grew = True
+    while grew:
+        grew = False
+        for edge in flow.edges:
+            if edge.source in reached and edge.target not in reached:
+                reached.add(edge.target)
+                grew = True
+    return reached
+
+
 _ICAL_MAX_BYTES = 1_048_576
 _ICAL_MAX_REDIRECTS = 5
 _ICAL_ALLOWED_CONTENT_TYPES = ("text/calendar", "application/ics", "application/octet-stream", "text/plain")
@@ -1271,10 +1307,11 @@ class LogicManager:
         iCal URLs are fetched, and no trigger-driven action nodes
         (api_client, notify_*, wake_on_lan, message_archive, value_sequence)
         are started. Only datapoint_write outputs are published, and only
-        when they do not descend from a Read Object without a current value
-        (whose None would otherwise be coerced to 0/False downstream).
-        Errors are logged, never raised, so a failed initial run cannot
-        break the save request.
+        for writes that descend from a seeded Read Object without passing
+        through an unseeded one (whose None would be coerced to 0/False) or
+        an _INIT_EXCLUDED_NODE_TYPES node (whose init output would be a
+        placeholder or computed from throwaway state). Errors are logged,
+        never raised, so a failed initial run cannot break the save request.
         """
         entry = self._graphs.get(graph_id)
         if not entry:
@@ -1286,6 +1323,7 @@ class LogicManager:
         # Seed every configured Read Object from the registry; nodes whose
         # DataPoint has no current value taint their downstream subgraph.
         seeds: dict[str, dict[str, Any]] = {}
+        seed_ts: dict[str, Any] = {}
         unseeded: set[str] = set()
         for node in flow.nodes:
             if node.type != "datapoint_read":
@@ -1302,38 +1340,57 @@ class LogicManager:
             # never received a value — only a real value counts as seeded.
             if vs is not None and vs.value is not None:
                 seeds[node.id] = {"value": vs.value, "changed": False}
+                seed_ts[node.id] = getattr(vs, "ts", None)
             else:
                 unseeded.add(node.id)
         if not seeds:
             return
 
-        tainted = set(unseeded)
-        grew = True
-        while grew:
-            grew = False
-            for edge in flow.edges:
-                if edge.source in tainted and edge.target not in tainted:
-                    tainted.add(edge.target)
-                    grew = True
+        # A write may only fire when it carries a seeded value: it must
+        # descend from a seeded Read Object (a save must not actuate
+        # unrelated branches like Const → Write) and must not descend from an
+        # unseeded Read Object or an excluded node type (see
+        # _INIT_EXCLUDED_NODE_TYPES).
+        tainted = _downstream_closure(unseeded | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow)
+        seeded_paths = _downstream_closure(set(seeds), flow)
+        skip_writes = {node.id for node in flow.nodes if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths)}
+
+        now = datetime.now(UTC)
+        graph_state = self._node_state.setdefault(graph_id, {})
+
+        # Prime the event filters (trigger_on_change, min_delta) BEFORE
+        # publishing writes: a graph that writes a DataPoint it also reads
+        # re-enters _on_value_event during the publish await. last_ts keeps
+        # the value's own registry timestamp — saving is not a datapoint
+        # event, so it must not start a fresh throttle window.
+        for node_id, seed in seeds.items():
+            ns = graph_state.setdefault(node_id, {})
+            ns["last_value"] = seed["value"]
+            ts = seed_ts.get(node_id)
+            if ts is not None:
+                ns["last_ts"] = ts
 
         try:
+            # operating_hours totals are injected as overrides by
+            # _execute_graph's pre-pass — mirror that here (read-only) so
+            # seeded paths through such nodes publish the accumulated hours
+            # instead of 0.0.
+            overrides = dict(seeds)
+            for node in flow.nodes:
+                if node.type != "operating_hours":
+                    continue
+                ns = graph_state.setdefault(node.id, {"accumulated_hours": 0.0, "last_start": None})
+                acc = ns["accumulated_hours"]
+                if ns.get("last_start"):
+                    acc += (now - ns["last_start"]).total_seconds() / 3600
+                overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
+
             hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
             executor = GraphExecutor(flow, hyst_copy, self._app_config)
-            outputs = executor.execute(seeds, commit_memory=False)
+            outputs = executor.execute(overrides, commit_memory=False)
 
-            now = datetime.now(UTC)
-            graph_state = self._node_state.setdefault(graph_id, {})
             wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
-            await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=tainted)
-
-            # Prime the event filters (trigger_on_change, min_delta, throttle)
-            # so the next external update repeating the seeded value is
-            # filtered like any other repeat instead of re-firing as a
-            # "first" value.
-            for node_id, seed in seeds.items():
-                ns = graph_state.setdefault(node_id, {})
-                ns["last_value"] = seed["value"]
-                ns["last_ts"] = now
+            await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
         except Exception as exc:
             logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
 

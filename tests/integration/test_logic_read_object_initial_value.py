@@ -316,3 +316,42 @@ async def test_duplicate_initializes_read_object(client, auth_headers):
         assert await _get_value(client, auth_headers, dst_id) == 55
     finally:
         await _cleanup(client, auth_headers, [graph_id, copy_id], [src_id, dst_id])
+
+
+@pytest.mark.asyncio
+async def test_config_import_initializes_read_object(client, auth_headers):
+    """A graph restored via the full configuration import is initialized too."""
+    import uuid as _uuid
+
+    ts = time.time()
+    src_id = await _create_dp(client, auth_headers, f"IT-1031-Restore-Src-{ts}")
+    dst_id = await _create_dp(client, auth_headers, f"IT-1031-Restore-Dst-{ts}")
+    graph_id = str(_uuid.uuid4())
+    try:
+        await _set_value(client, auth_headers, src_id, 66)
+
+        resp = await client.post(
+            "/api/v1/config/import",
+            json={
+                "obs_version": "5",
+                "exported_at": "2026-01-01T00:00:00",
+                "datapoints": [],
+                "bindings": [],
+                "logic_graphs": [
+                    {
+                        "id": graph_id,
+                        "name": "IT-1031-Restore",
+                        "description": "Integration test #1031",
+                        "enabled": True,
+                        "flow_data": _read_write_flow(src_id, dst_id),
+                    }
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["logic_graphs_created"] == 1
+
+        assert await _get_value(client, auth_headers, dst_id) == 66
+    finally:
+        await _cleanup(client, auth_headers, [graph_id], [src_id, dst_id])

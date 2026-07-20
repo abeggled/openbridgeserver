@@ -15,6 +15,7 @@ Verifies that the post-save initialization pass:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +23,8 @@ import pytest
 
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
+
+_SEED_TS = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _make_manager(graphs: dict, values: dict | None = None) -> LogicManager:
@@ -31,7 +34,7 @@ def _make_manager(graphs: dict, values: dict | None = None) -> LogicManager:
     event_bus.publish = AsyncMock()
     registry = MagicMock()
     value_map = {uuid.UUID(k): v for k, v in (values or {}).items()}
-    registry.get_value = MagicMock(side_effect=lambda dp_id: SimpleNamespace(value=value_map[dp_id]) if dp_id in value_map else None)
+    registry.get_value = MagicMock(side_effect=lambda dp_id: SimpleNamespace(value=value_map[dp_id], ts=_SEED_TS) if dp_id in value_map else None)
 
     mgr = LogicManager(db, event_bus, registry)
     mgr._graphs = graphs
@@ -70,10 +73,11 @@ async def test_seeded_read_publishes_write_and_primes_filter_state():
     assert event.value == 42
     assert event.source_adapter == "logic"
 
-    # Event filters (trigger_on_change, min_delta, throttle) are primed
+    # Event filters (trigger_on_change, min_delta) are primed; last_ts keeps
+    # the registry timestamp so no fresh throttle window starts at save time
     read_state = mgr._node_state["g1"]["r1"]
     assert read_state["last_value"] == 42
-    assert read_state["last_ts"] is not None
+    assert read_state["last_ts"] == _SEED_TS
 
 
 @pytest.mark.asyncio
@@ -318,3 +322,149 @@ async def test_write_outputs_throttle_ignores_non_numeric_config():
     await _apply(mgr, flow, {"w1": {"_write_value": 1}}, graph_state)
 
     mgr._event_bus.publish.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Second review round — scoping, ordering, placeholder/state protection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_filter_state_is_primed_before_writes_publish():
+    """A graph writing a DataPoint it also reads re-enters _on_value_event
+    during the publish await — the seed must already be primed by then."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g1": ("G", True, _read_write_flow(src_id, dst_id))}, values={src_id: 42})
+    seen_at_publish = {}
+
+    async def _capture(event):
+        seen_at_publish["last_value"] = mgr._node_state["g1"].get("r1", {}).get("last_value")
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_capture)
+
+    await mgr.initialize_graph("g1")
+
+    assert seen_at_publish == {"last_value": 42}
+
+
+@pytest.mark.asyncio
+async def test_write_not_descending_from_seeded_read_is_suppressed():
+    """A save must not actuate branches that carry no seeded value (e.g. a
+    constant-fed write) even when another Read Object is seeded."""
+    src_id, dst_a, dst_b = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_a}},
+            {"id": "c1", "type": "const_value", "data": {"value": 1}},
+            {"id": "w2", "type": "datapoint_write", "data": {"datapoint_id": dst_b}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "w1", "targetHandle": "value"},
+            {"source": "c1", "sourceHandle": "out", "target": "w2", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 7})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].datapoint_id == uuid.UUID(dst_a)
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_action_placeholder_is_suppressed():
+    """Non-executed action nodes emit placeholder outputs (api_client.success
+    is False without any HTTP attempt) — those must not be written."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "a1", "type": "api_client", "data": {"url": "http://example.invalid"}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "a1", "targetHandle": "trigger"},
+            {"source": "a1", "sourceHandle": "success", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_statistics_is_suppressed():
+    """Accumulator outputs are computed on the throwaway state copy and would
+    move backwards on the next real event — they must not be written."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "s1", "type": "statistics", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "s1", "targetHandle": "value"},
+            {"source": "s1", "sourceHandle": "avg", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 10})
+    mgr._hysteresis["g1"] = {"s1": {"s_min": 3.0, "s_max": 8.0, "s_sum": 25.0, "s_count": 5}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+    assert mgr._hysteresis["g1"]["s1"] == {"s_min": 3.0, "s_max": 8.0, "s_sum": 25.0, "s_count": 5}
+
+
+@pytest.mark.asyncio
+async def test_operating_hours_totals_are_injected():
+    """Seeded paths through operating_hours publish the accumulated total,
+    mirroring _execute_graph's _computed_hours pre-pass."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "oh1", "type": "operating_hours", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "oh1", "targetHandle": "active"},
+            {"source": "oh1", "sourceHandle": "hours", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+    mgr._node_state["g1"] = {"oh1": {"accumulated_hours": 5.5, "last_start": None}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 5.5
+
+
+@pytest.mark.asyncio
+async def test_operating_hours_running_accumulation_is_included():
+    """A currently running operating-hours block adds the elapsed time since
+    last_start to the published total, like _execute_graph's pre-pass."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "oh1", "type": "operating_hours", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "oh1", "targetHandle": "active"},
+            {"source": "oh1", "sourceHandle": "hours", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+    mgr._node_state["g1"] = {"oh1": {"accumulated_hours": 2.0, "last_start": datetime.now(UTC)}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value >= 2.0
