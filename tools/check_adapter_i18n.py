@@ -3,7 +3,7 @@
 
 The frontend guard (``check_i18n_guard.py``) only scans ``gui/src`` + ``frontend/src``,
 so user-facing German that originates in backend adapter code escapes detection. This
-gate closes that gap with two structural checks on the changed backend files:
+gate closes that gap with three structural checks on the changed backend files:
 
 1. **Status/test calls must use a code.** Any call to ``_publish_status`` /
    ``TestResult`` (and the thin adapter/registry wrappers around them) whose ``detail``
@@ -15,6 +15,15 @@ gate closes that gap with two structural checks on the changed backend files:
 2. **Referenced codes must exist with locale parity.** Every ``code`` / ``detail_code``
    literal referenced in a changed file must exist in both ``gui/src/locales/en.json``
    and ``de.json`` under the matching namespace.
+
+3. **Config schema field labels must exist with locale parity.** Any Pydantic config
+   field defined as ``field: T = Field(..., title=..., description=...)`` with a
+   hardcoded string literal ``title``/``description`` must have a matching
+   ``adapters.schema.<ADAPTER_TYPE>.<field>.{title,description}`` key in both locale
+   files. ``<ADAPTER_TYPE>`` is read from the ``adapter_type = "..."`` class attribute
+   in the same file. Adapter types with a dedicated custom Vue config form (see
+   ``CUSTOM_FORM_ADAPTER_TYPES``) are exempt — ``SchemaForm.vue`` never renders their
+   backend ``title``/``description`` literals, so there is nothing to localize.
 
 Scope: ``obs/adapters/**/*.py`` and ``obs/api/v1/adapters.py``.
 """
@@ -43,6 +52,13 @@ TESTRESULT_FUNC = "TestResult"
 
 STATUS_NS = "adapters.statusDetail"
 TESTRESULT_NS = "adapters.testResult"
+SCHEMA_NS = "adapters.schema"
+
+# Adapter types rendered by a dedicated custom Vue config form instead of the generic
+# SchemaForm.vue (which is what reads adapters.schema.<TYPE>.<field>.{title,description}
+# from the locale files). Their backend Field(title=/description=) literals are only a
+# non-localized fallback default and are never shown to the user, so they are exempt.
+CUSTOM_FORM_ADAPTER_TYPES = frozenset({"ANWESENHEITSSIMULATION", "KNX", "MESSAGE"})
 
 LOCALES = ("gui/src/locales/en.json", "gui/src/locales/de.json")
 
@@ -149,6 +165,59 @@ def scan_file(rel_path: str, source: str) -> tuple[list[Violation], list[tuple[i
     return violations, referenced
 
 
+def find_adapter_type(tree: ast.AST) -> str | None:
+    """Return the ``adapter_type = "..."`` class-attribute literal, if any."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "adapter_type"
+        ):
+            literal = _string_const(node.value)
+            if literal is not None:
+                return literal
+    return None
+
+
+def scan_schema_fields(tree: ast.AST) -> list[tuple[int, str, bool, bool]]:
+    """Return (lineno, field_name, has_title_literal, has_description_literal) for every
+    ``field: T = Field(...)`` class attribute with a hardcoded ``title``/``description``."""
+    fields: list[tuple[int, str, bool, bool]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for stmt in node.body:
+            if not (isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and isinstance(stmt.value, ast.Call)):
+                continue
+            if _call_name(stmt.value) != "Field":
+                continue
+            has_title = has_description = False
+            for kw in stmt.value.keywords:
+                if kw.arg == "title" and _string_const(kw.value) is not None:
+                    has_title = True
+                if kw.arg == "description" and _string_const(kw.value) is not None:
+                    has_description = True
+            if has_title or has_description:
+                fields.append((stmt.lineno, stmt.target.id, has_title, has_description))
+    return fields
+
+
+def scan_schema_refs(rel_path: str, source: str) -> list[tuple[int, str, str, str]]:
+    """Return (lineno, adapter_type, field_name, label) for schema fields needing a locale key."""
+    tree = ast.parse(source, filename=rel_path)
+    adapter_type = find_adapter_type(tree)
+    if adapter_type is None or adapter_type in CUSTOM_FORM_ADAPTER_TYPES:
+        return []
+    refs: list[tuple[int, str, str, str]] = []
+    for lineno, field_name, has_title, has_description in scan_schema_fields(tree):
+        if has_title:
+            refs.append((lineno, adapter_type, field_name, "title"))
+        if has_description:
+            refs.append((lineno, adapter_type, field_name, "description"))
+    return refs
+
+
 def load_locale(repo_root: Path, rel: str) -> dict:
     return json.loads((repo_root / rel).read_text(encoding="utf-8"))
 
@@ -182,13 +251,16 @@ def main() -> int:
 
     violations: list[Violation] = []
     referenced: list[tuple[str, int, str, str]] = []
+    schema_refs: list[tuple[str, int, str, str, str]] = []
     for rel in targets:
         path = repo_root / rel
         if not path.is_file():
             continue
-        file_violations, file_refs = scan_file(rel, path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+        file_violations, file_refs = scan_file(rel, source)
         violations.extend(file_violations)
         referenced.extend((rel, line, ns, code) for line, ns, code in file_refs)
+        schema_refs.extend((rel, line, adapter_type, field_name, label) for line, adapter_type, field_name, label in scan_schema_refs(rel, source))
 
     locales = {rel: load_locale(repo_root, rel) for rel in LOCALES}
     for rel, line, ns, code in referenced:
@@ -197,6 +269,14 @@ def main() -> int:
             if not lookup(data, dotted):
                 violations.append(Violation(rel, line, f"code {dotted!r} is missing from {loc_rel}"))
 
+    for rel, line, adapter_type, field_name, label in schema_refs:
+        dotted = f"{SCHEMA_NS}.{adapter_type}.{field_name}.{label}"
+        for loc_rel, data in locales.items():
+            if not lookup(data, dotted):
+                violations.append(
+                    Violation(rel, line, f"schema field {field_name!r} has a hardcoded {label}= but {dotted!r} is missing from {loc_rel}"),
+                )
+
     if violations:
         print("adapter i18n guard: violations detected:")
         for v in sorted(violations, key=lambda x: (x.path, x.line)):
@@ -204,7 +284,10 @@ def main() -> int:
         print("adapter i18n guard: FAILED")
         return 1
 
-    print(f"adapter i18n guard: OK (scanned {len(targets)} backend file(s), {len(referenced)} code reference(s))")
+    print(
+        f"adapter i18n guard: OK (scanned {len(targets)} backend file(s), "
+        f"{len(referenced)} code reference(s), {len(schema_refs)} schema field reference(s))",
+    )
     return 0
 
 

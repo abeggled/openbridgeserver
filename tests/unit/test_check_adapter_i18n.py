@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -98,5 +99,71 @@ def test_real_files_reference_only_existing_codes(rel):
     de = gate.load_locale(REPO_ROOT, "gui/src/locales/de.json")
     for _line, ns, code in referenced:
         dotted = f"{ns}.{code}"
+        assert gate.lookup(en, dotted), f"{dotted} missing from en.json"
+        assert gate.lookup(de, dotted), f"{dotted} missing from de.json"
+
+
+def test_find_adapter_type_reads_class_attribute():
+    src = 'import ast\nclass Adapter:\n    adapter_type = "MODBUS_TCP"\n'
+    tree = ast.parse(src)
+    assert gate.find_adapter_type(tree) == "MODBUS_TCP"
+
+
+def test_find_adapter_type_returns_none_when_absent():
+    tree = ast.parse("class Config:\n    host: str = 'x'\n")
+    assert gate.find_adapter_type(tree) is None
+
+
+def test_scan_schema_fields_detects_title_and_description_literals():
+    src = "class Config(BaseModel):\n    shared_bus: bool = Field(default=False, title='T', description='D')\n"
+    tree = ast.parse(src)
+    fields = gate.scan_schema_fields(tree)
+    assert fields == [(2, "shared_bus", True, True)]
+
+
+def test_scan_schema_fields_ignores_fields_without_title_or_description():
+    src = "class Config(BaseModel):\n    host: str = Field(default='x')\n"
+    tree = ast.parse(src)
+    assert gate.scan_schema_fields(tree) == []
+
+
+def test_scan_schema_fields_ignores_non_field_calls():
+    src = "class Config(BaseModel):\n    host: str = SomethingElse(title='T')\n"
+    tree = ast.parse(src)
+    assert gate.scan_schema_fields(tree) == []
+
+
+def test_scan_schema_refs_flags_missing_locale_key():
+    src = (
+        'class Adapter:\n    adapter_type = "MODBUS_TCP"\n'
+        "class Config(BaseModel):\n"
+        "    shared_bus: bool = Field(default=False, title='T', description='D')\n"
+    )
+    refs = gate.scan_schema_refs(REL, src)
+    assert refs == [(4, "MODBUS_TCP", "shared_bus", "title"), (4, "MODBUS_TCP", "shared_bus", "description")]
+
+
+def test_scan_schema_refs_exempt_for_custom_form_adapter_types():
+    src = (
+        'class Adapter:\n    adapter_type = "KNX"\n'
+        "class Config(BaseModel):\n"
+        "    some_field: bool = Field(default=False, title='T', description='D')\n"
+    )
+    assert gate.scan_schema_refs(REL, src) == []
+
+
+def test_scan_schema_refs_returns_empty_without_adapter_type():
+    src = "class Config(BaseModel):\n    some_field: bool = Field(default=False, title='T')\n"
+    assert gate.scan_schema_refs(REL, src) == []
+
+
+def test_shared_bus_schema_field_is_flagged_on_current_modbus_tcp_adapter():
+    """Regression test for PR #1045: shared_bus shipped without adapters.schema.MODBUS_TCP.shared_bus.* keys."""
+    source = (REPO_ROOT / "obs/adapters/modbus_tcp/adapter.py").read_text(encoding="utf-8")
+    refs = gate.scan_schema_refs("obs/adapters/modbus_tcp/adapter.py", source)
+    en = gate.load_locale(REPO_ROOT, "gui/src/locales/en.json")
+    de = gate.load_locale(REPO_ROOT, "gui/src/locales/de.json")
+    for _line, adapter_type, field_name, label in refs:
+        dotted = f"{gate.SCHEMA_NS}.{adapter_type}.{field_name}.{label}"
         assert gate.lookup(en, dotted), f"{dotted} missing from en.json"
         assert gate.lookup(de, dotted), f"{dotted} missing from de.json"
