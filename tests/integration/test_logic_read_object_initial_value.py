@@ -355,3 +355,57 @@ async def test_config_import_initializes_read_object(client, auth_headers):
         assert await _get_value(client, auth_headers, dst_id) == 66
     finally:
         await _cleanup(client, auth_headers, [graph_id], [src_id, dst_id])
+
+
+@pytest.mark.asyncio
+async def test_failed_config_import_entry_does_not_reinitialize_existing_graph(client, auth_headers):
+    """A config-import entry that fails validation while reusing an existing
+    graph id must not re-initialize (and re-write through) the old graph."""
+    ts = time.time()
+    src_id = await _create_dp(client, auth_headers, f"IT-1031-Failed-Src-{ts}")
+    dst_id = await _create_dp(client, auth_headers, f"IT-1031-Failed-Dst-{ts}")
+    graph_id = None
+    try:
+        await _set_value(client, auth_headers, src_id, 12)
+        graph_id = await _create_graph(client, auth_headers, "IT-1031-Failed", _read_write_flow(src_id, dst_id))
+        assert await _get_value(client, auth_headers, dst_id) == 12
+
+        # Make the destination diverge so a re-initialization would be visible
+        await _set_value(client, auth_headers, dst_id, 99)
+
+        # Reuse the existing graph id with a flow that fails validation
+        invalid_flow = {
+            "nodes": [
+                {"id": "t1", "type": "timer_delay", "position": {"x": 0, "y": 0}, "data": {"delay_s": -5}},
+            ],
+            "edges": [],
+        }
+        resp = await client.post(
+            "/api/v1/config/import",
+            json={
+                "obs_version": "5",
+                "exported_at": "2026-01-01T00:00:00",
+                "datapoints": [],
+                "bindings": [],
+                "logic_graphs": [
+                    {
+                        "id": graph_id,
+                        "name": "IT-1031-Failed",
+                        "description": "Integration test #1031",
+                        "enabled": True,
+                        "flow_data": invalid_flow,
+                    }
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["logic_graphs_created"] == 0
+        assert body["logic_graphs_updated"] == 0
+        assert any("delay_s" in e for e in body["errors"])
+
+        # The old graph was not re-initialized — dst keeps the manual value
+        assert await _get_value(client, auth_headers, dst_id) == 99
+    finally:
+        await _cleanup(client, auth_headers, [graph_id], [src_id, dst_id])

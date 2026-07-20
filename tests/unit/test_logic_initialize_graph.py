@@ -468,3 +468,51 @@ async def test_operating_hours_running_accumulation_is_included():
 
     mgr._event_bus.publish.assert_awaited_once()
     assert mgr._event_bus.publish.await_args.args[0].value >= 2.0
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_random_value_is_suppressed():
+    """random_value generates a fresh value per evaluation — a save must not
+    publish a new random actuator value."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "rnd1", "type": "random_value", "data": {"min": 0, "max": 100}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "rnd1", "targetHandle": "trigger"},
+            {"source": "rnd1", "sourceHandle": "value", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_memory_is_suppressed():
+    """The dry-run evaluates with commit_memory=False, so a Memory node emits
+    its uncommitted previous value — that stale output must not be written."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "m1", "type": "memory", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "m1", "targetHandle": "in"},
+            {"source": "m1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 42})
+    mgr._hysteresis["g1"] = {"m1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+    assert mgr._hysteresis["g1"]["m1"] == {"value": "stale"}

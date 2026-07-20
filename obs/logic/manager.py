@@ -62,7 +62,10 @@ _MAX_SEQUENCE_REPEAT_COUNT = 10_000
 # not publish through: action nodes are not executed there, so their executor
 # outputs are placeholders (e.g. api_client.success=False); per-sample
 # accumulators run on a throwaway state copy, so their outputs would include
-# the seed while the persisted state stays untouched.
+# the seed while the persisted state stays untouched; random_value generates
+# a fresh value on every evaluation, so a save would publish a new random
+# actuator value; memory evaluates with commit_memory=False, so its output is
+# the uncommitted previous/default value, not the seeded input.
 _INIT_EXCLUDED_NODE_TYPES = frozenset(
     {
         "api_client",
@@ -77,6 +80,8 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "min_max_tracker",
         "consumption_counter",
         "heating_circuit",
+        "random_value",
+        "memory",
     }
 )
 

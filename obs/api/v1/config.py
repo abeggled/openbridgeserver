@@ -810,6 +810,7 @@ async def import_config(
             result.errors.append(f"KNX GA {ga.address}: {exc}")
 
     # --- Logic Graphs ---
+    imported_graph_ids: list[str] = []
     for lg in body.logic_graphs:
         try:
             row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (lg.id,))
@@ -839,6 +840,7 @@ async def import_config(
                     ),
                 )
                 result.logic_graphs_created += 1
+            imported_graph_ids.append(lg.id)
         except Exception as exc:
             result.errors.append(f"LogicGraph {lg.id}: {exc}")
 
@@ -849,10 +851,12 @@ async def import_config(
             manager = get_logic_manager()
             await manager.reload()
             # Seed Read Object nodes of the restored graphs with the current
-            # registry values (issue #1031); initialize_graph is a no-op for
+            # registry values (issue #1031). Only successfully upserted graphs
+            # qualify — a failed entry reusing an existing graph id must not
+            # re-initialize the old graph. initialize_graph is a no-op for
             # disabled graphs and never raises.
-            for lg in body.logic_graphs:
-                await manager.initialize_graph(lg.id)
+            for graph_id in imported_graph_ids:
+                await manager.initialize_graph(graph_id)
         except Exception as exc:
             result.errors.append(f"Logic manager reload: {exc}")
 
