@@ -1021,6 +1021,10 @@
         "poll_interval": {
           "title": "Abfrageintervall (s)",
           "description": "Wie oft Sensoren gelesen werden, in Sekunden"
+        },
+        "request_timeout": {
+          "title": "Anfrage-Timeout (s)",
+          "description": "Sekunden pro owserver-Aufruf, bevor er als Fehler gewertet wird"
         }
       }
     },
