@@ -39,77 +39,47 @@ logger = logging.getLogger(__name__)
 _UNSET = object()
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
 
-# Ableitung von ``segment_max_bytes`` aus ``max_file_size_bytes`` (#919): die
-# Segment-Größe ist von der Rotationszeit entkoppelt und dient nur noch als
-# Größen-Notbremse (Safety-Cap). Zeit (``segment_max_age``) ist im Normalbetrieb
-# der primäre Rotations-Trigger. Bei unbegrenztem Size-Budget (None) ein fester
-# Default von 256 MiB — NICHT budgetabhängig. Bei gesetztem Budget
-# ``min(256 MiB, max_file_size_bytes // 3)``: das ``//3`` (RETENTION_SEGMENT_RATIO)
-# garantiert die 3-Segment-Regel für jedes positive Budget; KEINE 4-MiB-Untergrenze
-# im Auto-Pfad, damit auch winzige Budgets im Auto-Start nie ein 422 auslösen.
-_SEGMENT_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB (fester Default, budget-unabhängig)
 
+def _derive_segment_limit(retention_limit: int | None) -> int | None:
+    """Derive one segment threshold from its matching total retention limit.
 
-def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int:
-    """Leitet ``segment_max_bytes`` aus ``max_file_size_bytes`` ab (#919/#951).
-
-    * Budget None (unbegrenztes Size-Budget) → **256 MiB** (fester Default, NICHT
-      budgetabhängig).
-    * Budget gesetzt → **min(256 MiB, max_file_size_bytes // 3)** (RETENTION_SEGMENT_RATIO).
-      Das ``//3`` garantiert die 3-Segment-Regel
-      (``max_file_size_bytes >= 3 * segment_max_bytes``) für jedes Budget ab der
-      technischen Segment-Untergrenze von ``RETENTION_SEGMENT_RATIO`` (= 3) Byte –
-      es gibt bewusst KEINE 4-MiB-Untergrenze im Auto-Pfad, damit auch winzige
-      Budgets im Auto-Start nie ein 422 auslösen.
-
-    Technische Untergrenze (#951, P2): ein positives Segment muss mindestens 1 Byte
-    groß sein, die 3-Segment-Regel verlangt also ``max_file_size_bytes >= 3``. Für
-    degenerierte Budgets von 1 oder 2 Byte (per API-Modell ``ge=1`` zwar gültig, aber
-    zu klein für ein einziges SQLite-Segment) ist die Regel mit einem positiven
-    Segment mathematisch unerfüllbar; die Ableitung liefert das kleinstmögliche
-    positive Segment (1 Byte). Damit die Auto-Ableitung in diesem Fall dennoch keinen
-    Startup-Crash über ``validate_store_config`` verursacht, hebt der Aufrufer das an
-    den Store weitergereichte Retention-Budget auf diese Untergrenze an
-    (siehe ``_effective_store_max_file_size_bytes``).
+    ``None`` means that the total dimension is explicitly unbounded, so the
+    matching segment trigger stays disabled. A positive total is split into at
+    least three segments. Totals below three produce the smallest positive
+    segment value and are rejected by ``validate_store_config`` instead of being
+    silently increased.
     """
     from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
 
-    if max_file_size_bytes is None:
-        return _SEGMENT_MAX_BYTES_DEFAULT
-    return max(1, min(_SEGMENT_MAX_BYTES_DEFAULT, max_file_size_bytes // RETENTION_SEGMENT_RATIO))
+    if retention_limit is None:
+        return None
+    return max(1, retention_limit // RETENTION_SEGMENT_RATIO)
+
+
+def derive_segment_max_bytes(max_file_size_bytes: int | None) -> int | None:
+    return _derive_segment_limit(max_file_size_bytes)
+
+
+def derive_segment_max_rows(max_entries: int | None) -> int | None:
+    return _derive_segment_limit(max_entries)
+
+
+def derive_segment_max_age(max_age: int | None) -> int | None:
+    return _derive_segment_limit(max_age)
 
 
 def _effective_store_max_file_size_bytes(
     max_file_size_bytes: int | None,
-    segment_max_bytes: int,
+    segment_max_bytes: int | None,
     *,
     explicit_segment: bool,
 ) -> int | None:
-    """Hebt das Retention-Budget auf die 3-Segment-Untergrenze an, wenn nötig (#951, P2).
+    """Keep the configured total size unchanged for explicit and derived segments.
 
-    Für degenerierte Budgets (1/2 Byte) ist die 3-Segment-Regel mit einem positiven
-    Segment unerfüllbar. Damit ``validate_store_config`` beim (Auto-)Store-Open nicht
-    crasht, wird das an den Store gereichte ``max_file_size_bytes`` in genau diesem
-    Fall auf ``RETENTION_SEGMENT_RATIO * segment_max_bytes`` angehoben – der kleinste
-    Wert, der die Regel erfüllt. Für alle regelkonformen Budgets (>= 3 Byte, der
-    Normalfall) bleibt der Wert unverändert.
-
-    Der Uplift greift NUR im auto-abgeleiteten Pfad (``explicit_segment=False``, der
-    Tiny-Budget-Clamp aus ``derive_segment_max_bytes``). Ist ``segment_max_bytes``
-    EXPLIZIT konfiguriert (Config/Konstruktor, ``explicit_segment=True``), bleibt das
-    konfigurierte ``max_file_size_bytes`` ein harter Deckel: eine zu grobe explizite
-    Segmentgröße darf das Retention-Budget NICHT still aufblähen, sondern muss die
-    3-Segment-Ablehnung in ``validate_store_config`` auslösen (#951, F1). Sonst liefe
-    z. B. ``max_file_size_bytes=100 MiB`` mit explizitem ``segment_max_bytes=64 MiB``
-    still mit 192 MiB Store-Budget, statt zu scheitern oder 100 MiB zu honorieren.
+    The retained compatibility helper no longer uplifts 1/2-byte budgets. Such
+    invalid three-segment combinations must remain visible to validation.
     """
-    from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
-
-    if max_file_size_bytes is None:
-        return None
-    if explicit_segment:
-        return max_file_size_bytes
-    return max(max_file_size_bytes, RETENTION_SEGMENT_RATIO * segment_max_bytes)
+    return max_file_size_bytes
 
 
 _SQLITE_CORRUPTION_MARKERS = (
@@ -275,10 +245,11 @@ class RingBuffer:
         # bleibt der gesamte Legacy-Single-File-Pfad unverändert und ``_store``
         # None; keine der Segment-Codepfade unten wird betreten.
         self._segmented = bool(segmented)
-        # Roh-Config (``None`` = auto) getrennt vom effektiven Wert halten: nur so
-        # kann ein späterer Budget-Wechsel die AUTO-Segmentgröße neu ableiten,
-        # statt auf dem einmal abgeleiteten ``budget/3`` einzufrieren (#919).
+        # Raw values stay separate from effective values. ``None`` means derived
+        # from the matching total limit when one exists, otherwise disabled.
         self._segment_max_bytes_config = segment_max_bytes
+        self._segment_max_rows_config = segment_max_rows
+        self._segment_max_age_config = segment_max_age
         self._segment_max_bytes = segment_max_bytes
         self._segment_max_rows = segment_max_rows
         self._segment_max_age = segment_max_age
@@ -331,17 +302,17 @@ class RingBuffer:
         from obs.ringbuffer.store.migration import LegacyMigrator
         from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
 
-        # ``segment_max_bytes`` automatisch aus ``max_file_size_bytes`` ableiten,
-        # wenn nicht explizit gesetzt (#919). Das abgeleitete Budget erfüllt die
-        # 3-Segment-Regel immer → validate_store_config kann beim Auto-Start nicht
-        # fehlschlagen. Explizite Werte werden respektiert und weiter validiert.
+        # Resolve every dimension independently. No matching total limit means
+        # disabled; there is deliberately no fixed fallback threshold.
         if self._segment_max_bytes_config is None:
             self._segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
+        if self._segment_max_rows_config is None:
+            self._segment_max_rows = derive_segment_max_rows(self._max_entries)
+        if self._segment_max_age_config is None:
+            self._segment_max_age = derive_segment_max_age(self._max_age)
 
-        # Degenerierte Budgets (1/2 Byte) auf die 3-Segment-Untergrenze anheben, damit
-        # die Auto-Ableitung nie über validate_store_config crasht (#951, P2). Nur im
-        # auto-abgeleiteten Pfad: ist ``segment_max_bytes`` explizit gesetzt, bleibt das
-        # konfigurierte Budget harter Deckel und die 3-Segment-Validierung greift (#951, F1).
+        # The configured total remains unchanged; invalid tiny budgets must fail
+        # the three-segment validation instead of being silently increased.
         effective_max_file_size = _effective_store_max_file_size_bytes(
             self._max_file_size_bytes,
             self._segment_max_bytes,
@@ -601,8 +572,8 @@ class RingBuffer:
             # Wert behalten. ``segment_max_bytes=None`` (auto) leitet aus dem
             # effektiven ``max_file_size_bytes`` neu ab.
             resolved_segment_max_bytes = self._segment_max_bytes_config if segment_max_bytes is _UNSET else segment_max_bytes
-            resolved_segment_max_rows = self._segment_max_rows if segment_max_rows is _UNSET else segment_max_rows
-            resolved_segment_max_age = self._segment_max_age if segment_max_age is _UNSET else segment_max_age
+            resolved_segment_max_rows = self._segment_max_rows_config if segment_max_rows is _UNSET else segment_max_rows
+            resolved_segment_max_age = self._segment_max_age_config if segment_max_age is _UNSET else segment_max_age
 
             if (
                 storage == self._storage
@@ -698,6 +669,8 @@ class RingBuffer:
             "max_file_size_bytes": self._max_file_size_bytes,
             "max_age": self._max_age,
             "segment_max_bytes_config": self._segment_max_bytes_config,
+            "segment_max_rows_config": self._segment_max_rows_config,
+            "segment_max_age_config": self._segment_max_age_config,
             "segment_max_bytes": self._segment_max_bytes,
             "segment_max_rows": self._segment_max_rows,
             "segment_max_age": self._segment_max_age,
@@ -720,6 +693,8 @@ class RingBuffer:
         self._max_file_size_bytes = snap["max_file_size_bytes"]
         self._max_age = snap["max_age"]
         self._segment_max_bytes_config = snap["segment_max_bytes_config"]
+        self._segment_max_rows_config = snap["segment_max_rows_config"]
+        self._segment_max_age_config = snap["segment_max_age_config"]
         self._segment_max_bytes = snap["segment_max_bytes"]
         self._segment_max_rows = snap["segment_max_rows"]
         self._segment_max_age = snap["segment_max_age"]
@@ -744,22 +719,22 @@ class RingBuffer:
         """
         from obs.ringbuffer.store.config import SegmentConfig, StoreRetentionConfig
 
-        # Roh-Config (``None`` = auto) merken, DANN den effektiven Wert ableiten —
-        # so folgt die Auto-Segmentgröße auch künftigen Budget-Änderungen und friert
-        # nicht auf dem alten ``budget/3`` ein. Explizite Werte bleiben unangetastet.
+        # Remember raw values, then resolve every matching retention dimension.
         self._segment_max_bytes_config = segment_max_bytes
+        self._segment_max_rows_config = segment_max_rows
+        self._segment_max_age_config = segment_max_age
         if segment_max_bytes is None:
             segment_max_bytes = derive_segment_max_bytes(self._max_file_size_bytes)
+        if segment_max_rows is None:
+            segment_max_rows = derive_segment_max_rows(self._max_entries)
+        if segment_max_age is None:
+            segment_max_age = derive_segment_max_age(self._max_age)
 
         self._segment_max_bytes = segment_max_bytes
         self._segment_max_rows = segment_max_rows
         self._segment_max_age = segment_max_age
 
-        # Konsistent zum Startpfad: degenerierte Budgets (1/2 Byte) auf die
-        # 3-Segment-Untergrenze anheben, statt einen Store mit budget<3*segment zu
-        # hinterlassen (#951, P2). Nur im auto-abgeleiteten Pfad – ein explizit zu grob
-        # gesetztes ``segment_max_bytes`` bleibt hart gedeckelt und läuft in die
-        # 3-Segment-Validierung (#951, F1).
+        # Keep the total unchanged so invalid three-segment combinations fail.
         effective_max_file_size = _effective_store_max_file_size_bytes(
             self._max_file_size_bytes,
             self._segment_max_bytes,
@@ -914,7 +889,7 @@ class RingBuffer:
         nicht-Legacy-Zeile). Erst NACH dem ersten segmentierten Append ist der
         Guard erfüllt. Würde ``enforce_retention`` nur bei fälliger Rotation
         laufen, bliebe die (u. U. 20–30 GB große) Legacy-Datei bei Default-
-        Schwellen (6 h / 256 MiB) bis zur ersten Rotation liegen, obwohl sie
+        Rotationsschwellen bis zur ersten Rotation liegen, obwohl sie
         längst reclaimbar wäre (#919-Kernszenario). Solange also noch ein
         attached Legacy-Segment existiert, wird ``enforce_retention`` auch ohne
         fällige Rotation ausgeführt, damit die über-budget-Legacy zeitnah

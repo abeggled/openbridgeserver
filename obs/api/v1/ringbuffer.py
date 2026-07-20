@@ -62,6 +62,9 @@ from obs.ringbuffer.ringbuffer import (
     _is_sqlite_memory_path,
     default_ringbuffer_disk_path,
     delete_ringbuffer_storage_files,
+    derive_segment_max_age,
+    derive_segment_max_bytes,
+    derive_segment_max_rows,
     get_optional_ringbuffer,
     get_ringbuffer,
     init_ringbuffer,
@@ -133,6 +136,34 @@ def _unsubscribe_ringbuffer(rb: Any) -> None:
         pass
 
 
+def _segment_limit_source(configured: int | None, retention: int | None) -> Literal["explicit", "derived", "disabled"]:
+    if configured is not None:
+        return "explicit"
+    if retention is not None:
+        return "derived"
+    return "disabled"
+
+
+def _segment_contract_stats(
+    *,
+    max_entries: int | None,
+    max_file_size_bytes: int | None,
+    max_age: int | None,
+    segment_max_bytes: int | None,
+    segment_max_rows: int | None,
+    segment_max_age: int | None,
+) -> dict[str, Any]:
+    return {
+        "effective_segment_max_bytes": segment_max_bytes if segment_max_bytes is not None else derive_segment_max_bytes(max_file_size_bytes),
+        "effective_segment_max_rows": segment_max_rows if segment_max_rows is not None else derive_segment_max_rows(max_entries),
+        "effective_segment_max_age": segment_max_age if segment_max_age is not None else derive_segment_max_age(max_age),
+        "segment_max_bytes_source": _segment_limit_source(segment_max_bytes, max_file_size_bytes),
+        "segment_max_rows_source": _segment_limit_source(segment_max_rows, max_entries),
+        "segment_max_age_source": _segment_limit_source(segment_max_age, max_age),
+        "retention_unbounded": max_entries is None and max_file_size_bytes is None and max_age is None,
+    }
+
+
 async def _disabled_stats(db: Database) -> RingBufferStats:
     cfg = await load_persisted_ringbuffer_config(db, storage_path=_ringbuffer_disk_path())
     return RingBufferStats(
@@ -149,6 +180,14 @@ async def _disabled_stats(db: Database) -> RingBufferStats:
         segment_max_rows=cfg.get("segment_max_rows"),
         segment_max_age=cfg.get("segment_max_age"),
         file_size_bytes=0,
+        **_segment_contract_stats(
+            max_entries=cfg["max_entries"],
+            max_file_size_bytes=cfg["max_file_size_bytes"],
+            max_age=cfg["max_age"],
+            segment_max_bytes=cfg.get("segment_max_bytes"),
+            segment_max_rows=cfg.get("segment_max_rows"),
+            segment_max_age=cfg.get("segment_max_age"),
+        ),
     )
 
 
@@ -221,6 +260,13 @@ class RingBufferStats(BaseModel):
     segment_max_bytes: int | None = None
     segment_max_rows: int | None = None
     segment_max_age: int | None = None
+    effective_segment_max_bytes: int | None = None
+    effective_segment_max_rows: int | None = None
+    effective_segment_max_age: int | None = None
+    segment_max_bytes_source: Literal["explicit", "derived", "disabled"] = "disabled"
+    segment_max_rows_source: Literal["explicit", "derived", "disabled"] = "disabled"
+    segment_max_age_source: Literal["explicit", "derived", "disabled"] = "disabled"
+    retention_unbounded: bool = False
     last_recovery_at: str | None = None
     last_recovery_file_count: int = 0
     # Segmentierter Store (#919) — nur im segmentierten Modus befüllt (``common``
@@ -2214,6 +2260,14 @@ async def ringbuffer_stats(
         segment_max_bytes=persisted.get("segment_max_bytes"),
         segment_max_rows=persisted.get("segment_max_rows"),
         segment_max_age=persisted.get("segment_max_age"),
+        **_segment_contract_stats(
+            max_entries=stats["max_entries"],
+            max_file_size_bytes=stats["max_file_size_bytes"],
+            max_age=stats["max_age"],
+            segment_max_bytes=persisted.get("segment_max_bytes"),
+            segment_max_rows=persisted.get("segment_max_rows"),
+            segment_max_age=persisted.get("segment_max_age"),
+        ),
         **stats,
     )
 
@@ -2296,6 +2350,11 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
     resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")
+    effective_segment_max_bytes = (
+        resolved_segment_max_bytes if resolved_segment_max_bytes is not None else derive_segment_max_bytes(resolved_max_file_size)
+    )
+    effective_segment_max_rows = resolved_segment_max_rows if resolved_segment_max_rows is not None else derive_segment_max_rows(resolved_max_entries)
+    effective_segment_max_age = resolved_segment_max_age if resolved_segment_max_age is not None else derive_segment_max_age(resolved_max_age)
 
     # Technische Grenzen NUR für EXPLIZIT gesetzte Segment-Werte durchsetzen (#919):
     # 4 MiB…1 GiB / 300 s…30 d / >= 1000. Nicht gesetzte Felder (Auto-Ableitung)
@@ -2332,12 +2391,17 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     # Legacy-Store mit kurzer ``max_age`` behalten will, darf hier kein 422 gegen
     # den (ungenutzten) Default-``segment_max_age`` bekommen.
     if resolved_segmented:
+        if effective_segment_max_bytes is None and effective_segment_max_rows is None and effective_segment_max_age is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "At least one effective segment rotation limit is required; configure a segment limit or a matching total retention limit",
+            )
         try:
             validate_store_config(
                 SegmentConfig(
-                    segment_max_bytes=resolved_segment_max_bytes,
-                    segment_max_rows=resolved_segment_max_rows,
-                    segment_max_age=resolved_segment_max_age,
+                    segment_max_bytes=effective_segment_max_bytes,
+                    segment_max_rows=effective_segment_max_rows,
+                    segment_max_age=effective_segment_max_age,
                 ),
                 StoreRetentionConfig(
                     max_file_size_bytes=resolved_max_file_size,
@@ -2426,8 +2490,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             "max_age": rb._max_age,
             "segmented": rb.segmented,
             "segment_max_bytes": rb._segment_max_bytes_config,
-            "segment_max_rows": rb._segment_max_rows,
-            "segment_max_age": rb._segment_max_age,
+            "segment_max_rows": rb._segment_max_rows_config,
+            "segment_max_age": rb._segment_max_age_config,
             # Retention-Schutz des Legacy-Segments mitsichern (#968, Codex :2443),
             # damit ein Rollback nach fehlgeschlagenem Rebuild den Schutz nicht verliert.
             "legacy_retention_protected": rb._legacy_retention_protected,
@@ -2615,5 +2679,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
         segment_max_bytes=resolved_segment_max_bytes,
         segment_max_rows=resolved_segment_max_rows,
         segment_max_age=resolved_segment_max_age,
+        **_segment_contract_stats(
+            max_entries=stats["max_entries"],
+            max_file_size_bytes=stats["max_file_size_bytes"],
+            max_age=stats["max_age"],
+            segment_max_bytes=resolved_segment_max_bytes,
+            segment_max_rows=resolved_segment_max_rows,
+            segment_max_age=resolved_segment_max_age,
+        ),
         **stats,
     )

@@ -132,6 +132,74 @@ describe('PrognosisBlock — unlimited budget', () => {
     expect(history).toContain('unbegrenzt')
     expect(history).not.toContain('NaN')
   })
+
+  it('projects 30-day and annual disk growth when total retention is explicitly unbounded', () => {
+    const wrapper = mountBlock({
+      prognosis: { ...fullPrognosis, bytes_per_hour: 18.5 * 1024 * 1024 },
+      segmentAgeHours: 24,
+      segmentMaxBytes: null,
+      segmentMaxRows: null,
+      maxFileSizeBytes: null,
+      retentionUnbounded: true,
+    })
+    const growth = wrapper.find('[data-testid="prognosis-unbounded-growth"]')
+    expect(growth.exists()).toBe(true)
+    expect(growth.text()).toContain('13 GiB')
+    expect(growth.text()).toContain('158 GiB')
+  })
+})
+
+describe('PrognosisBlock — winning rotation trigger', () => {
+  it('names age when age is the only effective trigger', () => {
+    const wrapper = mountBlock({
+      prognosis: { ...fullPrognosis, effective_segment_max_bytes: null },
+      segmentAgeHours: 24,
+      segmentMaxBytes: null,
+      segmentMaxRows: null,
+      maxFileSizeBytes: null,
+    })
+    expect(wrapper.find('[data-testid="prognosis-rotation"]').text()).toContain('Alter')
+  })
+
+  it('names rows when the row threshold is reached before age and size', () => {
+    const wrapper = mountBlock({
+      prognosis: fullPrognosis,
+      segmentAgeHours: 6,
+      segmentMaxBytes: 400 * 1024 * 1024,
+      segmentMaxRows: 6000,
+      maxFileSizeBytes: 20 * GIB,
+    })
+    const rotation = wrapper.find('[data-testid="prognosis-rotation"]').text()
+    expect(rotation).toContain('0,5 h')
+    expect(rotation).toContain('Zeilen')
+  })
+
+  it('uses age deterministically when all rotation triggers tie', () => {
+    const wrapper = mountBlock({
+      prognosis: fullPrognosis,
+      segmentAgeHours: 6,
+      segmentMaxBytes: 300 * 1024 * 1024, // 50 MiB/h → 6 h
+      segmentMaxRows: 72000, // 12,000 rows/h → 6 h
+      maxFileSizeBytes: 20 * GIB,
+    })
+    const rotation = wrapper.find('[data-testid="prognosis-rotation"]').text()
+    expect(rotation).toContain('6,0 h')
+    expect(rotation).toContain('Alter')
+  })
+
+  it('ignores a row threshold when no row rate is available', () => {
+    const wrapper = mountBlock({
+      prognosis: { ...fullPrognosis, rows_per_hour: null },
+      segmentAgeHours: 6,
+      segmentMaxBytes: 400 * 1024 * 1024,
+      segmentMaxRows: 1,
+      maxFileSizeBytes: 20 * GIB,
+    })
+    const rotation = wrapper.find('[data-testid="prognosis-rotation"]').text()
+    expect(rotation).toContain('6,0 h')
+    expect(rotation).toContain('Alter')
+    expect(rotation).not.toContain('Zeilen')
+  })
 })
 
 describe('PrognosisBlock — warming up', () => {

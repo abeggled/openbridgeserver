@@ -2,14 +2,13 @@
   <!--
     PrognosisBlock (#919/#938) — gemeinsame, menschlich formulierte RingBuffer-
     Prognose. Wird sowohl im MonitorConfigModal als auch in der Dashboard-
-    RingBufferCard verwendet (DRY). Rendert bis zu vier abgestimmte Zeilen aus
+    RingBufferCard verwendet (DRY). Rendert abgestimmte Zeilen aus
     ``prognosis`` (stats.prognosis) plus Budget-Kontext:
 
       1. Durchsatz  — MiB/h + Events/h (bytes_per_hour / rows_per_hour)
-      2. Rotation   — ~alle N h (avg_segment_seconds); mit Größen-Cap-Zusatz,
-                      wenn der Cap vor der eingestellten Zeit greift
-      3. Historie   — Budget reicht für ~X (estimated_retention_seconds +
-                      maxFileSizeBytes); unbegrenzt, wenn kein Budget gesetzt ist
+      2. Rotation   — ~alle N h; Minimum aus Alter, Größe und Zeilen samt Auslöser
+      3. Historie   — Budget reicht für ~X; bei vollständig unbegrenzter
+                      Gesamt-Retention zusätzlich 30-Tage-/Jahreswachstum
       4. Budget-Empfehlung — Budget ≥ V für ~{segmentAgeHours}-h-Segmente; V wird
                       IM FRONTEND berechnet (bytes_per_hour * age * 3), damit Label
                       und Wert live beim Tippen zusammenpassen.
@@ -29,6 +28,13 @@
       <p v-if="rateLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-rate">{{ rateLine }}</p>
       <p v-if="rotationLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-rotation">{{ rotationLine }}</p>
       <p v-if="historyLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-history">{{ historyLine }}</p>
+      <p
+        v-if="unboundedGrowthLine"
+        class="text-xs font-medium text-amber-700 dark:text-amber-300"
+        data-testid="prognosis-unbounded-growth"
+      >
+        {{ unboundedGrowthLine }}
+      </p>
       <p v-if="budgetLine" class="text-xs text-slate-600 dark:text-slate-300" data-testid="prognosis-budget">{{ budgetLine }}</p>
     </template>
   </div>
@@ -55,9 +61,16 @@ const props = defineProps({
   // Aktuell konfiguriertes Segment-Alter in Stunden. null → Budget-Zeile weg
   // (der Consumer kennt kein Segment-Alter).
   segmentAgeHours: { type: [Number, String], default: null },
+  // Effektive weitere Rotationsschwellen. undefined nutzt als Abwärtskompatibilität
+  // den Prognosewert; null bedeutet ausdrücklich: dieser Trigger ist deaktiviert.
+  segmentMaxBytes: { type: [Number, String], default: undefined },
+  segmentMaxRows: { type: [Number, String], default: undefined },
   // Größen-Budget (stats.max_file_size_bytes) für die Historie-Zeile. null →
   // Budget unbegrenzt.
   maxFileSizeBytes: { type: [Number, String], default: null },
+  // Nur true, wenn ALLE Gesamtgrenzen deaktiviert sind. undefined bewahrt die
+  // bisherige Anzeige für Consumer, die dieses neue Signal noch nicht liefern.
+  retentionUnbounded: { type: Boolean, default: undefined },
 })
 
 // 3-Segment-Mindestregel: das Budget sollte mindestens drei Segmente fassen,
@@ -77,6 +90,10 @@ function fmtNum(value, digits = 0) {
   } catch {
     return String(value)
   }
+}
+
+function formatBytesCompact(value) {
+  return formatBytesBinary(value).replace(/([,.])0 (?=[KMGT]iB$)/, ' ')
 }
 
 /** Formatiert Sekunden menschlich als „~X h" bzw. „~X Tage" (h<48 → Stunden). */
@@ -106,33 +123,30 @@ const rateLine = computed(() => {
   })
 })
 
-// 2. Rotation — ERWARTETES Intervall aus der Config, nicht der historische
-// Messwert: min(segment_max_age, Zeit-bis-Größen-Cap). Füllt sich die Größe
-// schneller als das Alter, greift der Cap (größengetrieben); sonst rotiert die
-// Zeit (zeitgetrieben). So passt die Zeile zur eingestellten Segmentgröße —
-// z. B. „~alle 1 h" bei segment_max_age=1 h, statt dem 1,8-h-Durchschnitt alter
-// Segmente.
+// 2. Rotation — erwartetes Intervall als Minimum aller wirksamen Trigger.
 const rotationLine = computed(() => {
   const age = posNumber(props.segmentAgeHours) // Stunden
-  const cap = posNumber(props.prognosis?.effective_segment_max_bytes) // Bytes
+  const rawCap = props.segmentMaxBytes !== undefined
+    ? props.segmentMaxBytes
+    : props.prognosis?.effective_segment_max_bytes
+  const cap = posNumber(rawCap) // Bytes
+  const rowCap = posNumber(props.segmentMaxRows)
   const bytesPerHour = posNumber(props.prognosis?.bytes_per_hour)
+  const rowsPerHour = posNumber(props.prognosis?.rows_per_hour)
   const fillHours = cap !== null && bytesPerHour !== null ? cap / bytesPerHour : null
-  let expectedHours = null
-  let sizeDriven = false
-  if (age !== null && fillHours !== null) {
-    sizeDriven = fillHours < age
-    expectedHours = sizeDriven ? fillHours : age
-  } else if (age !== null) {
-    expectedHours = age
-  } else if (fillHours !== null) {
-    expectedHours = fillHours
-    sizeDriven = true
-  }
-  if (expectedHours === null) return ''
-  const base = t('ringbuffer.prognosis.rotation', {
-    hours: fmtNum(expectedHours, expectedHours < 10 ? 1 : 0),
+  const rowHours = rowCap !== null && rowsPerHour !== null ? rowCap / rowsPerHour : null
+  const candidates = [
+    { kind: 'age', hours: age },
+    { kind: 'size', hours: fillHours },
+    { kind: 'rows', hours: rowHours },
+  ].filter((candidate) => candidate.hours !== null)
+  if (!candidates.length) return ''
+  const winner = candidates.reduce((first, candidate) => candidate.hours < first.hours ? candidate : first)
+  const base = t('ringbuffer.prognosis.rotationWithTrigger', {
+    hours: fmtNum(winner.hours, winner.hours < 10 ? 1 : 0),
+    trigger: t(`ringbuffer.prognosis.trigger.${winner.kind}`),
   })
-  if (sizeDriven && cap !== null && age !== null) {
+  if (winner.kind === 'size' && cap !== null && age !== null) {
     return base + t('ringbuffer.prognosis.rotationSizeCap', {
       cap: fmtNum(cap / MIB, cap / MIB < 10 ? 1 : 0),
       age: fmtNum(age, age < 10 ? 1 : 0),
@@ -144,10 +158,24 @@ const rotationLine = computed(() => {
 // 3. Historie — Budget reicht für ~X. Kein Budget → „unbegrenzt".
 const historyLine = computed(() => {
   const budget = posNumber(props.maxFileSizeBytes)
-  if (budget === null) return t('ringbuffer.prognosis.historyUnlimited')
+  if (budget === null) {
+    if (props.retentionUnbounded === false) return t('ringbuffer.prognosis.historyOtherLimits')
+    return t('ringbuffer.prognosis.historyUnlimited')
+  }
   const dur = humanDuration(props.prognosis?.estimated_retention_seconds)
   if (dur === null) return ''
   return t('ringbuffer.prognosis.history', { budget: formatBytesBinary(budget), duration: dur })
+})
+
+// Bei bewusst unbegrenzter Gesamt-Retention die Konsequenz quantifizieren.
+const unboundedGrowthLine = computed(() => {
+  if (props.retentionUnbounded !== true) return ''
+  const bytesPerHour = posNumber(props.prognosis?.bytes_per_hour)
+  if (bytesPerHour === null) return ''
+  return t('ringbuffer.prognosis.unboundedGrowth', {
+    month: formatBytesCompact(bytesPerHour * 24 * 30),
+    year: formatBytesCompact(bytesPerHour * 24 * 365),
+  })
 })
 
 // 4. Budget-Empfehlung — V IM FRONTEND berechnet (bytes_per_hour * age * 3),

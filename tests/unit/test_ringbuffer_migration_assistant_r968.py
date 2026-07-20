@@ -237,7 +237,11 @@ async def test_stats_exposes_over_budget_under_store_backend_extra(tmp_path: Pat
     await _seed_legacy(legacy, list(range(200)))
     # Schutz AN: das attachte Legacy bleibt erhalten und der Store bleibt ueber
     # Budget (retention_over_budget=True), statt es sofort per FIFO zu reclaimen.
-    rb = _seg_rb(tmp_path, max_file_size_bytes=1, legacy_retention_protected=True)
+    # Three bytes is the smallest valid total when segment retention must keep
+    # room for at least three one-byte segments.  It is still far below the
+    # attached legacy database and therefore preserves this test's over-budget
+    # condition without bypassing the production ratio validation.
+    rb = _seg_rb(tmp_path, max_file_size_bytes=3, legacy_retention_protected=True)
     await rb.start()
     try:
         await rb.record(ts=_iso(50), datapoint_id="dp-1", topic="dp/dp-1/value", old_value=None, new_value=1, source_adapter="api", quality="good")
