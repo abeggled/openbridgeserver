@@ -98,6 +98,7 @@
     "hintDrag": "Ziehen → verschieben",
     "hintResize": "↘ Handle → Größe ändern",
     "hintDelete": "Entf → Widget löschen",
+    "hintMultiSelect": "Umschalt/Strg+Klick oder Ziehen auf freier Fläche → Mehrfachauswahl",
     "removeWidget": "Entfernen",
     "widgetName": "Name",
     "widgetNamePlaceholder": "z.B. Wohnzimmer Dimmer",
@@ -111,6 +112,11 @@
     "resizeConfigPanel": "Ziehen, um die Panel-Breite zu ändern",
     "hintEmpty": "Widget aus der Palette links einfügen",
     "hintNoSelection": "Widget auf dem Canvas anklicken\noder aus der Palette einfügen",
+    "multiSelect": {
+      "count": "{n} Widgets ausgewählt",
+      "removeAll": "Alle löschen",
+      "hint": "Die Konfiguration kann nicht für mehrere Widgets gleichzeitig bearbeitet werden. Wähle nur eines aus, um dessen Einstellungen zu bearbeiten."
+    },
     "widgetCountSingular": "Widget auf dieser Seite",
     "widgetCountPlural": "Widgets auf dieser Seite",
     "brokenDpRef": "Mindestens ein Datenpunkt-Verweis wurde nicht gefunden",
