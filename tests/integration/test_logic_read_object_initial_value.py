@@ -8,7 +8,8 @@ the graph, without waiting for the next external DataPoint update:
      still propagate normally.
   2. Multiple Read Object blocks are initialized independently.
   3. A DataPoint without a current value is handled deterministically
-     (no write, no error).
+     (no write, no error) — including downstream nodes that would coerce
+     the missing value to 0/False.
   4. A disabled graph is not initialized; re-activating it (PATCH) is.
   5. A full save (PUT) that enables the graph initializes it.
   6. Import and duplicate behave like create.
@@ -166,6 +167,57 @@ async def test_no_current_value_is_deterministic(client, auth_headers):
         assert await _get_value(client, auth_headers, dst_id) == 5
     finally:
         await _cleanup(client, auth_headers, [graph_id], [src_id, dst_id])
+
+
+@pytest.mark.asyncio
+async def test_unseeded_branch_does_not_write_coerced_value(client, auth_headers):
+    """A branch fed by a Read Object without a current value must not write a
+    coerced 0/False, while independent seeded branches still initialize."""
+    ts = time.time()
+    src_a = await _create_dp(client, auth_headers, f"IT-1031-Taint-SrcA-{ts}")
+    src_b = await _create_dp(client, auth_headers, f"IT-1031-Taint-SrcB-{ts}")
+    dst_a = await _create_dp(client, auth_headers, f"IT-1031-Taint-DstA-{ts}")
+    dst_b = await _create_dp(client, auth_headers, f"IT-1031-Taint-DstB-{ts}")
+    graph_id = None
+    try:
+        await _set_value(client, auth_headers, src_a, 7)
+        # src_b intentionally has no value — math_map would coerce None to 0
+
+        flow_a = _read_write_flow(src_a, dst_a, "A")
+        flow = {
+            "nodes": flow_a["nodes"]
+            + [
+                {
+                    "id": "rB",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 200},
+                    "data": {"datapoint_id": src_b, "datapoint_name": "srcB"},
+                },
+                {
+                    "id": "mB",
+                    "type": "math_map",
+                    "position": {"x": 150, "y": 200},
+                    "data": {"in_min": 0, "in_max": 100, "out_min": 0, "out_max": 1},
+                },
+                {
+                    "id": "wB",
+                    "type": "datapoint_write",
+                    "position": {"x": 300, "y": 200},
+                    "data": {"datapoint_id": dst_b, "datapoint_name": "dstB"},
+                },
+            ],
+            "edges": flow_a["edges"]
+            + [
+                {"id": "eB1", "source": "rB", "sourceHandle": "value", "target": "mB", "targetHandle": "value"},
+                {"id": "eB2", "source": "mB", "sourceHandle": "result", "target": "wB", "targetHandle": "value"},
+            ],
+        }
+        graph_id = await _create_graph(client, auth_headers, "IT-1031-Taint", flow)
+
+        assert await _get_value(client, auth_headers, dst_a) == 7
+        assert await _get_value(client, auth_headers, dst_b) is None
+    finally:
+        await _cleanup(client, auth_headers, [graph_id], [src_a, src_b, dst_a, dst_b])
 
 
 @pytest.mark.asyncio

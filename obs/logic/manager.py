@@ -1260,15 +1260,21 @@ class LogicManager:
         return await self._execute_graph(graph_id, name, flow, {})
 
     async def initialize_graph(self, graph_id: str) -> None:
-        """Run one execution right after a graph is saved or activated.
+        """Seed Read Object nodes with their current registry values right
+        after a graph is saved or activated (issue #1031).
 
         Without this, datapoint_read nodes stay unset until their DataPoint
-        receives the next external update (issue #1031). _execute_graph seeds
-        every datapoint_read node from the registry, so this single run
-        propagates the latest known values through the graph. No-op for
-        unknown or disabled graphs and for graphs without a configured
-        datapoint_read node; errors are logged, never raised, so a failed
-        initial run cannot break the save request.
+        receives the next external update. Deliberately NOT a full
+        _execute_graph run: saving a sheet is not a datapoint event, so this
+        pass evaluates the graph side-effect-free — stateful nodes
+        (statistics, memory, sequences) run on a throwaway state copy, no
+        iCal URLs are fetched, and no trigger-driven action nodes
+        (api_client, notify_*, wake_on_lan, message_archive, value_sequence)
+        are started. Only datapoint_write outputs are published, and only
+        when they do not descend from a Read Object without a current value
+        (whose None would otherwise be coerced to 0/False downstream).
+        Errors are logged, never raised, so a failed initial run cannot
+        break the save request.
         """
         entry = self._graphs.get(graph_id)
         if not entry:
@@ -1276,12 +1282,60 @@ class LogicManager:
         name, enabled, flow = entry
         if not enabled:
             return
-        if not any(node.type == "datapoint_read" and node.data.get("datapoint_id") for node in flow.nodes):
+
+        # Seed every configured Read Object from the registry; nodes whose
+        # DataPoint has no current value taint their downstream subgraph.
+        seeds: dict[str, dict[str, Any]] = {}
+        unseeded: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "datapoint_read":
+                continue
+            dp_id_str = node.data.get("datapoint_id")
+            if not dp_id_str:
+                continue
+            vs = None
+            try:
+                vs = self._registry.get_value(uuid.UUID(dp_id_str))
+            except Exception:
+                pass
+            # The registry returns an empty ValueState for DataPoints that
+            # never received a value — only a real value counts as seeded.
+            if vs is not None and vs.value is not None:
+                seeds[node.id] = {"value": vs.value, "changed": False}
+            else:
+                unseeded.add(node.id)
+        if not seeds:
             return
+
+        tainted = set(unseeded)
+        grew = True
+        while grew:
+            grew = False
+            for edge in flow.edges:
+                if edge.source in tainted and edge.target not in tainted:
+                    tainted.add(edge.target)
+                    grew = True
+
         try:
-            await self._execute_graph(graph_id, name, flow, {})
+            hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
+            executor = GraphExecutor(flow, hyst_copy, self._app_config)
+            outputs = executor.execute(seeds, commit_memory=False)
+
+            now = datetime.now(UTC)
+            graph_state = self._node_state.setdefault(graph_id, {})
+            wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
+            await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=tainted)
+
+            # Prime the event filters (trigger_on_change, min_delta, throttle)
+            # so the next external update repeating the seeded value is
+            # filtered like any other repeat instead of re-firing as a
+            # "first" value.
+            for node_id, seed in seeds.items():
+                ns = graph_state.setdefault(node_id, {})
+                ns["last_value"] = seed["value"]
+                ns["last_ts"] = now
         except Exception as exc:
-            logger.warning("LogicManager: initial execution of graph %s (%s) failed: %s", graph_id[:8], name, exc)
+            logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
 
     async def _execute_graph(
         self,
@@ -3119,13 +3173,85 @@ class LogicManager:
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
+        await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, execute_now, logic_depth)
+
+        # Value sequences are intentionally started after synchronous graph
+        # writes, so an execution that triggers both has deterministic order.
+        for node, condition in pending_sequence_starts:
+            if not graph_state.get(node.id, {}).get("sequence_prev_trigger", False):
+                continue
+            current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
+            if current_condition:
+                self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
+
+        # ── Persist node state (statistics / hysteresis) to DB ───────────
+        # Nodes with persist_state=False are excluded from the saved snapshot
+        # so their accumulators reset on server restart (opt-out behaviour).
+        hyst = self._hysteresis.get(graph_id)
+        if hyst:
+            try:
+                graph_entry = self._graphs.get(graph_id)
+                if graph_entry:
+                    _, _, _flow = graph_entry
+                    no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
+                    state_to_save = {nid: s for nid, s in hyst.items() if nid not in no_persist}
+                else:
+                    state_to_save = hyst
+                await self._db.execute_and_commit(
+                    "UPDATE logic_graphs SET node_state = ? WHERE id = ?",
+                    (json.dumps(state_to_save), graph_id),
+                )
+            except Exception as exc:
+                logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
+
+        # ── Broadcast final execution results to all WS clients ──────────
+        # Broadcast happens here — after all async ops (api_client HTTP calls,
+        # second-pass re-execution, etc.) — so the debug view shows the real
+        # success/response values and not the executor's initial placeholders.
+        try:
+            from obs.api.v1.websocket import get_ws_manager
+
+            def _safe(v: Any) -> Any:
+                if v is None or isinstance(v, (bool, int, float, str)):
+                    return v
+                return str(v)
+
+            safe_outputs = {nid: {k: _safe(val) for k, val in node_out.items()} for nid, node_out in outputs.items() if isinstance(node_out, dict)}
+            await get_ws_manager().broadcast(
+                {
+                    "action": "logic_run",
+                    "graph_id": graph_id,
+                    "outputs": safe_outputs,
+                },
+            )
+        except Exception:
+            pass  # WS not ready or no clients — non-critical
+
+        return outputs
+
+    # ── Cache ─────────────────────────────────────────────────────────────
+
+    async def _apply_datapoint_write_outputs(
+        self,
+        graph_id: str,
+        flow: FlowData,
+        outputs: dict[str, dict[str, Any]],
+        graph_state: dict[str, Any],
+        wired_inputs: set[tuple[str, str]],
+        write_now: datetime,
+        logic_depth: int,
+        *,
+        skip_node_ids: set[str] | frozenset[str] = frozenset(),
+    ) -> None:
+        """Apply trigger gating + write-side filters to datapoint_write outputs,
+        then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get
+        notified. skip_node_ids excludes individual write nodes (used by
+        initialize_graph for writes descending from unseeded Read Objects).
+        """
         from obs.core.event_bus import DataValueEvent
 
-        write_now = execute_now
-
-        # Build set of node+handle pairs that have an incoming edge (= are wired)
         for node in flow.nodes:
-            if node.type != "datapoint_write":
+            if node.type != "datapoint_write" or node.id in skip_node_ids:
                 continue
             node_out = outputs.get(node.id, {})
             write_val = node_out.get("_write_value")
@@ -3191,62 +3317,6 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception as exc:
                 logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
-
-        # Value sequences are intentionally started after synchronous graph
-        # writes, so an execution that triggers both has deterministic order.
-        for node, condition in pending_sequence_starts:
-            if not graph_state.get(node.id, {}).get("sequence_prev_trigger", False):
-                continue
-            current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
-            if current_condition:
-                self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
-
-        # ── Persist node state (statistics / hysteresis) to DB ───────────
-        # Nodes with persist_state=False are excluded from the saved snapshot
-        # so their accumulators reset on server restart (opt-out behaviour).
-        hyst = self._hysteresis.get(graph_id)
-        if hyst:
-            try:
-                graph_entry = self._graphs.get(graph_id)
-                if graph_entry:
-                    _, _, _flow = graph_entry
-                    no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
-                    state_to_save = {nid: s for nid, s in hyst.items() if nid not in no_persist}
-                else:
-                    state_to_save = hyst
-                await self._db.execute_and_commit(
-                    "UPDATE logic_graphs SET node_state = ? WHERE id = ?",
-                    (json.dumps(state_to_save), graph_id),
-                )
-            except Exception as exc:
-                logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
-
-        # ── Broadcast final execution results to all WS clients ──────────
-        # Broadcast happens here — after all async ops (api_client HTTP calls,
-        # second-pass re-execution, etc.) — so the debug view shows the real
-        # success/response values and not the executor's initial placeholders.
-        try:
-            from obs.api.v1.websocket import get_ws_manager
-
-            def _safe(v: Any) -> Any:
-                if v is None or isinstance(v, (bool, int, float, str)):
-                    return v
-                return str(v)
-
-            safe_outputs = {nid: {k: _safe(val) for k, val in node_out.items()} for nid, node_out in outputs.items() if isinstance(node_out, dict)}
-            await get_ws_manager().broadcast(
-                {
-                    "action": "logic_run",
-                    "graph_id": graph_id,
-                    "outputs": safe_outputs,
-                },
-            )
-        except Exception:
-            pass  # WS not ready or no clients — non-critical
-
-        return outputs
-
-    # ── Cache ─────────────────────────────────────────────────────────────
 
     async def _load_graphs(self) -> None:
         rows = await self._db.fetchall("SELECT id, name, enabled, flow_data, node_state FROM logic_graphs")
