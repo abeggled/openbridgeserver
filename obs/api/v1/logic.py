@@ -132,7 +132,9 @@ async def create_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        await manager.reload()
+        await manager.initialize_graph(gid)
     except Exception:
         pass
     return _row_to_out(row)
@@ -198,6 +200,7 @@ async def update_graph_full(
         else:
             manager.invalidate_cache(graph_id)
             await manager.reload()
+            await manager.initialize_graph(graph_id)
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
@@ -238,8 +241,10 @@ async def update_graph_partial(
         try:
             from obs.logic.manager import get_logic_manager
 
-            get_logic_manager().invalidate_cache(graph_id)
-            await get_logic_manager().reload()
+            manager = get_logic_manager()
+            manager.invalidate_cache(graph_id)
+            await manager.reload()
+            await manager.initialize_graph(graph_id)
         except Exception:
             pass
     else:
@@ -352,7 +357,9 @@ async def import_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        await manager.reload()
+        await manager.initialize_graph(gid)
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
@@ -431,7 +438,9 @@ async def duplicate_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        await manager.reload()
+        await manager.initialize_graph(new_id)
     except Exception:
         pass
     result = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (new_id,))

@@ -1259,6 +1259,30 @@ class LogicManager:
         name, enabled, flow = entry
         return await self._execute_graph(graph_id, name, flow, {})
 
+    async def initialize_graph(self, graph_id: str) -> None:
+        """Run one execution right after a graph is saved or activated.
+
+        Without this, datapoint_read nodes stay unset until their DataPoint
+        receives the next external update (issue #1031). _execute_graph seeds
+        every datapoint_read node from the registry, so this single run
+        propagates the latest known values through the graph. No-op for
+        unknown or disabled graphs and for graphs without a configured
+        datapoint_read node; errors are logged, never raised, so a failed
+        initial run cannot break the save request.
+        """
+        entry = self._graphs.get(graph_id)
+        if not entry:
+            return
+        name, enabled, flow = entry
+        if not enabled:
+            return
+        if not any(node.type == "datapoint_read" and node.data.get("datapoint_id") for node in flow.nodes):
+            return
+        try:
+            await self._execute_graph(graph_id, name, flow, {})
+        except Exception as exc:
+            logger.warning("LogicManager: initial execution of graph %s (%s) failed: %s", graph_id[:8], name, exc)
+
     async def _execute_graph(
         self,
         graph_id: str,
