@@ -6,9 +6,14 @@
 
 ### New features ✨
 * Adapter: 1-Wire adapter rewritten as an `owserver`/OWFS client via `pyownet`, so USB busmasters (including the ElabNET PBM) and native kernel buses all work through one code path. Adds sensor/property browsing with inline ROM-ID → label aliasing from the binding form, and writable 1-Wire properties (e.g. DS2408 switches) now actually write instead of being a no-op. https://github.com/abeggled/openbridgeserver/issues/6
+* Logic Engine/Admin GUI: Added a Comment node — a freely placeable, purely visual note with multi-line text for documenting non-obvious graph logic directly on the canvas, with no effect on execution. Text renders inline in the node body and the node is resizable. https://github.com/abeggled/openbridgeserver/issues/1043
 * Logic Engine/Admin GUI: Added a Sequence node for state-triggered, non-blocking value-write and pause sequences. Sequences are configured with a visual step editor (including object picker, reordering, duplication, pauses and a blink preset), configurable repeat/restart policies, and normal object values such as colours, switches or dimmer levels. https://github.com/abeggled/openbridgeserver/issues/1021
 
 ### Fixes 🐞
+* Logic/History: Consumption counters now reset daily, weekly, monthly, and yearly values in the configured application timezone. SQLite history aggregate buckets now carry explicit UTC (`Z`) timestamps, and the Chart widget continues to interpret legacy timezone-less buckets as UTC. https://github.com/abeggled/openbridgeserver/issues/975 https://github.com/abeggled/openbridgeserver/issues/909
+* Logic Engine/Admin GUI: Delay and Pulse function blocks no longer accept negative time values. https://github.com/abeggled/openbridgeserver/issues/1002
+* Logic engine: JSON Extractor path selection now assigns the chosen path to the selected output instead of incorrectly overwriting the last output. https://github.com/abeggled/openbridgeserver/issues/980
+* KNX: Added the reactive-energy datapoint types DPT 13.012 (VARh) and DPT 13.015 (kVARh) to the DPT registry. Bindings configured with these DPTs previously fell back to the UNKNOWN definition and produced no decoded value. https://github.com/abeggled/openbridgeserver/pull/1030
 
 ### Known Issues 🔔
 * none

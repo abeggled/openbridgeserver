@@ -76,6 +76,10 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 
 ### Fehlerbehebungen
 
+**Zeitzonen — Verbrauchszähler und History-Chart (#975, #909)**
+- Verbrauchszähler setzen Tages-, Wochen-, Monats- und Jahreswerte jetzt in der konfigurierten App-Zeitzone zurück, statt in der Zeitzone des Serverprozesses.
+- SQLite-Aggregations-Buckets werden als eindeutige UTC-Zeitstempel mit `Z` ausgegeben; das History-Chart interpretiert auch bereits vorhandene zeitlosen Buckets weiterhin als UTC.
+
 **Wertzuordnung — N-Werte und Modbus-Fliesskommazahlen (#208)**
 - Die Wertzuordnung (value_map) unterstützt jetzt beliebig viele Einträge — z.B. `{"0": "Aus", "1": "Init", "2": "Aktiv", ..., "10": "Standby"}` (bisher war nur 2-Wert-Logik dokumentiert)
 - Fehler behoben: Modbus und ähnliche Adapter liefern ganzzahlige Werte als Fliesskomma (z.B. `5.0` statt `5`). Die Suche im Wörterbuch schlug daher fehl, weil `"5.0" != "5"`. Ganzzahlige Fliesskommazahlen werden jetzt vor der Suche normalisiert (`5.0 → "5"`)
