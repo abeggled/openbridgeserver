@@ -35,6 +35,14 @@ OWFS yes/no properties (DS2408 PIO.x, sensed.x, latch.x, ...) are parsed as bool
 not float, so BOOLEAN datapoints don't reject them downstream as a type mismatch.
 browse_sensors() also resolves OWFS aliases (root entries that aren't bare ROM-IDs)
 via their "address" property, so an aliased device still shows up in a scan.
+
+If owserver isn't reachable yet when connect() first runs (a common boot-order
+race — owserver is an external service OBS doesn't start or sequence itself),
+connect() spawns a background _reconnect_loop() that keeps retrying every 10s
+instead of leaving the instance disconnected until an admin manually restarts
+it. Once a retry succeeds, it re-runs _on_bindings_reloaded() to start polling,
+since bindings were already loaded at startup even though that first call
+no-op'd without a live proxy.
 """
 
 from __future__ import annotations
@@ -125,6 +133,11 @@ class OneWireAdapter(AdapterBase):
         # pyownet errors (ConnError/OwnetTimeout/ProtocolError) from per-property
         # OwnetError (owserver reachable, just an error for that one path).
         self._owprotocol: Any = None
+        # Retries a failed initial connect() in the background (owserver commonly
+        # starts a few seconds after OBS during a shared boot) — otherwise the
+        # instance would stay disconnected forever until an admin manually restarts
+        # it, since _on_bindings_reloaded() never starts polling without a proxy.
+        self._reconnect_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -140,17 +153,22 @@ class OneWireAdapter(AdapterBase):
             await self._publish_status(False, "pyownet not installed", code="libNotInstalled", params={"lib": "pyownet"})
             return
 
+        self._owprotocol = owprotocol
+        if not await self._try_connect():
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop(), name="onewire-reconnect")
+
+    async def _try_connect(self) -> bool:
+        """Attempt a single owserver connection. Returns True on success."""
         if self._executor is not None:
             self._executor.shutdown(wait=False)
-        self._owprotocol = owprotocol
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="onewire-owserver")
 
         try:
             self._proxy = await asyncio.get_event_loop().run_in_executor(
                 self._executor,
-                lambda: owprotocol.proxy(host=self._cfg.host, port=self._cfg.port, persistent=True),
+                lambda: self._owprotocol.proxy(host=self._cfg.host, port=self._cfg.port, persistent=True),
             )
-        except owprotocol.Error as exc:
+        except self._owprotocol.Error as exc:
             # Covers ConnError (socket-level refusal/unreachable), OwnetTimeout,
             # and ProtocolError subclasses (MalformedHeader/ShortRead/ShortWrite —
             # host:port is reachable but isn't actually owserver).
@@ -163,7 +181,7 @@ class OneWireAdapter(AdapterBase):
             )
             self._executor.shutdown(wait=False)
             self._executor = None
-            return
+            return False
 
         await self._publish_status(
             True,
@@ -172,8 +190,26 @@ class OneWireAdapter(AdapterBase):
             params={"host": self._cfg.host, "port": self._cfg.port},
         )
         logger.info("1-Wire adapter connected: owserver %s:%d", self._cfg.host, self._cfg.port)
+        return True
+
+    async def _reconnect_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(10.0)
+                if await self._try_connect():
+                    # self._bindings was already populated by the initial
+                    # reload_instance_from_rows() call at startup even though
+                    # _on_bindings_reloaded() no-op'd without a proxy — re-run it
+                    # now to actually start polling.
+                    await self._on_bindings_reloaded()
+                    return
+        except asyncio.CancelledError:
+            return
 
     async def disconnect(self) -> None:
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            self._reconnect_task = None
         for t in self._poll_tasks:
             t.cancel()
         self._poll_tasks.clear()

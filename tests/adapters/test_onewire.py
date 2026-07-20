@@ -124,7 +124,10 @@ class TestConnect:
     @pytest.mark.asyncio
     async def test_conn_error_leaves_adapter_disconnected(self, mock_bus):
         adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
-        with mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.ConnError("refused")):
+        with (
+            mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.ConnError("refused")),
+            mock.patch.object(asyncio, "create_task", side_effect=_mock_create_task),
+        ):
             await adapter.connect()
         assert adapter._proxy is None
         assert adapter.connected is False
@@ -135,7 +138,10 @@ class TestConnect:
         """host:port reachable but not actually owserver — pyownet raises a
         ProtocolError subclass (MalformedHeader), not ConnError."""
         adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
-        with mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.MalformedHeader("garbage", b"garbage")):
+        with (
+            mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.MalformedHeader("garbage", b"garbage")),
+            mock.patch.object(asyncio, "create_task", side_effect=_mock_create_task),
+        ):
             await adapter.connect()
         assert adapter._proxy is None
         assert adapter.connected is False
@@ -144,11 +150,36 @@ class TestConnect:
     @pytest.mark.asyncio
     async def test_timeout_leaves_adapter_disconnected(self, mock_bus):
         adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
-        with mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.OwnetTimeout(1.0, 1.0)):
+        with (
+            mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.OwnetTimeout(1.0, 1.0)),
+            mock.patch.object(asyncio, "create_task", side_effect=_mock_create_task),
+        ):
             await adapter.connect()
         assert adapter._proxy is None
         assert adapter.connected is False
         assert adapter.last_detail_code == "couldNotConnectTo"
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_spawns_reconnect_task(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with (
+            mock.patch.object(owprotocol, "proxy", side_effect=owprotocol.ConnError("refused")),
+            mock.patch.object(asyncio, "create_task", side_effect=_mock_create_task) as create_task,
+        ):
+            await adapter.connect()
+        create_task.assert_called_once()
+        assert adapter._reconnect_task is not None
+
+    @pytest.mark.asyncio
+    async def test_successful_connect_does_not_spawn_reconnect_task(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with (
+            mock.patch.object(owprotocol, "proxy", return_value=mock.MagicMock()),
+            mock.patch.object(asyncio, "create_task", side_effect=_mock_create_task) as create_task,
+        ):
+            await adapter.connect()
+        create_task.assert_not_called()
+        assert adapter._reconnect_task is None
 
     @pytest.mark.asyncio
     async def test_successful_connect_stores_owprotocol_module(self, mock_bus):
@@ -172,6 +203,46 @@ class TestConnect:
 
 
 # ---------------------------------------------------------------------------
+# _reconnect_loop()
+# ---------------------------------------------------------------------------
+
+
+class TestReconnectLoop:
+    @pytest.mark.asyncio
+    async def test_retries_until_success_then_reloads_bindings(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        adapter._owprotocol = owprotocol
+        call_count = 0
+
+        def flaky_proxy(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise owprotocol.ConnError("still down")
+            return mock.MagicMock()
+
+        with (
+            mock.patch.object(owprotocol, "proxy", side_effect=flaky_proxy),
+            mock.patch.object(asyncio, "sleep", new=mock.AsyncMock()) as sleep_mock,
+            mock.patch.object(adapter, "_on_bindings_reloaded", new=mock.AsyncMock()) as reload_mock,
+        ):
+            await adapter._reconnect_loop()
+
+        assert call_count == 3
+        assert sleep_mock.await_count == 3
+        assert adapter.connected is True
+        reload_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_exits_cleanly_on_cancellation(self, mock_bus):
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        adapter._owprotocol = owprotocol
+        with mock.patch.object(asyncio, "sleep", side_effect=asyncio.CancelledError):
+            await adapter._reconnect_loop()  # must not raise
+        assert adapter._proxy is None
+
+
+# ---------------------------------------------------------------------------
 # disconnect()
 # ---------------------------------------------------------------------------
 
@@ -191,6 +262,17 @@ class TestDisconnect:
         assert adapter._poll_tasks == []
         assert adapter._proxy is None
         assert mock_bus.publish.called
+
+    @pytest.mark.asyncio
+    async def test_cancels_pending_reconnect_task(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        task = mock.MagicMock()
+        adapter._reconnect_task = task
+
+        await adapter.disconnect()
+
+        task.cancel.assert_called_once()
+        assert adapter._reconnect_task is None
 
     @pytest.mark.asyncio
     async def test_closes_persistent_connection_when_available(self, mock_bus):
