@@ -38,6 +38,7 @@ import AuthButton from '@/components/AuthButton.vue'
 import { datapoints as dpApi, visuBackgrounds as bgApi } from '@/api/client'
 import { useLocalizedText } from '@/composables/useLocalizedText'
 import { useVisuBackgrounds } from '@/composables/useVisuBackgrounds'
+import { useResizablePanel } from '@/composables/useResizablePanel'
 import {
   cssBackgroundPosition,
   cssBackgroundRepeat,
@@ -49,6 +50,7 @@ import {
 } from '@/utils/backgroundPresentation'
 import { getAutoContrastText } from '@/utils/colorContrast'
 import type { PageConfig, WidgetInstance } from '@/types'
+import { rectFromPoints, widgetsInRect, computeGroupMove } from '@/utils/multiSelect'
 
 import '@/widgets/ValueDisplay/index'
 import '@/widgets/Toggle/index'
@@ -82,6 +84,8 @@ const props = defineProps<{ id: string }>()
 const router = useRouter()
 const store = useVisuStore()
 const theme = useThemeStore()
+const { width: configPanelWidth, isResizing: isResizingConfigPanel, startResize: startConfigPanelResize } =
+  useResizablePanel({ storageKey: 'obs.visu.configPanelWidth', defaultWidth: 288, min: 260, max: 800 })
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const isNew   = computed(() => props.id === 'new')
@@ -95,13 +99,27 @@ const config = ref<PageConfig>({
   grid_cols: 12, grid_row_height: 80, grid_cell_width: 80, background: null, widgets: [],
 })
 
-const selectedId = ref<string | null>(null)
+// Multiselect (issue #1036): `selectedIds` is the source of truth; `selectedId`
+// mirrors it as "the one selected widget, or null" so existing single-widget
+// code paths (config panel, insertWidget, etc.) keep working unchanged.
+const selectedIds = ref<Set<string>>(new Set())
+const selectedId = computed<string | null>({
+  get: () => (selectedIds.value.size === 1 ? [...selectedIds.value][0]! : null),
+  set: (id) => { selectedIds.value = id ? new Set([id]) : new Set() },
+})
 const selectedWidget = computed(() =>
   config.value.widgets.find(w => w.id === selectedId.value) ?? null,
 )
 const selectedDef = computed(() =>
   selectedWidget.value ? WidgetRegistry.get(selectedWidget.value.type) : null,
 )
+
+function toggleSelected(id: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
 
 function withWidgetDefaults(type: string, raw: unknown): Record<string, unknown> {
   const def = WidgetRegistry.get(type)
@@ -380,24 +398,46 @@ function widgetChrome(w: WidgetInstance): string {
 }
 
 // ── Drag & Resize ─────────────────────────────────────────────────────────────
-interface DragState {
-  type: 'move' | 'resize'
-  widgetId: string
-  startMX: number; startMY: number
-  startX: number;  startY: number   // Grid-Einheiten
-  startW: number;  startH: number
-}
+// 'move' carries every selected widget's start position so the whole
+// selection is dragged together (issue #1036); 'resize' always narrows the
+// selection to the single widget being resized.
+type DragState =
+  | {
+      type: 'move'
+      widgetIds: string[]
+      startMX: number; startMY: number
+      startPositions: Map<string, { x: number; y: number }>
+    }
+  | {
+      type: 'resize'
+      widgetId: string
+      startMX: number; startMY: number
+      startX: number; startY: number
+      startW: number; startH: number
+    }
 const drag = shallowRef<DragState | null>(null)
 
 function startDrag(e: MouseEvent, w: WidgetInstance) {
   if (e.button !== 0) return
   e.preventDefault()
-  selectedId.value = w.id
+  if (e.shiftKey || e.ctrlKey || e.metaKey) {
+    toggleSelected(w.id)
+    return
+  }
+  if (!selectedIds.value.has(w.id)) selectedIds.value = new Set([w.id])
+
+  const ids = [...selectedIds.value]
   frozenCanvasHeight.value = dynamicCanvasHeight.value
   drag.value = {
-    type: 'move', widgetId: w.id,
+    type: 'move',
+    widgetIds: ids,
     startMX: e.clientX, startMY: e.clientY,
-    startX: w.x, startY: w.y, startW: w.w, startH: w.h,
+    startPositions: new Map(
+      ids
+        .map(id => config.value.widgets.find(x => x.id === id))
+        .filter((x): x is WidgetInstance => !!x)
+        .map(x => [x.id, { x: x.x, y: x.y }]),
+    ),
   }
 }
 
@@ -405,7 +445,7 @@ function startResize(e: MouseEvent, w: WidgetInstance) {
   if (e.button !== 0) return
   e.preventDefault()
   e.stopPropagation()
-  selectedId.value = w.id
+  selectedIds.value = new Set([w.id])
   frozenCanvasHeight.value = dynamicCanvasHeight.value
   drag.value = {
     type: 'resize', widgetId: w.id,
@@ -414,40 +454,90 @@ function startResize(e: MouseEvent, w: WidgetInstance) {
   }
 }
 
-function onMouseMove(e: MouseEvent) {
-  if (!drag.value) return
-  const w = config.value.widgets.find(x => x.id === drag.value!.widgetId)
-  if (!w) return
+// ── Rahmen-Auswahl (Marquee) auf leerer Canvas-Fläche ─────────────────────────
+interface MarqueeState {
+  startX: number; startY: number   // px, canvas-relativ
+  curX: number;   curY: number
+  additive: boolean                 // Shift/Strg beim Start gehalten → Auswahl erweitern statt ersetzen
+  baseSelection: Set<string>
+}
+const marquee = shallowRef<MarqueeState | null>(null)
 
-  const dx = Math.round((e.clientX - drag.value.startMX) / CELL_W.value)
-  const dy = Math.round((e.clientY - drag.value.startMY) / CELL_H.value)
+const marqueeRect = computed(() => {
+  if (!marquee.value) return null
+  return rectFromPoints(marquee.value.startX, marquee.value.startY, marquee.value.curX, marquee.value.curY)
+})
+
+function applyMarqueeSelection() {
+  const r = marqueeRect.value
+  if (!r || !marquee.value) return
+  const hit = widgetsInRect(config.value.widgets, r, CELL_W.value, CELL_H.value)
+  selectedIds.value = marquee.value.additive
+    ? new Set([...marquee.value.baseSelection, ...hit])
+    : hit
+}
+
+function onCanvasMouseDown(e: MouseEvent) {
+  if (e.button !== 0) return
+  if (e.target !== e.currentTarget) return // nur auf leerer Fläche starten, nicht auf einem Widget
+  if (!canvasRef.value) return
+  const rect = canvasRef.value.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey
+  marquee.value = { startX: x, startY: y, curX: x, curY: y, additive, baseSelection: new Set(selectedIds.value) }
+  if (!additive) selectedIds.value = new Set()
+}
+
+function onMouseMove(e: MouseEvent) {
+  if (marquee.value && canvasRef.value) {
+    const rect = canvasRef.value.getBoundingClientRect()
+    marquee.value = { ...marquee.value, curX: e.clientX - rect.left, curY: e.clientY - rect.top }
+    applyMarqueeSelection()
+    return
+  }
+  const d = drag.value
+  if (!d) return
+
+  const dx = Math.round((e.clientX - d.startMX) / CELL_W.value)
+  const dy = Math.round((e.clientY - d.startMY) / CELL_H.value)
+
+  if (d.type === 'move') {
+    const widthById = new Map(config.value.widgets.map(w => [w.id, w.w]))
+    const next = computeGroupMove(d.startPositions, dx, dy, widthById, COLS.value)
+    for (const [id, pos] of next) {
+      const w = config.value.widgets.find(x => x.id === id)
+      if (!w) continue
+      w.x = pos.x
+      w.y = pos.y
+    }
+    return
+  }
+
+  const w = config.value.widgets.find(x => x.id === d.widgetId)
+  if (!w) return
   const def = WidgetRegistry.get(w.type)
   const minW = def?.minW ?? 1
   const minH = def?.minH ?? 1
-
-  if (drag.value.type === 'move') {
-    w.x = Math.max(0, Math.min(COLS.value - w.w, drag.value.startX + dx))
-    w.y = Math.max(0, drag.value.startY + dy)
-  } else {
-    w.w = Math.max(minW, Math.min(COLS.value - w.x, drag.value.startW + dx))
-    w.h = Math.max(minH, drag.value.startH + dy)
-  }
+  w.w = Math.max(minW, Math.min(COLS.value - w.x, d.startW + dx))
+  w.h = Math.max(minH, d.startH + dy)
 }
 
 function onMouseUp() {
   drag.value = null
   frozenCanvasHeight.value = null
+  marquee.value = null
 }
 
 // ── Tastatur ──────────────────────────────────────────────────────────────────
 function onKeyDown(e: KeyboardEvent) {
-  if (!selectedId.value) return
+  if (selectedIds.value.size === 0) return
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if ((e.target as HTMLElement).tagName === 'INPUT' ||
         (e.target as HTMLElement).tagName === 'TEXTAREA') return
     removeSelected()
   }
-  if (e.key === 'Escape') selectedId.value = null
+  if (e.key === 'Escape') selectedIds.value = new Set()
 }
 
 onMounted(() => window.addEventListener('keydown', onKeyDown))
@@ -533,8 +623,18 @@ function insertWidgetAt(type: string, px: number, py: number) {
 
 // ── Widget entfernen ──────────────────────────────────────────────────────────
 function removeSelected() {
-  config.value.widgets = config.value.widgets.filter(w => w.id !== selectedId.value)
-  selectedId.value = null
+  const ids = selectedIds.value
+  config.value.widgets = config.value.widgets.filter(w => !ids.has(w.id))
+  selectedIds.value = new Set()
+}
+
+function removeWidget(id: string) {
+  config.value.widgets = config.value.widgets.filter(w => w.id !== id)
+  if (selectedIds.value.has(id)) {
+    const next = new Set(selectedIds.value)
+    next.delete(id)
+    selectedIds.value = next
+  }
 }
 
 // ── Config aktualisieren ──────────────────────────────────────────────────────
@@ -806,6 +906,7 @@ const showSettings = ref(false)
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDrag') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintResize') }}</p>
           <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintDelete') }}</p>
+          <p class="text-xs text-gray-400 dark:text-gray-600">{{ $t('editor.hintMultiSelect') }}</p>
         </div>
       </aside>
 
@@ -819,10 +920,10 @@ const showSettings = ref(false)
             minWidth: '100%',
             height: canvasHeight + 'px',
             ...canvasStyle,
-            cursor: drag ? (drag.type === 'move' ? 'grabbing' : 'se-resize') : 'default',
-            userSelect: drag ? 'none' : 'auto',
+            cursor: drag ? (drag.type === 'move' ? 'grabbing' : 'se-resize') : (marquee ? 'crosshair' : 'default'),
+            userSelect: (drag || marquee) ? 'none' : 'auto',
           }"
-          @click.self="selectedId = null"
+          @mousedown="onCanvasMouseDown"
           @dragover="onCanvasDragOver"
           @dragleave="onCanvasDragLeave"
           @drop="onCanvasDrop"
@@ -845,6 +946,17 @@ const showSettings = ref(false)
               }
             })()"
           />
+          <!-- Rahmen-Auswahl (Marquee) -->
+          <div
+            v-if="marqueeRect"
+            class="absolute pointer-events-none border-2 border-blue-400 bg-blue-400/10 z-40"
+            :style="{
+              left:   marqueeRect.left + 'px',
+              top:    marqueeRect.top + 'px',
+              width:  marqueeRect.width + 'px',
+              height: marqueeRect.height + 'px',
+            }"
+          />
           <!-- Widgets -->
           <div
             v-for="w in config.widgets"
@@ -852,15 +964,14 @@ const showSettings = ref(false)
             class="absolute transition-[border-color,box-shadow] group"
             :class="[
               widgetChrome(w),
-              selectedId === w.id
+              selectedIds.has(w.id)
                 ? '!border-2 !border-blue-500 shadow-lg shadow-blue-500/30 z-10'
                 : 'hover:border-gray-400 dark:hover:border-gray-500 z-0',
-              drag?.widgetId === w.id && drag?.type === 'move' ? 'opacity-90' : '',
+              drag?.type === 'move' && drag.widgetIds.includes(w.id) ? 'opacity-90' : '',
             ]"
             :style="widgetStyle(w)"
             :data-widget-id="w.id"
             @mousedown="startDrag($event, w)"
-            @click.stop="selectedId = w.id"
           >
             <!-- Widget-Vorschau (echte Komponente, editorMode=true) -->
             <div class="w-full h-full pointer-events-none">
@@ -887,21 +998,21 @@ const showSettings = ref(false)
             <!-- Widget-Label (nur sichtbar wenn selektiert oder hover) -->
             <div
               class="absolute top-0 left-0 right-0 flex items-center justify-between px-2 py-1 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity"
-              :class="{ '!opacity-100': selectedId === w.id }"
+              :class="{ '!opacity-100': selectedIds.has(w.id) }"
             >
               <span class="text-xs text-gray-700 dark:text-gray-300 font-medium">
                 {{ w.name || (WidgetRegistry.get(w.type)?.label ? widgetLabel(WidgetRegistry.get(w.type)!.label) : w.type) }}
               </span>
               <button
                 class="text-xs text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-2"
-                @click.stop="() => { selectedId = w.id; removeSelected() }"
+                @click.stop="removeWidget(w.id)"
               >✕</button>
             </div>
 
             <!-- Resize-Handle (unten-rechts) -->
             <div
               class="absolute bottom-0 right-0 w-5 h-5 flex items-end justify-end pb-1 pr-1 cursor-se-resize opacity-0 group-hover:opacity-100 transition-opacity"
-              :class="{ '!opacity-100': selectedId === w.id }"
+              :class="{ '!opacity-100': selectedIds.has(w.id) }"
               @mousedown.stop="startResize($event, w)"
             >
               <svg width="10" height="10" viewBox="0 0 10 10" class="text-gray-400">
@@ -924,10 +1035,17 @@ const showSettings = ref(false)
       <!-- ── Config-Panel (rechts) ───────────────────────────────────────── -->
       <aside
         class="w-72 flex-shrink-0 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 overflow-y-auto flex flex-col
-               fixed lg:static inset-y-0 right-0 z-40 lg:z-auto transform transition-transform duration-200
+               fixed lg:relative inset-y-0 right-0 z-40 lg:z-auto transform transition-transform duration-200
                lg:translate-x-0"
-        :class="showConfigMobile ? 'translate-x-0 w-80 max-w-[90vw]' : 'translate-x-full lg:w-72'"
+        :class="showConfigMobile ? 'translate-x-0 w-80 max-w-[90vw]' : 'translate-x-full lg:w-[var(--config-panel-w)]'"
+        :style="{ '--config-panel-w': configPanelWidth + 'px' }"
       >
+        <div
+          class="hidden lg:block absolute top-0 left-0 h-full w-1.5 -translate-x-1/2 cursor-ew-resize z-10 hover:bg-blue-500/40"
+          :class="{ 'bg-blue-500/40': isResizingConfigPanel }"
+          @pointerdown="startConfigPanelResize"
+          :title="$t('editor.resizeConfigPanel')"
+        />
         <div class="lg:hidden flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
           <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">{{ $t('editor.configuration') }}</span>
           <button class="text-xs text-gray-500 dark:text-gray-300" @click="showConfigMobile = false">✕</button>
@@ -1044,6 +1162,24 @@ const showSettings = ref(false)
             </div>
           </div>
         </template>
+
+        <!-- Mehrere Widgets gewählt (issue #1036) -->
+        <div v-else-if="selectedIds.size > 1" class="flex-1 flex flex-col">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-100/50 dark:bg-gray-800/50">
+            <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              {{ $t('editor.multiSelect.count', { n: selectedIds.size }) }}
+            </span>
+            <button
+              class="text-xs text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              @click="removeSelected"
+            >
+              🗑 {{ $t('editor.multiSelect.removeAll') }}
+            </button>
+          </div>
+          <div class="flex-1 flex items-center justify-center px-6">
+            <p class="text-sm text-gray-400 dark:text-gray-500 text-center">{{ $t('editor.multiSelect.hint') }}</p>
+          </div>
+        </div>
 
         <!-- Kein Widget gewählt -->
         <div v-else class="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">

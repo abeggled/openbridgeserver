@@ -2117,7 +2117,8 @@
         "in_max": "Eingang Max",
         "out_min": "Ausgang Min",
         "out_max": "Ausgang Max"
-      }
+      },
+      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern"
     },
     "portLabels": {
       "heizmode": "Heizmodus",
