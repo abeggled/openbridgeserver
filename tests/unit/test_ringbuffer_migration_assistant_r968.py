@@ -1512,6 +1512,62 @@ async def test_legacy_migration_status_rolls_back_protection_when_reopen_persist
         await db.disconnect()
 
 
+async def test_legacy_migration_status_keeps_protection_when_failed_write_cannot_be_verified(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Ein unklarer DB-Zustand darf den Schutz der Legacy-Quelle nicht aufheben."""
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+    load_calls = 0
+    actual_load = _migration_api.load_legacy_migration_decision
+
+    async def _fail_persist(_db, _decision):
+        raise RuntimeError("app db is locked")
+
+    async def _load_then_fail(target_db):
+        nonlocal load_calls
+        load_calls += 1
+        if load_calls == 2:
+            raise RuntimeError("decision readback failed")
+        return await actual_load(target_db)
+
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _fail_persist)
+    monkeypatch.setattr(_migration_api, "load_legacy_migration_decision", _load_then_fail)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert load_calls == 2
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_preserves_original_error_when_protection_rollback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Auch ein fehlgeschlagener Schutz-Rollback darf den Write-Fehler nicht verdecken."""
+
+    async def _fail_rollback(value: bool):
+        if not value:
+            raise RuntimeError("protection rollback failed")
+
+    async def _fail_persist(_db, _decision):
+        raise RuntimeError("app db is locked")
+
+    rb = _StatusReconcileRb(protect_hook=_fail_rollback)
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_DISCARDED)
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _fail_persist)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_DISCARDED
+        assert rb.protection_calls == [True, False]
+    finally:
+        await db.disconnect()
+
+
 async def test_legacy_migration_status_does_not_persist_pending_when_protection_fails(monkeypatch: pytest.MonkeyPatch):
     """Ohne wirksamen Retention-Schutz bleibt auch der persistierte Marker terminal."""
 
