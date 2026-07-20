@@ -30,6 +30,7 @@ _SEED_TS = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 def _make_manager(graphs: dict, values: dict | None = None) -> LogicManager:
     """LogicManager with an in-memory graph cache and a value-map registry."""
     db = MagicMock()
+    db.execute_and_commit = AsyncMock()
     event_bus = MagicMock()
     event_bus.publish = AsyncMock()
     registry = MagicMock()
@@ -631,3 +632,103 @@ async def test_hysteresis_state_on_seeded_path_is_committed():
     mgr._event_bus.publish.assert_awaited_once()
     assert mgr._event_bus.publish.await_args.args[0].value is True
     assert mgr._hysteresis["g1"]["h1"] is True
+
+    # The committed state is also persisted so a restart cannot reload the
+    # stale pre-save state from the DB
+    persist_calls = [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+    assert len(persist_calls) == 1
+    import json
+
+    assert json.loads(persist_calls[0].args[1][0])["h1"] is True
+    assert persist_calls[0].args[1][1] == "g1"
+
+
+@pytest.mark.asyncio
+async def test_unrelated_read_of_target_does_not_skip_write():
+    """Read A → Write B plus an independent Read B (no path back to the
+    write) is not a feedback loop — B must still be initialized."""
+    src_a, dp_b, dst_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wC", "type": "datapoint_write", "data": {"datapoint_id": dst_c}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wC", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 7, dp_b: 3})
+
+    await mgr.initialize_graph("g1")
+
+    written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
+    assert written == {uuid.UUID(dp_b): 7, uuid.UUID(dst_c): 3}
+
+
+@pytest.mark.asyncio
+async def test_no_state_commit_means_no_persist():
+    """A plain read→write initialization does not touch node_state in the DB."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g1": ("G", True, _read_write_flow(src_id, dst_id))}, values={src_id: 42})
+    mgr._hysteresis["g1"] = {"other": 1}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert not [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+
+
+# ---------------------------------------------------------------------------
+# _persist_node_state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_node_state_excludes_persist_state_false_nodes():
+    import json
+
+    flow = _flow([{"id": "s1", "type": "statistics", "data": {"persist_state": False}}, {"id": "h1", "type": "hysteresis", "data": {}}])
+    mgr = _make_manager({"g1": ("G", True, flow)})
+    mgr._hysteresis["g1"] = {"s1": {"s_count": 3}, "h1": True}
+
+    await mgr._persist_node_state("g1")
+
+    mgr._db.execute_and_commit.assert_awaited_once()
+    saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
+    assert saved == {"h1": True}
+
+
+@pytest.mark.asyncio
+async def test_persist_node_state_without_graph_entry_saves_everything():
+    import json
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"h1": False}
+
+    await mgr._persist_node_state("g1")
+
+    saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
+    assert saved == {"h1": False}
+
+
+@pytest.mark.asyncio
+async def test_persist_node_state_swallows_db_errors():
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"h1": True}
+    mgr._db.execute_and_commit = AsyncMock(side_effect=RuntimeError("db down"))
+
+    await mgr._persist_node_state("g1")
+
+    mgr._db.execute_and_commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_persist_node_state_without_state_is_noop():
+    mgr = _make_manager({})
+
+    await mgr._persist_node_state("g1")
+
+    mgr._db.execute_and_commit.assert_not_awaited()

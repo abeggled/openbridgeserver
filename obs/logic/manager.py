@@ -1371,14 +1371,26 @@ class LogicManager:
         # _INIT_EXCLUDED_NODE_TYPES).
         tainted = _downstream_closure(unseeded | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow)
         seeded_paths = _downstream_closure(set(seeds), flow)
-        # A write back to a DataPoint this graph also reads would re-enter
+        # A write that closes a feedback loop onto a Read Object of the same
+        # DataPoint (the write is reachable from that read) would re-enter
         # _on_value_event during publish and repeat until the cascade-depth
-        # guard — such feedback loops are self-driving, skip them here.
-        read_dp_ids = {node.data.get("datapoint_id") for node in flow.nodes if node.type == "datapoint_read" and node.data.get("datapoint_id")}
+        # guard — skip only those; unrelated reads of the target DataPoint
+        # (e.g. a separate status branch) keep the write eligible.
+        feedback_writes: set[str] = set()
+        for rnode in flow.nodes:
+            if rnode.type != "datapoint_read":
+                continue
+            r_dp = rnode.data.get("datapoint_id")
+            if not r_dp:
+                continue
+            reach = _downstream_closure({rnode.id}, flow)
+            feedback_writes.update(
+                wnode.id for wnode in flow.nodes if wnode.type == "datapoint_write" and wnode.id in reach and wnode.data.get("datapoint_id") == r_dp
+            )
         skip_writes = {
             node.id
             for node in flow.nodes
-            if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths or node.data.get("datapoint_id") in read_dp_ids)
+            if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths or node.id in feedback_writes)
         }
 
         now = datetime.now(UTC)
@@ -1418,9 +1430,17 @@ class LogicManager:
             # Gate/hysteresis outputs on clean seeded paths are published
             # below — commit their switched state so the persisted state
             # matches what was published (see _INIT_COMMIT_STATE_NODE_TYPES).
+            state_committed = False
             for node in flow.nodes:
                 if node.type in _INIT_COMMIT_STATE_NODE_TYPES and node.id in seeded_paths and node.id not in tainted and node.id in hyst_copy:
                     self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
+                    state_committed = True
+            if state_committed:
+                # Persist like _execute_graph does — otherwise a restart
+                # before the next real execution reloads the stale pre-save
+                # state from the DB while the switched value was already
+                # written.
+                await self._persist_node_state(graph_id)
 
             wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
             await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
@@ -3275,24 +3295,7 @@ class LogicManager:
                 self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
 
         # ── Persist node state (statistics / hysteresis) to DB ───────────
-        # Nodes with persist_state=False are excluded from the saved snapshot
-        # so their accumulators reset on server restart (opt-out behaviour).
-        hyst = self._hysteresis.get(graph_id)
-        if hyst:
-            try:
-                graph_entry = self._graphs.get(graph_id)
-                if graph_entry:
-                    _, _, _flow = graph_entry
-                    no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
-                    state_to_save = {nid: s for nid, s in hyst.items() if nid not in no_persist}
-                else:
-                    state_to_save = hyst
-                await self._db.execute_and_commit(
-                    "UPDATE logic_graphs SET node_state = ? WHERE id = ?",
-                    (json.dumps(state_to_save), graph_id),
-                )
-            except Exception as exc:
-                logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
+        await self._persist_node_state(graph_id)
 
         # ── Broadcast final execution results to all WS clients ──────────
         # Broadcast happens here — after all async ops (api_client HTTP calls,
@@ -3320,6 +3323,30 @@ class LogicManager:
         return outputs
 
     # ── Cache ─────────────────────────────────────────────────────────────
+
+    async def _persist_node_state(self, graph_id: str) -> None:
+        """Persist node state (statistics / hysteresis) to the DB.
+
+        Nodes with persist_state=False are excluded from the saved snapshot
+        so their accumulators reset on server restart (opt-out behaviour).
+        """
+        hyst = self._hysteresis.get(graph_id)
+        if not hyst:
+            return
+        try:
+            graph_entry = self._graphs.get(graph_id)
+            if graph_entry:
+                _, _, _flow = graph_entry
+                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
+                state_to_save = {nid: s for nid, s in hyst.items() if nid not in no_persist}
+            else:
+                state_to_save = hyst
+            await self._db.execute_and_commit(
+                "UPDATE logic_graphs SET node_state = ? WHERE id = ?",
+                (json.dumps(state_to_save), graph_id),
+            )
+        except Exception as exc:
+            logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
 
     async def _apply_datapoint_write_outputs(
         self,
