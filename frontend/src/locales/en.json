@@ -108,6 +108,7 @@
     "statusDatapoint": "Status datapoint",
     "statusDatapointHint": "Optional: separate read-back datapoint. If empty, the write datapoint is used for display.",
     "configuration": "Configuration",
+    "resizeConfigPanel": "Drag to resize panel",
     "hintEmpty": "Insert a widget from the palette on the left",
     "hintNoSelection": "Click a widget on the canvas\nor insert from the palette",
     "widgetCountSingular": "widget on this page",

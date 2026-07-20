@@ -108,6 +108,7 @@
     "statusDatapoint": "Status-Objekt",
     "statusDatapointHint": "Optional: separates Rückmelde-Objekt. Falls leer, wird das Schreib-Objekt für die Anzeige verwendet.",
     "configuration": "Konfiguration",
+    "resizeConfigPanel": "Ziehen, um die Panel-Breite zu ändern",
     "hintEmpty": "Widget aus der Palette links einfügen",
     "hintNoSelection": "Widget auf dem Canvas anklicken\noder aus der Palette einfügen",
     "widgetCountSingular": "Widget auf dieser Seite",
