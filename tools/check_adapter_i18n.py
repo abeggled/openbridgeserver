@@ -168,12 +168,7 @@ def scan_file(rel_path: str, source: str) -> tuple[list[Violation], list[tuple[i
 def find_adapter_type(tree: ast.AST) -> str | None:
     """Return the ``adapter_type = "..."`` class-attribute literal, if any."""
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "adapter_type"
-        ):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "adapter_type":
             literal = _string_const(node.value)
             if literal is not None:
                 return literal
