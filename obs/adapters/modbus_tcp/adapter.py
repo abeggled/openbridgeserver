@@ -49,6 +49,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# Shared I/O semaphores keyed by (host, port). Instances polling the same
+# Modbus endpoint (several devices behind one RS485/Modbus-TCP gateway) share a
+# lock so their requests never overlap on the single serial bus.
+_SHARED_BUS_SEMS: dict[tuple[str, int], asyncio.Semaphore] = {}
+
+
+def _shared_bus_sem(host: str, port: int) -> asyncio.Semaphore:
+    key = (host, port)
+    sem = _SHARED_BUS_SEMS.get(key)
+    if sem is None:
+        sem = asyncio.Semaphore(1)
+        _SHARED_BUS_SEMS[key] = sem
+    return sem
+
+
 class ModbusTcpAdapterConfig(BaseModel):
     host: str = "192.168.1.1"
     port: int = 502
@@ -57,6 +72,15 @@ class ModbusTcpAdapterConfig(BaseModel):
         default=True,
         title="Reads serialisieren",
         description="Sendet Modbus-Requests nacheinander statt gleichzeitig. Empfohlen fuer einfache Geraete (Heizungsregler, Wechselrichter, Zaehler), die nur einen Request gleichzeitig verarbeiten koennen. Deaktivieren bei leistungsstarken PLCs mit Multi-Request-Unterstuetzung.",
+    )
+    shared_bus: bool = Field(
+        default=False,
+        title="Bus mit Instanzen gleicher IP:Port teilen",
+        description=(
+            "Serialisiert I/O ueber ALLE Instanzen, die denselben Host:Port pollen "
+            "(z.B. mehrere Geraete hinter einem RS485/Modbus-TCP-Gateway). "
+            "Verhindert gleichzeitige Requests konkurrierender Instanzen am selben Bus."
+        ),
     )
     startup_jitter_s: float = Field(
         default=30.0,
@@ -128,7 +152,10 @@ class ModbusTcpAdapter(AdapterBase):
 
         # Configure I/O serialization: Semaphore(1) = one operation at a time (safe
         # for embedded devices); None = no-op via nullcontext (for capable PLCs).
-        self._io_sem = asyncio.Semaphore(1) if cfg.serialize_reads else None
+        if cfg.shared_bus:
+            self._io_sem = _shared_bus_sem(cfg.host, cfg.port)
+        else:
+            self._io_sem = asyncio.Semaphore(1) if cfg.serialize_reads else None
         logger.debug(
             "Modbus TCP: serialize_reads=%s startup_jitter_s=%.1f",
             cfg.serialize_reads,
