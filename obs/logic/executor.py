@@ -12,9 +12,10 @@ import logging
 import math
 import operator
 import re
-from datetime import date as _date
+from datetime import datetime as _datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+from zoneinfo import ZoneInfo as _ZoneInfo
 
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
@@ -1035,7 +1036,14 @@ class GraphExecutor:
                         "initialized": False,
                     },
                 )
-                today = _date.today()
+                # Min/max periods, like consumption periods, belong to the
+                # configured application timezone rather than the server
+                # process timezone (usually UTC in Docker).
+                try:
+                    tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
+                except Exception:
+                    tz = _ZoneInfo("Europe/Zurich")
+                today = _datetime.now(tz).date()
                 day_key = today.isoformat()
                 week_key = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
                 month_key = f"{today.year}-{today.month:02d}"
@@ -1155,7 +1163,13 @@ class GraphExecutor:
                         "initialized": False,
                     },
                 )
-                today = _date.today()
+                # Consumption periods belong to the configured application timezone,
+                # not the timezone of the server process (usually UTC in Docker).
+                try:
+                    tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
+                except Exception:
+                    tz = _ZoneInfo("Europe/Zurich")
+                today = _datetime.now(tz).date()
                 day_key = today.isoformat()
                 week_key = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
                 month_key = f"{today.year}-{today.month:02d}"

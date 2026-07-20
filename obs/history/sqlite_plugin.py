@@ -217,13 +217,13 @@ def _safe_loads(s: str | None) -> Any:
 
 def _sqlite_bucket_expr(fmt: str, minutes: int) -> str:
     if minutes == 60 or minutes >= 1440:
-        return f"strftime('{fmt}', ts)"
+        return f"strftime('{fmt}', ts) || 'Z'"
 
     if minutes > 60 and minutes % 60 == 0:
         hours = minutes // 60
-        return f"strftime('%Y-%m-%dT', ts) || printf('%02d:00:00', CAST(CAST(strftime('%H', ts) AS INTEGER) / {hours} AS INTEGER) * {hours})"
+        return f"strftime('%Y-%m-%dT', ts) || printf('%02d:00:00', CAST(CAST(strftime('%H', ts) AS INTEGER) / {hours} AS INTEGER) * {hours}) || 'Z'"
 
-    return f"strftime('{fmt}', ts)"
+    return f"strftime('{fmt}', ts) || 'Z'"
 
 
 def _bucket_key(ts_str: str, minutes: int) -> str:
@@ -233,7 +233,7 @@ def _bucket_key(ts_str: str, minutes: int) -> str:
         total_minutes = dt.hour * 60 + dt.minute
         rounded = (total_minutes // minutes) * minutes
         dt_rounded = dt.replace(hour=rounded // 60, minute=rounded % 60, second=0, microsecond=0)
-        return dt_rounded.strftime("%Y-%m-%dT%H:%M:00")
+        return dt_rounded.strftime("%Y-%m-%dT%H:%M:00") + "Z"
     except Exception:
         return ts_str[:16]
 

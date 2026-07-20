@@ -108,6 +108,20 @@ describe('SegmentStatsPanel', () => {
     expect(variants).toContain('info') // legacy
   })
 
+  it('distinguishes estimated, unknown, and exact-zero segment row counts', () => {
+    const store = makeStore({
+      backend_extra: {
+        segments: [
+          { segment_id: 3, status: 'legacy', row_count: 1200, row_count_accuracy: 'estimated', size_bytes: 1, from_ts: null, to_ts: null },
+          { segment_id: 2, status: 'legacy', row_count: null, row_count_accuracy: 'unknown', size_bytes: 1, from_ts: null, to_ts: null },
+          { segment_id: 1, status: 'closed', row_count: 0, row_count_accuracy: 'exact', size_bytes: 1, from_ts: null, to_ts: null },
+        ],
+      },
+    })
+    const counts = wrapperRowCounts(mountPanel(store))
+    expect(counts).toEqual(['≈ 1.200', '—', '0'])
+  })
+
   it('marks legacy segments as read-only pre-upgrade data', () => {
     const wrapper = mountPanel(makeStore())
     const note = wrapper.find('[data-testid="segment-legacy-note"]')
@@ -182,3 +196,7 @@ describe('SegmentStatsPanel', () => {
     expect(wrapper.find('[data-testid="segment-notices"]').exists()).toBe(false)
   })
 })
+
+function wrapperRowCounts(wrapper) {
+  return wrapper.findAll('[data-testid="segment-row-count"]').map((node) => node.text())
+}

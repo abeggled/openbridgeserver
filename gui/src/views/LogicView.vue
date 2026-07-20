@@ -176,6 +176,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
+import '@vue-flow/node-resizer/dist/style.css'
 
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
@@ -192,6 +193,7 @@ import GenericNode      from '@/components/logic/nodes/GenericNode.vue'
 import DatapointNode    from '@/components/logic/nodes/DatapointNode.vue'
 import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
+import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const { t }    = useI18n()
@@ -214,11 +216,14 @@ const _generic      = markRaw(GenericNode)
 const _datapoint    = markRaw(DatapointNode)
 const _pythonScript = markRaw(PythonScriptNode)
 const _missing      = markRaw(MissingNode)
+const _comment      = markRaw(CommentNode)
 
 const nodeTypeComponents = {
   missing_node: _missing,
   // Constant
   const_value: _generic,
+  // Comment (issue #1043)
+  comment: _comment,
   // Logic
   and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic,
   compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,

@@ -17,6 +17,7 @@
     "@vue-flow/controls": "^1.1.0",
     "@vue-flow/core": "^1.41.0",
     "@vue-flow/minimap": "^1.5.0",
+    "@vue-flow/node-resizer": "^1.5.1",
     "axios": "^1.6.0",
     "chart.js": "^4.4.0",
     "chroma-js": "^3.2.0",

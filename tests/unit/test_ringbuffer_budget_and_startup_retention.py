@@ -33,7 +33,6 @@ from obs.ringbuffer.ringbuffer import (
     _effective_store_max_file_size_bytes,
     derive_segment_max_bytes,
 )
-from obs.ringbuffer.store.config import RETENTION_SEGMENT_RATIO
 
 _MIB = 1024 * 1024
 
@@ -89,17 +88,12 @@ def test_explicit_segment_budget_is_not_uplifted():
     assert effective == 100 * _MIB
 
 
-def test_auto_derived_tiny_budget_still_uplifted():
-    """Gegentest: der auto-abgeleitete degenerierte Tiny-Budget-Fall bleibt funktionsfähig (#951, F1/P2).
-
-    Für ein 1-Byte-Budget clamped ``derive_segment_max_bytes`` das Segment auf 1 Byte; der
-    Uplift hebt das Budget auf ``RETENTION_SEGMENT_RATIO`` (= 3) an, damit die Auto-Ableitung
-    nie über ``validate_store_config`` crasht. Dieser Pfad darf NICHT regressen.
-    """
+def test_auto_derived_tiny_budget_is_not_silently_uplifted():
+    """A mathematically invalid tiny budget remains visible to validation."""
     derived = derive_segment_max_bytes(1)
     assert derived == 1
     effective = _effective_store_max_file_size_bytes(1, derived, explicit_segment=False)
-    assert effective == RETENTION_SEGMENT_RATIO * derived == 3
+    assert effective == 1
 
 
 def test_none_budget_stays_none_regardless_of_explicit_flag():

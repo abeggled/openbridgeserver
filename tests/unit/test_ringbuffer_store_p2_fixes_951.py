@@ -490,9 +490,10 @@ async def test_rotate_keeps_pending_size_when_checkpoint_busy(store: SqliteSegme
         return False
 
     monkeypatch.setattr(store, "_try_truncate_checkpoint", _busy)
+    real_size = SqliteSegmentStore._segment_file_size
 
     def _big_size(self, name):
-        return 50_000_000 if name == filename else SqliteSegmentStore._segment_file_size(self, name)
+        return 50_000_000 if name == filename else real_size(self, name)
 
     monkeypatch.setattr(SqliteSegmentStore, "_segment_file_size", _big_size)
 

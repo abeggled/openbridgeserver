@@ -31,6 +31,7 @@ function makeApi(overrides = {}) {
         max_entries: 50000,
         max_file_size_bytes: 2 * 1024 * 1024 * 1024, // 2 GB
         max_age: 30 * 24 * 60 * 60, // 30 days
+        segment_max_age: 6 * 60 * 60,
         effective_retention_seconds: 30 * 24 * 60 * 60,
         file_size_bytes: 1024 * 1024 * 500, // 500 MB
       },
@@ -42,6 +43,7 @@ function makeApi(overrides = {}) {
         max_entries: 50000,
         max_file_size_bytes: 2 * 1024 * 1024 * 1024,
         max_age: 30 * 24 * 60 * 60,
+        segment_max_age: 6 * 60 * 60,
         effective_retention_seconds: 30 * 24 * 60 * 60,
         file_size_bytes: 1024 * 1024 * 500,
       },
@@ -271,13 +273,201 @@ describe('MonitorConfigModal QA-01 coverage (#439)', () => {
 })
 
 describe('MonitorConfigModal segment rotation (#938)', () => {
-  it('renders the segment rotation field with the 6h default and no activation toggle', async () => {
+  it('renders an explicit age toggle without a separate segmented-store toggle', async () => {
     const { wrapper } = await mountModal()
-    // Segmentation is automatic — there must be no "segmented" activation toggle.
+    // Der Store bleibt segmentiert; nur die einzelnen Trigger werden geschaltet.
     expect(wrapper.find('[data-testid="rb-config-segmented"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="rb-config-segment-max-age-enabled"]').element.checked).toBe(true)
     const ageField = wrapper.find('[data-testid="rb-config-segment-max-age"]')
     expect(ageField.exists()).toBe(true)
     expect(ageField.element.value).toBe('6')
+  })
+
+  it('shows explicit, derived and disabled segment sources with their effective values', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: 3 * 1024 * 1024 * 1024,
+          max_age: 30 * 24 * 60 * 60,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 60 * 60,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+          effective_segment_max_age: 24 * 60 * 60,
+          effective_segment_max_bytes: 1024 * 1024 * 1024,
+          effective_segment_max_rows: null,
+          segment_max_age_source: 'explicit',
+          segment_max_bytes_source: 'derived',
+          segment_max_rows_source: 'disabled',
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    expect(wrapper.find('[data-testid="rb-segment-source-age"]').text()).toContain('Explizit')
+    expect(wrapper.find('[data-testid="rb-segment-source-age"]').text()).toContain('24')
+    expect(wrapper.find('[data-testid="rb-segment-source-bytes"]').text()).toContain('Abgeleitet')
+    expect(wrapper.find('[data-testid="rb-segment-source-bytes"]').text()).toContain('1 GiB')
+    expect(wrapper.find('[data-testid="rb-segment-source-rows"]').text()).toContain('Deaktiviert')
+  })
+
+  it('derives only from the matching total dimension when explicit triggers are disabled', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: 3 * 1024 * 1024 * 1024,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: null,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    expect(wrapper.find('[data-testid="rb-segment-source-bytes"]').text()).toContain('1 GiB')
+    expect(wrapper.find('[data-testid="rb-segment-source-age"]').text()).toContain('Deaktiviert')
+    expect(wrapper.find('[data-testid="rb-segment-source-rows"]').text()).toContain('Deaktiviert')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+    expect(api.config.mock.calls[0][0]).toMatchObject({
+      segment_max_age: null,
+      segment_max_bytes: null,
+      segment_max_rows: null,
+    })
+  })
+
+  it('shows and sends a derived age after its explicit value is disabled', async () => {
+    const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-age-enabled"]').setValue(false)
+    const source = wrapper.find('[data-testid="rb-segment-source-age"]').text()
+    expect(source).toContain('Abgeleitet')
+    expect(source).toContain('240') // 30 Tage / 3 = 10 Tage = 240 h
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config.mock.calls[0][0].segment_max_age).toBeNull()
+  })
+
+  it('rejects an enabled explicit segment threshold with an empty value', async () => {
+    const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-bytes-enabled"]').setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Segmentgröße muss größer als 0')
+  })
+
+  it('blocks saving when every total and segment limit is disabled', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 0,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: null,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 6 * 60 * 60,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('[data-testid="rb-config-segment-max-age-enabled"]').setValue(false)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('mindestens eine wirksame Segment-Rotationsgrenze')
+  })
+
+  it('warns and requires confirmation before saving unbounded total retention', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: null,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 60 * 60,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+          prognosis: { bytes_per_hour: 18.5 * 1024 * 1024, rows_per_hour: 14602 },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    expect(wrapper.find('[data-testid="rb-config-unbounded-warning"]').text()).toContain('unbegrenzt')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('dauerhaft')
+    const confirms = wrapper.findAll('[data-testid="btn-confirm"]')
+    await confirms.at(-1).trigger('click')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an enabled zero retention value as unbounded and saves null after confirmation', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: null,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 60 * 60,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    await wrapper.find('#retention-enabled').setValue(true)
+    await wrapper.find('[data-testid="rb-config-retention-value"]').setValue('0')
+    expect(wrapper.find('[data-testid="rb-config-unbounded-warning"]').exists()).toBe(true)
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).not.toHaveBeenCalled()
+    const confirms = wrapper.findAll('[data-testid="btn-confirm"]')
+    await confirms.at(-1).trigger('click')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
+    expect(api.config.mock.calls[0][0].max_age).toBeNull()
+  })
+
+  it('does not warn or confirm when any total retention dimension is active', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: 3000,
+          max_file_size_bytes: null,
+          max_age: null,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 60 * 60,
+          segment_max_bytes: null,
+          segment_max_rows: null,
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    expect(wrapper.find('[data-testid="rb-config-unbounded-warning"]').exists()).toBe(false)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(api.config).toHaveBeenCalledTimes(1)
   })
 
   it('posts segmented=true even when persisted stats report segmented=false (Codex #951)', async () => {
@@ -328,8 +518,10 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
 
   it('includes the optional advanced segment thresholds when filled', async () => {
     const { wrapper, api } = await mountModal()
+    await wrapper.find('[data-testid="rb-config-segment-max-bytes-enabled"]').setValue(true)
     await wrapper.find('[data-testid="rb-config-segment-max-bytes"]').setValue('4')
     await wrapper.find('[data-testid="rb-config-segment-max-bytes-unit"]').setValue('mb')
+    await wrapper.find('[data-testid="rb-config-segment-max-rows-enabled"]').setValue(true)
     await wrapper.find('[data-testid="rb-config-segment-max-rows"]').setValue('1000')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
@@ -338,7 +530,7 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     expect(payload.segment_max_rows).toBe(1000)
   })
 
-  it('sends explicit null when a hydrated segment threshold is cleared (reset to auto, #938 Codex #951)', async () => {
+  it('sends explicit null when hydrated segment thresholds are disabled (#938 Codex #951)', async () => {
     const api = makeApi({
       stats: vi.fn().mockResolvedValue({
         data: {
@@ -358,9 +550,10 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
     // Beide Felder wurden aus den Stats vorbefüllt.
     expect(wrapper.find('[data-testid="rb-config-segment-max-bytes"]').element.value).toBe('256')
     expect(wrapper.find('[data-testid="rb-config-segment-max-rows"]').element.value).toBe('1000')
-    // Nutzer leert sie wieder (= auf auto zurückstellen).
-    await wrapper.find('[data-testid="rb-config-segment-max-bytes"]').setValue('')
-    await wrapper.find('[data-testid="rb-config-segment-max-rows"]').setValue('')
+    // Nutzer deaktiviert die expliziten Werte. Größe wird anschließend aus der
+    // Gesamtgröße abgeleitet; Zeilen sind mangels Gesamtgrenze deaktiviert.
+    await wrapper.find('[data-testid="rb-config-segment-max-bytes-enabled"]').setValue(false)
+    await wrapper.find('[data-testid="rb-config-segment-max-rows-enabled"]').setValue(false)
     await wrapper.find('form').trigger('submit')
     await flushPromises()
     expect(api.config).toHaveBeenCalledTimes(1)
@@ -585,6 +778,49 @@ describe('MonitorConfigModal segment rotation (#938)', () => {
 })
 
 describe('MonitorConfigModal prognosis (#919/#938)', () => {
+  it('reloads at the end of live warmup without overwriting edited form fields', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = makeApi()
+      api.stats.mockResolvedValue({
+        data: {
+          total: 1,
+          enabled: true,
+          max_entries: 50000,
+          max_file_size_bytes: null,
+          max_age: null,
+          segment_max_age: 24 * 3600,
+          file_size_bytes: 1,
+          prognosis: { source: 'active', provisional: true, ready_after_seconds: 5, rows_per_hour: null, bytes_per_hour: null },
+        },
+      })
+      const { wrapper } = await mountModal({ api })
+      await wrapper.find('[data-testid="rb-config-max-entries"]').setValue('77777')
+
+      api.stats.mockResolvedValue({
+        data: {
+          total: 2,
+          enabled: true,
+          max_entries: 50000,
+          max_file_size_bytes: null,
+          max_age: null,
+          segment_max_age: 24 * 3600,
+          file_size_bytes: 2,
+          prognosis: { source: 'active', provisional: true, observed_seconds: 5, ready_after_seconds: 0, rows_per_hour: 3600, bytes_per_hour: 1024 },
+        },
+      })
+      await vi.advanceTimersByTimeAsync(5_100)
+      await flushPromises()
+
+      expect(api.stats).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[data-testid="prognosis-rate"]').text()).toContain('1,0 Events/s')
+      expect(wrapper.find('[data-testid="rb-config-max-entries"]').element.value).toBe('77777')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // Der Prognose-Block ist in die gemeinsame PrognosisBlock-Komponente
   // ausgelagert (DRY). Die Integrationstests hier prüfen, dass das Modal ihn
   // korrekt mit stats.prognosis + Segment-Alter füttert (data-testid prognosis-*).
@@ -610,7 +846,7 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     const rate = wrapper.find('[data-testid="prognosis-rate"]').text()
     expect(rate).toContain('50')
     expect(rate).toContain('MiB/h')
-    expect(rate).toContain('12.000') // Events/h, de-DE grouping
+    expect(rate).toContain('3,3') // Events/s, de-DE decimal separator
     expect(wrapper.find('[data-testid="prognosis-rotation"]').exists()).toBe(true)
     const history = wrapper.find('[data-testid="prognosis-history"]').text()
     expect(history).toContain('5 Tage')
@@ -619,6 +855,33 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     expect(budget).toContain('900 MiB')
     expect(budget).toContain('6') // current segment age in hours
     expect(budget).toContain('mind. 3 Segmente')
+  })
+
+  it('uses the configured 30-day retention for the live budget forecast', async () => {
+    const api = makeApi({
+      stats: vi.fn().mockResolvedValue({
+        data: {
+          total: 100,
+          enabled: true,
+          max_entries: null,
+          max_file_size_bytes: null,
+          max_age: 30 * 24 * 3600,
+          file_size_bytes: 0,
+          segment_max_age: 24 * 3600,
+          prognosis: {
+            bytes_per_hour: 50 * 1024 * 1024,
+            rows_per_hour: 12000,
+            estimated_retention_seconds: null,
+            effective_segment_max_bytes: null,
+          },
+        },
+      }),
+    })
+    const { wrapper } = await mountModal({ api })
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('30 Tage Retention')
+    expect(budget).toContain('35,2 GiB')
+    expect(budget).not.toContain('mind. 3 Segmente')
   })
 
   it('shows the warming-up hint when prognosis fields are null (too few segments)', async () => {
