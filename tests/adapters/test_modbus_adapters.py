@@ -2014,3 +2014,36 @@ class TestReconnectBackoff:
         adapter._bindings = [slow_binding, fast_binding]
 
         assert adapter._reconnect_backoff_delay(slow_binding.config["poll_interval"]) == 1.0
+
+
+class TestModbusTcpSharedBus:
+    # shared_bus: instances on the same host:port share one I/O semaphore (PR#1045)
+
+    async def test_shared_bus_sem_is_shared_per_endpoint(self):
+        from obs.adapters.modbus_tcp.adapter import _shared_bus_sem
+
+        s1 = _shared_bus_sem("10.9.9.1", 502)
+        s2 = _shared_bus_sem("10.9.9.1", 502)
+        s3 = _shared_bus_sem("10.9.9.1", 5020)
+        assert s1 is s2  # same endpoint -> same semaphore
+        assert s1 is not s3  # different port -> different semaphore
+
+    async def test_shared_bus_true_shares_semaphore_across_instances(self):
+        from obs.adapters.modbus_tcp.adapter import _shared_bus_sem
+
+        cfg = {"host": "10.9.9.2", "port": 502, "timeout": 1.0, "shared_bus": True}
+        a1, _ = _make_tcp(dict(cfg))
+        a2, _ = _make_tcp(dict(cfg))
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await a1.connect()
+            await a2.connect()
+        assert a1._io_sem is a2._io_sem
+        assert a1._io_sem is _shared_bus_sem("10.9.9.2", 502)
+
+    def test_default_config_has_shared_bus_false(self):
+        from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
+
+        assert ModbusTcpAdapterConfig().shared_bus is False

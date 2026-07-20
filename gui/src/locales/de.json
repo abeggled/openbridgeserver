@@ -756,6 +756,10 @@
           "title": "Lesezugriffe serialisieren",
           "description": "Sendet Modbus-Requests nacheinander statt gleichzeitig. Empfohlen für einfache Geräte (Heizungsregler, Wechselrichter, Zähler), die nur einen Request gleichzeitig verarbeiten können. Deaktivieren bei leistungsstarken PLCs mit Multi-Request-Unterstützung."
         },
+        "shared_bus": {
+          "title": "Bus mit Instanzen gleicher IP:Port teilen",
+          "description": "Serialisiert I/O über ALLE Instanzen, die denselben Host:Port pollen (z.B. mehrere Geräte hinter einem RS485/Modbus-TCP-Gateway). Verhindert gleichzeitige Requests konkurrierender Instanzen am selben Bus."
+        },
         "startup_jitter_s": {
           "title": "Startup-Jitter (s)",
           "description": "Maximale zufällige Verzögerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert."

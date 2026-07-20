@@ -756,6 +756,10 @@
           "title": "Serialize reads",
           "description": "Sends Modbus requests one at a time instead of concurrently. Recommended for simple devices (heating controllers, inverters, meters) that can only handle one request at a time. Disable for capable PLCs with multi-request support."
         },
+        "shared_bus": {
+          "title": "Share bus with instances on the same IP:port",
+          "description": "Serializes I/O across ALL instances polling the same host:port (e.g. several devices behind one RS485/Modbus-TCP gateway). Prevents concurrent requests from competing instances on the same bus."
+        },
         "startup_jitter_s": {
           "title": "Startup jitter (s)",
           "description": "Maximum random delay (seconds) before the first poll of each binding. Prevents a request burst when all tasks start simultaneously. 0 = disabled."
