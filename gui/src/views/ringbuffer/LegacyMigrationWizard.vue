@@ -215,12 +215,13 @@ watch(open, (val) => {
 // (#968, Codex :216): migriert ein Lauf bei mehreren attachten Legacy-DBs nur die erste,
 // bleibt die Entscheidung non-terminal und ``legacy`` non-null – der Admin muss den
 // nächsten Lauf (bzw. discard einer quarantänierten Quelle) aus dem Assistenten starten
-// können, statt in den Abschluss-Screen gedrängt zu werden. Terminale Entscheidungen
-// (migrated/discarded) und der frisch gewählte keep-Pfad schließen weiterhin sofort ab.
+// können, statt in den Abschluss-Screen gedrängt zu werden. Auch ein veralteter
+// terminaler Marker aus einer eingespielten app-DB darf eine weiterhin angehängte
+// Quelle nicht als erfolgreich erledigt darstellen. Der frisch gewählte keep-Pfad
+// schließt weiterhin sofort ab.
 const finished = computed(
   () =>
-    decision.value === 'migrated' ||
-    decision.value === 'discarded' ||
+    ((decision.value === 'migrated' || decision.value === 'discarded') && !legacy.value) ||
     (job.value?.phase === 'done' && !legacy.value) ||
     keepJustChosen.value
 )
@@ -243,7 +244,9 @@ function fmtInt(n) {
 
 const legacySizeText = computed(() => formatBytesBinary(legacy.value?.size_bytes ?? 0))
 const rowEstimateText = computed(() => {
-  const n = Number(legacy.value?.row_estimate)
+  const raw = legacy.value?.row_estimate
+  if (raw === null || raw === undefined) return '–'
+  const n = Number(raw)
   return Number.isFinite(n) && n >= 0 ? fmtInt(n) : '–'
 })
 const timespanText = computed(() => {

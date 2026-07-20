@@ -211,6 +211,32 @@ describe('LegacyMigrationWizard — Migrieren', () => {
     expect(wrapper.find('[data-testid="wizard-finished"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="wizard-options"]').exists()).toBe(false)
   })
+
+  it.each(['migrated', 'discarded'])(
+    'does not claim success when a stale %s marker still has an attached empty source',
+    async (decision) => {
+      const wrapper = await mountWizard(
+        statusPayload({
+          decision,
+          legacy: {
+            path: '/data/obs_ringbuffer.db',
+            status: 'legacy',
+            size_bytes: 68 * 1024,
+            row_estimate: 0,
+            from_ts: null,
+            to_ts: null,
+            retention_protected: false,
+          },
+          job: job({ phase: 'idle' }),
+        })
+      )
+
+      expect(wrapper.find('[data-testid="wizard-finished"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="wizard-analysis"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="wizard-row-estimate"]').text()).toBe('0')
+      expect(wrapper.find('[data-testid="wizard-option-migrate"]').exists()).toBe(true)
+    }
+  )
 })
 
 describe('LegacyMigrationWizard — Behalten', () => {
@@ -249,6 +275,11 @@ describe('LegacyMigrationWizard — Verwerfen', () => {
 })
 
 describe('LegacyMigrationWizard — nullish Backend-Werte (#968)', () => {
+  it('keeps an unknown row estimate distinct from an exact zero', async () => {
+    const wrapper = await mountWizard(statusPayload({ legacy: { ...statusPayload().legacy, row_estimate: null } }))
+    expect(wrapper.find('[data-testid="wizard-row-estimate"]').text()).toBe('–')
+  })
+
   it('treats unknown disk space as unknown, not 0 B, and does not block the start', async () => {
     // disk_free_bytes: null → freier Platz unbekannt. Number(null) wäre 0 und würde
     // fälschlich „0 B", ein rotes Verdict und einen gesperrten Start erzeugen.
