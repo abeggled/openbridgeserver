@@ -443,7 +443,15 @@
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.timeoutLabel') }}</label>
-          <input v-model="localData.timeout_s" type="number" class="input text-sm" @change="emitUpdate" />
+          <input
+            v-model="localData.timeout_s"
+            type="number"
+            min="1"
+            step="any"
+            class="input text-sm"
+            data-testid="api-client-timeout"
+            @change="emitBoundedUpdate('timeout_s', { type: 'number', min: 1 })"
+          />
         </div>
         <label class="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" v-model="localData.verify_ssl" @change="emitUpdate" class="accent-teal-500" />
@@ -700,6 +708,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -724,6 +733,7 @@
 
             <div
               v-for="(entry, i) in jsonPaths" :key="i"
+              @focusin="activeExtractorRow = i"
               class="extractor-output-row mt-2 p-2 rounded-lg border border-slate-700/50 flex flex-col gap-1"
               :style="extractorOutputRowStyle"
             >
@@ -745,7 +755,6 @@
                 :value="entry.path"
                 @input="updateJsonPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
@@ -759,6 +768,7 @@
             <p v-if="!jsonPaths.length && !localData.json_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               Klicke <strong>+</strong> um Ausgänge hinzuzufügen.
             </p>
+          </div>
           </div>
         </template>
 
@@ -776,6 +786,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -800,6 +811,7 @@
 
             <div
               v-for="(entry, i) in xmlPaths" :key="i"
+              @focusin="activeExtractorRow = i"
               class="extractor-output-row mt-2 p-2 rounded-lg border border-slate-700/50 flex flex-col gap-1"
               :style="extractorOutputRowStyle"
             >
@@ -821,7 +833,6 @@
                 :value="entry.path"
                 @input="updateXmlPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
@@ -835,6 +846,7 @@
             <p v-if="!xmlPaths.length && !localData.xml_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               {{ $t('logic.nodeConfig.extractor.clickPlusToAddOutputs') }}
             </p>
+          </div>
           </div>
         </template>
       </div>
@@ -1206,6 +1218,20 @@
       </div>
     </template>
 
+    <template v-else-if="isCommentNode">
+      <div class="flex-1 overflow-hidden p-4 flex flex-col gap-2">
+        <p class="text-xs text-slate-500 shrink-0">{{ nodeDescription(nodeDef) }}</p>
+        <label class="label shrink-0">{{ $t('logic.nodeConfig.comment.text') }}</label>
+        <textarea
+          v-model="localData.text"
+          class="input text-sm flex-1 resize-none"
+          :placeholder="$t('logic.nodeConfig.comment.textPlaceholder')"
+          data-testid="comment-text"
+          @change="emit('update', { text: localData.text })"
+        />
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1225,8 +1251,11 @@
               class="text-sm" @change="emitUpdate" />
             <input v-else
               v-model="localData[key]"
-              :type="schema.subtype === 'password' ? 'password' : schema.type === 'number' ? 'number' : 'text'"
-              class="input text-sm" @change="emitUpdate" />
+              :type="schema.subtype === 'password' ? 'password' : ['number', 'integer'].includes(schema.type) ? 'number' : 'text'"
+              :min="schema.min ?? schema.minimum"
+              :max="schema.max ?? schema.maximum"
+              :step="schema.step ?? (schema.type === 'integer' ? 1 : schema.type === 'number' ? 'any' : undefined)"
+              class="input text-sm" @change="onSchemaFieldChange(key, schema)" />
           </div>
 
         </template>
@@ -1466,6 +1495,7 @@ const isMessageArchiveNode = computed(() => props.node?.type === 'message_archiv
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
 const isValueSequenceNode = computed(() => props.node?.type === 'value_sequence')
+const isCommentNode       = computed(() => props.node?.type === 'comment')
 const sequenceSteps = computed(() => Array.isArray(localData.value.steps) ? localData.value.steps : [])
 const selectedMessageArchiveMissing = computed(() => {
   const id = localData.value.archive_id
@@ -2162,6 +2192,15 @@ function onExtractorPathSelect(e) {
     activeExtractorRow.value = 0
   }
   e.target.value = ''
+  activeExtractorRow.value = null
+}
+
+function onExtractorControlsFocusOut(e) {
+  // Keep the selected row while focus moves between the shared picker and any
+  // output controls, including reverse keyboard traversal through a row.
+  // Clear it once focus leaves the complete control group.
+  if (e.currentTarget.contains(e.relatedTarget)) return
+  activeExtractorRow.value = null
 }
 
 function onValueMapCustomInput(e) {
@@ -2334,6 +2373,34 @@ async function loadMessageArchives() {
 // ── Emit ───────────────────────────────────────────────────────────────────
 function emitUpdate() {
   emit('update', { ...localData.value })
+}
+
+function onSchemaFieldChange(key, schema) {
+  if (schema.type === 'number' || schema.type === 'integer') {
+    emitBoundedUpdate(key, schema)
+    return
+  }
+  emitUpdate()
+}
+
+function emitBoundedUpdate(key, schema) {
+  const rawValue = localData.value[key]
+  if (rawValue === '' || rawValue === null || rawValue === undefined) {
+    emitUpdate()
+    return
+  }
+
+  const value = Number(rawValue)
+  if (Number.isFinite(value)) {
+    const minimum = schema.min ?? schema.minimum
+    const maximum = schema.max ?? schema.maximum
+    let bounded = value
+    if (minimum !== undefined) bounded = Math.max(minimum, bounded)
+    if (maximum !== undefined) bounded = Math.min(maximum, bounded)
+    if (schema.type === 'integer') bounded = Math.round(bounded)
+    localData.value[key] = bounded
+  }
+  emitUpdate()
 }
 </script>
 

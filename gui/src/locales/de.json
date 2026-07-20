@@ -1464,6 +1464,7 @@
     "nodeTypes": {
       "divide": "Dividieren",
       "const_value": "Festwert",
+      "comment": "Kommentar",
       "and": "AND",
       "or": "OR",
       "not": "NOT",
@@ -1621,6 +1622,11 @@
       "ariaLabel": "Unbekannter Block-Typ"
     },
     "nodeConfig": {
+      "comment": {
+        "text": "Text",
+        "textPlaceholder": "Notiztext…",
+        "empty": "Leerer Kommentar — im Panel bearbeiten"
+      },
       "tabs": {
         "connection": "Verbindung",
         "transform": "Transformation",
@@ -2156,6 +2162,7 @@
     },
     "nodeDescriptions": {
       "const_value": "Gibt einen festen Wert aus — Zahl, Bool oder Text. Nützlich als Schwellwert oder Referenz.",
+      "comment": "Freier Mehrzeilen-Text zur Dokumentation direkt auf dem Graph-Canvas. Rein visuell, hat keinen Effekt auf die Ausführung.",
       "and": "Ausgang ist true wenn ALLE Eingänge true sind. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "or": "Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "not": "Invertiert den Eingang",

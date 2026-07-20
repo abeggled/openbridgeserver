@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -123,6 +125,112 @@ class TestSaveConfig:
         assert enabled_call[1][1] == "0"
 
 
+class TestApplicationTimezone:
+    @pytest.mark.asyncio
+    async def test_uses_configured_application_timezone(self):
+        from obs.api.v1.autobackup import _application_timezone
+
+        db = _DbStub(one=_make_row(value="Pacific/Kiritimati"))
+
+        assert (await _application_timezone(db)).key == "Pacific/Kiritimati"
+
+    @pytest.mark.asyncio
+    async def test_invalid_timezone_falls_back_to_default(self):
+        from obs.api.v1.autobackup import _application_timezone
+
+        db = _DbStub(one=_make_row(value="not/a-timezone"))
+
+        assert (await _application_timezone(db)).key == "Europe/Zurich"
+
+    @pytest.mark.asyncio
+    async def test_application_now_uses_the_configured_timezone(self):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub(one=_make_row(value="Pacific/Kiritimati"))
+
+        assert (await ab._application_now(db)).tzinfo == ZoneInfo("Pacific/Kiritimati")
+
+    @pytest.mark.asyncio
+    async def test_backup_name_uses_application_local_time(self, tmp_path):
+        from obs.api.v1 import autobackup as ab
+        from obs.api.v1 import config as config_api
+
+        export = MagicMock()
+        export.model_dump.return_value = {"version": 1}
+        local_time = datetime(2026, 7, 17, 3, 4, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        db = _DbStub()
+
+        with (
+            patch.object(config_api, "export_config", AsyncMock(return_value=export)),
+            patch.object(ab, "_application_now", AsyncMock(return_value=local_time)),
+            patch.object(ab, "_autobackup_dir", return_value=tmp_path),
+        ):
+            assert await ab._create_backup_now(db) == "20260717-0304"
+
+        assert (tmp_path / "20260717-0304.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_backup_name_adds_suffix_without_overwriting_existing_local_minute(self, tmp_path):
+        from obs.api.v1 import autobackup as ab
+        from obs.api.v1 import config as config_api
+
+        export = MagicMock()
+        export.model_dump.return_value = {"version": 2}
+        existing = tmp_path / "20260717-0304.json"
+        existing.write_text('{"version": 1}')
+        local_time = datetime(2026, 7, 17, 3, 4, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+
+        with (
+            patch.object(config_api, "export_config", AsyncMock(return_value=export)),
+            patch.object(ab, "_application_now", AsyncMock(return_value=local_time)),
+            patch.object(ab, "_autobackup_dir", return_value=tmp_path),
+        ):
+            assert await ab._create_backup_now(_DbStub()) == "20260717-0304-1"
+
+        assert existing.read_text() == '{"version": 1}'
+        assert (tmp_path / "20260717-0304-1.json").exists()
+
+
+class TestAutobackupSchedulerTimezone:
+    @pytest.mark.asyncio
+    async def test_scheduler_uses_application_date_for_daily_backup(self, monkeypatch):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        now = datetime(2026, 7, 17, 3, 1, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        scheduler = ab.AutobackupScheduler(db)
+        event = asyncio.Event()
+        monkeypatch.setattr(ab, "_config_changed_event", event)
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(return_value=ab.AutobackupConfig(enabled=True, hour=3, retention_days=7)))
+        monkeypatch.setattr(ab, "_application_now", AsyncMock(return_value=now))
+        create_backup = AsyncMock(return_value="20260717-0301")
+        monkeypatch.setattr(ab, "_create_backup_now", create_backup)
+        monkeypatch.setattr(ab, "_prune_old_backups", lambda _retention_days: 0)
+        monkeypatch.setattr(ab.asyncio, "wait_for", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+        create_backup.assert_awaited_once_with(db)
+
+    @pytest.mark.asyncio
+    async def test_scheduler_waits_until_tomorrow_after_local_backup(self, monkeypatch):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        now = datetime(2026, 7, 17, 3, 1, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        scheduler = ab.AutobackupScheduler(db)
+        monkeypatch.setattr(ab, "_config_changed_event", asyncio.Event())
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(return_value=ab.AutobackupConfig(enabled=True, hour=3, retention_days=7)))
+        monkeypatch.setattr(ab, "_application_now", AsyncMock(return_value=now))
+        monkeypatch.setattr(ab, "_create_backup_now", AsyncMock(return_value="20260717-0301"))
+        monkeypatch.setattr(ab, "_prune_old_backups", lambda _retention_days: 0)
+        monkeypatch.setattr(ab.asyncio, "wait_for", AsyncMock(side_effect=[asyncio.TimeoutError, asyncio.CancelledError]))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+
 class TestListBackups:
     def test_returns_empty_list_for_empty_dir(self, tmp_path):
         from obs.api.v1.autobackup import _list_backups
@@ -141,6 +249,19 @@ class TestListBackups:
         assert len(result) == 2
         assert result[0].name == "20240507-0300"
         assert result[1].name == "20240506-0300"
+
+    def test_lists_suffixed_backup_before_older_backup_from_same_local_minute(self, tmp_path):
+        from obs.api.v1.autobackup import _list_backups
+
+        older = tmp_path / "20260717-0304.json"
+        newer = tmp_path / "20260717-0304-1.json"
+        older.write_text("{}")
+        newer.write_text("{}")
+        os.utime(older, (1_000, 1_000))
+        os.utime(newer, (2_000, 2_000))
+
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
+            assert [entry.name for entry in _list_backups()] == ["20260717-0304-1", "20260717-0304"]
 
     def test_parses_valid_datetime_from_stem(self, tmp_path):
         from obs.api.v1.autobackup import _list_backups
@@ -171,6 +292,38 @@ class TestPruneOldBackups:
         assert deleted == 2
         remaining = list(tmp_path.glob("*.json"))
         assert len(remaining) == 3
+
+    def test_keeps_most_recently_created_backup_when_names_are_out_of_order(self, tmp_path):
+        from obs.api.v1.autobackup import _prune_old_backups
+
+        older = tmp_path / "20260102-0300.json"
+        newer = tmp_path / "20260101-0300.json"
+        older.write_text("{}")
+        newer.write_text("{}")
+        os.utime(older, (1_000, 1_000))
+        os.utime(newer, (2_000, 2_000))
+
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
+            assert _prune_old_backups(retention_days=1) == 1
+
+        assert newer.exists()
+        assert not older.exists()
+
+    def test_keeps_suffixed_backup_when_mtimes_are_equal(self, tmp_path):
+        from obs.api.v1.autobackup import _prune_old_backups
+
+        older = tmp_path / "20260717-0304.json"
+        newer = tmp_path / "20260717-0304-1.json"
+        older.write_text("{}")
+        newer.write_text("{}")
+        os.utime(older, (1_000, 1_000))
+        os.utime(newer, (1_000, 1_000))
+
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
+            assert _prune_old_backups(retention_days=1) == 1
+
+        assert newer.exists()
+        assert not older.exists()
 
     def test_no_deletion_when_within_retention(self, tmp_path):
         from obs.api.v1.autobackup import _prune_old_backups
@@ -672,6 +825,37 @@ class TestUpdateGraphPartial:
 
         assert result.enabled is False
 
+    @pytest.mark.asyncio
+    async def test_partial_update_rejects_enabling_legacy_invalid_duration(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import update_graph_partial
+        from obs.logic.models import LogicGraphUpdate
+
+        row = _make_graph_row(
+            enabled=0,
+            flow_data=json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": "timer",
+                            "type": "timer_delay",
+                            "position": {"x": 0, "y": 0},
+                            "data": {"delay_s": -1},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ),
+        )
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException, match="greater than or equal to 0") as exc_info:
+            await update_graph_partial(graph_id=row["id"], body=LogicGraphUpdate(enabled=True), _user="user", db=db)
+
+        assert exc_info.value.status_code == 422
+        assert db.execute_calls == []
+
 
 class TestDeleteGraph:
     @pytest.mark.asyncio
@@ -865,6 +1049,24 @@ class TestDuplicateGraph:
 
         assert result.name == "Kopie von Original"
         assert len(db.execute_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_copy_of_graph_with_negative_timer_duration(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import duplicate_graph
+
+        from obs.logic.models import FlowData, LogicNode, NodePosition
+
+        flow = FlowData(nodes=[LogicNode(id="timer", type="timer_delay", position=NodePosition(x=0, y=0), data={"delay_s": -1})])
+        original_row = _make_graph_row(flow_data=flow.model_dump_json())
+        db = _DbStub(one=original_row)
+
+        with pytest.raises(HTTPException, match="must be greater than or equal to 0") as exc_info:
+            await duplicate_graph(graph_id=original_row["id"], _user="user", db=db)
+
+        assert exc_info.value.status_code == 422
+        assert db.execute_calls == []
 
 
 class TestExportGraph:
