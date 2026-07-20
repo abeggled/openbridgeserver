@@ -357,6 +357,53 @@ describe('AdaptersView — save instance', () => {
 
     expect(wrapper.text()).toContain('Validation error')
   })
+
+  it('sends the live onewire aliases instead of the stale draft snapshot', async () => {
+    // "aliases" is edited outside this form (binding-form sensor scan) and excluded
+    // from SchemaForm — the draft's copy of it is frozen at initDrafts() time. The
+    // background poll is silent and never updates config (see stores/adapters.js),
+    // so a save must explicitly refresh and not overwrite an alias persisted
+    // elsewhere in the meantime.
+    const instance = makeInstance({
+      adapter_type: 'ONEWIRE',
+      config: { host: 'localhost', port: 4304, aliases: { '28.AA': 'Old Label' } },
+    })
+    adapterApiMock.listInstances.mockResolvedValue({ data: [instance] })
+    adapterApiMock.updateInstance.mockResolvedValue({ data: instance })
+
+    const { wrapper } = await mountAdapters({ instances: [instance] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    // An alias was saved elsewhere (binding form) in the meantime — the next
+    // listInstances() response reflects it.
+    const updatedInstance = { ...instance, config: { ...instance.config, aliases: { '28.AA': 'New Label' } } }
+    adapterApiMock.listInstances.mockResolvedValue({ data: [updatedInstance] })
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ config: expect.objectContaining({ aliases: { '28.AA': 'New Label' } }) }),
+    )
+  })
+
+  it('does not refresh before saving for adapter types without excluded fields', async () => {
+    // KNX has no excludedSchemaFields() entries — saving must not add an extra
+    // pre-save listInstances() round-trip, only the existing post-save refresh.
+    const { wrapper } = await mountAdapters({ instances: [makeInstance({ adapter_type: 'KNX' })] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+    adapterApiMock.listInstances.mockClear()
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.listInstances).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ─── Delete flow ──────────────────────────────────────────────────────────────

@@ -6,13 +6,15 @@ are mocked. Uses mocked EventBus; no hardware required.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import sys
+import time
 import unittest.mock as mock
 
 import pyownet.protocol as owprotocol
 import pytest
 
-from obs.adapters.onewire.adapter import OneWireAdapter
+from obs.adapters.onewire.adapter import OneWireAdapter, _normalize_sensor_id
 from tests.adapters.conftest import make_binding
 
 # ---------------------------------------------------------------------------
@@ -32,7 +34,30 @@ def _connected_adapter(mock_bus, **config) -> OneWireAdapter:
     """An adapter with a fake, already-connected proxy — bypasses connect()."""
     adapter = OneWireAdapter(event_bus=mock_bus, config=config)
     adapter._proxy = mock.MagicMock()
+    adapter._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     return adapter
+
+
+# ---------------------------------------------------------------------------
+# _normalize_sensor_id()
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeSensorId:
+    @pytest.mark.parametrize(
+        "legacy, expected",
+        [
+            ("28-000000000001", "28.000000000001"),
+            ("29-1122334455aa", "29.1122334455aa"),
+            ("29-1122334455AA", "29.1122334455AA"),
+        ],
+    )
+    def test_converts_hyphenated_legacy_id(self, legacy, expected):
+        assert _normalize_sensor_id(legacy) == expected
+
+    @pytest.mark.parametrize("already_dotted", ["28.4B057F0A1C10", "boiler", "29.1122334455aa"])
+    def test_leaves_non_legacy_ids_unchanged(self, already_dotted):
+        assert _normalize_sensor_id(already_dotted) == already_dotted
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +71,7 @@ class TestInit:
         assert adapter._cfg.host == "localhost"
         assert adapter._cfg.port == 4304
         assert adapter._cfg.poll_interval == 30.0
+        assert adapter._cfg.request_timeout == 10.0
         assert adapter._cfg.aliases == {}
         assert adapter._poll_tasks == []
         assert adapter._proxy is None
@@ -53,11 +79,18 @@ class TestInit:
     def test_config_overrides_applied(self, mock_bus):
         adapter = OneWireAdapter(
             event_bus=mock_bus,
-            config={"host": "owserver.local", "port": 4305, "poll_interval": 5.0, "aliases": {"28.AA": "Gästebad"}},
+            config={
+                "host": "owserver.local",
+                "port": 4305,
+                "poll_interval": 5.0,
+                "request_timeout": 2.5,
+                "aliases": {"28.AA": "Gästebad"},
+            },
         )
         assert adapter._cfg.host == "owserver.local"
         assert adapter._cfg.port == 4305
         assert adapter._cfg.poll_interval == 5.0
+        assert adapter._cfg.request_timeout == 2.5
         assert adapter._cfg.aliases == {"28.AA": "Gästebad"}
 
 
@@ -123,6 +156,19 @@ class TestConnect:
         with mock.patch.object(owprotocol, "proxy", return_value=mock.MagicMock()):
             await adapter.connect()
         assert adapter._owprotocol is owprotocol
+
+    @pytest.mark.asyncio
+    async def test_reconnect_shuts_down_previous_executor(self, mock_bus):
+        """A restart (connect() called again without an intervening disconnect())
+        must not leak the previous single-worker thread pool."""
+        adapter = OneWireAdapter(event_bus=mock_bus, config={"host": "owserver.local", "port": 4304})
+        with mock.patch.object(owprotocol, "proxy", return_value=mock.MagicMock()):
+            await adapter.connect()
+            first_executor = adapter._executor
+            await adapter.connect()
+
+        assert adapter._executor is not first_executor
+        assert first_executor._shutdown is True
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +237,35 @@ class TestDisconnect:
         await holder
 
         assert events == ["lock_acquired", "lock_released", "close_called"]
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_race_orphaned_poll_thread(self, mock_bus):
+        """Cancelling a task blocked on run_in_executor() marks its asyncio-side
+        future cancelled immediately — it does not stop the underlying thread,
+        which keeps running the blocking pyownet call to completion. disconnect()
+        must not let close_connection() run while that orphaned call is still
+        using the same non-thread-safe proxy (see module docstring)."""
+        adapter = _connected_adapter(mock_bus)
+        events: list[str] = []
+
+        def blocking_read(path, timeout=None):
+            events.append("read_start")
+            time.sleep(0.1)
+            events.append("read_end")
+            return b"1"
+
+        adapter._proxy.read.side_effect = blocking_read
+        adapter._proxy.close_connection.side_effect = lambda: events.append("close_called")
+
+        task = asyncio.create_task(adapter._read_property("28.AA", "temperature"))
+        await asyncio.sleep(0.02)  # let the worker thread start blocking_read
+        task.cancel()
+
+        await adapter.disconnect()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert events == ["read_start", "read_end", "close_called"]
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +542,27 @@ class TestReadProperty:
         result = await adapter._read_property("28.AA", "temperature")
 
         assert result == pytest.approx(21.312)
-        adapter._proxy.read.assert_called_once_with("/28.AA/temperature")
+        adapter._proxy.read.assert_called_once_with("/28.AA/temperature", timeout=adapter._cfg.request_timeout)
+
+    @pytest.mark.asyncio
+    async def test_normalizes_legacy_hyphenated_sensor_id(self, mock_bus):
+        """Bindings created by the pre-owserver sysfs adapter store ROM IDs as
+        "28-000000000001"; owserver paths need the dotted OWFS form."""
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"21.5"
+
+        await adapter._read_property("28-000000000001", "temperature")
+
+        adapter._proxy.read.assert_called_once_with("/28.000000000001/temperature", timeout=adapter._cfg.request_timeout)
+
+    @pytest.mark.asyncio
+    async def test_uses_configured_request_timeout(self, mock_bus):
+        adapter = _connected_adapter(mock_bus, request_timeout=2.5)
+        adapter._proxy.read.return_value = b"21.5"
+
+        await adapter._read_property("28.AA", "temperature")
+
+        adapter._proxy.read.assert_called_once_with("/28.AA/temperature", timeout=2.5)
 
     @pytest.mark.asyncio
     async def test_non_numeric_property_returned_as_string(self, mock_bus):
@@ -479,7 +574,7 @@ class TestReadProperty:
         assert result == "DS18B20"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("property_name", ["PIO.0", "pio.1", "sensed.0", "latch.1", "power", "present"])
+    @pytest.mark.parametrize("property_name", ["PIO.0", "pio.1", "sensed.0", "latch.1", "power", "present", "PIO.A", "sensed.B"])
     @pytest.mark.parametrize("raw, expected", [(b"1", True), (b"0", False)])
     async def test_yesno_properties_parsed_as_bool(self, mock_bus, property_name, raw, expected):
         adapter = _connected_adapter(mock_bus)
@@ -567,7 +662,7 @@ class TestWrite:
 
         await adapter.write(binding, 1)
 
-        adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", b"1")
+        adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", b"1", timeout=adapter._cfg.request_timeout)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("value, expected", [(True, b"1"), (False, b"0")])
@@ -579,7 +674,16 @@ class TestWrite:
 
         await adapter.write(binding, value)
 
-        adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", expected)
+        adapter._proxy.write.assert_called_once_with("/29.AA/PIO.0", expected, timeout=adapter._cfg.request_timeout)
+
+    @pytest.mark.asyncio
+    async def test_write_normalizes_legacy_hyphenated_sensor_id(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        binding = make_binding({"sensor_id": "29-1122334455aa", "property": "PIO.0"})
+
+        await adapter.write(binding, 1)
+
+        adapter._proxy.write.assert_called_once_with("/29.1122334455aa/PIO.0", b"1", timeout=adapter._cfg.request_timeout)
 
     @pytest.mark.asyncio
     async def test_write_error_is_caught_and_logged(self, mock_bus):
@@ -615,7 +719,7 @@ class TestBrowseSensors:
     async def test_filters_non_rom_id_entries(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/28.4B057F0A1C10", "/settings", "/uncached", "/statistics"]
             return ["/28.4B057F0A1C10/temperature"]
@@ -638,12 +742,12 @@ class TestBrowseSensors:
         it via the device's own "address" property rather than skipping it."""
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/boiler"]
             return ["/boiler/temperature"]
 
-        def fake_read(path):
+        def fake_read(path, **kwargs):
             assert path == "/boiler/address"
             return b"28.4B057F0A1C10"
 
@@ -658,10 +762,35 @@ class TestBrowseSensors:
         assert result[0]["properties"] == ["temperature"]
 
     @pytest.mark.asyncio
+    async def test_resolves_owfs_alias_via_raw_16_hex_address(self, mock_bus):
+        """owserver's "address" property on a real device dir is the raw 64-bit
+        ROM code — 16 hex chars, family+serial+crc8, with no dot — not the dotted
+        family.serial shape used elsewhere; both must resolve to a real device."""
+        adapter = _connected_adapter(mock_bus)
+
+        def fake_dir(path, **kwargs):
+            if path == "/":
+                return ["/boiler"]
+            return ["/boiler/temperature"]
+
+        def fake_read(path, **kwargs):
+            assert path == "/boiler/address"
+            return b"284B057F0A1C1042"  # family=28, serial=4B057F0A1C10, crc8=42
+
+        adapter._proxy.dir.side_effect = fake_dir
+        adapter._proxy.read.side_effect = fake_read
+
+        result = await adapter.browse_sensors()
+
+        assert len(result) == 1
+        assert result[0]["rom_id"] == "boiler"
+        assert result[0]["family"] == "28"
+
+    @pytest.mark.asyncio
     async def test_skips_entries_with_non_rom_id_shaped_address(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/structure"]
             return []
@@ -681,7 +810,7 @@ class TestBrowseSensors:
         "errata/") that are not readable leaf properties and must be excluded."""
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/28.A7F1D92A82C8/"]
             return [
@@ -702,7 +831,7 @@ class TestBrowseSensors:
     async def test_filters_structural_properties(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/28.4B057F0A1C10"]
             return [
@@ -730,7 +859,7 @@ class TestBrowseSensors:
     async def test_includes_persisted_alias(self, mock_bus):
         adapter = _connected_adapter(mock_bus, aliases={"28.4B057F0A1C10": "Gästebad Estrich"})
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/28.4B057F0A1C10"]
             return ["/28.4B057F0A1C10/temperature"]
@@ -745,7 +874,7 @@ class TestBrowseSensors:
     async def test_alias_is_none_when_not_set(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/28.4B057F0A1C10"]
             return ["/28.4B057F0A1C10/temperature"]
@@ -760,7 +889,7 @@ class TestBrowseSensors:
     async def test_multiple_sensors(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
 
-        def fake_dir(path):
+        def fake_dir(path, **kwargs):
             if path == "/":
                 return ["/28.4B057F0A1C10", "/29.1122334455AA"]
             if path == "/28.4B057F0A1C10":

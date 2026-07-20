@@ -655,9 +655,24 @@ async function saveInstance(a) {
   busy[a.id] = 'save'
   delete feedback[a.id]
   try {
+    // Fields in excludedSchemaFields() are edited outside this form (e.g. onewire
+    // aliases via the binding-form sensor scan) and can have changed on the backend
+    // since drafts[a.id] was initialized. The 10 s background poll is silent and only
+    // patches status fields (see stores/adapters.js), so it cannot be relied on to
+    // have picked up such a change — refresh explicitly and merge the live value for
+    // those fields instead of the possibly-stale draft copy, so this save can't
+    // clobber them. Skipped for adapter types without excluded fields to avoid an
+    // unnecessary round-trip/loading flash on every save.
+    const excluded = excludedSchemaFields(a.adapter_type)
+    if (excluded.length) await refreshInstances()
+    const live = store.instances.find(i => i.id === a.id) ?? a
+    const config = { ...drafts[a.id].config }
+    for (const key of excluded) {
+      if (key in live.config) config[key] = live.config[key]
+    }
     await store.updateInstance(a.id, {
       name:    drafts[a.id].name,
-      config:  drafts[a.id].config,
+      config,
       enabled: drafts[a.id].enabled,
     })
     feedback[a.id] = { success: true, detail: t('adapters.savedReconnected') }
