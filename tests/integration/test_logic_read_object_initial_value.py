@@ -409,3 +409,43 @@ async def test_failed_config_import_entry_does_not_reinitialize_existing_graph(c
         assert await _get_value(client, auth_headers, dst_id) == 99
     finally:
         await _cleanup(client, auth_headers, [graph_id], [src_id, dst_id])
+
+
+@pytest.mark.asyncio
+async def test_config_import_initialization_error_is_reported(client, auth_headers, monkeypatch):
+    """A failing initialization is reported as an import error instead of
+    failing the whole request."""
+    import uuid as _uuid
+
+    from obs.logic.manager import get_logic_manager
+
+    async def _boom(graph_id):
+        raise RuntimeError("init boom")
+
+    monkeypatch.setattr(get_logic_manager(), "initialize_graph", _boom)
+
+    graph_id = str(_uuid.uuid4())
+    try:
+        resp = await client.post(
+            "/api/v1/config/import",
+            json={
+                "obs_version": "5",
+                "exported_at": "2026-01-01T00:00:00",
+                "datapoints": [],
+                "bindings": [],
+                "logic_graphs": [
+                    {
+                        "id": graph_id,
+                        "name": "IT-1031-InitError",
+                        "description": "Integration test #1031",
+                        "enabled": True,
+                        "flow_data": {"nodes": [], "edges": []},
+                    }
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert any("Logic graph initialization" in e for e in resp.json()["errors"])
+    finally:
+        await _cleanup(client, auth_headers, [graph_id])

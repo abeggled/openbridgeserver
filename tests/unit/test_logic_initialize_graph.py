@@ -516,3 +516,118 @@ async def test_write_downstream_of_memory_is_suppressed():
 
     mgr._event_bus.publish.assert_not_awaited()
     assert mgr._hysteresis["g1"]["m1"] == {"value": "stale"}
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_timer_is_suppressed():
+    """timer_delay/timer_pulse are async manager-driven nodes; the executor
+    returns {} for them, so downstream coercions must not be written."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "t1", "type": "timer_delay", "data": {"delay_s": 5}},
+            {"id": "m1", "type": "math_map", "data": {"in_min": 0, "in_max": 100, "out_min": 0, "out_max": 1}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "t1", "targetHandle": "in"},
+            {"source": "t1", "sourceHandle": "out", "target": "m1", "targetHandle": "value"},
+            {"source": "m1", "sourceHandle": "result", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_missing_node_is_suppressed():
+    """missing_node placeholders (unknown imported blocks) produce no output —
+    downstream coercions must not be written."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "x1", "type": "missing_node", "data": {"original_type": "gone"}},
+            {"id": "m1", "type": "math_map", "data": {"in_min": 0, "in_max": 100, "out_min": 0, "out_max": 1}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "x1", "targetHandle": "in"},
+            {"source": "x1", "sourceHandle": "out", "target": "m1", "targetHandle": "value"},
+            {"source": "m1", "sourceHandle": "result", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_read_taints_shared_expression():
+    """A Read Object without a datapoint_id evaluates to None like an
+    unseeded one — a write joining it with a seeded branch is suppressed."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_name": "unconfigured"}},
+            {"id": "a1", "type": "and", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "a1", "targetHandle": "in1"},
+            {"source": "rB", "sourceHandle": "value", "target": "a1", "targetHandle": "in2"},
+            {"source": "a1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_back_to_read_datapoint_is_skipped():
+    """A Read A → Write A feedback loop would re-enter _on_value_event and
+    burst until the cascade-depth guard — such writes are not initialized."""
+    dp_id = str(uuid.uuid4())
+    mgr = _make_manager({"g1": ("G", True, _read_write_flow(dp_id, dp_id))}, values={dp_id: 42})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+    # The filter state is still primed for future events
+    assert mgr._node_state["g1"]["r1"]["last_value"] == 42
+
+
+@pytest.mark.asyncio
+async def test_hysteresis_state_on_seeded_path_is_committed():
+    """A published hysteresis output must match the persisted state, or the
+    next in-band value would flip the output back to the stale state."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "h1", "type": "hysteresis", "data": {"threshold_on": 40, "threshold_off": 20}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "h1", "targetHandle": "value"},
+            {"source": "h1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 50})
+    mgr._hysteresis["g1"] = {"h1": False}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value is True
+    assert mgr._hysteresis["g1"]["h1"] is True

@@ -59,13 +59,14 @@ _MAX_LOGIC_CASCADE_DEPTH = 10
 _MAX_SEQUENCE_REPEAT_COUNT = 10_000
 
 # Node types the side-effect-free initialization pass (initialize_graph) must
-# not publish through: action nodes are not executed there, so their executor
-# outputs are placeholders (e.g. api_client.success=False); per-sample
-# accumulators run on a throwaway state copy, so their outputs would include
-# the seed while the persisted state stays untouched; random_value generates
-# a fresh value on every evaluation, so a save would publish a new random
-# actuator value; memory evaluates with commit_memory=False, so its output is
-# the uncommitted previous/default value, not the seeded input.
+# not publish through: async/action nodes are not executed there, so their
+# executor outputs are placeholders (e.g. api_client.success=False, timers
+# and missing_node return {}); per-sample accumulators run on a throwaway
+# state copy, so their outputs would include the seed while the persisted
+# state stays untouched; random_value generates a fresh value on every
+# evaluation, so a save would publish a new random actuator value; memory
+# evaluates with commit_memory=False, so its output is the uncommitted
+# previous/default value, not the seeded input.
 _INIT_EXCLUDED_NODE_TYPES = frozenset(
     {
         "api_client",
@@ -75,6 +76,9 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "message_archive",
         "wake_on_lan",
         "value_sequence",
+        "timer_delay",
+        "timer_pulse",
+        "missing_node",
         "statistics",
         "avg_multi",
         "min_max_tracker",
@@ -84,6 +88,12 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "memory",
     }
 )
+
+# Deterministic two-state nodes whose init-pass state IS committed when they
+# sit on a clean seeded path: their output is published, so the persisted
+# state must switch with it or the next real value inside the dead band would
+# flip the output back to the stale pre-save state.
+_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis"})
 
 
 def _downstream_closure(start: set[str], flow: FlowData) -> set[str]:
@@ -1335,6 +1345,9 @@ class LogicManager:
                 continue
             dp_id_str = node.data.get("datapoint_id")
             if not dp_id_str:
+                # An unconfigured Read Object evaluates to None just like a
+                # configured one without a value — taint it the same way.
+                unseeded.add(node.id)
                 continue
             vs = None
             try:
@@ -1358,7 +1371,15 @@ class LogicManager:
         # _INIT_EXCLUDED_NODE_TYPES).
         tainted = _downstream_closure(unseeded | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow)
         seeded_paths = _downstream_closure(set(seeds), flow)
-        skip_writes = {node.id for node in flow.nodes if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths)}
+        # A write back to a DataPoint this graph also reads would re-enter
+        # _on_value_event during publish and repeat until the cascade-depth
+        # guard — such feedback loops are self-driving, skip them here.
+        read_dp_ids = {node.data.get("datapoint_id") for node in flow.nodes if node.type == "datapoint_read" and node.data.get("datapoint_id")}
+        skip_writes = {
+            node.id
+            for node in flow.nodes
+            if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths or node.data.get("datapoint_id") in read_dp_ids)
+        }
 
         now = datetime.now(UTC)
         graph_state = self._node_state.setdefault(graph_id, {})
@@ -1393,6 +1414,13 @@ class LogicManager:
             hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
             executor = GraphExecutor(flow, hyst_copy, self._app_config)
             outputs = executor.execute(overrides, commit_memory=False)
+
+            # Gate/hysteresis outputs on clean seeded paths are published
+            # below — commit their switched state so the persisted state
+            # matches what was published (see _INIT_COMMIT_STATE_NODE_TYPES).
+            for node in flow.nodes:
+                if node.type in _INIT_COMMIT_STATE_NODE_TYPES and node.id in seeded_paths and node.id not in tainted and node.id in hyst_copy:
+                    self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
 
             wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
             await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
