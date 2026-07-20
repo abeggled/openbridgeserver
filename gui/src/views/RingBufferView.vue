@@ -116,6 +116,15 @@
       {{ recoveryNotice }}
     </div>
 
+    <div
+      v-if="migrationStatsRefreshFailed"
+      class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300"
+      data-testid="ringbuffer-migration-stats-refresh-failed"
+      role="status"
+    >
+      {{ $t('ringbuffer.migration.statsRefreshFailed') }}
+    </div>
+
     <!-- Segment-Status/Stats (#938) — nicht mehr inline, sondern in einem Modal
          hinter dem Toolbar-Button. Nur im segmentierten Modus (stats.store != null). -->
     <Modal v-model="showSegments" :title="$t('ringbuffer.segmentSectionTitle')" max-width="2xl">
@@ -189,6 +198,7 @@ import { useLiveQueue } from '@/composables/useLiveQueue'
 import { timeFilterToPayload, entryInTimeWindow } from '@/composables/useTimeFilterPayload'
 import { matchedSetIds } from '@/composables/useClientSideMatch'
 import { isSegmentProblem } from '@/composables/useSegmentProblems'
+import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge from '@/components/ui/Badge.vue'
@@ -210,6 +220,7 @@ const { t } = useI18n()
 const { fmtDateTime } = useTz()
 const auth = useAuthStore()
 const wsStore = useWebSocketStore()
+const { completionRevision } = useLegacyMigration()
 const { getRowStyle, setSets, sets: topbarSetsRef } = useSetColors()
 
 function rowMatchTitle(matchedIds) {
@@ -258,6 +269,7 @@ const recoveryNotice = ref('')
 const monitorDisabled = ref(false)
 // Segmentierter Store (#938) — {common, backend_extra} oder null (Legacy).
 const storeStats = ref(null)
+const migrationStatsRefreshFailed = ref(false)
 let recoveryNoticeRefreshPromise = null
 let lastRecoveryNoticeRefreshAt = 0
 
@@ -332,6 +344,7 @@ async function onMonitorConfigSaved() {
 }
 
 function onMonitorStats(stats) {
+  migrationStatsRefreshFailed.value = false
   monitorDisabled.value = stats?.enabled === false
   // Segment-Panel-Quelle (#938): der segmentierte Store liefert ``store`` als
   // ``{common, backend_extra}``; im Legacy-Modus ist es null → dann rendert die
@@ -341,6 +354,19 @@ function onMonitorStats(stats) {
   clearLiveQueue()
   entries.value = []
 }
+
+// Der Migrations-Assistent pollt einen eigenen Endpoint. Sobald ein laufender
+// Job terminal wird, die Segmentquelle sofort invalidieren; andernfalls kann
+// das Modal bis zum nächsten 10-s-/WS-Refresh noch die Legacy-Zeile zeigen.
+watch(completionRevision, async () => {
+  const refreshed = await topbarStatsRef.value?.reload?.()
+  if (refreshed) {
+    onMonitorStats(refreshed)
+    return
+  }
+  storeStats.value = null
+  migrationStatsRefreshFailed.value = true
+})
 
 // TimeFilterPopover state (#432). See useTimeFilterPayload for the shape.
 const timeFilter = ref(null)

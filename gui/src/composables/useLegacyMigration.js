@@ -30,6 +30,11 @@ const POLL_INTERVAL_MS = 1000
 const status = ref(null)
 const loading = ref(false)
 const loadError = ref(false)
+// Monotoner Abschlusszähler für Consumer der getrennten /stats-Quelle. Der
+// Migrationsstatus und die Segmentstatistik werden über verschiedene Endpoints
+// geladen; ohne explizite Invalidierung kann nach ``phase=done`` kurz die alte
+// Legacy-Manifestzeile sichtbar bleiben.
+const completionRevision = ref(0)
 let pollTimer = null
 
 const decision = computed(() => status.value?.decision ?? null)
@@ -97,8 +102,13 @@ function syncPolling() {
 }
 
 function applyStatus(data) {
+  const previousPhase = status.value?.job?.phase ?? null
+  const nextPhase = data?.job?.phase ?? null
   status.value = data
   loadError.value = false
+  if (RUNNING_JOB_PHASES.has(previousPhase) && nextPhase === 'done') {
+    completionRevision.value += 1
+  }
   syncPolling()
 }
 
@@ -140,6 +150,7 @@ export function useLegacyMigration() {
     status,
     loading,
     loadError,
+    completionRevision,
     decision,
     legacy,
     job,

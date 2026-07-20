@@ -7,6 +7,7 @@
  * loadRecoveryNotice.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { ref } from 'vue'
 
 function segmentedStatsPayload() {
   return {
@@ -53,6 +54,7 @@ describe('RingBufferView segment panel wiring', () => {
     vi.doUnmock('@/api/client')
     vi.doUnmock('@/stores/websocket')
     vi.doUnmock('@/composables/useTz')
+    vi.doUnmock('@/composables/useLegacyMigration')
   })
 
   it('renders the segment panel when stats.store is present', async () => {
@@ -77,5 +79,72 @@ describe('RingBufferView segment panel wiring', () => {
     const { wrapper } = await mountRingBufferView({ ringbufferApi })
 
     expect(wrapper.find('[data-testid="segment-stats-panel"]').exists()).toBe(false)
+  })
+
+  it('reloads segment stats immediately when migration reaches done', async () => {
+    const completionRevision = ref(0)
+    vi.doMock('@/composables/useLegacyMigration', () => ({
+      useLegacyMigration: () => ({
+        completionRevision,
+        refresh: vi.fn().mockResolvedValue(null),
+        showBanner: ref(false),
+        escalated: ref(false),
+        status: ref(null),
+        decision: ref(null),
+        legacy: ref(null),
+        job: ref(null),
+        jobRunning: ref(false),
+        decide: vi.fn(),
+        startMigration: vi.fn(),
+      }),
+    }))
+
+    const before = segmentedStatsPayload()
+    before.store.backend_extra.segments = [
+      {
+        segment_id: 2,
+        status: 'legacy',
+        row_count: 0,
+        size_bytes: 10 * 1024 * 1024,
+        from_ts: null,
+        to_ts: null,
+        integrity_status: 'ok',
+        recovery_status: 'none',
+        quarantine_reason: null,
+      },
+    ]
+    before.store.common.segment_count = 1
+
+    const after = segmentedStatsPayload()
+    after.store.backend_extra.segments = [
+      {
+        segment_id: 4,
+        status: 'closed',
+        row_count: 75534,
+        size_bytes: 109 * 1024 * 1024,
+        from_ts: '2026-07-03T11:23:31.344Z',
+        to_ts: '2026-07-03T14:06:16.699Z',
+        integrity_status: 'ok',
+        recovery_status: 'none',
+        quarantine_reason: null,
+      },
+    ]
+    after.store.common.segment_count = 1
+
+    const { mountRingBufferView, makeRingbufferApiMock, flushPromises } = await import('../helpers/mountRingBufferView.js')
+    const ringbufferApi = makeRingbufferApiMock({
+      stats: vi.fn().mockResolvedValue({ data: before }),
+    })
+    const topbarReload = vi.fn().mockResolvedValue(after)
+    const { wrapper } = await mountRingBufferView({ ringbufferApi, topbarReload })
+
+    expect(wrapper.find('[data-testid="segment-row"]').text()).toContain('0')
+
+    completionRevision.value += 1
+    await flushPromises()
+
+    expect(topbarReload).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="segment-row"]').text()).toContain('75.534')
+    expect(wrapper.find('[data-testid="segment-row"]').text()).not.toContain('Legacy')
   })
 })

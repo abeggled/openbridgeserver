@@ -20,7 +20,7 @@ afterEach(() => {
   vi.doUnmock('@/stores/auth')
 })
 
-function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600, maxAge = null } = {}) {
+function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024, sizeBytes = 30 * 1024 * 1024, retentionSeconds = 3 * 24 * 3600, overBudget = false, prognosis, segmentMaxAge = 6 * 3600, maxAge = null, statsOverrides = {} } = {}) {
   return {
     enabled: true,
     total: 800,
@@ -35,6 +35,7 @@ function segmentedPayload({ segments = [], maxFileSizeBytes = 100 * 1024 * 1024,
       common: { segment_count: segments.length, size_bytes: sizeBytes, oldest_ts: null, newest_ts: null },
       backend_extra: { segments, retention_over_budget: overBudget, retention_pressure_reason: null },
     },
+    ...statsOverrides,
   }
 }
 
@@ -102,10 +103,11 @@ async function mountCard(statsData, { isAdmin = true } = {}) {
 // ── Zustand: Monitor deaktiviert ───────────────────────────────────────────
 describe('RingBufferCard — disabled state', () => {
   it('shows the disabled block and no retention numbers', async () => {
-    const wrapper = await mountCard({ enabled: false })
+    const wrapper = await mountCard({ enabled: false, retention_unbounded: true })
     expect(wrapper.find('[data-testid="rb-card-disabled"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="rb-card-budget"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="rb-card-segments"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="rb-card-unbounded-warning"]').exists()).toBe(false)
   })
 
   it('opens the config modal via the Konfigurieren button', async () => {
@@ -132,6 +134,28 @@ describe('RingBufferCard — segmented state', () => {
     expect(wrapper.find('[data-testid="rb-card-budget-unlimited"]').text()).toContain('unbegrenzt')
   })
 
+  it('shows a prominent warning when total retention is unbounded', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      maxFileSizeBytes: null,
+      statsOverrides: { retention_unbounded: true },
+    }))
+    const warning = wrapper.find('[data-testid="rb-card-unbounded-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.attributes('role')).toBe('alert')
+    expect(warning.text()).toContain('Gesamt-Retention unbegrenzt')
+    expect(warning.text()).toContain('unbegrenzt wachsen')
+  })
+
+  it('does not warn when another total retention limit is active', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      maxFileSizeBytes: null,
+      statsOverrides: { retention_unbounded: false },
+    }))
+    expect(wrapper.find('[data-testid="rb-card-unbounded-warning"]').exists()).toBe(false)
+  })
+
   it('shows segment count and the full prognosis block', async () => {
     const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: fullPrognosis }))
     expect(wrapper.find('[data-testid="rb-card-segments"]').text()).toBe('2')
@@ -142,9 +166,76 @@ describe('RingBufferCard — segmented state', () => {
     expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(true)
   })
 
+  it('feeds effective row and derived-age limits into the dashboard prognosis', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      segmentMaxAge: null,
+      prognosis: { ...fullPrognosis, effective_segment_max_bytes: null },
+      statsOverrides: {
+        effective_segment_max_age: 12 * 3600,
+        effective_segment_max_bytes: null,
+        effective_segment_max_rows: 6000,
+      },
+    }))
+    expect(wrapper.find('[data-testid="prognosis-rotation"]').text()).toContain('Zeilen')
+    expect(wrapper.find('[data-testid="prognosis-budget"]').text()).toContain('12')
+  })
+
+  it('feeds the full age-retention target into the dashboard budget forecast', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      segmentMaxAge: 24 * 3600,
+      maxAge: 30 * 24 * 3600,
+      prognosis: { ...fullPrognosis, bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+    const budget = wrapper.find('[data-testid="prognosis-budget"]').text()
+    expect(budget).toContain('30 Tage Retention')
+    expect(budget).toContain('35,2 GiB')
+    expect(budget).not.toContain('mind. 3 Segmente')
+  })
+
+  it('shows other retention limits instead of unlimited growth without a disk budget', async () => {
+    const wrapper = await mountCard(segmentedPayload({
+      segments: healthySegments,
+      maxFileSizeBytes: null,
+      prognosis: fullPrognosis,
+      statsOverrides: { retention_unbounded: false },
+    }))
+    const history = wrapper.find('[data-testid="prognosis-history"]').text()
+    expect(history).toContain('andere Gesamtgrenzen')
+    expect(history).not.toContain('Historie wächst')
+  })
+
   it('shows the warming-up hint when prognosis rate fields are unavailable', async () => {
     const wrapper = await mountCard(segmentedPayload({ segments: healthySegments, prognosis: { estimated_retention_seconds: null } }))
     expect(wrapper.find('[data-testid="prognosis-warming"]').text()).toContain('läuft sich noch ein')
+  })
+
+  it('reloads once when the five-second live prognosis becomes available', async () => {
+    vi.useFakeTimers()
+    try {
+      const warming = segmentedPayload({
+        segments: healthySegments,
+        prognosis: { source: 'active', provisional: true, ready_after_seconds: 5, rows_per_hour: null, bytes_per_hour: null },
+      })
+      const wrapper = await mountCard(warming)
+      expect(statsMock).toHaveBeenCalledTimes(1)
+
+      statsMock.mockResolvedValue({
+        data: segmentedPayload({
+          segments: healthySegments,
+          prognosis: { source: 'active', provisional: true, observed_seconds: 5, ready_after_seconds: 0, rows_per_hour: 3600, bytes_per_hour: 1024 },
+        }),
+      })
+      await vi.advanceTimersByTimeAsync(5_100)
+      await flushPromises()
+
+      expect(statsMock).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[data-testid="prognosis-rate"]').text()).toContain('1,0 Events/s')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('omits the prognosis budget line when segment_max_age is missing', async () => {
@@ -235,6 +326,17 @@ describe('RingBufferCard — legacy state', () => {
     const wrapper = await mountCard({ enabled: true, store: null, total: 10, file_size_bytes: 0 })
     await wrapper.find('[data-testid="rb-card-configure"]').trigger('click')
     expect(wrapper.find('[data-testid="config-modal-open"]').exists()).toBe(true)
+  })
+
+  it('shows the unbounded-retention warning in legacy mode too', async () => {
+    const wrapper = await mountCard({
+      enabled: true,
+      store: null,
+      total: 10,
+      file_size_bytes: 0,
+      retention_unbounded: true,
+    })
+    expect(wrapper.find('[data-testid="rb-card-unbounded-warning"]').exists()).toBe(true)
   })
 })
 

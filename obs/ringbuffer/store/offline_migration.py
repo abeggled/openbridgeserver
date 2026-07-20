@@ -55,6 +55,7 @@ from obs.ringbuffer.store.sqlite_backend import (
     MIGRATED_FILENAME_PREFIX,
     SEGMENT_SCHEMA_VERSION,
     SqliteSegmentStore,
+    _parse_ts,
     _safe_json_decode,
     _utc_now_compact,
 )
@@ -411,12 +412,15 @@ class OfflineLegacyMigrator:
             raise OfflineMigrationError("legacy source became unreadable during migration")
         segment_max_bytes = self._store._segment_config.segment_max_bytes
         segment_max_rows = self._store._segment_config.segment_max_rows
+        segment_max_age = self._store._segment_config.segment_max_age
         target_conn = None
         target_filename: str | None = None
         target_segment: SegmentRecord | None = None
         seg_rows = 0
         seg_from_ts: str | None = None
         seg_to_ts: str | None = None
+        seg_from_epoch: float | None = None
+        seg_to_epoch: float | None = None
         seg_index = 0
         try:
             has_metadata_cols = await self._legacy_has_metadata_columns(source)
@@ -450,24 +454,54 @@ class OfflineLegacyMigrator:
                     rows = await cur.fetchall()
                 if not rows:
                     break
-                if target_conn is None:
-                    seg_index += 1
-                    target_filename = f"{MIGRATED_FILENAME_PREFIX}{_utc_now_compact()}_{seg_index:03d}.sqlite"
-                    # Segment der kopierten Quelle zuordnen (#968, Codex :354), damit der Commit
-                    # bei mehreren Quellen nur diese Kopien promotet.
-                    target_segment = await self._store.manifest.create_migrating_segment(
-                        filename=target_filename, schema_version=SEGMENT_SCHEMA_VERSION, legacy_source_id=legacy.segment_id
-                    )
-                    target_conn = await self._store._open_segment_conn(target_filename)
-                    seg_rows = 0
-                    seg_from_ts = None
-                    seg_to_ts = None
                 for row in rows:
                     event = _legacy_row_to_event(row)
+                    event_epoch = _parse_ts(event.ts)
+                    if (
+                        target_conn is not None
+                        and seg_rows > 0
+                        and segment_max_age is not None
+                        and event_epoch is not None
+                        and seg_from_epoch is not None
+                        and seg_to_epoch is not None
+                    ):
+                        candidate_from = min(seg_from_epoch, event_epoch)
+                        candidate_to = max(seg_to_epoch, event_epoch)
+                        # Eine exakt an der Grenze liegende Datenspanne ist noch
+                        # gueltig. Erst das Event jenseits der Grenze startet ein
+                        # neues Segment. min/max deckt auch nicht monotone Legacy-ts.
+                        if candidate_to - candidate_from > segment_max_age:
+                            await target_conn.commit()
+                            await self._finalize_target(
+                                target_conn,
+                                target_segment,
+                                target_filename,
+                                seg_rows,
+                                seg_from_ts,
+                                seg_to_ts,
+                            )
+                            target_conn = None
+                    if target_conn is None:
+                        seg_index += 1
+                        target_filename = f"{MIGRATED_FILENAME_PREFIX}{_utc_now_compact()}_{seg_index:03d}.sqlite"
+                        # Segment der kopierten Quelle zuordnen (#968, Codex :354), damit der Commit
+                        # bei mehreren Quellen nur diese Kopien promotet.
+                        target_segment = await self._store.manifest.create_migrating_segment(
+                            filename=target_filename, schema_version=SEGMENT_SCHEMA_VERSION, legacy_source_id=legacy.segment_id
+                        )
+                        target_conn = await self._store._open_segment_conn(target_filename)
+                        seg_rows = 0
+                        seg_from_ts = None
+                        seg_to_ts = None
+                        seg_from_epoch = None
+                        seg_to_epoch = None
                     await self._store._insert_event(target_conn, _legacy_gid(row["id"], plan.legacy_segment_id), event)
                     seg_rows += 1
                     seg_from_ts = event.ts if seg_from_ts is None or event.ts < seg_from_ts else seg_from_ts
                     seg_to_ts = event.ts if seg_to_ts is None or event.ts > seg_to_ts else seg_to_ts
+                    if event_epoch is not None:
+                        seg_from_epoch = event_epoch if seg_from_epoch is None else min(seg_from_epoch, event_epoch)
+                        seg_to_epoch = event_epoch if seg_to_epoch is None else max(seg_to_epoch, event_epoch)
                 await target_conn.commit()
                 cursor_rowid = rows[-1]["id"]
                 progress["copied_rows"] = progress.get("copied_rows", 0) + len(rows)
