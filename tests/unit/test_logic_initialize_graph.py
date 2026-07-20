@@ -732,3 +732,62 @@ async def test_persist_node_state_without_state_is_noop():
     await mgr._persist_node_state("g1")
 
     mgr._db.execute_and_commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_init_publish_does_not_reenter_same_graph():
+    """Read A → Write B plus Read B → Write C: delivering the Write B event
+    back to _on_value_event during the init publish must not re-execute this
+    graph mid-pass; other graphs are unaffected."""
+    src_a, dp_b, dst_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wC", "type": "datapoint_write", "data": {"datapoint_id": dst_c}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wC", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 7, dp_b: 3})
+    mgr._execute_graph = AsyncMock()  # only reachable via _on_value_event re-entry
+
+    async def _deliver(event):
+        await mgr._on_value_event(event)
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._event_bus.publish.await_count == 2
+    mgr._execute_graph.assert_not_awaited()
+    # The guard is released afterwards — later events execute normally
+    assert "g1" not in mgr._initializing_graphs
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_cron_trigger_is_suppressed():
+    """timer_cron evaluates to trigger=False without a manager override — a
+    write joining it with a seeded branch must not publish that placeholder."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "c1", "type": "timer_cron", "data": {"cron": "0 7 * * *"}},
+            {"id": "a1", "type": "and", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "a1", "targetHandle": "in1"},
+            {"source": "c1", "sourceHandle": "trigger", "target": "a1", "targetHandle": "in2"},
+            {"source": "a1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()

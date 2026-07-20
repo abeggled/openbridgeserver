@@ -449,3 +449,32 @@ async def test_config_import_initialization_error_is_reported(client, auth_heade
         assert any("Logic graph initialization" in e for e in resp.json()["errors"])
     finally:
         await _cleanup(client, auth_headers, [graph_id])
+
+
+@pytest.mark.asyncio
+async def test_patch_layout_only_save_does_not_reinitialize(client, auth_headers):
+    """A PATCH that only moves nodes on the canvas keeps execution semantics
+    and must not re-run the initialization writes."""
+    ts = time.time()
+    src_id = await _create_dp(client, auth_headers, f"IT-1031-Layout-Src-{ts}")
+    dst_id = await _create_dp(client, auth_headers, f"IT-1031-Layout-Dst-{ts}")
+    graph_id = None
+    try:
+        await _set_value(client, auth_headers, src_id, 42)
+        flow = _read_write_flow(src_id, dst_id)
+        graph_id = await _create_graph(client, auth_headers, "IT-1031-Layout", flow)
+        assert await _get_value(client, auth_headers, dst_id) == 42
+
+        # Make the destination diverge so a re-initialization would be visible
+        await _set_value(client, auth_headers, dst_id, 99)
+
+        moved = {
+            "nodes": [{**node, "position": {"x": node["position"]["x"] + 50, "y": node["position"]["y"] + 50}} for node in flow["nodes"]],
+            "edges": flow["edges"],
+        }
+        resp = await client.patch(f"/api/v1/logic/graphs/{graph_id}", json={"flow_data": moved}, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+
+        assert await _get_value(client, auth_headers, dst_id) == 99
+    finally:
+        await _cleanup(client, auth_headers, [graph_id], [src_id, dst_id])

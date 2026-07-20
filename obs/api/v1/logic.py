@@ -52,6 +52,13 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
+def _without_positions(raw: dict) -> dict:
+    """Strip node positions for layout-only save detection."""
+    raw = dict(raw)
+    raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", [])]
+    return raw
+
+
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     return LogicGraphOut(
@@ -178,11 +185,6 @@ async def update_graph_full(
         ),
     )
 
-    def _without_positions(raw: dict) -> dict:
-        raw = dict(raw)
-        raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", [])]
-        return raw
-
     try:
         layout_only = bool(row["enabled"]) == body.enabled and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(
             json.loads(body.flow_data.model_dump_json())
@@ -238,13 +240,26 @@ async def update_graph_partial(
     # intact preserves in-flight value sequences; flow or enabled changes need
     # the normal reload and cancellation semantics.
     if body.flow_data is not None or body.enabled is not None:
+        # Position-only canvas saves keep execution semantics — mirror the
+        # PUT path: refresh the cache without re-initializing the sheet.
+        try:
+            layout_only = (
+                body.flow_data is not None
+                and (body.enabled is None or body.enabled == bool(row["enabled"]))
+                and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(json.loads(flow_json))
+            )
+        except (TypeError, ValueError):
+            layout_only = False
         try:
             from obs.logic.manager import get_logic_manager
 
             manager = get_logic_manager()
-            manager.invalidate_cache(graph_id)
-            await manager.reload()
-            await manager.initialize_graph(graph_id)
+            if layout_only:
+                manager.update_cached_graph(graph_id, name, enabled, body.flow_data)
+            else:
+                manager.invalidate_cache(graph_id)
+                await manager.reload()
+                await manager.initialize_graph(graph_id)
         except Exception:
             pass
     else:

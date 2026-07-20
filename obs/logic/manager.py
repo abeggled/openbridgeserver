@@ -78,6 +78,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "value_sequence",
         "timer_delay",
         "timer_pulse",
+        "timer_cron",
         "missing_node",
         "statistics",
         "avg_multi",
@@ -768,6 +769,9 @@ class LogicManager:
         # per-node runtime state for filter/throttle
         # {graph_id: {node_id: {last_value, last_ts, last_write_val, last_write_ts}}}
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
+        # graphs whose initialize_graph publish is in flight — their own
+        # DataValueEvents must not re-enter them (see _on_value_event)
+        self._initializing_graphs: set[str] = set()
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         # Running value sequences, keyed per graph/node.  They are deliberately
@@ -1181,6 +1185,12 @@ class LogicManager:
             name, enabled, flow = entry
             if not enabled:
                 continue
+            if graph_id in self._initializing_graphs:
+                # This graph's own initialization publish is in flight — a
+                # sibling Read Object of the written DataPoint must not
+                # re-enter the graph mid-pass (issue #1031). Other graphs
+                # still react normally.
+                continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
             if not trigger_nodes:
                 continue
@@ -1443,7 +1453,15 @@ class LogicManager:
                 await self._persist_node_state(graph_id)
 
             wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
-            await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
+            # While the publish is in flight, _on_value_event skips THIS
+            # graph: a write target read elsewhere in the same sheet (e.g.
+            # Read A → Write B plus Read B → Write C) would otherwise
+            # re-enter the graph mid-pass and burst until the cascade guard.
+            self._initializing_graphs.add(graph_id)
+            try:
+                await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
+            finally:
+                self._initializing_graphs.discard(graph_id)
         except Exception as exc:
             logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
 
