@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 1. Database
     db = await init_db(settings.database.path)
+    from obs.message_archive import init_message_archive_store
+
+    await init_message_archive_store(settings)
     persistent_log_level = await _read_persistent_log_level(db)
     if persistent_log_level and persistent_log_level != configured_log_level:
         log_level = getattr(logging, persistent_log_level, log_level)
@@ -147,35 +150,84 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     autobackup_scheduler = init_autobackup_scheduler(db=db)
 
+    # 11. DB-Wartung — periodischer WAL-TRUNCATE-Checkpoint (siehe issue #908)
+    from obs.db.maintenance import init_db_maintenance_scheduler
+
+    db_maintenance_scheduler = init_db_maintenance_scheduler(db=db)
+
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",
         registry.count(),
         len(adapter_registry.all_types()),
     )
+    try:
+        from obs.message_archive import get_message_archive_service
+
+        await get_message_archive_service().record(
+            "system",
+            type="system",
+            severity="info",
+            source="system.startup",
+            title="OBS started",
+            message=f"open bridge server v{__version__} ready",
+            payload={"datapoints": registry.count(), "adapters_registered": len(adapter_registry.all_types())},
+        )
+    except Exception:
+        logger.exception("Failed to write startup event to message archive")
 
     yield  # ← application running
 
     # Shutdown (reverse order)
+    await db_maintenance_scheduler.stop()
     await autobackup_scheduler.stop()
     await logic_mgr.stop()
     await adapter_registry.stop_all()
     await mqtt.stop()
     await _stop_optional_ringbuffer()
+    from obs.message_archive import close_message_archive_store
+
+    await close_message_archive_store()
     await get_db().disconnect()
     logger.info("open bridge server stopped.")
 
 
 async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_event_type) -> None:
-    from obs.ringbuffer.persisted_config import load_persisted_ringbuffer_config
-    from obs.ringbuffer.ringbuffer import default_ringbuffer_disk_path, init_ringbuffer, reset_ringbuffer, set_ringbuffer_enabled
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISIONS_PROTECTED,
+        ensure_legacy_migration_decision,
+        finalize_committed_migration_decision,
+        load_persisted_ringbuffer_config,
+    )
+    from obs.ringbuffer.ringbuffer import (
+        _is_sqlite_memory_path,
+        default_ringbuffer_disk_path,
+        init_ringbuffer,
+        reset_ringbuffer,
+        set_ringbuffer_enabled,
+    )
 
     rb_path = default_ringbuffer_disk_path(database_path)
-    rb_cfg = await load_persisted_ringbuffer_config(db)
+    # storage_path an den Loader durchreichen (#951 [P3]): fehlt die Config-Zeile,
+    # unterscheidet er anhand vorhandenen Ringbuffer-Storages Upgrade (10 MiB) von
+    # Fresh-Install (100 MiB).
+    rb_cfg = await load_persisted_ringbuffer_config(db, storage_path=rb_path)
     if not rb_cfg["enabled"]:
         reset_ringbuffer()
         set_ringbuffer_enabled(False)
         return
     set_ringbuffer_enabled(True)
+
+    # Memory-DB-Pfade (``:memory:`` bzw. ``file:...mode=memory``) sind nicht
+    # segmentierbar (Codex #951): der segmentierte Startup leitet aus dem Disk-Pfad
+    # ein reales ``*_segments``-Verzeichnis ab und schriebe Manifest-/Segment-Dateien
+    # auf die Platte, während das Memory-Cleanup ein No-op ist. Konsistent zur
+    # API-seitigen Normalisierung (memory ⇒ nicht segmentiert) hier erzwingen.
+    segmented = rb_cfg.get("segmented", False) and not _is_sqlite_memory_path(rb_path)
+
+    # Migrations-Assistent (#964): liegt eine Legacy-Single-DB vor und wurde noch
+    # nie entschieden, wird ``pending`` persistiert. Ohne informierte Entscheidung
+    # (pending/skipped) bleibt das attachte Legacy-Segment retention-geschützt.
+    decision = await ensure_legacy_migration_decision(db, legacy_db_path=rb_path if segmented else None)
 
     rb = await init_ringbuffer(
         storage="file",
@@ -183,7 +235,27 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         disk_path=rb_path,
         max_file_size_bytes=rb_cfg["max_file_size_bytes"],
         max_age=rb_cfg["max_age"],
+        # Segmentierter Store (#919) — OPT-IN; Default AUS = unveränderter Legacy-Pfad.
+        segmented=segmented,
+        segment_max_bytes=rb_cfg.get("segment_max_bytes"),
+        segment_max_rows=rb_cfg.get("segment_max_rows"),
+        segment_max_age=rb_cfg.get("segment_max_age"),
+        legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
     )
+    # Ist ein Offline-Migrations-Commit durch (Kopien promotet, Legacy detached), aber die
+    # ``migrated``-Entscheidung wurde nie terminal persistiert (im Commit-Fenster unterbrochen
+    # und vom Startup-Reconciler vollendet, oder eine frühere ``on_success``-Persistenz schlug
+    # fehl), state-basiert nachziehen (#968, Codex :449/:326). No-op, wenn bereits terminal oder
+    # noch eine Legacy-Quelle attached ist. Best-effort wie der Runtime-Config-Pfad (#968, Codex
+    # :231): ein transienter app-DB-Schreibfehler (locked/voll) darf den Boot NICHT blockieren –
+    # der Datenpfad ist bereits committed, der nächste ``/migration``-Poll zieht die Entscheidung
+    # nach.
+    try:
+        await finalize_committed_migration_decision(db, rb)
+    except Exception:
+        logger.exception(
+            "RingBuffer: Startup-Finalisierung der Migrations-Entscheidung fehlgeschlagen (Server startet, Retry beim nächsten Status-Poll)"
+        )
     bus.subscribe(data_value_event_type, rb.handle_value_event)
 
 

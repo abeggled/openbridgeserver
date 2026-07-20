@@ -75,6 +75,7 @@ export async function mountRingBufferView({
   hierarchyApi = makeHierarchyApiMock(),
   wsConnected = false,
   isAdmin = true,
+  topbarReload = vi.fn().mockResolvedValue({ enabled: true }),
 } = {}) {
   // capture the live entry handler so tests can fire fake WS events
   let liveHandler = null
@@ -156,7 +157,7 @@ export async function mountRingBufferView({
           name: 'TopbarStats',
           emits: ['stats'],
           setup(_, { expose }) {
-            expose({ reload: vi.fn().mockResolvedValue({ enabled: true }) })
+            expose({ reload: topbarReload })
             return () => h('span', { 'data-testid': 'stub-topbar-stats' })
           },
         }),

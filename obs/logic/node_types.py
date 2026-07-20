@@ -47,7 +47,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -65,7 +65,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -92,7 +92,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         outputs=[_port("out", "Out")],
         config_schema={
             "input_count": {
-                "type": "number",
+                "type": "integer",
                 "default": 2,
                 "min": 2,
                 "max": 30,
@@ -413,6 +413,25 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#7c3aed",
     ),
     # ── String ───────────────────────────────────────────────────────────
+    # Purely visual annotation node (issue #1043) — no ports, no executor
+    # case (falls through to the "unknown node type" no-op branch, same as
+    # ai_logic). width/height live in config_schema only so freshly dropped
+    # nodes get sane defaults via the generic onDrop seeding in LogicView.vue;
+    # they are not rendered as form fields (comment has its own config panel).
+    NodeTypeDef(
+        type="comment",
+        label="Kommentar",
+        category="string",
+        description="Freier Mehrzeilen-Text zur Dokumentation direkt auf dem Graph-Canvas. Rein visuell, hat keinen Effekt auf die Ausführung.",
+        inputs=[],
+        outputs=[],
+        config_schema={
+            "text": {"type": "string", "default": "", "label": "Text"},
+            "width": {"type": "number", "default": 220, "label": "Breite"},
+            "height": {"type": "number", "default": 140, "label": "Höhe"},
+        },
+        color="#ca8a04",
+    ),
     NodeTypeDef(
         type="string_concat",
         label="String Verketten",
@@ -613,7 +632,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         description="Verzögert ein Signal um N Sekunden",
         inputs=[_port("trigger", "Trigger", "trigger")],
         outputs=[_port("trigger", "Trigger", "trigger")],
-        config_schema={"delay_s": {"type": "number", "default": 1.0}},
+        config_schema={"delay_s": {"type": "number", "default": 1.0, "min": 0}},
         color="#b45309",
     ),
     NodeTypeDef(
@@ -623,7 +642,23 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         description="Gibt einen Impuls für N Sekunden aus",
         inputs=[_port("trigger", "Trigger", "trigger")],
         outputs=[_port("out", "Out")],
-        config_schema={"duration_s": {"type": "number", "default": 1.0}},
+        config_schema={"duration_s": {"type": "number", "default": 1.0, "min": 0}},
+        color="#b45309",
+    ),
+    NodeTypeDef(
+        type="value_sequence",
+        label="Sequenz",
+        category="timer",
+        description="Schreibt eine Folge von Werten mit konfigurierbaren Pausen.",
+        inputs=[_port("trigger", "Trigger", "trigger"), _port("condition", "Bedingung")],
+        outputs=[],
+        config_schema={
+            "run_mode": {"type": "string", "enum": ["once", "repeat_count", "while_condition"], "default": "once"},
+            "repeat_count": {"type": "number", "default": 2, "min": 1},
+            "restart_policy": {"type": "string", "enum": ["ignore", "restart", "queue"], "default": "ignore"},
+            "cancel_when_condition_false": {"type": "boolean", "default": False},
+            "steps": {"type": "array", "default": []},
+        },
         color="#b45309",
     ),
     NodeTypeDef(
@@ -769,6 +804,36 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
+    ),
+    NodeTypeDef(
+        type="message_archive",
+        label="Meldungsarchiv",
+        category="notification",
+        description="Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
+        inputs=[
+            _port("trigger", "Trigger"),
+            _port("message", "Nachricht"),
+            _port("title", "Titel"),
+        ],
+        outputs=[_port("stored", "Gespeichert", "trigger")],
+        config_schema={
+            "archive_id": {"type": "string", "default": "", "label": "Meldungsarchiv"},
+            "title": {"type": "string", "default": "", "label": "Titel (Fallback)"},
+            "message": {"type": "string", "default": "", "label": "Nachricht (Fallback)"},
+            "type": {
+                "type": "string",
+                "enum": ["automation", "notification", "system", "security", "adapter", "diagnostic"],
+                "default": "automation",
+                "label": "Meldungstyp",
+            },
+            "severity": {
+                "type": "string",
+                "enum": ["info", "success", "warning", "error", "critical"],
+                "default": "info",
+                "label": "Schweregrad",
+            },
+        },
+        color="#2563eb",
     ),
     # ── Integration ───────────────────────────────────────────────────────
     NodeTypeDef(
@@ -968,7 +1033,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": [],
                 "label": "Variablen",
             },
-            "timeout_s": {"type": "number", "default": 10, "label": "Timeout (s)"},
+            "timeout_s": {"type": "number", "default": 10, "min": 1, "label": "Timeout (s)"},
             "auth_type": {
                 "type": "string",
                 "enum": ["none", "basic", "digest", "bearer"],

@@ -12,9 +12,10 @@ import logging
 import math
 import operator
 import re
-from datetime import date as _date
+from datetime import datetime as _datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+from zoneinfo import ZoneInfo as _ZoneInfo
 
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
@@ -687,6 +688,18 @@ class GraphExecutor:
                     "sent": False,
                 }
 
+            case "message_archive":
+                # Fires when message arrives OR trigger is truthy (both optional).
+                msg = inputs.get("message")
+                title = inputs.get("title")
+                triggered = self._to_bool(inputs.get("trigger")) if "trigger" in inputs else False
+                return {
+                    "_trigger": msg is not None or triggered,
+                    "_message": msg,
+                    "_title": title,
+                    "stored": False,
+                }
+
             case "wake_on_lan":
                 return {
                     "_trigger": self._to_bool(inputs.get("trigger")),
@@ -886,6 +899,11 @@ class GraphExecutor:
                 # Async nodes — handled by manager, not executor
                 return {}
 
+            case "value_sequence":
+                # The manager owns the async task; execution only exposes the
+                # current control values and never sleeps in this synchronous pass.
+                return {"_triggered": inputs.get("trigger"), "_condition": inputs.get("condition", True)}
+
             case "heating_circuit":
                 # Mannheimer Methode (DIN 4710): Sommer/Winter-Umschaltung anhand Tagesmittel.
                 # Messzeitpunkte (Erste-Kreuzung-Semantik — kein exakter Sensor-Takt nötig):
@@ -1018,7 +1036,14 @@ class GraphExecutor:
                         "initialized": False,
                     },
                 )
-                today = _date.today()
+                # Min/max periods, like consumption periods, belong to the
+                # configured application timezone rather than the server
+                # process timezone (usually UTC in Docker).
+                try:
+                    tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
+                except Exception:
+                    tz = _ZoneInfo("Europe/Zurich")
+                today = _datetime.now(tz).date()
                 day_key = today.isoformat()
                 week_key = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
                 month_key = f"{today.year}-{today.month:02d}"
@@ -1138,7 +1163,13 @@ class GraphExecutor:
                         "initialized": False,
                     },
                 )
-                today = _date.today()
+                # Consumption periods belong to the configured application timezone,
+                # not the timezone of the server process (usually UTC in Docker).
+                try:
+                    tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
+                except Exception:
+                    tz = _ZoneInfo("Europe/Zurich")
+                today = _datetime.now(tz).date()
                 day_key = today.isoformat()
                 week_key = f"{today.isocalendar()[0]}-W{today.isocalendar()[1]:02d}"
                 month_key = f"{today.year}-{today.month:02d}"

@@ -145,6 +145,9 @@ mqtt:
 database:
   path: /data/obs.db      # Datenbankdatei
 
+message_archive:
+  path: /data/archives/messages.sqlite3  # separate Archiv-DB für Meldungsarchive
+
 ringbuffer:
   storage: file               # Änderungsprotokoll: file-only (Datei)
   max_entries: 10000          # Maximale Anzahl Einträge

@@ -8,6 +8,14 @@
 
 const BASE = '/api/v1'
 
+/** Wird von request() geworfen — trägt den HTTP-Status, damit Aufrufer z.B. auf 403 reagieren können */
+export class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+  }
+}
+
 /** FastAPI gibt detail manchmal als Array zurück — immer zu String normalisieren */
 function extractDetail(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object') return fallback
@@ -118,12 +126,12 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       // Redirect zur Login-Seite — der Router fängt das auf
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     }
-    throw new Error('Unauthorized')
+    throw new ApiRequestError('Unauthorized', 401)
   }
 
   if (!res.ok) {
     const body = await res.json().catch(() => null)
-    throw new Error(extractDetail(body, res.statusText))
+    throw new ApiRequestError(extractDetail(body, res.statusText), res.status)
   }
 
   // 204 No Content
@@ -202,7 +210,7 @@ export const visu = {
 
   /** Lädt alle Widget-Instanzen einer Seite ohne Zugriffsprüfung — für WidgetRef. */
   getWidgetRef: (pageId: string) =>
-    request<import('@/types').WidgetInstance[]>(`/visu/widget-ref/${pageId}`, { silent401: true }),
+    request<import('@/types').WidgetRefInstance[]>(`/visu/widget-ref/${pageId}`, { silent401: true }),
 
   savePage: (id: string, config: PageConfig) =>
     request<void>(`/visu/pages/${id}`, {
@@ -439,5 +447,79 @@ export const history = {
       `/history/${id}/aggregate?fn=${fn}&interval=${interval}&from=${from}&to=${to}`,
       { headers, silent401: true },
     )
+  },
+}
+
+// ── Message Archives ─────────────────────────────────────────────────────────
+
+export interface MessageArchiveOut {
+  id: string
+  name: string
+  description: string
+  tags: string[]
+  default_type: string | null
+  color: string
+  retention_max_entries: number | null
+  retention_max_age_days: number | null
+  created_at: string
+  updated_at: string
+  entry_count: number
+  oldest_entry_at: string | null
+  newest_entry_at: string | null
+  db_status: string
+  db_path: string
+}
+
+export interface MessageArchiveEntry {
+  id: string
+  archive_id: string
+  archive_name: string
+  archive_color: string
+  created_at: string
+  updated_at: string
+  type: string
+  severity: string
+  status: string
+  source: string
+  title: string
+  message: string
+  payload: Record<string, unknown>
+  acknowledged_at: string | null
+  acknowledged_by: string | null
+  read_at: string | null
+  is_read: boolean
+}
+
+export const messageArchives = {
+  list: () => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<MessageArchiveOut[]>('/message-archives', { headers, silent401: true })
+  },
+  entries: (params: Record<string, string | number | undefined>) => {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== '') query.set(key, String(value))
+    }
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<{ items: MessageArchiveEntry[]; total: number; limit: number; offset: number }>(
+      `/message-archives/entries?${query.toString()}`,
+      { headers, silent401: true },
+    )
+  },
+  markRead: (archiveId: string, entryId: string) => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<MessageArchiveEntry>(`/message-archives/${archiveId}/entries/${entryId}/read`, { method: 'POST', headers, silent401: true })
+  },
+  acknowledge: (archiveId: string, entryId: string) => {
+    const headers: Record<string, string> = {}
+    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
+    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    return request<MessageArchiveEntry>(`/message-archives/${archiveId}/entries/${entryId}/acknowledge`, { method: 'POST', headers, silent401: true })
   },
 }

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
 
 from obs.api.v1 import knxproj as knxproj_api
+from obs.api.v1.services.knx_traceability import build_datapoint_knx_context
 from obs.db.database import Database
 
 
@@ -59,6 +61,58 @@ async def _prepare_db() -> Database:
     return db
 
 
+async def _insert_datapoint_binding(
+    db: Database,
+    *,
+    dp_id: str,
+    name: str,
+    config: str,
+    direction: str = "SOURCE",
+    enabled: int = 1,
+) -> str:
+    now = datetime.now(UTC).isoformat()
+    binding_id = str(uuid.uuid5(uuid.NAMESPACE_URL, dp_id))
+    await db.execute(
+        """INSERT INTO datapoints
+           (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, created_at, updated_at, persist_value, record_history)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (dp_id, name, "BOOLEAN", None, "[]", f"dp/{dp_id}/value", None, now, now, 1, 1),
+    )
+    await db.execute(
+        """INSERT INTO adapter_bindings
+           (id, datapoint_id, adapter_type, direction, config, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (binding_id, dp_id, "KNX", direction, config, enabled, now, now),
+    )
+    await db.commit()
+    return binding_id
+
+
+async def _insert_hierarchy(db: Database) -> tuple[str, str, str]:
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        """INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at)
+           VALUES ('tree-1', 'Gebäude', '', '', ?, ?)""",
+        (now, now),
+    )
+    await db.executemany(
+        """INSERT INTO hierarchy_nodes
+           (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+           VALUES (?, 'tree-1', ?, ?, '', ?, NULL, ?, ?)""",
+        [
+            ("node-kitchen", None, "Küche", 1, now, now),
+            ("node-living", None, "Wohnen", 2, now, now),
+        ],
+    )
+    await db.execute(
+        """INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at)
+           VALUES ('hdl-1', 'node-kitchen', 'dev-1', ?)""",
+        (now,),
+    )
+    await db.commit()
+    return "tree-1", "node-kitchen", "node-living"
+
+
 @pytest.mark.asyncio
 async def test_list_knx_devices_with_filters_and_pagination():
     db = await _prepare_db()
@@ -67,6 +121,7 @@ async def test_list_knx_devices_with_filters_and_pagination():
             q="app",
             manufacturer="siemens",
             order_number="",
+            hierarchy_node_id="",
             page=0,
             size=1,
             _user="admin",
@@ -87,6 +142,12 @@ async def test_list_knx_devices_with_filters_and_pagination():
 async def test_get_knx_device_by_pa_includes_comm_objects_and_ga_links():
     db = await _prepare_db()
     try:
+        binding_id = await _insert_datapoint_binding(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000010",
+            name="Kitchen Light",
+            config='{"group_address": "1/2/3"}',
+        )
         result = await knxproj_api.get_knx_device(
             pa="1.1.1",
             _user="admin",
@@ -97,11 +158,14 @@ async def test_get_knx_device_by_pa_includes_comm_objects_and_ga_links():
         assert result.manufacturer == "Siemens"
         assert result.order_number == "5WG1"
         assert result.app_ref == "APP-KITCHEN"
+        assert result.hierarchy_links == []
 
         comm_objects = {co.id: co for co in result.comm_objects}
         assert set(comm_objects.keys()) == {"co-1", "co-2"}
         assert comm_objects["co-1"].ga_addresses == ["1/2/3"]
         assert comm_objects["co-2"].ga_addresses == ["1/2/4"]
+        assert str(comm_objects["co-1"].datapoints[0].binding_id) == binding_id
+        assert comm_objects["co-1"].datapoints[0].name == "Kitchen Light"
     finally:
         await db.disconnect()
 
@@ -120,6 +184,85 @@ async def test_get_knx_devices_for_group_address():
 
         assert result.total == 2
         assert [item.pa for item in result.items] == ["1.1.1", "1.1.2"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_knx_device_datapoints_context_groups_datapoints_by_comm_object_ga():
+    db = await _prepare_db()
+    try:
+        await _insert_datapoint_binding(
+            db,
+            dp_id="00000000-0000-0000-0000-000000000001",
+            name="Kitchen Light",
+            config='{"group_address": "1/2/3", "state_group_address": "1/2/4"}',
+            direction="BOTH",
+        )
+
+        result = await knxproj_api.get_knx_device_datapoints(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [dp.name for dp in result.datapoints] == ["Kitchen Light", "Kitchen Light"]
+        by_co = {co.id: co for co in result.comm_objects}
+        assert by_co["co-1"].group_addresses[0].address == "1/2/3"
+        assert by_co["co-1"].group_addresses[0].datapoints[0].ga_role == "group_address"
+        assert by_co["co-2"].group_addresses[0].address == "1/2/4"
+        assert by_co["co-2"].group_addresses[0].datapoints[0].ga_role == "state_group_address"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_datapoint_knx_context_resolves_group_addresses_devices_and_comm_objects():
+    db = await _prepare_db()
+    try:
+        dp_id = "00000000-0000-0000-0000-000000000002"
+        await _insert_datapoint_binding(
+            db,
+            dp_id=dp_id,
+            name="Kitchen Status",
+            config='{"group_address": "1/2/3", "state_group_address": "1/2/4"}',
+            direction="BOTH",
+        )
+
+        result = await build_datapoint_knx_context(
+            dp_id=uuid.UUID(dp_id),
+            db=db,
+        )
+
+        by_ga = {ga.address: ga for ga in result.group_addresses}
+        assert by_ga["1/2/3"].name == "GA 1"
+        assert by_ga["1/2/3"].roles == ["group_address"]
+        assert [device.pa for device in by_ga["1/2/3"].devices] == ["1.1.1", "1.1.2"]
+        assert by_ga["1/2/3"].devices[0].comm_objects[0].name == "Switch"
+        assert by_ga["1/2/4"].roles == ["state_group_address"]
+        assert by_ga["1/2/4"].devices[0].comm_objects[0].name == "Status"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_knx_context_returns_empty_when_device_schema_missing(monkeypatch: pytest.MonkeyPatch):
+    db = await _prepare_db()
+
+    async def _schema_not_ready(_db):
+        return False
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    try:
+        result = await knxproj_api.get_knx_device_datapoints(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+        assert result.pa == "1.1.1"
+        assert result.datapoints == []
+        assert result.comm_objects == []
     finally:
         await db.disconnect()
 
@@ -152,6 +295,7 @@ async def test_list_knx_devices_without_knx_device_schema(monkeypatch: pytest.Mo
             q="",
             manufacturer="",
             order_number="",
+            hierarchy_node_id="",
             page=0,
             size=10,
             _user="admin",
@@ -211,6 +355,7 @@ async def test_list_knx_devices_manufacturer_filter():
             q="",
             manufacturer="abb",
             order_number="",
+            hierarchy_node_id="",
             page=0,
             size=50,
             _user="admin",
@@ -231,6 +376,7 @@ async def test_list_knx_devices_order_number_filter():
             q="",
             manufacturer="",
             order_number="hs-10",
+            hierarchy_node_id="",
             page=0,
             size=50,
             _user="admin",
@@ -238,5 +384,235 @@ async def test_list_knx_devices_order_number_filter():
         )
         assert result.total == 1
         assert result.items[0].order_number == "HS-10"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_filters_by_hierarchy_node():
+    db = await _prepare_db()
+    try:
+        _, kitchen_node_id, _ = await _insert_hierarchy(db)
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id=kitchen_node_id,
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+
+        assert result.total == 1
+        assert result.items[0].pa == "1.1.1"
+        assert result.items[0].hierarchy_links[0].node_id == kitchen_node_id
+        assert result.items[0].hierarchy_links[0].tree_name == "Gebäude"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_hierarchy_filter_includes_descendant_nodes():
+    db = await _prepare_db()
+    try:
+        now = datetime.now(UTC).isoformat()
+        await db.execute(
+            """INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at)
+               VALUES ('tree-nested', 'Gebäude', '', '', ?, ?)""",
+            (now, now),
+        )
+        await db.executemany(
+            """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+               VALUES (?, 'tree-nested', ?, ?, '', ?, NULL, ?, ?)""",
+            [
+                ("node-floor", None, "EG", 1, now, now),
+                ("node-kitchen", "node-floor", "Küche", 2, now, now),
+                ("node-living", None, "Wohnen", 3, now, now),
+            ],
+        )
+        await db.execute(
+            """INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at)
+               VALUES ('hdl-nested', 'node-kitchen', 'dev-1', ?)""",
+            (now,),
+        )
+        await db.commit()
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="node-floor",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+
+        assert result.total == 1
+        assert result.items[0].pa == "1.1.1"
+        assert result.items[0].hierarchy_links[0].node_id == "node-kitchen"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_includes_hierarchy_display_path_metadata():
+    db = await _prepare_db()
+    try:
+        now = datetime.now(UTC).isoformat()
+        await db.execute(
+            """INSERT INTO hierarchy_trees (id, name, description, source, display_depth, created_at, updated_at)
+               VALUES ('tree-display', 'Gebäude', '', '', 2, ?, ?)""",
+            (now, now),
+        )
+        await db.executemany(
+            """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+               VALUES (?, 'tree-display', ?, ?, '', ?, NULL, ?, ?)""",
+            [
+                ("node-floor", None, "EG", 1, now, now),
+                ("node-kitchen", "node-floor", "Küche", 2, now, now),
+            ],
+        )
+        await db.execute(
+            """INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at)
+               VALUES ('hdl-display', 'node-kitchen', 'dev-1', ?)""",
+            (now,),
+        )
+        await db.commit()
+
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="node-kitchen",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+
+        link = result.items[0].hierarchy_links[0]
+        assert link.tree_name == "Gebäude"
+        assert link.node_name == "Küche"
+        assert link.node_path == ["EG"]
+        assert link.display_depth == 2
+    finally:
+        await db.disconnect()
+
+
+def test_parse_hierarchy_node_filter_normalizes_csv():
+    assert knxproj_api._parse_hierarchy_node_filter(" node-a, node-b,node-a,, ") == ["node-a", "node-b"]
+    assert knxproj_api._parse_hierarchy_node_filter("") == []
+    assert knxproj_api._parse_hierarchy_node_filter(None) == []
+
+
+@pytest.mark.asyncio
+async def test_load_device_hierarchy_links_returns_empty_for_empty_ids():
+    db = await _prepare_db()
+    try:
+        assert await knxproj_api._load_device_hierarchy_links(db, []) == {}
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_replaces_assignments():
+    db = await _prepare_db()
+    try:
+        _, _, living_node_id = await _insert_hierarchy(db)
+
+        result = await knxproj_api.set_knx_device_hierarchy_links(
+            pa="1.1.1",
+            body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=[living_node_id]),
+            _user="admin",
+            db=db,
+        )
+
+        assert result.pa == "1.1.1"
+        assert [link.node_id for link in result.hierarchy_links] == [living_node_id]
+
+        rows = await db.fetchall("SELECT node_id, device_id FROM hierarchy_device_links ORDER BY node_id")
+        assert [(row["node_id"], row["device_id"]) for row in rows] == [(living_node_id, "dev-1")]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_can_clear_assignments():
+    db = await _prepare_db()
+    try:
+        await _insert_hierarchy(db)
+
+        result = await knxproj_api.set_knx_device_hierarchy_links(
+            pa="1.1.1",
+            body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=[]),
+            _user="admin",
+            db=db,
+        )
+
+        assert result.hierarchy_links == []
+        rows = await db.fetchall("SELECT node_id, device_id FROM hierarchy_device_links")
+        assert rows == []
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_rejects_unknown_node():
+    db = await _prepare_db()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await knxproj_api.set_knx_device_hierarchy_links(
+                pa="1.1.1",
+                body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=["missing-node"]),
+                _user="admin",
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "missing-node" in str(exc_info.value.detail)
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_returns_404_for_unknown_device():
+    db = await _prepare_db()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await knxproj_api.set_knx_device_hierarchy_links(
+                pa="9.9.9",
+                body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=[]),
+                _user="admin",
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 404
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_set_knx_device_hierarchy_links_without_knx_device_schema(monkeypatch: pytest.MonkeyPatch):
+    db = await _prepare_db()
+
+    async def _schema_not_ready(_db):
+        return False
+
+    monkeypatch.setattr(knxproj_api, "_knx_device_schema_ready", _schema_not_ready)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await knxproj_api.set_knx_device_hierarchy_links(
+                pa="1.1.1",
+                body=knxproj_api.KnxDeviceHierarchyLinksIn(node_ids=[]),
+                _user="admin",
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 404
     finally:
         await db.disconnect()

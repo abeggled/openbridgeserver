@@ -45,6 +45,7 @@ beforeEach(() => {
       getZsuHolidays:     vi.fn().mockResolvedValue({ data: [] }),
     },
     knxprojApi: { listGA: vi.fn().mockResolvedValue({ data: { total: 0, items: [] } }) },
+    messageArchivesApi: { list: vi.fn().mockResolvedValue({ data: { archives: [] } }) },
   }))
 })
 
@@ -311,6 +312,31 @@ describe('BindingForm — MESSAGE create submit', () => {
         providers: [{ provider: 'pushover', target: 'phone' }],
         send_on_change: false,
         cooldown_seconds: 30,
+      }),
+    }))
+    w.unmount()
+  })
+
+  it('preserves disabled MESSAGE archive strategy in edit mode', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-message-disabled',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: {
+          archive_strategy: 'none',
+          providers: [],
+        },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).toHaveBeenCalledWith('dp-1', 'binding-message-disabled', expect.objectContaining({
+      direction: 'SOURCE',
+      config: expect.objectContaining({
+        archive_strategy: 'none',
       }),
     }))
     w.unmount()

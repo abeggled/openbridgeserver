@@ -560,6 +560,32 @@
         <div v-if="importDbResult" :class="['p-3 rounded-lg text-sm', importDbResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importDbResult.text }}</div>
       </div>
 
+      <!-- Meldungsarchiv-Datenbanksicherung erstellen (download) -->
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.messageArchiveDbExportTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.messageArchiveDbExportDesc') }}</p>
+        <button @click="doExportMessageArchiveDb" class="btn-secondary">{{ $t('settings.importexport.messageArchiveDbExportButton') }}</button>
+      </div>
+
+      <!-- Meldungsarchiv-Datenbank wiederherstellen (upload) -->
+      <div class="card p-5 flex flex-col gap-3">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.messageArchiveDbImportTitle') }}</h3>
+        <p class="text-sm text-slate-400">{{ $t('settings.importexport.messageArchiveDbImportDesc') }}</p>
+        <div class="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-600 dark:text-amber-400 flex flex-col gap-1">
+          <p class="font-semibold">{{ $t('settings.importexport.messageArchiveDbImportWarning') }}</p>
+          <ul class="list-disc list-inside text-xs mt-1 space-y-0.5">
+            <li>{{ $t('settings.importexport.messageArchiveDbImportWarning1') }}</li>
+            <li>{{ $t('settings.importexport.messageArchiveDbImportWarning2') }}</li>
+          </ul>
+        </div>
+        <div class="flex items-center gap-3">
+          <button type="button" class="btn-secondary btn-sm" @click="importMessageArchiveDbFileInput.click()">{{ $t('common.chooseFile') }}</button>
+          <span class="text-sm text-slate-400">{{ importMessageArchiveDbFileName || $t('common.noFileSelected') }}</span>
+          <input ref="importMessageArchiveDbFileInput" type="file" accept=".sqlite,.sqlite3,.db" @change="onImportMessageArchiveDbFile" class="hidden" />
+        </div>
+        <div v-if="importMessageArchiveDbResult" :class="['p-3 rounded-lg text-sm', importMessageArchiveDbResult.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">{{ importMessageArchiveDbResult.text }}</div>
+      </div>
+
       <!-- Autobackup -->
       <div class="card p-5 flex flex-col gap-3">
         <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupTitle') }}</h3>
@@ -627,7 +653,7 @@
       </div>
 
       <!-- KNX Projekt Import -->
-      <div class="card p-5 flex flex-col gap-3">
+      <div id="knx-project-import" class="card p-5 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
           <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
@@ -1340,7 +1366,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi, supportApi } from '@/api/client'
+import { authApi, adapterApi, configApi, autobackupApi, knxprojApi, historySettingsApi, iconsApi, dpApi, securityApi, supportApi, messageArchivesApi } from '@/api/client'
 import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
@@ -1427,6 +1453,7 @@ function onOutsideClick(e) {
 }
 
 onMounted(async () => {
+  activateTabFromRoute()
   if (!settings.loaded) await settings.load()
   tzSelected.value = settings.timezone
   document.addEventListener('mousedown', onOutsideClick)
@@ -1435,6 +1462,22 @@ onMounted(async () => {
     loadHistoryFilterDps()
   }
 })
+
+function activateTabFromRoute() {
+  const tab = new URLSearchParams(window.location.search).get('tab') || ''
+  if (tab && tabs.value.some((item) => item.id === tab)) {
+    activeTab.value = tab
+    scrollToRouteHash()
+  }
+}
+
+async function scrollToRouteHash() {
+  const hash = window.location.hash || ''
+  if (!hash) return
+  await nextTick()
+  const target = document.getElementById(decodeURIComponent(hash.slice(1)))
+  target?.scrollIntoView({ block: 'start' })
+}
 
 watch(activeTab, (tab) => {
   if (tab === 'history') {
@@ -1478,6 +1521,11 @@ const tabs = computed(() => [
   { id: 'history',      label: t('settings.tabs.history') },
   { id: 'dangerzone',   label: t('settings.tabs.dangerzone') },
 ])
+
+watch(
+  () => tabs.value.map((tab) => tab.id).join('|'),
+  () => activateTabFromRoute(),
+)
 
 // ── URL Target Allowlist ──────────────────────────────────────────────────
 const urlTargetsLoading = ref(false)
@@ -2149,10 +2197,13 @@ async function deleteApiKey(id) { await authApi.deleteApiKey(id); await loadKeys
 // ── Sicherung / Wiederherstellung ──────────────────────────────────────────
 const importResult    = ref(null)
 const importDbResult  = ref(null)
+const importMessageArchiveDbResult = ref(null)
 const importFileName  = ref('')
 const importDbFileName = ref('')
+const importMessageArchiveDbFileName = ref('')
 const importFileInput  = ref(null)
 const importDbFileInput = ref(null)
+const importMessageArchiveDbFileInput = ref(null)
 
 function _ts() {
   const now = new Date()
@@ -2174,6 +2225,14 @@ async function doExportDb() {
   const { data: blob } = await configApi.exportDb()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a'); a.href = url; a.download = `obs_DB_${_ts()}.sqlite`; a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function doExportMessageArchiveDb() {
+  if (!auth.isAdmin) return
+  const { data: blob } = await messageArchivesApi.exportDb()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = `obs_Meldungsarchiv_${_ts()}.sqlite`; a.click()
   URL.revokeObjectURL(url)
 }
 
@@ -2206,6 +2265,18 @@ async function onImportDbFile(e) {
     importDbResult.value = { ok: true, text: t('settings.importexport.dbImportResultOk', { message: data.message ?? '', adapters: data.adapters_restarted ?? 0 }) }
   } catch (err) {
     importDbResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.dbImportFailed') }
+  }
+}
+
+async function onImportMessageArchiveDbFile(e) {
+  const file = e.target.files[0]; if (!file) return
+  importMessageArchiveDbFileName.value = file.name
+  importMessageArchiveDbResult.value = null
+  try {
+    const { data } = await messageArchivesApi.importDb(file)
+    importMessageArchiveDbResult.value = { ok: true, text: t('settings.importexport.messageArchiveDbImportResultOk', { message: data.message ?? '' }) }
+  } catch (err) {
+    importMessageArchiveDbResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.messageArchiveDbImportFailed') }
   }
 }
 

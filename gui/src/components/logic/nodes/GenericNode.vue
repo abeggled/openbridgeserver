@@ -113,6 +113,7 @@ const NODE_DEFS = computed(() => ({
   math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'result',     label:t('logic.portLabels.resultShort')}] },
   timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
   timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  value_sequence: { label: t('logic.nodeTypes.value_sequence'), color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'condition',label:t('logic.ports.condition')}], outputs: [] },
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                                                                  outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
   mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'input',label:t('logic.ports.input')}],            outputs: [{id:'result',     label:t('logic.portLabels.resultShort')},{id:'done',label:t('logic.ports.done')}] },
   python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})},{id:'in3',label:t('logic.ports.in_n',{n:3})}], outputs: [{id:'result',label:t('logic.portLabels.resultShort')}] },
@@ -130,6 +131,7 @@ const NODE_DEFS = computed(() => ({
   // Notification
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
+  message_archive:    { label: t('logic.nodeTypes.message_archive'), color: '#2563eb', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'title',label:t('logic.portLabels.title')}], outputs: [{id:'stored', label:t('logic.ports.stored')}] },
   wake_on_lan:        { label: 'Wake on LAN',    color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                              outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   host_check:         { label: t('logic.nodeTypes.host_check'), color: '#0369a1', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                              outputs: [{id:'reachable',label:t('logic.portLabels.reachable')},{id:'latency_ms',label:t('logic.portLabels.latencyMs')}] },
   // Math — avg_multi (dynamic inputs, fixed outputs)
@@ -277,6 +279,11 @@ const summary = computed(() => {
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`
   if (props.type === 'timer_delay')  return `${d.delay_s ?? 1} s`
   if (props.type === 'timer_pulse')  return `${d.duration_s ?? 1} s`
+  if (props.type === 'value_sequence') {
+    const mode = d.run_mode || 'once'
+    const key = `logic.nodeConfig.value_sequence.modes.${mode}`
+    return t('logic.summary.sequence', { n: parseRowList(d.steps).length, mode: te(key) ? t(key) : mode })
+  }
   if (props.type === 'timer_cron')   return d.cron || '0 7 * * *'
   if (props.type === 'mcp_tool')     return d.tool_name || '—'
   if (props.type === 'astro_sun')       return `${d.latitude ?? 47.37}° N  ${d.longitude ?? 8.54}° E`

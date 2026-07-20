@@ -83,6 +83,7 @@ export const dpApi = {
   delete:        (id)                           => api.delete(`/datapoints/${id}`),
   value:         (id)                           => api.get(`/datapoints/${id}/value`),
   writeValue:    (id, value)                    => api.post(`/datapoints/${id}/value`, { value }),
+  knxContext:    (id)                           => api.get(`/datapoints/${id}/knx-context`),
   tags:          ()                             => api.get('/datapoints/tags'),
   listBindings:  (id)                           => api.get(`/datapoints/${id}/bindings`),
   createBinding: (id, data)                     => api.post(`/datapoints/${id}/bindings`, data),
@@ -145,6 +146,8 @@ export const knxprojApi = {
   listGA:  (params)   => api.get('/knxproj/group-addresses', { params }),
   listDevices: (params) => api.get('/knxproj/devices', { params }),
   getDevice: (pa)      => api.get(`/knxproj/devices/${encodeURIComponent(pa)}`),
+  getDeviceDatapoints: (pa) => api.get(`/knxproj/devices/${encodeURIComponent(pa)}/datapoints`),
+  setDeviceHierarchyLinks: (pa, data) => api.put(`/knxproj/devices/${encodeURIComponent(pa)}/hierarchy-links`, data),
   listGaDevices: (ga, params) => api.get(`/knxproj/group-addresses/${encodeURIComponent(ga)}/devices`, { params }),
   clearGA: ()         => api.delete('/knxproj/group-addresses'),
 }
@@ -250,6 +253,27 @@ export const ringbufferApi = {
   countExportRows: (body)           => api.post('/ringbuffer/filtersets/export/count', body),
   getExportSettings: ()             => api.get('/ringbuffer/export/settings'),
   putExportSettings: (body)         => api.put('/ringbuffer/export/settings', body),
+  // #966 — Migrations-Assistent für den Legacy-Altbestand (admin-only)
+  migrationStatus:   ()             => api.get('/ringbuffer/migration'),
+  migrationDecision: (decision)     => api.post('/ringbuffer/migration/decision', { decision }),
+  migrationStart:    ()             => api.post('/ringbuffer/migration/start'),
+}
+
+// ── Message Archives ─────────────────────────────────────────────────────
+export const messageArchivesApi = {
+  list: () => api.get('/message-archives'),
+  create: (body) => api.post('/message-archives', body),
+  update: (id, body) => api.patch(`/message-archives/${id}`, body),
+  delete: (id, confirm = false) => api.delete(`/message-archives/${id}`, { params: { confirm } }),
+  clear: (id, confirm = false) => api.post(`/message-archives/${id}/clear`, null, { params: { confirm } }),
+  integrityCheck: () => api.post('/message-archives/integrity-check'),
+  entries: (params) => api.get('/message-archives/entries', { params }),
+  export: (id, format = 'jsonl') => api.get(`/message-archives/${id}/export`, { params: { format }, responseType: 'blob' }),
+  exportDb: () => api.get('/message-archives/export/db', { responseType: 'blob' }),
+  importDb: (file) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/message-archives/import/db', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
 }
 
 // ── Config Import/Export ──────────────────────────────────────────────────

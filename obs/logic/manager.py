@@ -21,7 +21,7 @@ import re
 import socket
 import stat
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
@@ -56,6 +56,7 @@ _THROTTLE_UNITS: dict[str, float] = {
     "h": 3_600_000.0,
 }
 _MAX_LOGIC_CASCADE_DEPTH = 10
+_MAX_SEQUENCE_REPEAT_COUNT = 10_000
 
 _ICAL_MAX_BYTES = 1_048_576
 _ICAL_MAX_REDIRECTS = 5
@@ -65,6 +66,8 @@ _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+_API_CLIENT_URL_LEADING_STRIP_CHARS = "".join(chr(value) for value in range(0x21))
+_API_CLIENT_URL_REMOVE_CHARS = str.maketrans("", "", "\r\n\t")
 _HOST_CHECK_MIN_TIMEOUT_S = 1.0
 _HOST_CHECK_MAX_TIMEOUT_S = 30.0
 _HOST_CHECK_MIN_COUNT = 1
@@ -206,8 +209,35 @@ def _quote_api_client_url_value(value: str) -> str:
     return quote(value, safe="-._~")
 
 
+def _normalise_api_client_url_for_parse(value: str) -> str:
+    # The API-client call sites apply Python ``str.strip()`` to the resolved URL,
+    # which removes Unicode whitespace (e.g. U+00A0) on top of the C0 controls and
+    # ASCII space that ``urlparse`` itself trims. Mirror both here so the authority
+    # bounds are computed against the same leading run that is silently removed
+    # later; otherwise a leading Unicode-whitespace (or interleaved control /
+    # whitespace) prefix would hide the scheme and let a variable choose the host.
+    previous = None
+    while value != previous:
+        previous = value
+        value = value.lstrip(_API_CLIENT_URL_LEADING_STRIP_CHARS).lstrip()
+    return value.translate(_API_CLIENT_URL_REMOVE_CHARS)
+
+
 def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
+    value = _normalise_api_client_url_for_parse(value)
     authority_bounds: tuple[int, int] | None = None
+    scheme_separator = value.find("://")
+    if scheme_separator != -1 and _API_CLIENT_VARIABLE_RE.search(value[:scheme_separator]):
+        raise _ApiClientVariableError(
+            "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+        )
+    # Reject templates where removing placeholders would expose a :// that is hidden in the
+    # raw template (e.g. "http:###OBS1###//attacker.com" collapses to "http://attacker.com"
+    # when the variable resolves to an empty string).
+    if scheme_separator == -1 and _API_CLIENT_VARIABLE_RE.sub("", value).find("://") != -1:
+        raise _ApiClientVariableError(
+            "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+        )
     scheme_match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value)
     if scheme_match is not None:
         separator_scan_value = _API_CLIENT_VARIABLE_RE.sub(lambda match: "X" * (match.end() - match.start()), value)
@@ -220,9 +250,11 @@ def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
         authority_bounds = (authority_start, authority_end)
 
     def _replace(match: re.Match[str]) -> str:
-        replacement = resolver(int(match.group(1)))
         if authority_bounds is not None and authority_bounds[0] <= match.start() < authority_bounds[1]:
-            return quote(replacement, safe="-._~:[]")
+            raise _ApiClientVariableError(
+                "API client URL variables are not allowed in the scheme, host, userinfo, or port",
+            )
+        replacement = resolver(int(match.group(1)))
         return _quote_api_client_url_value(replacement)
 
     return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
@@ -687,6 +719,16 @@ class LogicManager:
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # Running value sequences, keyed per graph/node.  They are deliberately
+        # separate from cron tasks because they are short-lived and user-triggered.
+        self._sequence_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        self._sequence_conditions: dict[tuple[str, str], bool] = {}
+        self._sequence_queues: dict[tuple[str, str], int] = {}
+        self._sequence_queue_depths: dict[tuple[str, str], int] = {}
+        self._sequence_configs: dict[tuple[str, str], dict[str, Any]] = {}
+        self._sequence_graph_signatures: dict[str, str] = {}
+        self._sequence_restarts: set[tuple[str, str]] = set()
+        self._sequence_restart_sources: dict[tuple[str, str], asyncio.Task] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
 
@@ -709,6 +751,7 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
         """Reload graph cache from DB and restart cron schedulers."""
@@ -716,9 +759,231 @@ class LogicManager:
             task.cancel()
         self._cron_tasks.clear()
         await self._load_graphs()
+        # A config import/reset can remove graphs without first calling
+        # invalidate_cache().  Cancel only sequences whose graph no longer
+        # exists or is disabled; unrelated live graphs keep running.
+        for graph_id, node_id in list(self._sequence_tasks):
+            entry = self._graphs.get(graph_id)
+            node = next((node for node in entry[2].nodes if node.id == node_id), None) if entry else None
+            if (
+                entry is None
+                or not entry[1]
+                or node is None
+                or node.type != "value_sequence"
+                or node.data != self._sequence_configs.get((graph_id, node_id))
+                or entry[2].model_dump_json() != self._sequence_graph_signatures.get(graph_id)
+            ):
+                self._cancel_sequence_tasks(graph_id)
         self._start_cron_tasks()
 
     # ── App Config ────────────────────────────────────────────────────────
+
+    def _cancel_sequence_tasks(self, graph_id: str | None = None) -> None:
+        """Cancel active sequences, for shutdown/reload/delete semantics."""
+        keys = [key for key in self._sequence_tasks if graph_id is None or key[0] == graph_id]
+        for key in keys:
+            self._cancel_sequence_task(key)
+            self._sequence_conditions.pop(key, None)
+            self._sequence_queues.pop(key, None)
+            self._sequence_queue_depths.pop(key, None)
+            self._sequence_configs.pop(key, None)
+
+    def _cancel_sequence_task(self, key: tuple[str, str]) -> None:
+        """Cancel a tracked task and the source it may be restarting."""
+        task = self._sequence_tasks.pop(key, None)
+        source = self._sequence_restart_sources.pop(key, None)
+        self._sequence_restarts.discard(key)
+        self._sequence_queues.pop(key, None)
+        self._sequence_queue_depths.pop(key, None)
+        if task:
+            task.cancel()
+        if source and source is not task:
+            source.cancel()
+
+    @staticmethod
+    def _sequence_steps(raw: Any) -> list[dict[str, Any]]:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = []
+        return [step for step in raw if isinstance(step, dict)] if isinstance(raw, list) else []
+
+    @staticmethod
+    def _coerce_sequence_value(value: Any, data_type: str) -> Any:
+        if data_type == "BOOLEAN":
+            if not isinstance(value, str):
+                return bool(value)
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+            raise ValueError(f"invalid boolean value {value!r}")
+        if data_type == "INTEGER":
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError(f"fractional integer value {value!r}")
+            return int(value)
+        if data_type == "FLOAT":
+            return float(value)
+        if data_type == "DATE":
+            return date.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "TIME":
+            return time.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "DATETIME":
+            return datetime.fromisoformat(value) if isinstance(value, str) else value
+        if data_type == "STRING":
+            return str(value)
+        return value
+
+    async def _run_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int = 0) -> None:
+        """Publish configured writes without blocking the graph executor."""
+        from obs.core.event_bus import DataValueEvent
+
+        key = (graph_id, node_id)
+        steps = self._sequence_steps(config.get("steps"))
+        if not steps:
+            logger.warning("Value sequence graph=%s node=%s has no steps", graph_id[:8], node_id[:8])
+            return
+        mode = config.get("run_mode", "once")
+        if mode == "while_condition" and not self._sequence_conditions.get(key, True):
+            return
+        try:
+            raw_repeat_count = config.get("repeat_count", 2)
+            repetitions = (
+                min(_MAX_SEQUENCE_REPEAT_COUNT, max(1, int(2 if raw_repeat_count is None else raw_repeat_count))) if mode == "repeat_count" else 1
+            )
+        except (TypeError, ValueError):
+            repetitions = 1
+        try:
+            while True:
+                slept = False
+                for step in steps:
+                    if (mode == "while_condition" or config.get("cancel_when_condition_false")) and not self._sequence_conditions.get(key, True):
+                        logger.info("Value sequence cancelled: graph=%s node=%s", graph_id[:8], node_id[:8])
+                        return
+                    target = str(step.get("datapoint_id") or "").strip()
+                    if target:
+                        try:
+                            datapoint_id = uuid.UUID(target)
+                            target_dp = self._registry.get(datapoint_id)
+                            if target_dp is None:
+                                raise ValueError("target object no longer exists")
+                            publish_task = asyncio.create_task(
+                                self._event_bus.publish(
+                                    DataValueEvent(
+                                        datapoint_id=datapoint_id,
+                                        value=self._coerce_sequence_value(step.get("value"), target_dp.data_type),
+                                        quality="good",
+                                        source_adapter="logic_sequence",
+                                        logic_depth=logic_depth + 1,
+                                    )
+                                )
+                            )
+                            try:
+                                await asyncio.shield(publish_task)
+                            except asyncio.CancelledError:
+                                # A write can synchronously re-run this graph
+                                # and cancel its own sequence.  Complete the
+                                # already-emitted event before stopping so all
+                                # EventBus subscribers see the write.
+                                try:
+                                    await asyncio.shield(publish_task)
+                                except Exception:
+                                    pass
+                                raise
+                        except Exception as exc:
+                            logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
+                    try:
+                        delay_s = max(0.0, float(step.get("delay_ms") or 0) / 1000)
+                    except (TypeError, ValueError):
+                        delay_s = 0.0
+                    if delay_s:
+                        await asyncio.sleep(delay_s)
+                        slept = True
+                if mode == "while_condition":
+                    if not self._sequence_conditions.get(key, True):
+                        return
+                    if not slept:
+                        logger.warning("Value sequence graph=%s node=%s needs a positive pause in while mode", graph_id[:8], node_id[:8])
+                        return
+                    continue
+                repetitions -= 1
+                if repetitions <= 0:
+                    return
+                if mode == "repeat_count" and not slept:
+                    await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._sequence_tasks.get(key) is asyncio.current_task():
+                self._sequence_tasks.pop(key, None)
+                queued = self._sequence_queues.pop(key, 0)
+                queued_depth = self._sequence_queue_depths.pop(key, logic_depth)
+                if queued and self._sequence_conditions.get(key, True):
+                    if queued > 1:
+                        self._sequence_queues[key] = queued - 1
+                        self._sequence_queue_depths[key] = queued_depth
+                    task = asyncio.create_task(
+                        self._run_value_sequence(graph_id, node_id, config, queued_depth),
+                        name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+                    )
+                    self._sequence_tasks[key] = task
+
+    async def _restart_value_sequence(self, graph_id: str, node_id: str, config: dict[str, Any], logic_depth: int, active: asyncio.Task) -> None:
+        """Stop a sequence completely before launching its restart replacement."""
+        key = (graph_id, node_id)
+        try:
+            active.cancel()
+            try:
+                await active
+            except asyncio.CancelledError:
+                pass
+            if self._sequence_tasks.get(key) is not asyncio.current_task():
+                return
+            task = asyncio.create_task(
+                self._run_value_sequence(graph_id, node_id, config, logic_depth),
+                name=f"sequence-{graph_id[:8]}-{node_id[:8]}",
+            )
+            self._sequence_tasks[key] = task
+        finally:
+            self._sequence_restarts.discard(key)
+            if self._sequence_restart_sources.get(key) is active:
+                self._sequence_restart_sources.pop(key, None)
+
+    def _start_value_sequence(self, graph_id: str, node: Any, condition: bool, logic_depth: int = 0, graph_signature: str = "") -> None:
+        key = (graph_id, node.id)
+        self._sequence_conditions[key] = condition
+        self._sequence_configs[key] = dict(node.data)
+        self._sequence_graph_signatures[graph_id] = graph_signature
+        active = self._sequence_tasks.get(key)
+        if active and not active.done():
+            policy = node.data.get("restart_policy", "ignore")
+            if policy == "restart":
+                # The task slot holds the restart helper while it awaits the
+                # original task.  Coalesce rapid retriggers so they cannot
+                # cancel the helper and detach from that original publish.
+                if key in self._sequence_restarts:
+                    return
+                self._sequence_restarts.add(key)
+                self._sequence_restart_sources[key] = active
+                restart = asyncio.create_task(
+                    self._restart_value_sequence(graph_id, node.id, dict(node.data), logic_depth, active),
+                    name=f"sequence-restart-{graph_id[:8]}-{node.id[:8]}",
+                )
+                self._sequence_tasks[key] = restart
+                return
+            elif policy == "queue":
+                self._sequence_queues[key] = self._sequence_queues.get(key, 0) + 1
+                self._sequence_queue_depths[key] = max(self._sequence_queue_depths.get(key, 0), logic_depth)
+                return
+            else:
+                return
+        task = asyncio.create_task(
+            self._run_value_sequence(graph_id, node.id, dict(node.data), logic_depth),
+            name=f"sequence-{graph_id[:8]}-{node.id[:8]}",
+        )
+        self._sequence_tasks[key] = task
 
     async def _load_app_config(self) -> None:
         """Load app-level settings (e.g. timezone) from the database."""
@@ -955,6 +1220,13 @@ class LogicManager:
                 if variables_changed:
                     node.data["variables"] = variables
                     changed = True
+                if node.type == "value_sequence":
+                    steps = self._sequence_steps(node.data.get("steps"))
+                    for step in steps:
+                        if step.get("datapoint_id") == dp_id_str and step.get("datapoint_name") != event.new_name:
+                            step["datapoint_name"] = event.new_name
+                            changed = True
+                    node.data["steps"] = steps
             if changed:
                 current = self._graphs.get(graph_id)
                 if current is None or current[2] is not flow:
@@ -1023,8 +1295,11 @@ class LogicManager:
 
         api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
         host_check_ids = {node.id for node in flow.nodes if node.type == "host_check"}
+        message_archive_ids = {node.id for node in flow.nodes if node.type == "message_archive"}
+        notify_ids = {node.id for node in flow.nodes if node.type in {"notify_pushover", "notify_sms"}}
         operating_hour_ids = {node.id for node in flow.nodes if node.type == "operating_hours"}
-        needs_async_replay_snapshot = any(edge.source in api_client_ids or edge.source in host_check_ids for edge in flow.edges)
+        async_replay_source_ids = api_client_ids | host_check_ids | message_archive_ids | notify_ids
+        needs_async_replay_snapshot = any(edge.source in async_replay_source_ids for edge in flow.edges)
 
         # ── Pre-compute operating_hours values to inject as overrides ─────
         for node in flow.nodes:
@@ -1361,6 +1636,47 @@ class LogicManager:
                         outputs.get(_re.source, {}), _re.sourceHandle or "out"
                     )
 
+        def _replay_async_descendants(node_ids: set[str], *, skip_node_ids: set[str] | None = None) -> set[str]:
+            descendants: set[str] = set()
+            queue: list[str] = list(node_ids)
+            while queue:
+                source_id = queue.pop()
+                for edge in flow.edges:
+                    if edge.source == source_id and edge.target not in descendants:
+                        descendants.add(edge.target)
+                        queue.append(edge.target)
+            if not descendants:
+                return descendants
+
+            replay_overrides: dict[str, dict[str, Any]] = {nid: dict(vals) for nid, vals in aug_overrides.items()}
+            for nid, vals in resolved_async_edge_overrides.items():
+                replay_overrides.setdefault(nid, {}).update(vals)
+            for edge in flow.edges:
+                if edge.source in node_ids:
+                    source_handle = edge.sourceHandle or "out"
+                    target_handle = edge.targetHandle or "in"
+                    source_value = GraphExecutor._get_output_value(outputs.get(edge.source, {}), source_handle)
+                    replay_overrides.setdefault(edge.target, {})[target_handle] = source_value
+            for edge in flow.edges:
+                if edge.target not in descendants or edge.source in descendants or edge.source in node_ids:
+                    continue
+                source_handle = edge.sourceHandle or "out"
+                target_handle = edge.targetHandle or "in"
+                source_value = GraphExecutor._get_output_value(outputs.get(edge.source, {}), source_handle)
+                replay_overrides.setdefault(edge.target, {})[target_handle] = source_value
+
+            replay_hyst = copy.deepcopy(pre_execute_hyst if pre_execute_hyst is not None else hyst)
+            replay_executor = GraphExecutor(flow, replay_hyst, self._app_config)
+            replay_outputs = replay_executor.execute(replay_overrides, commit_memory=False)
+            blocked_ids = skip_node_ids or set()
+            for nid, vals in replay_outputs.items():
+                if nid in descendants and nid not in blocked_ids:
+                    outputs[nid] = vals
+                    if nid in replay_hyst:
+                        hyst[nid] = replay_hyst[nid]
+            _apply_operating_hours_state(descendants, pre_execute_node_state)
+            return descendants
+
         triggered_host_check_nodes: set[str] = set()
         for node in flow.nodes:
             if node.type != "host_check":
@@ -1415,14 +1731,7 @@ class LogicManager:
                 _add_resolved_outputs(newly_triggered_hc)
                 pending_host_check_replay.update(newly_triggered_hc)
 
-        # ── Handle wake_on_lan ────────────────────────────────────────────
-        # Runs AFTER host_check so that graphs with host_check → WoL read
-        # real reachability, and BEFORE api_client/notify so that wol.sent
-        # can propagate to downstream api_client or notify in the same tick.
-        triggered_wol_nodes: set[str] = set()
-        for node in flow.nodes:
-            if node.type != "wake_on_lan":
-                continue
+        async def _run_wake_on_lan_node(node: Any, target_set: set[str]) -> bool:
             out = outputs.get(node.id, {})
             hyst_wol = hyst.setdefault(node.id, {})
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
@@ -1432,13 +1741,13 @@ class LogicManager:
             is_cron_triggered = node.id in cron_reachable
             if not is_triggered:
                 hyst_wol["wol_prev_trigger"] = False
-                continue
+                return False
             if was_triggered and not is_cron_triggered:
-                continue
+                return False
             mac = (node.data.get("mac_address") or "").strip()
             if not mac:
                 logger.warning("wake_on_lan: mac_address missing on node %s", node.id[:8])
-                continue
+                return False
             broadcast = (node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
             _port_raw = node.data.get("port")
             try:
@@ -1456,10 +1765,22 @@ class LogicManager:
                 # that a transient failure does not silently suppress the next attempt.
                 hyst_wol["wol_prev_trigger"] = True
                 outputs[node.id]["sent"] = True
-                triggered_wol_nodes.add(node.id)
+                target_set.add(node.id)
                 logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
+                return True
             except Exception as exc:
                 logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
+                return False
+
+        # ── Handle wake_on_lan ────────────────────────────────────────────
+        # Runs AFTER host_check so that graphs with host_check → WoL read
+        # real reachability, and BEFORE api_client/notify so that wol.sent
+        # can propagate to downstream api_client or notify in the same tick.
+        triggered_wol_nodes: set[str] = set()
+        for node in flow.nodes:
+            if node.type != "wake_on_lan":
+                continue
+            await _run_wake_on_lan_node(node, triggered_wol_nodes)
 
         _add_resolved_outputs(triggered_wol_nodes)
 
@@ -1591,12 +1912,10 @@ class LogicManager:
                 execution_value_priority_by_datapoint_id[dp_id_str] = priority
         import json as _json  # noqa: PLC0415
 
-        for node in flow.nodes:
-            if node.type != "api_client":
-                continue
+        async def _run_api_client_node(node: Any, target_set: set[str]) -> bool:
             out = outputs.get(node.id, {})
             if not GraphExecutor._to_bool(out.get("_trigger")):
-                continue
+                return False
             variable_resolver = _make_api_client_variable_resolver(
                 self._registry,
                 node.data.get("variables"),
@@ -1608,19 +1927,19 @@ class LogicManager:
                     variable_resolver,
                 ).strip()
                 if not url:
-                    continue
+                    return False
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             try:
                 request_urls, pinned_headers, request_extensions = _build_api_client_fetch_targets(url)
             except ValueError as exc:
                 logger.warning("Graph %s: blocked api_client target %s: %s", graph_id[:8], url, exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             method = (node.data.get("method", "GET") or "GET").upper()
             content_type = node.data.get("content_type", "application/json")
             resp_type = node.data.get("response_type", "application/json")
@@ -1649,8 +1968,8 @@ class LogicManager:
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             # ── Authentication ──────────────────────────────────────────
             auth_type = (node.data.get("auth_type") or "none").lower()
             auth: Any = None
@@ -1684,8 +2003,8 @@ class LogicManager:
             except _ApiClientVariableError as exc:
                 logger.warning("Graph %s: api_client variable error: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
-                continue
+                target_set.add(node.id)
+                return True
             try:
                 req_kwargs: dict[str, Any] = {
                     "headers": extra_headers,
@@ -1749,11 +2068,18 @@ class LogicManager:
                     url,
                     resp.status_code,
                 )
-                triggered_api_clients.add(node.id)
+                target_set.add(node.id)
+                return True
             except Exception as exc:
                 logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
-                triggered_api_clients.add(node.id)
+                target_set.add(node.id)
+                return True
+
+        for node in flow.nodes:
+            if node.type != "api_client":
+                continue
+            await _run_api_client_node(node, triggered_api_clients)
 
         _add_resolved_outputs(triggered_api_clients)
 
@@ -2406,175 +2732,289 @@ class LogicManager:
                             _add_resolved_outputs(_fwolhc_chained)
                             _fwolhc_pending.update(_fwolhc_chained)
 
+        # ── Handle message_archive ────────────────────────────────────────────
+        triggered_message_archive_nodes: set[str] = set()
+
+        async def _run_message_archive_node(node: Any, target_set: set[str]) -> bool:
+            out = outputs.get(node.id, {})
+            if not GraphExecutor._to_bool(out.get("_trigger")):
+                return False
+
+            archive_id = (node.data.get("archive_id") or "").strip().lower()
+            if not archive_id:
+                logger.warning("Message archive: archive_id missing on node %s", node.id[:8])
+                return False
+
+            _raw_msg = out.get("_message")
+            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+            _raw_title = out.get("_title")
+            title = _msg_to_str(_raw_title) if _raw_title is not None else str(node.data.get("title") or "")
+            message_type = str(node.data.get("type") or "automation")
+            severity = str(node.data.get("severity") or "info")
+
+            try:
+                from obs.message_archive import get_message_archive_service
+
+                payload = dict(graph_id=graph_id, graph_name=name, node_id=node.id, node_label=node.data.get("label") or node.data.get("name") or "")
+                source = f"logic.graph.{graph_id}.node.{node.id}"
+                record_kwargs = dict(type=message_type, severity=severity, source=source, title=title, message=msg, payload=payload)
+                await get_message_archive_service().record(archive_id, **record_kwargs)
+                outputs[node.id]["stored"] = True
+                target_set.add(node.id)
+                logger.info("Graph %s: message archived in %s (msg=%r)", graph_id[:8], archive_id, msg[:40])
+                return True
+            except Exception as exc:
+                logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
+                return False
+
+        triggered_notify_nodes: set[str] = set()
+
+        async def _run_notify_node(node: Any, target_set: set[str]) -> bool:
+            out = outputs.get(node.id, {})
+            if not GraphExecutor._to_bool(out.get("_trigger")):
+                return False
+
+            if node.type == "notify_pushover":
+                app_token = (node.data.get("app_token") or "").strip()
+                user_key = (node.data.get("user_key") or "").strip()
+                if not app_token or not user_key:
+                    logger.warning("Pushover: app_token or user_key missing on node %s", node.id[:8])
+                    return False
+                _raw_msg = out.get("_message")
+                msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+                title = node.data.get("title", "open bridge server")
+                prio = int(node.data.get("priority", 0))
+                _out_url = out.get("_url")
+                _out_utit = out.get("_url_title")
+                _out_img = out.get("_image_url")
+                url = (_msg_to_str(_out_url) if _out_url is not None else (node.data.get("url") or "")).strip()
+                url_title = (_msg_to_str(_out_utit) if _out_utit is not None else (node.data.get("url_title") or "")).strip()
+                image_url = (_msg_to_str(_out_img) if _out_img is not None else (node.data.get("image_url") or "")).strip()
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        payload: dict[str, object] = {
+                            "token": app_token,
+                            "user": user_key,
+                            "title": str(title),
+                            "message": msg,
+                            "priority": prio,
+                        }
+                        if url:
+                            payload["url"] = url
+                        if url_title:
+                            payload["url_title"] = url_title
+
+                        if image_url:
+                            resolved = await _resolve_safe_image_url(image_url)
+                            if resolved is None:
+                                raise ValueError("Unsafe image_url: only validated HTTPS targets are allowed")
+                            pinned_url, host_header, pinned_ip = resolved
+                            async with client.stream(
+                                "GET",
+                                pinned_url,
+                                timeout=10.0,
+                                follow_redirects=False,
+                                headers={"Host": host_header},
+                                extensions={"sni_hostname": host_header.split(":", 1)[0]},
+                            ) as img_r:
+                                net_stream = img_r.extensions.get("network_stream")
+                                if net_stream is not None:
+                                    server_addr = net_stream.get_extra_info("server_addr")
+                                    if server_addr and server_addr[0] != pinned_ip:
+                                        raise ValueError("Pushover image_url resolved to an unexpected target IP")
+                                img_r.raise_for_status()
+                                content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
+                                if not content_type.startswith("image/"):
+                                    raise ValueError("Pushover image_url must return an image/* content type")
+
+                                content_len_raw = img_r.headers.get("content-length", "0") or "0"
+                                try:
+                                    content_len = int(content_len_raw)
+                                except ValueError:
+                                    content_len = 0
+                                if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                    raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                                img_content = bytearray()
+                                async for chunk in img_r.aiter_bytes():
+                                    img_content.extend(chunk)
+                                    if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
+                                        raise ValueError("Pushover attachment too large (max 5 MB)")
+
+                            fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
+                            r = await client.post(
+                                "https://api.pushover.net/1/messages.json",
+                                data=payload,
+                                files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
+                            )
+                        else:
+                            r = await client.post(
+                                "https://api.pushover.net/1/messages.json",
+                                data=payload,
+                            )
+                        r.raise_for_status()
+                        outputs[node.id]["sent"] = True
+                        target_set.add(node.id)
+                        logger.info("Graph %s: Pushover sent (msg=%r)", graph_id[:8], msg[:40])
+                        return True
+                except Exception as exc:
+                    logger.warning(
+                        "Graph %s: Pushover failed (msg=%r): %s",
+                        graph_id[:8],
+                        msg[:40],
+                        exc,
+                    )
+                    return False
+
+            if node.type == "notify_sms":
+                api_key = (node.data.get("api_key") or "").strip()
+                to = (node.data.get("to") or "").strip()
+                if not api_key or not to:
+                    logger.warning("seven.io SMS: api_key or to missing on node %s", node.id[:8])
+                    return False
+                _raw_msg = out.get("_message")
+                msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
+                sender = node.data.get("sender", "obs")
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        r = await client.post(
+                            "https://gateway.seven.io/api/sms",
+                            headers={"X-Api-Key": api_key},
+                            data={"to": to, "from": str(sender), "text": msg},
+                        )
+                        r.raise_for_status()
+                        body = r.text.strip()
+                        logger.info(
+                            "Graph %s: seven.io response status=%d body=%r",
+                            graph_id[:8],
+                            r.status_code,
+                            body[:80],
+                        )
+                        _SEVEN_ERRORS = {
+                            100: "Unbekannter Fehler / Empfänger nicht angegeben",
+                            200: "Absender nicht angegeben",
+                            201: "Absender zu lang (max 11 Zeichen)",
+                            300: "Nachricht nicht angegeben",
+                            301: "Nachricht zu lang",
+                            401: "API-Key ungültig oder nicht autorisiert",
+                            402: "Nicht genug Guthaben",
+                            403: "Absender nicht erlaubt",
+                            500: "Server-Fehler bei seven.io",
+                        }
+                        try:
+                            body_int = int(body)
+                            if body_int in _SEVEN_ERRORS:
+                                raise ValueError(f"seven.io Fehlercode {body_int}: {_SEVEN_ERRORS[body_int]}")
+                            if body_int <= 0:
+                                raise ValueError(f"seven.io: 0 Nachrichten gesendet (body={body!r})")
+                        except ValueError:
+                            raise
+                        except TypeError:
+                            pass
+                        outputs[node.id]["sent"] = True
+                        target_set.add(node.id)
+                        logger.info(
+                            "Graph %s: seven.io SMS sent to %s (msg=%r)",
+                            graph_id[:8],
+                            to,
+                            msg[:40],
+                        )
+                        return True
+                except Exception as exc:
+                    logger.warning(
+                        "Graph %s: seven.io SMS failed (msg=%r): %s",
+                        graph_id[:8],
+                        msg[:40],
+                        exc,
+                    )
+                    return False
+
+            return False
+
+        async def _run_replay_triggered_side_effects(candidate_ids: set[str]) -> None:
+            def _triggered_side_effect_ids() -> set[str]:
+                return (
+                    triggered_message_archive_nodes
+                    | triggered_notify_nodes
+                    | triggered_api_clients
+                    | triggered_wol_nodes
+                    | triggered_host_check_nodes
+                )
+
+            pending_candidates = set(candidate_ids)
+            while pending_candidates:
+                newly_triggered: set[str] = set()
+                for node in flow.nodes:
+                    if node.id not in pending_candidates:
+                        continue
+                    if node.type == "host_check" and node.id not in triggered_host_check_nodes:
+                        if await _run_host_check_node(node, newly_triggered, " (message-archive replay)"):
+                            triggered_host_check_nodes.add(node.id)
+                    elif node.type == "wake_on_lan" and node.id not in triggered_wol_nodes:
+                        if await _run_wake_on_lan_node(node, newly_triggered):
+                            triggered_wol_nodes.add(node.id)
+                    elif node.type == "api_client" and node.id not in triggered_api_clients:
+                        if await _run_api_client_node(node, newly_triggered):
+                            triggered_api_clients.add(node.id)
+                    elif node.type == "message_archive" and node.id not in triggered_message_archive_nodes:
+                        if await _run_message_archive_node(node, newly_triggered):
+                            triggered_message_archive_nodes.add(node.id)
+                    elif node.type in {"notify_pushover", "notify_sms"} and node.id not in triggered_notify_nodes:
+                        if await _run_notify_node(node, newly_triggered) or GraphExecutor._to_bool(outputs.get(node.id, {}).get("_trigger")):
+                            triggered_notify_nodes.add(node.id)
+                if not newly_triggered:
+                    break
+                _add_resolved_outputs(newly_triggered)
+                pending_candidates = _replay_async_descendants(
+                    newly_triggered,
+                    skip_node_ids=_triggered_side_effect_ids(),
+                )
+
+        for node in flow.nodes:
+            if node.type != "message_archive":
+                continue
+            await _run_message_archive_node(node, triggered_message_archive_nodes)
+        if triggered_message_archive_nodes:
+            _add_resolved_outputs(triggered_message_archive_nodes)
+            message_archive_descendants = _replay_async_descendants(
+                triggered_message_archive_nodes,
+                skip_node_ids=triggered_message_archive_nodes
+                | triggered_notify_nodes
+                | triggered_api_clients
+                | triggered_wol_nodes
+                | triggered_host_check_nodes,
+            )
+            await _run_replay_triggered_side_effects(message_archive_descendants)
+
         # ── Handle notify_pushover ────────────────────────────────────────
         # Runs AFTER api_client second-pass so that graphs with api_client →
         # json_extractor → notify see the real HTTP response, not placeholders.
         for node in flow.nodes:
             if node.type != "notify_pushover":
                 continue
-            out = outputs.get(node.id, {})
-            if not GraphExecutor._to_bool(out.get("_trigger")):
+            if node.id in triggered_notify_nodes:
                 continue
-            app_token = (node.data.get("app_token") or "").strip()
-            user_key = (node.data.get("user_key") or "").strip()
-            if not app_token or not user_key:
-                logger.warning("Pushover: app_token or user_key missing on node %s", node.id[:8])
-                continue
-            _raw_msg = out.get("_message")
-            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
-            title = node.data.get("title", "open bridge server")
-            prio = int(node.data.get("priority", 0))
-            # Input port value takes precedence over static config
-            _out_url = out.get("_url")
-            _out_utit = out.get("_url_title")
-            _out_img = out.get("_image_url")
-            url = (_msg_to_str(_out_url) if _out_url is not None else (node.data.get("url") or "")).strip()
-            url_title = (_msg_to_str(_out_utit) if _out_utit is not None else (node.data.get("url_title") or "")).strip()
-            image_url = (_msg_to_str(_out_img) if _out_img is not None else (node.data.get("image_url") or "")).strip()
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    payload: dict[str, object] = {
-                        "token": app_token,
-                        "user": user_key,
-                        "title": str(title),
-                        "message": msg,
-                        "priority": prio,
-                    }
-                    if url:
-                        payload["url"] = url
-                    if url_title:
-                        payload["url_title"] = url_title
-
-                    if image_url:
-                        resolved = await _resolve_safe_image_url(image_url)
-                        if resolved is None:
-                            raise ValueError("Unsafe image_url: only validated HTTPS targets are allowed")
-                        pinned_url, host_header, pinned_ip = resolved
-                        # Stream attachment bytes and enforce max size while downloading.
-                        async with client.stream(
-                            "GET",
-                            pinned_url,
-                            timeout=10.0,
-                            follow_redirects=False,
-                            headers={"Host": host_header},
-                            extensions={"sni_hostname": host_header.split(":", 1)[0]},
-                        ) as img_r:
-                            net_stream = img_r.extensions.get("network_stream")
-                            if net_stream is not None:
-                                server_addr = net_stream.get_extra_info("server_addr")
-                                if server_addr and server_addr[0] != pinned_ip:
-                                    raise ValueError("Pushover image_url resolved to an unexpected target IP")
-                            img_r.raise_for_status()
-                            content_type = img_r.headers.get("content-type", "").split(";")[0].strip().lower()
-                            if not content_type.startswith("image/"):
-                                raise ValueError("Pushover image_url must return an image/* content type")
-
-                            content_len_raw = img_r.headers.get("content-length", "0") or "0"
-                            try:
-                                content_len = int(content_len_raw)
-                            except ValueError:
-                                content_len = 0
-                            if content_len > _PUSHOVER_ATTACHMENT_MAX_BYTES:
-                                raise ValueError("Pushover attachment too large (max 5 MB)")
-
-                            img_content = bytearray()
-                            async for chunk in img_r.aiter_bytes():
-                                img_content.extend(chunk)
-                                if len(img_content) > _PUSHOVER_ATTACHMENT_MAX_BYTES:
-                                    raise ValueError("Pushover attachment too large (max 5 MB)")
-
-                        fname = image_url.split("?")[0].split("/")[-1] or "image.jpg"
-                        r = await client.post(
-                            "https://api.pushover.net/1/messages.json",
-                            data=payload,
-                            files={"attachment": (fname, bytes(img_content), content_type or "image/jpeg")},
-                        )
-                    else:
-                        r = await client.post(
-                            "https://api.pushover.net/1/messages.json",
-                            data=payload,
-                        )
-                    r.raise_for_status()
-                    outputs[node.id]["sent"] = True
-                    logger.info("Graph %s: Pushover sent (msg=%r)", graph_id[:8], msg[:40])
-            except Exception as exc:
-                logger.warning(
-                    "Graph %s: Pushover failed (msg=%r): %s",
-                    graph_id[:8],
-                    msg[:40],
-                    exc,
-                )
+            await _run_notify_node(node, triggered_notify_nodes)
 
         # ── Handle notify_sms ─────────────────────────────────────────────
         for node in flow.nodes:
             if node.type != "notify_sms":
                 continue
-            out = outputs.get(node.id, {})
-            if not GraphExecutor._to_bool(out.get("_trigger")):
+            if node.id in triggered_notify_nodes:
                 continue
-            api_key = (node.data.get("api_key") or "").strip()
-            to = (node.data.get("to") or "").strip()
-            if not api_key or not to:
-                logger.warning("seven.io SMS: api_key or to missing on node %s", node.id[:8])
-                continue
-            _raw_msg = out.get("_message")
-            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
-            sender = node.data.get("sender", "obs")
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    r = await client.post(
-                        "https://gateway.seven.io/api/sms",
-                        headers={"X-Api-Key": api_key},
-                        data={"to": to, "from": str(sender), "text": msg},
-                    )
-                    r.raise_for_status()
-                    # seven.io returns the number of sent messages as body (e.g. "1").
-                    # A value of "0" means failure (no credits, invalid number, etc.)
-                    # even though the HTTP status is 200.
-                    body = r.text.strip()
-                    logger.info(
-                        "Graph %s: seven.io response status=%d body=%r",
-                        graph_id[:8],
-                        r.status_code,
-                        body[:80],
-                    )
-                    # seven.io returns the number of sent messages on success (e.g. "1"),
-                    # or a numeric error code on failure. Known error codes:
-                    _SEVEN_ERRORS = {
-                        100: "Unbekannter Fehler / Empfänger nicht angegeben",
-                        200: "Absender nicht angegeben",
-                        201: "Absender zu lang (max 11 Zeichen)",
-                        300: "Nachricht nicht angegeben",
-                        301: "Nachricht zu lang",
-                        401: "API-Key ungültig oder nicht autorisiert",
-                        402: "Nicht genug Guthaben",
-                        403: "Absender nicht erlaubt",
-                        500: "Server-Fehler bei seven.io",
-                    }
-                    try:
-                        body_int = int(body)
-                        if body_int in _SEVEN_ERRORS:
-                            raise ValueError(f"seven.io Fehlercode {body_int}: {_SEVEN_ERRORS[body_int]}")
-                        if body_int <= 0:
-                            raise ValueError(f"seven.io: 0 Nachrichten gesendet (body={body!r})")
-                    except ValueError:
-                        raise  # re-raise error code or zero-count errors
-                    except TypeError:
-                        pass  # non-numeric body → assume success (future API changes)
-                    outputs[node.id]["sent"] = True
-                    logger.info(
-                        "Graph %s: seven.io SMS sent to %s (msg=%r)",
-                        graph_id[:8],
-                        to,
-                        msg[:40],
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Graph %s: seven.io SMS failed (msg=%r): %s",
-                    graph_id[:8],
-                    msg[:40],
-                    exc,
-                )
+            await _run_notify_node(node, triggered_notify_nodes)
+
+        if triggered_notify_nodes:
+            _add_resolved_outputs(triggered_notify_nodes)
+            notify_descendants = _replay_async_descendants(
+                triggered_notify_nodes,
+                skip_node_ids=triggered_message_archive_nodes
+                | triggered_notify_nodes
+                | triggered_api_clients
+                | triggered_wol_nodes
+                | triggered_host_check_nodes,
+            )
+            await _run_replay_triggered_side_effects(notify_descendants)
 
         # Deferred hc_prev_trigger=False: clear only for HC nodes that did NOT
         # fire in any async pass. Clearing inside _run_host_check_node was wrong
@@ -2591,6 +3031,68 @@ class LogicManager:
         # the final graph outputs, not executor placeholders from an earlier pass.
         executor.commit_memory_inputs(outputs, aug_overrides)
 
+        # ── Start/cancel value sequences ──────────────────────────────────
+        wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
+        node_by_id = {node.id: node for node in flow.nodes}
+        pending_sequence_starts: list[tuple[Any, bool]] = []
+        for node in flow.nodes:
+            if node.type != "value_sequence":
+                continue
+            output = outputs.get(node.id, {})
+            key = (graph_id, node.id)
+            condition = GraphExecutor._to_bool(output.get("_condition")) if (node.id, "condition") in wired_inputs else True
+            self._sequence_conditions[key] = condition
+            active = self._sequence_tasks.get(key)
+            if (
+                node.data.get("cancel_when_condition_false")
+                and not condition
+                and active
+                and not active.done()
+                and active is not asyncio.current_task()
+            ):
+                self._cancel_sequence_task(key)
+            state = graph_state.setdefault(node.id, {})
+            triggered = GraphExecutor._to_bool(output.get("_triggered"))
+            # A wired condition gates every sequence mode.  The cancellation
+            # setting controls only whether an already-running task is stopped.
+            blocked = not condition
+            if blocked:
+                state["sequence_prev_trigger"] = False
+                continue
+            was_triggered = state.get("sequence_prev_trigger", False)
+            state["sequence_prev_trigger"] = triggered
+            cron_triggered = any(
+                edge.target == node.id and (edge.targetHandle or "in") == "trigger" and edge.source in cron_reachable for edge in flow.edges
+            )
+            pulse_sources = [node.id]
+            pulse_seen: set[str] = set()
+            datapoint_change_triggered = False
+            while pulse_sources:
+                target_id = pulse_sources.pop()
+                if target_id in pulse_seen:
+                    continue
+                pulse_seen.add(target_id)
+                for edge in flow.edges:
+                    if edge.target != target_id:
+                        continue
+                    source = node_by_id.get(edge.source)
+                    if (
+                        source
+                        and source.type == "datapoint_read"
+                        and (edge.sourceHandle or "out") == "changed"
+                        and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                    ):
+                        datapoint_change_triggered = True
+                        break
+                    pulse_sources.append(edge.source)
+                if datapoint_change_triggered:
+                    break
+            if triggered and (not was_triggered or cron_triggered or datapoint_change_triggered):
+                # Defer creating the task until ordinary datapoint writes have
+                # been published below.  A task created here can otherwise run
+                # at the write loop's first await and invert graph-local order.
+                pending_sequence_starts.append((node, condition))
+
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         from obs.core.event_bus import DataValueEvent
@@ -2598,8 +3100,6 @@ class LogicManager:
         write_now = execute_now
 
         # Build set of node+handle pairs that have an incoming edge (= are wired)
-        wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
-
         for node in flow.nodes:
             if node.type != "datapoint_write":
                 continue
@@ -2667,6 +3167,15 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception as exc:
                 logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
+
+        # Value sequences are intentionally started after synchronous graph
+        # writes, so an execution that triggers both has deterministic order.
+        for node, condition in pending_sequence_starts:
+            if not graph_state.get(node.id, {}).get("sequence_prev_trigger", False):
+                continue
+            current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
+            if current_condition:
+                self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
 
         # ── Persist node state (statistics / hysteresis) to DB ───────────
         # Nodes with persist_state=False are excluded from the saved snapshot
@@ -2751,8 +3260,22 @@ class LogicManager:
         # On DELETE the graph row is gone from DB so no persistence concerns remain;
         # the in-memory entry is a no-op and will be GC'd naturally.
         self._node_state.pop(graph_id, None)
+        self._cancel_sequence_tasks(graph_id)
         # Cancel cron tasks for this specific graph
         to_remove = [k for k in list(self._cron_tasks) if k[0] == graph_id]
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]
+
+    def update_cached_graph_name(self, graph_id: str, name: str) -> None:
+        """Refresh metadata without invalidating active graph execution."""
+        graph = self._graphs.get(graph_id)
+        if graph:
+            _, enabled, flow = graph
+            self._graphs[graph_id] = (name, enabled, flow)
+
+    def update_cached_graph(self, graph_id: str, name: str, enabled: bool, flow: FlowData) -> None:
+        """Apply a layout-only save without interrupting active sequences."""
+        if graph_id in self._graphs:
+            self._graphs[graph_id] = (name, enabled, flow)
+            self._sequence_graph_signatures[graph_id] = flow.model_dump_json()

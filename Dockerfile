@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # open bridge server — Multi-Stage Dockerfile (3 stages)
-# Stage 1 (node-builder):   npm install + vite build → gui_dist/ + frontend_dist/
+# Stage 1 (node-builder):   npm ci + vite build → gui_dist/ + frontend_dist/
 # Stage 2 (py-builder):     pip install Python deps
 # Stage 3 (runtime):        python:3.14-slim, copies all artefacts
 #
@@ -16,16 +16,16 @@ ENV VITE_INSTANCE_COLOR=${VITE_INSTANCE_COLOR}
 
 # Admin-GUI (gui/ → ../gui_dist)
 WORKDIR /gui-src
-COPY gui/package.json ./
-RUN npm install --prefer-offline
+COPY gui/package.json gui/package-lock.json ./
+RUN npm ci --prefer-offline
 COPY gui/ ./
 RUN npm run build
 # Output: /gui_dist
 
 # Visu-Frontend (frontend/ → ../frontend_dist)
 WORKDIR /visu-src
-COPY frontend/package.json ./
-RUN npm install --prefer-offline
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --prefer-offline
 COPY frontend/ ./
 RUN npm run build
 # Output: /frontend_dist

@@ -98,6 +98,7 @@
     "hintDrag": "Drag → move",
     "hintResize": "↘ Handle → resize",
     "hintDelete": "Del → delete widget",
+    "hintMultiSelect": "Shift/Ctrl+click or drag on empty space → select multiple",
     "removeWidget": "Remove",
     "widgetName": "Name",
     "widgetNamePlaceholder": "e.g. Living room dimmer",
@@ -108,8 +109,14 @@
     "statusDatapoint": "Status datapoint",
     "statusDatapointHint": "Optional: separate read-back datapoint. If empty, the write datapoint is used for display.",
     "configuration": "Configuration",
+    "resizeConfigPanel": "Drag to resize panel",
     "hintEmpty": "Insert a widget from the palette on the left",
     "hintNoSelection": "Click a widget on the canvas\nor insert from the palette",
+    "multiSelect": {
+      "count": "{n} widgets selected",
+      "removeAll": "Delete all",
+      "hint": "Configuration editing isn't available for multiple widgets. Select just one to edit its settings."
+    },
     "widgetCountSingular": "widget on this page",
     "widgetCountPlural": "widgets on this page",
     "brokenDpRef": "At least one datapoint reference was not found",
@@ -719,8 +726,18 @@
     "stufenschalter": {
       "title": "Step switch",
       "stepsCount": "Steps ({n}/{max})",
+      "optionsCount": "Options ({n}/{max})",
       "addStep": "+ Step",
+      "addOption": "+ Option",
+      "mode": "Control mode",
+      "modeSequence": "Sequence",
+      "modeSelectSave": "Selection with save",
+      "modeSelectDirect": "Direct selection",
+      "save": "Save",
+      "writeError": "Write failed",
       "hint": "Pressing cycles through steps. The value is sent as bool / int / float / string depending on the object.",
+      "hintSelectSave": "The selection is sent only after Save. The value is sent as bool / int / float / string depending on the object.",
+      "hintSelectDirect": "The selection is sent immediately. The value is sent as bool / int / float / string depending on the object.",
       "moveUp": "Move up",
       "moveDown": "Move down",
       "remove": "Remove",
@@ -895,7 +912,12 @@
       "widget": "Widget (name)",
       "selectWidget": "— Select widget —",
       "noNamedWidgets": "— no named widgets —",
-      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor."
+      "noNamedWidgetsHint": "⚠ No widget on this page has a name. Add names in the editor.",
+      "reference": "Reference",
+      "selectReference": "Select reference …",
+      "noReference": "No reference",
+      "sourceUnavailable": "Source page unavailable",
+      "widgetNotFound": "Widget “{name}” not found"
     },
     "zeitschaltuhr": {
       "title": "Timer",
@@ -977,6 +999,55 @@
     },
     "horizontalbar": {
       "title": "Bar display"
+    },
+    "messageArchive": {
+      "title": "Message Archive",
+      "archives": "Archives",
+      "loadArchivesError": "Archives could not be loaded.",
+      "loadError": "Messages could not be loaded.",
+      "limit": "Entry count",
+      "severity": "Severity",
+      "status": "Status",
+      "allArchives": "All archives",
+      "allSeverities": "All severities",
+      "allStatuses": "All statuses",
+      "allTypes": "All types",
+      "allSources": "All sources",
+      "clearFilter": "Clear filter",
+      "selectedCount": "{count} selected",
+      "noSources": "No sources found",
+      "type": "Type",
+      "source": "Source",
+      "showArchive": "Show archive",
+      "showSource": "Show source",
+      "allowRead": "Allow mark as read",
+      "allowAcknowledge": "Allow acknowledge",
+      "refresh": "Refresh",
+      "empty": "No messages",
+      "unread": "new",
+      "markRead": "Read",
+      "acknowledge": "Acknowledge",
+      "statuses": {
+        "new": "New",
+        "open": "Open",
+        "acknowledged": "Acknowledged",
+        "closed": "Closed"
+      },
+      "types": {
+        "system": "System",
+        "security": "Security",
+        "notification": "Notification",
+        "automation": "Automation",
+        "adapter": "Adapter",
+        "diagnostic": "Diagnostic"
+      },
+      "severities": {
+        "info": "Info",
+        "success": "Success",
+        "warning": "Warning",
+        "error": "Error",
+        "critical": "Critical"
+      }
     },
     "missing": {
       "title": "Unknown",

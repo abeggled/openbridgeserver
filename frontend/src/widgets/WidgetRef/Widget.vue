@@ -7,6 +7,7 @@
  * konfiguriertes Widget auf beliebig vielen Seiten zu verwenden.
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { visu } from '@/api/client'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
@@ -18,10 +19,13 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  readonly?: boolean
 }>()
 
+const { t } = useI18n()
 const dpStore = useDatapointsStore()
 const sourceWidget = ref<WidgetInstance | null>(null)
+const sourcePageReadonly = ref(false)
 const loading = ref(false)
 const errorMsg = ref('')
 let subscribedIds: string[] = []
@@ -32,6 +36,7 @@ const sourceWidgetName = computed(() => (props.config.source_widget_name as stri
 async function loadReference() {
   if (!sourcePageId.value || !sourceWidgetName.value) {
     sourceWidget.value = null
+    sourcePageReadonly.value = false
     return
   }
   loading.value = true
@@ -51,13 +56,16 @@ async function loadReference() {
         subscribedIds = ids
       }
       sourceWidget.value = found
+      sourcePageReadonly.value = found.source_page_readonly === true
     } else {
-      errorMsg.value = `Widget „${sourceWidgetName.value}" nicht gefunden`
+      errorMsg.value = t('widgets.widgetref.widgetNotFound', { name: sourceWidgetName.value })
       sourceWidget.value = null
+      sourcePageReadonly.value = false
     }
   } catch {
-    errorMsg.value = 'Quell-Seite nicht erreichbar'
+    errorMsg.value = t('widgets.widgetref.sourceUnavailable')
     sourceWidget.value = null
+    sourcePageReadonly.value = false
   } finally {
     loading.value = false
   }
@@ -70,6 +78,7 @@ onUnmounted(() => { if (subscribedIds.length) dpStore.unsubscribe(subscribedIds)
 const refDef         = computed(() => sourceWidget.value ? WidgetRegistry.get(sourceWidget.value.type) : null)
 const refValue       = computed(() => sourceWidget.value?.datapoint_id        ? dpStore.getValue(sourceWidget.value.datapoint_id)        : null)
 const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? dpStore.getValue(sourceWidget.value.status_datapoint_id) : null)
+const refReadonly    = computed(() => props.readonly || sourcePageReadonly.value)
 </script>
 
 <template>
@@ -83,14 +92,14 @@ const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? 
       {{ sourceWidgetName }}
     </span>
     <span v-if="sourceWidgetName && sourcePageId" class="text-xs text-gray-400 dark:text-gray-600 truncate max-w-full">
-      Referenz
+      {{ $t('widgets.widgetref.reference') }}
     </span>
-    <span v-else class="text-xs text-gray-300 dark:text-gray-700">Referenz wählen …</span>
+    <span v-else class="text-xs text-gray-300 dark:text-gray-700">{{ $t('widgets.widgetref.selectReference') }}</span>
   </div>
 
   <!-- Viewer: Laden -->
   <div v-else-if="loading" class="flex items-center justify-center h-full text-gray-400 dark:text-gray-500 text-xs">
-    …
+    {{ $t('common.loading') }}
   </div>
 
   <!-- Viewer: Fehler / nicht konfiguriert -->
@@ -99,7 +108,8 @@ const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? 
     class="flex items-center justify-center h-full text-xs p-2 text-center"
     :class="errorMsg ? 'text-red-400 dark:text-red-500' : 'text-gray-400 dark:text-gray-600'"
   >
-    {{ errorMsg || '🔗 Keine Referenz' }}
+    <template v-if="errorMsg">{{ errorMsg }}</template>
+    <template v-else>🔗 {{ $t('widgets.widgetref.noReference') }}</template>
   </div>
 
   <!-- Viewer: Referenziertes Widget rendern -->
@@ -111,5 +121,6 @@ const refStatusValue = computed(() => sourceWidget.value?.status_datapoint_id ? 
     :value="refValue"
     :status-value="refStatusValue"
     :editor-mode="false"
+    :readonly="refReadonly"
   />
 </template>

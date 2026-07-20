@@ -31,6 +31,31 @@
         </div>
       </div>
 
+      <!-- Prognose (#919/#938): gemeinsame PrognosisBlock-Komponente. -->
+      <PrognosisBlock
+        :prognosis="stats?.prognosis ?? null"
+        :segment-age-hours="segmentAgeHoursForPrognosis"
+        :retention-age-seconds="totalMaxAgeSeconds"
+        :segment-max-bytes="effectiveSegmentBytes"
+        :segment-max-rows="effectiveSegmentRows"
+        :max-file-size-bytes="maxFileSizeForPrognosis"
+        :retention-unbounded="retentionUnbounded"
+      />
+
+      <!-- Retention-Signal (#919/#938): nur bei echter Fehlanpassung (Budget-Boden
+           gesprengt = rot, Retention unter Age-Ziel = amber). Normaler Budget-
+           Füllstand erzeugt hier bewusst KEIN Signal. -->
+      <div
+        v-if="retentionSignal.level !== 'none'"
+        class="rounded-md border px-3 py-2 text-xs"
+        :class="retentionSignal.level === 'error'
+          ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+          : 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'"
+        data-testid="rb-config-retention-signal"
+      >
+        {{ retentionSignal.text }}
+      </div>
+
       <div class="text-xs text-slate-500">
         {{ $t('ringbuffer.storageFixed') }} <span class="font-semibold">file-only</span>.
       </div>
@@ -75,11 +100,18 @@
             :disabled="!configForm.enabled || !configForm.maxSizeEnabled"
             data-testid="rb-config-max-size-unit"
           >
-            <option value="mb">MB</option>
-            <option value="gb">GB</option>
+            <option value="mb">{{ $t('ringbuffer.unitMiB') }}</option>
+            <option value="gb">{{ $t('ringbuffer.unitGiB') }}</option>
           </select>
         </div>
       </div>
+
+      <!-- Effektiver Speicherbedarf (#919): der Budget-Wert ist ein Retention-Ziel,
+           kein harter Momentan-Deckel. Zwischen zwei Rotationen wächst das aktive
+           Segment oben drauf → kurzzeitiger Sägezahn-Überschwinger. -->
+      <p class="text-xs text-slate-500 dark:text-slate-400" data-testid="rb-config-effective-storage-note">
+        {{ $t('ringbuffer.effectiveStorageNote') }}
+      </p>
 
       <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3">
         <div class="flex items-center gap-2">
@@ -110,6 +142,123 @@
         </div>
       </div>
 
+      <div
+        v-if="configForm.enabled && retentionUnbounded"
+        class="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+        data-testid="rb-config-unbounded-warning"
+      >
+        <p class="font-semibold">{{ $t('ringbuffer.unboundedWarningTitle') }}</p>
+        <p>{{ $t('ringbuffer.unboundedWarningBody') }}</p>
+      </div>
+
+      <!-- Segment-Rotation (#938): Jede Dimension ist explizit, aus der passenden
+           Gesamtgrenze abgeleitet oder deaktiviert. -->
+      <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 flex flex-col gap-3" data-testid="rb-config-segment">
+        <div class="flex items-center gap-2">
+          <input
+            id="segment-max-age-enabled"
+            type="checkbox"
+            v-model="configForm.segmentMaxAgeEnabled"
+            :disabled="!configForm.enabled"
+            data-testid="rb-config-segment-max-age-enabled"
+          />
+          <label for="segment-max-age-enabled" class="text-sm font-medium">{{ $t('ringbuffer.segmentMaxAge') }}</label>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">{{ $t('ringbuffer.segmentMaxAgeHint') }}</p>
+        <div class="grid grid-cols-2 gap-2">
+          <input
+            id="segment-max-age"
+            v-model.trim="configForm.segmentMaxAgeValue"
+            type="number"
+            min="1"
+            step="1"
+            class="input"
+            :disabled="!configForm.enabled || !configForm.segmentMaxAgeEnabled"
+            data-testid="rb-config-segment-max-age"
+            :placeholder="$t('ringbuffer.segmentMaxAgePlaceholder')"
+          />
+          <select
+            v-model="configForm.segmentMaxAgeUnit"
+            class="input"
+            :disabled="!configForm.enabled || !configForm.segmentMaxAgeEnabled"
+            data-testid="rb-config-segment-max-age-unit"
+          >
+            <option value="seconds">{{ $t('ringbuffer.unitSeconds') }}</option>
+            <option value="minutes">{{ $t('ringbuffer.unitMinutes') }}</option>
+            <option value="hours">{{ $t('ringbuffer.unitHours') }}</option>
+          </select>
+        </div>
+        <p class="text-xs text-slate-500" data-testid="rb-segment-source-age">{{ segmentAgeSourceText }}</p>
+
+        <details class="text-sm">
+          <summary class="cursor-pointer text-slate-600 dark:text-slate-300 select-none">{{ $t('ringbuffer.segmentAdvanced') }}</summary>
+          <div class="mt-3 flex flex-col gap-3">
+            <p class="text-xs text-slate-500">{{ $t('ringbuffer.segmentAdvancedHint') }}</p>
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center gap-2">
+                <input
+                  id="segment-max-bytes-enabled"
+                  type="checkbox"
+                  v-model="configForm.segmentMaxBytesEnabled"
+                  :disabled="!configForm.enabled"
+                  data-testid="rb-config-segment-max-bytes-enabled"
+                />
+                <label for="segment-max-bytes-enabled" class="text-xs font-medium text-slate-600 dark:text-slate-300">{{ $t('ringbuffer.segmentMaxBytes') }}</label>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <input
+                  id="segment-max-bytes"
+                  v-model.trim="configForm.segmentMaxBytesValue"
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="input"
+                  :disabled="!configForm.enabled || !configForm.segmentMaxBytesEnabled"
+                  data-testid="rb-config-segment-max-bytes"
+                  :placeholder="$t('ringbuffer.segmentOptionalPlaceholder')"
+                />
+                <select
+                  v-model="configForm.segmentMaxBytesUnit"
+                  class="input"
+                  :disabled="!configForm.enabled || !configForm.segmentMaxBytesEnabled"
+                  data-testid="rb-config-segment-max-bytes-unit"
+                >
+                  <option value="mb">{{ $t('ringbuffer.unitMiB') }}</option>
+                  <option value="gb">{{ $t('ringbuffer.unitGiB') }}</option>
+                </select>
+              </div>
+              <p class="text-xs text-slate-500" data-testid="rb-segment-source-bytes">{{ segmentBytesSourceText }}</p>
+            </div>
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center gap-2">
+                <input
+                  id="segment-max-rows-enabled"
+                  type="checkbox"
+                  v-model="configForm.segmentMaxRowsEnabled"
+                  :disabled="!configForm.enabled"
+                  data-testid="rb-config-segment-max-rows-enabled"
+                />
+                <label for="segment-max-rows-enabled" class="text-xs font-medium text-slate-600 dark:text-slate-300">{{ $t('ringbuffer.segmentMaxRows') }}</label>
+              </div>
+              <input
+                id="segment-max-rows"
+                v-model.trim="configForm.segmentMaxRowsValue"
+                type="number"
+                min="1"
+                step="1"
+                class="input"
+                :disabled="!configForm.enabled || !configForm.segmentMaxRowsEnabled"
+                data-testid="rb-config-segment-max-rows"
+                :placeholder="$t('ringbuffer.segmentOptionalPlaceholder')"
+              />
+              <p class="text-xs text-slate-500" data-testid="rb-segment-source-rows">{{ segmentRowsSourceText }}</p>
+            </div>
+          </div>
+        </details>
+
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.segmentRatioHint') }}</p>
+      </div>
+
       <div v-if="configMsg" :class="['p-3 rounded-lg text-sm', configMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">
         {{ configMsg.text }}
       </div>
@@ -129,6 +278,13 @@
     :confirm-label="$t('ringbuffer.disableConfirmLabel')"
     @confirm="confirmDisable"
   />
+  <ConfirmDialog
+    v-model="showUnboundedConfirm"
+    :title="$t('ringbuffer.unboundedConfirmTitle')"
+    :message="$t('ringbuffer.unboundedConfirmMessage')"
+    :confirm-label="$t('ringbuffer.unboundedConfirmLabel')"
+    @confirm="confirmUnbounded"
+  />
 </template>
 
 <script setup>
@@ -147,11 +303,15 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
+import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useSegmentProblems } from '@/composables/useSegmentProblems'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Modal from '@/components/ui/Modal.vue'
+import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const { t } = useI18n()
+const { retentionSignal: buildRetentionSignal } = useSegmentProblems()
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -164,6 +324,17 @@ const RETENTION_UNIT_SECONDS = {
   months: 30 * 24 * 60 * 60,
   years: 365 * 24 * 60 * 60,
 }
+// Sichtbarer Kompatibilitätswert für ältere /stats-Antworten, die den
+// persistierten Segment-Age-Wert noch nicht zurücklieferten.
+const DEFAULT_SEGMENT_MAX_AGE_HOURS = 6
+const SECONDS_PER_HOUR = 60 * 60
+const SECONDS_PER_MINUTE = 60
+const SEGMENT_AGE_UNIT_SECONDS = { seconds: 1, minutes: SECONDS_PER_MINUTE, hours: SECONDS_PER_HOUR }
+// Backend-Minimum für das Segment-Alter (#938): 300 s (5 min). Sub-Stunden-Werte
+// (z. B. aus einem migrierten 15-min-Retention-Fenster) müssen verlustfrei über
+// die Minuten-Einheit dargestellt und gespeichert werden – kein Runden auf ganze
+// Stunden (Codex #951).
+const SEGMENT_MAX_AGE_MIN_SECONDS = 300
 
 const open = computed({
   get: () => props.modelValue,
@@ -171,11 +342,29 @@ const open = computed({
 })
 
 const stats = ref(null)
+// Retention-Signal (#919/#938): DRY über useSegmentProblems, hier direkt am
+// Config-Formular, wo der Nutzer Budget/Alter anpassen kann.
+const retentionSignal = computed(() => buildRetentionSignal(stats.value))
+// PrognosisBlock rechnet in Stunden; das Formular kann aber Minuten führen.
+// Wert+Einheit → Stunden (auch < 1 h, z. B. 15 min = 0,25 h) umrechnen.
+const segmentAgeHoursForPrognosis = computed(() => {
+  if (effectiveSegmentAgeSeconds.value === null) return null
+  return effectiveSegmentAgeSeconds.value / SECONDS_PER_HOUR
+})
 const saving = ref(false)
 const configMsg = ref(null)
+// Codex #951: der zuletzt hydratisierte Segment-Alter-Wert (Sekunden) plus das
+// hydratisierte Anzeige-Paar (Wert+Einheit). Solange der Nutzer das Alter-Feld
+// nicht selbst anfasst, reichen wir diesen Original-Sekundenwert unverändert
+// durch – auch < 300 s (migrierter Wert). So scheitert das Speichern einer
+// UNRELATED-Einstellung nicht am 300-s-UI-Minimum.
+const hydratedSegmentAge = ref(null)
 const showDisableConfirm = ref(false)
 const pendingDisablePayload = ref(null)
+const showUnboundedConfirm = ref(false)
+const pendingUnboundedPayload = ref(null)
 let closeTimer = null
+let warmupTimer = null
 const configForm = reactive({
   enabled: true,
   maxEntriesEnabled: false,
@@ -186,15 +375,98 @@ const configForm = reactive({
   retentionEnabled: false,
   retentionValue: '30',
   retentionUnit: 'days',
+  // Segment-Rotation (#938). Jeder Trigger kann explizit gesetzt oder deaktiviert
+  // werden; eine passende Gesamtgrenze leitet bei deaktiviertem Trigger /3 ab.
+  segmentMaxAgeEnabled: true,
+  segmentMaxAgeValue: String(DEFAULT_SEGMENT_MAX_AGE_HOURS),
+  segmentMaxAgeUnit: 'hours',
+  segmentMaxBytesEnabled: false,
+  segmentMaxBytesValue: '',
+  segmentMaxBytesUnit: 'mb',
+  segmentMaxRowsEnabled: false,
+  segmentMaxRowsValue: '',
 })
 
+function positiveNumber(raw) {
+  const number = Number(raw)
+  return Number.isFinite(number) && number > 0 ? number : null
+}
+
+const totalMaxEntries = computed(() => configForm.maxEntriesEnabled ? positiveNumber(configForm.maxEntriesValue) : null)
+const totalMaxBytes = computed(() => {
+  const value = configForm.maxSizeEnabled ? positiveNumber(configForm.maxSizeValue) : null
+  return value === null ? null : value * SIZE_UNIT_FACTORS[configForm.maxSizeUnit]
+})
+const totalMaxAgeSeconds = computed(() => {
+  const value = configForm.retentionEnabled ? positiveNumber(configForm.retentionValue) : null
+  return value === null ? null : value * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
+})
+const explicitSegmentAgeSeconds = computed(() => {
+  const value = configForm.segmentMaxAgeEnabled ? positiveNumber(configForm.segmentMaxAgeValue) : null
+  return value === null ? null : value * SEGMENT_AGE_UNIT_SECONDS[configForm.segmentMaxAgeUnit]
+})
+const explicitSegmentBytes = computed(() => {
+  const value = configForm.segmentMaxBytesEnabled ? positiveNumber(configForm.segmentMaxBytesValue) : null
+  return value === null ? null : value * SIZE_UNIT_FACTORS[configForm.segmentMaxBytesUnit]
+})
+const explicitSegmentRows = computed(() => configForm.segmentMaxRowsEnabled ? positiveNumber(configForm.segmentMaxRowsValue) : null)
+const effectiveSegmentAgeSeconds = computed(() => explicitSegmentAgeSeconds.value ?? (
+  totalMaxAgeSeconds.value === null ? null : Math.floor(totalMaxAgeSeconds.value / 3)
+))
+const effectiveSegmentBytes = computed(() => explicitSegmentBytes.value ?? (
+  totalMaxBytes.value === null ? null : Math.floor(totalMaxBytes.value / 3)
+))
+const effectiveSegmentRows = computed(() => explicitSegmentRows.value ?? (
+  totalMaxEntries.value === null ? null : Math.floor(totalMaxEntries.value / 3)
+))
+const retentionUnbounded = computed(() => (
+  totalMaxEntries.value === null &&
+  totalMaxBytes.value === null &&
+  totalMaxAgeSeconds.value === null
+))
+const maxFileSizeForPrognosis = computed(() => totalMaxBytes.value)
+
+function formatSegmentAge(seconds) {
+  const hours = seconds / SECONDS_PER_HOUR
+  return `${new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 }).format(hours)} ${t('ringbuffer.unitHours')}`
+}
+
+function formatBytesCompact(value) {
+  return formatBytesBinary(value).replace(/([,.])0 (?=[KMGT]iB$)/, ' ')
+}
+
+function sourceText(explicitEnabled, explicitValue, derivedValue, formatter) {
+  if (explicitEnabled) {
+    return explicitValue === null
+      ? t('ringbuffer.segmentSourceExplicitInvalid')
+      : t('ringbuffer.segmentSourceExplicit', { value: formatter(explicitValue) })
+  }
+  return derivedValue === null
+    ? t('ringbuffer.segmentSourceDisabled')
+    : t('ringbuffer.segmentSourceDerived', { value: formatter(derivedValue) })
+}
+
+const segmentAgeSourceText = computed(() => sourceText(
+  configForm.segmentMaxAgeEnabled,
+  explicitSegmentAgeSeconds.value,
+  configForm.retentionEnabled && totalMaxAgeSeconds.value !== null ? Math.floor(totalMaxAgeSeconds.value / 3) : null,
+  formatSegmentAge,
+))
+const segmentBytesSourceText = computed(() => sourceText(
+  configForm.segmentMaxBytesEnabled,
+  explicitSegmentBytes.value,
+  configForm.maxSizeEnabled && totalMaxBytes.value !== null ? Math.floor(totalMaxBytes.value / 3) : null,
+  formatBytesCompact,
+))
+const segmentRowsSourceText = computed(() => sourceText(
+  configForm.segmentMaxRowsEnabled,
+  explicitSegmentRows.value,
+  configForm.maxEntriesEnabled && totalMaxEntries.value !== null ? Math.floor(totalMaxEntries.value / 3) : null,
+  (value) => new Intl.NumberFormat('de-DE').format(value),
+))
+
 function formatBytes(rawBytes) {
-  const bytes = Number(rawBytes)
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  if (bytes >= SIZE_UNIT_FACTORS.gb) return `${(bytes / SIZE_UNIT_FACTORS.gb).toFixed(2)} GB`
-  if (bytes >= SIZE_UNIT_FACTORS.mb) return `${(bytes / SIZE_UNIT_FACTORS.mb).toFixed(2)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`
-  return `${Math.round(bytes)} B`
+  return formatBytesBinary(rawBytes)
 }
 
 function formatRetention(rawSeconds) {
@@ -212,6 +484,17 @@ function parseNonNegativeInteger(raw) {
 function pickSizeUnit(bytes) {
   if (bytes % SIZE_UNIT_FACTORS.gb === 0) return { value: String(bytes / SIZE_UNIT_FACTORS.gb), unit: 'gb' }
   return { value: String(Math.max(1, Math.round(bytes / SIZE_UNIT_FACTORS.mb))), unit: 'mb' }
+}
+
+// Segment-Alter (#938, Codex #951): glatte Stunden über die Stunden-Einheit,
+// glatte Minuten über die Minuten-Einheit; alles andere (insb. migrierte
+// Sub-300s-Werte wie 200 s aus max_age // 3) verlustfrei über die Sekunden-
+// Einheit, statt eine krumme Nachkommazahl in Minuten anzuzeigen oder auf ganze
+// Stunden zu runden.
+function pickSegmentAgeUnit(seconds) {
+  if (seconds % SECONDS_PER_HOUR === 0) return { value: String(seconds / SECONDS_PER_HOUR), unit: 'hours' }
+  if (seconds % SECONDS_PER_MINUTE === 0) return { value: String(seconds / SECONDS_PER_MINUTE), unit: 'minutes' }
+  return { value: String(seconds), unit: 'seconds' }
 }
 
 function pickRetentionUnit(seconds) {
@@ -253,6 +536,53 @@ function hydrateForm(currentStats) {
     configForm.retentionValue = '30'
     configForm.retentionUnit = 'days'
   }
+  // /stats liefert die persistierten Segment-Parameter mit (#919/#938): das Alter
+  // wird aus dem gespeicherten Wert (Sekunden) verlustfrei hydratisiert – glatte
+  // Stunden über die Stunden-Einheit, Sub-Stunden-Werte (z. B. 900 s = 15 min aus
+  // einem migrierten 15-min-Retention-Fenster) über die Minuten-Einheit, statt auf
+  // ganze Stunden zu runden (Codex #951). Fehlt der Wert: Backend-Default (6 h).
+  const hasSegmentMaxAge = Object.prototype.hasOwnProperty.call(currentStats ?? {}, 'segment_max_age')
+  const segmentMaxAge = Number(currentStats?.segment_max_age)
+  if (Number.isFinite(segmentMaxAge) && segmentMaxAge > 0) {
+    configForm.segmentMaxAgeEnabled = true
+    const picked = pickSegmentAgeUnit(segmentMaxAge)
+    configForm.segmentMaxAgeValue = picked.value
+    configForm.segmentMaxAgeUnit = picked.unit
+    // Original-Sekundenwert + Anzeige-Paar merken, um ihn beim Speichern eines
+    // unangetasteten (ggf. migrierten Sub-300s-) Feldes verlustfrei durchzureichen.
+    hydratedSegmentAge.value = { seconds: segmentMaxAge, value: picked.value, unit: picked.unit }
+  } else if (!hasSegmentMaxAge) {
+    // Kompatibilität mit älteren /stats-Antworten: damals war der persistierte
+    // 6-h-Default nicht sichtbar. Ein ausdrücklich geliefertes null bleibt aus.
+    configForm.segmentMaxAgeEnabled = true
+    configForm.segmentMaxAgeValue = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
+    configForm.segmentMaxAgeUnit = 'hours'
+    hydratedSegmentAge.value = null
+  } else {
+    configForm.segmentMaxAgeEnabled = false
+    configForm.segmentMaxAgeValue = String(DEFAULT_SEGMENT_MAX_AGE_HOURS)
+    configForm.segmentMaxAgeUnit = 'hours'
+    hydratedSegmentAge.value = null
+  }
+  const segmentMaxBytes = Number(currentStats?.segment_max_bytes)
+  if (Number.isFinite(segmentMaxBytes) && segmentMaxBytes > 0) {
+    configForm.segmentMaxBytesEnabled = true
+    const picked = pickSizeUnit(segmentMaxBytes)
+    configForm.segmentMaxBytesValue = picked.value
+    configForm.segmentMaxBytesUnit = picked.unit
+  } else {
+    configForm.segmentMaxBytesEnabled = false
+    configForm.segmentMaxBytesValue = ''
+    configForm.segmentMaxBytesUnit = 'mb'
+  }
+  const segmentMaxRows = Number(currentStats?.segment_max_rows)
+  if (Number.isFinite(segmentMaxRows) && segmentMaxRows > 0) {
+    configForm.segmentMaxRowsEnabled = true
+    configForm.segmentMaxRowsValue = String(Math.round(segmentMaxRows))
+  } else {
+    configForm.segmentMaxRowsEnabled = false
+    configForm.segmentMaxRowsValue = ''
+  }
 }
 
 function buildPayload() {
@@ -275,16 +605,117 @@ function buildPayload() {
   if (configForm.retentionEnabled) {
     const retentionValue = parseNonNegativeInteger(configForm.retentionValue)
     if (retentionValue === null) throw new Error(t('ringbuffer.validationRetentionNaN'))
-    payload.max_age = retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
+    payload.max_age = retentionValue > 0
+      ? retentionValue * RETENTION_UNIT_SECONDS[configForm.retentionUnit]
+      : null
+  }
+
+  // Segmentierung ist automatisch aktiv (#938): dieses Modal zeigt ausschliesslich
+  // Segment-Rotations-Controls und steuert damit den segmentierten Store. Beim
+  // Speichern immer segmented=true senden – sonst behielte das Backend einen aus
+  // dem Legacy-/API-Pfad persistierten segmented=false und die angezeigten
+  // Rotations-Controls blieben wirkungslos (Codex #951).
+  payload.segmented = true
+
+  // Segment-Rotation (#938). Ein deaktivierter expliziter Trigger wird als null
+  // gesendet. Existiert die passende Gesamtgrenze, leitet das Backend daraus /3
+  // ab; sonst ist diese Dimension wirklich deaktiviert.
+  // Hat der Nutzer das Alter-Feld nicht angetastet, den ursprünglich
+  // hydratisierten Sekundenwert unverändert durchreichen – auch < 300 s (aus
+  // einer migrierten pre-Segmentierungs-Config). Das 300-s-Minimum greift nur,
+  // wenn der Nutzer AKTIV einen neuen (zu kleinen) Wert eingibt (Codex #951).
+  if (!configForm.segmentMaxAgeEnabled) {
+    payload.segment_max_age = null
+  } else {
+    const pristine = hydratedSegmentAge.value
+    const untouched =
+      pristine &&
+      String(configForm.segmentMaxAgeValue) === pristine.value &&
+      configForm.segmentMaxAgeUnit === pristine.unit
+    if (untouched) {
+      payload.segment_max_age = pristine.seconds
+    } else {
+      const segmentAgeValue = Number(String(configForm.segmentMaxAgeValue ?? '').trim())
+      if (!Number.isFinite(segmentAgeValue) || segmentAgeValue <= 0) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+      const segmentAgeSeconds = Math.round(segmentAgeValue * SEGMENT_AGE_UNIT_SECONDS[configForm.segmentMaxAgeUnit])
+      if (segmentAgeSeconds < SEGMENT_MAX_AGE_MIN_SECONDS) throw new Error(t('ringbuffer.validationSegmentMaxAge'))
+      payload.segment_max_age = segmentAgeSeconds
+    }
+  }
+
+  if (!configForm.segmentMaxBytesEnabled) {
+    payload.segment_max_bytes = null
+  } else {
+    const segmentBytes = parseNonNegativeInteger(configForm.segmentMaxBytesValue)
+    if (segmentBytes === null || segmentBytes <= 0) throw new Error(t('ringbuffer.validationSegmentMaxBytes'))
+    payload.segment_max_bytes = segmentBytes * SIZE_UNIT_FACTORS[configForm.segmentMaxBytesUnit]
+  }
+  if (!configForm.segmentMaxRowsEnabled) {
+    payload.segment_max_rows = null
+  } else {
+    const segmentRows = parseNonNegativeInteger(configForm.segmentMaxRowsValue)
+    if (segmentRows === null || segmentRows <= 0) throw new Error(t('ringbuffer.validationSegmentMaxRows'))
+    payload.segment_max_rows = segmentRows
+  }
+
+  const effectiveTriggers = [
+    payload.segment_max_age ?? (payload.max_age === null ? null : Math.floor(payload.max_age / 3)),
+    payload.segment_max_bytes ?? (payload.max_file_size_bytes === null ? null : Math.floor(payload.max_file_size_bytes / 3)),
+    payload.segment_max_rows ?? (payload.max_entries === null ? null : Math.floor(payload.max_entries / 3)),
+  ]
+  if (!effectiveTriggers.some((value) => Number.isFinite(value) && value > 0)) {
+    throw new Error(t('ringbuffer.validationSegmentTriggerRequired'))
   }
   return payload
 }
 
-async function loadStats() {
+/**
+ * Übersetzt eine Backend-Fehlerantwort in eine anzeigbare Meldung. Der
+ * 422-Payload der 3-Segment-Regel liefert ``detail`` als String; FastAPI-
+ * Validierungsfehler liefern ``detail`` als Liste ({loc, msg}). Beide Formen
+ * werden zu einer lesbaren Zeile verdichtet, statt Rohtext/[object Object].
+ */
+function extractConfigError(error) {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) {
+    // NUR den echten 3-Segment-Ratio-Fehler auf die lokalisierte Erklärung
+    // abbilden. Das Backend liefert dafür die eindeutige Formulierung
+    // „segmentation is too coarse ...“ (obs/ringbuffer/store/config.py,
+    // ``_check_ratio``). Frueher wurde jedes ``detail`` mit dem blossen Wort
+    // ``segment`` als Ratio-Fehler behandelt – dadurch bekamen explizite
+    // Grenzfehler (``segment_max_age ... must be between 300 s ...``)
+    // faelschlich die unrelated Ratio-Meldung (#938, Codex #951).
+    if (/segmentation is too coarse|zu grob/i.test(detail)) return t('ringbuffer.segmentRatioError')
+    // Explizite Grenz-Fehler der Segment-Felder (``must be between ...`` bzw.
+    // ``must be >= ...``) tragen die konkrete Einschraenkung bereits im
+    // Backend-``detail``; unveraendert durchreichen, damit der Admin die
+    // RICHTIGE Grenze sieht statt der Ratio-Meldung.
+    return detail
+  }
+  if (Array.isArray(detail) && detail.length) {
+    const msg = detail.map((entry) => entry?.msg).filter(Boolean).join('; ')
+    if (msg) return msg
+  }
+  return error?.message || t('ringbuffer.saveFailed')
+}
+
+function scheduleWarmupRefresh(data) {
+  if (warmupTimer) clearTimeout(warmupTimer)
+  warmupTimer = null
+  const seconds = Number(data?.prognosis?.ready_after_seconds)
+  if (!Number.isFinite(seconds) || seconds <= 0) return
+  warmupTimer = setTimeout(() => {
+    warmupTimer = null
+    void loadStats(false)
+  }, Math.ceil(seconds * 1000) + 50)
+}
+
+async function loadStats(hydrate = true) {
   try {
     const { data } = await ringbufferApi.stats()
     stats.value = data
-    hydrateForm(data)
+    if (hydrate) hydrateForm(data)
+    scheduleWarmupRefresh(data)
   } catch {
     // Silent on failure; the modal still renders with the configForm defaults.
   }
@@ -303,9 +734,19 @@ async function onSubmit() {
       showDisableConfirm.value = true
       return
     }
+    if (
+      payload.enabled &&
+      payload.max_entries === null &&
+      payload.max_file_size_bytes === null &&
+      payload.max_age === null
+    ) {
+      pendingUnboundedPayload.value = payload
+      showUnboundedConfirm.value = true
+      return
+    }
     await savePayload(payload)
   } catch (error) {
-    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || t('ringbuffer.saveFailed') }
+    configMsg.value = { ok: false, text: extractConfigError(error) }
   }
 }
 
@@ -323,7 +764,7 @@ async function savePayload(payload) {
       closeTimer = null
     }, 2000)
   } catch (error) {
-    configMsg.value = { ok: false, text: error?.response?.data?.detail || error?.message || t('ringbuffer.saveFailed') }
+    configMsg.value = { ok: false, text: extractConfigError(error) }
   } finally {
     saving.value = false
   }
@@ -336,13 +777,32 @@ async function confirmDisable() {
   await savePayload(payload)
 }
 
+async function confirmUnbounded() {
+  const payload = pendingUnboundedPayload.value
+  pendingUnboundedPayload.value = null
+  if (!payload) return
+  await savePayload(payload)
+}
+
 watch(open, (val) => {
   if (val) {
     configMsg.value = null
     void loadStats()
-  } else if (closeTimer) {
-    clearTimeout(closeTimer)
-    closeTimer = null
+  } else {
+    if (closeTimer) {
+      clearTimeout(closeTimer)
+      closeTimer = null
+    }
+    if (warmupTimer) {
+      clearTimeout(warmupTimer)
+      warmupTimer = null
+    }
+  }
+  if (!val) {
+    pendingDisablePayload.value = null
+    pendingUnboundedPayload.value = null
+    showDisableConfirm.value = false
+    showUnboundedConfirm.value = false
   }
 })
 
@@ -350,6 +810,10 @@ onUnmounted(() => {
   if (closeTimer) {
     clearTimeout(closeTimer)
     closeTimer = null
+  }
+  if (warmupTimer) {
+    clearTimeout(warmupTimer)
+    warmupTimer = null
   }
 })
 </script>

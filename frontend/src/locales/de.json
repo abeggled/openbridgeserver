@@ -98,6 +98,7 @@
     "hintDrag": "Ziehen → verschieben",
     "hintResize": "↘ Handle → Größe ändern",
     "hintDelete": "Entf → Widget löschen",
+    "hintMultiSelect": "Umschalt/Strg+Klick oder Ziehen auf freier Fläche → Mehrfachauswahl",
     "removeWidget": "Entfernen",
     "widgetName": "Name",
     "widgetNamePlaceholder": "z.B. Wohnzimmer Dimmer",
@@ -108,8 +109,14 @@
     "statusDatapoint": "Status-Objekt",
     "statusDatapointHint": "Optional: separates Rückmelde-Objekt. Falls leer, wird das Schreib-Objekt für die Anzeige verwendet.",
     "configuration": "Konfiguration",
+    "resizeConfigPanel": "Ziehen, um die Panel-Breite zu ändern",
     "hintEmpty": "Widget aus der Palette links einfügen",
     "hintNoSelection": "Widget auf dem Canvas anklicken\noder aus der Palette einfügen",
+    "multiSelect": {
+      "count": "{n} Widgets ausgewählt",
+      "removeAll": "Alle löschen",
+      "hint": "Die Konfiguration kann nicht für mehrere Widgets gleichzeitig bearbeitet werden. Wähle nur eines aus, um dessen Einstellungen zu bearbeiten."
+    },
     "widgetCountSingular": "Widget auf dieser Seite",
     "widgetCountPlural": "Widgets auf dieser Seite",
     "brokenDpRef": "Mindestens ein Datenpunkt-Verweis wurde nicht gefunden",
@@ -719,8 +726,18 @@
     "stufenschalter": {
       "title": "Stufenschalter",
       "stepsCount": "Stufen ({n}/{max})",
+      "optionsCount": "Optionen ({n}/{max})",
       "addStep": "+ Stufe",
+      "addOption": "+ Option",
+      "mode": "Bedienart",
+      "modeSequence": "Sequenz",
+      "modeSelectSave": "Auswahl mit Speichern",
+      "modeSelectDirect": "Auswahl direkt",
+      "save": "Speichern",
+      "writeError": "Schreiben fehlgeschlagen",
       "hint": "Beim Drücken wird durchgeschaltet. Der Wert wird je nach Objekt als bool / int / float / string gesendet.",
+      "hintSelectSave": "Auswahl wird erst mit Speichern gesendet. Der Wert wird je nach Objekt als bool / int / float / string gesendet.",
+      "hintSelectDirect": "Auswahl wird sofort gesendet. Der Wert wird je nach Objekt als bool / int / float / string gesendet.",
       "moveUp": "Nach oben",
       "moveDown": "Nach unten",
       "remove": "Entfernen",
@@ -895,7 +912,12 @@
       "widget": "Widget (Name)",
       "selectWidget": "— Widget wählen —",
       "noNamedWidgets": "— keine benannten Widgets —",
-      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben."
+      "noNamedWidgetsHint": "⚠ Auf dieser Seite hat kein Widget einen Namen. Namen im Editor vergeben.",
+      "reference": "Referenz",
+      "selectReference": "Referenz wählen …",
+      "noReference": "Keine Referenz",
+      "sourceUnavailable": "Quell-Seite nicht erreichbar",
+      "widgetNotFound": "Widget „{name}“ nicht gefunden"
     },
     "zeitschaltuhr": {
       "title": "Zeitschaltuhr",
@@ -977,6 +999,55 @@
     },
     "horizontalbar": {
       "title": "Balkenanzeige"
+    },
+    "messageArchive": {
+      "title": "Meldungsarchiv",
+      "archives": "Archive",
+      "loadArchivesError": "Archive konnten nicht geladen werden.",
+      "loadError": "Meldungen konnten nicht geladen werden.",
+      "limit": "Anzahl Einträge",
+      "severity": "Schweregrad",
+      "status": "Status",
+      "allArchives": "Alle Archive",
+      "allSeverities": "Alle Schweregrade",
+      "allStatuses": "Alle Status",
+      "allTypes": "Alle Typen",
+      "allSources": "Alle Quellen",
+      "clearFilter": "Filter zurücksetzen",
+      "selectedCount": "{count} ausgewählt",
+      "noSources": "Keine Quellen gefunden",
+      "type": "Typ",
+      "source": "Quelle",
+      "showArchive": "Archiv anzeigen",
+      "showSource": "Quelle anzeigen",
+      "allowRead": "Als gelesen markieren erlauben",
+      "allowAcknowledge": "Quittieren erlauben",
+      "refresh": "Aktualisieren",
+      "empty": "Keine Meldungen",
+      "unread": "neu",
+      "markRead": "Gelesen",
+      "acknowledge": "Quittieren",
+      "statuses": {
+        "new": "Neu",
+        "open": "Offen",
+        "acknowledged": "Quittiert",
+        "closed": "Geschlossen"
+      },
+      "types": {
+        "system": "System",
+        "security": "Sicherheit",
+        "notification": "Benachrichtigung",
+        "automation": "Automatisierung",
+        "adapter": "Adapter",
+        "diagnostic": "Diagnose"
+      },
+      "severities": {
+        "info": "Info",
+        "success": "Erfolg",
+        "warning": "Warnung",
+        "error": "Fehler",
+        "critical": "Kritisch"
+      }
     },
     "missing": {
       "title": "Unbekannt",

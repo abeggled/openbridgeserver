@@ -1,4 +1,5 @@
 import io
+import json
 import re
 import sys
 import textwrap
@@ -22,6 +23,13 @@ def _extract_checksum_injection_script(workflow: str) -> str:
     return textwrap.dedent(m.group(1))
 
 
+def _extract_asset_info_script(obs_update: str, target: str) -> str:
+    """Extract the asset-selection Python snippet embedded in `python3 -c "..."`."""
+    m = re.search(r'ASSET_INFO=\$\(echo "\$ALL_RELEASES" \| python3 -c "\n(.*?)\n"\)', obs_update, re.DOTALL)
+    assert m, "Could not find ASSET_INFO python block"
+    return m.group(1).replace("'${TARGET}'", repr(target))
+
+
 def test_updater_uses_release_bundle_filename_for_download_and_extract():
     obs_update = _obs_update_text()
 
@@ -34,14 +42,17 @@ def test_updater_uses_release_bundle_filename_for_download_and_extract():
 def test_updater_verifies_checksum_against_downloaded_filenames():
     obs_update = _obs_update_text()
 
-    # Primary path: SHA-256 embedded in release notes body
+    # Primary path: SHA-256 embedded in release notes body (stable/RC)
     assert "sha256:" in obs_update
     assert "sha256sum -c -" in obs_update
-    # Fallback path: legacy .sha512 release asset for releases predating this
-    # migration (enables rollback/downgrade to older versions)
+    # Secondary path: .sha256 sidecar asset (nightly builds)
+    assert "sha256url:" in obs_update
+    assert "sha256sum -c" in obs_update
+    # Fallback path: legacy .sha512 release asset for releases predating the
+    # SHA-256 migration (enables rollback/downgrade to older versions)
     assert "sha512url:" in obs_update
     assert "sha512sum -c" in obs_update
-    # Both paths are dispatched from the same CHECKSUM_LINE variable
+    # All paths are dispatched from the same CHECKSUM_LINE variable
     assert "CHECKSUM_LINE" in obs_update
 
 
@@ -58,7 +69,28 @@ def test_release_lxc_workflow_packages_obs_admin():
     assert "BUNDLE_HAS_OBS_ADMIN=false" in obs_update
     assert "grep -Eq '^(\\./)?obs-admin$'" in obs_update
     assert 'if [[ "$BUNDLE_HAS_OBS_ADMIN" == "true" ]]; then' in obs_update
-    assert 'cp "$INSTALL_DIR/obs-admin" /usr/local/bin/obs-admin' in obs_update
+    # Self-update writes to a temp file and renames atomically (no in-place
+    # overwrite of a binary that may still be executing) — see issue #942 P1.
+    assert "TMP_ADMIN=$(mktemp /usr/local/bin/obs-admin.XXXXXX)" in obs_update
+    assert 'install -m 755 "$INSTALL_DIR/obs-admin" "$TMP_ADMIN"' in obs_update
+    assert 'mv -f "$TMP_ADMIN" /usr/local/bin/obs-admin' in obs_update
+
+
+def test_updater_supports_nightly_flag():
+    obs_update = _obs_update_text()
+
+    # Default-off
+    assert "SHOW_NIGHTLIES=false" in obs_update
+    # Both long and short flag are accepted
+    assert "--nightly|-n) SHOW_NIGHTLIES=true" in obs_update
+    # Nightly tags use the date-based naming pattern
+    assert "nightly-" in obs_update
+    assert r"nightly-(\d{4})(\d{2})(\d{2})" in obs_update
+    # Menu labels carry no type suffix — the tag name itself (stable "X.Y.Z",
+    # RC "X.Y.Z-RCn", nightly "nightly-YYYYMMDD") already makes the type
+    # obvious; only the installed version gets a "(current)" marker.
+    assert 'MARKER="  (current)"' in obs_update
+    assert 'LABELS+=("$TAG${MARKER}")' in obs_update
 
 
 def test_updater_fails_closed_when_sha256_missing():
@@ -69,6 +101,33 @@ def test_updater_fails_closed_when_sha256_missing():
     # The fail-closed error and exit must be present
     assert "Integrity check is required" in obs_update
     assert "exit 1" in obs_update
+
+
+def test_asset_info_script_does_not_crash_when_bundle_asset_missing():
+    """A release with no app-bundle asset (e.g. still uploading) must degrade to
+    empty output, not crash with an unhandled TypeError on bundle['name']."""
+    obs_update = _obs_update_text()
+    script = _extract_asset_info_script(obs_update, "1.2.3")
+
+    releases = [
+        {
+            "tag_name": "1.2.3",
+            "assets": [{"name": "openbridgeserver-lxc_1.2.3_amd64.tar.zst", "browser_download_url": "https://example/x"}],
+            "body": "Release notes without an embedded sha256 block",
+        }
+    ]
+
+    old_stdin, old_stdout = sys.stdin, sys.stdout
+    sys.stdin = io.StringIO(json.dumps(releases))
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        exec(script, {})  # noqa: S102
+    finally:
+        sys.stdin, sys.stdout = old_stdin, old_stdout
+
+    lines = buf.getvalue().splitlines()
+    assert lines == ["", ""], "missing bundle asset must yield empty BUNDLE_URL/CHECKSUM_LINE, not a crash"
 
 
 def test_checksum_injection_is_idempotent(tmp_path):
@@ -107,6 +166,8 @@ def test_checksum_injection_is_idempotent(tmp_path):
 
     first_run = run_script(f"# Release\n\n{marker}\n")
     assert first_run.count("### Checksums") == 1
+    assert first_run.count("**App Bundle**") == 1
+    assert re.search(r"App Bundle.*?```\s*" + fake_hash, first_run, re.DOTALL)
     assert first_run.count(fake_hash) == 1
 
     second_run = run_script(first_run)

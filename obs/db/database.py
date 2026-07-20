@@ -6,7 +6,9 @@ Includes a simple version-based migration system.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sqlite3
 from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
@@ -15,6 +17,12 @@ from typing import Any
 import aiosqlite
 
 logger = logging.getLogger(__name__)
+
+# Busy timeout for the dedicated checkpoint connection. Zero → non-waiting: if a reader
+# (DB export/backup) or writer holds the DB, the checkpoint gives up immediately and is
+# retried on the next maintenance tick rather than stalling application write traffic
+# behind maintenance. See issue #908.
+_CHECKPOINT_BUSY_TIMEOUT_SECONDS = 0.0
 
 # ---------------------------------------------------------------------------
 # Migration SQL
@@ -642,6 +650,39 @@ CREATE INDEX IF NOT EXISTS idx_authz_node_roles_role
     ON authz_node_roles(role);
 """
 
+# Index-Audit #919/#935: Nur ein Index mit belegtem, heißem Query-Pfad wird
+# angelegt. Die Registry lädt bei jedem Adapter-Start/-Reload die Bindings via
+#   SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND enabled=1
+# (obs/adapters/registry.py:102/214/263, obs/api/v1/adapters.py:972). Bisher
+# existiert kein Index auf adapter_instance_id -> EXPLAIN QUERY PLAN zeigt einen
+# vollen 'SCAN adapter_bindings'. Der zusammengesetzte Index bringt den Plan auf
+# 'SEARCH ... USING INDEX (adapter_instance_id=? AND enabled=?)'. Schreibkosten
+# sind vertretbar: adapter_bindings wird nur bei Konfigänderungen geschrieben,
+# nicht im Datenpfad. Alle weiteren im Issue vorgeschlagenen OBS.db-Indexe wurden
+# per EXPLAIN als Duplikate oder ohne genutzten Query-Pfad verworfen (Details im
+# Audit-Skript tools/index-audit-919.py).
+_MIGRATION_V40 = """
+CREATE INDEX IF NOT EXISTS idx_bind_instance_enabled
+    ON adapter_bindings(adapter_instance_id, enabled);
+"""
+
+
+_MIGRATION_V38 = """
+CREATE TABLE IF NOT EXISTS hierarchy_device_links (
+    id         TEXT PRIMARY KEY,
+    node_id    TEXT NOT NULL REFERENCES hierarchy_nodes(id) ON DELETE CASCADE,
+    device_id  TEXT NOT NULL REFERENCES knx_devices(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    UNIQUE(node_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_device_links_node
+    ON hierarchy_device_links(node_id);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_device_links_device
+    ON hierarchy_device_links(device_id);
+"""
+
+_MIGRATION_V39 = _MIGRATION_V38
+
 
 # List of (version, sql_or_callable) tuples — append new migrations here
 MIGRATIONS: list[tuple[int, str | Callable]] = [
@@ -684,6 +725,9 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (35, _MIGRATION_V35),
     (36, _migration_v36),
     (37, _MIGRATION_V37),
+    (38, _MIGRATION_V38),
+    (39, _MIGRATION_V39),
+    (40, _MIGRATION_V40),
 ]
 
 
@@ -698,6 +742,11 @@ class Database:
     def __init__(self, path: str) -> None:
         self._path = path
         self._conn: aiosqlite.Connection | None = None
+        # Serializes WAL checkpoints and pairs them with disconnect: a restore
+        # (POST /config/import/db) disconnects the DB and rewrites the file, and
+        # cancelling asyncio.to_thread does not stop the worker thread — so disconnect
+        # must wait for any in-flight checkpoint to finish before returning. See #908.
+        self._checkpoint_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -713,16 +762,111 @@ class Database:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.execute("PRAGMA synchronous=NORMAL")
+        # Bound the -wal sidecar: auto-checkpoint roughly every 1000 pages and, on each
+        # checkpoint, truncate the WAL file back down to 64 MiB instead of leaving it at
+        # its high-water mark. Combined with the periodic TRUNCATE checkpoint driven by
+        # obs/db/maintenance.py this prevents the unbounded WAL growth that could fill the
+        # disk under continuous history writes. See issue #908.
+        await self._conn.execute("PRAGMA wal_autocheckpoint=1000")
+        await self._conn.execute("PRAGMA journal_size_limit=67108864")
         await self._conn.commit()
+
+        # Reclaim any oversized WAL left by a previous run *before* migrations or other
+        # startup writes: on a restart recovering from the full-disk condition behind
+        # issue #908, this frees space so the following writes don't hit ENOSPC. Best
+        # effort — a failure here must not block startup.
+        try:
+            await self.checkpoint()
+        except Exception:
+            logger.exception("Initial WAL checkpoint on connect failed")
 
         await self._run_migrations()
         logger.info("Database connected: %s", self._path)
 
     async def disconnect(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
-            logger.info("Database disconnected")
+        # Hold the checkpoint lock across the whole teardown: this waits for any
+        # in-flight maintenance checkpoint to finish (its worker thread cannot be
+        # cancelled) before closing, so a restore that rewrites the file right after
+        # disconnect never races a checkpoint still holding locks on it. See #908.
+        async with self._checkpoint_lock:
+            if self._conn is not None:
+                # Leave the -wal sidecar bounded on graceful shutdown.
+                try:
+                    await self._run_checkpoint()
+                except Exception:
+                    logger.exception("WAL checkpoint on disconnect failed")
+                await self._conn.close()
+                self._conn = None
+                logger.info("Database disconnected")
+
+    async def checkpoint(self) -> bool:
+        """Force a TRUNCATE WAL checkpoint to keep the ``-wal`` sidecar bounded.
+
+        The default PASSIVE auto-checkpoint writes WAL pages back into the DB but never
+        shrinks the WAL file on disk, so under continuous history writes it can grow
+        without bound. A TRUNCATE checkpoint resets the file once no read snapshot is
+        pinning it.
+
+        The checkpoint runs on a short-lived private ``sqlite3`` connection off the
+        event loop (via a worker thread) rather than the shared ``aiosqlite``
+        connection. That way it never commits another coroutine's in-flight
+        transaction/savepoint and never blocks the shared connection's operation queue
+        behind SQLite's busy timeout. Runs are serialized with ``disconnect()`` via
+        ``_checkpoint_lock`` so a restore that disconnects and rewrites the file never
+        races an in-flight checkpoint (the worker thread cannot be cancelled). Returns
+        ``True`` only when the WAL was actually checkpointed, ``False`` for in-memory
+        databases, a disconnected ``Database``, or a busy/locked result. See issue #908.
+        """
+        from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path
+
+        if self._conn is None or _is_sqlite_memory_path(self._path):
+            return False
+        async with self._checkpoint_lock:
+            # Re-check under the lock: disconnect may have closed the DB while we waited.
+            if self._conn is None:
+                return False
+            return await self._run_checkpoint()
+
+    async def _run_checkpoint(self) -> bool:
+        """Execute the TRUNCATE checkpoint. Caller must hold ``_checkpoint_lock``.
+
+        Skips in-memory databases (including named ``file:…?mode=memory`` URIs, which
+        would otherwise be normalized to a real on-disk filename). The checkpoint runs in
+        a worker thread that cannot be cancelled; if this coroutine is cancelled
+        (shutdown), we still wait for that worker to finish before propagating the
+        cancellation, so the caller keeps ``_checkpoint_lock`` until the thread has
+        released its SQLite locks and a following disconnect/restore can't race it. See
+        issue #908.
+        """
+        from obs.ringbuffer.ringbuffer import _is_sqlite_memory_path, _sqlite_filesystem_path
+
+        if _is_sqlite_memory_path(self._path):
+            return False
+        fs_path = _sqlite_filesystem_path(self._path)
+
+        def _run() -> bool:
+            conn = sqlite3.connect(fs_path, timeout=_CHECKPOINT_BUSY_TIMEOUT_SECONDS)
+            try:
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            except sqlite3.OperationalError as exc:
+                # Non-waiting busy timeout surfaces contention as "database is locked";
+                # treat it as a skipped checkpoint rather than an error to retry later.
+                if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                    return False
+                raise
+            finally:
+                conn.close()
+            # row = (busy, log_pages, checkpointed_pages); busy != 0 → WAL not reset.
+            return bool(row is not None and row[0] == 0)
+
+        fut = asyncio.get_running_loop().run_in_executor(None, _run)
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            # The worker thread can't be cancelled — wait for it to finish (releasing its
+            # SQLite locks) before we unwind and release _checkpoint_lock.
+            await asyncio.wait({fut})
+            raise
 
     # ------------------------------------------------------------------
     # Migrations

@@ -12,6 +12,21 @@
            single baseline; status badge matches the button height. -->
       <div class="flex items-center gap-2">
         <button v-if="auth.isAdmin" @click="showConfig = true" class="btn-secondary btn-sm" data-testid="btn-open-monitor-config">{{ $t('ringbuffer.configure') }}</button>
+        <button
+          v-if="storeStats"
+          @click="showSegments = true"
+          class="btn-secondary btn-sm relative"
+          data-testid="btn-open-segments"
+          :title="$t('ringbuffer.segmentSectionTitle')"
+        >
+          {{ $t('ringbuffer.segmentsButton') }}
+          <span
+            v-if="segmentProblems"
+            class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-surface-900"
+            data-testid="btn-segments-badge"
+            :title="$t('ringbuffer.segmentProblemsBadgeTitle')"
+          />
+        </button>
         <button @click="applyFilters" class="btn-secondary btn-sm" data-testid="btn-refresh-ringbuffer">{{ $t('ringbuffer.refresh') }}</button>
         <button
           v-if="!paused"
@@ -41,6 +56,10 @@
         <TopbarStats ref="topbarStatsRef" @stats="onMonitorStats" />
       </div>
     </div>
+
+    <!-- Migrations-Assistent (#966): dezenter Hinweis-Balken, solange die
+         Entscheidung zum Legacy-Altbestand aussteht (admin-only, self-gated). -->
+    <LegacyMigrationBanner class="shrink-0" @open="showMigrationWizard = true" />
 
     <!-- Sticky filter topbar (#435) — drag/toggle/remove set chips, TimeFilterPopover (#432) in the left slot. -->
     <div class="sticky top-0 z-20 -mx-5 px-5 py-2 bg-surface-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700/60">
@@ -97,6 +116,25 @@
       {{ recoveryNotice }}
     </div>
 
+    <div
+      v-if="migrationStatsRefreshFailed"
+      class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300"
+      data-testid="ringbuffer-migration-stats-refresh-failed"
+      role="status"
+    >
+      {{ $t('ringbuffer.migration.statsRefreshFailed') }}
+    </div>
+
+    <!-- Segment-Status/Stats (#938) — nicht mehr inline, sondern in einem Modal
+         hinter dem Toolbar-Button. Nur im segmentierten Modus (stats.store != null). -->
+    <Modal v-model="showSegments" :title="$t('ringbuffer.segmentSectionTitle')" max-width="2xl">
+      <SegmentStatsPanel v-if="storeStats" :store="storeStats" @open-migration="onOpenMigrationFromSegments" />
+    </Modal>
+
+    <!-- Migrations-Assistent-Modal (#966); „Budget prüfen" öffnet das
+         bestehende MonitorConfigModal. -->
+    <LegacyMigrationWizard v-model="showMigrationWizard" @open-config="openConfigFromWizard" />
+
     <!-- Soft-modal CSV/TSV export dialog (#427) -->
     <ExportDialog
       v-model="showExportDialog"
@@ -151,7 +189,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
@@ -159,6 +197,8 @@ import { useSetColors } from '@/composables/useSetColors'
 import { useLiveQueue } from '@/composables/useLiveQueue'
 import { timeFilterToPayload, entryInTimeWindow } from '@/composables/useTimeFilterPayload'
 import { matchedSetIds } from '@/composables/useClientSideMatch'
+import { isSegmentProblem } from '@/composables/useSegmentProblems'
+import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge from '@/components/ui/Badge.vue'
@@ -169,6 +209,10 @@ import TopbarStats from '@/views/ringbuffer/TopbarStats.vue'
 import FilterEditor from '@/views/ringbuffer/FilterEditor.vue'
 import ExportDialog from '@/views/ringbuffer/ExportDialog.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'
+import SegmentStatsPanel from '@/views/ringbuffer/SegmentStatsPanel.vue'
+import LegacyMigrationBanner from '@/components/ringbuffer/LegacyMigrationBanner.vue'
+import LegacyMigrationWizard from '@/views/ringbuffer/LegacyMigrationWizard.vue'
+import Modal from '@/components/ui/Modal.vue'
 
 const DEFAULT_QUERY_LIMIT = 500
 
@@ -176,6 +220,7 @@ const { t } = useI18n()
 const { fmtDateTime } = useTz()
 const auth = useAuthStore()
 const wsStore = useWebSocketStore()
+const { completionRevision } = useLegacyMigration()
 const { getRowStyle, setSets, sets: topbarSetsRef } = useSetColors()
 
 function rowMatchTitle(matchedIds) {
@@ -199,14 +244,45 @@ const entries = ref([])
 const loading = ref(false)
 const listError = ref('')
 const showConfig = ref(false)
+// Konfigurator aus dem Migrations-Assistenten heraus: der Wizard schließt sich,
+// damit das Konfig-Modal nicht hinter ihm liegt, und öffnet sich nach dem
+// Schließen der Konfig wieder (lädt den Status dann frisch, inkl. neuem Budget).
+const configOpenedFromWizard = ref(false)
+function openConfigFromWizard() {
+  configOpenedFromWizard.value = true
+  showMigrationWizard.value = false
+  showConfig.value = true
+}
+watch(showConfig, (open) => {
+  if (!open && configOpenedFromWizard.value) {
+    configOpenedFromWizard.value = false
+    showMigrationWizard.value = true
+  }
+})
+const showSegments = ref(false)
+const showMigrationWizard = ref(false)
 const showFilterEditor = ref(false)
 const showExportDialog = ref(false)
 const editorTargetId = ref(null)
 const topbarChipsRef = ref(null)
 const recoveryNotice = ref('')
 const monitorDisabled = ref(false)
+// Segmentierter Store (#938) — {common, backend_extra} oder null (Legacy).
+const storeStats = ref(null)
+const migrationStatsRefreshFailed = ref(false)
 let recoveryNoticeRefreshPromise = null
 let lastRecoveryNoticeRefreshAt = 0
+
+// Warn-Badge am Segmente-Button (#938/#951): true, sobald irgendein Segment
+// problematisch ist. Nutzt den GETEILTEN Helper aus useSegmentProblems (eine
+// Quelle der Wahrheit), damit der Badge dieselben Zustände wie Dialog/Dashboard
+// erkennt – inkl. status='checkpoint_pending'/'quarantined' via status. Im
+// Normalfall (alle gesund) false → kein Badge.
+const segmentProblems = computed(() => {
+  const segs = storeStats.value?.backend_extra?.segments
+  if (!Array.isArray(segs)) return false
+  return segs.some((s) => isSegmentProblem(s))
+})
 
 function onEditSet(id) {
   editorTargetId.value = id
@@ -216,6 +292,13 @@ function onEditSet(id) {
 function onNewSet() {
   editorTargetId.value = null
   showFilterEditor.value = true
+}
+
+// Einstieg aus dem Segment-Status-Modal (#966): Segment-Modal schließen,
+// Assistent öffnen.
+function onOpenMigrationFromSegments() {
+  showSegments.value = false
+  showMigrationWizard.value = true
 }
 
 function openExportDialog() {
@@ -261,11 +344,29 @@ async function onMonitorConfigSaved() {
 }
 
 function onMonitorStats(stats) {
+  migrationStatsRefreshFailed.value = false
   monitorDisabled.value = stats?.enabled === false
+  // Segment-Panel-Quelle (#938): der segmentierte Store liefert ``store`` als
+  // ``{common, backend_extra}``; im Legacy-Modus ist es null → dann rendert die
+  // Sektion nicht. TopbarStats pollt /stats ohnehin, wir spiegeln nur das Feld.
+  storeStats.value = stats?.store ?? null
   if (!monitorDisabled.value) return
   clearLiveQueue()
   entries.value = []
 }
+
+// Der Migrations-Assistent pollt einen eigenen Endpoint. Sobald ein laufender
+// Job terminal wird, die Segmentquelle sofort invalidieren; andernfalls kann
+// das Modal bis zum nächsten 10-s-/WS-Refresh noch die Legacy-Zeile zeigen.
+watch(completionRevision, async () => {
+  const refreshed = await topbarStatsRef.value?.reload?.()
+  if (refreshed) {
+    onMonitorStats(refreshed)
+    return
+  }
+  storeStats.value = null
+  migrationStatsRefreshFailed.value = true
+})
 
 // TimeFilterPopover state (#432). See useTimeFilterPayload for the shape.
 const timeFilter = ref(null)

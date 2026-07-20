@@ -50,8 +50,18 @@ async def test_init_persisted_ringbuffer_subscribes_when_enabled(monkeypatch):
     ringbuffer = RingBufferStub()
 
     monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
+    )
+    monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
-        lambda _db: _async_value(
+        lambda _db, **_kwargs: _async_value(
             {
                 "enabled": True,
                 "max_entries": 42,
@@ -83,8 +93,18 @@ async def test_init_persisted_ringbuffer_disables_without_initializing(monkeypat
     events: list[tuple[str, object]] = []
 
     monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
+    )
+    monkeypatch.setattr(
         "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
-        lambda _db: _async_value(
+        lambda _db, **_kwargs: _async_value(
             {
                 "enabled": False,
                 "max_entries": 42,
@@ -100,6 +120,112 @@ async def test_init_persisted_ringbuffer_disables_without_initializing(monkeypat
     await _init_persisted_ringbuffer(object(), SimpleNamespace(subscribe=lambda *_args: None), "/tmp/obs.sqlite", object)
 
     assert events == [("reset", None), ("enabled", False)]
+
+
+async def test_init_persisted_ringbuffer_memory_path_forces_unsegmented(monkeypatch):
+    # Ist der abgeleitete RingBuffer-Disk-Pfad ein Memory-Pfad (``:memory:``),
+    # darf der segmentierte Store (#919) NICHT starten – sonst würde ein reales
+    # ``:memory:_segments``-Verzeichnis mit Manifest-/Segment-Dateien auf die Platte
+    # geschrieben, während das Memory-Cleanup ein No-op ist (Codex #951).
+    events: list[tuple[str, object]] = []
+
+    class BusStub:
+        def subscribe(self, event_type, handler):
+            events.append(("subscribe", (event_type, handler)))
+
+    class RingBufferStub:
+        handle_value_event = object()
+
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
+    )
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
+        lambda _db, **_kwargs: _async_value(
+            {
+                "enabled": True,
+                "max_entries": 42,
+                "max_file_size_bytes": 1024,
+                "max_age": 3600,
+                # Neue Default-Config setzt segmented=true.
+                "segmented": True,
+                "segment_max_bytes": 4 * 1024 * 1024,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "obs.ringbuffer.ringbuffer.default_ringbuffer_disk_path",
+        lambda _path: ":memory:",
+    )
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.set_ringbuffer_enabled", lambda enabled: events.append(("enabled", enabled)))
+
+    async def _init_ringbuffer(**kwargs):
+        events.append(("segmented", kwargs["segmented"]))
+        return RingBufferStub()
+
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.init_ringbuffer", _init_ringbuffer)
+
+    await _init_persisted_ringbuffer(object(), BusStub(), ":memory:", object)
+
+    assert ("segmented", False) in events
+
+
+async def test_init_persisted_ringbuffer_file_path_stays_segmented(monkeypatch):
+    # Gegenprobe: ein realer File-Pfad reicht segmented=true unverändert durch.
+    events: list[tuple[str, object]] = []
+
+    class BusStub:
+        def subscribe(self, event_type, handler):
+            events.append(("subscribe", (event_type, handler)))
+
+    class RingBufferStub:
+        handle_value_event = object()
+
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.ensure_legacy_migration_decision",
+        lambda _db, **_kwargs: _async_value(None),
+    )
+    # #968: main.py finalisiert nach init_ringbuffer state-basiert die Migrations-Entscheidung.
+    # Diese Tests prüfen subscribe/segmented, nicht die Decision – Finalisierung neutralisieren.
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.finalize_committed_migration_decision",
+        lambda _db, _rb: _async_value(False),
+    )
+    monkeypatch.setattr(
+        "obs.ringbuffer.persisted_config.load_persisted_ringbuffer_config",
+        lambda _db, **_kwargs: _async_value(
+            {
+                "enabled": True,
+                "max_entries": 42,
+                "max_file_size_bytes": 1024,
+                "max_age": 3600,
+                "segmented": True,
+                "segment_max_bytes": 4 * 1024 * 1024,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "obs.ringbuffer.ringbuffer.default_ringbuffer_disk_path",
+        lambda path: f"{path}.ringbuffer",
+    )
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.set_ringbuffer_enabled", lambda enabled: events.append(("enabled", enabled)))
+
+    async def _init_ringbuffer(**kwargs):
+        events.append(("segmented", kwargs["segmented"]))
+        return RingBufferStub()
+
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.init_ringbuffer", _init_ringbuffer)
+
+    await _init_persisted_ringbuffer(object(), BusStub(), "/tmp/obs.sqlite", object)
+
+    assert ("segmented", True) in events
 
 
 async def test_stop_optional_ringbuffer_stops_active_ringbuffer(monkeypatch):

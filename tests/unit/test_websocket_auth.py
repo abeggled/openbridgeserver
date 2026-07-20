@@ -72,6 +72,23 @@ class _LogAccessDbStub:
         return self.row
 
 
+class _ApiKeyOwnerDbStub:
+    def __init__(self) -> None:
+        self.updated = False
+
+    async def fetchone(self, query: str, _params: tuple):
+        if "SELECT name FROM api_keys" in query:
+            return {"name": "automation-client"}
+        if "SELECT id, owner FROM api_keys" in query:
+            return {"id": "key-1", "owner": "alice"}
+        if "FROM visu_nodes" in query:
+            return {"type": "PAGE"}
+        return None
+
+    async def execute_and_commit(self, _query: str, _params: tuple) -> None:
+        self.updated = True
+
+
 @pytest.mark.asyncio
 async def test_authenticate_ws_rejects_missing_credentials():
     ws = _FakeWebSocket()
@@ -185,6 +202,124 @@ async def test_websocket_endpoint_subscribe_sends_initial_registry_value(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_websocket_endpoint_applies_page_archive_predicates_for_authenticated_socket(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    class _ManagerStub:
+        def __init__(self) -> None:
+            self.allowed_dp_ids = None
+            self.allowed_message_archive_access = None
+
+        async def connect(self, ws, *, allowed_dp_ids=None, allowed_message_archive_access=None, **_kwargs):
+            self.allowed_dp_ids = allowed_dp_ids
+            self.allowed_message_archive_access = allowed_message_archive_access
+            await ws.accept()
+            return "conn-1"
+
+        async def disconnect(self, _conn_id: str) -> None:
+            return None
+
+    expected_access = [ws_api.MessageArchivePredicate(archive_ids={"system"})]
+    predicate_calls: list[tuple[object, str]] = []
+
+    async def _page_predicates(db, page_id: str, **_kwargs):
+        predicate_calls.append((db, page_id))
+        return expected_access
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    db = _DbStub(has_key=False, page_type="PAGE")
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_public_access)
+    monkeypatch.setattr(ws_api, "_page_allowed_message_archive_predicates", _page_predicates)
+    manager = _ManagerStub()
+    monkeypatch.setattr(ws_api, "get_ws_manager", lambda: manager)
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        query_params={"page_id": "page-public"},
+    )
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.accepted is True
+    assert predicate_calls == [(db, "page-public")]
+    assert manager.allowed_dp_ids is None
+    assert manager.allowed_message_archive_access is expected_access
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_rejects_authenticated_archive_scope_without_page_access(monkeypatch):
+    def _decode_token(token: str, expected_type: str = "access") -> str:
+        if token == "valid.jwt.token" and expected_type == "access":
+            return "alice"
+        raise HTTPException(401, "invalid")
+
+    class _ManagerStub:
+        async def connect(self, ws, **_kwargs):
+            await ws.accept()
+            return "conn-1"
+
+        async def disconnect(self, _conn_id: str) -> None:
+            return None
+
+    async def _deny_user_access(_db, _node_id: str, _username: str) -> bool:
+        return False
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+    db = _DbStub(has_key=False, page_type="PAGE")
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_user_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _deny_user_access)
+    monkeypatch.setattr(ws_api, "get_ws_manager", lambda: _ManagerStub())
+
+    ws = _FakeWebSocket(
+        headers={"authorization": "Bearer valid.jwt.token"},
+        query_params={"page_id": "page-user"},
+    )
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.accepted is False
+    assert ws.close_calls == [(4001, "Zugriff verweigert")]
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_uses_api_key_owner_for_user_page_scope(monkeypatch):
+    class _ManagerStub:
+        async def connect(self, ws, **_kwargs):
+            await ws.accept()
+            return "conn-1"
+
+        async def disconnect(self, _conn_id: str) -> None:
+            return None
+
+    access_checks: list[tuple[str, str]] = []
+
+    async def _allow_owner_access(_db, node_id: str, username: str) -> bool:
+        access_checks.append((node_id, username))
+        return username == "alice"
+
+    async def _page_predicates(_db, _page_id: str, **_kwargs):
+        return [ws_api.MessageArchivePredicate(archive_ids={"system"})]
+
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    db = _ApiKeyOwnerDbStub()
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+    monkeypatch.setattr("obs.api.v1.visu._resolve_access_with_node", _resolve_user_access)
+    monkeypatch.setattr("obs.api.v1.visu._check_user_access", _allow_owner_access)
+    monkeypatch.setattr(ws_api, "_page_allowed_message_archive_predicates", _page_predicates)
+    monkeypatch.setattr(ws_api, "get_ws_manager", lambda: _ManagerStub())
+
+    ws = _FakeWebSocket(headers={"x-api-key": "obs_valid"}, query_params={"page_id": "page-user"})
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.accepted is True
+    assert ws.close_calls == []
+    assert ("page-user", "alice") in access_checks
+
+
+@pytest.mark.asyncio
 async def test_ws_log_access_allows_authenticated_user_without_admin_lookup(monkeypatch):
     def fail_get_db():
         raise AssertionError("JWT log access should match REST read access without admin lookup")
@@ -211,6 +346,28 @@ async def test_ws_log_access_rejects_revoked_api_key(monkeypatch):
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
     assert await ws_api._ws_has_log_access("__api_key__", "obs_revoked") is False  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_ws_log_access_revalidates_resolved_api_key_owner(monkeypatch):
+    monkeypatch.setattr(auth_api, "hash_api_key", lambda key: f"hash:{key}")
+    db = _LogAccessDbStub(None)
+    monkeypatch.setattr(ws_api, "get_db", lambda: db)
+
+    assert await ws_api._ws_has_log_access("alice", "obs_revoked") is False  # noqa: SLF001
+    assert db.queries
+
+
+@pytest.mark.asyncio
+async def test_ws_log_access_ignores_stray_api_key_for_jwt_identity(monkeypatch):
+    def fail_get_db():
+        raise AssertionError("A JWT-derived identity must not be revalidated against an unrelated api_key header")
+
+    monkeypatch.setattr(ws_api, "get_db", fail_get_db)
+
+    assert (
+        await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True  # noqa: SLF001
+    )
 
 
 @pytest.mark.asyncio
@@ -268,3 +425,7 @@ async def _resolve_public_access(_db, _node_id: str) -> tuple[str, str | None]:
 
 async def _resolve_protected_access(_db, _node_id: str) -> tuple[str, str | None]:
     return "protected", "node-protected"
+
+
+async def _resolve_user_access(_db, _node_id: str) -> tuple[str, str | None]:
+    return "user", "node-user"

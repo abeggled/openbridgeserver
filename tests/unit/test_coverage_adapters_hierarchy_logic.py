@@ -103,6 +103,45 @@ class TestInstanceOut:
         assert result.severity == "ok"
         assert result.bindings == 0
 
+    def test_instance_out_redacts_message_provider_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.redaction import REDACTED
+
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        row = _inst_row(
+            adapter_type="MESSAGE",
+            config={
+                "providers": {
+                    "pushover": {
+                        "enabled": True,
+                        "api_token": "pushover-token",
+                        "targets": {"ops": {"user_key": "pushover-user"}},
+                    },
+                    "telegram": {
+                        "enabled": True,
+                        "bot_token": "telegram-token",
+                        "targets": {"ops": {"chat_id": "telegram-chat"}},
+                    },
+                    "seven.io": {
+                        "enabled": True,
+                        "api_key": "sevenio-key",
+                        "sender": "OpenBridge",
+                        "targets": {"ops": {"to": "+49123456789"}},
+                    },
+                }
+            },
+        )
+
+        result = adp_api._instance_out(row, None)
+
+        assert result.config["providers"]["pushover"]["api_token"] == REDACTED
+        assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
+        assert result.config["providers"]["telegram"]["bot_token"] == REDACTED
+        assert result.config["providers"]["telegram"]["targets"]["ops"]["chat_id"] == REDACTED
+        assert result.config["providers"]["seven.io"]["api_key"] == REDACTED
+        assert result.config["providers"]["seven.io"]["targets"]["ops"]["to"] == REDACTED
+        assert result.config["providers"]["seven.io"]["sender"] == "OpenBridge"
+
     def test_instance_out_with_instance(self, monkeypatch):
         from obs.api.v1 import adapters as adp_api
 
@@ -220,6 +259,35 @@ class TestCreateInstance:
         with pytest.raises(HTTPException) as exc_info:
             await adp_api.create_instance(body=body, db=_DbStub(), _user="admin")
         assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_create_message_instance_rejects_redacted_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceCreate
+        from obs.api.v1.redaction import REDACTED
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema.return_value = MagicMock()
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        body = AdapterInstanceCreate(
+            adapter_type="MESSAGE",
+            name="copy",
+            config={
+                "providers": {
+                    "pushover": {
+                        "enabled": True,
+                        "api_token": REDACTED,
+                        "targets": {"ops": {"user_key": REDACTED}},
+                    },
+                }
+            },
+        )
+        db = _DbStub()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.create_instance(body=body, db=db, _user="admin")
+        assert exc_info.value.status_code == 422
+        assert db.committed == []
 
     @pytest.mark.asyncio
     async def test_create_instance_success_disabled(self, monkeypatch):
@@ -395,6 +463,349 @@ class TestUpdateInstance:
                 _user="admin",
             )
         assert len(stop_called) == 1
+
+    @pytest.mark.asyncio
+    async def test_update_message_instance_preserves_redacted_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {"ops": {"user_key": "pushover-user"}},
+                },
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": "telegram-token",
+                    "targets": {"ops": {"chat_id": "telegram-chat"}},
+                },
+                "seven.io": {
+                    "enabled": True,
+                    "api_key": "sevenio-key",
+                    "targets": {"ops": {"to": "+49123456789"}},
+                },
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {"ops": {"user_key": REDACTED}},
+                },
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": REDACTED,
+                    "targets": {"ops": {"chat_id": REDACTED}},
+                },
+                "seven.io": {
+                    "enabled": True,
+                    "api_key": REDACTED,
+                    "targets": {"ops": {"to": REDACTED}},
+                },
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
+        assert saved_config["providers"]["pushover"]["targets"]["ops"]["user_key"] == "pushover-user"
+        assert saved_config["providers"]["telegram"]["bot_token"] == "telegram-token"
+        assert saved_config["providers"]["telegram"]["targets"]["ops"]["chat_id"] == "telegram-chat"
+        assert saved_config["providers"]["seven.io"]["api_key"] == "sevenio-key"
+        assert saved_config["providers"]["seven.io"]["targets"]["ops"]["to"] == "+49123456789"
+
+    @pytest.mark.asyncio
+    async def test_update_message_instance_preserves_redacted_target_secrets_when_renamed(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {"ops": {"user_key": "pushover-user"}},
+                },
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": "telegram-token",
+                    "targets": {"ops": {"chat_id": "telegram-chat"}},
+                },
+                "seven.io": {
+                    "enabled": True,
+                    "api_key": "sevenio-key",
+                    "targets": {"ops": {"to": "+49123456789", "channel": "sms"}},
+                },
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {"oncall": {"user_key": REDACTED}},
+                },
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": REDACTED,
+                    "targets": {"oncall": {"chat_id": REDACTED}},
+                },
+                "seven.io": {
+                    "enabled": True,
+                    "api_key": REDACTED,
+                    "targets": {"oncall": {"to": REDACTED, "channel": "voice"}},
+                },
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["targets"]["oncall"]["user_key"] == "pushover-user"
+        assert saved_config["providers"]["telegram"]["targets"]["oncall"]["chat_id"] == "telegram-chat"
+        assert saved_config["providers"]["seven.io"]["targets"]["oncall"]["to"] == "+49123456789"
+        assert saved_config["providers"]["seven.io"]["targets"]["oncall"]["channel"] == "voice"
+
+    @pytest.mark.asyncio
+    async def test_update_message_instance_rejects_unresolvable_redacted_target_secrets(self, monkeypatch):
+        """Multi-target rename with REDACTED secrets must be rejected (422), not silently saved."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "oncall": {"user_key": REDACTED},
+                        "developers": {"user_key": REDACTED},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_instance(
+                instance_id=uuid.UUID(row["id"]),
+                body=AdapterInstanceUpdate(config=incoming_config),
+                db=db,
+                _user="admin",
+            )
+        assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_message_instance_rejects_multiple_renamed_redacted_targets(self, monkeypatch):
+        """Multi-rename with ambiguous REDACTED secrets must be rejected (422), not silently saved."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "oncall": {"user_key": REDACTED},
+                        "developers": {"user_key": REDACTED},
+                        "new": {"user_key": "new-user"},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_instance(
+                instance_id=uuid.UUID(row["id"]),
+                body=AdapterInstanceUpdate(config=incoming_config),
+                db=db,
+                _user="admin",
+            )
+        assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_multi_rename_rejects_ambiguous_redacted_target_secrets(self, monkeypatch):
+        """FIFO matching would swap secrets when admin renames targets in a different order than stored;
+        the ambiguous multi-rename must be rejected (422) rather than silently saving wrong secrets."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "developers": {"user_key": REDACTED},
+                        "oncall": {"user_key": REDACTED},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_instance(
+                instance_id=uuid.UUID(row["id"]),
+                body=AdapterInstanceUpdate(config=incoming_config),
+                db=db,
+                _user="admin",
+            )
+        assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_message_instance_rejects_ambiguous_redacted_target_after_multi_delete(self, monkeypatch):
+        """Deleting multiple targets while adding a new one with REDACTED is ambiguous; must be rejected (422)."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+        from obs.api.v1.redaction import REDACTED
+
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {
+                        "ops": {"user_key": "ops-user"},
+                        "dev": {"user_key": "dev-user"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {
+                        "developers": {"user_key": REDACTED},
+                    },
+                }
+            }
+        }
+
+        row = _inst_row(adapter_type="MESSAGE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_instance(
+                instance_id=uuid.UUID(row["id"]),
+                body=AdapterInstanceUpdate(config=incoming_config),
+                db=db,
+                _user="admin",
+            )
+        assert exc_info.value.status_code == 422
 
 
 class TestDeleteInstance:
@@ -626,6 +1037,121 @@ class TestUpdateAdapterConfig:
         )
         assert result.adapter_type == "KNX"
 
+    @pytest.mark.asyncio
+    async def test_update_config_preserves_legacy_message_redacted_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import ConfigPatch
+        from obs.api.v1.redaction import REDACTED
+
+        from pydantic import BaseModel
+
+        class Cfg(BaseModel):
+            providers: dict
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema = Cfg
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": "pushover-token",
+                    "targets": {"ops": {"user_key": "pushover-user"}},
+                },
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "enabled": True,
+                    "api_token": REDACTED,
+                    "targets": {"ops": {"user_key": REDACTED}},
+                },
+            }
+        }
+        row = _row(adapter_type="MESSAGE", config=json.dumps(stored_config), enabled=1, updated_at="2024-01-01T00:00:00")
+        db = _DbStub(one=row)
+
+        result = await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["providers"]["pushover"]["api_token"] == "pushover-token"
+        assert saved_config["providers"]["pushover"]["targets"]["ops"]["user_key"] == "pushover-user"
+        assert result.config["providers"]["pushover"]["api_token"] == REDACTED
+        assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
+
+    @pytest.mark.asyncio
+    async def test_update_config_legacy_message_unresolvable_redaction_returns_422(self, monkeypatch):
+        """PATCH /{type}/config must return 422 (not 500) when redacted target secret is unresolvable."""
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import ConfigPatch
+        from obs.api.v1.redaction import REDACTED
+
+        from pydantic import BaseModel
+
+        class Cfg(BaseModel):
+            providers: dict
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema = Cfg
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        # Two stored targets → rename-candidate queue is empty (ambiguous); new target with REDACTED → ValueError
+        stored_config = {
+            "providers": {
+                "pushover": {
+                    "api_token": "tok",
+                    "targets": {
+                        "alpha": {"user_key": "key_a"},
+                        "beta": {"user_key": "key_b"},
+                    },
+                }
+            }
+        }
+        incoming_config = {
+            "providers": {
+                "pushover": {
+                    "api_token": "tok",
+                    "targets": {"gamma": {"user_key": REDACTED}},
+                }
+            }
+        }
+        row = _row(adapter_type="MESSAGE", config=json.dumps(stored_config), enabled=1, updated_at="2024-01-01T00:00:00")
+        db = _DbStub(one=row)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
+        assert exc_info.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_config_legacy_message_rejects_redacted_secrets_without_stored_config(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import ConfigPatch
+        from obs.api.v1.redaction import REDACTED
+
+        from pydantic import BaseModel
+
+        class Cfg(BaseModel):
+            providers: dict
+
+        mock_cls = MagicMock()
+        mock_cls.config_schema = Cfg
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: mock_cls)
+        incoming_config = {
+            "providers": {
+                "telegram": {
+                    "enabled": True,
+                    "bot_token": REDACTED,
+                    "targets": {"ops": {"chat_id": REDACTED}},
+                }
+            }
+        }
+        db = _DbStub(one=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await adp_api.update_adapter_config(adapter_type="MESSAGE", body=ConfigPatch(config=incoming_config), db=db, _user="admin")
+        assert exc_info.value.status_code == 422
+        assert db.committed == []
+
 
 class TestGetAdapterConfig:
     @pytest.mark.asyncio
@@ -645,6 +1171,34 @@ class TestGetAdapterConfig:
         db = _DbStub(one=row)
         result = await adp_api.get_adapter_config(adapter_type="KNX", db=db, _user="admin")
         assert result.config == {"host": "10.0.0.1"}
+
+    @pytest.mark.asyncio
+    async def test_get_config_redacts_legacy_message_secrets(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.redaction import REDACTED
+
+        row = _row(
+            adapter_type="MESSAGE",
+            config=json.dumps(
+                {
+                    "providers": {
+                        "pushover": {
+                            "enabled": True,
+                            "api_token": "pushover-token",
+                            "targets": {"ops": {"user_key": "pushover-user"}},
+                        },
+                    }
+                }
+            ),
+            enabled=1,
+            updated_at="2024-01-01T00:00:00",
+        )
+        db = _DbStub(one=row)
+
+        result = await adp_api.get_adapter_config(adapter_type="MESSAGE", db=db, _user="admin")
+
+        assert result.config["providers"]["pushover"]["api_token"] == REDACTED
+        assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
 
 
 class TestMigrateInstanceBindings:
@@ -1996,6 +2550,7 @@ class TestEtsImport:
             def __init__(self):
                 self.node_rows = []
                 self.link_rows = []
+                self.device_link_rows = []
 
             async def fetchall(self, query, params=()):
                 if "FROM knx_locations" in query:
@@ -2005,6 +2560,8 @@ class TestEtsImport:
                     ]
                 if "FROM knx_functions f" in query:
                     return [_row(space_id="room", ga_address="1/2/3")]
+                if "FROM knx_space_device_links" in query:
+                    return [_row(space_id="room", device_id="dev-1")]
                 if "FROM datapoints dp" in query:
                     return [_row(id="dp-1")]
                 return []
@@ -2017,6 +2574,8 @@ class TestEtsImport:
                     self.node_rows.extend(rows)
                 if "hierarchy_datapoint_links" in query:
                     self.link_rows.extend(rows)
+                if "hierarchy_device_links" in query:
+                    self.device_link_rows.extend(rows)
 
             async def commit(self):
                 pass
@@ -2031,6 +2590,114 @@ class TestEtsImport:
         assert result.links_created == 1
         assert len(db.node_rows) == 2
         assert len(db.link_rows) == 1
+        assert len(db.device_link_rows) == 1
+        assert db.device_link_rows[0][1] == db.node_rows[1][0]
+        assert db.device_link_rows[0][2] == "dev-1"
+
+    @pytest.mark.asyncio
+    async def test_create_ets_hierarchy_buildings_links_devices_without_datapoint_auto_link(self):
+        from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
+
+        class _Db:
+            def __init__(self):
+                self.node_rows = []
+                self.link_rows = []
+                self.device_link_rows = []
+                self.datapoint_queries = 0
+
+            async def fetchall(self, query, params=()):
+                if "FROM knx_locations" in query:
+                    return [
+                        _row(id="building", parent_id=None, name="Building", space_type="Building", sort_order=1),
+                        _row(id="room", parent_id="building", name="Room", space_type="Room", sort_order=2),
+                    ]
+                if "FROM datapoints dp" in query:
+                    self.datapoint_queries += 1
+                    return [_row(id="dp-1")]
+                if "FROM knx_space_device_links" in query:
+                    return [_row(space_id="room", device_id="dev-1")]
+                if "FROM knx_comm_objects co" in query:
+                    return [_row(space_id="room", device_id="dev-2")]
+                return []
+
+            async def execute_and_commit(self, query, params=()):
+                pass
+
+            async def executemany(self, query, rows):
+                if "hierarchy_nodes" in query:
+                    self.node_rows.extend(rows)
+                if "hierarchy_datapoint_links" in query:
+                    self.link_rows.extend(rows)
+                if "hierarchy_device_links" in query:
+                    self.device_link_rows.extend(rows)
+
+            async def commit(self):
+                pass
+
+        db = _Db()
+        result = await create_ets_hierarchy(
+            db,
+            EtsImportRequest(tree_name="Buildings", mode="buildings", auto_link=False),
+        )
+
+        room_node_id = db.node_rows[1][0]
+        assert result.links_created == 0
+        assert db.datapoint_queries == 0
+        assert db.link_rows == []
+        assert sorted((row[1], row[2]) for row in db.device_link_rows) == [
+            (room_node_id, "dev-1"),
+            (room_node_id, "dev-2"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_create_ets_hierarchy_buildings_auto_links_unique_device_space_from_group_addresses(self):
+        from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
+
+        class _Db:
+            def __init__(self):
+                self.node_rows = []
+                self.device_link_rows = []
+
+            async def fetchall(self, query, params=()):
+                if "FROM knx_locations" in query:
+                    return [
+                        _row(id="building", parent_id=None, name="Building", space_type="Building", sort_order=1),
+                        _row(id="room", parent_id="building", name="Room", space_type="Room", sort_order=2),
+                    ]
+                if "FROM knx_functions f" in query:
+                    return []
+                if "FROM knx_space_device_links" in query:
+                    return [_row(space_id="room", device_id="direct-device")]
+                if "FROM knx_comm_objects co" in query:
+                    return [
+                        _row(space_id="room", device_id="inferred-device"),
+                        _row(space_id="missing-room", device_id="missing-room-device"),
+                    ]
+                return []
+
+            async def execute_and_commit(self, query, params=()):
+                pass
+
+            async def executemany(self, query, rows):
+                if "hierarchy_nodes" in query:
+                    self.node_rows.extend(rows)
+                if "hierarchy_device_links" in query:
+                    self.device_link_rows.extend(rows)
+
+            async def commit(self):
+                pass
+
+        db = _Db()
+        await create_ets_hierarchy(
+            db,
+            EtsImportRequest(tree_name="Buildings", mode="buildings", auto_link=True),
+        )
+
+        room_node_id = db.node_rows[1][0]
+        assert sorted((row[1], row[2]) for row in db.device_link_rows) == [
+            (room_node_id, "direct-device"),
+            (room_node_id, "inferred-device"),
+        ]
 
     @pytest.mark.asyncio
     async def test_create_ets_hierarchy_trades_auto_links_function_datapoints(self):

@@ -43,6 +43,13 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 **Einstellungen — KNX-Projektdatei**
 - Der Bereich „KNX Projekt importieren" wurde vom Tab „Sicherung" in den Tab **Allgemein** verschoben
 
+**KNX — Geräteverwaltung (#911)**
+- Neue Admin-Seite **KNX-Geräte** für importierte Geräte aus KNX-Projektdateien, erreichbar über die Seitenleiste direkt unter „Objekte"
+- Die Geräteansicht zeigt Gerätedetails, verknüpfte Gruppenadressen und Hierarchie-Zuordnungen; Filter berücksichtigen auch untergeordnete Hierarchie-Knoten
+- Der KNX-Projektimport übernimmt Geräte-Zuordnungen aus ETS-Orten und verknüpft importierte Geräte mit der Gebäudehierarchie
+- Im Monitor/RingBuffer kann jetzt nach KNX-Geräten gesucht und gefiltert werden; das Aufklappen eines Geräts löst dessen Gruppenadressen in konkrete Datenpunkt-Bindings auf
+- Die Geräteansicht enthält einen direkten Einstieg zum KNX-Projektimport in den Einstellungen
+
 **7 neue Blocktypen im Logik-Editor**
 
 | Block | Kategorie | Beschreibung |
@@ -68,6 +75,10 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 ---
 
 ### Fehlerbehebungen
+
+**Zeitzonen — Verbrauchszähler und History-Chart (#975, #909)**
+- Verbrauchszähler setzen Tages-, Wochen-, Monats- und Jahreswerte jetzt in der konfigurierten App-Zeitzone zurück, statt in der Zeitzone des Serverprozesses.
+- SQLite-Aggregations-Buckets werden als eindeutige UTC-Zeitstempel mit `Z` ausgegeben; das History-Chart interpretiert auch bereits vorhandene zeitlosen Buckets weiterhin als UTC.
 
 **Wertzuordnung — N-Werte und Modbus-Fliesskommazahlen (#208)**
 - Die Wertzuordnung (value_map) unterstützt jetzt beliebig viele Einträge — z.B. `{"0": "Aus", "1": "Init", "2": "Aktiv", ..., "10": "Standby"}` (bisher war nur 2-Wert-Logik dokumentiert)

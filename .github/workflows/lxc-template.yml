@@ -82,7 +82,7 @@ jobs:
 
       # ── Build GUI and frontend on the runner (no Node needed in the LXC) ─────
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: 'npm'
@@ -96,13 +96,13 @@ jobs:
       - name: Build Admin GUI
         run: |
           cd gui
-          npm install --prefer-offline
+          npm ci --prefer-offline
           npm run build
 
       - name: Build Visu Frontend
         run: |
           cd frontend
-          npm install --prefer-offline
+          npm ci --prefer-offline
           npm run build
 
       - name: Write obs-update script
@@ -499,6 +499,8 @@ jobs:
 
           section = "### Checksums (SHA-256)\n\n"
           for name, cs in entries:
+              if 'app-bundle' in name:
+                  section += "**App Bundle**\n\n"
               section += f"*{name}*:\n```\n{cs}\n```\n\n"
           section += marker
 

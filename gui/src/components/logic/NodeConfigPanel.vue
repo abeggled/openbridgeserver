@@ -1,5 +1,11 @@
 <template>
-  <div v-if="node" class="h-full flex flex-col bg-surface-800 border-l border-slate-200 dark:border-slate-700/60 w-72">
+  <div v-if="node" class="h-full flex flex-col bg-surface-800 border-l border-slate-200 dark:border-slate-700/60 relative flex-shrink-0" :style="{ width: panelWidth + 'px' }">
+    <div
+      class="absolute top-0 left-0 h-full w-1.5 -translate-x-1/2 cursor-ew-resize z-10 hover:bg-teal-500/40"
+      :class="{ 'bg-teal-500/40': isResizingPanel }"
+      @pointerdown="startPanelResize"
+      :title="$t('logic.nodeConfig.resizeHandle')"
+    />
 
     <!-- Header -->
     <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
@@ -282,6 +288,47 @@
       </div>
     </template>
 
+    <!-- ── value_sequence: GUI-first step editor ─────────────────────── -->
+    <template v-else-if="isValueSequenceNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.value_sequence.run_mode') }}</label>
+          <select v-model="localData.run_mode" class="input text-sm" @change="emitUpdate">
+            <option value="once">{{ $t('logic.nodeConfig.value_sequence.modes.once') }}</option>
+            <option value="repeat_count">{{ $t('logic.nodeConfig.value_sequence.modes.repeat_count') }}</option>
+            <option value="while_condition">{{ $t('logic.nodeConfig.value_sequence.modes.while_condition') }}</option>
+          </select>
+        </div>
+        <div v-if="localData.run_mode === 'repeat_count'" class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.value_sequence.repeat_count') }}</label>
+          <input v-model.number="localData.repeat_count" type="number" min="1" class="input text-sm" @change="emitUpdate" />
+        </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.value_sequence.restart_policy') }}</label>
+          <select v-model="localData.restart_policy" class="input text-sm" @change="emitUpdate">
+            <option value="ignore">{{ $t('logic.nodeConfig.value_sequence.policies.ignore') }}</option>
+            <option value="restart">{{ $t('logic.nodeConfig.value_sequence.policies.restart') }}</option>
+            <option value="queue">{{ $t('logic.nodeConfig.value_sequence.policies.queue') }}</option>
+          </select>
+        </div>
+        <label class="flex gap-2 text-xs text-slate-600 dark:text-slate-300"><input v-model="localData.cancel_when_condition_false" type="checkbox" @change="emitUpdate" />{{ $t('logic.nodeConfig.value_sequence.cancel_when_condition_false') }}</label>
+        <div class="flex gap-2">
+          <button type="button" class="btn-secondary btn-sm" data-testid="sequence-add" @click="addSequenceStep">{{ $t('logic.nodeConfig.value_sequence.add') }}</button>
+          <button type="button" class="btn-secondary btn-sm" data-testid="sequence-blink" @click="applySequencePreset">{{ $t('logic.nodeConfig.value_sequence.blink') }}</button>
+        </div>
+        <div v-for="(step, index) in sequenceSteps" :key="index" class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2" :data-testid="`sequence-step-${index}`">
+          <div class="flex justify-between items-center"><span class="text-xs font-semibold text-amber-400">{{ $t('logic.nodeConfig.value_sequence.step', { n: index + 1 }) }}</span><div class="flex gap-2"><button class="text-xs" @click="moveSequenceStep(index, -1)">↑</button><button class="text-xs" @click="moveSequenceStep(index, 1)">↓</button><button class="text-xs text-teal-400" @click="duplicateSequenceStep(index)">{{ $t('logic.nodeConfig.value_sequence.duplicate') }}</button><button class="text-xs text-red-400" @click="removeSequenceStep(index)">×</button></div></div>
+          <input v-model="sequenceSearches[index]" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.object')" @input="onSequenceSearchInput(index)" />
+          <div v-if="sequenceDpResults[index]?.length" class="max-h-24 overflow-y-auto border border-slate-700 rounded">
+            <button v-for="dp in sequenceDpResults[index]" :key="dp.id" class="block w-full text-left px-2 py-1 text-xs hover:bg-slate-700" @click="selectSequenceDp(index, dp)">{{ dp.name }} <span class="text-slate-500">{{ dp.data_type }}</span></button>
+          </div>
+          <input v-model="step.value" class="input text-xs" :placeholder="$t('logic.nodeConfig.value_sequence.value')" @change="saveSequenceSteps" />
+          <div class="flex gap-2"><input v-model.number="step.delay_ms" type="number" min="0" class="input text-xs" @change="saveSequenceSteps" /><span class="text-xs self-center">ms</span></div>
+        </div>
+      </div>
+    </template>
+
     <!-- ── api_client: special rendering with conditional auth fields ──── -->
     <template v-else-if="isApiClientNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -396,7 +443,15 @@
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.timeoutLabel') }}</label>
-          <input v-model="localData.timeout_s" type="number" class="input text-sm" @change="emitUpdate" />
+          <input
+            v-model="localData.timeout_s"
+            type="number"
+            min="1"
+            step="any"
+            class="input text-sm"
+            data-testid="api-client-timeout"
+            @change="emitBoundedUpdate('timeout_s', { type: 'number', min: 1 })"
+          />
         </div>
         <label class="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" v-model="localData.verify_ssl" @change="emitUpdate" class="accent-teal-500" />
@@ -653,6 +708,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -677,6 +733,7 @@
 
             <div
               v-for="(entry, i) in jsonPaths" :key="i"
+              @focusin="activeExtractorRow = i"
               class="extractor-output-row mt-2 p-2 rounded-lg border border-slate-700/50 flex flex-col gap-1"
               :style="extractorOutputRowStyle"
             >
@@ -698,7 +755,6 @@
                 :value="entry.path"
                 @input="updateJsonPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
@@ -712,6 +768,7 @@
             <p v-if="!jsonPaths.length && !localData.json_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               Klicke <strong>+</strong> um Ausgänge hinzuzufügen.
             </p>
+          </div>
           </div>
         </template>
 
@@ -729,6 +786,7 @@
             </div>
           </template>
 
+          <div @focusout="onExtractorControlsFocusOut">
           <!-- Multi-path path picker dropdown (one shared, fills active row) -->
           <div v-if="extractorPaths.length" class="form-group">
             <label class="label">
@@ -753,6 +811,7 @@
 
             <div
               v-for="(entry, i) in xmlPaths" :key="i"
+              @focusin="activeExtractorRow = i"
               class="extractor-output-row mt-2 p-2 rounded-lg border border-slate-700/50 flex flex-col gap-1"
               :style="extractorOutputRowStyle"
             >
@@ -774,7 +833,6 @@
                 :value="entry.path"
                 @input="updateXmlPath(i, 'path', $event.target.value)"
                 @focus="activeExtractorRow = i"
-                @blur="activeExtractorRow = null"
                 class="input text-xs font-mono w-full"
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
@@ -788,6 +846,7 @@
             <p v-if="!xmlPaths.length && !localData.xml_path" class="text-xs text-slate-500 mt-2 text-center py-2">
               {{ $t('logic.nodeConfig.extractor.clickPlusToAddOutputs') }}
             </p>
+          </div>
           </div>
         </template>
       </div>
@@ -1100,6 +1159,79 @@
       </div>
     </template>
 
+    <!-- ── message_archive: archive selection by display name ────────────── -->
+    <template v-else-if="isMessageArchiveNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.messageArchive.archive') }}</label>
+          <select v-model="localData.archive_id" class="input text-sm" @change="emitUpdate">
+            <option value="">{{ $t('logic.nodeConfig.messageArchive.selectArchive') }}</option>
+            <option v-for="archive in messageArchives" :key="archive.id" :value="archive.id">
+              {{ archive.name || archive.id }}
+            </option>
+            <option v-if="selectedMessageArchiveMissing" :value="localData.archive_id">
+              {{ $t('logic.nodeConfig.messageArchive.missingArchive') }}
+            </option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.messageArchive.type') }}</label>
+            <select v-model="localData.type" class="input text-sm" @change="emitUpdate">
+              <option v-for="type in MESSAGE_TYPE_OPTIONS" :key="type" :value="type">
+                {{ $t(`messageArchives.types.${type}`) }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.messageArchive.severity') }}</label>
+            <select v-model="localData.severity" class="input text-sm" @change="emitUpdate">
+              <option v-for="severity in MESSAGE_SEVERITY_OPTIONS" :key="severity" :value="severity">
+                {{ $t(`messageArchives.severities.${severity}`) }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.messageArchive.title') }}</label>
+          <input
+            v-model="localData.title"
+            class="input text-sm"
+            :placeholder="$t('logic.nodeConfig.messageArchive.titlePlaceholder')"
+            @change="emitUpdate"
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.messageArchive.message') }}</label>
+          <textarea
+            v-model="localData.message"
+            class="input text-sm min-h-24 resize-y"
+            :placeholder="$t('logic.nodeConfig.messageArchive.messagePlaceholder')"
+            @change="emitUpdate"
+          />
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="isCommentNode">
+      <div class="flex-1 overflow-hidden p-4 flex flex-col gap-2">
+        <p class="text-xs text-slate-500 shrink-0">{{ nodeDescription(nodeDef) }}</p>
+        <label class="label shrink-0">{{ $t('logic.nodeConfig.comment.text') }}</label>
+        <textarea
+          v-model="localData.text"
+          class="input text-sm flex-1 resize-none"
+          :placeholder="$t('logic.nodeConfig.comment.textPlaceholder')"
+          data-testid="comment-text"
+          @change="emit('update', { text: localData.text })"
+        />
+      </div>
+    </template>
+
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1119,8 +1251,11 @@
               class="text-sm" @change="emitUpdate" />
             <input v-else
               v-model="localData[key]"
-              :type="schema.subtype === 'password' ? 'password' : schema.type === 'number' ? 'number' : 'text'"
-              class="input text-sm" @change="emitUpdate" />
+              :type="schema.subtype === 'password' ? 'password' : ['number', 'integer'].includes(schema.type) ? 'number' : 'text'"
+              :min="schema.min ?? schema.minimum"
+              :max="schema.max ?? schema.maximum"
+              :step="schema.step ?? (schema.type === 'integer' ? 1 : schema.type === 'number' ? 'any' : undefined)"
+              class="input text-sm" @change="onSchemaFieldChange(key, schema)" />
           </div>
 
         </template>
@@ -1133,12 +1268,16 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { dpApi, searchApi, securityApi } from '@/api/client'
+import { dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import { useResizablePanel } from '@/composables/useResizablePanel'
 
 const { t, te } = useI18n()
 const auth = useAuthStore()
+
+const { width: panelWidth, isResizing: isResizingPanel, startResize: startPanelResize } =
+  useResizablePanel({ storageKey: 'obs.logic.nodeConfigPanelWidth', defaultWidth: 288, min: 260, max: 800 })
 
 const props = defineProps({
   node:        { type: Object, default: null },
@@ -1162,12 +1301,19 @@ const activeTab          = ref('connection')
 const valueMapPreset     = ref('')
 const valueMapCustom     = ref('')
 const valueMapCustomError = ref('')
+const sequenceDpResults = ref([])
+const sequenceSearches = ref([])
+const sequenceSearchDrafts = ref([])
+const sequenceSearchNodeId = ref(null)
 const urlTargetChecking = ref(false)
 const urlTargetSaving = ref(false)
 const urlTargetDecision = ref(null)
 const urlTargetMsg = ref(null)
 const apiVariableSearches = ref([])
 const apiVariableResults = ref([])
+const messageArchives = ref([])
+const MESSAGE_TYPE_OPTIONS = ['automation', 'notification', 'system', 'security', 'adapter', 'diagnostic']
+const MESSAGE_SEVERITY_OPTIONS = ['info', 'success', 'warning', 'error', 'critical']
 
 const CONDITION_OPERATOR_OPTIONS = computed(() => [
   { value: 'eq',          label: t('logic.nodeConfig.rules.operators.eq') },
@@ -1345,8 +1491,16 @@ const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
+const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
+const isValueSequenceNode = computed(() => props.node?.type === 'value_sequence')
+const isCommentNode       = computed(() => props.node?.type === 'comment')
+const sequenceSteps = computed(() => Array.isArray(localData.value.steps) ? localData.value.steps : [])
+const selectedMessageArchiveMissing = computed(() => {
+  const id = localData.value.archive_id
+  return !!id && !messageArchives.value.some((archive) => archive.id === id)
+})
 
 const MAC_RE = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
 const macAddressError = computed(() => {
@@ -1943,6 +2097,25 @@ watch(() => props.node, (n) => {
       apiVariableSearches.value = []
       apiVariableResults.value = []
     }
+    if (n.type === 'message_archive') {
+      if (!localData.value.type) localData.value.type = 'automation'
+      if (!localData.value.severity) localData.value.severity = 'info'
+      if (localData.value.archive_id) localData.value.archive_id = String(localData.value.archive_id).toLowerCase()
+      loadMessageArchives()
+    }
+    if (n.type === 'value_sequence') {
+      if (sequenceSearchNodeId.value !== n.id) {
+        sequenceSearchNodeId.value = n.id
+        sequenceSearchDrafts.value = []
+      }
+      let steps = n.data.steps
+      if (typeof steps === 'string') {
+        try { steps = JSON.parse(steps) } catch { steps = [] }
+      }
+      localData.value.steps = Array.isArray(steps) ? steps.filter(step => step && typeof step === 'object' && !Array.isArray(step)) : []
+      sequenceSearches.value = localData.value.steps.map((step, index) => step.datapoint_name || sequenceSearchDrafts.value[index] || '')
+      sequenceDpResults.value = localData.value.steps.map(() => [])
+    }
     if (n.type === 'datapoint_read' || n.type === 'datapoint_write') {
       searchDps()
       // Restore value_map UI state — but don't overwrite if user just picked 'custom'
@@ -2019,6 +2192,15 @@ function onExtractorPathSelect(e) {
     activeExtractorRow.value = 0
   }
   e.target.value = ''
+  activeExtractorRow.value = null
+}
+
+function onExtractorControlsFocusOut(e) {
+  // Keep the selected row while focus moves between the shared picker and any
+  // output controls, including reverse keyboard traversal through a row.
+  // Clear it once focus leaves the complete control group.
+  if (e.currentTarget.contains(e.relatedTarget)) return
+  activeExtractorRow.value = null
 }
 
 function onValueMapCustomInput(e) {
@@ -2063,6 +2245,17 @@ function selectDp(dp) {
   dpResults.value = []
   emitUpdate()
 }
+
+function syncSequencePickerState() { sequenceSearches.value = sequenceSteps.value.map(step => step.datapoint_name || ''); sequenceDpResults.value = sequenceSteps.value.map(() => []) }
+function onSequenceSearchInput(index) { const steps = [...sequenceSteps.value]; if (steps[index]?.datapoint_id && sequenceSearches.value[index] !== steps[index].datapoint_name) { sequenceSearchDrafts.value[index] = sequenceSearches.value[index]; steps[index] = { ...steps[index], datapoint_id: '', datapoint_name: '' }; localData.value.steps = steps; emitUpdate() }; searchSequenceDps(index, sequenceSearches.value[index]) }
+function saveSequenceSteps() { localData.value.steps = sequenceSteps.value; syncSequencePickerState(); emitUpdate() }
+function addSequenceStep() { localData.value.steps = [...sequenceSteps.value, { datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }]; syncSequencePickerState(); emitUpdate() }
+function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index, 1); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
+function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index + 1, 0, { ...steps[index] }); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
+function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
+function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; syncSequencePickerState(); emitUpdate() }
+async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
+function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearchDrafts.value[index] = ''; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function addApiVariable() {
   const variables = normaliseApiVariables(localData.value.variables)
@@ -2168,9 +2361,46 @@ async function allowApiClientTarget() {
   }
 }
 
+async function loadMessageArchives() {
+  try {
+    const { data } = await messageArchivesApi.list()
+    messageArchives.value = Array.isArray(data) ? data : (data?.archives ?? [])
+  } catch {
+    messageArchives.value = []
+  }
+}
+
 // ── Emit ───────────────────────────────────────────────────────────────────
 function emitUpdate() {
   emit('update', { ...localData.value })
+}
+
+function onSchemaFieldChange(key, schema) {
+  if (schema.type === 'number' || schema.type === 'integer') {
+    emitBoundedUpdate(key, schema)
+    return
+  }
+  emitUpdate()
+}
+
+function emitBoundedUpdate(key, schema) {
+  const rawValue = localData.value[key]
+  if (rawValue === '' || rawValue === null || rawValue === undefined) {
+    emitUpdate()
+    return
+  }
+
+  const value = Number(rawValue)
+  if (Number.isFinite(value)) {
+    const minimum = schema.min ?? schema.minimum
+    const maximum = schema.max ?? schema.maximum
+    let bounded = value
+    if (minimum !== undefined) bounded = Math.max(minimum, bounded)
+    if (maximum !== undefined) bounded = Math.min(maximum, bounded)
+    if (schema.type === 'integer') bounded = Math.round(bounded)
+    localData.value[key] = bounded
+  }
+  emitUpdate()
 }
 </script>
 

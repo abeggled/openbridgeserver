@@ -4,7 +4,9 @@ Stored in ``app_settings`` under ``ringbuffer.runtime_config`` as JSON. The
 values mirror the ``POST /api/v1/ringbuffer/config`` payload (``enabled``,
 ``max_entries``, ``max_file_size_bytes``, ``max_age``). When no row exists,
 ``load`` returns sane defaults — the monitor is enabled and only
-``max_file_size_bytes`` has a non-null fallback (10 MiB).
+``max_file_size_bytes`` has a non-null fallback: 100 MiB for a fresh install,
+but the prior 10 MiB for an upgrade that already has ringbuffer storage on disk
+yet no saved config (#951 [P3]), so the limit does not silently jump on upgrade.
 
 Why DB-backed rather than YAML/env: keeps UI-driven changes intact across
 container restarts and rebuilds, matches the pattern already used for
@@ -14,13 +16,63 @@ history.*, autobackup.*, and ringbuffer.export_settings.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from obs.db.database import Database
 
 PERSISTED_CONFIG_KEY = "ringbuffer.runtime_config"
 
-DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MiB
+# Entscheidungszustand des Legacy-Migrations-Assistenten (#964). Eigener
+# app_settings-Key (reiner String), damit der Zustand unabhängig von der
+# Runtime-Config gelesen/geschrieben werden kann.
+LEGACY_MIGRATION_DECISION_KEY = "ringbuffer.legacy_migration_decision"
+
+# Zustände: ``pending`` (Upgrade erkannt, keine Entscheidung), ``skipped``
+# (Wizard dismisst – revidierbar), ``keep`` (bewusst read-only behalten bis die
+# FIFO-Retention greift – revidierbar), ``migrated``/``discarded`` (terminal).
+LEGACY_DECISION_PENDING = "pending"
+LEGACY_DECISION_KEEP = "keep"
+LEGACY_DECISION_SKIPPED = "skipped"
+LEGACY_DECISION_MIGRATED = "migrated"
+LEGACY_DECISION_DISCARDED = "discarded"
+LEGACY_DECISIONS = (
+    LEGACY_DECISION_PENDING,
+    LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_SKIPPED,
+    LEGACY_DECISION_MIGRATED,
+    LEGACY_DECISION_DISCARDED,
+)
+# Terminale Zustände: die Legacy-Quelle existiert danach nicht mehr (migriert
+# bzw. verworfen) – keine weitere Entscheidung möglich.
+LEGACY_DECISIONS_TERMINAL = (LEGACY_DECISION_MIGRATED, LEGACY_DECISION_DISCARDED)
+# Zustände OHNE informierte Entscheidung: das Legacy-Segment bleibt vor der
+# FIFO-Retention geschützt (``StoreRetentionConfig.protect_legacy``). ``keep``
+# ist bewusst NICHT enthalten – der Admin hat die Alles-oder-nichts-Rückgewinnung
+# dann explizit akzeptiert.
+LEGACY_DECISIONS_PROTECTED = (LEGACY_DECISION_PENDING, LEGACY_DECISION_SKIPPED)
+
+# Sentinel: unterscheidet "``segment_max_age`` fehlt in der persistierten Config"
+# (Alt-Config vor der Segmentierung) von einem explizit persistierten ``None``.
+_UNSET = object()
+
+# Muss zur ``RETENTION_SEGMENT_RATIO`` in ``obs.ringbuffer.store.config`` passen
+# (3-Segment-Regel). Bewusst dupliziert, um keinen Import-Zyklus/Store-Import in
+# diesem reinen DB-Config-Modul zu erzeugen.
+_RETENTION_SEGMENT_RATIO = 3
+
+DEFAULT_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MiB (Fresh-Install-Default, #919)
+
+# Vormaliger Default vor der bewussten Anhebung auf 100 MiB (#919). Wird fuer
+# UPGEGRADETE Installationen bewahrt, die Ringbuffer-Storage besitzen, aber nie
+# Monitor-Settings gespeichert haben (keine Config-Zeile) – siehe
+# ``load_persisted_ringbuffer_config`` (#951 [P3]).
+DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MiB (Upgrade-ohne-Config-Default)
+
+# Deployter expliziter Startwert für die zeitgetriebene Rotation (#919): alle
+# 6 Stunden ein neues Segment. Andere Dimensionen bleiben roh ``None`` und werden
+# nur bei einer passenden Gesamtgrenze abgeleitet.
+DEFAULT_SEGMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # 21600 s (6 h)
 
 
 def _defaults() -> dict[str, Any]:
@@ -29,13 +81,102 @@ def _defaults() -> dict[str, Any]:
         "max_entries": None,
         "max_file_size_bytes": DEFAULT_MAX_FILE_SIZE_BYTES,
         "max_age": None,
+        # Segmentierter Store (#919) — DEPLOYTER DEFAULT: segmentiert. Bestehende
+        # Installationen ohne persistierten ``segmented``-Key laufen damit
+        # automatisch segmentiert; der Legacy-Single-File-Pfad bleibt nur intern
+        # (Tests/Legacy) über ``segmented=False`` erreichbar.
+        "segmented": True,
+        # Segment-Parameter (#930/#919): ``None`` wird nur aus der passenden
+        # Gesamtgrenze abgeleitet; ohne passende Grenze bleibt der Trigger aus.
+        # ``segment_max_age`` ist der sichtbare explizite Startwert (6 h).
+        "segment_max_bytes": None,
+        "segment_max_rows": None,
+        "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     }
 
 
-async def load_persisted_ringbuffer_config(db: Database) -> dict[str, Any]:
+def _resolve_migrated_segment_max_age(
+    *,
+    persisted_segment_max_age: Any,
+    default_segment_max_age: int | None,
+    max_age: int | None,
+) -> int | None:
+    """Leitet ``segment_max_age`` für migrierte Alt-Configs so ab, dass die 3-Segment-Regel hält (#951).
+
+    Eine Config aus der Zeit vor der Segmentierung kennt ``max_age`` (die Monitor-
+    Retention), aber keinen ``segment_max_age``-Key. Würde hier stur der 6-h-Default
+    (21600 s) eingesetzt, verlangt die 3-Segment-Regel des Stores
+    ``max_age >= 3 * segment_max_age`` (= 64800 s) — jede Installation mit kürzerer
+    Retention (z. B. 15 min / 1 h) crasht beim Ringbuffer-Init, bevor ein Admin die
+    Config ändern kann.
+
+    Fix: nur wenn ``segment_max_age`` FEHLT und ``max_age`` gesetzt ist, den
+    abgeleiteten Wert auf ``max_age // RATIO`` klemmen. Explizit persistierte Werte
+    (auch ``None``) bleiben unangetastet.
+
+    Degenerierter Sub-3-Sekunden-Fall (#951): ist ``max_age`` kleiner als
+    ``RETENTION_SEGMENT_RATIO`` (= 3, also 1 oder 2 s), ergibt ``max_age // RATIO``
+    0 – es existiert KEIN positives ganzzahliges ``segment_max_age``, das die
+    3-Segment-Regel ``max_age >= 3 * segment_max_age`` erfüllt. Ein früher hier auf
+    1 hochgeklemmter Wert ließ ``validate_store_config`` beim Startup crashen. Für
+    diese entarteten Werte wird daher ``None`` zurückgegeben (kein zeitgetriebener
+    Segment-Trigger, analog zur Tiny-Budget-Behandlung): die Regel greift dann nicht,
+    Size-/Row-Trigger segmentieren weiterhin, und ein Admin kann ``max_age`` später
+    gefahrlos korrigieren. Ab ``max_age`` = 3 wird regulär auf ``max_age // RATIO``
+    (mindestens 1) geklemmt.
+    """
+    if persisted_segment_max_age is not _UNSET:
+        return persisted_segment_max_age
+    if max_age is None or default_segment_max_age is None:
+        return default_segment_max_age
+    derived = max_age // _RETENTION_SEGMENT_RATIO
+    if derived < 1:
+        return None
+    return min(default_segment_max_age, derived)
+
+
+def _ringbuffer_storage_exists(storage_path: str | None) -> bool:
+    """Erkennt, ob bereits Ringbuffer-Storage auf der Platte liegt (#951 [P3]).
+
+    Als robuste, testbare Upgrade-Spur gelten:
+    * die Legacy-Single-File-DB ``<stem>.db`` (oder ihre WAL/SHM-Sidecars), oder
+    * das Segment-Store-Root-Verzeichnis ``<stem>_segments`` des v2-Stores.
+
+    ``storage_path`` ist der Pfad der Legacy-Ringbuffer-DB (z. B.
+    ``obs_ringbuffer.db``); fehlt er (``None`` oder In-Memory), wird als „keine Spur"
+    gewertet.
+    """
+    if not storage_path:
+        return False
+    db_path = Path(storage_path)
+    if db_path.suffix == "":  # ``:memory:`` o. ae. – kein Dateisystem-Pfad.
+        return False
+    candidates = [
+        db_path,
+        db_path.with_name(f"{db_path.name}-wal"),
+        db_path.with_name(f"{db_path.name}-shm"),
+        db_path.with_name(f"{db_path.stem}_segments"),
+    ]
+    return any(candidate.exists() for candidate in candidates)
+
+
+async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | None = None) -> dict[str, Any]:
+    """Laedt die persistierte Ringbuffer-Config oder liefert Defaults.
+
+    Fehlt die Config-Zeile, wird zwischen frischer Installation und Upgrade ohne
+    gespeicherte Monitor-Settings unterschieden (#951 [P3]): existiert bereits
+    Ringbuffer-Storage auf der Platte (``storage_path`` zeigt auf eine vorhandene
+    Legacy-DB oder ein ``<stem>_segments``-Root), wird das vormalige 10-MiB-Budget
+    bewahrt, damit das Limit fuer bestehende Installationen nicht still auf 100 MiB
+    springt. Ohne jede Storage-Spur (oder ohne ``storage_path``) gilt der bewusste
+    100-MiB-Fresh-Install-Default.
+    """
     row = await db.fetchone("SELECT value FROM app_settings WHERE key=?", (PERSISTED_CONFIG_KEY,))
     if not row or not row["value"]:
-        return _defaults()
+        defaults = _defaults()
+        if _ringbuffer_storage_exists(storage_path):
+            defaults["max_file_size_bytes"] = DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES
+        return defaults
     try:
         data = json.loads(row["value"])
     except (json.JSONDecodeError, TypeError):
@@ -44,12 +185,159 @@ async def load_persisted_ringbuffer_config(db: Database) -> dict[str, Any]:
         return _defaults()
 
     defaults = _defaults()
-    return {
+    # Persistierte ``max_age: 0`` als ``None`` (unbegrenzt) normalisieren (#951): Das
+    # API-Modell erlaubte frueher die 0. ``StoreRetentionConfig`` verlangt aber
+    # ``>= 1`` oder ``null`` – wuerde die rohe 0 an den Store-Init durchgereicht,
+    # crashte der Ringbuffer beim Startup, bevor ein Admin es korrigieren kann.
+    max_age = data.get("max_age", defaults["max_age"])
+    if max_age == 0:
+        max_age = None
+    segment_max_age = _resolve_migrated_segment_max_age(
+        persisted_segment_max_age=data.get("segment_max_age", _UNSET),
+        default_segment_max_age=defaults["segment_max_age"],
+        max_age=max_age,
+    )
+    resolved = {
         "enabled": bool(data.get("enabled", defaults["enabled"])),
         "max_entries": data.get("max_entries", defaults["max_entries"]),
         "max_file_size_bytes": data.get("max_file_size_bytes", defaults["max_file_size_bytes"]),
-        "max_age": data.get("max_age", defaults["max_age"]),
+        "max_age": max_age,
+        "segmented": bool(data.get("segmented", defaults["segmented"])),
+        "segment_max_bytes": data.get("segment_max_bytes", defaults["segment_max_bytes"]),
+        "segment_max_rows": data.get("segment_max_rows", defaults["segment_max_rows"]),
+        "segment_max_age": segment_max_age,
     }
+    # Compatibility migration for totals persisted before the three-segment
+    # invariant existed.  One- and two-unit row/size budgets cannot contain
+    # three positive integer segments; lift only these legacy degenerate values
+    # to the smallest valid total.  The matching raw segment value stays
+    # ``None`` so runtime derivation remains visible as ``derived`` in /stats.
+    if resolved["segmented"] and resolved["segment_max_rows"] is None and resolved["max_entries"] in (1, 2):
+        resolved["max_entries"] = _RETENTION_SEGMENT_RATIO
+    if resolved["segmented"] and resolved["segment_max_bytes"] is None and resolved["max_file_size_bytes"] in (1, 2):
+        resolved["max_file_size_bytes"] = _RETENTION_SEGMENT_RATIO
+
+    # A legacy age-only total of one or two seconds has no positive segment age
+    # that can satisfy the ratio.  If no size/row trigger can close segments,
+    # migrate this pair to the smallest valid 3 s / 1 s combination.  When
+    # another trigger exists, preserve the original tiny age retention and its
+    # deliberately disabled age trigger; closed segments can then still be
+    # reclaimed by age.
+    has_size_or_row_trigger = any(
+        value is not None
+        for value in (
+            resolved["max_entries"],
+            resolved["max_file_size_bytes"],
+            resolved["segment_max_rows"],
+            resolved["segment_max_bytes"],
+        )
+    )
+    if resolved["segmented"] and resolved["max_age"] in (1, 2) and resolved["segment_max_age"] is None and not has_size_or_row_trigger:
+        resolved["max_age"] = _RETENTION_SEGMENT_RATIO
+        resolved["segment_max_age"] = 1
+
+    # Compatibility migration for configs that previously relied on hidden
+    # runtime fallbacks: an all-unbounded segmented store must not restart with
+    # no rotation trigger at all. Materialize the documented 6-hour age value so
+    # stats and the next UI save expose the effective choice explicitly.
+    if (
+        resolved["segmented"]
+        and resolved["max_entries"] is None
+        and resolved["max_file_size_bytes"] is None
+        and resolved["max_age"] is None
+        and resolved["segment_max_bytes"] is None
+        and resolved["segment_max_rows"] is None
+        and resolved["segment_max_age"] is None
+    ):
+        resolved["segment_max_age"] = DEFAULT_SEGMENT_MAX_AGE_SECONDS
+    return resolved
+
+
+async def load_legacy_migration_decision(db: Database) -> str | None:
+    """Liest den Entscheidungszustand des Migrations-Assistenten (#964).
+
+    ``None`` = kein Zustand vorhanden (Fresh Install ohne Legacy-DB, oder der
+    Startup lief noch nie mit vorhandener Legacy-Quelle). Unbekannte Werte
+    (manueller Edit) werden konservativ als ``None`` behandelt.
+    """
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key=?", (LEGACY_MIGRATION_DECISION_KEY,))
+    value = row["value"] if row else None
+    return value if value in LEGACY_DECISIONS else None
+
+
+async def persist_legacy_migration_decision(db: Database, decision: str) -> None:
+    """Persistiert den Entscheidungszustand des Migrations-Assistenten (#964)."""
+    if decision not in LEGACY_DECISIONS:
+        raise ValueError(f"unknown legacy migration decision: {decision!r}")
+    await db.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (LEGACY_MIGRATION_DECISION_KEY, decision),
+    )
+    await db.commit()
+
+
+async def ensure_legacy_migration_decision(db: Database, *, legacy_db_path: str | None) -> str | None:
+    """Stellt beim Startup den Entscheidungszustand sicher (#964).
+
+    * Existiert bereits ein Zustand → unverändert zurückgeben.
+    * Sonst: liegt eine Legacy-Single-DB auf der Platte (Upgrade-Fall), wird
+      ``pending`` persistiert und zurückgegeben – der Wizard erscheint, das
+      Legacy-Segment bleibt bis zur Entscheidung retention-geschützt.
+    * Ohne Legacy-Datei (Fresh Install, Memory-Pfad) bleibt der Zustand leer.
+    """
+    existing = await load_legacy_migration_decision(db)
+    if existing is not None:
+        return existing
+    if not legacy_db_path:
+        return None
+    db_path = Path(legacy_db_path)
+    if db_path.suffix == "" or not db_path.exists():
+        return None
+    await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
+    return LEGACY_DECISION_PENDING
+
+
+async def finalize_committed_migration_decision(db: Database, rb) -> bool:
+    """Zieht die terminale ``migrated``-Entscheidung state-basiert nach (#968, Codex :326/:2423/:1273).
+
+    Deckt drei Post-Commit-Lücken ab, in denen ein Offline-Commit bereits durchlief (Legacy
+    detached, Kopien promotet), die Entscheidung aber NICHT terminal persistiert wurde und der
+    Startup-Reconciler sie nicht mehr repariert (keine fehlende Legacy-Manifest-Zeile mehr):
+
+    * Cancel im Commit-``await`` (Shutdown), bevor ``on_success`` lief,
+    * ``on_success``-Persistenz scheiterte (app-DB locked/voll),
+    * Runtime-Init (Monitor-Enable via ``POST /config``) reconciled nach einem Crash im
+      Commit-Fenster, spiegelt aber den Startup-Finalizer nicht.
+
+    Durable & idempotent: Grundlage ist der promotete ``rb_migrated_*``-Segment-State
+    (``has_committed_migration``), nicht ein transientes Flag – über Prozess-Neustarts
+    reparierbar. No-op, wenn bereits terminal, noch eine Legacy-Quelle attached ist oder kein
+    Migrations-Commit belegt ist. Gibt ``True`` zurück, wenn ``migrated`` nachgezogen wurde.
+    """
+    if rb is None:
+        return False
+    decision = await load_legacy_migration_decision(db)
+    if decision in LEGACY_DECISIONS_TERMINAL:
+        return False
+    # ``keep`` ist eine BEWUSSTE non-terminale Entscheidung und wird hier NIE state-basiert
+    # überschrieben (#968, Q0qIJ): der Zustand ``keep`` + committed + attached ist NICHT eindeutig
+    # von einem gescheiterten ``on_success``-Bookkeeping-Write unterscheidbar. ``has_committed_migration``
+    # bleibt nach der ersten migrierten Quelle dauerhaft True – wählt der Admin danach für eine
+    # verbleibende Quelle bewusst ``keep``, sähe das identisch aus wie ein fehlgeschlagenes Nachziehen.
+    # Ein state-basierter Repair würde diesen frischen keep sofort wieder zu ``skipped`` drehen und die
+    # dokumentierte keep-Option für jede spätere Quelle unmöglich machen. Den keep→skipped-Übergang für
+    # eine nach einem Multi-Quellen-Commit verbleibende Quelle macht deshalb ausschließlich der
+    # ``on_success``-Pfad (``api/v1/ringbuffer.py``), der den Commit-Kontext besitzt.
+    if decision == LEGACY_DECISION_KEEP:
+        return False
+    # Solange noch eine (evtl. quarantänierte) Legacy-Quelle existiert, bleibt der Assistent
+    # nicht-terminal – sonst versteckte eine terminale Entscheidung den verbleibenden Cleanup.
+    if await rb.has_attached_legacy():
+        return False
+    if not await rb.has_committed_migration():
+        return False
+    await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+    return True
 
 
 async def persist_ringbuffer_config(
@@ -59,6 +347,10 @@ async def persist_ringbuffer_config(
     max_entries: int | None,
     max_file_size_bytes: int | None,
     max_age: int | None,
+    segmented: bool = False,
+    segment_max_bytes: int | None = None,
+    segment_max_rows: int | None = None,
+    segment_max_age: int | None = None,
 ) -> None:
     payload = json.dumps(
         {
@@ -66,6 +358,10 @@ async def persist_ringbuffer_config(
             "max_entries": max_entries,
             "max_file_size_bytes": max_file_size_bytes,
             "max_age": max_age,
+            "segmented": bool(segmented),
+            "segment_max_bytes": segment_max_bytes,
+            "segment_max_rows": segment_max_rows,
+            "segment_max_age": segment_max_age,
         }
     )
     await db.execute(
