@@ -811,6 +811,38 @@ class TestWrite:
         assert adapter.connected is True
 
     @pytest.mark.asyncio
+    async def test_write_recovers_connected_status_after_previous_failure(self, mock_bus):
+        # A DEST-only instance starts no poll task, so a successful write is the
+        # only place that ever observes owserver coming back after an outage —
+        # mirrors the recovery block in _poll_loop().
+        adapter = _connected_adapter(mock_bus)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(
+            False,
+            "Lost connection",
+            code="couldNotConnectTo",
+            params={"host": "h", "port": 1},
+        )
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
+
+        await adapter.write(binding, 1)
+
+        assert adapter.connected is True
+        assert adapter.last_detail_code == "connectedTo"
+
+    @pytest.mark.asyncio
+    async def test_write_does_not_republish_status_when_already_connected(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(True, "connected", code="connectedTo", params={"host": "h", "port": 1})
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
+
+        with mock.patch.object(adapter, "_publish_status", wraps=adapter._publish_status) as publish_status:
+            await adapter.write(binding, 1)
+
+        publish_status.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_write_error_is_caught_and_logged(self, mock_bus):
         adapter = _connected_adapter(mock_bus)
         adapter._proxy.write.side_effect = owprotocol.OwnetError(1, "read-only", "/28.AA/temperature")

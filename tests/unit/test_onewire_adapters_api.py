@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +18,34 @@ class _FakeDb:
 
     async def fetchone(self, _query: str, _params: tuple):
         return self._row
+
+
+class _RaceDb:
+    """Simulates two overlapping requests sharing one row. The first fetchone()
+    call captures its snapshot immediately (like a real SELECT that already
+    ran) but only returns it once released — modeling an await that resolves
+    later than a second, concurrent request's full read-modify-write cycle.
+    Without serialization, that stale snapshot then overwrites the second
+    request's already-committed write."""
+
+    def __init__(self, row: dict):
+        self._row = dict(row)
+        self._fetch_count = 0
+        self.first_fetch_started = asyncio.Event()
+        self.release_first_fetch = asyncio.Event()
+
+    async def fetchone(self, _query: str, _params: tuple):
+        self._fetch_count += 1
+        if self._fetch_count == 1:
+            snapshot = dict(self._row)
+            self.first_fetch_started.set()
+            await self.release_first_fetch.wait()
+            return snapshot
+        return dict(self._row)
+
+    async def execute_and_commit(self, _query: str, params: tuple):
+        config_json, _updated_at, _instance_id = params
+        self._row["config"] = config_json
 
 
 INSTANCE_ID = "96f4d53c-455d-47ff-a9d0-a9def24951ff"
@@ -177,6 +206,47 @@ async def test_set_alias_preserves_existing_aliases(monkeypatch):
 
     saved_config = json.loads(db.execute_and_commit.call_args[0][1][0])
     assert saved_config["aliases"] == {"10.AA": "Keller", "28.BB": "Bad"}
+
+
+@pytest.mark.asyncio
+async def test_set_alias_serializes_concurrent_saves(monkeypatch):
+    # Without the per-instance lock, two overlapping saves both read the same
+    # pre-update config, each merge only their own rom_id, and the later write
+    # silently drops the earlier one's alias.
+    monkeypatch.setattr(adapters_api.adapter_registry, "restart_instance", AsyncMock())
+    race_instance_id = "b3f6f3b7-6a34-4a0a-9a1a-2f9c9b7a5b11"
+    db = _RaceDb({"adapter_type": "ONEWIRE", "config": json.dumps({"host": "localhost", "port": 4304})})
+
+    with patch("obs.core.event_bus.get_event_bus", return_value=AsyncMock()):
+        task_a = asyncio.create_task(
+            adapters_api.onewire_set_alias(
+                instance_id=race_instance_id,
+                body=OneWireAliasRequest(rom_id="28.AA", label="A"),
+                _user="admin",
+                db=db,
+            ),
+        )
+        # Task A is now blocked inside its (first) fetchone() call, holding the
+        # per-instance lock if the fix is in place.
+        await db.first_fetch_started.wait()
+
+        task_b = asyncio.create_task(
+            adapters_api.onewire_set_alias(
+                instance_id=race_instance_id,
+                body=OneWireAliasRequest(rom_id="28.BB", label="B"),
+                _user="admin",
+                db=db,
+            ),
+        )
+        # Give task B a chance to run as far as it currently can (blocked on the
+        # lock if present; otherwise runs its whole read-modify-write to completion).
+        await asyncio.sleep(0)
+
+        db.release_first_fetch.set()
+        await asyncio.gather(task_a, task_b)
+
+    saved_config = json.loads(db._row["config"])
+    assert saved_config["aliases"] == {"28.AA": "A", "28.BB": "B"}
 
 
 @pytest.mark.asyncio

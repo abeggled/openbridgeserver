@@ -976,6 +976,14 @@ async def onewire_browse_sensors(
         ) from exc
 
 
+# Serializes the read-modify-write of an instance's config JSON per instance_id.
+# Without this, two overlapping alias saves for the same instance (e.g. a user
+# clicking "Save" on several scanned sensors in quick succession) both read the
+# same pre-update config, each merge in only their own rom_id, and the later
+# UPDATE silently overwrites the earlier one's alias.
+_ONEWIRE_ALIAS_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 @router.patch("/instances/{instance_id}/onewire/aliases", response_model=OneWireAliasRequest)
 async def onewire_set_alias(
     instance_id: uuid.UUID,
@@ -984,36 +992,38 @@ async def onewire_set_alias(
     db: Database = Depends(lambda: get_db()),
 ) -> OneWireAliasRequest:
     """Persistiert einen ROM-ID → Klartext-Label Alias, gepflegt aus der Binding-Scan-UI (issue #6)."""
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "ONEWIRE":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ONEWIRE-Instanzen verfügbar")
+    lock = _ONEWIRE_ALIAS_LOCKS.setdefault(str(instance_id), asyncio.Lock())
+    async with lock:
+        row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+        if row["adapter_type"] != "ONEWIRE":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ONEWIRE-Instanzen verfügbar")
 
-    config = json.loads(row["config"]) if row["config"] else {}
-    aliases = dict(config.get("aliases") or {})
-    aliases[body.rom_id] = body.label
-    config["aliases"] = aliases
+        config = json.loads(row["config"]) if row["config"] else {}
+        aliases = dict(config.get("aliases") or {})
+        aliases[body.rom_id] = body.label
+        config["aliases"] = aliases
 
-    cls = adapter_registry.get_class(row["adapter_type"])
-    if cls:
-        try:
-            cls.config_schema(**config)
-        except Exception as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"Config-Validierungsfehler: {exc}",
-            ) from exc
+        cls = adapter_registry.get_class(row["adapter_type"])
+        if cls:
+            try:
+                cls.config_schema(**config)
+            except Exception as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"Config-Validierungsfehler: {exc}",
+                ) from exc
 
-    now = datetime.now(UTC).isoformat()
-    await db.execute_and_commit(
-        "UPDATE adapter_instances SET config=?, updated_at=? WHERE id=?",
-        (json.dumps(config), now, str(instance_id)),
-    )
+        now = datetime.now(UTC).isoformat()
+        await db.execute_and_commit(
+            "UPDATE adapter_instances SET config=?, updated_at=? WHERE id=?",
+            (json.dumps(config), now, str(instance_id)),
+        )
 
-    from obs.core.event_bus import get_event_bus
+        from obs.core.event_bus import get_event_bus
 
-    await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
+        await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
 
     return body
 

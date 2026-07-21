@@ -357,6 +357,17 @@ class OneWireAdapter(AdapterBase):
                     self._executor,
                     lambda: self._proxy.write(path, data, timeout=self._cfg.request_timeout),
                 )
+            if not self.connected:
+                # Recovered after a connection-level failure below. DEST-only
+                # instances start no poll task, so a successful write is the
+                # only place that ever observes owserver coming back.
+                await self._publish_status(
+                    True,
+                    f"Connected to {self._cfg.host}:{self._cfg.port}",
+                    code="connectedTo",
+                    params={"host": self._cfg.host, "port": self._cfg.port},
+                )
+                logger.info("1-Wire adapter: connection to owserver recovered")
         except Exception as exc:
             # No adapter-side writability allowlist is maintained — owserver's own
             # error is the source of truth for whether a property is writable.
