@@ -947,8 +947,10 @@ async def test_reset_node_state_clears_memory_and_db():
 
     assert "g1" not in mgr._hysteresis
     assert "g1" not in mgr._node_state
+    # node_state is TEXT NOT NULL — the reset must write '{}', not NULL
     call = mgr._db.execute_and_commit.await_args
-    assert "node_state = NULL" in call.args[0]
+    assert "node_state = '{}'" in call.args[0]
+    assert "NULL" not in call.args[0]
     assert call.args[1] == ("g1",)
 
 
@@ -985,3 +987,152 @@ async def test_operating_hours_seeded_reset_zeroes_counter():
     ns = mgr._node_state["g1"]["oh1"]
     assert ns["accumulated_hours"] == 0.0
     assert ns["last_start"] is None
+
+
+@pytest.mark.asyncio
+async def test_python_script_is_not_executed_during_initialization(monkeypatch):
+    """The dry run must not run user scripts inside the save request — a
+    loop-heavy script would hang the save/activation."""
+    from unittest.mock import MagicMock as _MagicMock
+
+    from obs.logic.executor import GraphExecutor
+
+    run_script = _MagicMock(return_value=1)
+    monkeypatch.setattr(GraphExecutor, "_run_script", run_script)
+
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "p1", "type": "python_script", "data": {"script": "result = 1"}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "p1", "targetHandle": "value"},
+            {"source": "p1", "sourceHandle": "result", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    run_script.assert_not_called()
+    mgr._event_bus.publish.assert_not_awaited()
+    # The cached flow itself keeps its real node types
+    assert mgr._graphs["g1"][2].nodes[1].type == "python_script"
+
+
+@pytest.mark.asyncio
+async def test_trigger_only_seeded_path_does_not_publish_foreign_value():
+    """Const → Write.value plus Read → Write.trigger: the seeded read only
+    controls WHEN the write fires — a save must not publish the constant."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "c1", "type": "const_value", "data": {"value": 21}},
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "c1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+            {"source": "r1", "sourceHandle": "value", "target": "w1", "targetHandle": "trigger"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_seeded_value_with_seeded_trigger_still_publishes():
+    """A write whose value AND trigger both come from seeded reads stays
+    eligible — only trigger-only paths are excluded."""
+    src_a, src_b, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "w1", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "w1", "targetHandle": "trigger"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 5, src_b: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 5
+
+
+@pytest.mark.asyncio
+async def test_bulk_initialization_orders_producers_first():
+    """Config restore payloads may list consumers before producers — the bulk
+    pass reorders so the producer's write lands before the consumer seeds."""
+    src_a, dp_b, dst_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager(
+        {
+            "gA": ("A", True, _read_write_flow(src_a, dp_b)),
+            "gB": ("B", True, _read_write_flow(dp_b, dst_c)),
+        },
+        values={src_a: 7, dp_b: 3},
+    )
+    mgr._execute_graph = AsyncMock()
+
+    async def _deliver(event):
+        await mgr._on_value_event(event)
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    # Consumer listed first — the producer must still initialize first
+    await mgr.initialize_graphs(["gB", "gA"])
+
+    written = [c.args[0].datapoint_id for c in mgr._event_bus.publish.await_args_list]
+    assert written == [uuid.UUID(dp_b), uuid.UUID(dst_c)]
+    mgr._execute_graph.assert_not_awaited()
+    assert not mgr._bulk_init_pending
+
+
+@pytest.mark.asyncio
+async def test_bulk_initialization_cycle_falls_back_to_given_order():
+    """Two graphs writing what the other reads form a cycle — the pass keeps
+    the payload order and still initializes each exactly once."""
+    dp_a, dp_b = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager(
+        {
+            "gA": ("A", True, _read_write_flow(dp_a, dp_b)),
+            "gB": ("B", True, _read_write_flow(dp_b, dp_a)),
+        },
+        values={dp_a: 1, dp_b: 2},
+    )
+    mgr._execute_graph = AsyncMock()
+
+    async def _deliver(event):
+        await mgr._on_value_event(event)
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graphs(["gA", "gB"])
+
+    written = [c.args[0].datapoint_id for c in mgr._event_bus.publish.await_args_list]
+    assert written == [uuid.UUID(dp_b), uuid.UUID(dp_a)]
+    mgr._execute_graph.assert_not_awaited()
+    assert not mgr._bulk_init_pending
+
+
+@pytest.mark.asyncio
+async def test_bulk_initialization_tolerates_unknown_graph_ids():
+    """Ids that failed to load into the cache are ordered without effect and
+    no-op during initialization."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g1": ("G", True, _read_write_flow(src_id, dst_id))}, values={src_id: 4})
+
+    await mgr.initialize_graphs(["missing", "g1"])
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 4
+    assert not mgr._bulk_init_pending

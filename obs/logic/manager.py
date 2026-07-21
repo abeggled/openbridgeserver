@@ -82,6 +82,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "timer_cron",
         "ical",
         "missing_node",
+        "python_script",
         "statistics",
         "avg_multi",
         "min_max_tracker",
@@ -99,13 +100,13 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
 _INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis"})
 
 
-def _downstream_closure(start: set[str], flow: FlowData) -> set[str]:
+def _downstream_closure(start: set[str], edges: list[Any]) -> set[str]:
     """Node ids reachable from *start* (inclusive) following edges forward."""
     reached = set(start)
     grew = True
     while grew:
         grew = False
-        for edge in flow.edges:
+        for edge in edges:
             if edge.source in reached and edge.target not in reached:
                 reached.add(edge.target)
                 grew = True
@@ -1401,8 +1402,16 @@ class LogicManager:
         # object value — branches fed via that handle must not be initialized.
         read_node_ids = {node.id for node in flow.nodes if node.type == "datapoint_read"}
         changed_targets = {e.target for e in flow.edges if e.source in read_node_ids and e.sourceHandle == "changed"}
-        tainted = _downstream_closure(unseeded | changed_targets | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow)
-        seeded_paths = _downstream_closure(set(seeds), flow)
+        tainted = _downstream_closure(
+            unseeded | changed_targets | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow.edges
+        )
+        # Seeded eligibility must follow value-carrying paths only: an edge
+        # into a write node's trigger handle controls WHEN a write fires but
+        # does not deliver the written value, so it must not make a write
+        # (e.g. Const → Write.value plus Read → Write.trigger) initializable.
+        write_ids = {node.id for node in flow.nodes if node.type == "datapoint_write"}
+        value_edges = [e for e in flow.edges if not (e.target in write_ids and e.targetHandle == "trigger")]
+        seeded_paths = _downstream_closure(set(seeds), value_edges)
         # A write that closes a feedback loop onto a Read Object of the same
         # DataPoint (the write is reachable from that read) would re-enter
         # _on_value_event during publish and repeat until the cascade-depth
@@ -1415,7 +1424,7 @@ class LogicManager:
             r_dp = rnode.data.get("datapoint_id")
             if not r_dp:
                 continue
-            reach = _downstream_closure({rnode.id}, flow)
+            reach = _downstream_closure({rnode.id}, flow.edges)
             feedback_writes.update(
                 wnode.id for wnode in flow.nodes if wnode.type == "datapoint_write" and wnode.id in reach and wnode.data.get("datapoint_id") == r_dp
             )
@@ -1456,7 +1465,17 @@ class LogicManager:
                 overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
 
             hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
-            executor = GraphExecutor(flow, hyst_copy, self._app_config)
+            # Excluded node types never influence published writes (their
+            # subgraphs are tainted) — replace them with inert placeholders
+            # for the dry run so e.g. a python_script cannot burn CPU inside
+            # the save request.
+            init_flow = flow
+            if any(node.type in _INIT_EXCLUDED_NODE_TYPES for node in flow.nodes):
+                init_flow = flow.model_copy(deep=True)
+                for node in init_flow.nodes:
+                    if node.type in _INIT_EXCLUDED_NODE_TYPES:
+                        node.type = "missing_node"
+            executor = GraphExecutor(init_flow, hyst_copy, self._app_config)
             outputs = executor.execute(overrides, commit_memory=False)
 
             # Gate/hysteresis outputs on clean seeded paths are published
@@ -1515,18 +1534,51 @@ class LogicManager:
         except Exception as exc:
             logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
 
+    def _order_graphs_for_initialization(self, graph_ids: list[str]) -> list[str]:
+        """Order restored graphs producers-first.
+
+        A graph that writes a DataPoint another restored graph reads must
+        initialize first, so the consumer seeds from the freshly written
+        registry value. Dependency cycles fall back to the given order.
+        """
+        infos: dict[str, tuple[set[str], set[str]]] = {}
+        for gid in graph_ids:
+            entry = self._graphs.get(gid)
+            if not entry:
+                infos[gid] = (set(), set())
+                continue
+            _, _, flow = entry
+            reads = {n.data.get("datapoint_id") for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id")}
+            writes = {n.data.get("datapoint_id") for n in flow.nodes if n.type == "datapoint_write" and n.data.get("datapoint_id")}
+            infos[gid] = (reads, writes)
+        ordered: list[str] = []
+        remaining = list(graph_ids)
+        while remaining:
+            progressed = False
+            for gid in list(remaining):
+                reads, _ = infos[gid]
+                if any(other != gid and infos[other][1] & reads for other in remaining):
+                    continue  # a pending producer writes what this graph reads
+                ordered.append(gid)
+                remaining.remove(gid)
+                progressed = True
+            if not progressed:
+                ordered.extend(remaining)
+                break
+        return ordered
+
     async def initialize_graphs(self, graph_ids: list[str]) -> None:
         """Initialize several restored graphs exactly once each (issue #1031).
 
-        While the bulk pass runs, logic-sourced events do not re-enter the
-        graphs still awaiting their turn — a cascaded write from one imported
-        graph lands in the registry and is picked up by the later graph's own
-        seeding instead of double-executing it (see _on_value_event).
+        The pass runs producers-first and keeps ALL restored graphs
+        suppressed for its whole duration — a cascaded write from one
+        imported graph lands in the registry and is picked up by the later
+        graph's own seeding instead of double-executing it, regardless of
+        payload order (see _on_value_event).
         """
         self._bulk_init_pending.update(graph_ids)
         try:
-            for graph_id in graph_ids:
-                self._bulk_init_pending.discard(graph_id)
+            for graph_id in self._order_graphs_for_initialization(graph_ids):
                 await self.initialize_graph(graph_id)
         finally:
             self._bulk_init_pending.difference_update(graph_ids)
@@ -1541,7 +1593,9 @@ class LogicManager:
         self._hysteresis.pop(graph_id, None)
         self._node_state.pop(graph_id, None)
         try:
-            await self._db.execute_and_commit("UPDATE logic_graphs SET node_state = NULL WHERE id = ?", (graph_id,))
+            # node_state is TEXT NOT NULL DEFAULT '{}' — reset to the empty
+            # object, NULL would violate the schema.
+            await self._db.execute_and_commit("UPDATE logic_graphs SET node_state = '{}' WHERE id = ?", (graph_id,))
         except Exception as exc:
             logger.warning("Graph %s: failed to reset node_state: %s", graph_id[:8], exc)
 

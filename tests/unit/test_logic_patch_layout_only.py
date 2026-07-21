@@ -48,3 +48,36 @@ async def test_patch_with_corrupt_stored_flow_falls_back_to_reload(monkeypatch):
 
     assert result.id == "g1"
     db.execute_and_commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_patch_move_only_on_legacy_flow_is_layout_only(monkeypatch):
+    """Stored graphs from older exports may omit optional edge handles that a
+    freshly parsed body carries as null — a move-only PATCH must still be
+    classified layout-only and not re-initialize the sheet."""
+    manager = MagicMock()
+    manager.reload = AsyncMock()
+    manager.initialize_graph = AsyncMock()
+    monkeypatch.setattr("obs.logic.manager._manager", manager)
+
+    # Legacy stored flow: no sourceHandle/targetHandle keys at all
+    legacy_flow = {
+        "nodes": [{"id": "n1", "type": "and", "position": {"x": 0, "y": 0}, "data": {}}],
+        "edges": [{"id": "e1", "source": "n1", "target": "n1"}],
+    }
+    moved = FlowData.model_validate(
+        {
+            "nodes": [{"id": "n1", "type": "and", "position": {"x": 50, "y": 50}, "data": {}}],
+            "edges": [{"id": "e1", "source": "n1", "target": "n1"}],
+        }
+    )
+    db = MagicMock()
+    db.fetchone = AsyncMock(side_effect=[_row(json.dumps(legacy_flow)), _row(moved.model_dump_json())])
+    db.execute_and_commit = AsyncMock()
+
+    result = await update_graph_partial("g1", LogicGraphUpdate(flow_data=moved), _user="admin", db=db)
+
+    assert result.id == "g1"
+    manager.update_cached_graph.assert_called_once()
+    manager.invalidate_cache.assert_not_called()
+    manager.initialize_graph.assert_not_awaited()

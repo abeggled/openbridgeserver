@@ -59,6 +59,16 @@ def _without_positions(raw: dict) -> dict:
     return raw
 
 
+def _normalized_without_positions(raw: dict) -> dict:
+    """Normalize a flow through FlowData, then strip positions.
+
+    Stored graphs (e.g. from older exports) may omit optional fields that a
+    freshly parsed request body carries explicitly as null — comparing raw
+    dicts would misclassify a move-only save as an execution change.
+    """
+    return _without_positions(json.loads(FlowData.model_validate(raw).model_dump_json()))
+
+
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     return LogicGraphOut(
@@ -186,9 +196,9 @@ async def update_graph_full(
     )
 
     try:
-        layout_only = bool(row["enabled"]) == body.enabled and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(
-            json.loads(body.flow_data.model_dump_json())
-        )
+        layout_only = bool(row["enabled"]) == body.enabled and _normalized_without_positions(
+            json.loads(row["flow_data"] or "{}")
+        ) == _normalized_without_positions(json.loads(body.flow_data.model_dump_json()))
     except (TypeError, ValueError):
         layout_only = False
 
@@ -246,7 +256,7 @@ async def update_graph_partial(
             layout_only = (
                 body.flow_data is not None
                 and (body.enabled is None or body.enabled == bool(row["enabled"]))
-                and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(json.loads(flow_json))
+                and _normalized_without_positions(json.loads(row["flow_data"] or "{}")) == _normalized_without_positions(json.loads(flow_json))
             )
         except (TypeError, ValueError):
             layout_only = False
