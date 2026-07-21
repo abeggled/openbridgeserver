@@ -1194,6 +1194,7 @@ class LogicManager:
         dp_id = str(event.datapoint_id)
         now = datetime.now(UTC)
         logic_depth = int(getattr(event, "logic_depth", 0) or 0)
+        is_init_event = getattr(event, "initialization", False) is True
 
         for graph_id in list(self._graphs):
             entry = self._graphs.get(graph_id)
@@ -1202,21 +1203,18 @@ class LogicManager:
             name, enabled, flow = entry
             if not enabled:
                 continue
-            if getattr(event, "source_adapter", None) == "logic" and (
-                dp_id in self._initializing_graphs.get(graph_id, ())
-                or (graph_id in self._bulk_init_pending and getattr(event, "initialization", False) is True)
-            ):
+            if is_init_event and (dp_id in self._initializing_graphs.get(graph_id, ()) or graph_id in self._bulk_init_pending):
                 # This graph's own initialization publish is in flight — or
                 # the graph awaits its turn in a bulk config-restore pass and
                 # will seed itself from the registry in a moment — so the
-                # logic-sourced write must not re-enter it mid-pass (issue
-                # #1031). Keep the read filters of the written DataPoint in
-                # sync so a later event repeating this value is deduplicated
-                # (last_value only — refreshing last_ts would start a
-                # throttle window at save time and drop the next real
-                # update). Unrelated live events (other DataPoints, or
-                # non-logic sources of the same DataPoint) still execute
-                # normally.
+                # initialization-flagged write must not re-enter it mid-pass
+                # (issue #1031). Only flagged events qualify: a REAL logic
+                # write from another sheet racing in during the publish await
+                # executes normally. Keep the read filters of the written
+                # DataPoint in sync so a later event repeating this value is
+                # deduplicated (last_value only — refreshing last_ts would
+                # start a throttle window at save time and drop the next
+                # real update).
                 sync_state = self._node_state.setdefault(graph_id, {})
                 for tn in flow.nodes:
                     if tn.type == "datapoint_read" and tn.data.get("datapoint_id") == dp_id:
@@ -1283,14 +1281,18 @@ class LogicManager:
                     except (TypeError, ValueError):
                         pass
 
-                # All filters passed — update state and add override
+                # All filters passed — update state and add override.
+                # Initialization cascades keep last_ts untouched: save-time
+                # seeding is not a real source update and must not start a
+                # throttle window that would drop the next real event.
                 ns["last_value"] = new_val
-                ns["last_ts"] = now
+                if not is_init_event:
+                    ns["last_ts"] = now
                 overrides[tn.id] = {"value": new_val, "changed": True}
 
             if not overrides:
                 continue
-            if getattr(event, "initialization", False) is True:
+            if is_init_event:
                 # Save-time seeding cascading into another sheet stays
                 # initialization: run the side-effect-free pass instead of a
                 # full execution so no api_client/notify/WoL/sequence action
@@ -1698,13 +1700,25 @@ class LogicManager:
         carried across the reload: invalidate_cache drops _node_state, and an
         initialization publish evaluated against empty filter state would
         re-send unchanged actuator values on every semantic save even though
-        only_on_change/min_delta/throttle should suppress them.
+        only_on_change/min_delta/throttle should suppress them. Only nodes
+        whose semantics are unchanged (same type and data) keep their state —
+        e.g. a write retargeted to another DataPoint must not inherit the old
+        target's last_write_val and skip its initialization.
         """
+        old_entry = self._graphs.get(graph_id)
         saved_state = self._node_state.get(graph_id)
         self.invalidate_cache(graph_id)
         await self.reload()
-        if saved_state:
-            self._node_state[graph_id] = saved_state
+        new_entry = self._graphs.get(graph_id)
+        if saved_state and old_entry and new_entry:
+            old_nodes = {node.id: node for node in old_entry[2].nodes}
+            kept = {
+                node.id: saved_state[node.id]
+                for node in new_entry[2].nodes
+                if node.id in saved_state and node.id in old_nodes and old_nodes[node.id].type == node.type and old_nodes[node.id].data == node.data
+            }
+            if kept:
+                self._node_state[graph_id] = kept
         await self.initialize_graph(graph_id)
 
     async def initialize_graphs(self, graph_ids: list[str]) -> None:

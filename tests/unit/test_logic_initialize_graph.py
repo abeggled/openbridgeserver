@@ -1600,3 +1600,87 @@ async def test_bulk_pending_graph_still_executes_live_logic_events():
     mgr._execute_graph.reset_mock()
     await mgr._on_value_event(flagged)
     mgr._execute_graph.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_graph_drops_state_of_retargeted_nodes():
+    """A write retargeted to another DataPoint (same node id) must not
+    inherit the old target's last_write_val — the new target initializes."""
+    src_id, dst_a, dst_b = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+
+    def _rw_flow(dst: str) -> FlowData:
+        return _flow(
+            [
+                {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+                {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst, "only_on_change": True}},
+            ],
+            [{"source": "r1", "sourceHandle": "value", "target": "w1", "targetHandle": "value"}],
+        )
+
+    mgr = _make_manager({"g1": ("G", True, _rw_flow(dst_a))}, values={src_id: 42})
+    mgr._node_state["g1"] = {"w1": {"last_write_val": 42}}
+
+    async def _reload():
+        mgr._graphs["g1"] = ("G", True, _rw_flow(dst_b))
+
+    mgr.reload = AsyncMock(side_effect=_reload)
+
+    await mgr.reinitialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    event = mgr._event_bus.publish.await_args.args[0]
+    assert event.datapoint_id == uuid.UUID(dst_b)
+    assert event.value == 42
+
+
+@pytest.mark.asyncio
+async def test_cascaded_initialization_does_not_start_read_throttle():
+    """The read filter loop keeps last_ts untouched for initialization
+    cascades — save-time seeding must not open a throttle window."""
+    from obs.core.event_bus import DataValueEvent
+
+    dp_x, dst_y = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g2": ("B", True, _read_write_flow(dp_x, dst_y))}, values={dp_x: 3})
+
+    flagged = DataValueEvent(datapoint_id=uuid.UUID(dp_x), value=7, quality="good", source_adapter="logic", initialization=True)
+    await mgr._on_value_event(flagged)
+
+    ns = mgr._node_state["g2"]["r1"]
+    assert ns["last_value"] == 7
+    # seed priming uses the registry ts; the cascade must not stamp `now`
+    assert ns.get("last_ts") in (None, _SEED_TS)
+    # the cascade still initialized the sheet with the event value
+    assert mgr._event_bus.publish.await_args.args[0].value == 7
+
+
+@pytest.mark.asyncio
+async def test_real_logic_write_during_init_publish_executes():
+    """Only initialization-flagged events are treated as self-reentry — a
+    real logic write from another sheet racing in during the publish await
+    executes the graph normally."""
+    from obs.core.event_bus import DataValueEvent
+
+    src_a, dp_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+        ],
+        [{"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"}],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 7, dp_b: 3})
+    mgr._execute_graph = AsyncMock()
+
+    async def _deliver(event):
+        await mgr._on_value_event(event)  # own flagged event — suppressed
+        other = DataValueEvent(datapoint_id=uuid.UUID(dp_b), value=99, quality="good", source_adapter="logic")
+        await mgr._on_value_event(other)  # real write from another sheet
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graph("g1")
+
+    mgr._execute_graph.assert_awaited_once()
+    overrides = mgr._execute_graph.await_args.args[3]
+    assert overrides == {"rB": {"value": 99, "changed": True}}

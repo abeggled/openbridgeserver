@@ -840,7 +840,9 @@ async def import_config(
                     ),
                 )
                 result.logic_graphs_created += 1
-            imported_graph_ids.append(lg.id)
+            # Duplicate ids collapse to one row — initialize each id once
+            if lg.id not in imported_graph_ids:
+                imported_graph_ids.append(lg.id)
         except Exception as exc:
             result.errors.append(f"LogicGraph {lg.id}: {exc}")
 
