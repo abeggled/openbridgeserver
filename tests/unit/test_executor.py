@@ -48,6 +48,15 @@ def test_datetime_node_localizes_names_and_preserves_literal_words():
     assert any(day in output for day in ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"))
 
 
+def test_datetime_node_uses_schema_default_for_custom_output():
+    executor = make_executor([node("clock", "datetime", {})], app_config={"timezone": "UTC", "language": "en"})
+
+    output = executor.execute()["clock"]["custom"]
+
+    assert "," in output
+    assert ":" in output
+
+
 # ===========================================================================
 # _round_half_up
 # ===========================================================================

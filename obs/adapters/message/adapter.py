@@ -349,7 +349,7 @@ class MessageAdapter(AdapterBase):
         try:
             from zoneinfo import ZoneInfo
 
-            display_ts = datetime.now(ZoneInfo(app_settings["timezone"]))
+            display_ts = event_ts.astimezone(ZoneInfo(app_settings["timezone"]))
         except Exception:
             display_ts = event_ts
         rendered = render_message(

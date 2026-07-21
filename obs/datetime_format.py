@@ -6,6 +6,7 @@ from datetime import datetime
 
 DEFAULT_DATE_FORMAT = "dd.MM.yyyy"
 DEFAULT_TIME_FORMAT = "HH:mm:ss"
+DEFAULT_CUSTOM_FORMAT = "EEEE, MMMM d, yyyy HH:mm:ss"
 
 _WEEKDAYS_EN = (
     ("Monday", "Mon", "Mo"),

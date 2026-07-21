@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo as _ZoneInfo
 
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
-from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
+from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
@@ -906,7 +906,7 @@ class GraphExecutor:
                 return {
                     "date": format_datetime(now, str(self.app_config.get("date_format", DEFAULT_DATE_FORMAT)), language),
                     "time": format_datetime(now, str(self.app_config.get("time_format", DEFAULT_TIME_FORMAT)), language),
-                    "custom": format_datetime(now, str(d.get("custom_format") or DEFAULT_DATE_FORMAT), language),
+                    "custom": format_datetime(now, str(d.get("custom_format") or DEFAULT_CUSTOM_FORMAT), language),
                 }
 
             case "timer_delay" | "timer_pulse":

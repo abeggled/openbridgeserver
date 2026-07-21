@@ -200,10 +200,12 @@ async def test_changing_timezone_does_not_overwrite_formats(client, auth_headers
         json={"timezone": "UTC", "date_format": "yyyy/MM/dd", "time_format": "H-mm"},
         headers=auth_headers,
     )
-    await client.put("/api/v1/system/settings", json={"timezone": "Europe/Berlin"}, headers=auth_headers)
+    response = await client.put("/api/v1/system/settings", json={"timezone": "Europe/Berlin"}, headers=auth_headers)
 
     settings = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
 
+    assert response.json()["date_format"] == "yyyy/MM/dd"
+    assert response.json()["time_format"] == "H-mm"
     assert settings["date_format"] == "yyyy/MM/dd"
     assert settings["time_format"] == "H-mm"
     await client.put(

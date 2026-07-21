@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from obs.datetime_format import DEFAULT_CUSTOM_FORMAT
 from obs.logic.models import NodeTypeDef, NodeTypePort
 
 # ---------------------------------------------------------------------------
@@ -679,7 +680,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         inputs=[],
         outputs=[_port("date", "Datum"), _port("time", "Zeit"), _port("custom", "Benutzerdefiniert")],
         config_schema={
-            "custom_format": {"type": "string", "default": "EEEE, MMMM d, yyyy HH:mm:ss", "label": "Benutzerdefiniertes Format"},
+            "custom_format": {"type": "string", "default": DEFAULT_CUSTOM_FORMAT, "label": "Benutzerdefiniertes Format"},
         },
         color="#b45309",
     ),

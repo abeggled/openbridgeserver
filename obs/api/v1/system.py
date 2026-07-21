@@ -264,6 +264,7 @@ async def update_app_settings(
 
     format_fields_supplied = len(format_fields) == 2
     language_supplied = "language" in body.model_fields_set
+    current_settings = await get_app_settings(db=db, _user=_user)
     if format_fields_supplied and language_supplied:
         await db.execute_and_commit(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
@@ -298,7 +299,12 @@ async def update_app_settings(
     except Exception:
         pass  # Manager may not be running — non-critical
 
-    return AppSettingsOut(**body.model_dump())
+    return AppSettingsOut(
+        timezone=body.timezone,
+        date_format=body.date_format if format_fields_supplied else current_settings.date_format,
+        time_format=body.time_format if format_fields_supplied else current_settings.time_format,
+        language=body.language if language_supplied else current_settings.language,
+    )
 
 
 # ---------------------------------------------------------------------------

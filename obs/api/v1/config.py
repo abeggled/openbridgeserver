@@ -982,18 +982,18 @@ async def import_config(
         except Exception as exc:
             result.errors.append(f"AppSetting {s.key}: {exc}")
 
-    # Apply an imported timezone immediately.  Logic graphs may already have
-    # been reloaded above, but their executor receives this hot configuration
-    # on the next evaluation.
-    imported_timezone = next((s.value for s in body.app_settings if s.key == "timezone"), None)
-    if imported_timezone is not None:
+    # Apply imported date/time settings immediately. Logic graphs may already
+    # have been reloaded above, but their executor receives this hot
+    # configuration on the next evaluation.
+    imported_datetime_settings = {
+        setting.key: setting.value for setting in body.app_settings if setting.key in {"timezone", "date_format", "time_format", "language"}
+    }
+    if imported_datetime_settings:
         try:
-            ZoneInfo(imported_timezone)
+            if "timezone" in imported_datetime_settings:
+                ZoneInfo(imported_datetime_settings["timezone"])
             from obs.logic.manager import get_logic_manager
 
-            imported_datetime_settings = {
-                setting.key: setting.value for setting in body.app_settings if setting.key in {"timezone", "date_format", "time_format", "language"}
-            }
             get_logic_manager().update_app_config(imported_datetime_settings)
         except Exception:
             pass  # Manager may not be running — non-critical
@@ -1157,6 +1157,9 @@ async def factory_reset(
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('date_format', 'dd.MM.yyyy')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('time_format', 'HH:mm:ss')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'de')")
+        from obs.logic.manager import get_logic_manager
+
+        get_logic_manager().update_app_config({"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"})
     except Exception as exc:
         result.errors.append(f"App settings reset failed: {exc}")
 

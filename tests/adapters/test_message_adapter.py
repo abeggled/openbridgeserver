@@ -303,6 +303,28 @@ async def test_datapoint_update_sends_message_to_provider(bus, dummy_provider, m
 
 
 @pytest.mark.asyncio
+async def test_date_and_time_placeholders_use_event_timestamp(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    monkeypatch.setattr(
+        "obs.adapters.message.adapter._datetime_settings",
+        AsyncMock(return_value={"timezone": "Europe/Zurich", "date_format": "yyyy-MM-dd", "time_format": "HH:mm:ss", "language": "de"}),
+    )
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, message="###DATE### ###TIME### ###TS###")
+    await adapter.reload_bindings([binding])
+    event_ts = datetime(2026, 1, 2, 23, 4, 5, tzinfo=UTC)
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=29.4, quality="good", source_adapter="test", ts=event_ts))
+    await _drain_sends(adapter)
+
+    assert dummy_provider.send.await_args.kwargs["message"] == "2026-01-03 00:04:05 2026-01-02T23:04:05+00:00"
+
+
+@pytest.mark.asyncio
 async def test_send_on_change_suppresses_repeated_true_condition(bus, dummy_provider, monkeypatch):
     dp_id = uuid.uuid4()
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
