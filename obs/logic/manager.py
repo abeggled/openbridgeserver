@@ -1452,7 +1452,13 @@ class LogicManager:
         # feedback can also span several DataPoints (Read A → Write B plus
         # Read B → Write A would never settle). Build the DataPoint-level
         # dependency graph and exclude every write whose target sits on a
-        # cycle, exactly like the same-DataPoint feedback above.
+        # cycle, exactly like the same-DataPoint feedback above. Only
+        # value-carrying reachability counts: a read that merely gates a
+        # write's trigger (or another control-only handle) can never deliver
+        # the written value, so it forms no settle dependency.
+        reach_by_read_value: dict[str, set[str]] = {
+            rnode.id: _downstream_closure({rnode.id}, value_edges) for rnode in flow.nodes if rnode.type == "datapoint_read"
+        }
         dp_deps: dict[str, set[str]] = {}
         for wnode in flow.nodes:
             if wnode.type != "datapoint_write" or wnode.id in feedback_writes:
@@ -1461,7 +1467,7 @@ class LogicManager:
             if not w_dp:
                 continue
             for rnode in flow.nodes:
-                if rnode.type == "datapoint_read" and wnode.id in reach_by_read.get(rnode.id, ()):
+                if rnode.type == "datapoint_read" and rnode.data.get("datapoint_id") and wnode.id in reach_by_read_value.get(rnode.id, ()):
                     dp_deps.setdefault(w_dp, set()).add(rnode.data.get("datapoint_id"))
         cyclic_dps: set[str] = set()
         for start_dp in dp_deps:
@@ -1564,6 +1570,10 @@ class LogicManager:
                     write_val = node_out.get("_write_value")
                     if not w_dp or write_val is None:
                         continue
+                    # A value the write-side filters would suppress is never
+                    # actually written — it must not seed downstream reads.
+                    if not self._write_filters_allow(wnode.data, graph_state.get(wnode.id, {}), write_val, now):
+                        continue
                     for rnode in flow.nodes:
                         if rnode.type != "datapoint_read" or rnode.data.get("datapoint_id") != w_dp:
                             continue
@@ -1573,15 +1583,6 @@ class LogicManager:
                             settled = False
                 if settled:
                     break
-
-            # Gate/hysteresis outputs on clean seeded paths are published
-            # below — commit their switched state so the persisted state
-            # matches what was published (see _INIT_COMMIT_STATE_NODE_TYPES).
-            state_committed = False
-            for node in flow.nodes:
-                if node.type in _INIT_COMMIT_STATE_NODE_TYPES and node.id in seeded_paths and node.id not in tainted and node.id in hyst_copy:
-                    self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
-                    state_committed = True
 
             # Start/stop the operating-hours accumulators exactly like
             # _execute_graph's _apply_operating_hours_state, but only for
@@ -1603,12 +1604,6 @@ class LogicManager:
                 elif ns.get("last_start"):
                     ns["accumulated_hours"] += (now - ns["last_start"]).total_seconds() / 3600
                     ns["last_start"] = None
-            if state_committed:
-                # Persist like _execute_graph does — otherwise a restart
-                # before the next real execution reloads the stale pre-save
-                # state from the DB while the switched value was already
-                # written.
-                await self._persist_node_state(graph_id)
 
             # While the publish is in flight, _on_value_event skips THIS
             # graph for the DataPoints written here: a write target read
@@ -1623,11 +1618,33 @@ class LogicManager:
             }
             self._initializing_graphs[graph_id] = init_write_dps
             try:
-                await self._apply_datapoint_write_outputs(
+                published_writes = await self._apply_datapoint_write_outputs(
                     graph_id, flow, outputs, graph_state, wired_inputs, now, logic_depth, skip_node_ids=skip_writes, initialization=True
                 )
             finally:
                 self._initializing_graphs.pop(graph_id, None)
+
+            # Commit gate/hysteresis state only for nodes whose switched
+            # output was actually published (see
+            # _INIT_COMMIT_STATE_NODE_TYPES) — without a published write the
+            # save must not act like a datapoint event on the stored state.
+            state_committed = False
+            for node in flow.nodes:
+                if (
+                    node.type in _INIT_COMMIT_STATE_NODE_TYPES
+                    and node.id in seeded_paths
+                    and node.id not in tainted
+                    and node.id in hyst_copy
+                    and _downstream_closure({node.id}, flow.edges) & published_writes
+                ):
+                    self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
+                    state_committed = True
+            if state_committed:
+                # Persist like _execute_graph does — otherwise a restart
+                # before the next real execution reloads the stale pre-save
+                # state from the DB while the switched value was already
+                # written.
+                await self._persist_node_state(graph_id)
         except Exception as exc:
             logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
 
@@ -3609,16 +3626,18 @@ class LogicManager:
         *,
         skip_node_ids: set[str] | frozenset[str] = frozenset(),
         initialization: bool = False,
-    ) -> None:
+    ) -> set[str]:
         """Apply trigger gating + write-side filters to datapoint_write outputs,
         then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get
         notified. skip_node_ids excludes individual write nodes (used by
         initialize_graph for writes descending from unseeded Read Objects);
         initialization marks the events as save-time seeding so notification
-        subscribers do not react to them.
+        subscribers do not react to them. Returns the ids of the write nodes
+        whose event was actually published.
         """
         from obs.core.event_bus import DataValueEvent
 
+        published: set[str] = set()
         for node in flow.nodes:
             if node.type != "datapoint_write" or node.id in skip_node_ids:
                 continue
@@ -3638,37 +3657,9 @@ class LogicManager:
             if not dp_id_str:
                 continue
 
-            d = node.data
             ns = graph_state.setdefault(node.id, {})
-            last_wr = ns.get("last_write_val")
-            last_ts = ns.get("last_write_ts")
-
-            # ── Filter: only_on_change ───────────────────────────────────
-            ooc = d.get("only_on_change")
-            if ooc is True or ooc == "true":
-                if write_val == last_wr:
-                    continue
-
-            # ── Filter: min_delta (write side) ───────────────────────────
-            raw_delta = d.get("min_delta")
-            if raw_delta not in (None, "", 0) and last_wr is not None:
-                try:
-                    if abs(float(write_val) - float(last_wr)) < float(raw_delta):
-                        continue
-                except (TypeError, ValueError):
-                    pass
-
-            # ── Filter: throttle (value + unit, write side) ───────────────
-            tv = d.get("throttle_value")
-            if tv not in (None, "", 0) and last_ts is not None:
-                try:
-                    unit_ms = _THROTTLE_UNITS.get(d.get("throttle_unit", "s"), 1000.0)
-                    throttle_ms = float(tv) * unit_ms
-                    elapsed_ms = (write_now - last_ts).total_seconds() * 1000
-                    if elapsed_ms < throttle_ms:
-                        continue
-                except (TypeError, ValueError):
-                    pass
+            if not self._write_filters_allow(node.data, ns, write_val, write_now):
+                continue
 
             # All filters passed — update state and publish
             ns["last_write_val"] = write_val
@@ -3684,9 +3675,44 @@ class LogicManager:
                     initialization=initialization,
                 )
                 await self._event_bus.publish(event)
+                published.add(node.id)
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception as exc:
                 logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
+        return published
+
+    @staticmethod
+    def _write_filters_allow(d: dict[str, Any], ns: dict[str, Any], write_val: Any, write_now: datetime) -> bool:
+        """Write-side only_on_change / min_delta / throttle filters.
+
+        Pure predicate against the node's filter state — shared by the
+        publish path and the initialization settle pass, which must not feed
+        values downstream that these filters would suppress.
+        """
+        last_wr = ns.get("last_write_val")
+        last_ts = ns.get("last_write_ts")
+
+        ooc = d.get("only_on_change")
+        if (ooc is True or ooc == "true") and write_val == last_wr:
+            return False
+
+        raw_delta = d.get("min_delta")
+        if raw_delta not in (None, "", 0) and last_wr is not None:
+            try:
+                if abs(float(write_val) - float(last_wr)) < float(raw_delta):
+                    return False
+            except (TypeError, ValueError):
+                pass
+
+        tv = d.get("throttle_value")
+        if tv not in (None, "", 0) and last_ts is not None:
+            try:
+                unit_ms = _THROTTLE_UNITS.get(d.get("throttle_unit", "s"), 1000.0)
+                if (write_now - last_ts).total_seconds() * 1000 < float(tv) * unit_ms:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        return True
 
     async def _load_graphs(self) -> None:
         rows = await self._db.fetchall("SELECT id, name, enabled, flow_data, node_state FROM logic_graphs")

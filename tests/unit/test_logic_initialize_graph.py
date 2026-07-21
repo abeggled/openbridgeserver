@@ -1442,3 +1442,82 @@ async def test_branch_off_cyclic_pair_still_initializes():
     event = mgr._event_bus.publish.await_args.args[0]
     assert event.datapoint_id == uuid.UUID(dp_x)
     assert event.value == 1
+
+
+@pytest.mark.asyncio
+async def test_settle_honors_write_filters():
+    """A filtered (suppressed) intermediate write never lands in the registry
+    — the settle pass must not feed its would-be value downstream."""
+    src_a, dp_b, dst_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b, "only_on_change": True}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wC", "type": "datapoint_write", "data": {"datapoint_id": dst_c}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wC", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 7, dp_b: 3})
+    # only_on_change suppresses the B write — 7 was already written earlier
+    mgr._node_state["g1"] = {"wB": {"last_write_val": 7}}
+
+    await mgr.initialize_graph("g1")
+
+    written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
+    # B is not re-written; C initializes from B's actual registry value
+    assert written == {uuid.UUID(dst_c): 3}
+
+
+@pytest.mark.asyncio
+async def test_trigger_only_edge_does_not_form_settle_cycle():
+    """Read A → Write B.trigger plus Read B → Write A.value: the trigger edge
+    cannot deliver a value, so there is no cycle and Write A initializes."""
+    dp_a, dp_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": dp_a}},
+            {"id": "c1", "type": "const_value", "data": {"value": 9}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wA", "type": "datapoint_write", "data": {"datapoint_id": dp_a}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "trigger"},
+            {"source": "c1", "sourceHandle": "out", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wA", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={dp_a: 1, dp_b: 2})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    event = mgr._event_bus.publish.await_args.args[0]
+    assert event.datapoint_id == uuid.UUID(dp_a)
+    assert event.value == 2
+
+
+@pytest.mark.asyncio
+async def test_hysteresis_without_published_write_is_not_committed():
+    """Without a published write on its path, the save must not act like a
+    datapoint event on the stored gate/hysteresis state."""
+    src_id = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "h1", "type": "hysteresis", "data": {"threshold_on": 40, "threshold_off": 20}},
+        ],
+        [{"source": "r1", "sourceHandle": "value", "target": "h1", "targetHandle": "value"}],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 50})
+    mgr._hysteresis["g1"] = {"h1": False}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+    assert mgr._hysteresis["g1"]["h1"] is False
+    assert not [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
