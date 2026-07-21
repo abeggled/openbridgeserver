@@ -1415,6 +1415,7 @@ class LogicManager:
         value_edges = [e for e in flow.edges if not (e.target in write_ids and e.targetHandle == "trigger")]
         wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
         feedback_writes: set[str] = set()
+        reach_by_read: dict[str, set[str]] = {}
         for rnode in flow.nodes:
             if rnode.type != "datapoint_read":
                 continue
@@ -1422,9 +1423,40 @@ class LogicManager:
             if not r_dp:
                 continue
             reach = _downstream_closure({rnode.id}, flow.edges)
+            reach_by_read[rnode.id] = reach
             feedback_writes.update(
                 wnode.id for wnode in flow.nodes if wnode.type == "datapoint_write" and wnode.id in reach and wnode.data.get("datapoint_id") == r_dp
             )
+
+        # The settle pass adds implicit write-target → read dependencies, so
+        # feedback can also span several DataPoints (Read A → Write B plus
+        # Read B → Write A would never settle). Build the DataPoint-level
+        # dependency graph and exclude every write whose target sits on a
+        # cycle, exactly like the same-DataPoint feedback above.
+        dp_deps: dict[str, set[str]] = {}
+        for wnode in flow.nodes:
+            if wnode.type != "datapoint_write" or wnode.id in feedback_writes:
+                continue
+            w_dp = wnode.data.get("datapoint_id")
+            if not w_dp:
+                continue
+            for rnode in flow.nodes:
+                if rnode.type == "datapoint_read" and wnode.id in reach_by_read.get(rnode.id, ()):
+                    dp_deps.setdefault(w_dp, set()).add(rnode.data.get("datapoint_id"))
+        cyclic_dps: set[str] = set()
+        for start_dp in dp_deps:
+            frontier = set(dp_deps.get(start_dp, ()))
+            seen: set[str] = set()
+            while frontier:
+                dep = frontier.pop()
+                if dep == start_dp:
+                    cyclic_dps.add(start_dp)
+                    break
+                if dep in seen:
+                    continue
+                seen.add(dep)
+                frontier.update(dp_deps.get(dep, ()))
+        feedback_writes.update(wnode.id for wnode in flow.nodes if wnode.type == "datapoint_write" and wnode.data.get("datapoint_id") in cyclic_dps)
 
         now = datetime.now(UTC)
         graph_state = self._node_state.setdefault(graph_id, {})
@@ -1442,7 +1474,6 @@ class LogicManager:
                 ns["last_ts"] = ts
 
         try:
-            hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
             # Excluded node types never influence published writes (their
             # subgraphs are tainted) — replace them with inert placeholders
             # for the dry run so e.g. a python_script cannot burn CPU inside
@@ -1453,7 +1484,6 @@ class LogicManager:
                 for node in init_flow.nodes:
                     if node.type in _INIT_EXCLUDED_NODE_TYPES:
                         node.type = "missing_node"
-            executor = GraphExecutor(init_flow, hyst_copy, self._app_config)
 
             # Evaluate until intermediate DataPoints settle: a write target
             # that another Read Object of the same sheet watches feeds its
@@ -1490,6 +1520,13 @@ class LogicManager:
                         acc += (now - ns["last_start"]).total_seconds() / 3600
                     overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
 
+                # Fresh state copy per pass: the executor mutates gate/
+                # hysteresis state during evaluation, and a later pass with
+                # settled seeds must evaluate against the ORIGINAL persisted
+                # state, not the state an earlier pass derived from stale
+                # intermediate values.
+                hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
+                executor = GraphExecutor(init_flow, hyst_copy, self._app_config)
                 outputs = executor.execute(overrides, commit_memory=False)
 
                 settled = True

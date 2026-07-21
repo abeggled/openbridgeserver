@@ -190,6 +190,11 @@ class AnwesenheitssimulationAdapter(AdapterBase):
     async def _handle_control_event(self, event: Any) -> None:
         if not self._cfg.control_dp_id:
             return
+        if getattr(event, "initialization", False):
+            # Save-time seeding by the logic initialization pass (issue
+            # #1031) is not a real presence change — never start/stop the
+            # simulation on it.
+            return
         try:
             control_id = uuid.UUID(self._cfg.control_dp_id)
         except ValueError:

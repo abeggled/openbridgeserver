@@ -1216,3 +1216,89 @@ async def test_unconfigured_write_on_seeded_path_is_ignored():
 
     mgr._event_bus.publish.assert_awaited_once()
     assert mgr._event_bus.publish.await_args.args[0].value == 6
+
+
+@pytest.mark.asyncio
+async def test_settle_pass_evaluates_hysteresis_from_original_state():
+    """Each settle pass gets a fresh state copy: an earlier pass evaluating
+    the stale intermediate value must not flip the hysteresis state that the
+    final settled pass (and the commit) is based on."""
+    src_a, dp_b, dst_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "h1", "type": "hysteresis", "data": {"threshold_on": 40, "threshold_off": 20}},
+            {"id": "wC", "type": "datapoint_write", "data": {"datapoint_id": dst_c}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "h1", "targetHandle": "value"},
+            {"source": "h1", "sourceHandle": "out", "target": "wC", "targetHandle": "value"},
+        ],
+    )
+    # Stale B=10 would switch the hysteresis OFF in the first pass; the
+    # settled B=30 is inside the dead band and must RETAIN the stored True.
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 30, dp_b: 10})
+    mgr._hysteresis["g1"] = {"h1": True}
+
+    await mgr.initialize_graph("g1")
+
+    written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
+    assert written == {uuid.UUID(dp_b): 30, uuid.UUID(dst_c): True}
+    assert mgr._hysteresis["g1"]["h1"] is True
+
+
+@pytest.mark.asyncio
+async def test_cross_datapoint_feedback_is_skipped():
+    """Read A → Write B plus Read B → Write A is a feedback loop across two
+    DataPoints — the settle pass would never converge, so neither write may
+    publish on save."""
+    dp_a, dp_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": dp_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wA", "type": "datapoint_write", "data": {"datapoint_id": dp_a}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wA", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={dp_a: 1, dp_b: 2})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_diamond_dependency_is_not_a_cycle():
+    """Z feeds Y and both Z and Y feed X — a diamond, not a cycle: all
+    writes initialize."""
+    dp_z, dp_y, dp_x = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rZ", "type": "datapoint_read", "data": {"datapoint_id": dp_z}},
+            {"id": "wY", "type": "datapoint_write", "data": {"datapoint_id": dp_y}},
+            {"id": "rY", "type": "datapoint_read", "data": {"datapoint_id": dp_y}},
+            {"id": "a1", "type": "and", "data": {}},
+            {"id": "wX", "type": "datapoint_write", "data": {"datapoint_id": dp_x}},
+        ],
+        [
+            {"source": "rZ", "sourceHandle": "value", "target": "wY", "targetHandle": "value"},
+            {"source": "rZ", "sourceHandle": "value", "target": "a1", "targetHandle": "in1"},
+            {"source": "rY", "sourceHandle": "value", "target": "a1", "targetHandle": "in2"},
+            {"source": "a1", "sourceHandle": "out", "target": "wX", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={dp_z: 1, dp_y: 0})
+
+    await mgr.initialize_graph("g1")
+
+    written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
+    # Y settles to 1 (from Z); X = Z AND settled Y = True
+    assert written == {uuid.UUID(dp_y): 1, uuid.UUID(dp_x): True}
