@@ -688,6 +688,20 @@ class TestReadProperty:
 
         assert result == "unexpected"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("property_name", ["PIO.ALL", "pio.byte", "sensed.ALL", "latch.BYTE", "PIO.byte"])
+    async def test_aggregate_byte_and_all_properties_not_parsed_as_bool(self, mock_bus, property_name):
+        # PIO.ALL/sensed.ALL/latch.ALL are comma-separated per-channel lists and
+        # PIO.BYTE/etc. are a 0-255 bitmask across all channels — neither is a
+        # single yes/no value, so collapsing either to bool would lose data.
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"255"
+
+        result = await adapter._read_property("29.AA", property_name)
+
+        assert result == pytest.approx(255.0)
+        assert not isinstance(result, bool)
+
 
 # ---------------------------------------------------------------------------
 # read()
@@ -766,6 +780,35 @@ class TestWrite:
         await adapter.write(binding, 1)
 
         adapter._proxy.write.assert_called_once_with("/29.1122334455aa/PIO.0", b"1", timeout=adapter._cfg.request_timeout)
+
+    @pytest.mark.asyncio
+    async def test_write_marks_adapter_disconnected_on_connection_level_error(self, mock_bus):
+        # A DEST-only instance (write-only bindings) starts no poll task, so
+        # write() is the only place that ever observes a lost owserver
+        # connection — without this, the UI would keep reporting the instance
+        # healthy while writes silently fail.
+        adapter = _connected_adapter(mock_bus)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(True, "connected", code="connectedTo", params={"host": "h", "port": 1})
+        adapter._proxy.write.side_effect = owprotocol.ConnError("gone")
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
+
+        await adapter.write(binding, 1)
+
+        assert adapter.connected is False
+        assert adapter.last_detail_code == "couldNotConnectTo"
+
+    @pytest.mark.asyncio
+    async def test_write_per_property_ownet_error_does_not_mark_adapter_disconnected(self, mock_bus):
+        adapter = _connected_adapter(mock_bus)
+        adapter._owprotocol = owprotocol
+        await adapter._publish_status(True, "connected", code="connectedTo", params={"host": "h", "port": 1})
+        adapter._proxy.write.side_effect = owprotocol.OwnetError(1, "not writable", "/29.AA/PIO.0")
+        binding = make_binding({"sensor_id": "29.AA", "property": "PIO.0"})
+
+        await adapter.write(binding, 1)
+
+        assert adapter.connected is True
 
     @pytest.mark.asyncio
     async def test_write_error_is_caught_and_logged(self, mock_bus):

@@ -8,7 +8,11 @@ const STUBS = {
   SchemaForm:                        { template: '<div class="schema-form" />' },
   KnxConfigForm:                     { template: '<div class="knx-form" />' },
   AnwesenheitConfigForm:             { template: '<div class="anwesenheit-form" />' },
-  ZeitschaltuhrCustomHolidaysEditor: { template: '<div />' },
+  ZeitschaltuhrCustomHolidaysEditor: {
+    template: '<button data-testid="edit-holidays" @click="$emit(\'update:modelValue\', [\'2027-01-01\'])" />',
+    props: ['modelValue'],
+    emits: ['update:modelValue'],
+  },
   AnwesenheitDatapointSelector:      { template: '<div />' },
   Spinner:  { template: '<span class="spinner" />' },
   Badge:    { template: '<span class="badge"><slot /></span>' },
@@ -387,6 +391,34 @@ describe('AdaptersView — save instance', () => {
     expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ config: expect.objectContaining({ aliases: { '28.AA': 'New Label' } }) }),
+    )
+  })
+
+  it('persists an in-form custom_holidays edit instead of the refreshed live value', async () => {
+    // custom_holidays is excluded from SchemaForm (rendered by its own dedicated
+    // editor instead) but, unlike onewire's aliases, that editor writes directly
+    // into drafts[a.id].config — the pre-save live-refresh merge must not clobber
+    // it with the (stale, unedited) value still on the backend.
+    const instance = makeInstance({
+      adapter_type: 'ZEITSCHALTUHR',
+      config: { custom_holidays: ['2026-12-24'] },
+    })
+    adapterApiMock.listInstances.mockResolvedValue({ data: [instance] })
+    adapterApiMock.updateInstance.mockResolvedValue({ data: instance })
+
+    const { wrapper } = await mountAdapters({ instances: [instance] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="edit-holidays"]').trigger('click')
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ config: expect.objectContaining({ custom_holidays: ['2027-01-01'] }) }),
     )
   })
 

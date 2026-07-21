@@ -72,9 +72,11 @@ _LEGACY_SYSFS_ID_RE = re.compile(r"^([0-9A-Fa-f]{2})-([0-9A-Fa-f]{12})$")
 # OWFS yes/no properties (DS2408 PIO.x/PIO.A, sensed.x, latch.x, ...) — read back
 # as "0"/"1", parsed as bool rather than float so BOOLEAN datapoints don't reject
 # them as a type mismatch downstream (WriteRouter only allows float values
-# through for FLOAT datapoints, not BOOLEAN). Channels can be numbered (PIO.0)
-# or lettered (PIO.A), hence "\w+" rather than "\d+".
-_YESNO_PROPERTY_RE = re.compile(r"^(?:PIO|sensed|latch|power|present)(?:\.\w+)?$", re.IGNORECASE)
+# through for FLOAT datapoints, not BOOLEAN). Channels are always a single
+# numbered (PIO.0) or lettered (PIO.A) character — the aggregate "ALL"/"BYTE"
+# suffixes (e.g. PIO.BYTE) are multi-channel bitmasks/lists, not a single
+# yes/no value, and must stay numeric/string rather than collapse to bool.
+_YESNO_PROPERTY_RE = re.compile(r"^(?:PIO|sensed|latch)\.[0-9A-Za-z]$|^(?:power|present)$", re.IGNORECASE)
 # Structural/metadata OWFS entries — not sensor readings, hidden from the browse picker.
 _STRUCTURAL_PROPERTIES = frozenset(
     {"address", "alias", "crc8", "id", "locator", "r_address", "r_id", "r_locator", "type", "version", "family"},
@@ -359,6 +361,22 @@ class OneWireAdapter(AdapterBase):
             # No adapter-side writability allowlist is maintained — owserver's own
             # error is the source of truth for whether a property is writable.
             logger.warning("1-Wire write failed for binding %s (%s): %s", binding.id, path, exc)
+            if (
+                self._owprotocol is not None
+                and isinstance(exc, (self._owprotocol.ConnError, self._owprotocol.OwnetTimeout, self._owprotocol.ProtocolError))
+                and self.connected
+            ):
+                # DEST-only instances (write-only bindings, e.g. a DS2408 output)
+                # start no poll task, so this is the only place that ever observes
+                # a lost owserver connection — without this, the UI would keep
+                # reporting the instance healthy while writes silently fail.
+                await self._publish_status(
+                    False,
+                    f"Lost connection to {self._cfg.host}:{self._cfg.port}: {exc}",
+                    code="couldNotConnectTo",
+                    params={"host": self._cfg.host, "port": self._cfg.port},
+                )
+                logger.warning("1-Wire adapter: connection to owserver lost: %s", exc)
 
     async def _read_property(self, sensor_id: str, property_name: str) -> float | bool | str | None:
         path = f"/{_normalize_sensor_id(sensor_id)}/{property_name}"
