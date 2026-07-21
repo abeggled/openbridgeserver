@@ -284,6 +284,27 @@ async def test_datapoint_update_sends_message_to_provider(bus, dummy_provider, m
 
 
 @pytest.mark.asyncio
+async def test_direct_notification_uses_shared_provider_path_for_all_targets(bus, dummy_provider):
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"first": {}, "second": {}}}}},
+    )
+
+    results = await adapter.send_notification(
+        message="Alarm",
+        title="OBS",
+        providers=[
+            {"provider": "dummy", "target": "first"},
+            {"provider": "dummy", "target": "second"},
+        ],
+    )
+
+    assert [result.ok for result in results] == [True, True]
+    assert [call.kwargs["target_name"] for call in dummy_provider.send.await_args_list] == ["first", "second"]
+    assert all(call.kwargs["message"] == "Alarm" for call in dummy_provider.send.await_args_list)
+
+
+@pytest.mark.asyncio
 async def test_send_on_change_suppresses_repeated_true_condition(bus, dummy_provider, monkeypatch):
     dp_id = uuid.uuid4()
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))

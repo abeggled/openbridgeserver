@@ -1296,7 +1296,7 @@ class LogicManager:
         api_client_ids = {node.id for node in flow.nodes if node.type == "api_client"}
         host_check_ids = {node.id for node in flow.nodes if node.type == "host_check"}
         message_archive_ids = {node.id for node in flow.nodes if node.type == "message_archive"}
-        notify_ids = {node.id for node in flow.nodes if node.type in {"notify_pushover", "notify_sms"}}
+        notify_ids = {node.id for node in flow.nodes if node.type in {"notify_message", "notify_pushover", "notify_sms"}}
         operating_hour_ids = {node.id for node in flow.nodes if node.type == "operating_hours"}
         async_replay_source_ids = api_client_ids | host_check_ids | message_archive_ids | notify_ids
         needs_async_replay_snapshot = any(edge.source in async_replay_source_ids for edge in flow.edges)
@@ -2774,6 +2774,43 @@ class LogicManager:
             if not GraphExecutor._to_bool(out.get("_trigger")):
                 return False
 
+            if node.type == "notify_message":
+                instance_id = str(node.data.get("adapter_instance_id") or "").strip()
+                providers = node.data.get("providers") or []
+                if not instance_id or not isinstance(providers, list) or not providers:
+                    outputs[node.id]["__error__"] = "MESSAGE adapter and at least one target are required"
+                    logger.warning("Notification: adapter or targets missing on node %s", node.id[:8])
+                    return False
+                from obs.adapters import registry as adapter_registry
+
+                adapter = adapter_registry.get_instance_by_id(instance_id)
+                if adapter is None or getattr(adapter, "adapter_type", None) != "MESSAGE":
+                    outputs[node.id]["__error__"] = "MESSAGE adapter instance is unavailable"
+                    logger.warning("Notification: MESSAGE adapter %s unavailable", instance_id)
+                    return False
+                raw_message = out.get("_message")
+                message = _msg_to_str(raw_message) if raw_message is not None else str(node.data.get("message") or "")
+                try:
+                    results = await adapter.send_notification(
+                        message=message,
+                        providers=providers,
+                        title=str(node.data.get("title") or "") or None,
+                        priority=int(node.data.get("priority", 0)),
+                    )
+                    failures = [result for result in results if not result.ok]
+                    if not results or failures:
+                        detail = ", ".join(f"{result.provider}/{result.target}: {result.detail}" for result in failures)
+                        outputs[node.id]["__error__"] = detail or "MESSAGE adapter did not process any targets"
+                        logger.warning("Graph %s: notification failed: %s", graph_id[:8], outputs[node.id]["__error__"])
+                        return False
+                    outputs[node.id]["sent"] = True
+                    target_set.add(node.id)
+                    return True
+                except Exception as exc:
+                    outputs[node.id]["__error__"] = str(exc)
+                    logger.warning("Graph %s: notification failed: %s", graph_id[:8], exc)
+                    return False
+
             if node.type == "notify_pushover":
                 app_token = (node.data.get("app_token") or "").strip()
                 user_key = (node.data.get("user_key") or "").strip()
@@ -2959,7 +2996,7 @@ class LogicManager:
                     elif node.type == "message_archive" and node.id not in triggered_message_archive_nodes:
                         if await _run_message_archive_node(node, newly_triggered):
                             triggered_message_archive_nodes.add(node.id)
-                    elif node.type in {"notify_pushover", "notify_sms"} and node.id not in triggered_notify_nodes:
+                    elif node.type in {"notify_message", "notify_pushover", "notify_sms"} and node.id not in triggered_notify_nodes:
                         if await _run_notify_node(node, newly_triggered) or GraphExecutor._to_bool(outputs.get(node.id, {}).get("_trigger")):
                             triggered_notify_nodes.add(node.id)
                 if not newly_triggered:
@@ -2987,6 +3024,12 @@ class LogicManager:
             await _run_replay_triggered_side_effects(message_archive_descendants)
 
         # ── Handle notify_pushover ────────────────────────────────────────
+        # Generic notifications use the MESSAGE adapter. Provider-specific
+        # branches below are retained solely for existing legacy sheets.
+        for node in flow.nodes:
+            if node.type == "notify_message" and node.id not in triggered_notify_nodes:
+                await _run_notify_node(node, triggered_notify_nodes)
+
         # Runs AFTER api_client second-pass so that graphs with api_client →
         # json_extractor → notify see the real HTTP response, not placeholders.
         for node in flow.nodes:

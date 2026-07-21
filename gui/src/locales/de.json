@@ -1526,6 +1526,7 @@
       "astro_sun": "Astro Sonne",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "notify_message": "Benachrichtigung",
       "message_archive": "Meldungsarchiv",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
@@ -2068,6 +2069,17 @@
         "to": "Empfänger (+41…)",
         "sender": "Absender (max 11 Zeichen)",
         "message": "Nachricht (Fallback)"
+      },
+      "notification": {
+        "adapter": "Message-/Benachrichtigungsadapter",
+        "selectAdapter": "Adapter auswählen",
+        "targets": "Ziele",
+        "noTargets": "Keine aktiven, konfigurierten Ziele vorhanden.",
+        "title": "Titel",
+        "fallback": "Nachricht (Fallback)",
+        "placeholders": "Der Logikblock hat keinen Datenpunkt-Kontext; MESSAGE-Platzhalter werden unverändert gesendet.",
+        "priority": "Priorität",
+        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden."
       },
       "messageArchive": {
         "archive": "Meldungsarchiv",

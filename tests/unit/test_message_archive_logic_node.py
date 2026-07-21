@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from obs.adapters.message.providers.base import MessageSendResult
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
@@ -240,6 +241,76 @@ def test_notify_sent_output_replays_downstream_message_archive() -> None:
     service.record.assert_awaited_once()
     assert outputs["notify"]["sent"] is True
     assert outputs["ma"]["stored"] is True
+
+
+def test_generic_notification_uses_message_adapter_and_requires_all_targets() -> None:
+    manager = _make_manager()
+    flow = _flow(
+        [
+            node(
+                "notify",
+                "notify_message",
+                {
+                    "adapter_instance_id": "message-1",
+                    "providers": [
+                        {"provider": "pushover", "target": "default"},
+                        {"provider": "seven.io", "target": "admin"},
+                    ],
+                    "title": "Alarm",
+                    "message": "Fallback",
+                },
+            )
+        ]
+    )
+    adapter = MagicMock(adapter_type="MESSAGE")
+    adapter.send_notification = AsyncMock(
+        return_value=[
+            MessageSendResult("pushover", "default", True),
+            MessageSendResult("seven.io", "admin", True),
+        ]
+    )
+
+    with patch("obs.adapters.registry.get_instance_by_id", return_value=adapter):
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = _run(manager, flow, {"notify": {"trigger": True, "message": "Dynamic"}})
+
+    assert outputs["notify"]["sent"] is True
+    adapter.send_notification.assert_awaited_once_with(
+        message="Dynamic",
+        providers=flow.nodes[0].data["providers"],
+        title="Alarm",
+        priority=0,
+    )
+
+
+def test_generic_notification_reports_target_failure() -> None:
+    manager = _make_manager()
+    flow = _flow(
+        [
+            node(
+                "notify",
+                "notify_message",
+                {
+                    "adapter_instance_id": "message-1",
+                    "providers": [{"provider": "telegram", "target": "family"}],
+                    "message": "Alarm",
+                },
+            )
+        ]
+    )
+    adapter = MagicMock(adapter_type="MESSAGE")
+    adapter.send_notification = AsyncMock(
+        return_value=[
+            MessageSendResult("telegram", "family", False, "provider disabled"),
+        ]
+    )
+
+    with patch("obs.adapters.registry.get_instance_by_id", return_value=adapter):
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = _run(manager, flow, {"notify": {"trigger": True}})
+
+    assert outputs["notify"]["sent"] is False
+    assert "provider disabled" in outputs["notify"]["__error__"]
 
 
 def test_notify_sent_output_replays_downstream_notify() -> None:
