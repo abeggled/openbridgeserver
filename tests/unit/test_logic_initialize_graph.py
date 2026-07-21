@@ -444,6 +444,8 @@ async def test_operating_hours_totals_are_injected():
 
     mgr._event_bus.publish.assert_awaited_once()
     assert mgr._event_bus.publish.await_args.args[0].value == 5.5
+    # The seeded truthy active input starts the accumulator right away
+    assert mgr._node_state["g1"]["oh1"]["last_start"] is not None
 
 
 @pytest.mark.asyncio
@@ -764,6 +766,9 @@ async def test_init_publish_does_not_reenter_same_graph():
 
     assert mgr._event_bus.publish.await_count == 2
     mgr._execute_graph.assert_not_awaited()
+    # The suppressed self-event still synced Read B's filter state to the
+    # written value, so a later event repeating it is deduplicated correctly
+    assert mgr._node_state["g1"]["rB"]["last_value"] == 7
     # The guard is released afterwards — later events execute normally
     assert "g1" not in mgr._initializing_graphs
 
@@ -826,3 +831,157 @@ async def test_live_events_still_execute_during_initialization():
     overrides = mgr._execute_graph.await_args.args[3]
     assert overrides == {"rD": {"value": 9, "changed": True}}
     assert "g1" not in mgr._initializing_graphs
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_ical_is_suppressed():
+    """ical outputs come from the fetch cache, which may be empty right after
+    a save — a write joining it with a seeded branch must not publish."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "i1", "type": "ical", "data": {"url": "https://example.com/cal.ics"}},
+            {"id": "a1", "type": "and", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "a1", "targetHandle": "in1"},
+            {"source": "i1", "sourceHandle": "f0_today", "target": "a1", "targetHandle": "in2"},
+            {"source": "a1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_changed_handle_branch_is_not_initialized():
+    """Read.changed carries the synthetic changed=False seed, not the object
+    value — a write fed via that handle must not publish on save."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [{"source": "r1", "sourceHandle": "changed", "target": "w1", "targetHandle": "value"}],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 42})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operating_hours_seeded_inactive_stops_counter():
+    """A seeded falsy active input stops a running accumulator exactly like a
+    live off-event would: elapsed time is added and last_start cleared."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "oh1", "type": "operating_hours", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "oh1", "targetHandle": "active"},
+            {"source": "oh1", "sourceHandle": "hours", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 0})
+    mgr._node_state["g1"] = {"oh1": {"accumulated_hours": 2.0, "last_start": datetime.now(UTC)}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value >= 2.0
+    ns = mgr._node_state["g1"]["oh1"]
+    assert ns["last_start"] is None
+    assert ns["accumulated_hours"] >= 2.0
+
+
+@pytest.mark.asyncio
+async def test_bulk_initialization_runs_each_graph_once():
+    """Config restore: Graph A writes B, Graph B reads B — the cascade from
+    A's publish must not double-run B; B initializes once from the registry."""
+    src_a, dp_b, dst_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager(
+        {
+            "gA": ("A", True, _read_write_flow(src_a, dp_b)),
+            "gB": ("B", True, _read_write_flow(dp_b, dst_c)),
+        },
+        values={src_a: 7, dp_b: 3},
+    )
+    mgr._execute_graph = AsyncMock()  # only reachable via _on_value_event
+
+    async def _deliver(event):
+        await mgr._on_value_event(event)
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graphs(["gA", "gB"])
+
+    written = [(c.args[0].datapoint_id, c.args[0].value) for c in mgr._event_bus.publish.await_args_list]
+    assert written == [(uuid.UUID(dp_b), 7), (uuid.UUID(dst_c), 3)]
+    mgr._execute_graph.assert_not_awaited()
+    assert not mgr._bulk_init_pending
+
+
+# ---------------------------------------------------------------------------
+# reset_node_state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reset_node_state_clears_memory_and_db():
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"h1": True}
+    mgr._node_state["g1"] = {"r1": {"last_value": 5}}
+
+    await mgr.reset_node_state("g1")
+
+    assert "g1" not in mgr._hysteresis
+    assert "g1" not in mgr._node_state
+    call = mgr._db.execute_and_commit.await_args
+    assert "node_state = NULL" in call.args[0]
+    assert call.args[1] == ("g1",)
+
+
+@pytest.mark.asyncio
+async def test_reset_node_state_swallows_db_errors():
+    mgr = _make_manager({})
+    mgr._db.execute_and_commit = AsyncMock(side_effect=RuntimeError("db down"))
+
+    await mgr.reset_node_state("g1")
+
+    mgr._db.execute_and_commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_operating_hours_seeded_reset_zeroes_counter():
+    """A seeded truthy reset input zeroes the accumulator like a live reset."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "oh1", "type": "operating_hours", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "oh1", "targetHandle": "reset"},
+            {"source": "oh1", "sourceHandle": "hours", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+    mgr._node_state["g1"] = {"oh1": {"accumulated_hours": 5.5, "last_start": None}}
+
+    await mgr.initialize_graph("g1")
+
+    ns = mgr._node_state["g1"]["oh1"]
+    assert ns["accumulated_hours"] == 0.0
+    assert ns["last_start"] is None

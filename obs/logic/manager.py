@@ -66,7 +66,8 @@ _MAX_SEQUENCE_REPEAT_COUNT = 10_000
 # state stays untouched; random_value generates a fresh value on every
 # evaluation, so a save would publish a new random actuator value; memory
 # evaluates with commit_memory=False, so its output is the uncommitted
-# previous/default value, not the seeded input.
+# previous/default value, not the seeded input; ical outputs come from the
+# fetch cache, which may still be empty right after a save.
 _INIT_EXCLUDED_NODE_TYPES = frozenset(
     {
         "api_client",
@@ -79,6 +80,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "timer_delay",
         "timer_pulse",
         "timer_cron",
+        "ical",
         "missing_node",
         "statistics",
         "avg_multi",
@@ -773,6 +775,9 @@ class LogicManager:
         # DataPoint ids that pass is writing — only those self-originating
         # events must not re-enter the graph (see _on_value_event)
         self._initializing_graphs: dict[str, set[str]] = {}
+        # graphs still awaiting their turn in a bulk initialization pass
+        # (config restore) — cascaded logic writes must not double-run them
+        self._bulk_init_pending: set[str] = set()
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         # Running value sequences, keyed per graph/node.  They are deliberately
@@ -1186,12 +1191,23 @@ class LogicManager:
             name, enabled, flow = entry
             if not enabled:
                 continue
-            if dp_id in self._initializing_graphs.get(graph_id, ()) and getattr(event, "source_adapter", None) == "logic":
-                # This graph's own initialization publish is in flight — a
-                # sibling Read Object of the written DataPoint must not
-                # re-enter the graph mid-pass (issue #1031). Unrelated live
-                # events (other DataPoints, or non-logic sources of the same
-                # DataPoint) and other graphs still execute normally.
+            if getattr(event, "source_adapter", None) == "logic" and (
+                dp_id in self._initializing_graphs.get(graph_id, ()) or graph_id in self._bulk_init_pending
+            ):
+                # This graph's own initialization publish is in flight — or
+                # the graph awaits its turn in a bulk config-restore pass and
+                # will seed itself from the registry in a moment — so the
+                # logic-sourced write must not re-enter it mid-pass (issue
+                # #1031). Keep the read filters of the written DataPoint in
+                # sync so a later event repeating this value is deduplicated.
+                # Unrelated live events (other DataPoints, or non-logic
+                # sources of the same DataPoint) still execute normally.
+                sync_state = self._node_state.setdefault(graph_id, {})
+                for tn in flow.nodes:
+                    if tn.type == "datapoint_read" and tn.data.get("datapoint_id") == dp_id:
+                        ns = sync_state.setdefault(tn.id, {})
+                        ns["last_value"] = event.value
+                        ns["last_ts"] = now
                 continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
             if not trigger_nodes:
@@ -1381,7 +1397,11 @@ class LogicManager:
         # unrelated branches like Const → Write) and must not descend from an
         # unseeded Read Object or an excluded node type (see
         # _INIT_EXCLUDED_NODE_TYPES).
-        tainted = _downstream_closure(unseeded | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow)
+        # Read.changed edges carry the synthetic changed=False seed, not the
+        # object value — branches fed via that handle must not be initialized.
+        read_node_ids = {node.id for node in flow.nodes if node.type == "datapoint_read"}
+        changed_targets = {e.target for e in flow.edges if e.source in read_node_ids and e.sourceHandle == "changed"}
+        tainted = _downstream_closure(unseeded | changed_targets | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow)
         seeded_paths = _downstream_closure(set(seeds), flow)
         # A write that closes a feedback loop onto a Read Object of the same
         # DataPoint (the write is reachable from that read) would re-enter
@@ -1447,6 +1467,27 @@ class LogicManager:
                 if node.type in _INIT_COMMIT_STATE_NODE_TYPES and node.id in seeded_paths and node.id not in tainted and node.id in hyst_copy:
                     self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
                     state_committed = True
+
+            # Start/stop the operating-hours accumulators exactly like
+            # _execute_graph's _apply_operating_hours_state, but only for
+            # nodes driven by clean seeded inputs — a placeholder-coerced
+            # False must not stop a running counter. Without this, a source
+            # that is already on at activation would not be counted until
+            # its next datapoint event.
+            for node in flow.nodes:
+                if node.type != "operating_hours" or node.id not in seeded_paths or node.id in tainted:
+                    continue
+                out = outputs.get(node.id, {})
+                ns = graph_state.setdefault(node.id, {"accumulated_hours": 0.0, "last_start": None})
+                if out.get("_reset", False):
+                    ns["accumulated_hours"] = 0.0
+                    ns["last_start"] = now if out.get("_active", False) else None
+                elif out.get("_active", False):
+                    if not ns.get("last_start"):
+                        ns["last_start"] = now
+                elif ns.get("last_start"):
+                    ns["accumulated_hours"] += (now - ns["last_start"]).total_seconds() / 3600
+                    ns["last_start"] = None
             if state_committed:
                 # Persist like _execute_graph does — otherwise a restart
                 # before the next real execution reloads the stale pre-save
@@ -1473,6 +1514,36 @@ class LogicManager:
                 self._initializing_graphs.pop(graph_id, None)
         except Exception as exc:
             logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
+
+    async def initialize_graphs(self, graph_ids: list[str]) -> None:
+        """Initialize several restored graphs exactly once each (issue #1031).
+
+        While the bulk pass runs, logic-sourced events do not re-enter the
+        graphs still awaiting their turn — a cascaded write from one imported
+        graph lands in the registry and is picked up by the later graph's own
+        seeding instead of double-executing it (see _on_value_event).
+        """
+        self._bulk_init_pending.update(graph_ids)
+        try:
+            for graph_id in graph_ids:
+                self._bulk_init_pending.discard(graph_id)
+                await self.initialize_graph(graph_id)
+        finally:
+            self._bulk_init_pending.difference_update(graph_ids)
+
+    async def reset_node_state(self, graph_id: str) -> None:
+        """Drop in-memory and persisted node state of a graph.
+
+        Used by the config restore: the imported sheet carries no node state,
+        so accumulators and switch states of a previously existing graph with
+        reused node ids must not leak into the restored one.
+        """
+        self._hysteresis.pop(graph_id, None)
+        self._node_state.pop(graph_id, None)
+        try:
+            await self._db.execute_and_commit("UPDATE logic_graphs SET node_state = NULL WHERE id = ?", (graph_id,))
+        except Exception as exc:
+            logger.warning("Graph %s: failed to reset node_state: %s", graph_id[:8], exc)
 
     async def _execute_graph(
         self,

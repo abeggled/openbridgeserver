@@ -849,11 +849,14 @@ async def import_config(
             from obs.logic.manager import get_logic_manager
 
             manager = get_logic_manager()
-            # Mirror the PUT/PATCH save paths: drop cached graph + node state
-            # of the upserted graphs so stale read/write-filter state from a
-            # previous flow cannot suppress the initialization below.
+            # The imported sheet carries no node state: drop the cached graph
+            # plus all in-memory and persisted node state of the upserted
+            # graphs, so neither stale read/write-filter state nor old
+            # hysteresis/accumulator state of a reused graph id leaks into
+            # the restored sheet.
             for graph_id in imported_graph_ids:
                 manager.invalidate_cache(graph_id)
+                await manager.reset_node_state(graph_id)
             await manager.reload()
         except Exception as exc:
             result.errors.append(f"Logic manager reload: {exc}")
@@ -869,22 +872,6 @@ async def import_config(
         result.adapters_restarted = len(adapter_registry.get_all_instances())
     except Exception as exc:
         result.errors.append(f"Adapter restart failed: {exc}")
-
-    # Seed Read Object nodes of the restored graphs with the current registry
-    # values (issue #1031) — after the adapter restart, so the WriteRouter can
-    # resolve newly imported adapter instances for the published writes. Only
-    # successfully upserted graphs qualify — a failed entry reusing an
-    # existing graph id must not re-initialize the old graph. initialize_graph
-    # is a no-op for disabled graphs and never raises.
-    if imported_graph_ids:
-        try:
-            from obs.logic.manager import get_logic_manager
-
-            manager = get_logic_manager()
-            for graph_id in imported_graph_ids:
-                await manager.initialize_graph(graph_id)
-        except Exception as exc:
-            result.errors.append(f"Logic graph initialization: {exc}")
 
     # --- FontAwesome API Key ---
     if body.fa_api_key:
@@ -1018,6 +1005,22 @@ async def import_config(
             get_logic_manager().update_app_config({"timezone": imported_timezone})
         except Exception:
             pass  # Manager may not be running — non-critical
+
+    # Seed Read Object nodes of the restored graphs with the current registry
+    # values (issue #1031) — after the adapter restart, so the WriteRouter can
+    # resolve newly imported adapter instances for the published writes, and
+    # after the app-settings import, so timezone-dependent nodes evaluate
+    # with the restored configuration. Only successfully upserted graphs
+    # qualify — a failed entry reusing an existing graph id must not
+    # re-initialize the old graph. The bulk pass suppresses cascades between
+    # the restored graphs so each one initializes exactly once.
+    if imported_graph_ids:
+        try:
+            from obs.logic.manager import get_logic_manager
+
+            await get_logic_manager().initialize_graphs(imported_graph_ids)
+        except Exception as exc:
+            result.errors.append(f"Logic graph initialization: {exc}")
 
     # --- Hierarchy Trees ---
     for ht in body.hierarchy_trees:
