@@ -1,9 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { settingsApi } from '@/api/client'
+import { setLocale } from '@/i18n'
 
 export const useSettingsStore = defineStore('settings', () => {
   const timezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone)
+  const dateFormat = ref('dd.MM.yyyy')
+  const timeFormat = ref('HH:mm:ss')
+  const language = ref(localStorage.getItem('obs-locale') ?? 'de')
   const theme    = ref(localStorage.getItem('theme') ?? 'system')
   const loaded   = ref(false)
 
@@ -17,14 +21,23 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const { data } = await settingsApi.get()
       if (data.timezone) timezone.value = data.timezone
+      if (data.date_format) dateFormat.value = data.date_format
+      if (data.time_format) timeFormat.value = data.time_format
+      if (data.language) {
+        language.value = data.language
+        setLocale(data.language)
+      }
     } catch {}
     loaded.value = true
     applyTheme()
   }
 
-  async function save(tz) {
-    await settingsApi.update({ timezone: tz })
+  async function save(tz, dateFmt = dateFormat.value, timeFmt = timeFormat.value, languageCode = language.value) {
+    await settingsApi.update({ timezone: tz, date_format: dateFmt, time_format: timeFmt, language: languageCode })
     timezone.value = tz
+    dateFormat.value = dateFmt
+    timeFormat.value = timeFmt
+    language.value = languageCode
   }
 
   function setTheme(value) {
@@ -33,5 +46,5 @@ export const useSettingsStore = defineStore('settings', () => {
     applyTheme()
   }
 
-  return { timezone, theme, loaded, load, save, setTheme, applyTheme }
+  return { timezone, dateFormat, timeFormat, language, theme, loaded, load, save, setTheme, applyTheme }
 })

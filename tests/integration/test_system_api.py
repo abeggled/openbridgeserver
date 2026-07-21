@@ -161,7 +161,14 @@ async def test_put_settings_valid_timezone(client, auth_headers):
     )
     assert resp.status_code == 200
     assert resp.json()["timezone"] == "Europe/Berlin"
-    await client.put("/api/v1/system/settings", json={"timezone": "Europe/Zurich"}, headers=auth_headers)
+    assert resp.json()["date_format"] == "dd.MM.yyyy"
+    assert resp.json()["time_format"] == "HH:mm:ss"
+    assert resp.json()["language"] == "de"
+    await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"},
+        headers=auth_headers,
+    )
 
 
 async def test_put_settings_invalid_timezone_returns_422(client, auth_headers):
@@ -174,10 +181,54 @@ async def test_put_settings_invalid_timezone_returns_422(client, auth_headers):
 
 
 async def test_put_settings_persists(client, auth_headers):
-    await client.put("/api/v1/system/settings", json={"timezone": "America/New_York"}, headers=auth_headers)
+    await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "America/New_York", "date_format": "MMMM d, yyyy", "time_format": "H:mm", "language": "en"},
+        headers=auth_headers,
+    )
     resp = await client.get("/api/v1/system/settings", headers=auth_headers)
     assert resp.json()["timezone"] == "America/New_York"
+    assert resp.json()["date_format"] == "MMMM d, yyyy"
+    assert resp.json()["time_format"] == "H:mm"
+    assert resp.json()["language"] == "en"
     await client.put("/api/v1/system/settings", json={"timezone": "Europe/Zurich"}, headers=auth_headers)
+
+
+async def test_changing_timezone_does_not_overwrite_formats(client, auth_headers):
+    await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "UTC", "date_format": "yyyy/MM/dd", "time_format": "H-mm"},
+        headers=auth_headers,
+    )
+    await client.put("/api/v1/system/settings", json={"timezone": "Europe/Berlin"}, headers=auth_headers)
+
+    settings = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+
+    assert settings["date_format"] == "yyyy/MM/dd"
+    assert settings["time_format"] == "H-mm"
+    await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"},
+        headers=auth_headers,
+    )
+
+
+async def test_changing_language_without_formats_is_persisted(client, auth_headers):
+    response = await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "Europe/Zurich", "language": "en"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    settings = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    assert settings["language"] == "en"
+
+    await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "Europe/Zurich", "language": "de"},
+        headers=auth_headers,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -672,6 +672,18 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#b45309",
     ),
     NodeTypeDef(
+        type="datetime",
+        label="Datum/Zeit",
+        category="timer",
+        description="Gibt das aktuelle Datum und die aktuelle Zeit in der Anwendungs-Zeitzone aus.",
+        inputs=[],
+        outputs=[_port("date", "Datum"), _port("time", "Zeit"), _port("custom", "Benutzerdefiniert")],
+        config_schema={
+            "custom_format": {"type": "string", "default": "EEEE, MMMM d, yyyy HH:mm:ss", "label": "Benutzerdefiniertes Format"},
+        },
+        color="#b45309",
+    ),
+    NodeTypeDef(
         type="operating_hours",
         label="Betriebsstunden",
         category="timer",

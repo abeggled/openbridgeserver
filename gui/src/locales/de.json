@@ -1520,6 +1520,7 @@
       "timer_pulse": "Impuls",
       "value_sequence": "Sequenz",
       "timer_cron": "Trigger",
+      "datetime": "Datum/Zeit",
       "operating_hours": "Betriebsstd.",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
@@ -1629,6 +1630,9 @@
       "min": "Min",
       "max": "Max",
       "avg": "∅"
+      ,"date": "Datum",
+      "time": "Zeit",
+      "custom": "Benutzerdefiniert"
     },
     "summary": {
       "inputs": "{n} Eingänge",
@@ -1651,6 +1655,9 @@
       "ariaLabel": "Unbekannter Block-Typ"
     },
     "nodeConfig": {
+      "datetime": {
+        "tokens": "Token: H/HH Stunde, m/mm Minute, s/ss Sekunde, d/dd Tag, EE = Mo, EEE = Mo., EEEE = Montag, M/MM/MMM/MMMM Monat, yy/yyyy Jahr. Namen folgen der gewählten Sprache."
+      },
       "comment": {
         "text": "Text",
         "textPlaceholder": "Notiztext…",
@@ -2255,6 +2262,9 @@
       "title": "Allgemeine Einstellungen",
       "timezone": "Zeitzone",
       "timezoneHint": "Alle Zeitangaben im System werden in dieser Zeitzone dargestellt.",
+      "dateFormat": "Standard-Datumsformat",
+      "timeFormat": "Standard-Zeitformat",
+      "formatHint": "Token: d/dd Tag, EE = Mo, EEE = Mo., EEEE = Montag, M/MM/MMM/MMMM Monat, yy/yyyy Jahr; H/HH Stunde, m/mm Minute, s/ss Sekunde.",
       "timezonePlaceholder": "Suchen … z.B. Zurich, Berlin, UTC",
       "noResults": "Keine Treffer",
       "save": "Speichern",

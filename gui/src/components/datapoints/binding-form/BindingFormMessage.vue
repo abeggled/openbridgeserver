@@ -28,7 +28,7 @@
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.messageTemplateLabel') }}</label>
     <textarea v-model="cfg.message" class="input min-h-24 font-mono text-sm resize-y" />
-    <p class="hint">###DP### · ###DPU### · ###DPN### · ###DPI### · ###TS###</p>
+    <p class="hint">###DP### · ###DPU### · ###DPN### · ###DPI### · ###DATE### · ###TIME### · ###TS###</p>
   </div>
 
   <div class="grid grid-cols-2 gap-4">

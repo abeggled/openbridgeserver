@@ -991,7 +991,10 @@ async def import_config(
             ZoneInfo(imported_timezone)
             from obs.logic.manager import get_logic_manager
 
-            get_logic_manager().update_app_config({"timezone": imported_timezone})
+            imported_datetime_settings = {
+                setting.key: setting.value for setting in body.app_settings if setting.key in {"timezone", "date_format", "time_format", "language"}
+            }
+            get_logic_manager().update_app_config(imported_datetime_settings)
         except Exception:
             pass  # Manager may not be running — non-critical
 
@@ -1151,6 +1154,9 @@ async def factory_reset(
     try:
         await db.execute_and_commit("DELETE FROM app_settings WHERE key NOT LIKE 'autobackup.%'")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('timezone', 'Europe/Zurich')")
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('date_format', 'dd.MM.yyyy')")
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('time_format', 'HH:mm:ss')")
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'de')")
     except Exception as exc:
         result.errors.append(f"App settings reset failed: {exc}")
 

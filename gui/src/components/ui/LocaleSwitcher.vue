@@ -17,11 +17,18 @@
 <script setup>
 import { useI18n } from 'vue-i18n'
 import { SUPPORTED_LOCALES, setLocale } from '@/i18n'
+import { useSettingsStore } from '@/stores/settings'
 
 const { locale } = useI18n()
+const settings = useSettingsStore()
 
-function onChange(e) {
-  setLocale(e.target.value)
+async function onChange(e) {
+  const language = e.target.value
+  setLocale(language)
+  try {
+    await settings.save(settings.timezone, settings.dateFormat, settings.timeFormat, language)
+  } catch {
+    // The browser-local selection still remains usable while the backend is unavailable.
+  }
 }
 </script>
-

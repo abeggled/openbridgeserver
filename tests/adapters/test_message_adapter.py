@@ -128,6 +128,25 @@ def test_render_message_replaces_value_unit_and_metadata():
     assert rendered == f"Temperatur {dp_id} 29.4 °C 2026-06-28T12:00:00+00:00"
 
 
+def test_render_message_formats_date_and_time_without_changing_timestamp():
+    dp_id = uuid.uuid4()
+    ts = datetime(2026, 6, 8, 2, 4, 5, tzinfo=UTC)
+
+    rendered = render_message(
+        "###DATE### ###TIME### ###TS###",
+        value=1,
+        unit=None,
+        name="Sensor",
+        datapoint_id=dp_id,
+        ts=ts,
+        date_format="EEEE, MMMM d, yyyy",
+        time_format="H:m:s",
+        language="en",
+    )
+
+    assert rendered == "Monday, June 8, 2026 2:4:5 2026-06-08T02:04:05+00:00"
+
+
 def test_render_message_does_not_reprocess_inserted_placeholder_text():
     dp_id = uuid.uuid4()
     ts = datetime(2026, 6, 28, 12, 0, tzinfo=UTC)

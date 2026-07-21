@@ -22,6 +22,32 @@ import pytest
 from obs.logic.executor import ExecutionError, GraphExecutor
 from tests.unit.conftest import edge, make_executor, node
 
+
+def test_datetime_node_uses_application_formats():
+    executor = make_executor(
+        [node("clock", "datetime", {"custom_format": "yyyy-MM-dd HH:mm:ss"})],
+        app_config={"timezone": "UTC", "date_format": "yyyy/MM/dd", "time_format": "HH-mm"},
+    )
+
+    output = executor.execute()["clock"]
+
+    assert output["date"].count("/") == 2
+    assert output["time"].count("-") == 1
+    assert len(output["custom"]) == 19
+
+
+def test_datetime_node_localizes_names_and_preserves_literal_words():
+    executor = make_executor(
+        [node("clock", "datetime", {"custom_format": "EEEE MMMM guguseli"})],
+        app_config={"timezone": "UTC", "language": "de"},
+    )
+
+    output = executor.execute()["clock"]["custom"]
+
+    assert "guguseli" in output
+    assert any(day in output for day in ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"))
+
+
 # ===========================================================================
 # _round_half_up
 # ===========================================================================
