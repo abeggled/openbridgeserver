@@ -2091,21 +2091,10 @@ async def _finalize_decision_under_lock(db: Database, rb) -> None:
             try:
                 await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
             except BaseException:
-                # Ein Commit kann bereits erfolgt sein, obwohl sein Await danach
-                # fehlschlägt/cancelt. Nur zurückrollen, wenn der ursprüngliche
-                # Terminalmarker nachweislich noch persistiert ist. Bei unklarem
-                # DB-Zustand bleibt der zusätzliche Schutz die datensichere Seite;
-                # der fehlgeschlagene Request wird beim nächsten Poll wiederholt.
-                persisted_after_error: str | None = None
-                try:
-                    persisted_after_error = await load_legacy_migration_decision(db)
-                except BaseException:
-                    logger.exception("RingBuffer: Decision-State nach fehlgeschlagenem Abgleich nicht verifizierbar")
-                if persisted_after_error == decision:
-                    try:
-                        await rb.set_legacy_retention_protected(False)
-                    except BaseException:
-                        logger.exception("RingBuffer: Retention-Schutz nach fehlgeschlagenem Decision-Abgleich nicht rücksetzbar")
+                # Protection bleibt in jedem Fehlerfall aktiv: die Legacy-Quelle ist
+                # noch angehängt; ein Rollback auf False wäre datenunsicher, weil die
+                # FIFO-Retention die Quelle vor dem nächsten Poll-Retry zurückgewinnen
+                # könnte. Der Fehler wird weitergeleitet; der nächste Poll wiederholt.
                 raise
             return
         try:
