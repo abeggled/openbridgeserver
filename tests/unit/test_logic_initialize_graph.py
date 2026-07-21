@@ -791,3 +791,38 @@ async def test_write_downstream_of_cron_trigger_is_suppressed():
     await mgr.initialize_graph("g1")
 
     mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_events_still_execute_during_initialization():
+    """Only the initialization's own logic-sourced writes are suppressed — a
+    live source update racing in during the publish window still executes."""
+    from obs.core.event_bus import DataValueEvent
+
+    src_a, dp_b, dp_d = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rD", "type": "datapoint_read", "data": {"datapoint_id": dp_d}},
+        ],
+        [{"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"}],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 7, dp_d: 3})
+    mgr._execute_graph = AsyncMock()  # only reachable via _on_value_event
+
+    async def _deliver(event):
+        # The init's own logic-sourced write event is suppressed …
+        await mgr._on_value_event(event)
+        # … but an external update arriving during the same window executes
+        live = DataValueEvent(datapoint_id=uuid.UUID(dp_d), value=9, quality="good", source_adapter="knx")
+        await mgr._on_value_event(live)
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graph("g1")
+
+    mgr._execute_graph.assert_awaited_once()
+    overrides = mgr._execute_graph.await_args.args[3]
+    assert overrides == {"rD": {"value": 9, "changed": True}}
+    assert "g1" not in mgr._initializing_graphs

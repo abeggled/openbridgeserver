@@ -769,9 +769,10 @@ class LogicManager:
         # per-node runtime state for filter/throttle
         # {graph_id: {node_id: {last_value, last_ts, last_write_val, last_write_ts}}}
         self._node_state: dict[str, dict[str, dict[str, Any]]] = {}
-        # graphs whose initialize_graph publish is in flight — their own
-        # DataValueEvents must not re-enter them (see _on_value_event)
-        self._initializing_graphs: set[str] = set()
+        # graphs whose initialize_graph publish is in flight, mapped to the
+        # DataPoint ids that pass is writing — only those self-originating
+        # events must not re-enter the graph (see _on_value_event)
+        self._initializing_graphs: dict[str, set[str]] = {}
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         # Running value sequences, keyed per graph/node.  They are deliberately
@@ -1185,11 +1186,12 @@ class LogicManager:
             name, enabled, flow = entry
             if not enabled:
                 continue
-            if graph_id in self._initializing_graphs:
+            if dp_id in self._initializing_graphs.get(graph_id, ()) and getattr(event, "source_adapter", None) == "logic":
                 # This graph's own initialization publish is in flight — a
                 # sibling Read Object of the written DataPoint must not
-                # re-enter the graph mid-pass (issue #1031). Other graphs
-                # still react normally.
+                # re-enter the graph mid-pass (issue #1031). Unrelated live
+                # events (other DataPoints, or non-logic sources of the same
+                # DataPoint) and other graphs still execute normally.
                 continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
             if not trigger_nodes:
@@ -1454,14 +1456,21 @@ class LogicManager:
 
             wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
             # While the publish is in flight, _on_value_event skips THIS
-            # graph: a write target read elsewhere in the same sheet (e.g.
-            # Read A → Write B plus Read B → Write C) would otherwise
-            # re-enter the graph mid-pass and burst until the cascade guard.
-            self._initializing_graphs.add(graph_id)
+            # graph for the DataPoints written here: a write target read
+            # elsewhere in the same sheet (e.g. Read A → Write B plus
+            # Read B → Write C) would otherwise re-enter the graph mid-pass
+            # and burst until the cascade guard. Live events for other
+            # DataPoints keep executing the graph normally.
+            init_write_dps = {
+                str(node.data.get("datapoint_id"))
+                for node in flow.nodes
+                if node.type == "datapoint_write" and node.id not in skip_writes and node.data.get("datapoint_id")
+            }
+            self._initializing_graphs[graph_id] = init_write_dps
             try:
                 await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
             finally:
-                self._initializing_graphs.discard(graph_id)
+                self._initializing_graphs.pop(graph_id, None)
         except Exception as exc:
             logger.warning("LogicManager: initialization of graph %s (%s) failed: %s", graph_id[:8], name, exc)
 
