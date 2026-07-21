@@ -33,4 +33,21 @@ describe('DebugInspector', () => {
     expect(wrapper.text()).toContain('Kopiert!')
     expect(writeText).toHaveBeenCalledTimes(2)
   })
+
+  it('emits close and override clearing actions', async () => {
+    const wrapper = mount(DebugInspector, {
+      props: {
+        node: { id: 'n1', data: {} },
+        inputs: [{ id: 'value', label: 'Value', incoming: null, overridden: true, overrideText: '42' }],
+      },
+    })
+
+    await wrapper.find('button[title="Schließen"]').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Alle Überschreibungen löschen').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Löschen').trigger('click')
+
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(wrapper.emitted('clear-all')).toHaveLength(1)
+    expect(wrapper.emitted('clear-override')[0]).toEqual(['value'])
+  })
 })

@@ -411,6 +411,29 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm).toBeTruthy()
     wrapper.unmount()
   })
+
+  it('subscribes and unsubscribes the active graph over an open socket', async () => {
+    let wsInstance = null
+    global.WebSocket = class {
+      static OPEN = 1
+      constructor() { wsInstance = this; this.readyState = 1; this.send = vi.fn(); this.close = vi.fn() }
+    }
+    overrideStorage({ access_token: 'tok' })
+    const graph = makeGraph('graph-1')
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wsInstance.onopen()
+    wrapper.vm.toggleDebug()
+    wrapper.vm.toggleDebug()
+
+    expect(wsInstance.send).toHaveBeenCalledWith(JSON.stringify({ action: 'logic_debug', graph_id: 'graph-1', enabled: true }))
+    expect(wsInstance.send).toHaveBeenCalledWith(JSON.stringify({ action: 'logic_debug', graph_id: 'graph-1', enabled: false }))
+  })
 })
 
 describe('LogicView inspector inputs', () => {
@@ -432,6 +455,43 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.debugNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
     wrapper.vm.edges = [{ id: 'custom', source: 'n1', target: 'concat', sourceHandle: 'value', targetHandle: 'in_4' }]
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
+  })
+
+  it('edits, parses, runs, and clears temporary input overrides', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicApi.runGraph.mockResolvedValueOnce({
+      data: {
+        outputs: { n1: { value: 7 } },
+        debug: { inputs: { n1: { value: { incoming: null, effective: 7, overridden: true } } } },
+      },
+    })
+
+    wrapper.vm.toggleDebug()
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+    expect(wrapper.vm.debugNode.id).toBe('n1')
+    expect(wrapper.vm.selectedNode).toBe(null)
+
+    wrapper.vm.setDebugOverride('value', '{"nested":true}')
+    wrapper.vm.setDebugOverride('label', 'plain text')
+    await wrapper.vm.runGraph()
+    expect(logicApi.runGraph).toHaveBeenCalledWith('graph-1', {
+      input_overrides: { n1: { value: { nested: true }, label: 'plain text' } },
+    })
+    expect(wrapper.vm.lastRunInputs.n1.value.incoming).toBe(null)
+
+    wrapper.vm.clearDebugOverride('value')
+    expect(wrapper.vm.debugOverrides.n1.value).toBeUndefined()
+    wrapper.vm.setDebugOverride('label', '   ')
+    wrapper.vm.clearAllDebugOverrides()
+    wrapper.vm.toggleDebug()
+    expect(wrapper.vm.debugNode).toBe(null)
+    expect(wrapper.vm.lastRunMetadata).toBe(null)
   })
 })
 
