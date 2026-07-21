@@ -1203,22 +1203,25 @@ class LogicManager:
             if not enabled:
                 continue
             if getattr(event, "source_adapter", None) == "logic" and (
-                dp_id in self._initializing_graphs.get(graph_id, ()) or graph_id in self._bulk_init_pending
+                dp_id in self._initializing_graphs.get(graph_id, ())
+                or (graph_id in self._bulk_init_pending and getattr(event, "initialization", False) is True)
             ):
                 # This graph's own initialization publish is in flight — or
                 # the graph awaits its turn in a bulk config-restore pass and
                 # will seed itself from the registry in a moment — so the
                 # logic-sourced write must not re-enter it mid-pass (issue
                 # #1031). Keep the read filters of the written DataPoint in
-                # sync so a later event repeating this value is deduplicated.
-                # Unrelated live events (other DataPoints, or non-logic
-                # sources of the same DataPoint) still execute normally.
+                # sync so a later event repeating this value is deduplicated
+                # (last_value only — refreshing last_ts would start a
+                # throttle window at save time and drop the next real
+                # update). Unrelated live events (other DataPoints, or
+                # non-logic sources of the same DataPoint) still execute
+                # normally.
                 sync_state = self._node_state.setdefault(graph_id, {})
                 for tn in flow.nodes:
                     if tn.type == "datapoint_read" and tn.data.get("datapoint_id") == dp_id:
                         ns = sync_state.setdefault(tn.id, {})
                         ns["last_value"] = event.value
-                        ns["last_ts"] = now
                 continue
             trigger_nodes = [n for n in flow.nodes if n.type == "datapoint_read" and n.data.get("datapoint_id") == dp_id]
             if not trigger_nodes:
@@ -1293,7 +1296,7 @@ class LogicManager:
                 # full execution so no api_client/notify/WoL/sequence action
                 # fires because a different sheet was saved. The cascade
                 # depth guard above still bounds chains between sheets.
-                await self.initialize_graph(graph_id, logic_depth=logic_depth)
+                await self.initialize_graph(graph_id, logic_depth=logic_depth, seed_overrides={dp_id: event.value})
                 continue
             await self._execute_graph(graph_id, name, flow, overrides, logic_depth=logic_depth)
 
@@ -1357,7 +1360,7 @@ class LogicManager:
         name, enabled, flow = entry
         return await self._execute_graph(graph_id, name, flow, {})
 
-    async def initialize_graph(self, graph_id: str, logic_depth: int = 0) -> None:
+    async def initialize_graph(self, graph_id: str, logic_depth: int = 0, seed_overrides: dict[str, Any] | None = None) -> None:
         """Seed Read Object nodes with their current registry values right
         after a graph is saved or activated (issue #1031).
 
@@ -1395,6 +1398,13 @@ class LogicManager:
                 # An unconfigured Read Object evaluates to None just like a
                 # configured one without a value — taint it the same way.
                 unseeded.add(node.id)
+                continue
+            if seed_overrides and dp_id_str in seed_overrides:
+                # Cascaded initialization: the triggering event value takes
+                # precedence — the registry handler runs concurrently and may
+                # not have stored the write yet.
+                seeds[node.id] = {"value": seed_overrides[dp_id_str], "changed": False}
+                seed_ts[node.id] = None
                 continue
             vs = None
             try:
@@ -1681,14 +1691,31 @@ class LogicManager:
                 break
         return ordered
 
+    async def reinitialize_graph(self, graph_id: str) -> None:
+        """Save-path helper: invalidate + reload + initialize (issue #1031).
+
+        The read/write filter state (last_value, last_write_val, …) is
+        carried across the reload: invalidate_cache drops _node_state, and an
+        initialization publish evaluated against empty filter state would
+        re-send unchanged actuator values on every semantic save even though
+        only_on_change/min_delta/throttle should suppress them.
+        """
+        saved_state = self._node_state.get(graph_id)
+        self.invalidate_cache(graph_id)
+        await self.reload()
+        if saved_state:
+            self._node_state[graph_id] = saved_state
+        await self.initialize_graph(graph_id)
+
     async def initialize_graphs(self, graph_ids: list[str]) -> None:
         """Initialize several restored graphs exactly once each (issue #1031).
 
-        The pass runs producers-first and keeps ALL restored graphs
-        suppressed for its whole duration — a cascaded write from one
-        imported graph lands in the registry and is picked up by the later
-        graph's own seeding instead of double-executing it, regardless of
-        payload order (see _on_value_event).
+        The pass runs producers-first and keeps ALL restored graphs listed in
+        _bulk_init_pending for its whole duration — initialization-flagged
+        cascades between imported graphs are suppressed (the later graph
+        seeds itself from the then-current registry state instead of
+        double-executing), while real live events keep executing the graphs
+        normally (see _on_value_event).
         """
         self._bulk_init_pending.update(graph_ids)
         try:

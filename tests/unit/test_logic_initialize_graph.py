@@ -771,8 +771,10 @@ async def test_init_publish_does_not_reenter_same_graph():
     assert mgr._event_bus.publish.await_count == 2
     mgr._execute_graph.assert_not_awaited()
     # The suppressed self-event still synced Read B's filter state to the
-    # written value, so a later event repeating it is deduplicated correctly
+    # written value, so a later event repeating it is deduplicated correctly —
+    # but last_ts keeps the registry timestamp (no save-time throttle window)
     assert mgr._node_state["g1"]["rB"]["last_value"] == 7
+    assert mgr._node_state["g1"]["rB"]["last_ts"] == _SEED_TS
     # The guard is released afterwards — later events execute normally
     assert "g1" not in mgr._initializing_graphs
 
@@ -1521,3 +1523,80 @@ async def test_hysteresis_without_published_write_is_not_committed():
     mgr._event_bus.publish.assert_not_awaited()
     assert mgr._hysteresis["g1"]["h1"] is False
     assert not [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_graph_preserves_write_filter_state():
+    """A semantic save must not re-send an unchanged actuator value: the
+    write-filter state survives the invalidate/reload of the save path."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id, "only_on_change": True}},
+        ],
+        [{"source": "r1", "sourceHandle": "value", "target": "w1", "targetHandle": "value"}],
+    )
+    entry = ("G", True, flow)
+    mgr = _make_manager({"g1": entry}, values={src_id: 42})
+    # 42 was already written before the save
+    mgr._node_state["g1"] = {"w1": {"last_write_val": 42}}
+
+    async def _reload():
+        mgr._graphs["g1"] = entry
+
+    mgr.reload = AsyncMock(side_effect=_reload)
+
+    await mgr.reinitialize_graph("g1")
+
+    mgr.reload.assert_awaited_once()
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cascaded_initialization_uses_event_value_over_stale_registry():
+    """The registry handler runs concurrently with the logic handler — the
+    cascaded sheet must seed from the event value, not the stale registry."""
+    src_a, dp_x, dst_y = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    # The registry mock is static: dp_x stays 3 even after the write
+    mgr = _make_manager(
+        {
+            "g1": ("A", True, _read_write_flow(src_a, dp_x)),
+            "g2": ("B", True, _read_write_flow(dp_x, dst_y)),
+        },
+        values={src_a: 7, dp_x: 3},
+    )
+    mgr._execute_graph = AsyncMock()
+
+    async def _deliver(event):
+        await mgr._on_value_event(event)
+
+    mgr._event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graph("g1")
+
+    written = [(c.args[0].datapoint_id, c.args[0].value) for c in mgr._event_bus.publish.await_args_list]
+    # g2 initialized with the event value 7, not the stale registry 3
+    assert written == [(uuid.UUID(dp_x), 7), (uuid.UUID(dst_y), 7)]
+    mgr._execute_graph.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bulk_pending_graph_still_executes_live_logic_events():
+    """Only initialization-flagged cascades are suppressed for bulk-pending
+    graphs — a real logic event from an unrelated running sheet executes."""
+    from obs.core.event_bus import DataValueEvent
+
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g1": ("G", True, _read_write_flow(src_id, dst_id))}, values={src_id: 4})
+    mgr._execute_graph = AsyncMock()
+    mgr._bulk_init_pending.add("g1")
+
+    live = DataValueEvent(datapoint_id=uuid.UUID(src_id), value=9, quality="good", source_adapter="logic")
+    await mgr._on_value_event(live)
+    mgr._execute_graph.assert_awaited_once()
+
+    flagged = DataValueEvent(datapoint_id=uuid.UUID(src_id), value=9, quality="good", source_adapter="logic", initialization=True)
+    mgr._execute_graph.reset_mock()
+    await mgr._on_value_event(flagged)
+    mgr._execute_graph.assert_not_awaited()

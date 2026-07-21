@@ -103,6 +103,7 @@ async def test_patch_repeating_stored_enabled_is_noop(monkeypatch):
     manager.invalidate_cache.assert_not_called()
     manager.reload.assert_not_awaited()
     manager.initialize_graph.assert_not_awaited()
+    manager.reinitialize_graph.assert_not_called()
     manager.update_cached_graph_name.assert_called_once()
 
 

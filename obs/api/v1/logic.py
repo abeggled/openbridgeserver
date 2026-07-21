@@ -212,9 +212,7 @@ async def update_graph_full(
         if layout_only:
             manager.update_cached_graph(graph_id, body.name, body.enabled, body.flow_data)
         else:
-            manager.invalidate_cache(graph_id)
-            await manager.reload()
-            await manager.initialize_graph(graph_id)
+            await manager.reinitialize_graph(graph_id)
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
@@ -273,9 +271,7 @@ async def update_graph_partial(
             if layout_only:
                 manager.update_cached_graph(graph_id, name, enabled, body.flow_data)
             else:
-                manager.invalidate_cache(graph_id)
-                await manager.reload()
-                await manager.initialize_graph(graph_id)
+                await manager.reinitialize_graph(graph_id)
         except Exception:
             pass
     else:
