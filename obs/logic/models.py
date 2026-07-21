@@ -54,6 +54,12 @@ class LogicGraphUpdate(BaseModel):
     flow_data: FlowData | None = None
 
 
+class LogicGraphRun(BaseModel):
+    """Ephemeral values used for one interactive debug execution."""
+
+    input_overrides: dict[str, dict[str, Any]] = {}
+
+
 class LogicGraphOut(BaseModel):
     id: str
     name: str

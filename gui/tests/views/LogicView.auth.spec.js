@@ -436,7 +436,7 @@ describe('LogicView WebSocket', () => {
   it('applies debug values from a logic_run WebSocket message when debug mode is on', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
-    overrideStorage({ access_token: 'tok', logic_debug_mode: '1' })
+    overrideStorage({ access_token: 'tok' })
 
     const graph = makeGraph('graph-1')
     const { wrapper } = await mountLogicView({
@@ -445,6 +445,8 @@ describe('LogicView WebSocket', () => {
       routeQuery: { graph: 'graph-1' },
       graphDetails: { 'graph-1': graph },
     })
+
+    wrapper.vm.toggleDebug()
 
     wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { n1: { value: 77, changed: true } } }) })
     expect(wrapper.vm.nodes[0].data._dbg).toBe('= 77')

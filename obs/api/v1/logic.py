@@ -17,6 +17,7 @@ GET    /api/v1/logic/graphs/{id}/export       export graph as JSON download
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -26,12 +27,14 @@ from fastapi.responses import JSONResponse
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
+from obs.logic.executor import GraphExecutor
 from obs.logic.models import (
     FlowData,
     LogicEdge,
     LogicGraphCreate,
     LogicGraphImport,
     LogicGraphOut,
+    LogicGraphRun,
     LogicGraphUpdate,
     LogicNode,
     LogicUsageOut,
@@ -81,6 +84,25 @@ def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
             },
         )
     return warnings
+
+
+def _debug_inputs(flow: FlowData, outputs: dict, overrides: dict[str, dict[str, object]]) -> dict[str, dict[str, dict]]:
+    """Describe incoming and effective values without persisting debug state."""
+    values: dict[str, dict[str, dict]] = {}
+    for edge in flow.edges:
+        incoming = GraphExecutor._get_output_value(outputs.get(edge.source, {}), edge.sourceHandle or "out")
+        port = edge.targetHandle or "in"
+        override = overrides.get(edge.target, {}).get(port)
+        values.setdefault(edge.target, {})[port] = {
+            "incoming": incoming,
+            "effective": override if port in overrides.get(edge.target, {}) else incoming,
+            "overridden": port in overrides.get(edge.target, {}),
+        }
+    for node_id, node_overrides in overrides.items():
+        for port, override in node_overrides.items():
+            values.setdefault(node_id, {}).setdefault(port, {"incoming": None})
+            values[node_id][port].update({"effective": override, "overridden": True})
+    return values
 
 
 @router.get("/node-types", response_model=list[NodeTypeDef])
@@ -362,10 +384,11 @@ async def import_graph(
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
 async def run_graph(
     graph_id: str,
+    body: LogicGraphRun | None = None,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
-    row = await db.fetchone("SELECT id, enabled FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT id, enabled, flow_data FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
     if not bool(row["enabled"]):
@@ -373,8 +396,20 @@ async def run_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        outputs = await get_logic_manager().execute_graph(graph_id)
-        return {"status": "ok", "outputs": outputs, "warnings": _logic_run_warnings(outputs)}
+        started = time.perf_counter()
+        overrides = body.input_overrides if body else {}
+        outputs = await get_logic_manager().execute_graph(graph_id, overrides)
+        return {
+            "status": "ok",
+            "outputs": outputs,
+            "warnings": _logic_run_warnings(outputs),
+            "debug": {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "used_overrides": bool(overrides),
+                "inputs": _debug_inputs(FlowData.model_validate_json(row["flow_data"]), outputs, overrides),
+            },
+        }
     except Exception as exc:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
 

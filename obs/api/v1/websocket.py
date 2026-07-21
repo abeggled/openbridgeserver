@@ -72,6 +72,7 @@ class WebSocketManager:
         self._connections: dict[str, tuple[WebSocket, set[str], asyncio.Lock, set[str] | None, bool, LogAccessCheck | None]] = {}
         # conn_id -> allowed message archive predicates. None means unrestricted.
         self._message_archive_access: dict[str, MessageArchiveAccess] = {}
+        self._logic_debug_subscriptions: dict[str, set[str]] = {}
 
     async def connect(
         self,
@@ -93,6 +94,7 @@ class WebSocketManager:
                 await ws.accept()
         conn_id = str(uuid.uuid4())
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check)
+        self._logic_debug_subscriptions[conn_id] = set()
         if allowed_message_archive_access is not None:
             self._message_archive_access[conn_id] = allowed_message_archive_access
         elif allowed_message_archive_ids is not None:
@@ -105,6 +107,7 @@ class WebSocketManager:
     async def disconnect(self, conn_id: str) -> None:
         entry = self._connections.pop(conn_id, None)
         self._message_archive_access.pop(conn_id, None)
+        self._logic_debug_subscriptions.pop(conn_id, None)
         if entry:
             ws = entry[0]
             try:
@@ -134,6 +137,26 @@ class WebSocketManager:
     def unsubscribe(self, conn_id: str, dp_ids: list[str]) -> None:
         if conn_id in self._connections:
             self._connections[conn_id][1].difference_update(dp_ids)
+
+    def set_logic_debug(self, conn_id: str, graph_id: str, enabled: bool) -> None:
+        subscriptions = self._logic_debug_subscriptions.get(conn_id)
+        if subscriptions is None or self._connections[conn_id][3] is not None:
+            return
+        if enabled:
+            subscriptions.add(graph_id)
+        else:
+            subscriptions.discard(graph_id)
+
+    def has_logic_debug_subscribers(self, graph_id: str) -> bool:
+        return any(graph_id in subscriptions for subscriptions in self._logic_debug_subscriptions.values())
+
+    async def broadcast_logic_debug(self, graph_id: str, msg: dict) -> None:
+        dead: list[str] = []
+        for conn_id, subscriptions in list(self._logic_debug_subscriptions.items()):
+            if graph_id in subscriptions and not await self._send(conn_id, msg):
+                dead.append(conn_id)
+        for conn_id in dead:
+            await self.disconnect(conn_id)
 
     async def send_initial_values(self, conn_id: str, dp_ids: list[str]) -> None:
         """Send current registry values for subscribed datapoints."""
@@ -984,6 +1007,11 @@ async def websocket_endpoint(
 
             elif action == "ping":
                 await ws.send_json({"action": "pong"})
+
+            elif action == "logic_debug":
+                graph_id = str(data.get("graph_id") or "")
+                if graph_id:
+                    manager.set_logic_debug(conn_id, graph_id, bool(data.get("enabled")))
 
     except WebSocketDisconnect:
         pass

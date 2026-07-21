@@ -111,12 +111,23 @@
 
       <!-- Config Panel -->
       <NodeConfigPanel
-        v-if="selectedNode && auth.isAdmin"
+        v-if="selectedNode && auth.isAdmin && !debugNode"
         :node="selectedNode"
         :node-types="store.nodeTypes"
         :node-outputs="lastRunOutputs"
         @update="onNodeDataUpdate"
         @close="selectedNode = null"
+      />
+      <DebugInspector
+        v-if="debugNode"
+        :node="debugNode"
+        :inputs="debugInputs"
+        :outputs="lastRunOutputs[debugNode.id] || {}"
+        :metadata="lastRunMetadata"
+        @close="debugNode = null"
+        @set-override="setDebugOverride"
+        @clear-override="clearDebugOverride"
+        @clear-all="clearAllDebugOverrides"
       />
     </div>
 
@@ -184,6 +195,7 @@ import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
+import DebugInspector      from '@/components/logic/DebugInspector.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
@@ -429,7 +441,11 @@ async function saveGraph() {
 }
 
 // ── Debug mode ─────────────────────────────────────────────────────────────
-const debugMode = ref(localStorage.getItem('logic_debug_mode') === '1')
+const debugMode = ref(false)
+const debugNode = ref(null)
+const debugOverrides = ref({})
+const lastRunMetadata = ref(null)
+const lastRunInputs = ref({})
 const DEBUG_TOOLTIP_MAX_CHARS = 1000
 
 function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
@@ -527,14 +543,54 @@ function countGraphDiagnostics(outputs) {
 
 function toggleDebug() {
   debugMode.value = !debugMode.value
-  localStorage.setItem('logic_debug_mode', debugMode.value ? '1' : '0')
-  if (!debugMode.value) clearDebugValues()
+  sendDebugSubscription(activeGraphId.value, debugMode.value)
+  if (!debugMode.value) {
+    clearDebugValues()
+    clearAllDebugOverrides()
+    debugNode.value = null
+    lastRunMetadata.value = null
+    lastRunInputs.value = {}
+  }
 }
+
+function parseOverride(text) {
+  if (!text.trim()) return undefined
+  try { return JSON.parse(text) } catch { return text }
+}
+
+function setDebugOverride(inputId, text) {
+  if (!auth.isAdmin || !debugNode.value) return
+  const nodeValues = { ...(debugOverrides.value[debugNode.value.id] || {}) }
+  if (text === '') delete nodeValues[inputId]
+  else nodeValues[inputId] = text
+  debugOverrides.value = { ...debugOverrides.value, [debugNode.value.id]: nodeValues }
+}
+
+function clearDebugOverride(inputId) { setDebugOverride(inputId, '') }
+function clearAllDebugOverrides() { debugOverrides.value = {} }
+
+const debugInputs = computed(() => {
+  if (!debugNode.value) return []
+  const definition = store.nodeTypes.find(type => type.type === debugNode.value.type)
+  return (definition?.inputs || []).map(port => {
+    const edge = edges.value.find(item => item.target === debugNode.value.id && (item.targetHandle || 'in') === port.id)
+    const captured = lastRunInputs.value[debugNode.value.id]?.[port.id]
+    const incoming = captured?.incoming ?? (edge ? lastRunOutputs.value[edge.source]?.[edge.sourceHandle || 'out'] : undefined)
+    const overrideText = debugOverrides.value[debugNode.value.id]?.[port.id]
+    return { id: port.id, label: port.label || port.id, incoming, overridden: overrideText !== undefined, overrideText: overrideText ?? '' }
+  })
+})
 
 async function runGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
   try {
-    const { data } = await logicApi.runGraph(activeGraphId.value)
+    const parsedOverrides = Object.fromEntries(Object.entries(debugOverrides.value).map(([nodeId, values]) => [
+      nodeId,
+      Object.fromEntries(Object.entries(values).map(([port, value]) => [port, parseOverride(value)])),
+    ]).filter(([, values]) => Object.keys(values).length))
+    const { data } = Object.keys(parsedOverrides).length
+      ? await logicApi.runGraph(activeGraphId.value, { input_overrides: parsedOverrides })
+      : await logicApi.runGraph(activeGraphId.value)
     const outputs = data.outputs || {}
     const evalCount = Object.keys(outputs).length
     const diagnosticCount = Array.isArray(data.warnings) ? data.warnings.length : countGraphDiagnostics(outputs)
@@ -547,6 +603,8 @@ async function runGraph() {
     )
     // Always update lastRunOutputs (needed for extractor config panels)
     lastRunOutputs.value = outputs
+    lastRunMetadata.value = data.debug || { timestamp: new Date().toISOString(), used_overrides: false }
+    lastRunInputs.value = data.debug?.inputs || {}
     if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs)
     else clearDebugValues()
   } catch (err) {
@@ -730,6 +788,11 @@ function onDrop(event) {
 const selectedNode = ref(null)
 
 function onNodeClick({ node }) {
+  if (debugMode.value) {
+    debugNode.value = { ...node }
+    selectedNode.value = null
+    return
+  }
   if (!auth.isAdmin) return
   selectedNode.value = { ...node }
 }
@@ -761,6 +824,8 @@ function _wsConnect() {
     _ws = new WebSocket(url, [`obs.jwt.${token}`])
   } catch { return }
 
+  _ws.onopen = () => sendDebugSubscription(activeGraphId.value, debugMode.value)
+
   _ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data)
@@ -770,6 +835,7 @@ function _wsConnect() {
         debugMode.value
       ) {
         applyDebugValues(msg.outputs || {})
+        lastRunMetadata.value = msg.debug || { timestamp: new Date().toISOString(), used_overrides: false }
       }
     } catch { /* ignore parse errors */ }
   }
@@ -783,6 +849,11 @@ function _wsConnect() {
   _ws.onerror = () => { try { _ws?.close() } catch { /* ignore */ } }
 }
 
+function sendDebugSubscription(graphId, enabled) {
+  if (!graphId || !_ws || typeof _ws.send !== 'function' || _ws.readyState !== WebSocket.OPEN) return
+  _ws.send(JSON.stringify({ action: 'logic_debug', graph_id: graphId, enabled }))
+}
+
 function _wsDisconnect() {
   clearTimeout(_wsTimer)
   _wsTimer = null
@@ -791,7 +862,15 @@ function _wsDisconnect() {
 }
 
 // ── Persist active graph selection ────────────────────────────────────────
-watch(activeGraphId, (id) => {
+watch(activeGraphId, (id, previousId) => {
+  if (previousId && id !== previousId) {
+    sendDebugSubscription(previousId, false)
+    debugMode.value = false
+    debugNode.value = null
+    debugOverrides.value = {}
+    lastRunInputs.value = {}
+    lastRunMetadata.value = null
+  }
   if (id) localStorage.setItem('logic_active_graph', id)
   else localStorage.removeItem('logic_active_graph')
 })

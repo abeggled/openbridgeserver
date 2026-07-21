@@ -1247,7 +1247,11 @@ class LogicManager:
 
     # ── Execution ─────────────────────────────────────────────────────────
 
-    async def execute_graph(self, graph_id: str) -> dict[str, Any]:
+    async def execute_graph(
+        self,
+        graph_id: str,
+        input_overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Manually trigger a graph (e.g. from API).
 
         Registry seeding for all datapoint_read nodes is handled inside
@@ -1257,7 +1261,7 @@ class LogicManager:
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
         name, enabled, flow = entry
-        return await self._execute_graph(graph_id, name, flow, {})
+        return await self._execute_graph(graph_id, name, flow, input_overrides or {})
 
     async def _execute_graph(
         self,
@@ -3204,17 +3208,27 @@ class LogicManager:
         try:
             from obs.api.v1.websocket import get_ws_manager
 
+            ws_manager = get_ws_manager()
+            if not ws_manager.has_logic_debug_subscribers(graph_id):
+                return outputs
+
             def _safe(v: Any) -> Any:
                 if v is None or isinstance(v, (bool, int, float, str)):
                     return v
                 return str(v)
 
             safe_outputs = {nid: {k: _safe(val) for k, val in node_out.items()} for nid, node_out in outputs.items() if isinstance(node_out, dict)}
-            await get_ws_manager().broadcast(
+            await ws_manager.broadcast_logic_debug(
+                graph_id,
                 {
                     "action": "logic_run",
                     "graph_id": graph_id,
                     "outputs": safe_outputs,
+                    "debug": {
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "duration_ms": round((datetime.now(UTC) - execute_now).total_seconds() * 1000, 2),
+                        "used_overrides": bool(overrides),
+                    },
                 },
             )
         except Exception:

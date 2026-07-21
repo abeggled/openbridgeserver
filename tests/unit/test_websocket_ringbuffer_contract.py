@@ -47,6 +47,28 @@ class _TransportFailWebSocket(_FakeWebSocket):
 
 
 @pytest.mark.asyncio
+async def test_logic_debug_payloads_only_reach_subscribed_editor_connections():
+    subscribed_ws = _FakeWebSocket()
+    normal_ws = _FakeWebSocket()
+    page_ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    subscribed_id = await manager.connect(subscribed_ws)
+    await manager.connect(normal_ws)
+    page_id = await manager.connect(page_ws, allowed_dp_ids=set())
+
+    manager.set_logic_debug(subscribed_id, "graph", True)
+    manager.set_logic_debug(page_id, "graph", True)
+    assert manager.has_logic_debug_subscribers("graph") is True
+    await manager.broadcast_logic_debug("graph", {"action": "logic_run"})
+
+    assert subscribed_ws.messages == [{"action": "logic_run"}]
+    assert normal_ws.messages == []
+    assert page_ws.messages == []
+    manager.set_logic_debug(subscribed_id, "graph", False)
+    assert manager.has_logic_debug_subscribers("graph") is False
+
+
+@pytest.mark.asyncio
 async def test_ringbuffer_entry_payload_contains_documented_fields(monkeypatch):
     ws = _FakeWebSocket()
     manager = WebSocketManager()

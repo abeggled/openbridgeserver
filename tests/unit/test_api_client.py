@@ -1778,7 +1778,8 @@ class TestApiClientWsBroadcast:
         ws_payloads: list[dict] = []
 
         mock_ws_manager = MagicMock()
-        mock_ws_manager.broadcast = AsyncMock(side_effect=lambda p: ws_payloads.append(p))
+        mock_ws_manager.has_logic_debug_subscribers.return_value = True
+        mock_ws_manager.broadcast_logic_debug = AsyncMock(side_effect=lambda _graph_id, payload: ws_payloads.append(payload))
 
         manager = _make_manager()
         n = node("ac", "api_client", {"url": "http://93.184.216.34", "method": "GET"})
