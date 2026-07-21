@@ -187,4 +187,43 @@ describe('BindingForm — 1-Wire sensor scan/select/alias flow', () => {
     expect(wrapper.text()).toContain('29.SECOND')
     expect(wrapper.text()).not.toContain('28.STALE')
   })
+
+  it('ignores a stale alias-save response after switching to a different instance', async () => {
+    let resolveAliasSave
+    const aliasSave = new Promise(resolve => { resolveAliasSave = resolve })
+    const onewireBrowseSensors = vi.fn()
+      .mockResolvedValueOnce({
+        data: [{ rom_id: '28.SHARED', family: '28', properties: ['temperature'], alias: null }],
+      })
+      .mockResolvedValueOnce({
+        data: [{ rom_id: '28.SHARED', family: '28', properties: ['temperature'], alias: null }],
+      })
+    const onewireSetAlias = vi.fn().mockImplementationOnce(() => aliasSave)
+    const { wrapper } = await mountBindingForm({}, { onewireBrowseSensors, onewireSetAlias })
+
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-1')
+    await flushPromises()
+    let scanBtn = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn.trigger('click')
+    await flushPromises()
+
+    const aliasInput = wrapper.findAll('input').find(i => i.attributes('placeholder')?.includes('Label'))
+    await aliasInput.setValue('ow-1 Label')
+    const saveBtn = wrapper.findAll('button').find(b => b.text().includes('Speichern'))
+    await saveBtn.trigger('click') // PATCH for ow-1 — stays pending
+
+    // Switch to ow-2 before the ow-1 alias save resolves, and scan its (unrelated) sensor sharing the same rom_id.
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('ow-2')
+    await flushPromises()
+    scanBtn = wrapper.findAll('button').find(b => b.text().includes('Scannen'))
+    await scanBtn.trigger('click')
+    await flushPromises()
+
+    // The stale ow-1 alias save now resolves — must not label ow-2's sensor.
+    resolveAliasSave({ data: { rom_id: '28.SHARED', label: 'ow-1 Label' } })
+    await flushPromises()
+
+    const aliasField = wrapper.findAll('input').find(i => i.attributes('placeholder')?.includes('Label'))
+    expect(aliasField.element.value).toBe('')
+  })
 })

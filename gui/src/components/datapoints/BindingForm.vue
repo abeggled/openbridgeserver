@@ -850,9 +850,14 @@ async function saveOnewireAlias(romId) {
   if (!instanceId || label === undefined) return
   try {
     await adapterApi.onewireSetAlias(instanceId, romId, label)
+    // The selected instance may have changed while this PATCH was in flight —
+    // don't apply the saved label to whatever scan list is now displayed, since
+    // a same-rom_id sensor on the newly selected instance would get the wrong alias.
+    if (selectedInstanceId.value !== instanceId) return
     const sensor = onewireSensors.value.find(s => s.rom_id === romId)
     if (sensor) sensor.alias = label
   } catch (e) {
+    if (selectedInstanceId.value !== instanceId) return
     onewireBrowseError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.onewireAliasSaveFailed')
   }
 }
