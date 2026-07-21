@@ -49,10 +49,9 @@
 import { computed, ref, onUnmounted } from 'vue'
 import ValueView from './DebugValueView.vue'
 
-const props = defineProps({ node: { type: Object, required: true }, inputs: { type: Array, default: () => [] }, outputs: { type: Object, default: () => ({}) }, metadata: { type: Object, default: null } })
+const props = defineProps({ node: { type: Object, required: true }, inputs: { type: Array, default: () => [] }, outputs: { type: Object, default: () => ({}) }, metadata: { type: Object, default: null }, hasOverrides: { type: Boolean, default: false } })
 defineEmits(['close', 'set-override', 'clear-override', 'clear-all'])
 const outputEntries = computed(() => Object.entries(props.outputs || {}))
-const hasOverrides = computed(() => props.inputs.some(input => input.overridden))
 const payloadCopied = ref(false)
 let copiedTimer = null
 

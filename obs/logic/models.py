@@ -58,6 +58,7 @@ class LogicGraphRun(BaseModel):
     """Ephemeral values used for one interactive debug execution."""
 
     input_overrides: dict[str, dict[str, Any]] = {}
+    debug: bool = False
 
 
 class LogicGraphOut(BaseModel):

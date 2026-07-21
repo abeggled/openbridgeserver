@@ -247,6 +247,7 @@ describe('LogicView auth gates', () => {
     await wrapper.vm.doDuplicateGraph()
     expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1')
     expect(wrapper.vm.activeGraphId).toBe('graph-copy')
+    expect(wrapper.vm.lastRunOutputs).toEqual({})
 
     await wrapper.vm.doExportGraph()
     expect(logicApi.exportGraph).toHaveBeenCalledWith('graph-copy')
@@ -481,6 +482,7 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.setDebugOverride('label', 'plain text')
     await wrapper.vm.runGraph()
     expect(logicApi.runGraph).toHaveBeenCalledWith('graph-1', {
+      debug: true,
       input_overrides: { n1: { value: { nested: true }, label: 'plain text' } },
     })
     expect(wrapper.vm.lastRunInputs.n1.value.incoming).toBe(null)

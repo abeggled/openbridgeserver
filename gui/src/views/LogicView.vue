@@ -124,6 +124,7 @@
         :inputs="debugInputs"
         :outputs="lastRunOutputs[debugNode.id] || {}"
         :metadata="lastRunMetadata"
+        :has-overrides="hasDebugOverrides"
         @close="debugNode = null"
         @set-override="setDebugOverride"
         @clear-override="clearDebugOverride"
@@ -486,6 +487,7 @@ function setDebugOverride(inputId, text) {
 
 function clearDebugOverride(inputId) { setDebugOverride(inputId, '') }
 function clearAllDebugOverrides() { debugOverrides.value = {} }
+const hasDebugOverrides = computed(() => Object.values(debugOverrides.value).some(values => Object.keys(values).length > 0))
 
 const debugInputs = computed(() => {
   if (!debugNode.value) return []
@@ -522,8 +524,8 @@ async function runGraph() {
       nodeId,
       Object.fromEntries(Object.entries(values).map(([port, value]) => [port, parseOverride(value)])),
     ]).filter(([, values]) => Object.keys(values).length))
-    const { data } = Object.keys(parsedOverrides).length
-      ? await logicApi.runGraph(activeGraphId.value, { input_overrides: parsedOverrides })
+    const { data } = debugMode.value || Object.keys(parsedOverrides).length
+      ? await logicApi.runGraph(activeGraphId.value, { debug: debugMode.value, input_overrides: parsedOverrides })
       : await logicApi.runGraph(activeGraphId.value)
     const outputs = data.outputs || {}
     const evalCount = Object.keys(outputs).length
@@ -801,6 +803,7 @@ watch(activeGraphId, (id, previousId) => {
     debugMode.value = false
     debugNode.value = null
     debugOverrides.value = {}
+    lastRunOutputs.value = {}
     lastRunInputs.value = {}
     lastRunMetadata.value = null
   }

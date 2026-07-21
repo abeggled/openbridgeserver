@@ -982,7 +982,7 @@ class TestRunGraph:
         row = _make_graph_row(enabled=1)
         db = _DbStub(one=row)
         mock_manager = MagicMock()
-        mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": 1}, {}))
+        mock_manager.execute_graph = AsyncMock(return_value={"output": 1})
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], _user="user", db=db)
@@ -1011,6 +1011,22 @@ class TestRunGraph:
         assert result["debug"]["duration_ms"] >= 0
 
     @pytest.mark.asyncio
+    async def test_explicit_debug_run_captures_inputs_without_overrides(self):
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": 1}, {"node": {}}))
+
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
+            result = await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="user", db=db)
+
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {})
+        assert result["debug"]["inputs"] == {"node": {}}
+
+    @pytest.mark.asyncio
     async def test_raises_500_on_execution_error(self):
         from fastapi import HTTPException
 
@@ -1019,7 +1035,7 @@ class TestRunGraph:
         row = _make_graph_row(enabled=1)
         db = _DbStub(one=row)
         mock_manager = MagicMock()
-        mock_manager.execute_graph_debug = AsyncMock(side_effect=RuntimeError("execution failed"))
+        mock_manager.execute_graph = AsyncMock(side_effect=RuntimeError("execution failed"))
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             with pytest.raises(HTTPException) as exc_info:

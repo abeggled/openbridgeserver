@@ -39,6 +39,7 @@ describe('DebugInspector', () => {
       props: {
         node: { id: 'n1', data: {} },
         inputs: [{ id: 'value', label: 'Value', incoming: null, overridden: true, overrideText: '42' }],
+        hasOverrides: true,
       },
     })
 

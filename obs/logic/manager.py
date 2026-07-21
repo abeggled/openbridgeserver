@@ -3265,8 +3265,8 @@ class LogicManager:
                 {
                     "action": "logic_run",
                     "graph_id": graph_id,
-                    "outputs": jsonable(outputs),
-                    "inputs": jsonable(debug_inputs or {}),
+                    "outputs": json.loads(json.dumps(jsonable(outputs), default=str)),
+                    "inputs": json.loads(json.dumps(jsonable(debug_inputs or {}), default=str)),
                     "debug": {
                         "timestamp": datetime.now(UTC).isoformat(),
                         "duration_ms": round((datetime.now(UTC) - execute_now).total_seconds() * 1000, 2),

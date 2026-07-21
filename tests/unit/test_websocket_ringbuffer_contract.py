@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -65,6 +66,21 @@ async def test_logic_debug_payloads_only_reach_subscribed_editor_connections():
     assert normal_ws.messages == []
     assert page_ws.messages == []
     manager.set_logic_debug(subscribed_id, "graph", False)
+    assert manager.has_logic_debug_subscribers("graph") is False
+
+
+@pytest.mark.asyncio
+async def test_logic_debug_access_is_revalidated_before_broadcast():
+    ws = _FakeWebSocket()
+    access_check = AsyncMock(return_value=False)
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws, logic_debug_access=True, logic_debug_access_check=access_check)
+    manager.set_logic_debug(conn_id, "graph", True)
+
+    await manager.broadcast_logic_debug("graph", {"action": "logic_run"})
+
+    access_check.assert_awaited_once()
+    assert ws.messages == []
     assert manager.has_logic_debug_subscribers("graph") is False
 
 

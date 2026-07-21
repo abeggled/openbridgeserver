@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
 LogAccessCheck = Callable[[], Awaitable[bool]]
+LogicDebugAccessCheck = Callable[[], Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class WebSocketManager:
         self._message_archive_access: dict[str, MessageArchiveAccess] = {}
         self._logic_debug_subscriptions: dict[str, set[str]] = {}
         self._logic_debug_access: set[str] = set()
+        self._logic_debug_access_checks: dict[str, LogicDebugAccessCheck] = {}
 
     async def connect(
         self,
@@ -84,6 +86,7 @@ class WebSocketManager:
         log_access: bool = False,
         log_access_check: LogAccessCheck | None = None,
         logic_debug_access: bool = False,
+        logic_debug_access_check: LogicDebugAccessCheck | None = None,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -99,6 +102,8 @@ class WebSocketManager:
         self._logic_debug_subscriptions[conn_id] = set()
         if logic_debug_access:
             self._logic_debug_access.add(conn_id)
+            if logic_debug_access_check is not None:
+                self._logic_debug_access_checks[conn_id] = logic_debug_access_check
         if allowed_message_archive_access is not None:
             self._message_archive_access[conn_id] = allowed_message_archive_access
         elif allowed_message_archive_ids is not None:
@@ -113,6 +118,7 @@ class WebSocketManager:
         self._message_archive_access.pop(conn_id, None)
         self._logic_debug_subscriptions.pop(conn_id, None)
         self._logic_debug_access.discard(conn_id)
+        self._logic_debug_access_checks.pop(conn_id, None)
         if entry:
             ws = entry[0]
             try:
@@ -158,7 +164,14 @@ class WebSocketManager:
     async def broadcast_logic_debug(self, graph_id: str, msg: dict) -> None:
         dead: list[str] = []
         for conn_id, subscriptions in list(self._logic_debug_subscriptions.items()):
-            if graph_id in subscriptions and not await self._send(conn_id, msg):
+            if graph_id not in subscriptions:
+                continue
+            access_check = self._logic_debug_access_checks.get(conn_id)
+            if access_check is not None and not await access_check():
+                subscriptions.clear()
+                self._logic_debug_access.discard(conn_id)
+                continue
+            if not await self._send(conn_id, msg):
                 dead.append(conn_id)
         for conn_id in dead:
             await self.disconnect(conn_id)
@@ -827,7 +840,7 @@ async def _ws_has_logic_debug_access(user: str | None) -> bool:
         return False
     try:
         row = await get_db().fetchone("SELECT is_admin FROM users WHERE username=?", (user,))
-    except RuntimeError:
+    except Exception:
         return False
     return bool(row and row["is_admin"])
 
@@ -994,6 +1007,7 @@ async def websocket_endpoint(
         log_access=log_access,
         log_access_check=(lambda: _ws_has_log_access(user, api_key, identity_from_jwt=identity_from_jwt)) if log_access else None,
         logic_debug_access=logic_debug_access,
+        logic_debug_access_check=(lambda: _ws_has_logic_debug_access(user)) if logic_debug_access else None,
         subprotocol=selected_subprotocol,
     )
 

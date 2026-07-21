@@ -378,7 +378,12 @@ async def run_graph(
 
         started = time.perf_counter()
         overrides = body.input_overrides if body else {}
-        outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
+        debug_requested = bool(body and body.debug) or bool(overrides)
+        if debug_requested:
+            outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
+        else:
+            outputs = await get_logic_manager().execute_graph(graph_id)
+            inputs = {}
         return {
             "status": "ok",
             "outputs": outputs,
