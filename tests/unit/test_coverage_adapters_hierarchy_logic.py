@@ -3399,12 +3399,24 @@ class TestLogicManagerBasics:
 
     @pytest.mark.asyncio
     async def test_execute_graph_success(self):
+        from obs.logic.executor import GraphExecutor
+
         flow = _make_flow()
         mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        captures = []
+        original_init = GraphExecutor.__init__
+
+        def recording_init(instance, *args, **kwargs):
+            captures.append(args[3] if len(args) > 3 else kwargs.get("input_capture"))
+            original_init(instance, *args, **kwargs)
+
         with patch("obs.api.v1.websocket.get_ws_manager") as mock_ws:
             mock_ws.return_value.broadcast = AsyncMock()
-            result = await mgr.execute_graph("g1")
+            mock_ws.return_value.has_logic_debug_subscribers.return_value = False
+            with patch.object(GraphExecutor, "__init__", recording_init):
+                result = await mgr.execute_graph("g1")
         assert isinstance(result, dict)
+        assert captures and all(capture is None for capture in captures)
 
     @pytest.mark.asyncio
     async def test_load_graphs_parses_flow(self):

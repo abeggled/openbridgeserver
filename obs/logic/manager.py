@@ -1258,8 +1258,17 @@ class LogicManager:
         Registry seeding for all datapoint_read nodes is handled inside
         _execute_graph, so no extra overrides are needed here.
         """
-        outputs, _inputs = await self.execute_graph_debug(graph_id, input_overrides)
-        return outputs
+        entry = self._graphs.get(graph_id)
+        if not entry:
+            raise KeyError(f"Graph {graph_id} not in cache")
+        name, _enabled, flow = entry
+        return await self._execute_graph(
+            graph_id,
+            name,
+            flow,
+            {},
+            debug_overrides=input_overrides or {},
+        )
 
     async def execute_graph_debug(
         self,
@@ -1295,15 +1304,17 @@ class LogicManager:
         execute_now = datetime.now(UTC)
         graph_state = self._node_state.setdefault(graph_id, {})
         debug_overrides = debug_overrides or {}
-        debug_inputs = debug_input_capture
-        if debug_inputs is None:
+        capture_debug_inputs = debug_input_capture is not None
+        if not capture_debug_inputs:
             try:
                 from obs.api.v1.websocket import get_ws_manager
 
                 if get_ws_manager().has_logic_debug_subscribers(graph_id):
-                    debug_inputs = {}
+                    capture_debug_inputs = True
             except Exception:
                 pass
+        debug_inputs: dict[str, dict[str, dict[str, Any]]] = {}
+        debug_input_runs: list[tuple[dict[str, Any], dict[str, dict[str, dict[str, Any]]]]] = []
 
         def _debug_run_overrides(candidate: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
             merged = {node_id: dict(values) for node_id, values in candidate.items()}
@@ -1312,7 +1323,21 @@ class LogicManager:
             return merged
 
         def _executor(state: dict[str, Any]) -> GraphExecutor:
-            return GraphExecutor(flow, state, self._app_config, debug_inputs)
+            if not capture_debug_inputs:
+                return GraphExecutor(flow, state, self._app_config)
+
+            run_inputs: dict[str, dict[str, dict[str, Any]]] = {}
+
+            class CapturingGraphExecutor(GraphExecutor):
+                def execute(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                    run_outputs = super().execute(*args, **kwargs)
+                    # ``outputs`` is updated in place as async replay results are
+                    # merged. A shallow copy preserves each node output object's
+                    # identity while isolating the pass's top-level mapping.
+                    debug_input_runs.append((dict(run_outputs), run_inputs))
+                    return run_outputs
+
+            return CapturingGraphExecutor(flow, state, self._app_config, run_inputs)
 
         # ── Seed all datapoint_read nodes from registry ───────────────────
         # In event-driven execution only the triggered node(s) have overrides.
@@ -3241,6 +3266,18 @@ class LogicManager:
                 )
             except Exception as exc:
                 logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
+
+        # Select each node's capture from the execution pass whose output was
+        # retained. Async replay passes may execute unrelated branches whose
+        # outputs are deliberately discarded; their inputs must be discarded too.
+        if capture_debug_inputs:
+            for run_outputs, run_inputs in debug_input_runs:
+                for node_id, ports in run_inputs.items():
+                    if run_outputs.get(node_id) is outputs.get(node_id):
+                        debug_inputs[node_id] = ports
+            if debug_input_capture is not None:
+                debug_input_capture.clear()
+                debug_input_capture.update(debug_inputs)
 
         # ── Broadcast final execution results to all WS clients ──────────
         # Broadcast happens here — after all async ops (api_client HTTP calls,

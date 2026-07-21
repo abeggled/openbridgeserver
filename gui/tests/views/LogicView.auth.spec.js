@@ -456,6 +456,15 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.debugNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
     wrapper.vm.edges = [{ id: 'custom', source: 'n1', target: 'concat', sourceHandle: 'value', targetHandle: 'in_4' }]
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
+
+    wrapper.vm.debugNode = { id: 'source', type: 'datapoint_read', data: {} }
+    wrapper.vm.edges = []
+    wrapper.vm.lastRunInputs = {
+      source: { value: { incoming: 23, effective: 23, overridden: false } },
+    }
+    expect(wrapper.vm.debugInputs).toEqual([
+      expect.objectContaining({ id: 'value', incoming: 23 }),
+    ])
   })
 
   it('edits, parses, runs, and clears temporary input overrides', async () => {

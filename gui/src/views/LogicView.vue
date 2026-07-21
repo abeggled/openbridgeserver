@@ -505,7 +505,16 @@ const debugInputs = computed(() => {
   const known = new Set(ports.map(port => port.id))
   for (const edge of edges.value.filter(item => item.target === debugNode.value.id)) {
     const id = edge.targetHandle || 'in'
-    if (!known.has(id)) ports = [...ports, { id, label: id }]
+    if (!known.has(id)) {
+      ports = [...ports, { id, label: id }]
+      known.add(id)
+    }
+  }
+  for (const id of Object.keys(lastRunInputs.value[debugNode.value.id] || {})) {
+    if (!known.has(id)) {
+      ports = [...ports, { id, label: id }]
+      known.add(id)
+    }
   }
   return ports.map(port => {
     const edge = edges.value.find(item => item.target === debugNode.value.id && (item.targetHandle || 'in') === port.id)
