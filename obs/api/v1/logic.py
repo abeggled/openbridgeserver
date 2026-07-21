@@ -27,7 +27,6 @@ from fastapi.responses import JSONResponse
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
-from obs.logic.executor import GraphExecutor
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -84,25 +83,6 @@ def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
             },
         )
     return warnings
-
-
-def _debug_inputs(flow: FlowData, outputs: dict, overrides: dict[str, dict[str, object]]) -> dict[str, dict[str, dict]]:
-    """Describe incoming and effective values without persisting debug state."""
-    values: dict[str, dict[str, dict]] = {}
-    for edge in flow.edges:
-        incoming = GraphExecutor._get_output_value(outputs.get(edge.source, {}), edge.sourceHandle or "out")
-        port = edge.targetHandle or "in"
-        override = overrides.get(edge.target, {}).get(port)
-        values.setdefault(edge.target, {})[port] = {
-            "incoming": incoming,
-            "effective": override if port in overrides.get(edge.target, {}) else incoming,
-            "overridden": port in overrides.get(edge.target, {}),
-        }
-    for node_id, node_overrides in overrides.items():
-        for port, override in node_overrides.items():
-            values.setdefault(node_id, {}).setdefault(port, {"incoming": None})
-            values[node_id][port].update({"effective": override, "overridden": True})
-    return values
 
 
 @router.get("/node-types", response_model=list[NodeTypeDef])
@@ -398,7 +378,7 @@ async def run_graph(
 
         started = time.perf_counter()
         overrides = body.input_overrides if body else {}
-        outputs = await get_logic_manager().execute_graph(graph_id, overrides)
+        outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
         return {
             "status": "ok",
             "outputs": outputs,
@@ -407,7 +387,7 @@ async def run_graph(
                 "timestamp": datetime.now(UTC).isoformat(),
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "used_overrides": bool(overrides),
-                "inputs": _debug_inputs(FlowData.model_validate_json(row["flow_data"]), outputs, overrides),
+                "inputs": inputs,
             },
         }
     except Exception as exc:

@@ -52,7 +52,7 @@ async def test_logic_debug_payloads_only_reach_subscribed_editor_connections():
     normal_ws = _FakeWebSocket()
     page_ws = _FakeWebSocket()
     manager = WebSocketManager()
-    subscribed_id = await manager.connect(subscribed_ws)
+    subscribed_id = await manager.connect(subscribed_ws, logic_debug_access=True)
     await manager.connect(normal_ws)
     page_id = await manager.connect(page_ws, allowed_dp_ids=set())
 

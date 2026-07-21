@@ -73,6 +73,7 @@ class WebSocketManager:
         # conn_id -> allowed message archive predicates. None means unrestricted.
         self._message_archive_access: dict[str, MessageArchiveAccess] = {}
         self._logic_debug_subscriptions: dict[str, set[str]] = {}
+        self._logic_debug_access: set[str] = set()
 
     async def connect(
         self,
@@ -82,6 +83,7 @@ class WebSocketManager:
         allowed_message_archive_access: MessageArchiveAccess = None,
         log_access: bool = False,
         log_access_check: LogAccessCheck | None = None,
+        logic_debug_access: bool = False,
         subprotocol: str | None = None,
     ) -> str:
         if subprotocol is None:
@@ -95,6 +97,8 @@ class WebSocketManager:
         conn_id = str(uuid.uuid4())
         self._connections[conn_id] = (ws, set(), asyncio.Lock(), allowed_dp_ids, log_access, log_access_check)
         self._logic_debug_subscriptions[conn_id] = set()
+        if logic_debug_access:
+            self._logic_debug_access.add(conn_id)
         if allowed_message_archive_access is not None:
             self._message_archive_access[conn_id] = allowed_message_archive_access
         elif allowed_message_archive_ids is not None:
@@ -108,6 +112,7 @@ class WebSocketManager:
         entry = self._connections.pop(conn_id, None)
         self._message_archive_access.pop(conn_id, None)
         self._logic_debug_subscriptions.pop(conn_id, None)
+        self._logic_debug_access.discard(conn_id)
         if entry:
             ws = entry[0]
             try:
@@ -140,7 +145,7 @@ class WebSocketManager:
 
     def set_logic_debug(self, conn_id: str, graph_id: str, enabled: bool) -> None:
         subscriptions = self._logic_debug_subscriptions.get(conn_id)
-        if subscriptions is None or self._connections[conn_id][3] is not None:
+        if subscriptions is None or conn_id not in self._logic_debug_access:
             return
         if enabled:
             subscriptions.add(graph_id)
@@ -816,6 +821,17 @@ async def _ws_has_log_access(user: str | None, api_key: str | None, *, identity_
     return False
 
 
+async def _ws_has_logic_debug_access(user: str | None) -> bool:
+    """Only administrator JWT identities may inspect live logic values."""
+    if not user or user == "__api_key__" or user.startswith("api_key:"):
+        return False
+    try:
+        row = await get_db().fetchone("SELECT is_admin FROM users WHERE username=?", (user,))
+    except RuntimeError:
+        return False
+    return bool(row and row["is_admin"])
+
+
 # ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
@@ -968,6 +984,7 @@ async def websocket_endpoint(
         )
 
     log_access = await _ws_has_log_access(user, api_key, identity_from_jwt=identity_from_jwt) if allowed_dp_ids is None else False
+    logic_debug_access = await _ws_has_logic_debug_access(user) if identity_from_jwt and allowed_dp_ids is None else False
 
     manager = get_ws_manager()
     conn_id = await manager.connect(
@@ -976,6 +993,7 @@ async def websocket_endpoint(
         allowed_message_archive_access=allowed_message_archive_access,
         log_access=log_access,
         log_access_check=(lambda: _ws_has_log_access(user, api_key, identity_from_jwt=identity_from_jwt)) if log_access else None,
+        logic_debug_access=logic_debug_access,
         subprotocol=selected_subprotocol,
     )
 

@@ -952,21 +952,6 @@ class TestImportGraph:
 
 
 class TestRunGraph:
-    def test_debug_inputs_marks_incoming_and_effective_values(self):
-        from obs.api.v1.logic import _debug_inputs
-        from obs.logic.models import FlowData
-
-        flow = FlowData.model_validate(
-            {
-                "nodes": [],
-                "edges": [{"id": "e", "source": "source", "target": "target", "sourceHandle": "out", "targetHandle": "in"}],
-            }
-        )
-
-        assert _debug_inputs(flow, {"source": {"out": 1}}, {"target": {"in": 2}}) == {
-            "target": {"in": {"incoming": 1, "effective": 2, "overridden": True}},
-        }
-
     @pytest.mark.asyncio
     async def test_raises_404_when_not_found(self):
         from fastapi import HTTPException
@@ -997,7 +982,7 @@ class TestRunGraph:
         row = _make_graph_row(enabled=1)
         db = _DbStub(one=row)
         mock_manager = MagicMock()
-        mock_manager.execute_graph = AsyncMock(return_value={"output": 1})
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": 1}, {}))
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], _user="user", db=db)
@@ -1013,13 +998,15 @@ class TestRunGraph:
         row = _make_graph_row(enabled=1)
         db = _DbStub(one=row)
         mock_manager = MagicMock()
-        mock_manager.execute_graph = AsyncMock(return_value={"output": {"out": 7}})
+        captured = {"node": {"in": {"incoming": 1, "effective": 7, "overridden": True}}}
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": {"out": 7}}, captured))
         body = LogicGraphRun(input_overrides={"node": {"in": 7}})
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], body=body, _user="user", db=db)
 
-        mock_manager.execute_graph.assert_awaited_once_with(row["id"], {"node": {"in": 7}})
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}})
+        assert result["debug"]["inputs"] == captured
         assert result["debug"]["used_overrides"] is True
         assert result["debug"]["duration_ms"] >= 0
 
@@ -1032,7 +1019,7 @@ class TestRunGraph:
         row = _make_graph_row(enabled=1)
         db = _DbStub(one=row)
         mock_manager = MagicMock()
-        mock_manager.execute_graph = AsyncMock(side_effect=RuntimeError("execution failed"))
+        mock_manager.execute_graph_debug = AsyncMock(side_effect=RuntimeError("execution failed"))
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             with pytest.raises(HTTPException) as exc_info:

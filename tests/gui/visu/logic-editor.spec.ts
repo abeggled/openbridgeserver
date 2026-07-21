@@ -4,8 +4,7 @@ import { apiPost, apiPut, apiGet, apiDelete, getToken } from '../helpers'
 
 /**
  * End-to-end test: Create a logic graph with a const_value node via API,
- * open it in the GUI, enable debug mode, run it, and verify the debug-band
- * shows a value (not the default "—").
+ * open it in the GUI, enable debug mode, run it, and verify the inspector.
  */
 test('Logic-Editor Debug-Modus zeigt Wert nach Ausführen', async ({ page }) => {
   // 1. Create a graph with one const_value node via API
@@ -41,7 +40,7 @@ test('Logic-Editor Debug-Modus zeigt Wert nach Ausführen', async ({ page }) => 
 
     // 4. Wait for the canvas to render the node (VueFlow + API load takes a moment)
     await page.waitForTimeout(1_000)
-    await expect(page.locator('[data-testid="debug-band"]').first()).toBeHidden({ timeout: 5_000 })
+    await expect(page.locator('[data-testid="debug-inspector"]')).toBeHidden({ timeout: 5_000 })
 
     // 5. Enable debug mode
     await page.click('[data-testid="btn-debug"]')
@@ -49,13 +48,11 @@ test('Logic-Editor Debug-Modus zeigt Wert nach Ausführen', async ({ page }) => 
     // 6. Run the graph
     await page.click('[data-testid="btn-run"]')
 
-    // 7. The debug-band must appear and show a value (not "—")
-    //    runGraph() calls POST /api/v1/logic/graphs/{id}/run → Vue reactivity update; allow up to 8 s
-    const debugBand = page.locator('[data-testid="debug-band"]').first()
-    await expect(debugBand).toBeVisible({ timeout: 8_000 })
-    const text = await debugBand.textContent()
-    expect(text?.trim()).not.toBe('—')
-    expect(text?.trim()).not.toBe('')
+    // 7. Select the node and verify its output in the dedicated inspector.
+    await page.locator('.vue-flow__node[data-id="node-1"]').click()
+    const inspector = page.locator('[data-testid="debug-inspector"]')
+    await expect(inspector).toBeVisible({ timeout: 8_000 })
+    await expect(inspector).toContainText('42')
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
@@ -92,12 +89,10 @@ test('AND-Gate mit 3 Eingängen (input_count=3) zeigt true wenn alle Eingänge t
     await page.waitForTimeout(1_000)
     await page.click('[data-testid="btn-debug"]')
     await page.click('[data-testid="btn-run"]')
-    // Verify the AND gate's debug band shows a truthy result
-    const debugBands = page.locator('[data-testid="debug-band"]')
-    await expect(debugBands.first()).toBeVisible({ timeout: 8_000 })
-    // At least one debug band must be visible (graph ran successfully)
-    const count = await debugBands.count()
-    expect(count).toBeGreaterThan(0)
+    await page.locator('.vue-flow__node[data-id="g"]').click()
+    const inspector = page.locator('[data-testid="debug-inspector"]')
+    await expect(inspector).toBeVisible({ timeout: 8_000 })
+    await expect(inspector).toContainText('true')
   } finally {
     await apiDelete(`/api/v1/logic/graphs/${graphId}`)
   }
