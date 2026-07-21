@@ -16,6 +16,8 @@ beforeEach(() => {
         config: { providers: {
           pushover: { enabled: true, targets: { default: {} } },
           telegram: { enabled: false, targets: { family: {} } },
+          sevenio: { enabled: 'false', targets: { admin: {} } },
+          matrix: { enabled: '1', targets: { ops: {} } },
         } },
       }],
     }),
@@ -51,7 +53,9 @@ describe('NodeConfigPanel notification', () => {
 
     await wrapper.find('select').setValue('message-1')
     expect(wrapper.text()).toContain('pushover/default')
+    expect(wrapper.text()).toContain('matrix/ops')
     expect(wrapper.text()).not.toContain('telegram/family')
+    expect(wrapper.text()).not.toContain('sevenio/admin')
     await wrapper.find('input[type="checkbox"]').setValue(true)
 
     expect(wrapper.emitted('update').at(-1)[0]).toMatchObject({

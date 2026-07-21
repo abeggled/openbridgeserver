@@ -1520,9 +1520,16 @@ const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
 const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
 const isNotifyMessageNode = computed(() => props.node?.type === 'notify_message')
 const selectedMessageAdapter = computed(() => messageAdapters.value.find(instance => instance.id === localData.value.adapter_instance_id))
+function notificationProviderEnabled(config) {
+  if (config?.enabled === true || config?.enabled === 1) return true
+  if (typeof config?.enabled === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(config.enabled.trim().toLowerCase())
+  }
+  return false
+}
 const notificationTargets = computed(() => {
   const providers = selectedMessageAdapter.value?.config?.providers || {}
-  return Object.entries(providers).flatMap(([provider, config]) => config?.enabled
+  return Object.entries(providers).flatMap(([provider, config]) => notificationProviderEnabled(config)
     ? Object.keys(config.targets || {}).map(target => ({ provider, target, key: `${provider}/${target}` }))
     : [])
 })
