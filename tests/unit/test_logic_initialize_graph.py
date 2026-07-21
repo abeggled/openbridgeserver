@@ -1302,3 +1302,143 @@ async def test_diamond_dependency_is_not_a_cycle():
     written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
     # Y settles to 1 (from Z); X = Z AND settled Y = True
     assert written == {uuid.UUID(dp_y): 1, uuid.UUID(dp_x): True}
+
+
+@pytest.mark.asyncio
+async def test_gate_enable_control_path_does_not_publish_foreign_value():
+    """Const → Gate.in → Write.value with the seeded Read only on Gate.enable:
+    the written value does not descend from the seed — no publish on save."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "c1", "type": "const_value", "data": {"value": 33}},
+            {"id": "g1", "type": "gate", "data": {}},
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "c1", "sourceHandle": "out", "target": "g1", "targetHandle": "in"},
+            {"source": "r1", "sourceHandle": "value", "target": "g1", "targetHandle": "enable"},
+            {"source": "g1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gate_passing_seeded_value_still_publishes():
+    """A gate whose IN carries the seeded value stays eligible — only the
+    control handle is excluded from seeded reachability."""
+    src_in, src_en, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rIn", "type": "datapoint_read", "data": {"datapoint_id": src_in}},
+            {"id": "rEn", "type": "datapoint_read", "data": {"datapoint_id": src_en}},
+            {"id": "g1", "type": "gate", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "rIn", "sourceHandle": "value", "target": "g1", "targetHandle": "in"},
+            {"source": "rEn", "sourceHandle": "value", "target": "g1", "targetHandle": "enable"},
+            {"source": "g1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_in: 17, src_en: 1})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 17
+
+
+@pytest.mark.asyncio
+async def test_initialization_cascade_into_other_sheet_stays_side_effect_free():
+    """An initialization write read by ANOTHER sheet runs that sheet's
+    side-effect-free pass, not a full execution."""
+    from obs.logic.manager import LogicManager
+
+    src_a, dp_x, dst_y = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    value_map = {uuid.UUID(src_a): 7, uuid.UUID(dp_x): 3}
+
+    db = MagicMock()
+    db.execute_and_commit = AsyncMock()
+    event_bus = MagicMock()
+    registry = MagicMock()
+    registry.get_value = MagicMock(side_effect=lambda dp_id: SimpleNamespace(value=value_map[dp_id], ts=_SEED_TS) if dp_id in value_map else None)
+    mgr = LogicManager(db, event_bus, registry)
+    mgr._graphs = {
+        "g1": ("A", True, _read_write_flow(src_a, dp_x)),
+        "g2": ("B", True, _read_write_flow(dp_x, dst_y)),
+    }
+    mgr._execute_graph = AsyncMock()  # a full execution would be a failure
+
+    async def _deliver(event):
+        # the registry handler runs before the logic handler
+        value_map[event.datapoint_id] = event.value
+        await mgr._on_value_event(event)
+
+    event_bus.publish = AsyncMock(side_effect=_deliver)
+
+    await mgr.initialize_graph("g1")
+
+    written = [(c.args[0].datapoint_id, c.args[0].value, c.args[0].initialization) for c in event_bus.publish.await_args_list]
+    # g1 wrote X=7; the cascade initialized g2 side-effect-free with the
+    # fresh value and its write is flagged as initialization too
+    assert written == [(uuid.UUID(dp_x), 7, True), (uuid.UUID(dst_y), 7, True)]
+    mgr._execute_graph.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_long_intermediate_chain_settles_completely():
+    """Chains with more handoffs than the logic cascade depth still settle —
+    the pass bound derives from the number of intermediate DataPoints."""
+    hops = 14
+    dps = [str(uuid.uuid4()) for _ in range(hops + 1)]
+    nodes = []
+    edges = []
+    values = {dps[0]: 5}
+    for i in range(hops):
+        nodes.append({"id": f"r{i}", "type": "datapoint_read", "data": {"datapoint_id": dps[i]}})
+        nodes.append({"id": f"w{i}", "type": "datapoint_write", "data": {"datapoint_id": dps[i + 1]}})
+        edges.append({"source": f"r{i}", "sourceHandle": "value", "target": f"w{i}", "targetHandle": "value"})
+        if i > 0:
+            values[dps[i]] = 100 + i  # stale intermediate values
+    mgr = _make_manager({"g1": ("G", True, _flow(nodes, edges))}, values=values)
+
+    await mgr.initialize_graph("g1")
+
+    written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
+    assert written == {uuid.UUID(dps[i + 1]): 5 for i in range(hops)}
+
+
+@pytest.mark.asyncio
+async def test_branch_off_cyclic_pair_still_initializes():
+    """Read A → Write X next to the A/B feedback pair: X is not on the cycle
+    and initializes, while both cyclic writes stay suppressed."""
+    dp_a, dp_b, dp_x = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": dp_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wA", "type": "datapoint_write", "data": {"datapoint_id": dp_a}},
+            {"id": "wX", "type": "datapoint_write", "data": {"datapoint_id": dp_x}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wA", "targetHandle": "value"},
+            {"source": "rA", "sourceHandle": "value", "target": "wX", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={dp_a: 1, dp_b: 2})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    event = mgr._event_bus.publish.await_args.args[0]
+    assert event.datapoint_id == uuid.UUID(dp_x)
+    assert event.value == 1

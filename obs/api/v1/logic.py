@@ -53,9 +53,11 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
 
 
 def _without_positions(raw: dict) -> dict:
-    """Strip node positions for layout-only save detection."""
+    """Strip node positions and purely visual comment nodes for layout-only
+    save detection — neither affects execution semantics.
+    """
     raw = dict(raw)
-    raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", [])]
+    raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", []) if node.get("type") != "comment"]
     return raw
 
 

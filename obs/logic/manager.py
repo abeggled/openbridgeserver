@@ -99,6 +99,16 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
 # flip the output back to the stale pre-save state.
 _INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis"})
 
+# Input handles that control WHEN a node's output fires/passes but do not
+# deliver the value itself. Seeded eligibility must not propagate through
+# them: a Const → Gate.in → Write.value sheet whose Read Object only drives
+# Gate.enable (or Write.trigger) would otherwise publish the constant on
+# save even though the written value does not descend from the seed.
+_INIT_CONTROL_INPUT_HANDLES: dict[str, frozenset[str]] = {
+    "datapoint_write": frozenset({"trigger"}),
+    "gate": frozenset({"enable"}),
+}
+
 
 def _downstream_closure(start: set[str], edges: list[Any]) -> set[str]:
     """Node ids reachable from *start* (inclusive) following edges forward."""
@@ -1277,6 +1287,14 @@ class LogicManager:
 
             if not overrides:
                 continue
+            if getattr(event, "initialization", False) is True:
+                # Save-time seeding cascading into another sheet stays
+                # initialization: run the side-effect-free pass instead of a
+                # full execution so no api_client/notify/WoL/sequence action
+                # fires because a different sheet was saved. The cascade
+                # depth guard above still bounds chains between sheets.
+                await self.initialize_graph(graph_id, logic_depth=logic_depth)
+                continue
             await self._execute_graph(graph_id, name, flow, overrides, logic_depth=logic_depth)
 
     async def _on_datapoint_renamed(self, event: Any) -> None:
@@ -1339,7 +1357,7 @@ class LogicManager:
         name, enabled, flow = entry
         return await self._execute_graph(graph_id, name, flow, {})
 
-    async def initialize_graph(self, graph_id: str) -> None:
+    async def initialize_graph(self, graph_id: str, logic_depth: int = 0) -> None:
         """Seed Read Object nodes with their current registry values right
         after a graph is saved or activated (issue #1031).
 
@@ -1411,8 +1429,10 @@ class LogicManager:
         read_node_ids = {node.id for node in flow.nodes if node.type == "datapoint_read"}
         changed_targets = {e.target for e in flow.edges if e.source in read_node_ids and e.sourceHandle == "changed"}
         excluded_ids = {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}
-        write_ids = {node.id for node in flow.nodes if node.type == "datapoint_write"}
-        value_edges = [e for e in flow.edges if not (e.target in write_ids and e.targetHandle == "trigger")]
+        node_type_by_id = {node.id: node.type for node in flow.nodes}
+        value_edges = [
+            e for e in flow.edges if (e.targetHandle or "") not in _INIT_CONTROL_INPUT_HANDLES.get(node_type_by_id.get(e.target, ""), frozenset())
+        ]
         wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
         feedback_writes: set[str] = set()
         reach_by_read: dict[str, set[str]] = {}
@@ -1491,8 +1511,12 @@ class LogicManager:
             # event is suppressed for this graph, so downstream branches
             # would otherwise initialize from the stale registry value.
             # Feedback loops are excluded via feedback_writes, so the chains
-            # form a DAG and settle within the cascade-depth bound.
-            for _ in range(_MAX_LOGIC_CASCADE_DEPTH):
+            # form a DAG and each pass settles at least one handoff level —
+            # the number of DataPoints both read and written bounds the pass
+            # count for chains of any length.
+            read_dps = {node.data.get("datapoint_id") for node in flow.nodes if node.type == "datapoint_read" and node.data.get("datapoint_id")}
+            write_dps = {node.data.get("datapoint_id") for node in flow.nodes if node.type == "datapoint_write" and node.data.get("datapoint_id")}
+            for _ in range(len(read_dps & write_dps) + 1):
                 # A write may only fire when it carries a seeded value: it
                 # must descend from a seeded Read Object (a save must not
                 # actuate unrelated branches like Const → Write) and must not
@@ -1600,7 +1624,7 @@ class LogicManager:
             self._initializing_graphs[graph_id] = init_write_dps
             try:
                 await self._apply_datapoint_write_outputs(
-                    graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes, initialization=True
+                    graph_id, flow, outputs, graph_state, wired_inputs, now, logic_depth, skip_node_ids=skip_writes, initialization=True
                 )
             finally:
                 self._initializing_graphs.pop(graph_id, None)

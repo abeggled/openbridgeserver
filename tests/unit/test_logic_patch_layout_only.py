@@ -104,3 +104,33 @@ async def test_patch_repeating_stored_enabled_is_noop(monkeypatch):
     manager.reload.assert_not_awaited()
     manager.initialize_graph.assert_not_awaited()
     manager.update_cached_graph_name.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_patch_comment_edit_is_layout_only(monkeypatch):
+    """Editing a purely visual comment node (text/size) has no execution
+    semantics — the save must not re-initialize the sheet."""
+    manager = MagicMock()
+    manager.reload = AsyncMock()
+    manager.initialize_graph = AsyncMock()
+    monkeypatch.setattr("obs.logic.manager._manager", manager)
+
+    def _graph(comment_text: str) -> dict:
+        return {
+            "nodes": [
+                {"id": "n1", "type": "and", "position": {"x": 0, "y": 0}, "data": {}},
+                {"id": "k1", "type": "comment", "position": {"x": 10, "y": 10}, "data": {"text": comment_text}},
+            ],
+            "edges": [],
+        }
+
+    edited = FlowData.model_validate(_graph("updated documentation"))
+    db = MagicMock()
+    db.fetchone = AsyncMock(side_effect=[_row(json.dumps(_graph("old text"))), _row(edited.model_dump_json())])
+    db.execute_and_commit = AsyncMock()
+
+    result = await update_graph_partial("g1", LogicGraphUpdate(flow_data=edited), _user="admin", db=db)
+
+    assert result.id == "g1"
+    manager.update_cached_graph.assert_called_once()
+    manager.initialize_graph.assert_not_awaited()

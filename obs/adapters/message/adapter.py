@@ -290,7 +290,7 @@ class MessageAdapter(AdapterBase):
     async def _on_value_event(self, event: DataValueEvent) -> None:
         if event.quality != "good":
             return
-        if getattr(event, "initialization", False):
+        if getattr(event, "initialization", False) is True:
             # Save-time seeding by the logic initialization pass (issue
             # #1031) is not a value change — never notify on it.
             return
