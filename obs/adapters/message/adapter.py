@@ -290,6 +290,10 @@ class MessageAdapter(AdapterBase):
     async def _on_value_event(self, event: DataValueEvent) -> None:
         if event.quality != "good":
             return
+        if getattr(event, "initialization", False):
+            # Save-time seeding by the logic initialization pass (issue
+            # #1031) is not a value change — never notify on it.
+            return
         for binding in self._binding_map.get(event.datapoint_id, []):
             await self._handle_binding_event(binding, event)
 

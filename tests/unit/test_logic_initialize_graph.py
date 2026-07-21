@@ -73,6 +73,8 @@ async def test_seeded_read_publishes_write_and_primes_filter_state():
     assert event.datapoint_id == uuid.UUID(dst_id)
     assert event.value == 42
     assert event.source_adapter == "logic"
+    # Marked as save-time seeding so notification subscribers can ignore it
+    assert event.initialization is True
 
     # Event filters (trigger_on_change, min_delta) are primed; last_ts keeps
     # the registry timestamp so no fresh throttle window starts at save time
@@ -667,7 +669,9 @@ async def test_unrelated_read_of_target_does_not_skip_write():
     await mgr.initialize_graph("g1")
 
     written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
-    assert written == {uuid.UUID(dp_b): 7, uuid.UUID(dst_c): 3}
+    # B settles to the value the sheet itself derives (7), and the Read B →
+    # Write C branch initializes from that settled value, not the stale 3
+    assert written == {uuid.UUID(dp_b): 7, uuid.UUID(dst_c): 7}
 
 
 @pytest.mark.asyncio
@@ -1136,3 +1140,79 @@ async def test_bulk_initialization_tolerates_unknown_graph_ids():
     mgr._event_bus.publish.assert_awaited_once()
     assert mgr._event_bus.publish.await_args.args[0].value == 4
     assert not mgr._bulk_init_pending
+
+
+@pytest.mark.asyncio
+async def test_intermediate_chain_settles_before_publishing():
+    """Read A → Write B, Read B → Write C, Read C → Write D: all writes
+    publish the value the sheet derives from A, not stale registry values."""
+    src_a = str(uuid.uuid4())
+    dp_b, dp_c, dp_d = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "wB", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wC", "type": "datapoint_write", "data": {"datapoint_id": dp_c}},
+            {"id": "rC", "type": "datapoint_read", "data": {"datapoint_id": dp_c}},
+            {"id": "wD", "type": "datapoint_write", "data": {"datapoint_id": dp_d}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "wB", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "wC", "targetHandle": "value"},
+            {"source": "rC", "sourceHandle": "value", "target": "wD", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 1, dp_b: 9, dp_c: 8})
+
+    await mgr.initialize_graph("g1")
+
+    written = {c.args[0].datapoint_id: c.args[0].value for c in mgr._event_bus.publish.await_args_list}
+    assert written == {uuid.UUID(dp_b): 1, uuid.UUID(dp_c): 1, uuid.UUID(dp_d): 1}
+
+
+@pytest.mark.asyncio
+async def test_seeded_falsy_trigger_gates_write_and_settle():
+    """A wired falsy trigger gates the write — nothing is published and the
+    settle pass does not treat the gated write as delivering a value."""
+    src_a, src_b, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "rA", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "rB", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "rA", "sourceHandle": "value", "target": "w1", "targetHandle": "value"},
+            {"source": "rB", "sourceHandle": "value", "target": "w1", "targetHandle": "trigger"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 5, src_b: 0})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_write_on_seeded_path_is_ignored():
+    """A write node without a datapoint_id neither publishes nor participates
+    in the settle pass; sibling configured writes still initialize."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "wX", "type": "datapoint_write", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "wX", "targetHandle": "value"},
+            {"source": "r1", "sourceHandle": "value", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 6})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 6

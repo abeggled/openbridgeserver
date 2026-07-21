@@ -1393,30 +1393,27 @@ class LogicManager:
         if not seeds:
             return
 
-        # A write may only fire when it carries a seeded value: it must
-        # descend from a seeded Read Object (a save must not actuate
-        # unrelated branches like Const → Write) and must not descend from an
-        # unseeded Read Object or an excluded node type (see
-        # _INIT_EXCLUDED_NODE_TYPES).
-        # Read.changed edges carry the synthetic changed=False seed, not the
-        # object value — branches fed via that handle must not be initialized.
+        # Topology-only sets, computed once:
+        # - Read.changed edges carry the synthetic changed=False seed, not
+        #   the object value — branches fed via that handle must not be
+        #   initialized.
+        # - Seeded eligibility must follow value-carrying paths only: an edge
+        #   into a write node's trigger handle controls WHEN a write fires
+        #   but does not deliver the written value, so it must not make a
+        #   write (e.g. Const → Write.value plus Read → Write.trigger)
+        #   initializable.
+        # - A write that closes a feedback loop onto a Read Object of the
+        #   same DataPoint (the write is reachable from that read) would
+        #   re-enter _on_value_event during publish and repeat until the
+        #   cascade-depth guard — skip only those; unrelated reads of the
+        #   target DataPoint (e.g. a separate status branch) keep the write
+        #   eligible.
         read_node_ids = {node.id for node in flow.nodes if node.type == "datapoint_read"}
         changed_targets = {e.target for e in flow.edges if e.source in read_node_ids and e.sourceHandle == "changed"}
-        tainted = _downstream_closure(
-            unseeded | changed_targets | {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}, flow.edges
-        )
-        # Seeded eligibility must follow value-carrying paths only: an edge
-        # into a write node's trigger handle controls WHEN a write fires but
-        # does not deliver the written value, so it must not make a write
-        # (e.g. Const → Write.value plus Read → Write.trigger) initializable.
+        excluded_ids = {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}
         write_ids = {node.id for node in flow.nodes if node.type == "datapoint_write"}
         value_edges = [e for e in flow.edges if not (e.target in write_ids and e.targetHandle == "trigger")]
-        seeded_paths = _downstream_closure(set(seeds), value_edges)
-        # A write that closes a feedback loop onto a Read Object of the same
-        # DataPoint (the write is reachable from that read) would re-enter
-        # _on_value_event during publish and repeat until the cascade-depth
-        # guard — skip only those; unrelated reads of the target DataPoint
-        # (e.g. a separate status branch) keep the write eligible.
+        wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
         feedback_writes: set[str] = set()
         for rnode in flow.nodes:
             if rnode.type != "datapoint_read":
@@ -1428,11 +1425,6 @@ class LogicManager:
             feedback_writes.update(
                 wnode.id for wnode in flow.nodes if wnode.type == "datapoint_write" and wnode.id in reach and wnode.data.get("datapoint_id") == r_dp
             )
-        skip_writes = {
-            node.id
-            for node in flow.nodes
-            if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths or node.id in feedback_writes)
-        }
 
         now = datetime.now(UTC)
         graph_state = self._node_state.setdefault(graph_id, {})
@@ -1450,33 +1442,76 @@ class LogicManager:
                 ns["last_ts"] = ts
 
         try:
-            # operating_hours totals are injected as overrides by
-            # _execute_graph's pre-pass — mirror that here (read-only) so
-            # seeded paths through such nodes publish the accumulated hours
-            # instead of 0.0.
-            overrides = dict(seeds)
-            for node in flow.nodes:
-                if node.type != "operating_hours":
-                    continue
-                ns = graph_state.setdefault(node.id, {"accumulated_hours": 0.0, "last_start": None})
-                acc = ns["accumulated_hours"]
-                if ns.get("last_start"):
-                    acc += (now - ns["last_start"]).total_seconds() / 3600
-                overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
-
             hyst_copy = copy.deepcopy(self._hysteresis.get(graph_id, {}))
             # Excluded node types never influence published writes (their
             # subgraphs are tainted) — replace them with inert placeholders
             # for the dry run so e.g. a python_script cannot burn CPU inside
             # the save request.
             init_flow = flow
-            if any(node.type in _INIT_EXCLUDED_NODE_TYPES for node in flow.nodes):
+            if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
                 for node in init_flow.nodes:
                     if node.type in _INIT_EXCLUDED_NODE_TYPES:
                         node.type = "missing_node"
             executor = GraphExecutor(init_flow, hyst_copy, self._app_config)
-            outputs = executor.execute(overrides, commit_memory=False)
+
+            # Evaluate until intermediate DataPoints settle: a write target
+            # that another Read Object of the same sheet watches feeds its
+            # computed value back into that read and re-evaluates — the write
+            # event is suppressed for this graph, so downstream branches
+            # would otherwise initialize from the stale registry value.
+            # Feedback loops are excluded via feedback_writes, so the chains
+            # form a DAG and settle within the cascade-depth bound.
+            for _ in range(_MAX_LOGIC_CASCADE_DEPTH):
+                # A write may only fire when it carries a seeded value: it
+                # must descend from a seeded Read Object (a save must not
+                # actuate unrelated branches like Const → Write) and must not
+                # descend from an unseeded Read Object or an excluded node
+                # type (see _INIT_EXCLUDED_NODE_TYPES).
+                tainted = _downstream_closure(unseeded | changed_targets | excluded_ids, flow.edges)
+                seeded_paths = _downstream_closure(set(seeds), value_edges)
+                skip_writes = {
+                    node.id
+                    for node in flow.nodes
+                    if node.type == "datapoint_write" and (node.id in tainted or node.id not in seeded_paths or node.id in feedback_writes)
+                }
+
+                # operating_hours totals are injected as overrides by
+                # _execute_graph's pre-pass — mirror that here (read-only) so
+                # seeded paths through such nodes publish the accumulated
+                # hours instead of 0.0.
+                overrides = dict(seeds)
+                for node in flow.nodes:
+                    if node.type != "operating_hours":
+                        continue
+                    ns = graph_state.setdefault(node.id, {"accumulated_hours": 0.0, "last_start": None})
+                    acc = ns["accumulated_hours"]
+                    if ns.get("last_start"):
+                        acc += (now - ns["last_start"]).total_seconds() / 3600
+                    overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
+
+                outputs = executor.execute(overrides, commit_memory=False)
+
+                settled = True
+                for wnode in flow.nodes:
+                    if wnode.type != "datapoint_write" or wnode.id in skip_writes:
+                        continue
+                    node_out = outputs.get(wnode.id, {})
+                    if (wnode.id, "trigger") in wired_inputs and not GraphExecutor._to_bool(node_out.get("_triggered")):
+                        continue  # gated writes do not deliver a value
+                    w_dp = wnode.data.get("datapoint_id")
+                    write_val = node_out.get("_write_value")
+                    if not w_dp or write_val is None:
+                        continue
+                    for rnode in flow.nodes:
+                        if rnode.type != "datapoint_read" or rnode.data.get("datapoint_id") != w_dp:
+                            continue
+                        if seeds.get(rnode.id, {}).get("value") != write_val:
+                            seeds[rnode.id] = {"value": write_val, "changed": False}
+                            unseeded.discard(rnode.id)
+                            settled = False
+                if settled:
+                    break
 
             # Gate/hysteresis outputs on clean seeded paths are published
             # below — commit their switched state so the persisted state
@@ -1514,7 +1549,6 @@ class LogicManager:
                 # written.
                 await self._persist_node_state(graph_id)
 
-            wired_inputs = {(e.target, e.targetHandle or "in") for e in flow.edges}
             # While the publish is in flight, _on_value_event skips THIS
             # graph for the DataPoints written here: a write target read
             # elsewhere in the same sheet (e.g. Read A → Write B plus
@@ -1528,7 +1562,9 @@ class LogicManager:
             }
             self._initializing_graphs[graph_id] = init_write_dps
             try:
-                await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes)
+                await self._apply_datapoint_write_outputs(
+                    graph_id, flow, outputs, graph_state, wired_inputs, now, 0, skip_node_ids=skip_writes, initialization=True
+                )
             finally:
                 self._initializing_graphs.pop(graph_id, None)
         except Exception as exc:
@@ -3511,11 +3547,14 @@ class LogicManager:
         logic_depth: int,
         *,
         skip_node_ids: set[str] | frozenset[str] = frozenset(),
+        initialization: bool = False,
     ) -> None:
         """Apply trigger gating + write-side filters to datapoint_write outputs,
         then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get
         notified. skip_node_ids excludes individual write nodes (used by
-        initialize_graph for writes descending from unseeded Read Objects).
+        initialize_graph for writes descending from unseeded Read Objects);
+        initialization marks the events as save-time seeding so notification
+        subscribers do not react to them.
         """
         from obs.core.event_bus import DataValueEvent
 
@@ -3581,6 +3620,7 @@ class LogicManager:
                     quality="good",
                     source_adapter="logic",
                     logic_depth=logic_depth + 1,
+                    initialization=initialization,
                 )
                 await self._event_bus.publish(event)
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)

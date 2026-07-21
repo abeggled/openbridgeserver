@@ -40,6 +40,10 @@ class DataValueEvent:
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
     binding_id: uuid.UUID | None = None
     logic_depth: int = 0
+    # True when the value was published by the logic sheet initialization
+    # pass (issue #1031) — save-time seeding, not a real value change.
+    # Notification-style subscribers must not react to it.
+    initialization: bool = False
 
 
 @dataclass

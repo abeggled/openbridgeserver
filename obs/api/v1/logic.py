@@ -249,7 +249,11 @@ async def update_graph_partial(
     # A title/description change does not alter execution.  Keeping the cache
     # intact preserves in-flight value sequences; flow or enabled changes need
     # the normal reload and cancellation semantics.
-    if body.flow_data is not None or body.enabled is not None:
+    # A PATCH repeating the stored enabled value without flow_data is a
+    # no-op for execution semantics — it must not cancel/reload the running
+    # sheet or re-run the initialization writes.
+    enabled_changed = body.enabled is not None and body.enabled != bool(row["enabled"])
+    if body.flow_data is not None or enabled_changed:
         # Position-only canvas saves keep execution semantics — mirror the
         # PUT path: refresh the cache without re-initializing the sheet.
         try:

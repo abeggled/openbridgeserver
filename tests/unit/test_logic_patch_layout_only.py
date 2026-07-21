@@ -81,3 +81,26 @@ async def test_patch_move_only_on_legacy_flow_is_layout_only(monkeypatch):
     manager.update_cached_graph.assert_called_once()
     manager.invalidate_cache.assert_not_called()
     manager.initialize_graph.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_repeating_stored_enabled_is_noop(monkeypatch):
+    """PATCH {"enabled": true} on an already-enabled graph without flow_data
+    must not cancel/reload the running sheet or re-run initialization."""
+    manager = MagicMock()
+    manager.reload = AsyncMock()
+    manager.initialize_graph = AsyncMock()
+    monkeypatch.setattr("obs.logic.manager._manager", manager)
+
+    row = _row(json.dumps({"nodes": [], "edges": []}))
+    db = MagicMock()
+    db.fetchone = AsyncMock(side_effect=[row, row])
+    db.execute_and_commit = AsyncMock()
+
+    result = await update_graph_partial("g1", LogicGraphUpdate(enabled=True), _user="admin", db=db)
+
+    assert result.id == "g1"
+    manager.invalidate_cache.assert_not_called()
+    manager.reload.assert_not_awaited()
+    manager.initialize_graph.assert_not_awaited()
+    manager.update_cached_graph_name.assert_called_once()
