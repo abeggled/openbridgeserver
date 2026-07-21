@@ -418,7 +418,7 @@ const { t, te } = useI18n()
 const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
 // Fields rendered by a dedicated component instead of the generic SchemaForm.
 function excludedSchemaFields(adapterType) {
-  const type = (adapterType || '').toLowerCase()
+  const type = adapterType.toLowerCase()
   if (type === 'zeitschaltuhr') return ['custom_holidays']
   if (type === 'onewire') return ['aliases'] // edited inline via the binding-form sensor scan
   return []
@@ -430,7 +430,7 @@ function excludedSchemaFields(adapterType) {
 // dedicated editor writes directly into drafts[a.id].config, so merging the live value here
 // would discard the user's in-form edit instead of protecting it.
 function fieldsEditedOutsideDraft(adapterType) {
-  return (adapterType || '').toLowerCase() === 'onewire' ? ['aliases'] : []
+  return adapterType.toLowerCase() === 'onewire' ? ['aliases'] : []
 }
 // Issue #779: TestResult / action feedback may carry a backend detail_code
 // (adapters.testResult.*) with params; translate it, else show the raw detail.

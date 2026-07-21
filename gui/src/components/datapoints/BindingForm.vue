@@ -949,23 +949,21 @@ watch(selectedAdapterType, type => {
 })
 
 watch(selectedInstanceId, (newId, oldId) => {
-  if (oldId && newId !== oldId && selectedAdapterType.value === 'MESSAGE') {
+  if (oldId && selectedAdapterType.value === 'MESSAGE') {
     cfg.providers = []
   }
-  if (newId !== oldId) {
-    // Discard the previous instance's 1-Wire scan — otherwise its sensors stay
-    // visible/selectable after switching instances, and a slow in-flight scan
-    // for the old instance could still overwrite this once it resolves (see
-    // the selectedInstanceId re-check in browseOnewireSensors()).
-    onewireSensors.value = []
-    onewireBrowseError.value = null
-    // Also unblock the Scan button immediately — otherwise a still-pending
-    // scan for the previous instance leaves it disabled until that request
-    // eventually settles (its own "finally" skips clearing this, since by
-    // then selectedInstanceId no longer matches the instance it was for).
-    onewireBrowseLoading.value = false
-    for (const key of Object.keys(onewireAliasDrafts)) delete onewireAliasDrafts[key]
-  }
+  // Discard the previous instance's 1-Wire scan — otherwise its sensors stay
+  // visible/selectable after switching instances, and a slow in-flight scan
+  // for the old instance could still overwrite this once it resolves (see
+  // the selectedInstanceId re-check in browseOnewireSensors()).
+  onewireSensors.value = []
+  onewireBrowseError.value = null
+  // Also unblock the Scan button immediately — otherwise a still-pending
+  // scan for the previous instance leaves it disabled until that request
+  // eventually settles (its own "finally" skips clearing this, since by
+  // then selectedInstanceId no longer matches the instance it was for).
+  onewireBrowseLoading.value = false
+  for (const key of Object.keys(onewireAliasDrafts)) delete onewireAliasDrafts[key]
 })
 
 // Zeitschaltuhr helpers
