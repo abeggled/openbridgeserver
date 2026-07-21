@@ -145,12 +145,13 @@ async def test_browse_sensors_503_when_scan_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_browse_sensors_503_when_instance_not_connected(monkeypatch):
-    """The instance is registered/running but connect() never got a live proxy
-    (e.g. owserver was unreachable at startup) — must surface 503, not an empty
-    scan result that looks identical to "connected, zero devices"."""
+async def test_browse_sensors_503_when_instance_has_no_proxy(monkeypatch):
+    """connect() never got a live proxy (e.g. owserver was unreachable at
+    startup, or pyownet isn't installed) — must surface 503, not an empty scan
+    result that looks identical to "connected, zero devices"."""
     fake_instance = type("FakeOneWireInstance", (), {})()
     fake_instance.connected = False
+    fake_instance.has_proxy = False
     fake_instance.browse_sensors = AsyncMock(return_value=[])
     monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _id: fake_instance)
 
@@ -162,6 +163,31 @@ async def test_browse_sensors_503_when_instance_not_connected(monkeypatch):
         )
     assert exc_info.value.status_code == 503
     fake_instance.browse_sensors.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_browse_sensors_attempts_scan_despite_stale_disconnected_status(monkeypatch):
+    # A DEST-only binding's write failure can mark `connected=False` with no poll
+    # loop ever running to notice owserver coming back — `has_proxy` (True, since
+    # a proxy object still exists) must not be shadowed by that stale flag, so a
+    # scan for additional sensors on the same instance is still attempted rather
+    # than permanently 503ing.
+    fake_instance = type("FakeOneWireInstance", (), {})()
+    fake_instance.connected = False
+    fake_instance.has_proxy = True
+    fake_instance.browse_sensors = AsyncMock(
+        return_value=[{"rom_id": "28.4B057F0A1C10", "family": "28", "properties": ["temperature"], "alias": None}],
+    )
+    monkeypatch.setattr(adapters_api.adapter_registry, "get_instance_by_id", lambda _id: fake_instance)
+
+    result = await adapters_api.onewire_browse_sensors(
+        instance_id=INSTANCE_ID,
+        _user="admin",
+        db=_FakeDb({"adapter_type": "ONEWIRE"}),
+    )
+
+    assert len(result) == 1
+    fake_instance.browse_sensors.assert_awaited_once_with()
 
 
 # ---------------------------------------------------------------------------

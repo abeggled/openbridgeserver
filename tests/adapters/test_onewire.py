@@ -667,16 +667,31 @@ class TestReadProperty:
         assert result is expected
 
     @pytest.mark.asyncio
-    async def test_non_yesno_property_still_parsed_as_float(self, mock_bus):
+    async def test_non_yesno_property_still_parsed_as_numeric(self, mock_bus):
         # A DS18B20 "temperature" containing "1" would previously and still
-        # parses as a numeric float — only known yes/no property names take
-        # the bool branch.
+        # parses as numeric — only known yes/no property names take the bool
+        # branch. Whole numbers parse as int (see test_whole_number_property_parsed_as_int).
         adapter = _connected_adapter(mock_bus)
         adapter._proxy.read.return_value = b"1"
 
         result = await adapter._read_property("28.AA", "temperature")
 
         assert result == pytest.approx(1.0)
+        assert not isinstance(result, bool)
+
+    @pytest.mark.asyncio
+    async def test_whole_number_property_parsed_as_int(self, mock_bus):
+        # Whole-number readings (e.g. PIO.BYTE's 0-255 bitmask, counters) must be
+        # int rather than float: WriteRouter only accepts a float value for FLOAT
+        # datapoints, so an INTEGER-bound property would otherwise always be
+        # published as a type mismatch and never propagate.
+        adapter = _connected_adapter(mock_bus)
+        adapter._proxy.read.return_value = b"255"
+
+        result = await adapter._read_property("29.AA", "PIO.BYTE")
+
+        assert result == 255
+        assert isinstance(result, int)
         assert not isinstance(result, bool)
 
     @pytest.mark.asyncio
@@ -699,7 +714,7 @@ class TestReadProperty:
 
         result = await adapter._read_property("29.AA", property_name)
 
-        assert result == pytest.approx(255.0)
+        assert result == 255
         assert not isinstance(result, bool)
 
 
@@ -891,6 +906,26 @@ class TestBrowseSensors:
         assert len(result) == 1
         assert result[0]["rom_id"] == "28.4B057F0A1C10"
         assert result[0]["family"] == "28"
+
+    @pytest.mark.asyncio
+    async def test_connection_level_error_during_alias_resolution_propagates(self, mock_bus):
+        # A connection-level failure while reading a non-ROM-ID entry's "address"
+        # property (e.g. owserver going away mid-scan) must not be swallowed as
+        # "not a real device" — the scan should surface it as a real failure
+        # (503 at the API layer) instead of silently returning an empty/partial list.
+        adapter = _connected_adapter(mock_bus)
+        adapter._owprotocol = owprotocol
+
+        def fake_dir(path, **kwargs):
+            if path == "/":
+                return ["/boiler"]
+            return ["/boiler/temperature"]
+
+        adapter._proxy.dir.side_effect = fake_dir
+        adapter._proxy.read.side_effect = owprotocol.ConnError("gone")
+
+        with pytest.raises(owprotocol.ConnError):
+            await adapter.browse_sensors()
 
     @pytest.mark.asyncio
     async def test_resolves_owfs_alias_via_address_property(self, mock_bus):

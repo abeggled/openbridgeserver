@@ -141,6 +141,22 @@ class OneWireAdapter(AdapterBase):
         # it, since _on_bindings_reloaded() never starts polling without a proxy.
         self._reconnect_task: asyncio.Task | None = None
 
+    @property
+    def has_proxy(self) -> bool:
+        """Whether connect() ever obtained a live owserver proxy.
+
+        Unlike ``connected``, this does not flip back to False after a runtime
+        read/write failure on an *existing* binding — it only reflects whether a
+        proxy object exists at all. The browse endpoint (issue #6) uses this
+        instead of ``connected`` to decide whether a scan is even worth
+        attempting: an instance with existing DEST-only bindings marked
+        disconnected by a past write failure may have since had owserver come
+        back without any further write to notice it (no poll loop runs for
+        DEST-only bindings), so a stale `connected=False` must not permanently
+        block scanning for additional sensors on the same instance.
+        """
+        return self._proxy is not None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -389,7 +405,7 @@ class OneWireAdapter(AdapterBase):
                 )
                 logger.warning("1-Wire adapter: connection to owserver lost: %s", exc)
 
-    async def _read_property(self, sensor_id: str, property_name: str) -> float | bool | str | None:
+    async def _read_property(self, sensor_id: str, property_name: str) -> float | int | bool | str | None:
         path = f"/{_normalize_sensor_id(sensor_id)}/{property_name}"
         async with self._owlock:
             raw = await asyncio.get_event_loop().run_in_executor(
@@ -402,6 +418,15 @@ class OneWireAdapter(AdapterBase):
                 return bool(int(text))
             except ValueError:
                 return text
+        # Prefer int over float for whole-number readings (e.g. PIO.BYTE's 0-255
+        # bitmask, counter properties): WriteRouter only lets FLOAT datapoints
+        # accept a float value, so an INTEGER-bound property would otherwise be
+        # published as a type mismatch and never propagate. int is still accepted
+        # by FLOAT datapoints (WriteRouter's allow_float_numeric).
+        try:
+            return int(text)
+        except ValueError:
+            pass
         try:
             return float(text)
         except ValueError:
@@ -446,7 +471,19 @@ class OneWireAdapter(AdapterBase):
                             lambda n=name: self._proxy.read(f"/{n}/address", timeout=self._cfg.request_timeout),
                         )
                     resolved = address.decode("utf-8", errors="replace").strip()
-                except Exception:
+                except Exception as exc:
+                    if self._owprotocol is not None and isinstance(
+                        exc,
+                        (self._owprotocol.ConnError, self._owprotocol.OwnetTimeout, self._owprotocol.ProtocolError),
+                    ):
+                        # Connection-level failure — not a "this directory has no
+                        # address property" case. Let it propagate so the caller
+                        # (onewire_browse_sensors) reports a real scan failure
+                        # instead of silently returning an empty/partial list.
+                        raise
+                    # A per-path OwnetError here just means this entry has no
+                    # "address" property, i.e. it's a system/meta directory, not
+                    # a real (aliased) device — skip it.
                     continue
                 # "address" is usually the raw undotted 16-hex ROM code
                 # (family+serial+crc8); some owserver builds report the dotted
