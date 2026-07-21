@@ -2420,13 +2420,16 @@ function onNotificationAdapterChange() {
 }
 
 function notificationTargetSelected(target) {
-  return (localData.value.providers || []).some(ref => ref.provider === target.provider && ref.target === target.target)
+  const refs = Array.isArray(localData.value.providers) ? localData.value.providers : []
+  return refs.some(ref => ref.provider === target.provider && ref.target === target.target)
 }
 
 function toggleNotificationTarget(target, selected) {
-  const refs = Array.isArray(localData.value.providers) ? [...localData.value.providers] : []
+  const validKeys = new Set(notificationTargets.value.map(item => item.key))
+  const refs = (Array.isArray(localData.value.providers) ? localData.value.providers : [])
+    .filter(ref => validKeys.has(`${ref.provider}/${ref.target}`))
   localData.value.providers = selected
-    ? [...refs, { provider: target.provider, target: target.target }]
+    ? [...refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target), { provider: target.provider, target: target.target }]
     : refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target)
   emitUpdate()
 }

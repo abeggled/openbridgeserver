@@ -2791,11 +2791,17 @@ class LogicManager:
                 raw_message = out.get("_message")
                 message = _msg_to_str(raw_message) if raw_message is not None else str(node.data.get("message") or "")
                 try:
+                    raw_priority = node.data.get("priority")
+                    try:
+                        priority = int(raw_priority) if raw_priority not in (None, "") else 0
+                    except (TypeError, ValueError):
+                        priority = 0
+                    priority = max(-2, min(1, priority))
                     results = await adapter.send_notification(
                         message=message,
                         providers=providers,
                         title=str(node.data.get("title") or "") or None,
-                        priority=int(node.data.get("priority", 0)),
+                        priority=priority,
                     )
                     failures = [result for result in results if not result.ok]
                     if not results or failures:

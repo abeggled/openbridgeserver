@@ -313,6 +313,84 @@ def test_generic_notification_reports_target_failure() -> None:
     assert "provider disabled" in outputs["notify"]["__error__"]
 
 
+def test_generic_notification_defaults_blank_priority_and_clamps_range() -> None:
+    manager = _make_manager()
+    adapter = MagicMock(adapter_type="MESSAGE")
+    adapter.send_notification = AsyncMock(return_value=[MessageSendResult("dummy", "target", True)])
+
+    for priority, expected in [("", 0), (None, 0), ("invalid", 0), (99, 1), (-99, -2)]:
+        flow = _flow(
+            [
+                node(
+                    "notify",
+                    "notify_message",
+                    {
+                        "adapter_instance_id": "message-1",
+                        "providers": [{"provider": "dummy", "target": "target"}],
+                        "priority": priority,
+                    },
+                )
+            ]
+        )
+        with patch("obs.adapters.registry.get_instance_by_id", return_value=adapter):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                outputs = _run(manager, flow, {"notify": {"trigger": True}})
+
+        assert outputs["notify"]["sent"] is True
+        assert adapter.send_notification.await_args.kwargs["priority"] == expected
+
+
+def test_generic_notification_rejects_missing_configuration() -> None:
+    manager = _make_manager()
+    flow = _flow([node("notify", "notify_message", {})])
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        outputs = _run(manager, flow, {"notify": {"trigger": True}})
+
+    assert outputs["notify"]["sent"] is False
+    assert "at least one target" in outputs["notify"]["__error__"]
+
+
+def test_generic_notification_rejects_unavailable_or_wrong_adapter() -> None:
+    manager = _make_manager()
+    flow = _flow(
+        [
+            node(
+                "notify",
+                "notify_message",
+                {"adapter_instance_id": "missing", "providers": [{"provider": "dummy", "target": "target"}]},
+            )
+        ]
+    )
+
+    for adapter in (None, MagicMock(adapter_type="MQTT")):
+        with patch("obs.adapters.registry.get_instance_by_id", return_value=adapter):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                outputs = _run(manager, flow, {"notify": {"trigger": True}})
+        assert "unavailable" in outputs["notify"]["__error__"]
+
+
+def test_generic_notification_reports_no_results_and_adapter_exception() -> None:
+    manager = _make_manager()
+    flow = _flow(
+        [
+            node(
+                "notify",
+                "notify_message",
+                {"adapter_instance_id": "message-1", "providers": [{"provider": "dummy", "target": "target"}]},
+            )
+        ]
+    )
+    adapter = MagicMock(adapter_type="MESSAGE")
+
+    for result, message in [([], "did not process"), (RuntimeError("boom"), "boom")]:
+        adapter.send_notification = AsyncMock(side_effect=result if isinstance(result, Exception) else None, return_value=result)
+        with patch("obs.adapters.registry.get_instance_by_id", return_value=adapter):
+            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+                outputs = _run(manager, flow, {"notify": {"trigger": True}})
+        assert message in outputs["notify"]["__error__"]
+
+
 def test_notify_sent_output_replays_downstream_notify() -> None:
     manager = _make_manager()
     flow = _flow(
