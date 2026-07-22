@@ -764,9 +764,10 @@ async def _build_query_from_filter_criteria(
     effective_filter = filter_
     if filter_.hierarchy_nodes:
         resolved_dps = await _resolve_hierarchy_to_datapoints(filter_.hierarchy_nodes, db)
-        if resolved_dps:
-            merged = list({*filter_.datapoints, *resolved_dps})
-            effective_filter = filter_.model_copy(update={"datapoints": merged})
+        merged = _normalize_nonempty([*filter_.datapoints, *resolved_dps])
+        if not merged:
+            return None
+        effective_filter = filter_.model_copy(update={"datapoints": merged})
 
     query = _filter_to_query_v2(effective_filter, time_filter)
 
