@@ -84,12 +84,14 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
 
     # Batch all inserts; commit once at the end for performance.
     inserts: list[tuple] = []
+    group_link_sentinels: set[tuple[str, str]] = set()
     device_link_sentinels: set[tuple[str, str]] = set()
 
     def _q_insert(nid: str, parent_id: str | None, name: str, desc: str, order: int) -> None:
         inserts.append((nid, tree_id, parent_id, name, desc, order, None, now, now))
 
     if request.mode in ("groups", "mid", "flat"):
+        address_nodes: dict[str, str] = {}
         if request.group_addresses is not None:
             scoped_addresses = list(dict.fromkeys(request.group_addresses))
             rows = []
@@ -135,6 +137,7 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
                     _q_insert(nid, main_nodes[main_key], mid_label, "", int(mid_key))
                     mid_nodes[mid_composite] = nid
                     nodes_created += 1
+                address_nodes[str(row["address"])] = mid_nodes[mid_composite]
 
         elif request.mode == "groups":
             main_nodes = {}
@@ -160,6 +163,7 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
                 ga_name = str(row["name"]).strip() or row["address"]
                 nid = _new_id()
                 _q_insert(nid, mid_nodes[mid_composite], ga_name, str(row["description"] or ""), 0)
+                address_nodes[str(row["address"])] = nid
                 nodes_created += 1
 
         else:  # "flat"
@@ -176,7 +180,31 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
                 ga_name = str(row["name"]).strip() or row["address"]
                 nid = _new_id()
                 _q_insert(nid, main_nodes[main_key], ga_name, str(row["description"] or ""), 0)
+                address_nodes[str(row["address"])] = nid
                 nodes_created += 1
+
+        if request.auto_link:
+            datapoints_by_address: dict[str, set[str]] = {}
+            for chunk in _chunks(list(address_nodes), _GA_SCOPE_CHUNK_SIZE):
+                placeholders = ",".join("?" * len(chunk))
+                binding_rows = await db.fetchall(
+                    f"""SELECT JSON_EXTRACT(ab.config, '$.group_address') AS group_address,
+                               ab.datapoint_id
+                        FROM adapter_bindings ab
+                        JOIN datapoints dp ON dp.id = ab.datapoint_id
+                        WHERE UPPER(ab.adapter_type) = 'KNX'
+                          AND JSON_EXTRACT(ab.config, '$.group_address') IN ({placeholders})
+                        GROUP BY group_address, ab.datapoint_id""",
+                    chunk,
+                )
+                for binding in binding_rows:
+                    address = str(binding["group_address"])
+                    datapoints_by_address.setdefault(address, set()).add(binding["datapoint_id"])
+
+            for address, datapoint_ids in datapoints_by_address.items():
+                if len(datapoint_ids) != 1:
+                    continue
+                group_link_sentinels.add((address_nodes[address], next(iter(datapoint_ids))))
 
     elif request.mode == "buildings":
         loc_rows = await db.fetchall("SELECT id, parent_id, name, space_type, sort_order FROM knx_locations ORDER BY sort_order")
@@ -304,6 +332,8 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
 
     node_inserts = [t for t in inserts if t[0] != "__link__"]
     link_sentinels = [t for t in inserts if t[0] == "__link__"]
+    link_sentinels.extend(("__link__", node_id, datapoint_id) for node_id, datapoint_id in group_link_sentinels)
+    links_created += len(group_link_sentinels)
 
     trees_replaced = 0
     if request.replace_existing:
