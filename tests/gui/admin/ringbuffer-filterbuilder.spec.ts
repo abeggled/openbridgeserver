@@ -223,14 +223,14 @@ test('Topbar-Chip-Toggle schaltet das Set ein und aus', async ({ page }) => {
     await expect(dpOutRows).toHaveCount(0)
 
     // Toggle (●→○) flips is_active=false. The set stays pinned to the topbar
-    // (topbar_active=true) but the backend multi-query skips inactive sets,
-    // so the OR-union is empty and the table renders nothing.
+    // (topbar_active=true) but no longer participates in the filter query, so
+    // the unfiltered query/v2 fallback returns both datapoints.
     await page.click(`[data-testid="topbar-chip-toggle-${setId}"]`)
-    await expect(page.locator('[data-testid="ringbuffer-empty"]')).toBeVisible({ timeout: 10_000 })
-    await expect(dpInRows).toHaveCount(0)
-    await expect(dpOutRows).toHaveCount(0)
+    await expect(dpInRows).toHaveCount(1, { timeout: 10_000 })
+    await expect(dpOutRows).toHaveCount(1)
 
-    // Toggle back on → multi-query returns only dpIn.
+    // Toggle back on → the reactivated set participates again and the
+    // multi-query returns only dpIn.
     await page.click(`[data-testid="topbar-chip-toggle-${setId}"]`)
     await expect(dpInRows).toHaveCount(1, { timeout: 10_000 })
     await expect(dpOutRows).toHaveCount(0)
