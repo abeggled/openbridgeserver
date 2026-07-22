@@ -38,7 +38,14 @@ async def _insert_group_address(
     )
 
 
-async def _insert_knx_binding(db: Database, datapoint_id: str, binding_id: str, address: str) -> None:
+async def _insert_knx_binding(
+    db: Database,
+    datapoint_id: str,
+    binding_id: str,
+    address: str,
+    *,
+    state_group_address: str | None = None,
+) -> None:
     now = "2026-07-22T00:00:00+00:00"
     await db.execute_and_commit(
         """INSERT INTO datapoints
@@ -46,16 +53,32 @@ async def _insert_knx_binding(db: Database, datapoint_id: str, binding_id: str, 
            VALUES (?, ?, 'BOOL', NULL, '[]', ?, ?, ?)""",
         (datapoint_id, datapoint_id, f"obs/test/{datapoint_id}", now, now),
     )
-    await _insert_binding(db, datapoint_id, binding_id, address)
+    await _insert_binding(
+        db,
+        datapoint_id,
+        binding_id,
+        address,
+        state_group_address=state_group_address,
+    )
 
 
-async def _insert_binding(db: Database, datapoint_id: str, binding_id: str, address: str) -> None:
+async def _insert_binding(
+    db: Database,
+    datapoint_id: str,
+    binding_id: str,
+    address: str,
+    *,
+    state_group_address: str | None = None,
+) -> None:
     now = "2026-07-22T00:00:00+00:00"
+    config = {"group_address": address}
+    if state_group_address is not None:
+        config["state_group_address"] = state_group_address
     await db.execute_and_commit(
         """INSERT INTO adapter_bindings
            (id, datapoint_id, adapter_type, direction, config, enabled, created_at, updated_at)
            VALUES (?, ?, 'KNX', 'BOTH', ?, 1, ?, ?)""",
-        (binding_id, datapoint_id, json.dumps({"group_address": address}), now, now),
+        (binding_id, datapoint_id, json.dumps(config), now, now),
     )
 
 
@@ -102,6 +125,32 @@ async def test_group_mode_auto_link_false_creates_no_links(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_group_mode_auto_links_datapoint_by_state_group_address(tmp_path):
+    async with _database(tmp_path / "state-group-address.db") as db:
+        await _insert_group_address(db, "1/2/4", name="Feedback")
+        await _insert_knx_binding(
+            db,
+            "dp-1",
+            "binding-1",
+            "1/2/3",
+            state_group_address="1/2/4",
+        )
+
+        result = await create_ets_hierarchy(
+            db,
+            EtsImportRequest(tree_name="ETS groups", mode="groups", auto_link=True),
+        )
+
+        links = await db.fetchall(
+            """SELECT hdl.datapoint_id, hn.name
+               FROM hierarchy_datapoint_links hdl
+               JOIN hierarchy_nodes hn ON hn.id = hdl.node_id"""
+        )
+        assert result.links_created == 1
+        assert [(row["datapoint_id"], row["name"]) for row in links] == [("dp-1", "Feedback")]
+
+
+@pytest.mark.asyncio
 async def test_group_mode_links_only_unique_bindings_in_current_import_scope(tmp_path):
     async with _database(tmp_path / "scope.db") as db:
         await _insert_group_address(db, "1/2/3", name="Unique")
@@ -110,7 +159,13 @@ async def test_group_mode_links_only_unique_bindings_in_current_import_scope(tmp
         await _insert_group_address(db, "9/9/9", name="Out of scope", main_group_name="Other", mid_group_name="Other")
         await _insert_knx_binding(db, "dp-unique", "binding-unique", "1/2/3")
         await _insert_knx_binding(db, "dp-a", "binding-a", "1/2/4")
-        await _insert_knx_binding(db, "dp-b", "binding-b", "1/2/4")
+        await _insert_knx_binding(
+            db,
+            "dp-b",
+            "binding-b",
+            "8/8/8",
+            state_group_address="1/2/4",
+        )
         await _insert_knx_binding(db, "dp-out", "binding-out", "9/9/9")
 
         result = await create_ets_hierarchy(
