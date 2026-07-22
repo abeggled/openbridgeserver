@@ -167,6 +167,23 @@ describe('useLegacyMigration — polling', () => {
     expect(migrationStatus).toHaveBeenCalledTimes(2)
   })
 
+  it('stops after three retries when a server error remains persistent', async () => {
+    vi.useFakeTimers()
+    const api = await loadComposable()
+    const persistentError = Object.assign(new Error('database unavailable'), {
+      response: { status: 500 },
+    })
+    migrationStatus.mockRejectedValue(persistentError)
+
+    await expect(api.refresh()).rejects.toThrow('database unavailable')
+    await vi.advanceTimersByTimeAsync(5000)
+
+    // Initial request plus three automatic retries; no module-global endless poll.
+    expect(migrationStatus).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(migrationStatus).toHaveBeenCalledTimes(4)
+  })
+
   it('signals a completed migration exactly once when a running job reaches done', async () => {
     const api = await loadComposable()
 
