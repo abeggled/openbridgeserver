@@ -248,6 +248,22 @@ describe('NodeConfigPanel xml_extractor — remove path', () => {
     expect(remaining).toHaveLength(0)
     w.unmount()
   })
+
+  it('selects a row when one of its controls receives focus', async () => {
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('xml_extractor', { xml_paths: paths })
+    await flushPromises()
+
+    const secondRow = w.findAll('.extractor-output-row')[1]
+    await secondRow.find('input:not([data-testid])').trigger('focusin')
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="extractor-path-input"]')[1].classes()).toContain('ring-1')
+    w.unmount()
+  })
 })
 
 describe('NodeConfigPanel xml_extractor — legacy migration', () => {
@@ -294,6 +310,138 @@ describe('NodeConfigPanel json_extractor — path picker fills row', () => {
 
     const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
     expect(updated[0].path).toBe('temperature')
+    w.unmount()
+  })
+
+  it('keeps the selected row when focus moves to the path picker', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    await inputs[0].trigger('focus')
+
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await inputs[0].trigger('focusout', { relatedTarget: pathSelect.element })
+    await pathSelect.setValue('temperature')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('temperature')
+    expect(updated[1].path).toBe('')
+    w.unmount()
+  })
+
+  it('keeps the selected row while tabbing backwards through its controls to the picker', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    const row = w.findAll('.extractor-output-row')[0]
+    const labelInput = row.find('input:not([data-testid])')
+    const removeButton = row.find('.extractor-output-remove')
+    const addButton = w.findAll('button').find(button => button.text() === '+').element
+    await inputs[0].trigger('focus')
+    await inputs[0].trigger('focusout', { relatedTarget: removeButton.element })
+    await removeButton.trigger('focusout', { relatedTarget: labelInput.element })
+    await labelInput.trigger('focusout', { relatedTarget: addButton })
+
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await w.findAll('button').find(button => button.text() === '+').trigger('focusout', { relatedTarget: pathSelect.element })
+    await pathSelect.setValue('temperature')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('temperature')
+    expect(updated[1].path).toBe('')
+    w.unmount()
+  })
+
+  it('updates the selected row when focus moves to another output row', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    const secondLabel = w.findAll('.extractor-output-row')[1].find('input:not([data-testid])')
+    await inputs[0].trigger('focus')
+    await inputs[0].trigger('focusout', { relatedTarget: secondLabel.element })
+    await secondLabel.trigger('focusin')
+
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await pathSelect.setValue('humidity')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('')
+    expect(updated[1].path).toBe('humidity')
+    w.unmount()
+  })
+
+  it('clears the selected row when focus leaves its controls', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    await inputs[0].trigger('focus')
+    const removeButton = w.findAll('.extractor-output-remove')[0]
+    await inputs[0].trigger('focusout', { relatedTarget: removeButton.element })
+    await removeButton.trigger('focusout', { relatedTarget: w.find('[data-testid="extractor-preview"]').element })
+
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await pathSelect.setValue('humidity')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('')
+    expect(updated[1].path).toBe('humidity')
+    w.unmount()
+  })
+
+  it('clears the selected row after applying a picker selection', async () => {
+    const nodeOutputs = { n1: { _preview: '{"temperature": 22.5, "humidity": 60}' } }
+    const paths = JSON.stringify([
+      { label: 'Temperatur', path: '' },
+      { label: 'Luftfeuchtigkeit', path: '' },
+    ])
+    const w = await mountPanel('json_extractor', { json_paths: paths }, nodeOutputs)
+    await flushPromises()
+
+    const inputs = w.findAll('[data-testid="extractor-path-input"]')
+    const pathSelect = w.find('[data-testid="extractor-path-select"]')
+    await inputs[0].trigger('focus')
+    await inputs[0].trigger('focusout', { relatedTarget: pathSelect.element })
+    await pathSelect.setValue('temperature')
+    await pathSelect.trigger('change')
+    await pathSelect.setValue('humidity')
+    await pathSelect.trigger('change')
+    await flushPromises()
+
+    const updated = JSON.parse(w.emitted('update').at(-1)[0].json_paths)
+    expect(updated[0].path).toBe('temperature')
+    expect(updated[1].path).toBe('humidity')
     w.unmount()
   })
 

@@ -623,3 +623,5 @@ profile (`profiles: ["onewire"]`) instead of `ExecCondition`, activated via
 ### Release Notes
 
 `RELEASENOTES_FOOTER.md` contains an invisible HTML comment `<!-- LXC_INSERT -->` that marks where the LXC checksum block is injected by `lxc-template.yml`. Do not remove this marker.
+
+Within each section of a version's changelog (`### Breaking changes`, `### New features`, `### Fixes`, etc.), entries must be sorted alphabetically by their leading component label (e.g. `Admin GUI/Visu:` before `Logic Engine/Admin GUI:`). When adding a new entry, insert it at the alphabetically correct position rather than appending it at the end.

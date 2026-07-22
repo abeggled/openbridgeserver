@@ -31,6 +31,10 @@ class TestProxyFactory:
 
 class TestProxyMethods:
     def _proxy_class(self):
+        # Returns the class object itself, never instantiates it — pyownet's
+        # _Proxy.__init__ requires a live socket (family/address), which this
+        # offline contract test deliberately never opens. Only attribute/signature
+        # presence on the class is asserted below.
         return pyownet_protocol._Proxy
 
     def test_proxy_has_dir(self):

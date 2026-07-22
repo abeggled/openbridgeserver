@@ -479,6 +479,17 @@ async def get_instance(
     return _instance_out(row, instance)
 
 
+# Serializes the read-modify-write of a ONEWIRE instance's config JSON per
+# instance_id, shared between update_instance() and onewire_set_alias(). Without
+# this, an alias save (binding-form sensor scan) racing the general instance
+# settings form's save both read the same pre-update config, and whichever
+# UPDATE commits last silently overwrites the other's change — e.g. the
+# settings form's own (already-fetched, now stale) copy of `aliases` clobbering
+# an alias just persisted by onewire_set_alias(), or two overlapping alias
+# saves each merging in only their own rom_id.
+_ONEWIRE_CONFIG_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 @router.patch("/instances/{instance_id}", response_model=AdapterInstanceOut)
 async def update_instance(
     instance_id: uuid.UUID,
@@ -486,54 +497,68 @@ async def update_instance(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> AdapterInstanceOut:
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    lock = _ONEWIRE_CONFIG_LOCKS.setdefault(str(instance_id), asyncio.Lock())
+    async with lock:
+        row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
 
-    # Neue Werte bestimmen
-    name_new = body.name if body.name is not None else row["name"]
-    enabled_new = body.enabled if body.enabled is not None else bool(row["enabled"])
-    config_raw = row["config"]
-    if body.config is not None:
-        config_new = body.config
-        if row["adapter_type"] == "MESSAGE":
-            stored_config = json.loads(config_raw) if config_raw else {}
-            try:
-                config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
-                _reject_unresolved_redacted_message_config(config_new)
-            except ValueError as exc:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-        cls = adapter_registry.get_class(row["adapter_type"])
-        if cls:
-            try:
-                cls.config_schema(**config_new)
-            except Exception as exc:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    f"Config-Validierungsfehler: {exc}",
-                ) from exc
-        if row["adapter_type"] == "MESSAGE":
-            await _validate_message_config_preserves_binding_targets(str(instance_id), config_new, db)
-        config_raw = json.dumps(config_new)
+        # Neue Werte bestimmen
+        name_new = body.name if body.name is not None else row["name"]
+        enabled_new = body.enabled if body.enabled is not None else bool(row["enabled"])
+        config_raw = row["config"]
+        if body.config is not None:
+            config_new = body.config
+            if row["adapter_type"] == "MESSAGE":
+                stored_config = json.loads(config_raw) if config_raw else {}
+                try:
+                    config_new = _preserve_redacted_message_config_secrets(stored_config, body.config)
+                    _reject_unresolved_redacted_message_config(config_new)
+                except ValueError as exc:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+            if row["adapter_type"] == "ONEWIRE":
+                # `aliases` is maintained exclusively by onewire_set_alias() (the
+                # binding-form sensor scan), never by this form — always keep the
+                # currently-persisted value instead of the client's copy (which
+                # may be stale, e.g. an alias was saved elsewhere after this form
+                # was loaded), sharing _ONEWIRE_CONFIG_LOCKS so this can't race a
+                # concurrent onewire_set_alias() either.
+                stored_config = json.loads(config_raw) if config_raw else {}
+                if "aliases" in stored_config:
+                    config_new["aliases"] = stored_config["aliases"]
+                else:
+                    config_new.pop("aliases", None)
+            cls = adapter_registry.get_class(row["adapter_type"])
+            if cls:
+                try:
+                    cls.config_schema(**config_new)
+                except Exception as exc:
+                    raise HTTPException(
+                        status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        f"Config-Validierungsfehler: {exc}",
+                    ) from exc
+            if row["adapter_type"] == "MESSAGE":
+                await _validate_message_config_preserves_binding_targets(str(instance_id), config_new, db)
+            config_raw = json.dumps(config_new)
 
-    now = datetime.now(UTC).isoformat()
-    await db.execute_and_commit(
-        """UPDATE adapter_instances
-           SET name=?, config=?, enabled=?, updated_at=?
-           WHERE id=?""",
-        (name_new, config_raw, int(enabled_new), now, str(instance_id)),
-    )
+        now = datetime.now(UTC).isoformat()
+        await db.execute_and_commit(
+            """UPDATE adapter_instances
+               SET name=?, config=?, enabled=?, updated_at=?
+               WHERE id=?""",
+            (name_new, config_raw, int(enabled_new), now, str(instance_id)),
+        )
 
-    # Hot-reload: Instanz neu starten
-    from obs.core.event_bus import get_event_bus
+        # Hot-reload: Instanz neu starten
+        from obs.core.event_bus import get_event_bus
 
-    if enabled_new:
-        await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
-    else:
-        await adapter_registry.stop_instance(str(instance_id))
+        if enabled_new:
+            await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
+        else:
+            await adapter_registry.stop_instance(str(instance_id))
 
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    instance = adapter_registry.get_instance_by_id(str(instance_id))
+        row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+        instance = adapter_registry.get_instance_by_id(str(instance_id))
     return _instance_out(row, instance)
 
 
@@ -959,6 +984,20 @@ async def onewire_browse_sensors(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "1-Wire-Instanz ist nicht verbunden")
     if not hasattr(instance, "browse_sensors"):
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "1-Wire-Sensor-Browser nicht verfügbar")
+    if not getattr(instance, "has_proxy", instance.connected):
+        # No proxy was ever obtained (e.g. owserver was unreachable at startup,
+        # or pyownet isn't installed) — browse_sensors() would otherwise just
+        # return [], which looks identical to "connected, zero devices" instead
+        # of surfacing the actual connectivity problem.
+        #
+        # Deliberately not `instance.connected`: that flag can go stale (e.g. a
+        # DEST-only binding's write failed and there's no poll loop to notice
+        # owserver coming back since), which would permanently 503 an instance
+        # that could otherwise scan successfully right now. `has_proxy` only
+        # reflects whether connect() ever produced a live proxy object; a
+        # scan attempt with a stale/broken proxy still fails via the except
+        # block below.
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "1-Wire-Instanz ist nicht verbunden")
 
     try:
         return [OneWireSensorOut(**item) for item in await instance.browse_sensors()]
@@ -977,36 +1016,38 @@ async def onewire_set_alias(
     db: Database = Depends(lambda: get_db()),
 ) -> OneWireAliasRequest:
     """Persistiert einen ROM-ID → Klartext-Label Alias, gepflegt aus der Binding-Scan-UI (issue #6)."""
-    row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    if row["adapter_type"] != "ONEWIRE":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ONEWIRE-Instanzen verfügbar")
+    lock = _ONEWIRE_CONFIG_LOCKS.setdefault(str(instance_id), asyncio.Lock())
+    async with lock:
+        row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+        if row["adapter_type"] != "ONEWIRE":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für ONEWIRE-Instanzen verfügbar")
 
-    config = json.loads(row["config"]) if row["config"] else {}
-    aliases = dict(config.get("aliases") or {})
-    aliases[body.rom_id] = body.label
-    config["aliases"] = aliases
+        config = json.loads(row["config"]) if row["config"] else {}
+        aliases = dict(config.get("aliases") or {})
+        aliases[body.rom_id] = body.label
+        config["aliases"] = aliases
 
-    cls = adapter_registry.get_class(row["adapter_type"])
-    if cls:
-        try:
-            cls.config_schema(**config)
-        except Exception as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"Config-Validierungsfehler: {exc}",
-            ) from exc
+        cls = adapter_registry.get_class(row["adapter_type"])
+        if cls:
+            try:
+                cls.config_schema(**config)
+            except Exception as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"Config-Validierungsfehler: {exc}",
+                ) from exc
 
-    now = datetime.now(UTC).isoformat()
-    await db.execute_and_commit(
-        "UPDATE adapter_instances SET config=?, updated_at=? WHERE id=?",
-        (json.dumps(config), now, str(instance_id)),
-    )
+        now = datetime.now(UTC).isoformat()
+        await db.execute_and_commit(
+            "UPDATE adapter_instances SET config=?, updated_at=? WHERE id=?",
+            (json.dumps(config), now, str(instance_id)),
+        )
 
-    from obs.core.event_bus import get_event_bus
+        from obs.core.event_bus import get_event_bus
 
-    await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
+        await adapter_registry.restart_instance(str(instance_id), get_event_bus(), db)
 
     return body
 

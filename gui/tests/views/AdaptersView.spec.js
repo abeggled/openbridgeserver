@@ -8,7 +8,11 @@ const STUBS = {
   SchemaForm:                        { template: '<div class="schema-form" />' },
   KnxConfigForm:                     { template: '<div class="knx-form" />' },
   AnwesenheitConfigForm:             { template: '<div class="anwesenheit-form" />' },
-  ZeitschaltuhrCustomHolidaysEditor: { template: '<div />' },
+  ZeitschaltuhrCustomHolidaysEditor: {
+    template: '<button data-testid="edit-holidays" @click="$emit(\'update:modelValue\', [\'2027-01-01\'])" />',
+    props: ['modelValue'],
+    emits: ['update:modelValue'],
+  },
   AnwesenheitDatapointSelector:      { template: '<div />' },
   Spinner:  { template: '<span class="spinner" />' },
   Badge:    { template: '<span class="badge"><slot /></span>' },
@@ -356,6 +360,137 @@ describe('AdaptersView — save instance', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Validation error')
+  })
+
+  it('sends the live onewire aliases instead of the stale draft snapshot', async () => {
+    // "aliases" is edited outside this form (binding-form sensor scan) and excluded
+    // from SchemaForm — the draft's copy of it is frozen at initDrafts() time. The
+    // background poll is silent and never updates config (see stores/adapters.js),
+    // so a save must explicitly refresh and not overwrite an alias persisted
+    // elsewhere in the meantime.
+    const instance = makeInstance({
+      adapter_type: 'ONEWIRE',
+      config: { host: 'localhost', port: 4304, aliases: { '28.AA': 'Old Label' } },
+    })
+    adapterApiMock.listInstances.mockResolvedValue({ data: [instance] })
+    adapterApiMock.updateInstance.mockResolvedValue({ data: instance })
+
+    const { wrapper } = await mountAdapters({ instances: [instance] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    // An alias was saved elsewhere (binding form) in the meantime — the next
+    // listInstances() response reflects it.
+    const updatedInstance = { ...instance, config: { ...instance.config, aliases: { '28.AA': 'New Label' } } }
+    adapterApiMock.listInstances.mockResolvedValue({ data: [updatedInstance] })
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ config: expect.objectContaining({ aliases: { '28.AA': 'New Label' } }) }),
+    )
+  })
+
+  it('falls back to the draft instance when the live refresh no longer lists it', async () => {
+    // The instance can vanish from store.instances between the pre-save refresh
+    // and the config merge (e.g. deleted concurrently in another session) —
+    // the merge must fall back to the draft's own instance data instead of
+    // crashing on a missing live.config.
+    const instance = makeInstance({
+      adapter_type: 'ONEWIRE',
+      config: { host: 'localhost', port: 4304, aliases: { '28.AA': 'Old Label' } },
+    })
+    adapterApiMock.listInstances.mockResolvedValue({ data: [instance] })
+    adapterApiMock.updateInstance.mockResolvedValue({ data: instance })
+
+    const { wrapper } = await mountAdapters({ instances: [instance] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    // The pre-save refresh now reports the instance gone.
+    adapterApiMock.listInstances.mockResolvedValue({ data: [] })
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ config: expect.objectContaining({ aliases: { '28.AA': 'Old Label' } }) }),
+    )
+  })
+
+  it('keeps the draft alias value when the refreshed live config has no aliases key', async () => {
+    // A legacy/partial config on the backend without an "aliases" key at all must not
+    // wipe out the draft's own aliases — only overwrite when the live config actually has it.
+    const instance = makeInstance({
+      adapter_type: 'ONEWIRE',
+      config: { host: 'localhost', port: 4304, aliases: { '28.AA': 'Draft Label' } },
+    })
+    adapterApiMock.listInstances.mockResolvedValue({ data: [instance] })
+    adapterApiMock.updateInstance.mockResolvedValue({ data: instance })
+
+    const { wrapper } = await mountAdapters({ instances: [instance] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    const liveWithoutAliases = { ...instance, config: { host: 'localhost', port: 4304 } }
+    adapterApiMock.listInstances.mockResolvedValue({ data: [liveWithoutAliases] })
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ config: expect.objectContaining({ aliases: { '28.AA': 'Draft Label' } }) }),
+    )
+  })
+
+  it('persists an in-form custom_holidays edit instead of the refreshed live value', async () => {
+    // custom_holidays is excluded from SchemaForm (rendered by its own dedicated
+    // editor instead) but, unlike onewire's aliases, that editor writes directly
+    // into drafts[a.id].config — the pre-save live-refresh merge must not clobber
+    // it with the (stale, unedited) value still on the backend.
+    const instance = makeInstance({
+      adapter_type: 'ZEITSCHALTUHR',
+      config: { custom_holidays: ['2026-12-24'] },
+    })
+    adapterApiMock.listInstances.mockResolvedValue({ data: [instance] })
+    adapterApiMock.updateInstance.mockResolvedValue({ data: instance })
+
+    const { wrapper } = await mountAdapters({ instances: [instance] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="edit-holidays"]').trigger('click')
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.updateInstance).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ config: expect.objectContaining({ custom_holidays: ['2027-01-01'] }) }),
+    )
+  })
+
+  it('does not refresh before saving for adapter types without excluded fields', async () => {
+    // KNX has no excludedSchemaFields() entries — saving must not add an extra
+    // pre-save listInstances() round-trip, only the existing post-save refresh.
+    const { wrapper } = await mountAdapters({ instances: [makeInstance({ adapter_type: 'KNX' })] })
+    await wrapper.find('[data-testid="btn-expand-1"]').trigger('click')
+    await flushPromises()
+    adapterApiMock.listInstances.mockClear()
+
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Speichern')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(adapterApiMock.listInstances).toHaveBeenCalledTimes(1)
   })
 })
 

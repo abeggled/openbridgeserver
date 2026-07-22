@@ -24,6 +24,24 @@
            Entscheidung zum Legacy-Altbestand aussteht (admin-only, self-gated). -->
       <LegacyMigrationBanner compact @open="showMigrationWizard = true" />
 
+      <!-- Eine unbegrenzte Gesamt-Retention ist auch außerhalb des
+           Konfigurators betriebsrelevant und muss im Dashboard auffallen. -->
+      <div
+        v-if="showUnboundedWarning"
+        class="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2"
+        data-testid="rb-card-unbounded-warning"
+        role="alert"
+      >
+        <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <div>
+          <p class="font-semibold">{{ $t('ringbuffer.unboundedWarningTitle') }}</p>
+          <p class="mt-0.5">{{ $t('ringbuffer.unboundedWarningBody') }}</p>
+        </div>
+      </div>
+
       <!-- Ladezustand -->
       <div v-if="loading" class="flex justify-center py-6" data-testid="rb-card-loading"><Spinner /></div>
 
@@ -74,7 +92,11 @@
         <PrognosisBlock
           :prognosis="stats?.prognosis ?? null"
           :segment-age-hours="segmentAgeHours"
+          :retention-age-seconds="stats?.max_age ?? null"
+          :segment-max-bytes="stats?.effective_segment_max_bytes ?? stats?.prognosis?.effective_segment_max_bytes ?? null"
+          :segment-max-rows="stats?.effective_segment_max_rows ?? null"
           :max-file-size-bytes="stats?.max_file_size_bytes ?? null"
+          :retention-unbounded="stats?.retention_unbounded"
         />
 
         <!-- Problem-Hinweis (deutlich) -->
@@ -157,6 +179,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ringbufferApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useSegmentProblems } from '@/composables/useSegmentProblems'
+import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal from '@/components/ui/Modal.vue'
@@ -173,6 +196,7 @@ const { problemCounts, problemSummary: buildProblemSummary, retentionSignal: bui
 // Konfig-Aktionen sind admin-only (Backend gibt Nicht-Admins 403). Gleiches
 // Gating wie in RingBufferView (#938): Buttons für Nicht-Admins ausblenden.
 const auth = useAuthStore()
+const { completionRevision } = useLegacyMigration()
 
 const stats = ref(null)
 const loading = ref(true)
@@ -195,6 +219,18 @@ watch(showConfig, (open) => {
   }
 })
 let refreshTimer = null
+let warmupTimer = null
+
+function scheduleWarmupRefresh(data) {
+  if (warmupTimer) clearTimeout(warmupTimer)
+  warmupTimer = null
+  const seconds = Number(data?.prognosis?.ready_after_seconds)
+  if (!Number.isFinite(seconds) || seconds <= 0) return
+  warmupTimer = setTimeout(() => {
+    warmupTimer = null
+    void load()
+  }, Math.ceil(seconds * 1000) + 50)
+}
 
 // Einstieg aus dem Segment-Details-Modal (#966): Modal schließen, Assistent öffnen.
 function onOpenMigrationFromSegments() {
@@ -206,13 +242,23 @@ async function load() {
   try {
     const { data } = await ringbufferApi.stats()
     stats.value = data
+    scheduleWarmupRefresh(data)
     loadError.value = false
+    return true
   } catch {
     loadError.value = true
+    return false
   } finally {
     loading.value = false
   }
 }
+
+watch(completionRevision, async () => {
+  // Kein alter Legacy-Stand nach einem erfolgreichen Commit: bei einem
+  // Refresh-Fehler fällt die Karte in ihren normalen Fehlerzustand.
+  const loaded = await load()
+  if (!loaded) stats.value = null
+})
 
 async function onConfigSaved() {
   await load()
@@ -228,9 +274,19 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  if (warmupTimer) {
+    clearTimeout(warmupTimer)
+    warmupTimer = null
+  }
 })
 
 const disabled = computed(() => stats.value?.enabled === false)
+const showUnboundedWarning = computed(() => (
+  !loading.value
+  && !loadError.value
+  && !disabled.value
+  && stats.value?.retention_unbounded === true
+))
 const store = computed(() => stats.value?.store ?? null)
 const segmented = computed(() => !disabled.value && store.value != null)
 
@@ -274,7 +330,7 @@ const segmentCount = computed(() => fmtInt(common.value.segment_count ?? segment
 // Segment-Alter (Sekunden → Stunden) für die Budget-Empfehlung der Prognose.
 // null → PrognosisBlock lässt die Budget-Zeile weg.
 const segmentAgeHours = computed(() => {
-  const seconds = Number(stats.value?.segment_max_age)
+  const seconds = Number(stats.value?.effective_segment_max_age ?? stats.value?.segment_max_age)
   return Number.isFinite(seconds) && seconds > 0 ? seconds / 3600 : null
 })
 

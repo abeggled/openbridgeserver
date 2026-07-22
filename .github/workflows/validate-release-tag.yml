@@ -1,0 +1,95 @@
+name: Validate Release Tag
+
+# Shared tag-format + tag-origin-branch gate, called by both release.yml
+# (GitHub release + Docker image) and lxc-template.yml (LXC/app-bundle
+# assets). Both workflows trigger independently on the same tag push, so
+# without this shared gate a tag moved to a wrong-branch commit could still
+# have its LXC assets rebuilt and clobbered onto an existing release even
+# after release.yml's own validation aborted (issue #948 Codex review).
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Validate tag format and origin branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tag format
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ ! "$TAG" =~ ^[0-9]{4}\.(1[0-2]|[1-9])\.(0|[1-9][0-9]*)(-RC[0-9]+)?$ ]]; then
+            echo "::error::Tag '$TAG' does not match CalVer format YYYY.M.PATCH(-RC<N>) with M in 1-12 and no leading zero on M/PATCH. Aborting release."
+            exit 1
+          fi
+          echo "Tag format OK: $TAG"
+
+      - name: Validate tag origin branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          export TAG_NAME
+          python3 <<'ORIGIN_EOF'
+          import json, os, re, sys, urllib.request, urllib.error
+
+          tag        = os.environ['TAG_NAME']
+          commit_sha = os.environ['GITHUB_SHA']
+          repo       = os.environ['GITHUB_REPOSITORY']
+          token      = os.environ['GITHUB_TOKEN']
+
+          # YYYY.M.0(-RC<N>)? → must be on main (initial release or its RCs)
+          # YYYY.M.X(-RC<N>)? (X>0) → must be on YYYY.M bugfix branch
+          m = re.match(r'^(\d{4})\.(\d+)\.(\d+)(-RC\d+)?$', tag, re.IGNORECASE)
+          patch = int(m.group(3))
+          if patch == 0:
+              expected_branch = 'main'
+          else:
+              expected_branch = f'{m.group(1)}.{m.group(2)}'
+          print(f'Expected branch for "{tag}": {expected_branch}')
+
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+
+          def gh_get(path):
+              req = urllib.request.Request(f'https://api.github.com/{path}', headers=headers)
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          if expected_branch != 'main':
+              try:
+                  gh_get(f'repos/{repo}/branches/{expected_branch}')
+              except urllib.error.HTTPError as e:
+                  if e.code == 404:
+                      print(f'::error::Bugfix branch "{expected_branch}" does not exist. '
+                            f'Cut it from the {m.group(1)}.{m.group(2)}.0 tag before tagging a patch release.')
+                  else:
+                      print(f'::error::GitHub API error checking branch: {e}')
+                  sys.exit(1)
+
+          # compare/{base}...{head}: "behind" or "identical" means commit IS on the branch
+          try:
+              cmp = gh_get(f'repos/{repo}/compare/{expected_branch}...{commit_sha}')
+          except urllib.error.HTTPError as e:
+              print(f'::error::Could not compare branch to tag commit: {e}')
+              sys.exit(1)
+
+          status   = cmp.get('status', 'unknown')
+          ahead_by = cmp.get('ahead_by', -1)
+          if status not in ('behind', 'identical'):
+              print(
+                  f'::error::Tag "{tag}" (commit {commit_sha[:8]}) is not on branch '
+                  f'"{expected_branch}" (compare status: {status}, ahead_by: {ahead_by}). '
+                  f'Tags must be created from "{expected_branch}".'
+              )
+              sys.exit(1)
+
+          print(f'Tag origin OK: "{tag}" is on "{expected_branch}" (status: {status}).')
+          ORIGIN_EOF

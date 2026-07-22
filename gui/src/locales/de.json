@@ -756,6 +756,10 @@
           "title": "Lesezugriffe serialisieren",
           "description": "Sendet Modbus-Requests nacheinander statt gleichzeitig. Empfohlen für einfache Geräte (Heizungsregler, Wechselrichter, Zähler), die nur einen Request gleichzeitig verarbeiten können. Deaktivieren bei leistungsstarken PLCs mit Multi-Request-Unterstützung."
         },
+        "shared_bus": {
+          "title": "Bus mit Instanzen gleicher IP:Port teilen",
+          "description": "Serialisiert I/O über ALLE Instanzen, die denselben Host:Port pollen (z.B. mehrere Geräte hinter einem RS485/Modbus-TCP-Gateway). Verhindert gleichzeitige Requests konkurrierender Instanzen am selben Bus."
+        },
         "startup_jitter_s": {
           "title": "Startup-Jitter (s)",
           "description": "Maximale zufällige Verzögerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert."
@@ -1017,6 +1021,10 @@
         "poll_interval": {
           "title": "Abfrageintervall (s)",
           "description": "Wie oft Sensoren gelesen werden, in Sekunden"
+        },
+        "request_timeout": {
+          "title": "Anfrage-Timeout (s)",
+          "description": "Sekunden pro owserver-Aufruf, bevor er als Fehler gewertet wird"
         }
       }
     },
@@ -1151,7 +1159,7 @@
     "storageFixed": "Speichermodell ist serverseitig fix:",
     "maxDisk": "Max. Speicherplatz auf Platte",
     "maxDiskPlaceholder": "z. B. 500",
-    "effectiveStorageNote": "Effektiver Speicherbedarf: Das Budget ist ein Retention-Ziel, kein harter Momentan-Deckel. Zwischen zwei Rotationen wächst das aktive Segment oben drauf (bis zu einer Segmentgröße), bevor die nächste Rotation alte Segmente entfernt. Spitzenwert ≈ Budget + Segmentgröße (Standard: Segmentgröße ≈ Budget/3, also bis zu ~133 %).",
+    "effectiveStorageNote": "Effektiver Speicherbedarf: Das Budget ist ein Retention-Ziel, kein harter Momentan-Deckel. Ohne explizite Segmentgröße wird sie aus dem Speicherbudget als Budget/3 abgeleitet. Dann liegt der Spitzenwert bei bis zu ~133 %. Ohne Speicherbudget und ohne explizite Segmentgröße gibt es keine größenbasierte Rotation.",
     "maxRetention": "Max. Retention",
     "maxRetentionPlaceholder": "z. B. 30",
     "maxEntriesPlaceholder": "z. B. 10000",
@@ -1167,6 +1175,12 @@
     "validationMinEntries": "Max. Einträge muss mindestens 100 sein",
     "validationMinDisk": "Max. Speicherplatz muss grösser als 0 sein",
     "validationRetentionNaN": "Retention muss eine gültige Zahl sein",
+    "validationSegmentTriggerRequired": "Für den segmentierten Ringbuffer ist mindestens eine wirksame Segment-Rotationsgrenze erforderlich: explizit oder aus einer passenden Gesamtgrenze abgeleitet.",
+    "unboundedWarningTitle": "Gesamt-Retention unbegrenzt",
+    "unboundedWarningBody": "Es ist keine Grenze für Einträge, Speicherplatz oder Alter aktiv. Geschlossene Segmente werden daher nicht automatisch entfernt und der Ringbuffer kann unbegrenzt wachsen.",
+    "unboundedConfirmTitle": "Ringbuffer unbegrenzt wachsen lassen?",
+    "unboundedConfirmMessage": "Ohne Gesamtgrenze werden alte Segmente dauerhaft aufbewahrt. Der belegte Speicher wächst weiter, bis die Konfiguration geändert oder Speicher extern freigegeben wird.",
+    "unboundedConfirmLabel": "Unbegrenzt speichern",
     "export": {
       "csvFormat": "CSV-Format",
       "rfcResetTitle": "Setzt Trennzeichen, Anführungszeichen und Escape-Zeichen auf die RFC-4180-Vorgabe.",
@@ -1332,13 +1346,17 @@
     "retentionOverBudgetReason": "Aufbewahrung über Budget: {reason}",
     "storageOnNetworkDrive": "Der Speicher liegt auf einem Netzlaufwerk. Das kann zu Datenverlust oder Sperren führen — lokaler Speicher wird empfohlen.",
     "segmentMaxAge": "Segment-Rotation nach Alter",
-    "segmentMaxAgeHint": "Nach dieser Zeitspanne wird ein neues Segment begonnen (Standard: 6 Stunden, Minimum: 5 Minuten).",
+    "segmentMaxAgeHint": "Explizit aktivieren oder deaktivieren. Ohne expliziten Wert wird eine aktive Gesamt-Retention nach Alter durch drei geteilt.",
     "segmentMaxAgePlaceholder": "z. B. 6",
     "segmentAdvanced": "Erweitert",
-    "segmentAdvancedHint": "Optionale zusätzliche Rotationsschwellen. Leer lassen, um sie automatisch aus den Retention-Grenzen abzuleiten.",
+    "segmentAdvancedHint": "Jede Schwelle kann explizit gesetzt werden. Ist sie deaktiviert, wird sie aus der passenden Gesamtgrenze abgeleitet oder bleibt ohne passende Gesamtgrenze aus.",
     "segmentMaxBytes": "Segment-Rotation nach Größe",
     "segmentMaxRows": "Segment-Rotation nach Zeilen",
     "segmentOptionalPlaceholder": "optional",
+    "segmentSourceExplicit": "Explizit: {value}",
+    "segmentSourceExplicitInvalid": "Explizit: gültigen Wert eingeben",
+    "segmentSourceDerived": "Abgeleitet aus Gesamtgrenze: {value}",
+    "segmentSourceDisabled": "Deaktiviert",
     "segmentRatioHint": "Damit die Aufbewahrung segmentgenau greifen kann, muss jedes gesetzte Retention-Limit (Größe, Zeilen, Alter) mindestens das Dreifache der zugehörigen Segment-Schwelle betragen.",
     "segmentRatioError": "Die Segmentierung ist zu grob für die gewählte Aufbewahrung: Jedes gesetzte Retention-Limit (Größe, Zeilen, Alter) muss mindestens das Dreifache der zugehörigen Segment-Schwelle betragen.",
     "validationSegmentMaxAge": "Das Segment-Alter muss mindestens 5 Minuten betragen.",
@@ -1368,12 +1386,26 @@
     "prognosis": {
       "title": "Prognose",
       "warming": "Prognose läuft sich noch ein (zu wenige Segmente).",
-      "rate": "Aktuell ~{mib} MiB/h (~{rows} Events/h).",
+      "warmingLive": "Live-Daten werden gesammelt — erste Prognose in ~{seconds} s.",
+      "provisional": "Vorläufig aus {seconds} s Live-Daten; wird mit jedem Abruf genauer.",
+      "idle": "Seit {seconds} Sekunden keine neuen Events.",
+      "rate": "Aktuell ~{rows} Events/s — hochgerechnet ~{mib} MiB/h.",
+      "eventRateOnly": "Aktuell ~{rows} Events/s — Speicherwachstum wird noch gemessen.",
+      "storageRateOnly": "Hochgerechnet ~{mib} MiB/h — Eventrate noch unbekannt.",
       "rotation": "Neues Segment ~alle {hours} h",
+      "rotationWithTrigger": "Neues Segment ~alle {hours} h — zuerst greift: {trigger}",
       "rotationSizeCap": " — der Größen-Cap (~{cap} MiB) greift vor den eingestellten {age} h.",
+      "trigger": {
+        "age": "Alter",
+        "size": "Größe",
+        "rows": "Zeilen"
+      },
       "history": "Budget {budget} reicht für ~{duration}.",
       "historyUnlimited": "Budget unbegrenzt — Historie wächst.",
+      "historyOtherLimits": "Kein Speicherbudget — andere Gesamtgrenzen können alte Segmente entfernen.",
+      "unboundedGrowth": "Ohne Gesamtgrenze wachsen bei dieser Rate etwa {month} in 30 Tagen und {year} pro Jahr an.",
       "budget": "Für ~{age}-h-Segmente: Budget ≥ {budget} (für mind. {segments} Segmente).",
+      "budgetRetention": "Für {retention} Retention: Budget ≥ {budget} (bei aktueller Rate).",
       "hours": "{n} h",
       "days": "{n} Tage"
     },
@@ -1402,6 +1434,7 @@
       "progressDropped": "{n} Zeilen über Budget verworfen",
       "migrateFailed": "Migration fehlgeschlagen: {error}",
       "migrateDone": "Migration abgeschlossen – die neuesten Alt-Daten wurden übernommen.",
+      "statsRefreshFailed": "Migration abgeschlossen. Die aktuellen Segmentdaten konnten noch nicht geladen werden und werden beim nächsten Abruf erneut geprüft.",
       "keepTitle": "Behalten",
       "keepBody": "Die Alt-Historie bleibt lesbar erhalten. Der Schutz entfällt: Ist das Budget erschöpft, darf die Bereinigung die Alt-Historie später als Ganzes verwerfen. Revidierbar, solange die Alt-Historie existiert.",
       "keepEta": "Voraussichtlich in ~{days} Tagen erzwingt das Budget die Rückgewinnung der Alt-Historie.",
@@ -1472,6 +1505,7 @@
     "nodeTypes": {
       "divide": "Dividieren",
       "const_value": "Festwert",
+      "comment": "Kommentar",
       "and": "AND",
       "or": "OR",
       "not": "NOT",
@@ -1629,6 +1663,11 @@
       "ariaLabel": "Unbekannter Block-Typ"
     },
     "nodeConfig": {
+      "comment": {
+        "text": "Text",
+        "textPlaceholder": "Notiztext…",
+        "empty": "Leerer Kommentar — im Panel bearbeiten"
+      },
       "tabs": {
         "connection": "Verbindung",
         "transform": "Transformation",
@@ -2111,7 +2150,8 @@
         "in_max": "Eingang Max",
         "out_min": "Ausgang Min",
         "out_max": "Ausgang Max"
-      }
+      },
+      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern"
     },
     "portLabels": {
       "heizmode": "Heizmodus",
@@ -2163,6 +2203,7 @@
     },
     "nodeDescriptions": {
       "const_value": "Gibt einen festen Wert aus — Zahl, Bool oder Text. Nützlich als Schwellwert oder Referenz.",
+      "comment": "Freier Mehrzeilen-Text zur Dokumentation direkt auf dem Graph-Canvas. Rein visuell, hat keinen Effekt auf die Ausführung.",
       "and": "Ausgang ist true wenn ALLE Eingänge true sind. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "or": "Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "not": "Invertiert den Eingang",

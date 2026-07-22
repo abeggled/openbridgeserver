@@ -684,6 +684,48 @@ async def test_import_config_updates_logic_graph(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_import_config_rejects_logic_graph_with_negative_timer_duration(monkeypatch):
+    """Config restore does not persist negative timer durations."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub(fetchone_result=None)
+    graph_id = str(uuid.uuid4())
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.logic.manager.get_logic_manager") as mock_lm,
+    ):
+        mock_lm.return_value.reload = AsyncMock()
+        body = _make_config_export(
+            logic_graphs=[
+                config_api.ExportedLogicGraph(
+                    id=graph_id,
+                    name="Invalid timer",
+                    description="",
+                    enabled=True,
+                    flow_data={
+                        "nodes": [
+                            {
+                                "id": "timer",
+                                "type": "timer_pulse",
+                                "position": {"x": 0, "y": 0},
+                                "data": {"duration_s": -1},
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.logic_graphs_created == 0
+    assert any("duration_s must be greater than or equal to 0" in error for error in result.errors)
+    assert db.committed == []
+
+
+@pytest.mark.asyncio
 async def test_import_config_logic_manager_reload_error_recorded(monkeypatch):
     """import_config records error when logic manager reload fails."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
@@ -768,15 +810,37 @@ async def test_import_config_app_settings(monkeypatch):
         ]
     )
 
+    logic_manager = MagicMock()
     with (
         patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
         patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
         patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
         patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
     ):
         result = await config_api.import_config(body=body, _user="u", db=db)
 
     assert result.app_settings_upserted == 2
+    logic_manager.update_app_config.assert_called_once_with({"timezone": "Europe/Berlin"})
+
+
+@pytest.mark.asyncio
+async def test_import_config_invalid_timezone_does_not_hot_update_logic(monkeypatch):
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub()
+    body = _make_config_export(app_settings=[config_api.ExportedAppSetting(key="timezone", value="not/a-timezone")])
+    logic_manager = MagicMock()
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
+    ):
+        await config_api.import_config(body=body, _user="u", db=db)
+
+    logic_manager.update_app_config.assert_not_called()
 
 
 @pytest.mark.asyncio

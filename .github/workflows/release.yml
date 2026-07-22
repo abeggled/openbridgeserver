@@ -12,8 +12,19 @@ env:
   PROJECT_NAME: openbridgeserver
 
 jobs:
+  validate-tag:
+    name: Validate tag
+    # Reusable-workflow tokens can only be reduced, never elevated, from the
+    # caller's permissions — the workflow-level `permissions: {}` above would
+    # otherwise strip the `contents: read` the callee needs for its branch/
+    # compare API checks.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/validate-release-tag.yml
+
   release:
     name: Release
+    needs: validate-tag
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,7 +37,7 @@ jobs:
           fetch-tags: true
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.x'
 
@@ -242,3 +253,142 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             OBS_VERSION=${{ env.OBS_VERSION }}
+
+  prepare-next-release:
+    name: Prepare next release on main
+    runs-on: ubuntu-latest
+    needs: release
+    # Only for stable .0 releases — not RCs, not patch releases (PATCH > 0)
+    if: ${{ !contains(github.ref_name, '-RC') && endsWith(github.ref_name, '.0') }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Create version bump PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          YEAR=$(echo "$TAG" | cut -d. -f1)
+          MINOR=$(echo "$TAG" | cut -d. -f2)
+          # Force base-10: a tag like 2026.08.0 would otherwise make bash
+          # parse "08"/"09" as invalid octal literals and abort this job.
+          MINOR=$((10#$MINOR))
+          if [[ "$MINOR" -eq 12 ]]; then
+            NEXT_YEAR=$((YEAR + 1))
+            NEXT_MINOR=1
+          else
+            NEXT_YEAR=$YEAR
+            NEXT_MINOR=$((MINOR + 1))
+          fi
+          NEXT_VERSION="${NEXT_YEAR}.${NEXT_MINOR}.0"
+          BRANCH="release-prep/${NEXT_VERSION}"
+
+          echo "Preparing next release: $NEXT_VERSION on branch $BRANCH"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Idempotency: a workflow re-run for the same tag (e.g. after a
+          # transient failure in a later step) must not fail on an already
+          # pushed branch, open a duplicate PR, or insert a second
+          # "## ${NEXT_VERSION}" section once the first prep PR is merged.
+          # An existing prep branch *without* a PR (e.g. `gh pr create`
+          # failed transiently right after the push) is resumed by opening
+          # the missing PR instead of being treated as already done.
+          if grep -qF "## ${NEXT_VERSION}" RELEASENOTES.md; then
+            echo "RELEASENOTES.md already has a section for ${NEXT_VERSION} — nothing to do."
+            exit 0
+          fi
+          # --state open only: a closed-but-unmerged prep PR must not be
+          # mistaken for completed work — a merged PR is already caught by
+          # the RELEASENOTES.md content check above.
+          EXISTING_PR="$(gh pr list --repo "${{ github.repository }}" --state open --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || true)"
+          if [[ -n "$EXISTING_PR" ]]; then
+            echo "PR #${EXISTING_PR} for ${BRANCH} already exists — nothing to do."
+            exit 0
+          fi
+
+          # An existing prep branch without a PR (e.g. `gh pr create` failed
+          # transiently right after the push) is resumed by checking it out
+          # instead of being treated as already done.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch ${BRANCH} already exists without a PR — resuming."
+            # actions/checkout only has "main" (fetch-depth: 1); a plain
+            # `git fetch origin "$BRANCH"` only updates FETCH_HEAD, it does
+            # not create a local or origin/$BRANCH ref to check out. Force
+            # the local branch to point at FETCH_HEAD explicitly instead.
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" FETCH_HEAD
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+          # Idempotent on its own: no-ops if the section is already present
+          # on the checked-out branch (the resume case above).
+          NEXT_VERSION="$NEXT_VERSION" python3 - <<'PYEOF'
+          import os, sys
+
+          next_version = os.environ['NEXT_VERSION']
+
+          with open("RELEASENOTES.md", "r") as f:
+              content = f.read()
+
+          if f"## {next_version}" in content:
+              print(f"Section for {next_version} already present on this branch — nothing to insert.")
+              sys.exit(0)
+
+          new_lines = [
+              f"## {next_version}",
+              "### Breaking changes 🚨",
+              "* none",
+              "",
+              "### New features ✨",
+              "* none",
+              "",
+              "### Fixes 🐞",
+              "* none",
+              "",
+              "### Known Issues 🔔",
+              "* none",
+              "",
+          ]
+
+          lines = content.split("\n")
+          insert_at = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
+          for nl in reversed(new_lines):
+              lines.insert(insert_at, nl)
+
+          with open("RELEASENOTES.md", "w") as f:
+              f.write("\n".join(lines))
+
+          print(f"Added section for {next_version}")
+          PYEOF
+
+          if git diff --quiet RELEASENOTES.md; then
+            echo "RELEASENOTES.md unchanged on ${BRANCH} — skipping commit/push."
+          else
+            git add RELEASENOTES.md
+            git commit -m "chore: prepare RELEASENOTES.md for ${NEXT_VERSION}"
+            git push -u origin "$BRANCH"
+          fi
+
+          {
+            echo "Automatisch erstellt nach dem stabilen \`${TAG}\`-Release."
+            echo ""
+            echo "Fügt einen leeren Abschnitt für \`${NEXT_VERSION}\` in \`RELEASENOTES.md\` ein."
+            echo ""
+            echo "→ Bitte reviewen und mergen, bevor der erste Feature-PR für das nächste Release landet."
+          } > pr_body.md
+
+          gh pr create \
+            --title "chore: Prepare RELEASENOTES.md for ${NEXT_VERSION}" \
+            --body-file pr_body.md \
+            --base main \
+            --head "$BRANCH"

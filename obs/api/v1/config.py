@@ -16,6 +16,7 @@ import sqlite3
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -26,6 +27,8 @@ from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
+from obs.logic.models import FlowData
+from obs.logic.validation import validate_timer_durations
 from obs.models.datapoint import DataPoint
 
 router = APIRouter(tags=["config"])
@@ -810,6 +813,7 @@ async def import_config(
     for lg in body.logic_graphs:
         try:
             row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (lg.id,))
+            validate_timer_durations(FlowData.model_validate(lg.flow_data))
             flow_json = json.dumps(lg.flow_data)
             if row:
                 await db.execute_and_commit(
@@ -977,6 +981,19 @@ async def import_config(
             result.app_settings_upserted += 1
         except Exception as exc:
             result.errors.append(f"AppSetting {s.key}: {exc}")
+
+    # Apply an imported timezone immediately.  Logic graphs may already have
+    # been reloaded above, but their executor receives this hot configuration
+    # on the next evaluation.
+    imported_timezone = next((s.value for s in body.app_settings if s.key == "timezone"), None)
+    if imported_timezone is not None:
+        try:
+            ZoneInfo(imported_timezone)
+            from obs.logic.manager import get_logic_manager
+
+            get_logic_manager().update_app_config({"timezone": imported_timezone})
+        except Exception:
+            pass  # Manager may not be running — non-critical
 
     # --- Hierarchy Trees ---
     for ht in body.hierarchy_trees:
