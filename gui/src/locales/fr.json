@@ -5,6 +5,10 @@
     "submit": "Se connecter",
     "submitting": "Connexion en cours…"
   },
+  "logic": {
+    "nodeConfig": { "datetime": { "custom_format": "Format personnalisé", "tokens": "Jetons : H/HH heure, m/mm minute, s/ss seconde, d/dd jour, EE/EEE/EEEE jour de la semaine, M/MM/MMM/MMMM mois, yy/yyyy année." } },
+    "nodeDescriptions": { "datetime": "Affiche la date et l’heure actuelles dans le fuseau horaire et le format configurés." }
+  },
   "common": {
     "save": "Sauvegarder"
   }

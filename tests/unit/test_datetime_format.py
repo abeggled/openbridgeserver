@@ -31,3 +31,10 @@ def test_format_datetime_supports_adjacent_tokens():
     value = datetime(2026, 7, 21, 2, 4, 5, tzinfo=UTC)
 
     assert format_datetime(value, "yyyyMMdd-HHmmss", "de") == "20260721-020405"
+
+
+def test_format_datetime_preserves_literal_token_separators():
+    value = datetime(2026, 7, 21, 9, 8, 7, tzinfo=UTC)
+
+    assert format_datetime(value, "yyyy-MM-ddTHH:mm:ss", "de") == "2026-07-21T09:08:07"
+    assert format_datetime(value, "HHhmm", "de") == "09h08"

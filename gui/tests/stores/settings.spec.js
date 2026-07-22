@@ -60,6 +60,18 @@ describe('useSettingsStore', () => {
     expect(store.language).toBe('gsw')
   })
 
+  it('saves a language change without resubmitting formats', async () => {
+    settingsApiMock.update.mockResolvedValue({})
+    const { useSettingsStore } = await import('@/stores/settings')
+    const store = useSettingsStore()
+    store.timezone = 'UTC'
+
+    await store.saveLanguage('en')
+
+    expect(settingsApiMock.update).toHaveBeenCalledWith({ timezone: 'UTC', language: 'en' })
+    expect(store.language).toBe('en')
+  })
+
   it('persists and applies the selected theme', async () => {
     const { useSettingsStore } = await import('@/stores/settings')
     const store = useSettingsStore()

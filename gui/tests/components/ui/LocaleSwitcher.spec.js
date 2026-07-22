@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { useAuthStore } from '@/stores/auth'
+import { useSettingsStore } from '@/stores/settings'
 
 let setLocaleMock
 
@@ -60,5 +62,16 @@ describe('LocaleSwitcher', () => {
     await w.find('[data-testid="select-language"]').setValue('en')
     await w.find('[data-testid="select-language"]').setValue('de')
     expect(setLocaleMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps demo language changes browser-local', async () => {
+    const w = await mountSwitcher()
+    useAuthStore().user = { username: 'demo', is_admin: false }
+    const saveLanguage = vi.spyOn(useSettingsStore(), 'saveLanguage')
+
+    await w.find('[data-testid="select-language"]').setValue('en')
+
+    expect(setLocaleMock).toHaveBeenCalledWith('en')
+    expect(saveLanguage).not.toHaveBeenCalled()
   })
 })

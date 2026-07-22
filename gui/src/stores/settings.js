@@ -40,11 +40,16 @@ export const useSettingsStore = defineStore('settings', () => {
     language.value = languageCode
   }
 
+  async function saveLanguage(languageCode) {
+    await settingsApi.update({ timezone: timezone.value, language: languageCode })
+    language.value = languageCode
+  }
+
   function setTheme(value) {
     theme.value = value
     localStorage.setItem('theme', value)
     applyTheme()
   }
 
-  return { timezone, dateFormat, timeFormat, language, theme, loaded, load, save, setTheme, applyTheme }
+  return { timezone, dateFormat, timeFormat, language, theme, loaded, load, save, saveLanguage, setTheme, applyTheme }
 })

@@ -1656,6 +1656,7 @@
     },
     "nodeConfig": {
       "datetime": {
+        "custom_format": "Custom format",
         "tokens": "Tokens: H/HH hour, m/mm minute, s/ss second, d/dd day, EE = Mo, EEE = Mon, EEEE = Monday, M/MM/MMM/MMMM month, yy/yyyy year. Names follow the selected language."
       },
       "comment": {
@@ -2197,6 +2198,7 @@
       "latencyMs": "Latency (ms)"
     },
     "nodeDescriptions": {
+      "datetime": "Outputs the current date and time in the configured timezone and format.",
       "const_value": "Outputs a fixed value — number, bool or text. Useful as threshold or reference.",
       "comment": "Free-form multi-line note placed directly on the canvas for documentation. Purely visual — has no effect on execution.",
       "and": "Output is true when ALL inputs are true. Inputs (2–30) and output can be individually negated.",

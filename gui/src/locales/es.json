@@ -5,6 +5,10 @@
     "password": "Contraseña",
     "submitting": "Iniciando sesión…"
   },
+  "logic": {
+    "nodeConfig": { "datetime": { "custom_format": "Formato personalizado", "tokens": "Tokens: H/HH hora, m/mm minuto, s/ss segundo, d/dd día, EE/EEE/EEEE día de la semana, M/MM/MMM/MMMM mes, yy/yyyy año." } },
+    "nodeDescriptions": { "datetime": "Muestra la fecha y hora actuales en la zona horaria y el formato configurados." }
+  },
   "common": {
     "save": "Ahorrar"
   }

@@ -171,6 +171,10 @@ def format_datetime(value: datetime, pattern: str, language: str = "de") -> str:
             while word_index < len(word):
                 token = next((candidate for candidate in _TOKENS if word.startswith(candidate, word_index)), None)
                 if token is None:
+                    if word[word_index] in {"T", "h"} and word_result:
+                        word_result.append(word[word_index])
+                        word_index += 1
+                        continue
                     word_result = [word]
                     break
                 word_result.append(replacements[token])

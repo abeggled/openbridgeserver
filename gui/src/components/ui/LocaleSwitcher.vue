@@ -17,16 +17,19 @@
 <script setup>
 import { useI18n } from 'vue-i18n'
 import { SUPPORTED_LOCALES, setLocale } from '@/i18n'
+import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
 
 const { locale } = useI18n()
 const settings = useSettingsStore()
+const auth = useAuthStore()
 
 async function onChange(e) {
   const language = e.target.value
   setLocale(language)
+  if (auth.username === 'demo') return
   try {
-    await settings.save(settings.timezone, settings.dateFormat, settings.timeFormat, language)
+    await settings.saveLanguage(language)
   } catch {
     // The browser-local selection still remains usable while the backend is unavailable.
   }

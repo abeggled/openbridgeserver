@@ -1,4 +1,8 @@
 {
+  "logic": {
+    "nodeConfig": { "datetime": { "custom_format": "Formato personalizzato", "tokens": "Token: H/HH ora, m/mm minuto, s/ss secondo, d/dd giorno, EE/EEE/EEEE giorno della settimana, M/MM/MMM/MMMM mese, yy/yyyy anno." } },
+    "nodeDescriptions": { "datetime": "Mostra la data e l’ora correnti nel fuso orario e nel formato configurati." }
+  },
   "login": {
     "submitting": "Accesso in corso…",
     "submit": "Accedi",
