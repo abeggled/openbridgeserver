@@ -124,6 +124,49 @@ describe('RingBufferView table-row colouring', () => {
     expect(ringbufferApi.queryMultiFiltersets).not.toHaveBeenCalled()
   })
 
+  it('treats pinned but disabled sets as no filter on initial load and refresh', async () => {
+    const helpers = await import('../../helpers/mountRingBufferView.js')
+    const ringbufferApi = helpers.makeRingbufferApiMock({
+      listFiltersets: vi.fn().mockResolvedValue({
+        data: [
+          makeSet({ id: 'set-a', is_active: false, topbar_active: true, topbar_order: 0 }),
+          makeSet({ id: 'set-b', is_active: false, topbar_active: true, topbar_order: 1 }),
+        ],
+      }),
+    })
+
+    const { wrapper } = await helpers.mountRingBufferView({ ringbufferApi })
+
+    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(1)
+    expect(ringbufferApi.queryMultiFiltersets).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-testid="btn-refresh-ringbuffer"]').trigger('click')
+    await helpers.flushPromises()
+
+    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(2)
+    expect(ringbufferApi.queryMultiFiltersets).not.toHaveBeenCalled()
+  })
+
+  it('sends only enabled pinned sets to the ordered OR-union query', async () => {
+    const helpers = await import('../../helpers/mountRingBufferView.js')
+    const ringbufferApi = helpers.makeRingbufferApiMock({
+      listFiltersets: vi.fn().mockResolvedValue({
+        data: [
+          makeSet({ id: 'set-c', is_active: true, topbar_active: true, topbar_order: 2 }),
+          makeSet({ id: 'set-disabled', is_active: false, topbar_active: true, topbar_order: 1 }),
+          makeSet({ id: 'set-a', is_active: true, topbar_active: true, topbar_order: 0 }),
+        ],
+      }),
+      queryMultiFiltersets: vi.fn().mockResolvedValue({ data: [] }),
+    })
+
+    await helpers.mountRingBufferView({ ringbufferApi })
+
+    expect(ringbufferApi.queryMultiFiltersets).toHaveBeenCalledTimes(1)
+    expect(ringbufferApi.queryMultiFiltersets.mock.calls[0][0].set_ids).toEqual(['set-a', 'set-c'])
+    expect(ringbufferApi.queryV2).not.toHaveBeenCalled()
+  })
+
   it('multi-match: first topbar set in topbar_order wins', async () => {
     const helpers = await import('../../helpers/mountRingBufferView.js')
     const ringbufferApi = helpers.makeRingbufferApiMock({

@@ -210,6 +210,47 @@ describe('RingBufferView — live-entry matching (#36 follow-up)', () => {
     expect(rows.length).toBe(1)
     wrapper.unmount()
   })
+
+  it('keeps live entries flowing when every pinned set is disabled', async () => {
+    const ringbufferApi = makeRingbufferApiMock({
+      listFiltersets: vi.fn().mockResolvedValue({
+        data: [
+          { ...ACTIVE_SET_HEIZUNG, is_active: false },
+          { ...ACTIVE_SET_KNX, is_active: false },
+        ],
+      }),
+    })
+    const { wrapper, emitLive } = await mountRingBufferView({ ringbufferApi })
+    await flushPromises()
+
+    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(1)
+    expect(ringbufferApi.queryMultiFiltersets).not.toHaveBeenCalled()
+
+    emitLive(makeLiveEntry({ metadata: { tags: ['licht'] }, source_adapter: 'api' }))
+    await new Promise((r) => setTimeout(r, 120))
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="ringbuffer-entry"]')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('keeps an enabled empty filterset restrictive for live entries', async () => {
+    const ringbufferApi = makeRingbufferApiMock({
+      listFiltersets: vi.fn().mockResolvedValue({
+        data: [{ ...ACTIVE_SET_HEIZUNG, filter: {}, filter_json: '{}' }],
+      }),
+      queryMultiFiltersets: vi.fn().mockResolvedValue({ data: [] }),
+    })
+    const { wrapper, emitLive } = await mountRingBufferView({ ringbufferApi })
+    await flushPromises()
+
+    emitLive(makeLiveEntry({ metadata: { tags: ['heizung'] } }))
+    await new Promise((r) => setTimeout(r, 120))
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="ringbuffer-entry"]')).toHaveLength(0)
+    wrapper.unmount()
+  })
 })
 
 describe('RingBufferView — live entries honor the active time filter', () => {
