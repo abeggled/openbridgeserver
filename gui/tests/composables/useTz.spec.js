@@ -107,6 +107,24 @@ describe('fmtDateTime', () => {
 
     expect(useTz().fmtDate('2024-06-15T02:03:04Z')).toBe('2024-06-15T02 guguseli')
   })
+
+  it('preserves accented literal words', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'EEEE día'
+    settings.language = 'es'
+
+    expect(useTz().fmtDate('2024-06-15T02:03:04Z')).toBe('sábado día')
+  })
+
+  it('formats EE and MMM consistently with the backend tables', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'EE EEE MMM'
+    settings.language = 'de'
+
+    expect(useTz().fmtDate('2024-06-15T02:03:04Z')).toBe('Sa Sa. Juni')
+  })
 })
 
 describe('fmtChartLabel', () => {

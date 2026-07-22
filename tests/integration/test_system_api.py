@@ -216,19 +216,22 @@ async def test_changing_timezone_does_not_overwrite_formats(client, auth_headers
 
 
 async def test_changing_language_without_formats_is_persisted(client, auth_headers):
+    await client.put("/api/v1/system/settings", json={"timezone": "Europe/Berlin"}, headers=auth_headers)
     response = await client.put(
         "/api/v1/system/settings",
-        json={"timezone": "Europe/Zurich", "language": "en"},
+        json={"timezone": "UTC", "language": "en"},
         headers=auth_headers,
     )
 
     assert response.status_code == 200
+    assert response.json()["timezone"] == "Europe/Berlin"
     settings = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
     assert settings["language"] == "en"
+    assert settings["timezone"] == "Europe/Berlin"
 
     await client.put(
         "/api/v1/system/settings",
-        json={"timezone": "Europe/Zurich", "language": "de"},
+        json={"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"},
         headers=auth_headers,
     )
 

@@ -277,8 +277,8 @@ async def update_app_settings(
         )
     elif language_supplied:
         await db.execute_and_commit(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?), (?, ?)",
-            ("timezone", body.timezone, "language", body.language),
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('language', ?)",
+            (body.language,),
         )
     else:
         await db.execute_and_commit(
@@ -290,7 +290,7 @@ async def update_app_settings(
     try:
         from obs.logic.manager import get_logic_manager
 
-        updated_config = {"timezone": body.timezone}
+        updated_config = {} if language_supplied and not format_fields_supplied else {"timezone": body.timezone}
         if format_fields_supplied:
             updated_config.update({"date_format": body.date_format, "time_format": body.time_format})
         if language_supplied:
@@ -300,7 +300,7 @@ async def update_app_settings(
         pass  # Manager may not be running — non-critical
 
     return AppSettingsOut(
-        timezone=body.timezone,
+        timezone=current_settings.timezone if language_supplied and not format_fields_supplied else body.timezone,
         date_format=body.date_format if format_fields_supplied else current_settings.date_format,
         time_format=body.time_format if format_fields_supplied else current_settings.time_format,
         language=body.language if language_supplied else current_settings.language,

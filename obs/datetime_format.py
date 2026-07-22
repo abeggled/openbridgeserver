@@ -123,9 +123,19 @@ _MONTHS_IT = (
     ("novembre", "nov"),
     ("dicembre", "dic"),
 )
+_WEEKDAYS_GSW = (
+    ("Mäntig", "Mä.", "Mä"),
+    ("Zischtig", "Zi.", "Zi"),
+    ("Mittwuch", "Mi.", "Mi"),
+    ("Dunschtig", "Du.", "Du"),
+    ("Friitig", "Fr.", "Fr"),
+    ("Samschtig", "Sa.", "Sa"),
+    ("Sunntig", "Su.", "Su"),
+)
+_MONTHS_GSW = _MONTHS_DE
 _LOCALIZED_NAMES = {
     "de": (_WEEKDAYS_DE, _MONTHS_DE),
-    "gsw": (_WEEKDAYS_DE, _MONTHS_DE),
+    "gsw": (_WEEKDAYS_GSW, _MONTHS_GSW),
     "en": (_WEEKDAYS_EN, _MONTHS_EN),
     "es": (_WEEKDAYS_ES, _MONTHS_ES),
     "fr": (_WEEKDAYS_FR, _MONTHS_FR),

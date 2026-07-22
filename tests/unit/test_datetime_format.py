@@ -17,6 +17,12 @@ def test_format_datetime_uses_selected_language():
     assert format_datetime(value, "EE EEE EEEE MMM MMMM", "en") == "Mo Mon Monday Jun June"
 
 
+def test_format_datetime_uses_swiss_german_names():
+    value = datetime(2026, 6, 8, tzinfo=UTC)
+
+    assert format_datetime(value, "EE EEE EEEE", "gsw") == "Mä Mä. Mäntig"
+
+
 def test_format_datetime_preserves_literal_text():
     assert format_datetime(datetime(2026, 1, 2, tzinfo=UTC), "dd.MM.yyyy / x") == "02.01.2026 / x"
 
