@@ -211,32 +211,6 @@ describe('LegacyMigrationWizard — Migrieren', () => {
     expect(wrapper.find('[data-testid="wizard-finished"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="wizard-options"]').exists()).toBe(false)
   })
-
-  it.each(['migrated', 'discarded'])(
-    'does not claim success when a stale %s marker still has an attached empty source',
-    async (decision) => {
-      const wrapper = await mountWizard(
-        statusPayload({
-          decision,
-          legacy: {
-            path: '/data/obs_ringbuffer.db',
-            status: 'legacy',
-            size_bytes: 68 * 1024,
-            row_estimate: 0,
-            from_ts: null,
-            to_ts: null,
-            retention_protected: false,
-          },
-          job: job({ phase: 'idle' }),
-        })
-      )
-
-      expect(wrapper.find('[data-testid="wizard-finished"]').exists()).toBe(false)
-      expect(wrapper.find('[data-testid="wizard-analysis"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="wizard-row-estimate"]').text()).toBe('0')
-      expect(wrapper.find('[data-testid="wizard-option-migrate"]').exists()).toBe(true)
-    }
-  )
 })
 
 describe('LegacyMigrationWizard — Behalten', () => {

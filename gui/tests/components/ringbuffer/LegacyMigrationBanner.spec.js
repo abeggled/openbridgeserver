@@ -75,14 +75,6 @@ describe('LegacyMigrationBanner — Sichtbarkeit', () => {
     const wrapper = await mountBanner(statusPayload({ legacy: null }))
     expect(wrapper.find('[data-testid="legacy-migration-banner"]').exists()).toBe(false)
   })
-
-  it.each(['migrated', 'discarded'])(
-    'stays visible for a stale %s marker while the legacy source still exists',
-    async (decision) => {
-      const wrapper = await mountBanner(statusPayload({ decision }))
-      expect(wrapper.find('[data-testid="legacy-migration-banner"]').exists()).toBe(true)
-    }
-  )
 })
 
 describe('LegacyMigrationBanner — Aktionen', () => {

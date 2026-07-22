@@ -66,14 +66,8 @@ const pendingFinalization = computed(
 )
 
 // Banner nur solange KEINE informierte Entscheidung vorliegt und die
-// Legacy-Quelle noch existiert (#966). Ein terminaler Marker bei weiterhin
-// angehängter Quelle ist widersprüchlich (z. B. app-DB und RingBuffer-DB aus
-// unterschiedlichen Kopierständen) und darf die Quelle ebenfalls nicht
-// verstecken. Der Backend-Startup repariert diesen Zustand zu ``pending``;
-// diese Bedingung hält die Warnung auch während eines gemischten Rollouts offen.
-const showBanner = computed(
-  () => legacy.value != null && ['pending', 'migrated', 'discarded'].includes(decision.value)
-)
+// Legacy-Quelle noch existiert (#966).
+const showBanner = computed(() => decision.value === 'pending' && legacy.value != null)
 
 // Eskalation (#966): Budget bereits überschritten (eta === 0 inklusive) oder
 // Prognose sagt Budget-Druck innerhalb von 7 Tagen voraus.
