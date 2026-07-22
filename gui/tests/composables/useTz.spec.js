@@ -139,6 +139,15 @@ describe('fmtChartLabel', () => {
     expect(result).toBeTruthy()
     expect(result).toContain('15')
   })
+
+  it('uses configured formats for chart labels', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'yyyy/MM/dd'
+    settings.timeFormat = 'H-mm'
+
+    expect(useTz().fmtChartLabel('2024-06-15T12:30:00Z')).toBe('2024/06/15 12-30')
+  })
 })
 
 describe('toDatetimeLocal', () => {

@@ -1,4 +1,10 @@
 {
+  "datetimeNames": {
+    "weekdays": "Mäntig|Zischtig|Mittwuch|Dunschtig|Friitig|Samschtig|Sunntig",
+    "weekdaysShort": "Mä.|Zi.|Mi.|Du.|Fr.|Sa.|Su.", "weekdaysTwo": "Mä|Zi|Mi|Du|Fr|Sa|Su",
+    "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
+    "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
+  },
   "login": {
     "username": "Benutzername",
     "password": "Passwort",

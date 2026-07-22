@@ -1,4 +1,10 @@
 {
+  "datetimeNames": {
+    "weekdays": "Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag",
+    "weekdaysShort": "Mo.|Di.|Mi.|Do.|Fr.|Sa.|So.", "weekdaysTwo": "Mo|Di|Mi|Do|Fr|Sa|So",
+    "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
+    "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
+  },
   "nav": {
     "dashboard": "Übersicht",
     "datapoints": "Objekte",
