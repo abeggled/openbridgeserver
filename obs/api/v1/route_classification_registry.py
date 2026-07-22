@@ -64,6 +64,8 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/adapters/instances/{instance_id}/iobroker/states"): "read_live",
     ("GET", "/api/v1/adapters/instances/{instance_id}/mqtt/browse"): "read_live",
     ("GET", "/api/v1/adapters/instances/{instance_id}/mqtt/sample"): "read_live",
+    ("GET", "/api/v1/adapters/instances/{instance_id}/onewire/browse"): "read_live",
+    ("PATCH", "/api/v1/adapters/instances/{instance_id}/onewire/aliases"): "config_mutation",
     ("GET", "/api/v1/adapters/instances/{instance_id}/snmp/walk"): "read_live",
     ("GET", "/api/v1/adapters/knx/dpts"): "read_live",
     ("GET", "/api/v1/adapters/{adapter_type}/binding-schema"): "read_live",

@@ -807,6 +807,66 @@ class TestUpdateInstance:
             )
         assert exc_info.value.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_update_onewire_instance_preserves_stored_aliases_over_stale_client_copy(self, monkeypatch):
+        # `aliases` is maintained exclusively by onewire_set_alias() (binding-form
+        # sensor scan), never by this form — an alias saved elsewhere after this
+        # form was loaded must survive a subsequent general instance-settings save,
+        # even though the client's own (now stale) copy still says otherwise.
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+
+        stored_config = {"host": "localhost", "port": 4304, "aliases": {"28.AA": "Fresh Label"}}
+        incoming_config = {"host": "localhost", "port": 4304, "aliases": {"28.AA": "Stale Label"}}
+        row = _inst_row(adapter_type="ONEWIRE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert saved_config["aliases"] == {"28.AA": "Fresh Label"}
+
+    @pytest.mark.asyncio
+    async def test_update_onewire_instance_without_stored_aliases_drops_client_copy(self, monkeypatch):
+        # A fresh instance with no aliases set yet — the client shouldn't be able
+        # to introduce an aliases value through this form either.
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1.adapters import AdapterInstanceUpdate
+
+        stored_config = {"host": "localhost", "port": 4304}
+        incoming_config = {"host": "localhost", "port": 4304, "aliases": {"28.AA": "Injected"}}
+        row = _inst_row(adapter_type="ONEWIRE", enabled=0, config=stored_config)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        async def _fake_stop(iid):
+            pass
+
+        monkeypatch.setattr(adp_api.adapter_registry, "stop_instance", _fake_stop)
+        db = _DbStub(one=row)
+
+        await adp_api.update_instance(
+            instance_id=uuid.UUID(row["id"]),
+            body=AdapterInstanceUpdate(config=incoming_config),
+            db=db,
+            _user="admin",
+        )
+
+        saved_config = json.loads(db.committed[0][1][1])
+        assert "aliases" not in saved_config
+
 
 class TestDeleteInstance:
     @pytest.mark.asyncio

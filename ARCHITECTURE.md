@@ -69,7 +69,7 @@ open bridge server ist ein Open-Source Multiprotokoll-Server als MIT-lizenzierte
 | MQTT Broker | `Mosquitto` (extern) | Battle-tested, Docker-kompatibel |
 | KNX | `xknx` | Vollständigste Python KNX-Bibliothek |
 | Modbus | `pymodbus` | Async-Support, RTU + TCP |
-| 1-Wire | `w1thermsensor` | Standard Linux 1-Wire Interface |
+| 1-Wire | `pyownet` | TCP-Client für externen `owserver` (OWFS) — abstrahiert USB/PBM/GPIO |
 | Datenbank | `SQLite` + `aiosqlite` | Zero-dependency, ARM-optimiert |
 | Authentifizierung | `python-jose` (JWT) + API Keys | Dual-Auth-System |
 | Konfiguration | `pydantic-settings` + YAML | Env-Vars überschreiben Datei |
