@@ -57,6 +57,18 @@ def test_datetime_node_uses_schema_default_for_custom_output():
     assert ":" in output
 
 
+def test_datetime_node_falls_back_to_utc_for_invalid_timezone():
+    executor = make_executor(
+        [node("clock", "datetime", {"custom_format": "yyyy"})],
+        app_config={"timezone": "not-a-timezone", "date_format": "yyyy", "time_format": "HH"},
+    )
+
+    output = executor.execute()["clock"]
+
+    assert len(output["date"]) == 4
+    assert len(output["time"]) == 2
+
+
 # ===========================================================================
 # _round_half_up
 # ===========================================================================

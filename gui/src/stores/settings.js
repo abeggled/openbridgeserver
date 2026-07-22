@@ -41,7 +41,7 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function saveLanguage(languageCode) {
-    await settingsApi.update({ timezone: timezone.value, language: languageCode })
+    await settingsApi.update({ language: languageCode })
     language.value = languageCode
   }
 

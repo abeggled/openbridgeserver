@@ -64,11 +64,9 @@ describe('useSettingsStore', () => {
     settingsApiMock.update.mockResolvedValue({})
     const { useSettingsStore } = await import('@/stores/settings')
     const store = useSettingsStore()
-    store.timezone = 'UTC'
-
     await store.saveLanguage('en')
 
-    expect(settingsApiMock.update).toHaveBeenCalledWith({ timezone: 'UTC', language: 'en' })
+    expect(settingsApiMock.update).toHaveBeenCalledWith({ language: 'en' })
     expect(store.language).toBe('en')
   })
 

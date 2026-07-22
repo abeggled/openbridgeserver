@@ -219,7 +219,7 @@ async def test_changing_language_without_formats_is_persisted(client, auth_heade
     await client.put("/api/v1/system/settings", json={"timezone": "Europe/Berlin"}, headers=auth_headers)
     response = await client.put(
         "/api/v1/system/settings",
-        json={"timezone": "UTC", "language": "en"},
+        json={"language": "en"},
         headers=auth_headers,
     )
 
@@ -234,6 +234,56 @@ async def test_changing_language_without_formats_is_persisted(client, auth_heade
         json={"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"},
         headers=auth_headers,
     )
+
+
+async def test_changing_timezone_and_language_without_formats_persists_both(client, auth_headers):
+    response = await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "UTC", "language": "en"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "UTC"
+    assert response.json()["language"] == "en"
+    settings = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    assert settings["timezone"] == "UTC"
+    assert settings["language"] == "en"
+
+    await client.put(
+        "/api/v1/system/settings",
+        json={"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"},
+        headers=auth_headers,
+    )
+
+
+async def test_put_settings_succeeds_when_logic_manager_is_not_running(client, auth_headers, monkeypatch):
+    def unavailable_manager():
+        raise RuntimeError("logic manager not initialized")
+
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", unavailable_manager)
+
+    response = await client.put("/api/v1/system/settings", json={"language": "en"}, headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["language"] == "en"
+    await client.put("/api/v1/system/settings", json={"language": "de"}, headers=auth_headers)
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        ({}, "At least one setting must be supplied"),
+        ({"date_format": "yyyy"}, "Date and time formats must be supplied together"),
+        ({"date_format": "", "time_format": "HH:mm"}, "Date and time formats must not be empty"),
+        ({"language": "xx"}, "Unsupported language"),
+    ],
+)
+async def test_put_settings_rejects_invalid_partial_updates(client, auth_headers, payload, detail):
+    response = await client.put("/api/v1/system/settings", json=payload, headers=auth_headers)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == detail
 
 
 # ---------------------------------------------------------------------------

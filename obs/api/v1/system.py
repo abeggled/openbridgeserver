@@ -74,10 +74,10 @@ class AppSettingsOut(BaseModel):
 
 
 class AppSettingsIn(BaseModel):
-    timezone: str
-    date_format: str = DEFAULT_DATE_FORMAT
-    time_format: str = DEFAULT_TIME_FORMAT
-    language: str = "de"
+    timezone: str | None = None
+    date_format: str | None = None
+    time_format: str | None = None
+    language: str | None = None
 
 
 class HistorySettingsOut(BaseModel):
@@ -240,70 +240,54 @@ async def update_app_settings(
     _user: str = Depends(get_current_user),
 ) -> AppSettingsOut:
     """Update application settings. Changes are applied immediately."""
-    # Validate timezone using zoneinfo
-    try:
-        from zoneinfo import ZoneInfo
+    supplied_fields = body.model_fields_set
+    if not supplied_fields:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="At least one setting must be supplied")
+    if "timezone" in supplied_fields:
+        try:
+            from zoneinfo import ZoneInfo
 
-        ZoneInfo(body.timezone)
-    except Exception:
-        raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Unknown timezone: {body.timezone!r}",
-        )
+            ZoneInfo(body.timezone or "")
+        except Exception:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Unknown timezone: {body.timezone!r}",
+            )
 
-    format_fields = {"date_format", "time_format"} & body.model_fields_set
+    format_fields = {"date_format", "time_format"} & supplied_fields
     if len(format_fields) == 1:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Date and time formats must be supplied together",
         )
-    if not body.date_format or not body.time_format:
+    if format_fields and (not body.date_format or not body.time_format):
         raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Date and time formats must not be empty")
-    if body.language not in {"de", "en", "es", "fr", "it", "gsw"}:
+    if "language" in supplied_fields and body.language not in {"de", "en", "es", "fr", "it", "gsw"}:
         raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Unsupported language")
 
-    format_fields_supplied = len(format_fields) == 2
-    language_supplied = "language" in body.model_fields_set
     current_settings = await get_app_settings(db=db, _user=_user)
-    if format_fields_supplied and language_supplied:
-        await db.execute_and_commit(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?), (?, ?), (?, ?), (?, ?)",
-            ("timezone", body.timezone, "date_format", body.date_format, "time_format", body.time_format, "language", body.language),
-        )
-    elif format_fields_supplied:
-        await db.execute_and_commit(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?), (?, ?), (?, ?)",
-            ("timezone", body.timezone, "date_format", body.date_format, "time_format", body.time_format),
-        )
-    elif language_supplied:
-        await db.execute_and_commit(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('language', ?)",
-            (body.language,),
-        )
-    else:
-        await db.execute_and_commit(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('timezone', ?)",
-            (body.timezone,),
-        )
+    updated_config = {
+        field: value
+        for field in ("timezone", "date_format", "time_format", "language")
+        if field in supplied_fields and (value := getattr(body, field)) is not None
+    }
+    placeholders = ", ".join("(?, ?)" for _ in updated_config)
+    parameters = tuple(item for pair in updated_config.items() for item in pair)
+    await db.execute_and_commit(f"INSERT OR REPLACE INTO app_settings (key, value) VALUES {placeholders}", parameters)
 
     # Hot-reload LogicManager so astro_sun picks up new timezone immediately
     try:
         from obs.logic.manager import get_logic_manager
 
-        updated_config = {} if language_supplied and not format_fields_supplied else {"timezone": body.timezone}
-        if format_fields_supplied:
-            updated_config.update({"date_format": body.date_format, "time_format": body.time_format})
-        if language_supplied:
-            updated_config["language"] = body.language
         get_logic_manager().update_app_config(updated_config)
     except Exception:
         pass  # Manager may not be running — non-critical
 
     return AppSettingsOut(
-        timezone=current_settings.timezone if language_supplied and not format_fields_supplied else body.timezone,
-        date_format=body.date_format if format_fields_supplied else current_settings.date_format,
-        time_format=body.time_format if format_fields_supplied else current_settings.time_format,
-        language=body.language if language_supplied else current_settings.language,
+        timezone=updated_config.get("timezone", current_settings.timezone),
+        date_format=updated_config.get("date_format", current_settings.date_format),
+        time_format=updated_config.get("time_format", current_settings.time_format),
+        language=updated_config.get("language", current_settings.language),
     )
 
 
