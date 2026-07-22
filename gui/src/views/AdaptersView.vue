@@ -67,7 +67,7 @@
                 :schema="newSchema"
                 v-model="newForm.config"
                 :adapter-type="newForm.adapter_type"
-                :exclude="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+                :exclude="excludedSchemaFields(newForm.adapter_type)"
               />
               <ZeitschaltuhrCustomHolidaysEditor
                 v-if="newForm.adapter_type.toLowerCase() === 'zeitschaltuhr'"
@@ -184,7 +184,7 @@
                   :schema="schemas[a.adapter_type]"
                   v-model="drafts[a.id].config"
                   :adapter-type="a.adapter_type"
-                  :exclude="a.adapter_type.toLowerCase() === 'zeitschaltuhr' ? ['custom_holidays'] : []"
+                  :exclude="excludedSchemaFields(a.adapter_type)"
                 />
                 <ZeitschaltuhrCustomHolidaysEditor
                   v-if="a.adapter_type.toLowerCase() === 'zeitschaltuhr'"
@@ -416,6 +416,22 @@ import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant,
 
 const { t, te } = useI18n()
 const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
+// Fields rendered by a dedicated component instead of the generic SchemaForm.
+function excludedSchemaFields(adapterType) {
+  const type = adapterType.toLowerCase()
+  if (type === 'zeitschaltuhr') return ['custom_holidays']
+  if (type === 'onewire') return ['aliases'] // edited inline via the binding-form sensor scan
+  return []
+}
+// Subset of excludedSchemaFields() that is edited entirely outside drafts[a.id].config
+// (e.g. onewire aliases, mutated via a separate PATCH from the binding-form sensor scan)
+// and can therefore go stale in the draft — saveInstance() merges the live value back in
+// for these only. zeitschaltuhr's custom_holidays is excluded from SchemaForm too, but its
+// dedicated editor writes directly into drafts[a.id].config, so merging the live value here
+// would discard the user's in-form edit instead of protecting it.
+function fieldsEditedOutsideDraft(adapterType) {
+  return adapterType.toLowerCase() === 'onewire' ? ['aliases'] : []
+}
 // Issue #779: TestResult / action feedback may carry a backend detail_code
 // (adapters.testResult.*) with params; translate it, else show the raw detail.
 function feedbackText(fb) {
@@ -648,9 +664,24 @@ async function saveInstance(a) {
   busy[a.id] = 'save'
   delete feedback[a.id]
   try {
+    // Fields in fieldsEditedOutsideDraft() are edited outside this form (e.g. onewire
+    // aliases via the binding-form sensor scan) and can have changed on the backend
+    // since drafts[a.id] was initialized. The 10 s background poll is silent and only
+    // patches status fields (see stores/adapters.js), so it cannot be relied on to
+    // have picked up such a change — refresh explicitly and merge the live value for
+    // those fields instead of the possibly-stale draft copy, so this save can't
+    // clobber them. Skipped for adapter types without such fields to avoid an
+    // unnecessary round-trip/loading flash on every save.
+    const excluded = fieldsEditedOutsideDraft(a.adapter_type)
+    if (excluded.length) await refreshInstances()
+    const live = store.instances.find(i => i.id === a.id) ?? a
+    const config = { ...drafts[a.id].config }
+    for (const key of excluded) {
+      if (key in live.config) config[key] = live.config[key]
+    }
     await store.updateInstance(a.id, {
       name:    drafts[a.id].name,
-      config:  drafts[a.id].config,
+      config,
       enabled: drafts[a.id].enabled,
     })
     feedback[a.id] = { success: true, detail: t('adapters.savedReconnected') }

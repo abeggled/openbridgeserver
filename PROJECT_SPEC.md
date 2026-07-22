@@ -48,7 +48,7 @@ Zielgruppe: Bestehende Timberwolf Server (TWS) Anwender und Neueinsteiger in der
 11. KNX Adapter (`xknx`) + DPT Registry (Basis-DPTs)
 12. Modbus TCP Adapter (`pymodbus`)
 13. Modbus RTU Adapter (`pymodbus`)
-14. 1-Wire Adapter (`w1thermsensor`)
+14. 1-Wire Adapter (`pyownet` — Client von externem `owserver`/OWFS)
 
 ### Phase 4 — API
 15. FastAPI Setup + Authentifizierung (JWT + API Key)
