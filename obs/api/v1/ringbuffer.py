@@ -2563,7 +2563,17 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # zur Laufzeit aktiviert wird, die Entscheidung ``None`` (Banner versteckt) und
             # die ersten non-legacy-Daten könnten die FIFO-Retention das Legacy-Segment
             # zurückgewinnen lassen, bevor der Assistent den pending/skipped-Schutz greift.
-            decision = await ensure_legacy_migration_decision(db, legacy_db_path=_ringbuffer_disk_path() if resolved_segmented else None)
+            try:
+                decision = await ensure_legacy_migration_decision(
+                    db,
+                    legacy_db_path=_ringbuffer_disk_path() if resolved_segmented else None,
+                )
+            except Exception:
+                # Ein transient gesperrtes app-DB-Setting darf den gesunden
+                # Runtime-Buffer nicht verhindern. Konservativ geschützt starten;
+                # der Finalizer unten und spätere Status-Polls wiederholen den Write.
+                logger.exception("RingBuffer: Runtime-Abgleich der Legacy-Entscheidung fehlgeschlagen (Buffer startet retention-geschützt)")
+                decision = LEGACY_DECISION_PENDING
             rb = await init_ringbuffer(
                 storage="file",
                 max_entries=resolved_max_entries,
@@ -2594,7 +2604,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # behandelt), darf das den bereits laufenden Buffer NICHT abbauen (created_rb/
             # subscribed_new sind gesetzt, der except-Cleanup risse ihn sonst nieder). Der nächste
             # Status-Poll zieht die Entscheidung nach.
-            await _finalize_decision_under_lock(db, rb)
+            try:
+                await _finalize_decision_under_lock(db, rb)
+            except Exception:
+                logger.exception(
+                    "RingBuffer: Runtime-Finalisierung der Migrations-Entscheidung fehlgeschlagen "
+                    "(Buffer bleibt aktiv, Retry beim nächsten Status-Poll)"
+                )
 
         reconfigure_kwargs: dict[str, Any] = {}
         if "max_entries" in body.model_fields_set:

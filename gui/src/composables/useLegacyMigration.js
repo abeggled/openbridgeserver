@@ -13,7 +13,8 @@
  *
  * Während ein Migrationsjob läuft (phase starting/precheck/copying/committing)
  * pollt der Composable den Status im 1-s-Intervall und stoppt selbsttätig,
- * sobald der Job terminal ist (done/failed) oder ein Refresh fehlschlägt.
+ * sobald der Job terminal ist (done/failed). Transiente Serverfehler werden
+ * weiter im 1-s-Intervall versucht; nicht retryfähige Fehler stoppen den Poller.
  */
 import { computed, ref } from 'vue'
 import { ringbufferApi } from '@/api/client'
@@ -120,8 +121,21 @@ async function refresh() {
     return data
   } catch (error) {
     loadError.value = true
-    // Kein Endlos-Polling gegen einen fehlschlagenden Endpoint.
-    stopPolling()
+    const responseStatus = error?.response?.status
+    if (responseStatus >= 500 && responseStatus < 600) {
+      // Der Status-Reconciler kann bei einem transienten app-DB-Lock mit 5xx
+      // antworten. Auch beim initialen Dashboard-Refresh automatisch erneut
+      // versuchen, damit die geschützte Legacy-Quelle nach erfolgreichem Repair
+      // ohne manuellen Reload wieder bedienbar wird.
+      if (pollTimer == null) {
+        pollTimer = setInterval(() => {
+          refresh().catch(() => {})
+        }, POLL_INTERVAL_MS)
+      }
+    } else {
+      // Auth-/Clientfehler sind nicht durch Wiederholen heilbar.
+      stopPolling()
+    }
     throw error
   } finally {
     loading.value = false

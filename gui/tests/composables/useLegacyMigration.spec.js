@@ -146,6 +146,27 @@ describe('useLegacyMigration — actions', () => {
 })
 
 describe('useLegacyMigration — polling', () => {
+  it('retries a transient server error and stops once reconciliation succeeds', async () => {
+    vi.useFakeTimers()
+    const api = await loadComposable()
+    const transientError = Object.assign(new Error('app db is locked'), {
+      response: { status: 500 },
+    })
+    migrationStatus
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce({ data: statusPayload() })
+
+    await expect(api.refresh()).rejects.toThrow('app db is locked')
+    expect(api.loadError.value).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(migrationStatus).toHaveBeenCalledTimes(2)
+    expect(api.loadError.value).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(migrationStatus).toHaveBeenCalledTimes(2)
+  })
+
   it('signals a completed migration exactly once when a running job reaches done', async () => {
     const api = await loadComposable()
 
