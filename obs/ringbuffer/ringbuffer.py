@@ -1193,30 +1193,38 @@ class RingBuffer:
             return 0
         return sum(s.size_bytes for s in await self._store.manifest.list_schema_legacy_segments())
 
-    async def reclaimable_migrating_total_bytes(self) -> int:
-        """Bytes von ``migrating``-Resten, die ein neuer Copy-Lauf sicher verwirft (#1009).
+    async def reclaimable_migrating_bytes(self) -> tuple[int, int]:
+        """Manifest- und Disk-Bytes, die ein neuer Copy-Lauf sicher verwirft (#1009).
 
         Fehlt die Datei einer Legacy-Manifest-Zeile, liegt ein recoverbares Commit-Fenster
-        vor: source-scoped Kopien dieser Quelle und unscoped Alt-Manifest-Kopien können die
-        einzige verbliebene Historie sein und werden vom Reconciler promotet. Alle anderen
-        ``migrating``-Segmente sind Copy-Phase-Reste bzw. Orphans, die der nächste Start vor
-        seiner Planung entfernt.
+        vor. Der nächste Start beendet dann nur diesen Commit und führt den normalen Cleanup
+        nicht aus; deshalb ist in diesem Zustand noch kein ``migrating``-Segment reclaimable.
+
+        Der erste Rückgabewert entspricht den Manifest-Größen, die nach dem Cleanup aus
+        ``stats.file_size_bytes`` verschwinden. Der zweite zählt ausschließlich tatsächlich
+        vorhandene Hauptdateien und Sidecars, deren Unlink realen freien Platz schafft.
         """
         if not self._segmented or self._store is None:
-            return 0
+            return 0, 0
         # Während eines aktiven Jobs sind die neu entstehenden ``migrating``-Chunks
         # keine stale Reste: ein paralleler Start wird abgelehnt und führt den Cleanup
         # daher nicht aus. Status-Schätzungen dürfen diese Bytes nicht vorweg freigeben.
         if self.legacy_migration_in_progress():
-            return 0
-        missing_source_ids = {
-            segment.segment_id for segment in await self._store.manifest.list_schema_legacy_segments() if not Path(segment.filename).exists()
-        }
-        return sum(
-            max(0, int(segment.size_bytes or 0))
-            for segment in await self._store.manifest.list_migrating_segments()
-            if segment.legacy_source_id not in missing_source_ids and (segment.legacy_source_id is not None or not missing_source_ids)
-        )
+            return 0, 0
+        if any(not Path(segment.filename).exists() for segment in await self._store.manifest.list_schema_legacy_segments()):
+            return 0, 0
+
+        segments = await self._store.manifest.list_migrating_segments()
+        manifest_bytes = sum(max(0, int(segment.size_bytes or 0)) for segment in segments)
+        disk_bytes = 0
+        for segment in segments:
+            base = self._store._segments_dir / segment.filename
+            for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+                try:
+                    disk_bytes += max(0, candidate.stat().st_size)
+                except OSError:
+                    pass
+        return manifest_bytes, disk_bytes
 
     async def has_missing_file_legacy(self) -> bool:
         """True, wenn eine schema-legacy Manifest-Row eine FEHLENDE Datei hat (#968, Codex :2110).

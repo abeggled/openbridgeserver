@@ -2038,7 +2038,7 @@ async def test_attached_legacy_total_bytes_sums_all_sources(tmp_path: Path):
 
 
 async def test_reclaimable_migrating_bytes_preserve_interrupted_commit_chunks(tmp_path: Path):
-    """Nur sichere Copy-Reste zählen als reclaimable; Commit-Fenster-Kopien bleiben geschützt (#1009)."""
+    """Nur sofort gelöschte Dateien zählen; ein offener Commit schützt alle Copy-Reste (#1009)."""
     rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
     await rb.start()
     try:
@@ -2060,9 +2060,17 @@ async def test_reclaimable_migrating_bytes_preserve_interrupted_commit_chunks(tm
         for segment, size in ((stale, 100), (interrupted, 200), (unscoped, 300), (orphan, 400)):
             await rb._store.manifest.update_segment_stats(segment.segment_id, row_count=1, size_bytes=size, from_ts=_iso(0), to_ts=_iso(0))
 
-        assert await rb.reclaimable_migrating_total_bytes() == 500
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "pending commit führt beim nächsten Start noch keinen Cleanup aus"
+
+        await rb._store.manifest.delete_segment(missing.segment_id)
+        segments_dir = rb._store._segments_dir
+        (segments_dir / stale.filename).write_bytes(b"1234567")
+        Path(f"{segments_dir / stale.filename}-wal").write_bytes(b"wal")
+        Path(f"{segments_dir / orphan.filename}-shm").write_bytes(b"shm!")
+        assert await rb.reclaimable_migrating_bytes() == (1000, 14), "Disk-Freigabe zählt nur tatsächlich vorhandene Dateien"
+
         rb._legacy_migration_progress = {"phase": "copying"}
-        assert await rb.reclaimable_migrating_total_bytes() == 0, "aktive Job-Chunks sind nicht reclaimable"
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "aktive Job-Chunks sind nicht reclaimable"
     finally:
         await rb.stop()
 

@@ -969,8 +969,8 @@ async def test_migration_status_reclaims_stale_copy_bytes_from_estimate_and_free
         async def attached_legacy_total_bytes(self):
             return 300
 
-        async def reclaimable_migrating_total_bytes(self):
-            return 200
+        async def reclaimable_migrating_bytes(self):
+            return 200, 150
 
     db = Database(":memory:")
     await db.connect()
@@ -982,7 +982,7 @@ async def test_migration_status_reclaims_stale_copy_bytes_from_estimate_and_free
         status = await rb_api._legacy_migration_status(db)
         # live = 800 total - 300 legacy - 200 stale; target = 1000 - 100 headroom - 300 live
         assert status.estimated_copy_bytes == 600
-        assert status.disk_free_bytes == 250
+        assert status.disk_free_bytes == 200
     finally:
         await db.disconnect()
 
