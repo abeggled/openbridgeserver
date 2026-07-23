@@ -2829,3 +2829,147 @@ async def test_partial_keep_migration_persists_protected(tmp_path: Path, monkeyp
     finally:
         await rb.stop()
         await db.disconnect()
+
+
+# ---------- #1013: durabler Repair nach partial keep-Migration ----------
+
+
+async def test_partial_keep_repair_survives_failed_write_and_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Schlägt ``keep`` → ``skipped`` nach einem partial commit fehl, muss der Commit
+    einen durablen Repair-Beleg hinterlassen. Der nächste Startup-Finalizer schützt
+    die verbleibende Quelle und zieht die Entscheidung nach, ohne ein später bewusst
+    gewähltes ``keep`` erneut zu überschreiben."""
+    import obs.ringbuffer.persisted_config as persisted
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_SKIPPED,
+        finalize_committed_migration_decision,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    app_db_path = tmp_path / "app.db"
+    db1 = Database(str(app_db_path))
+    await db1.connect()
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(15)))
+    rb1 = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)
+    await rb1.start()
+    active_rb = {"value": rb1}
+    monkeypatch.setattr(_migration_api, "get_optional_ringbuffer", lambda: active_rb["value"])
+    monkeypatch.setattr(_migration_api, "is_ringbuffer_enabled", lambda: True)
+
+    original_persist = persisted.persist_legacy_migration_decision
+    failed_once = False
+
+    async def _fail_first_skipped(db: Database, decision: str) -> None:
+        nonlocal failed_once
+        if decision == LEGACY_DECISION_SKIPPED and not failed_once:
+            failed_once = True
+            raise OSError("app database locked")
+        await original_persist(db, decision)
+
+    try:
+        second = tmp_path / "legacy2.db"
+        second.write_bytes(b"z" * 128)
+        await rb1._store.manifest.register_legacy_segment(source_path=str(second), size_bytes=128)
+        await persist_legacy_migration_decision(db1, LEGACY_DECISION_KEEP)
+        monkeypatch.setattr(persisted, "persist_legacy_migration_decision", _fail_first_skipped)
+
+        await _migration_api.legacy_migration_start(_user="admin", db=db1)
+        await rb1._legacy_migration_task
+
+        assert rb1.legacy_migration_progress()["phase"] == "done"
+        assert await rb1.has_attached_legacy() is True
+        assert await load_legacy_migration_decision(db1) == LEGACY_DECISION_KEEP
+        assert await rb1.has_pending_keep_migration_repair() is True
+    finally:
+        await rb1.stop()
+        await db1.disconnect()
+
+    db2 = Database(str(app_db_path))
+    await db2.connect()
+    rb2 = _seg_rb(tmp_path, max_file_size_bytes=100, legacy_retention_protected=False)
+    await rb2.start()
+    active_rb["value"] = rb2
+    try:
+        assert rb2._legacy_retention_protected is True, "Store-Beleg schützt VOR der Startup-Retention"
+        assert second.exists(), "Startup-Retention darf die verbleibende Legacy-Quelle nicht reclaimen"
+
+        assert await finalize_committed_migration_decision(db2, rb2) is True
+        assert await load_legacy_migration_decision(db2) == LEGACY_DECISION_SKIPPED
+        assert rb2._legacy_retention_protected is True
+        assert await rb2.has_pending_keep_migration_repair() is False
+
+        await _migration_api._legacy_migration_decision_locked(_migration_api.LegacyMigrationDecisionIn(decision="keep"), db2)
+        assert await load_legacy_migration_decision(db2) == LEGACY_DECISION_KEEP
+        assert await finalize_committed_migration_decision(db2, rb2) is False
+        assert await load_legacy_migration_decision(db2) == LEGACY_DECISION_KEEP, "bewusstes späteres keep bleibt erhalten"
+    finally:
+        await rb2.stop()
+        await db2.disconnect()
+
+
+async def test_interrupted_partial_keep_commit_records_repair_during_reconcile(tmp_path: Path):
+    """Auch ein Crash zwischen Legacy-Unlink und Manifest-Commit muss den vorher
+    durabel gespeicherten keep-Intent beim Reconcile atomar in einen Repair-Beleg
+    für die verbleibende Quelle überführen."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        first_path = tmp_path / "legacy-1.db"
+        second_path = tmp_path / "legacy-2.db"
+        first_path.write_bytes(b"first")
+        second_path.write_bytes(b"second")
+        first = await store.manifest.register_legacy_segment(source_path=str(first_path), size_bytes=5)
+        await store.manifest.register_legacy_segment(source_path=str(second_path), size_bytes=6)
+        await store.manifest.prepare_offline_migration(first.segment_id, started_from_keep=True)
+        await store.manifest.create_migrating_segment(
+            filename="rb_migrated_interrupted.sqlite",
+            schema_version=SEGMENT_SCHEMA_VERSION,
+            legacy_source_id=first.segment_id,
+        )
+
+        first_path.unlink()
+        assert await reconcile_offline_migration(store) is True
+
+        assert await store.manifest.has_pending_keep_migration_repair() is True
+        remaining = await store.manifest.list_schema_legacy_segments()
+        assert [row.segment_id for row in remaining] != [first.segment_id]
+    finally:
+        await store.close()
+
+
+async def test_old_manifest_adds_partial_keep_repair_columns(tmp_path: Path):
+    """Ein bestehendes Manifest mit dem alten reinen Commit-Zähler wird beim
+    Öffnen idempotent um Intent + Repair-Beleg erweitert."""
+    import sqlite3
+
+    from obs.ringbuffer.store.manifest import Manifest
+
+    manifest_path = tmp_path / "manifest.sqlite"
+    conn = sqlite3.connect(manifest_path)
+    try:
+        conn.execute(
+            """CREATE TABLE migration_state (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   committed_migrations INTEGER NOT NULL DEFAULT 0
+               )"""
+        )
+        conn.execute("INSERT INTO migration_state (id, committed_migrations) VALUES (1, 3)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    manifest = Manifest(manifest_path)
+    await manifest.open()
+    try:
+        async with manifest._db.execute("PRAGMA table_info(migration_state)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        assert {"keep_migration_source_id", "pending_keep_migration_repair"} <= columns
+        assert await manifest.committed_migration_count() == 3
+        assert await manifest.has_pending_keep_migration_repair() is False
+    finally:
+        await manifest.close()
