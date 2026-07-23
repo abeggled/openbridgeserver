@@ -366,7 +366,11 @@
         "invalidXml": "Invalid XML: {msg}",
         "noChildElementsFound": "No child elements found",
         "sampleMustBeJsonObjectOrArray": "Sample must be a JSON object or array",
-        "selectAdapterInstance": "Please select an adapter instance"
+        "selectAdapterInstance": "Please select an adapter instance",
+        "selectOnewireInstanceFirst": "Please select a 1-Wire instance first",
+        "noSensorsFound": "No sensors found",
+        "onewireScanFailed": "1-Wire sensor scan failed",
+        "onewireAliasSaveFailed": "Could not save alias"
       },
       "knxSection": "KNX binding",
       "dptLabel": "DPT *",
@@ -423,10 +427,12 @@
       "xmlPathHint": "Path relative to the root element (ET-XPath, e.g. data/temperature). Numeric text values are converted automatically.",
       "onewireSection": "1-Wire binding",
       "onewireSensorIdLabel": "Sensor ID *",
-      "onewireSensorIdPlaceholder": "e.g. 28-000000000001",
-      "onewireSensorTypeLabel": "Sensor type",
-      "onewireSensorTypePlaceholder": "DS18B20",
-      "onewireSensorTypeHint": "Default: DS18B20",
+      "onewireSensorIdPlaceholder": "e.g. 28.4B057F0A1C10",
+      "onewirePropertyLabel": "Property",
+      "onewirePropertyPlaceholder": "temperature",
+      "onewireScanButton": "Scan",
+      "onewireAliasPlaceholder": "Label (e.g. Guest bathroom)",
+      "onewireAliasSave": "Save",
       "haSection": "Home Assistant binding",
       "haEntityIdLabel": "Entity ID *",
       "haEntityIdPlaceholder": "e.g. light.living_room, sensor.temperature",
@@ -1004,13 +1010,21 @@
         }
       },
       "ONEWIRE": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the owserver process"
+        },
+        "port": {
+          "title": "Port",
+          "description": "owserver port (default: 4304)"
+        },
         "poll_interval": {
           "title": "Poll interval (s)",
           "description": "How often sensors are read, in seconds"
         },
-        "w1_path": {
-          "title": "1-Wire path",
-          "description": "Sysfs path to the 1-Wire bus (default: /sys/bus/w1/devices)"
+        "request_timeout": {
+          "title": "Request timeout (s)",
+          "description": "Seconds per owserver call before it is treated as an error"
         }
       }
     },
@@ -1033,8 +1047,6 @@
       "couldNotOpenPort": "Could not open {port}",
       "modbusSerialConnected": "Connected ({port} @ {baudrate} baud)",
       "modbusReconnectBackoff": "Modbus TCP reconnect backoff active",
-      "pathNotFound": "{path} not found",
-      "onewireBusAt": "1-Wire bus at {path}",
       "socketConnectFailed": "Socket.IO connection failed",
       "socketDisconnected": "Socket.IO disconnected",
       "socketUnstable": "ioBroker Socket.IO connection unstable: multiple disconnects in a short time.",
@@ -1487,6 +1499,9 @@
     "searchNodesPalette": "Search nodes …",
     "negateOutput": "Negate output",
     "debugMode": "Debug mode: shows values after execution",
+    "snapToGrid": "Grid",
+    "snapToGridTitle": "Snap function blocks to the grid",
+    "gridSize": "Grid size",
     "deleteBlock": "Delete block",
     "deleteNode": "Delete branch",
     "init": "Init",

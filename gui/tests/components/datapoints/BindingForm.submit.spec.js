@@ -134,7 +134,7 @@ describe('BindingForm — ONEWIRE create submit', () => {
     await submit(w)
     expect(createBinding).toHaveBeenCalledWith('dp-1', expect.objectContaining({
       adapter_instance_id: 'ow-1',
-      config:              expect.objectContaining({ sensor_type: 'DS18B20' }),
+      config:              expect.objectContaining({ property: 'temperature' }),
     }))
     w.unmount()
   })

@@ -56,6 +56,21 @@ describe('logicApi client', () => {
   })
 })
 
+describe('adapterApi onewire client', () => {
+  it('calls the onewire browse and alias endpoints', async () => {
+    const { adapterApi } = await import('@/api/client')
+
+    await adapterApi.onewireBrowseSensors('ow-1')
+    await adapterApi.onewireSetAlias('ow-1', '28.4B057F0A1C10', 'Gästebad')
+
+    expect(api.get).toHaveBeenCalledWith('/adapters/instances/ow-1/onewire/browse', { timeout: 60_000 })
+    expect(api.patch).toHaveBeenCalledWith('/adapters/instances/ow-1/onewire/aliases', {
+      rom_id: '28.4B057F0A1C10',
+      label: 'Gästebad',
+    })
+  })
+})
+
 describe('messageArchivesApi client', () => {
   it('calls message archive endpoints including DB import/export', async () => {
     const { messageArchivesApi } = await import('@/api/client')
