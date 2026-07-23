@@ -218,6 +218,9 @@ async def test_factory_reset_requires_admin(client):
 
 
 async def test_factory_reset_success(client, auth_headers):
+    from obs.logic.manager import get_logic_manager
+
+    get_logic_manager().update_app_config({"timezone": "UTC", "date_format": "yyyy", "time_format": "H", "language": "en"})
     resp = await client.delete("/api/v1/config/reset", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
@@ -226,6 +229,12 @@ async def test_factory_reset_success(client, auth_headers):
     assert "adapter_instances_deleted" in body
     assert "logic_graphs_deleted" in body
     assert "errors" in body
+    assert get_logic_manager()._app_config == {
+        "timezone": "Europe/Zurich",
+        "date_format": "dd.MM.yyyy",
+        "time_format": "HH:mm:ss",
+        "language": "de",
+    }
 
 
 async def test_factory_reset_leaves_db_empty(client, auth_headers):

@@ -1739,6 +1739,9 @@ async def test_update_app_settings(monkeypatch):
     monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: MagicMock(update_app_config=MagicMock()))
 
     class _Db:
+        async def fetchone(self, q, p=()):
+            return None
+
         async def execute_and_commit(self, q, p=()):
             pass
 
