@@ -146,6 +146,44 @@ describe('useLegacyMigration — actions', () => {
 })
 
 describe('useLegacyMigration — polling', () => {
+  it('retries a transient server error and stops once reconciliation succeeds', async () => {
+    vi.useFakeTimers()
+    const api = await loadComposable()
+    const transientError = Object.assign(new Error('app db is locked'), {
+      response: { status: 500 },
+    })
+    migrationStatus
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce({ data: statusPayload() })
+
+    await expect(api.refresh()).rejects.toThrow('app db is locked')
+    expect(api.loadError.value).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(migrationStatus).toHaveBeenCalledTimes(2)
+    expect(api.loadError.value).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(migrationStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops after three retries when a server error remains persistent', async () => {
+    vi.useFakeTimers()
+    const api = await loadComposable()
+    const persistentError = Object.assign(new Error('database unavailable'), {
+      response: { status: 500 },
+    })
+    migrationStatus.mockRejectedValue(persistentError)
+
+    await expect(api.refresh()).rejects.toThrow('database unavailable')
+    await vi.advanceTimersByTimeAsync(5000)
+
+    // Initial request plus three automatic retries; no module-global endless poll.
+    expect(migrationStatus).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(migrationStatus).toHaveBeenCalledTimes(4)
+  })
+
   it('signals a completed migration exactly once when a running job reaches done', async () => {
     const api = await loadComposable()
 

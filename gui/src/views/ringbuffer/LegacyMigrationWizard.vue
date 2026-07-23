@@ -243,7 +243,9 @@ function fmtInt(n) {
 
 const legacySizeText = computed(() => formatBytesBinary(legacy.value?.size_bytes ?? 0))
 const rowEstimateText = computed(() => {
-  const n = Number(legacy.value?.row_estimate)
+  const raw = legacy.value?.row_estimate
+  if (raw === null || raw === undefined) return '–'
+  const n = Number(raw)
   return Number.isFinite(n) && n >= 0 ? fmtInt(n) : '–'
 })
 const timespanText = computed(() => {
