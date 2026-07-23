@@ -2037,6 +2037,34 @@ async def test_attached_legacy_total_bytes_sums_all_sources(tmp_path: Path):
         await rb.stop()
 
 
+async def test_reclaimable_migrating_bytes_preserve_interrupted_commit_chunks(tmp_path: Path):
+    """Nur sichere Copy-Reste zählen als reclaimable; Commit-Fenster-Kopien bleiben geschützt (#1009)."""
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        present_path = tmp_path / "present-legacy.db"
+        present_path.write_bytes(b"legacy")
+        present = await rb._store.manifest.register_legacy_segment(source_path=str(present_path), size_bytes=6)
+        missing = await rb._store.manifest.register_legacy_segment(source_path=str(tmp_path / "missing-legacy.db"), size_bytes=12)
+
+        stale = await rb._store.manifest.create_migrating_segment(
+            filename="rb_migrated_stale.sqlite", schema_version=2, legacy_source_id=present.segment_id
+        )
+        interrupted = await rb._store.manifest.create_migrating_segment(
+            filename="rb_migrated_interrupted.sqlite", schema_version=2, legacy_source_id=missing.segment_id
+        )
+        unscoped = await rb._store.manifest.create_migrating_segment(filename="rb_migrated_unscoped.sqlite", schema_version=2)
+        orphan = await rb._store.manifest.create_migrating_segment(
+            filename="rb_migrated_orphan.sqlite", schema_version=2, legacy_source_id=missing.segment_id + 1000
+        )
+        for segment, size in ((stale, 100), (interrupted, 200), (unscoped, 300), (orphan, 400)):
+            await rb._store.manifest.update_segment_stats(segment.segment_id, row_count=1, size_bytes=size, from_ts=_iso(0), to_ts=_iso(0))
+
+        assert await rb.reclaimable_migrating_total_bytes() == 500
+    finally:
+        await rb.stop()
+
+
 # ---------- Runde 19, Codex :1291: Reservierung deckt das commit_count-await ----------
 
 

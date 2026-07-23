@@ -2007,6 +2007,7 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     budget: int | None = None
     eta: float | None = None
     estimated_copy: int | None = None
+    reclaimable_migrating_bytes = 0
     protected = decision in LEGACY_DECISIONS_PROTECTED
     job: dict[str, Any] | None = None
     if rb is not None and is_ringbuffer_enabled():
@@ -2014,6 +2015,8 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
         legacy = await rb.legacy_migration_overview()
         stats = await rb.stats()
         budget = stats.get("max_file_size_bytes")
+        if legacy is not None:
+            reclaimable_migrating_bytes = await rb.reclaimable_migrating_total_bytes()
         # ``retention_over_budget`` liegt unter ``store.backend_extra`` und die Gesamt-
         # Nutzung als Top-Level ``file_size_bytes`` (#968, Codex :1999) – nicht als
         # Top-Level ``retention_over_budget``/``size_bytes``. Ohne die korrekten Pfade
@@ -2046,7 +2049,11 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
                 # Live-Bestand, senkten ``target_volume``/``estimated_copy`` und ließen eine
                 # Migration zu, die der Backend-Precheck dann ablehnt.
                 total_legacy_bytes = await rb.attached_legacy_total_bytes()
-                live_bytes = max(0, total_size - total_legacy_bytes)
+                # Der nächste ``/migration/start`` verwirft Copy-Phase-Reste VOR seiner
+                # Planung. Dieselben sicher reclaimable ``migrating``-Bytes deshalb hier
+                # ebenfalls nicht als Live-Bestand zählen (#1009). Recoverbare Kopien aus
+                # einem unterbrochenen Commit-Fenster sind ausdrücklich ausgeschlossen.
+                live_bytes = max(0, total_size - total_legacy_bytes - reclaimable_migrating_bytes)
                 target_volume = max(0, budget - headroom - live_bytes)
                 estimated_copy = min(v2_estimate, target_volume)
             else:
@@ -2054,6 +2061,9 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
     disk_free: int | None = None
     try:
         disk_free = shutil.disk_usage(str(Path(_ringbuffer_disk_path()).parent)).free
+        # Effektiv verfügbarer Platz nach demselben Cleanup, das ``/migration/start``
+        # vor dem Disk-Precheck ausführt (#1009).
+        disk_free += reclaimable_migrating_bytes
     except OSError:
         disk_free = None
     return LegacyMigrationStatus(

@@ -1193,6 +1193,26 @@ class RingBuffer:
             return 0
         return sum(s.size_bytes for s in await self._store.manifest.list_schema_legacy_segments())
 
+    async def reclaimable_migrating_total_bytes(self) -> int:
+        """Bytes von ``migrating``-Resten, die ein neuer Copy-Lauf sicher verwirft (#1009).
+
+        Fehlt die Datei einer Legacy-Manifest-Zeile, liegt ein recoverbares Commit-Fenster
+        vor: source-scoped Kopien dieser Quelle und unscoped Alt-Manifest-Kopien können die
+        einzige verbliebene Historie sein und werden vom Reconciler promotet. Alle anderen
+        ``migrating``-Segmente sind Copy-Phase-Reste bzw. Orphans, die der nächste Start vor
+        seiner Planung entfernt.
+        """
+        if not self._segmented or self._store is None:
+            return 0
+        missing_source_ids = {
+            segment.segment_id for segment in await self._store.manifest.list_schema_legacy_segments() if not Path(segment.filename).exists()
+        }
+        return sum(
+            max(0, int(segment.size_bytes or 0))
+            for segment in await self._store.manifest.list_migrating_segments()
+            if segment.legacy_source_id not in missing_source_ids and (segment.legacy_source_id is not None or not missing_source_ids)
+        )
+
     async def has_missing_file_legacy(self) -> bool:
         """True, wenn eine schema-legacy Manifest-Row eine FEHLENDE Datei hat (#968, Codex :2110).
 
