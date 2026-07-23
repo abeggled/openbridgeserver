@@ -32,7 +32,7 @@ from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
-from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT
+from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, validate_datetime_setting
 from obs.models.types import DataTypeRegistry
 
 router = APIRouter(tags=["system"])
@@ -243,27 +243,17 @@ async def update_app_settings(
     supplied_fields = body.model_fields_set
     if not supplied_fields:
         raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="At least one setting must be supplied")
-    if "timezone" in supplied_fields:
-        try:
-            from zoneinfo import ZoneInfo
-
-            ZoneInfo(body.timezone or "")
-        except Exception:
-            raise HTTPException(
-                status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Unknown timezone: {body.timezone!r}",
-            )
-
     format_fields = {"date_format", "time_format"} & supplied_fields
     if len(format_fields) == 1:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Date and time formats must be supplied together",
         )
-    if format_fields and (not body.date_format or not body.time_format):
-        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Date and time formats must not be empty")
-    if "language" in supplied_fields and body.language not in {"de", "en", "es", "fr", "it", "gsw"}:
-        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Unsupported language")
+    try:
+        for field in supplied_fields:
+            validate_datetime_setting(field, getattr(body, field))
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     current_settings = await get_app_settings(db=db, _user=_user)
     updated_config = {

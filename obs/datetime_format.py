@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 DEFAULT_DATE_FORMAT = "dd.MM.yyyy"
 DEFAULT_TIME_FORMAT = "HH:mm:ss"
 DEFAULT_CUSTOM_FORMAT = "EEEE, MMMM d, yyyy HH:mm:ss"
+DATETIME_SETTING_KEYS = {"timezone", "date_format", "time_format", "language"}
+SUPPORTED_LANGUAGES = {"de", "en", "es", "fr", "it", "gsw"}
+
+
+def validate_datetime_setting(key: str, value: str | None) -> None:
+    """Validate one persisted application date/time setting."""
+    if key == "timezone":
+        try:
+            ZoneInfo(value or "")
+        except Exception as exc:
+            raise ValueError(f"Unknown timezone: {value!r}") from exc
+    elif key in {"date_format", "time_format"} and not value:
+        raise ValueError("Date and time formats must not be empty")
+    elif key == "language" and value not in SUPPORTED_LANGUAGES:
+        raise ValueError("Unsupported language")
+
 
 _WEEKDAYS_EN = (
     ("Monday", "Mon", "Mo"),

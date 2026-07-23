@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 
-from obs.datetime_format import format_datetime
+import pytest
+
+from obs.datetime_format import format_datetime, validate_datetime_setting
 
 
 def test_format_datetime_supports_all_documented_tokens():
@@ -44,3 +46,12 @@ def test_format_datetime_preserves_literal_token_separators():
 
     assert format_datetime(value, "yyyy-MM-ddTHH:mm:ss", "de") == "2026-07-21T09:08:07"
     assert format_datetime(value, "HHhmm", "de") == "09h08"
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("timezone", "Invalid/Timezone"), ("date_format", ""), ("time_format", None), ("language", "pt")],
+)
+def test_validate_datetime_setting_rejects_invalid_values(key, value):
+    with pytest.raises(ValueError):
+        validate_datetime_setting(key, value)

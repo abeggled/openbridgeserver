@@ -27,6 +27,7 @@ const auth = useAuthStore()
 async function onChange(e) {
   const language = e.target.value
   setLocale(language)
+  settings.language = language
   if (auth.username === 'demo') return
   try {
     await settings.saveLanguage(language)

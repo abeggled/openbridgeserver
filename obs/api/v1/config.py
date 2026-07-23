@@ -16,7 +16,6 @@ import sqlite3
 import tempfile
 import uuid
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -27,6 +26,7 @@ from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
+from obs.datetime_format import DATETIME_SETTING_KEYS, validate_datetime_setting
 from obs.logic.models import FlowData
 from obs.logic.validation import validate_timer_durations
 from obs.models.datapoint import DataPoint
@@ -972,26 +972,26 @@ async def import_config(
             result.errors.append(f"NavLink {nl.id}: {exc}")
 
     # --- App Settings ---
+    imported_datetime_settings: dict[str, str] = {}
     for s in body.app_settings:
         try:
+            if s.key in DATETIME_SETTING_KEYS:
+                validate_datetime_setting(s.key, s.value)
             await db.execute_and_commit(
                 "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)",
                 (s.key, s.value),
             )
             result.app_settings_upserted += 1
+            if s.key in DATETIME_SETTING_KEYS:
+                imported_datetime_settings[s.key] = s.value
         except Exception as exc:
             result.errors.append(f"AppSetting {s.key}: {exc}")
 
     # Apply imported date/time settings immediately. Logic graphs may already
     # have been reloaded above, but their executor receives this hot
     # configuration on the next evaluation.
-    imported_datetime_settings = {
-        setting.key: setting.value for setting in body.app_settings if setting.key in {"timezone", "date_format", "time_format", "language"}
-    }
     if imported_datetime_settings:
         try:
-            if "timezone" in imported_datetime_settings:
-                ZoneInfo(imported_datetime_settings["timezone"])
             from obs.logic.manager import get_logic_manager
 
             get_logic_manager().update_app_config(imported_datetime_settings)

@@ -4,11 +4,14 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const pushMock = vi.fn()
 const connectMock = vi.fn()
+const settingsGetMock = vi.fn()
 
 beforeEach(() => {
   vi.resetModules()
   pushMock.mockReset()
   connectMock.mockReset()
+  settingsGetMock.mockReset()
+  settingsGetMock.mockResolvedValue({ data: { timezone: 'UTC', date_format: 'yyyy/MM/dd', time_format: 'H:mm', language: 'en' } })
 
   vi.doMock('vue-router', () => ({
     useRouter: () => ({ push: pushMock }),
@@ -30,7 +33,7 @@ async function mountLogin({ authApiMock = {} } = {}) {
     me:    vi.fn().mockResolvedValue({ data: { id: 1, username: 'admin', is_admin: true } }),
     ...authApiMock,
   }
-  vi.doMock('@/api/client', () => ({ authApi: defaultAuthApi }))
+  vi.doMock('@/api/client', () => ({ authApi: defaultAuthApi, settingsApi: { get: settingsGetMock } }))
 
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -80,6 +83,7 @@ describe('LoginView', () => {
     await flushPromises()
 
     expect(connectMock).toHaveBeenCalled()
+    expect(settingsGetMock).toHaveBeenCalled()
     expect(pushMock).toHaveBeenCalledWith('/')
   })
 

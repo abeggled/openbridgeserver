@@ -73,5 +73,15 @@ describe('LocaleSwitcher', () => {
 
     expect(setLocaleMock).toHaveBeenCalledWith('en')
     expect(saveLanguage).not.toHaveBeenCalled()
+    expect(useSettingsStore().language).toBe('en')
+  })
+
+  it('keeps the settings formatter language in sync when persistence fails', async () => {
+    const w = await mountSwitcher()
+    vi.spyOn(useSettingsStore(), 'saveLanguage').mockRejectedValue(new Error('offline'))
+
+    await w.find('[data-testid="select-language"]').setValue('en')
+
+    expect(useSettingsStore().language).toBe('en')
   })
 })

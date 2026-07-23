@@ -398,6 +398,28 @@ async def test_import_hot_reloads_datetime_settings_without_timezone(client, aut
     )
 
 
+async def test_import_skips_invalid_datetime_settings(client, auth_headers):
+    original = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [],
+        "bindings": [],
+        "app_settings": [
+            {"key": "timezone", "value": "Not/A/Timezone"},
+            {"key": "date_format", "value": ""},
+            {"key": "language", "value": "pt"},
+        ],
+    }
+
+    response = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["app_settings_upserted"] == 0
+    assert len(response.json()["errors"]) == 3
+    assert (await client.get("/api/v1/system/settings", headers=auth_headers)).json() == original
+
+
 # ---------------------------------------------------------------------------
 # POST /config/import  — nav links upsert
 # ---------------------------------------------------------------------------
