@@ -49,6 +49,7 @@ from obs.ringbuffer.persisted_config import (
     load_persisted_ringbuffer_config,
     persist_legacy_migration_decision,
     persist_ringbuffer_config,
+    repair_pending_keep_migration_decision,
 )
 from obs.ringbuffer.store.config import (
     SEGMENT_MAX_AGE_MIN,
@@ -2139,10 +2140,12 @@ async def legacy_migration_decision(
 
 
 async def _legacy_migration_decision_locked(body: LegacyMigrationDecisionIn, db: Database) -> LegacyMigrationStatus:
+    rb = get_optional_ringbuffer()
+    if rb is not None:
+        await repair_pending_keep_migration_decision(db, rb)
     current = await load_legacy_migration_decision(db)
     if current in LEGACY_DECISIONS_TERMINAL:
         raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
-    rb = get_optional_ringbuffer()
     # Keine Entscheidung, solange ein Migrationsjob laeuft (#968, Codex :2047/:2078): ein
     # ``discard`` waehrend ``starting``/``copying``/``committing`` koennte die Legacy-
     # Quelle entfernen, waehrend die Copy-Task noch laeuft und danach ``migrated``
@@ -2236,40 +2239,30 @@ async def legacy_migration_start(
 async def _legacy_migration_start_locked(db: Database) -> LegacyMigrationStatus:
     from obs.ringbuffer.store.offline_migration import OfflineMigrationError
 
-    current = await load_legacy_migration_decision(db)
-    if current in LEGACY_DECISIONS_TERMINAL:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
     rb = get_optional_ringbuffer()
     if rb is None or not is_ringbuffer_enabled():
         raise HTTPException(status.HTTP_409_CONFLICT, "ringbuffer is not running")
+    await repair_pending_keep_migration_decision(db, rb)
+    current = await load_legacy_migration_decision(db)
+    if current in LEGACY_DECISIONS_TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"legacy migration already finalized ({current})")
 
     async def _persist_migrated() -> None:
-        # Nur terminal ``migrated``, wenn KEINE Legacy-Quelle mehr attached ist (#968,
-        # Codex :441/:2142): bei mehreren attachten Legacy-DBs behandelt EIN Lauf nur die
-        # erste Quelle. Würde die Entscheidung sofort terminal, versteckte sie den Assistenten
-        # und weitere ``/migration/start``/``/decision`` würden als finalisiert abgelehnt –
-        # die restliche Alt-Historie könnte dann nur von der Retention verworfen werden. Der
-        # Check ist schema-basiert (``has_attached_legacy``), sodass auch ein quarantäniertes
-        # (nicht migrierbares, nur verwerfbares) Legacy den Abschluss verhindert – der Admin
-        # muss es über den weiterhin sichtbaren Assistenten discarden können.
-        if await rb.has_attached_legacy():
-            # Verbleibende Quelle(n) nach einem Multi-Quellen-Lauf: eine PROTECTED non-terminale
-            # Entscheidung persistieren (#968, Codex :2184), analog zum partial-discard-Pfad. War die
-            # Start-Entscheidung ``keep`` (Schutz aus der Persistenz), bliebe die verbleibende Quelle
-            # nach einem Restart/Status-Reload ungeschützt (``legacy_retention_protected = decision in
-            # LEGACY_DECISIONS_PROTECTED``) und die FIFO-Retention könnte sie zurückgewinnen, bevor
-            # der Admin über sie entscheidet. ``skipped`` ist protected + non-terminal. Dieser
-            # keep→skipped-Übergang läuft POST-Commit (crash-sicher: erst nach dem durablen Commit
-            # wird die Decision berührt). Schlägt er transient fehl (app-DB locked/voll), bleibt es bei
-            # ``keep`` – der Retention-Schutz der verbleibenden Quelle wird bis zum Restart weiterhin
-            # in-memory gehalten; der durable Repair dafür ist als Follow-up ausgegliedert (#1010, Q10kE).
-            if await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP:
-                await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
-            return
-        await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
+        async with _LEGACY_DECISION_LOCK:
+            # Nur terminal ``migrated``, wenn KEINE Legacy-Quelle mehr attached ist
+            # (#968, Codex :441/:2142). Bei einem partial keep-Commit zieht der
+            # atomare Store-Beleg stattdessen ``skipped`` + Schutz nach und wird erst
+            # nach erfolgreicher App-DB-Persistenz quittiert (#1013).
+            if await rb.has_attached_legacy():
+                await repair_pending_keep_migration_decision(db, rb)
+                return
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_MIGRATED)
 
     try:
-        await rb.start_legacy_migration(on_success=_persist_migrated)
+        await rb.start_legacy_migration(
+            on_success=_persist_migrated,
+            started_from_keep=current == LEGACY_DECISION_KEEP,
+        )
     except OfflineMigrationError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return await _legacy_migration_status(db)
