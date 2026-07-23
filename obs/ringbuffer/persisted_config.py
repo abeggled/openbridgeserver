@@ -279,20 +279,23 @@ async def persist_legacy_migration_decision(db: Database, decision: str) -> None
 async def ensure_legacy_migration_decision(db: Database, *, legacy_db_path: str | None) -> str | None:
     """Stellt beim Startup den Entscheidungszustand sicher (#964).
 
-    * Existiert bereits ein Zustand → unverändert zurückgeben.
+    * Existiert bereits ein non-terminaler Zustand → unverändert zurückgeben.
+    * Ein terminaler Zustand setzt voraus, dass die damalige Legacy-Quelle nicht
+      mehr existiert. Liegt wieder eine Legacy-Datei vor (z. B. nach Einspielen
+      einer DB-Kopie), wird sie als neue ausstehende Quelle behandelt.
     * Sonst: liegt eine Legacy-Single-DB auf der Platte (Upgrade-Fall), wird
       ``pending`` persistiert und zurückgegeben – der Wizard erscheint, das
       Legacy-Segment bleibt bis zur Entscheidung retention-geschützt.
     * Ohne Legacy-Datei (Fresh Install, Memory-Pfad) bleibt der Zustand leer.
     """
     existing = await load_legacy_migration_decision(db)
-    if existing is not None:
+    if existing is not None and existing not in LEGACY_DECISIONS_TERMINAL:
         return existing
     if not legacy_db_path:
-        return None
+        return existing
     db_path = Path(legacy_db_path)
     if db_path.suffix == "" or not db_path.exists():
-        return None
+        return existing
     await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
     return LEGACY_DECISION_PENDING
 
