@@ -679,7 +679,7 @@ class GraphExecutor:
                     "sent": False,
                 }
 
-            case "notify_sms":
+            case "notify_sms" | "notify_message":
                 # Fires when message arrives OR trigger is truthy (both optional).
                 msg = inputs.get("message")
                 triggered = self._to_bool(inputs.get("trigger")) if "trigger" in inputs else False

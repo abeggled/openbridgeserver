@@ -83,7 +83,7 @@ const categories = computed(() =>
     .map(id => ({
       id,
       label: t('logic.palette.categories.' + id),
-      types: props.nodeTypes.filter(nt => nt.category === id)
+      types: props.nodeTypes.filter(nt => nt.category === id && !nt.hidden_from_palette)
     }))
     .filter(cat => cat.types.length > 0)
 )

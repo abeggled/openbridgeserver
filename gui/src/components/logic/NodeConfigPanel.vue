@@ -1218,6 +1218,30 @@
       </div>
     </template>
 
+    <template v-else-if="isNotifyMessageNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.notification.adapter') }}</label>
+          <select v-model="localData.adapter_instance_id" class="input text-sm" @change="onNotificationAdapterChange">
+            <option value="">{{ $t('logic.nodeConfig.notification.selectAdapter') }}</option>
+            <option v-for="instance in messageAdapters" :key="instance.id" :value="instance.id">{{ instance.name }}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.notification.targets') }}</label>
+          <label v-for="target in notificationTargets" :key="target.key" class="flex items-center gap-2 text-sm">
+            <input type="checkbox" :checked="notificationTargetSelected(target)" @change="toggleNotificationTarget(target, $event.target.checked)" />
+            <span>{{ target.key }}</span>
+          </label>
+          <p v-if="localData.adapter_instance_id && !notificationTargets.length" class="text-xs text-amber-500">{{ $t('logic.nodeConfig.notification.noTargets') }}</p>
+        </div>
+        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.title') }}</label><input v-model="localData.title" class="input text-sm" @change="emitUpdate" /></div>
+        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.fallback') }}</label><textarea v-model="localData.message" class="input text-sm min-h-24" @change="emitUpdate" /><p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.notification.placeholders') }}</p></div>
+        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.priority') }}</label><input v-model.number="localData.priority" type="number" min="-2" max="1" class="input text-sm" @change="emitUpdate" /></div>
+      </div>
+    </template>
+
     <template v-else-if="isCommentNode">
       <div class="flex-1 overflow-hidden p-4 flex flex-col gap-2">
         <p class="text-xs text-slate-500 shrink-0">{{ nodeDescription(nodeDef) }}</p>
@@ -1235,6 +1259,7 @@
     <!-- ── All other node types: generic rendering ─────────────────────── -->
     <template v-else>
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p v-if="nodeDef?.legacy" class="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-600 dark:text-amber-300">{{ $t('logic.nodeConfig.notification.legacy') }}</p>
         <p v-if="nodeDef?.description" class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
         <template v-if="nodeDef?.config_schema">
           <div v-for="(schema, key) in configFields" :key="key" class="form-group">
@@ -1271,7 +1296,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
+import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -1315,6 +1340,7 @@ const urlTargetMsg = ref(null)
 const apiVariableSearches = ref([])
 const apiVariableResults = ref([])
 const messageArchives = ref([])
+const messageAdapters = ref([])
 const MESSAGE_TYPE_OPTIONS = ['automation', 'notification', 'system', 'security', 'adapter', 'diagnostic']
 const MESSAGE_SEVERITY_OPTIONS = ['info', 'success', 'warning', 'error', 'critical']
 
@@ -1495,6 +1521,21 @@ const apiVariables = computed(() => Array.isArray(localData.value.variables) ? l
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
 const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
+const isNotifyMessageNode = computed(() => props.node?.type === 'notify_message')
+const selectedMessageAdapter = computed(() => messageAdapters.value.find(instance => instance.id === localData.value.adapter_instance_id))
+function notificationProviderEnabled(config) {
+  if (config?.enabled === true || config?.enabled === 1) return true
+  if (typeof config?.enabled === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(config.enabled.trim().toLowerCase())
+  }
+  return false
+}
+const notificationTargets = computed(() => {
+  const providers = selectedMessageAdapter.value?.config?.providers || {}
+  return Object.entries(providers).flatMap(([provider, config]) => notificationProviderEnabled(config)
+    ? Object.keys(config.targets || {}).map(target => ({ provider, target, key: `${provider}/${target}` }))
+    : [])
+})
 const isDecisionNode      = computed(() => props.node?.type === 'decision')
 const isValueMappingNode  = computed(() => props.node?.type === 'value_mapping')
 const isValueSequenceNode = computed(() => props.node?.type === 'value_sequence')
@@ -2106,6 +2147,7 @@ watch(() => props.node, (n) => {
       if (localData.value.archive_id) localData.value.archive_id = String(localData.value.archive_id).toLowerCase()
       loadMessageArchives()
     }
+    if (n.type === 'notify_message') loadMessageAdapters()
     if (n.type === 'value_sequence') {
       if (sequenceSearchNodeId.value !== n.id) {
         sequenceSearchNodeId.value = n.id
@@ -2371,6 +2413,35 @@ async function loadMessageArchives() {
   } catch {
     messageArchives.value = []
   }
+}
+
+async function loadMessageAdapters() {
+  try {
+    const { data } = await adapterApi.listInstances()
+    messageAdapters.value = (Array.isArray(data) ? data : []).filter(instance => instance.adapter_type === 'MESSAGE' && instance.enabled)
+  } catch {
+    messageAdapters.value = []
+  }
+}
+
+function onNotificationAdapterChange() {
+  localData.value.providers = []
+  emitUpdate()
+}
+
+function notificationTargetSelected(target) {
+  const refs = Array.isArray(localData.value.providers) ? localData.value.providers : []
+  return refs.some(ref => ref.provider === target.provider && ref.target === target.target)
+}
+
+function toggleNotificationTarget(target, selected) {
+  const validKeys = new Set(notificationTargets.value.map(item => item.key))
+  const refs = (Array.isArray(localData.value.providers) ? localData.value.providers : [])
+    .filter(ref => validKeys.has(`${ref.provider}/${ref.target}`))
+  localData.value.providers = selected
+    ? [...refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target), { provider: target.provider, target: target.target }]
+    : refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target)
+  emitUpdate()
 }
 
 // ── Emit ───────────────────────────────────────────────────────────────────

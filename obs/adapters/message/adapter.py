@@ -13,6 +13,7 @@ import time
 import uuid
 from collections import deque
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -313,6 +314,25 @@ class MessageAdapter(AdapterBase):
             binding_id=binding.id,
         )
         await self._handle_binding_event(binding, event, ignore_repetition=True)
+
+    async def send_notification(
+        self,
+        *,
+        message: str,
+        providers: list[dict[str, str] | ProviderTargetRef],
+        title: str | None = None,
+        priority: int | None = None,
+    ) -> list[MessageSendResult]:
+        """Send an already rendered notification through the shared provider path."""
+        refs = [ref if isinstance(ref, ProviderTargetRef) else ProviderTargetRef(**ref) for ref in providers]
+        cfg = MessageBindingConfig(message=message, providers=refs, title=title, priority=priority)
+        event = DataValueEvent(
+            datapoint_id=uuid.UUID(int=0),
+            value=message,
+            quality="good",
+            source_adapter=self.adapter_type,
+        )
+        return await self._send_to_targets(cfg, SimpleNamespace(id=uuid.uuid4()), event, message)
 
     async def _on_value_event(self, event: DataValueEvent) -> None:
         if event.quality != "good":

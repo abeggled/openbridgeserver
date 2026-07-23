@@ -1548,6 +1548,7 @@
       "astro_sun": "Astro Sun",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "notify_message": "Notification",
       "message_archive": "Message Archive",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
@@ -2098,6 +2099,17 @@
         "sender": "Sender (max 11 chars)",
         "message": "Message (fallback)"
       },
+      "notification": {
+        "adapter": "Message/notification adapter",
+        "selectAdapter": "Select adapter",
+        "targets": "Targets",
+        "noTargets": "No active, configured targets available.",
+        "title": "Title",
+        "fallback": "Message (fallback)",
+        "placeholders": "The logic block has no datapoint context; MESSAGE placeholders are sent unchanged.",
+        "priority": "Priority",
+        "legacy": "Legacy block. Please use the Notification block for new notifications."
+      },
       "messageArchive": {
         "archive": "Message archive",
         "selectArchive": "Select message archive",
@@ -2251,6 +2263,7 @@
       "operating_hours": "Counts operating hours while 'Active' is true. Reset clears the counter.",
       "python_script": "Executes a Python script. Available: inputs dict → return value",
       "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
+      "notify_message": "Sends a notification through the configured targets of a Message/notification adapter.",
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
       "message_archive": "Writes a message to a message archive. Triggered automatically when a message arrives at the input or when the trigger is true.",

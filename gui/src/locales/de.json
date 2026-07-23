@@ -1548,6 +1548,7 @@
       "astro_sun": "Astro Sonne",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "notify_message": "Benachrichtigung",
       "message_archive": "Meldungsarchiv",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
@@ -2098,6 +2099,17 @@
         "sender": "Absender (max 11 Zeichen)",
         "message": "Nachricht (Fallback)"
       },
+      "notification": {
+        "adapter": "Message-/Benachrichtigungsadapter",
+        "selectAdapter": "Adapter auswählen",
+        "targets": "Ziele",
+        "noTargets": "Keine aktiven, konfigurierten Ziele vorhanden.",
+        "title": "Titel",
+        "fallback": "Nachricht (Fallback)",
+        "placeholders": "Der Logikblock hat keinen Datenpunkt-Kontext; MESSAGE-Platzhalter werden unverändert gesendet.",
+        "priority": "Priorität",
+        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden."
+      },
       "messageArchive": {
         "archive": "Meldungsarchiv",
         "selectArchive": "Meldungsarchiv auswählen",
@@ -2251,6 +2263,7 @@
       "operating_hours": "Zählt Betriebsstunden solange 'Aktiv' wahr ist. Reset setzt den Zähler zurück.",
       "python_script": "Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
       "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
+      "notify_message": "Sendet eine Benachrichtigung über die konfigurierten Ziele eines Message-/Benachrichtigungsadapters.",
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "message_archive": "Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
