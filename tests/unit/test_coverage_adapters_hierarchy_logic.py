@@ -2361,7 +2361,7 @@ class TestEtsImport:
 
         result = await create_ets_hierarchy(
             db,
-            EtsImportRequest(tree_name="Reusable", mode="groups"),
+            EtsImportRequest(tree_name="Reusable", mode="groups", auto_link=False),
         )
 
         assert result.tree_name == "Reusable"
