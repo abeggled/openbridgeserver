@@ -39,6 +39,7 @@ from obs.ringbuffer.persisted_config import (
     LEGACY_DECISION_DISCARDED,
     LEGACY_DECISION_KEEP,
     LEGACY_DECISION_MIGRATED,
+    LEGACY_DECISION_PENDING,
     LEGACY_DECISION_SKIPPED,
     LEGACY_DECISIONS_PROTECTED,
     LEGACY_DECISIONS_TERMINAL,
@@ -2068,13 +2069,34 @@ async def _legacy_migration_status(db: Database) -> LegacyMigrationStatus:
 
 
 async def _finalize_decision_under_lock(db: Database, rb) -> None:
-    """Serialisiert das state-basierte Nachziehen der terminalen ``migrated``-Entscheidung mit dem
-    Decision-Endpoint (#968, Q10j0). Ohne diese Serialisierung könnte ein Status-Poll die alte
-    non-terminale Entscheidung laden und – nachdem ein paralleler ``discard`` die letzte Quelle
-    entfernt und ``discarded`` persistiert hat – ``migrated`` darüberschreiben. Best-effort:
-    schlägt die Persistenz transient fehl (app-DB locked/voll), darf der Aufrufer NICHT mit 500
-    antworten – der Frontend-Poller stoppt sonst bei Refresh-Fehlern; der nächste Poll retryt."""
+    """Gleicht Decision-State und Legacy-Quelle unter dem Decision-Lock ab.
+
+    Zwei entgegengesetzte Crash-/Kopierzustände werden serialisiert mit Admin-
+    Entscheidungen repariert:
+
+    * terminal + Legacy attached → Quelle wieder ``pending`` und geschützt,
+    * non-terminal + Migration committed + keine Legacy → ``migrated``.
+
+    Der zweite, rein nachziehende Finalizer bleibt best-effort. Beim ersten Pfad
+    darf der Status dagegen keinen scheinbar reparierten Zustand liefern, wenn
+    Schutz oder Persistenz fehlschlagen; der Fehler wird für einen späteren Poll
+    weitergereicht.
+    """
     async with _LEGACY_DECISION_LOCK:
+        decision = await load_legacy_migration_decision(db)
+        if decision in LEGACY_DECISIONS_TERMINAL and await rb.has_attached_legacy():
+            # Schutz zuerst aktivieren: zwischen Decision-Write und Live-Reconfigure
+            # darf die FIFO-Retention die gerade wiederentdeckte Quelle nicht reclaimen.
+            await rb.set_legacy_retention_protected(True)
+            try:
+                await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
+            except BaseException:
+                # Protection bleibt in jedem Fehlerfall aktiv: die Legacy-Quelle ist
+                # noch angehängt; ein Rollback auf False wäre datenunsicher, weil die
+                # FIFO-Retention die Quelle vor dem nächsten Poll-Retry zurückgewinnen
+                # könnte. Der Fehler wird weitergeleitet; der nächste Poll wiederholt.
+                raise
+            return
         try:
             await finalize_committed_migration_decision(db, rb)
         except Exception:
@@ -2541,7 +2563,17 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # zur Laufzeit aktiviert wird, die Entscheidung ``None`` (Banner versteckt) und
             # die ersten non-legacy-Daten könnten die FIFO-Retention das Legacy-Segment
             # zurückgewinnen lassen, bevor der Assistent den pending/skipped-Schutz greift.
-            decision = await ensure_legacy_migration_decision(db, legacy_db_path=_ringbuffer_disk_path() if resolved_segmented else None)
+            try:
+                decision = await ensure_legacy_migration_decision(
+                    db,
+                    legacy_db_path=_ringbuffer_disk_path() if resolved_segmented else None,
+                )
+            except Exception:
+                # Ein transient gesperrtes app-DB-Setting darf den gesunden
+                # Runtime-Buffer nicht verhindern. Konservativ geschützt starten;
+                # der Finalizer unten und spätere Status-Polls wiederholen den Write.
+                logger.exception("RingBuffer: Runtime-Abgleich der Legacy-Entscheidung fehlgeschlagen (Buffer startet retention-geschützt)")
+                decision = LEGACY_DECISION_PENDING
             rb = await init_ringbuffer(
                 storage="file",
                 max_entries=resolved_max_entries,
@@ -2572,7 +2604,13 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # behandelt), darf das den bereits laufenden Buffer NICHT abbauen (created_rb/
             # subscribed_new sind gesetzt, der except-Cleanup risse ihn sonst nieder). Der nächste
             # Status-Poll zieht die Entscheidung nach.
-            await _finalize_decision_under_lock(db, rb)
+            try:
+                await _finalize_decision_under_lock(db, rb)
+            except Exception:
+                logger.exception(
+                    "RingBuffer: Runtime-Finalisierung der Migrations-Entscheidung fehlgeschlagen "
+                    "(Buffer bleibt aktiv, Retry beim nächsten Status-Poll)"
+                )
 
         reconfigure_kwargs: dict[str, Any] = {}
         if "max_entries" in body.model_fields_set:
