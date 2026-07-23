@@ -199,6 +199,18 @@ describe('GenericNode — summary', () => {
     await flushPromises()
     expect(w.find('.gn-summary').text()).toBe('—')
   })
+
+  it('shows datetime outputs and configured or default format summaries', async () => {
+    const configured = await mountGN('datetime', { custom_format: 'yyyy/MM/dd' })
+    await flushPromises()
+    expect(configured.find('.gn-title').text()).toBe('Datum/Zeit')
+    expect(configured.find('.gn-summary').text()).toBe('yyyy/MM/dd')
+    expect(configured.findAll('.handle').map(handle => handle.attributes('data-id'))).toEqual(['date', 'time', 'custom'])
+
+    const defaults = await mountGN('datetime')
+    await flushPromises()
+    expect(defaults.find('.gn-summary').text()).toBe('EEEE, MMMM d, yyyy HH:mm:ss')
+  })
 })
 
 describe('GenericNode — debug band', () => {

@@ -65,6 +65,15 @@
               </div>
             </div>
           </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.general.dateFormat') }}</label>
+            <input v-model="dateFormatSelected" class="input text-sm font-mono" type="text" />
+            <p class="text-xs text-slate-500 mt-1">{{ $t('settings.general.formatHint') }}</p>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.general.timeFormat') }}</label>
+            <input v-model="timeFormatSelected" class="input text-sm font-mono" type="text" />
+          </div>
           <div v-if="tzMsg" :class="['p-3 rounded-lg text-sm', tzMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ tzMsg.text }}</div>
           <button @click="saveTz" class="btn-primary" :disabled="tzSaving">
             <Spinner v-if="tzSaving" size="sm" color="white" />
@@ -1414,6 +1423,8 @@ const ALL_TIMEZONES = (() => {
 
 const tzSearch         = ref('')
 const tzSelected       = ref(settings.timezone)
+const dateFormatSelected = ref(settings.dateFormat)
+const timeFormatSelected = ref(settings.timeFormat)
 const tzSaving         = ref(false)
 const tzMsg            = ref(null)
 const tzDropdownOpen   = ref(false)
@@ -1456,6 +1467,8 @@ onMounted(async () => {
   activateTabFromRoute()
   if (!settings.loaded) await settings.load()
   tzSelected.value = settings.timezone
+  dateFormatSelected.value = settings.dateFormat
+  timeFormatSelected.value = settings.timeFormat
   document.addEventListener('mousedown', onOutsideClick)
   if (auth.isAdmin) {
     loadHistorySettings()
@@ -1498,7 +1511,7 @@ onUnmounted(() => {
 async function saveTz() {
   tzSaving.value = true; tzMsg.value = null
   try {
-    await settings.save(tzSelected.value)
+    await settings.save(tzSelected.value, dateFormatSelected.value, timeFormatSelected.value)
     tzMsg.value = { ok: true, text: t('settings.general.tzSaved', { tz: tzSelected.value }) }
   } catch (e) {
     tzMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }

@@ -1281,6 +1281,9 @@
               :max="schema.max ?? schema.maximum"
               :step="schema.step ?? (schema.type === 'integer' ? 1 : schema.type === 'number' ? 'any' : undefined)"
               class="input text-sm" @change="onSchemaFieldChange(key, schema)" />
+            <p v-if="node?.type === 'datetime' && key === 'custom_format'" class="text-xs text-slate-500 mt-1">
+              {{ $t('logic.nodeConfig.datetime.tokens') }}
+            </p>
           </div>
 
         </template>

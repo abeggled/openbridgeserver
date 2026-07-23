@@ -113,9 +113,9 @@ async def test_v39_repairs_existing_v38_without_device_hierarchy_links(tmp_path)
         assert "idx_hierarchy_device_links_node" in await _index_names(db, "hierarchy_device_links")
         assert "idx_hierarchy_device_links_device" in await _index_names(db, "hierarchy_device_links")
         # V40 (adapter_bindings index, #935) wurde beim Merge von issue-919 auf main
-        # als naechste freie Migration ergaenzt -> neueste Version ist jetzt 40.
+        # als naechste freie Migration ergaenzt; V41 adds date/time settings.
         version = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 40
+        assert version["version"] == 41
     finally:
         await db.disconnect()
 

@@ -43,12 +43,14 @@
 import { reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useSettingsStore } from '@/stores/settings'
 import { useWebSocketStore } from '@/stores/websocket'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const appVersion = __APP_VERSION__
 
 const auth   = useAuthStore()
+const settings = useSettingsStore()
 const ws     = useWebSocketStore()
 const router = useRouter()
 
@@ -58,6 +60,7 @@ async function submit() {
   const ok = await auth.login(form.username, form.password)
   if (ok) {
     ws.connect()
+    await settings.load()
     router.push('/')
   }
 }

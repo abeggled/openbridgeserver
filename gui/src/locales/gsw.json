@@ -1,10 +1,20 @@
 {
+  "datetimeNames": {
+    "weekdays": "Mäntig|Zischtig|Mittwuch|Dunschtig|Friitig|Samschtig|Sunntig",
+    "weekdaysShort": "Mä.|Zi.|Mi.|Du.|Fr.|Sa.|Su.", "weekdaysTwo": "Mä|Zi|Mi|Du|Fr|Sa|Su",
+    "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
+    "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
+  },
   "login": {
     "username": "Benutzername",
     "password": "Passwort",
     "submit": "Amäude",
     "submitting": "Amäude …",
     "logoAlt": "open bridge server"
+  },
+  "logic": {
+    "nodeConfig": { "datetime": { "custom_format": "Benutzerdefinierts Format", "tokens": "Token: H/HH Stund, m/mm Minute, s/ss Sekunde, d/dd Tag, EE/EEE/EEEE Wuchetag, M/MM/MMM/MMMM Monet, yy/yyyy Johr." } },
+    "nodeDescriptions": { "datetime": "Git s aktuelle Datum und d Uhrziit i de konfigurierte Ziitzone und im gwählte Format us." }
   },
   "common": {
     "save": "Sichere",

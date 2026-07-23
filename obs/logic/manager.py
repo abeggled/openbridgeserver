@@ -730,7 +730,12 @@ class LogicManager:
         self._sequence_restarts: set[tuple[str, str]] = set()
         self._sequence_restart_sources: dict[tuple[str, str], asyncio.Task] = {}
         # application-level config (e.g. timezone) — loaded from app_settings table
-        self._app_config: dict[str, Any] = {"timezone": "Europe/Zurich"}
+        self._app_config: dict[str, Any] = {
+            "timezone": "Europe/Zurich",
+            "date_format": "dd.MM.yyyy",
+            "time_format": "HH:mm:ss",
+            "language": "de",
+        }
 
     async def start(self) -> None:
         """Subscribe to EventBus, load all graphs and start cron schedulers."""

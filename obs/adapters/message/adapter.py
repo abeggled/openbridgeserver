@@ -24,6 +24,8 @@ from obs.adapters.message.providers.base import MessageSendResult
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps
+from obs.db.database import get_db
+from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ MessageOperator = Literal["any", "=", "==", "<", "<=", ">", ">=", "!=", "contain
 ArchiveStrategy = Literal["none", "send_only", "archive_only", "send_and_archive"]
 MAX_PENDING_EVENTS_PER_BINDING = 100
 _NO_PENDING_COALESCE = object()
-_PLACEHOLDER_PATTERN = re.compile("###(?:DP|DPU|DPN|DPI|TS)###")
+_PLACEHOLDER_PATTERN = re.compile("###(?:DP|DPU|DPN|DPI|TS|DATE|TIME)###")
 
 
 class ProviderTargetRef(BaseModel):
@@ -212,15 +214,40 @@ def _format_value(value: Any) -> str:
     return json_dumps(value)
 
 
-def render_message(template: str, *, value: Any, unit: str | None, name: str, datapoint_id: uuid.UUID, ts: datetime) -> str:
+def render_message(
+    template: str,
+    *,
+    value: Any,
+    unit: str | None,
+    name: str,
+    datapoint_id: uuid.UUID,
+    ts: datetime,
+    date_format: str = DEFAULT_DATE_FORMAT,
+    time_format: str = DEFAULT_TIME_FORMAT,
+    language: str = "de",
+    display_ts: datetime | None = None,
+) -> str:
+    display_ts = display_ts or ts
     replacements = {
         "###DP###": _format_value(value),
         "###DPU###": unit or "",
         "###DPN###": name,
         "###DPI###": str(datapoint_id),
         "###TS###": ts.isoformat(),
+        "###DATE###": format_datetime(display_ts, date_format, language),
+        "###TIME###": format_datetime(display_ts, time_format, language),
     }
     return _PLACEHOLDER_PATTERN.sub(lambda match: replacements[match.group(0)], template)
+
+
+async def _datetime_settings() -> dict[str, str]:
+    values = {"timezone": "Europe/Zurich", "date_format": DEFAULT_DATE_FORMAT, "time_format": DEFAULT_TIME_FORMAT, "language": "de"}
+    try:
+        rows = await get_db().fetchall("SELECT key, value FROM app_settings WHERE key IN ('timezone', 'date_format', 'time_format', 'language')")
+        values.update({row["key"]: row["value"] for row in rows})
+    except RuntimeError:
+        pass
+    return values
 
 
 @register
@@ -337,13 +364,25 @@ class MessageAdapter(AdapterBase):
                     return
 
         dp = _lookup_datapoint(event.datapoint_id)
+        app_settings = await _datetime_settings()
+        event_ts = event.ts if event.ts.tzinfo else event.ts.replace(tzinfo=UTC)
+        try:
+            from zoneinfo import ZoneInfo
+
+            display_ts = event_ts.astimezone(ZoneInfo(app_settings["timezone"]))
+        except Exception:
+            display_ts = event_ts
         rendered = render_message(
             cfg.message,
             value=event.value,
             unit=getattr(dp, "unit", None),
             name=getattr(dp, "name", str(event.datapoint_id)),
             datapoint_id=event.datapoint_id,
-            ts=event.ts if event.ts.tzinfo else event.ts.replace(tzinfo=UTC),
+            ts=event_ts,
+            date_format=app_settings["date_format"],
+            time_format=app_settings["time_format"],
+            language=app_settings["language"],
+            display_ts=display_ts,
         )
         reset_version = state.reset_version
         if state.in_flight and not ignore_repetition:
