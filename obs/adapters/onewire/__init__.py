@@ -1,1 +1,1 @@
-"""1-Wire Adapter (w1thermsensor) — Phase 3."""
+"""1-Wire Adapter (pyownet / owserver client)."""
