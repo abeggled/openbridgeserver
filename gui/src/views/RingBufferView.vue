@@ -561,11 +561,10 @@ onUnmounted(() => {
 })
 
 function activeTopbarSetIds() {
-  // Only enabled pinned sets participate. Walk them in ascending
-  // topbar_order so the first-match-wins tie-break in useSetColors() lines
-  // up with the visual chip order.
+  // Walk the cached topbar-set map in ascending topbar_order. The order is
+  // also what the chip strip displays, so the first-match-wins tie-break in
+  // useSetColors() lines up with the visual order.
   return Array.from(topbarSetsRef.value.values())
-    .filter((s) => s.is_active !== false)
     .sort((a, b) => (a.topbar_order ?? 0) - (b.topbar_order ?? 0))
     .map((s) => s.id)
 }

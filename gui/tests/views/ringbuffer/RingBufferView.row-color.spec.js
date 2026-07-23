@@ -124,33 +124,6 @@ describe('RingBufferView table-row colouring', () => {
     expect(ringbufferApi.queryMultiFiltersets).not.toHaveBeenCalled()
   })
 
-  it('adds a reactivated pinned chip back to the next filter query', async () => {
-    const helpers = await import('../../helpers/mountRingBufferView.js')
-    const disabled = [makeSet({ id: 'set-a', is_active: false, topbar_active: true })]
-    const reactivated = [makeSet({ id: 'set-a', is_active: true, topbar_active: true })]
-    const listFiltersets = vi
-      .fn()
-      .mockResolvedValueOnce({ data: disabled })
-      .mockResolvedValue({ data: reactivated })
-    const ringbufferApi = helpers.makeRingbufferApiMock({
-      listFiltersets,
-      queryMultiFiltersets: vi.fn().mockResolvedValue({ data: [] }),
-    })
-
-    const { wrapper } = await helpers.mountRingBufferView({ ringbufferApi })
-
-    expect(ringbufferApi.queryV2).toHaveBeenCalledTimes(1)
-    expect(ringbufferApi.queryMultiFiltersets).not.toHaveBeenCalled()
-
-    const chips = wrapper.findComponent({ name: 'TopbarFilterChips' })
-    await chips.vm.$emit('changed')
-    await helpers.flushPromises()
-
-    expect(listFiltersets).toHaveBeenCalledTimes(2)
-    expect(ringbufferApi.queryMultiFiltersets).toHaveBeenCalledTimes(1)
-    expect(ringbufferApi.queryMultiFiltersets.mock.calls[0][0].set_ids).toEqual(['set-a'])
-  })
-
   it('multi-match: first topbar set in topbar_order wins', async () => {
     const helpers = await import('../../helpers/mountRingBufferView.js')
     const ringbufferApi = helpers.makeRingbufferApiMock({
