@@ -116,8 +116,10 @@ INSERT OR IGNORE INTO event_id_counter (id, last_value) VALUES (1, 0);
 -- einzigen migrierten Segments und Prozess-Neustarts – die verlässliche Grundlage der
 -- Post-Commit-Decision-Finalisierung (``CREATE IF NOT EXISTS`` zieht Alt-Manifests nach).
 CREATE TABLE IF NOT EXISTS migration_state (
-    id                   INTEGER PRIMARY KEY CHECK (id = 1),
-    committed_migrations INTEGER NOT NULL DEFAULT 0
+    id                              INTEGER PRIMARY KEY CHECK (id = 1),
+    committed_migrations            INTEGER NOT NULL DEFAULT 0,
+    keep_migration_source_id        INTEGER,
+    pending_keep_migration_repair   INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO migration_state (id, committed_migrations) VALUES (1, 0);
 """
@@ -180,6 +182,7 @@ class Manifest:
         await conn.execute("PRAGMA journal_mode=WAL")
         await conn.executescript(_MANIFEST_SCHEMA)
         await self._migrate_add_segment_columns(conn)
+        await self._migrate_add_migration_state_columns(conn)
         await conn.commit()
         self._conn = conn
 
@@ -195,6 +198,16 @@ class Manifest:
         # committeten/reconcileten Quelle promotet (nicht stale Reste einer anderen Quelle).
         if "legacy_source_id" not in columns:
             await conn.execute("ALTER TABLE segments ADD COLUMN legacy_source_id INTEGER")
+
+    @staticmethod
+    async def _migrate_add_migration_state_columns(conn: aiosqlite.Connection) -> None:
+        """Erweitert Alt-Manifeste um den durablen partial-keep-Repair (#1013)."""
+        async with conn.execute("PRAGMA table_info(migration_state)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "keep_migration_source_id" not in columns:
+            await conn.execute("ALTER TABLE migration_state ADD COLUMN keep_migration_source_id INTEGER")
+        if "pending_keep_migration_repair" not in columns:
+            await conn.execute("ALTER TABLE migration_state ADD COLUMN pending_keep_migration_repair INTEGER NOT NULL DEFAULT 0")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -387,6 +400,33 @@ class Manifest:
             rows = await cur.fetchall()
         return [_row_to_segment(row) for row in rows]
 
+    async def prepare_offline_migration(self, legacy_source_id: int, *, started_from_keep: bool) -> None:
+        """Persistiert nur den Startkontext, ohne die Decision-Semantik zu ändern (#1013).
+
+        Der Marker allein schützt nichts und löst keinen Repair aus. Erst
+        ``commit_offline_migration`` wandelt ihn atomar in
+        ``pending_keep_migration_repair`` um, wenn nach dem Detach noch eine
+        Legacy-Quelle übrig ist. Ein Crash während der Copy-Phase lässt deshalb
+        die ursprüngliche ``keep``-Entscheidung unverändert.
+        """
+        source_id = legacy_source_id if started_from_keep else None
+        await self._db.execute(
+            "UPDATE migration_state SET keep_migration_source_id = ? WHERE id = 1",
+            (source_id,),
+        )
+        await self._db.commit()
+
+    async def has_pending_keep_migration_repair(self) -> bool:
+        """True, wenn ein partial keep-Commit noch durablen Schutz nachziehen muss."""
+        async with self._db.execute("SELECT pending_keep_migration_repair FROM migration_state WHERE id = 1") as cur:
+            row = await cur.fetchone()
+        return bool(row and row[0])
+
+    async def acknowledge_pending_keep_migration_repair(self) -> None:
+        """Quittiert den Repair erst nach erfolgreicher Decision-Persistenz."""
+        await self._db.execute("UPDATE migration_state SET pending_keep_migration_repair = 0 WHERE id = 1")
+        await self._db.commit()
+
     async def commit_offline_migration(self, legacy_segment_ids: list[int], *, promote_unscoped: bool = False) -> None:
         """Atomarer Migrations-Commit (#965): promote + detach in EINER Transaktion.
 
@@ -414,10 +454,33 @@ class Manifest:
         )
         for segment_id in legacy_segment_ids:
             await self._db.execute("DELETE FROM segments WHERE segment_id = ?", (segment_id,))
+        async with self._db.execute("SELECT keep_migration_source_id FROM migration_state WHERE id = 1") as cur:
+            intent_row = await cur.fetchone()
+        keep_source_id = int(intent_row[0]) if intent_row and intent_row[0] is not None else None
+        pending_keep_repair = False
+        if keep_source_id is not None and keep_source_id in legacy_segment_ids:
+            async with self._db.execute(
+                """SELECT 1 FROM segments
+                   WHERE schema_version <= ? AND status != ?
+                   LIMIT 1""",
+                (LEGACY_SCHEMA_VERSION, SEGMENT_STATUS_DISCARDING),
+            ) as cur:
+                pending_keep_repair = await cur.fetchone() is not None
         # Durablen Commit-Zähler ATOMAR mit dem Detach erhöhen (#968, Codex :1175): der
         # verlässliche Beleg, dass DIESER Commit durch ist – auch ohne ``rb_migrated_*``-
         # Segment (drop-only) und nachdem Retention das einzige migrierte Segment trimmt.
-        await self._db.execute("UPDATE migration_state SET committed_migrations = committed_migrations + 1 WHERE id = 1")
+        # Gleichzeitig wird der keep-Startkontext NUR bei einem partial commit in einen
+        # Repair-Beleg umgewandelt (#1013). Damit überlebt der Beleg denselben Commit
+        # wie Promote + Detach, auch beim Startup-Reconcile eines Commit-Fenster-Crashs.
+        await self._db.execute(
+            """UPDATE migration_state
+               SET committed_migrations = committed_migrations + 1,
+                   keep_migration_source_id = NULL,
+                   pending_keep_migration_repair =
+                       CASE WHEN ? THEN 1 ELSE pending_keep_migration_repair END
+               WHERE id = 1""",
+            (pending_keep_repair,),
+        )
         await self._db.commit()
 
     async def committed_migration_count(self) -> int:

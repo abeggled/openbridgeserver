@@ -20,14 +20,22 @@ beforeEach(() => {
     configurable: true,
   })
   vi.doMock('@vue-flow/core', () => ({
-    VueFlow: { template: '<div data-testid="vue-flow"><slot /></div>' },
+    VueFlow: {
+      name: 'VueFlow',
+      props: ['snapToGrid', 'snapGrid'],
+      template: '<div data-testid="vue-flow"><slot /></div>',
+    },
     Handle: { template: '<span />' },
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
     useVueFlow: () => ({ project: (point) => point }),
     addEdge: (edge, edges) => [...edges, edge],
   }))
   vi.doMock('@vue-flow/background', () => ({
-    Background: { template: '<div />' },
+    Background: {
+      name: 'Background',
+      props: ['gap', 'offset'],
+      template: '<div />',
+    },
   }))
   vi.doMock('@vue-flow/controls', () => ({
     Controls: { template: '<div />' },
@@ -274,6 +282,40 @@ describe('LogicView auth gates', () => {
     clickSpy.mockRestore()
     createObjectURL.mockRestore()
     revokeObjectURL.mockRestore()
+  })
+
+  it('snaps blocks to an adjustable grid and persists the browser preference', async () => {
+    const graph = makeGraph('graph-1')
+    localStorage.getItem.mockImplementation(key => ({
+      'obs-logic-snap-to-grid': '1',
+      'obs-logic-snap-grid-size': '35',
+    })[key] ?? null)
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    expect(wrapper.findComponent({ name: 'VueFlow' }).props()).toMatchObject({
+      snapToGrid: true,
+      snapGrid: [35, 35],
+    })
+    expect(wrapper.findComponent({ name: 'Background' }).props()).toMatchObject({
+      gap: 35,
+      offset: 0.5,
+    })
+
+    await wrapper.find('[data-testid="btn-snap-to-grid"]').trigger('click')
+    expect(localStorage.setItem).toHaveBeenCalledWith('obs-logic-snap-to-grid', '0')
+
+    await wrapper.find('[data-testid="btn-snap-to-grid"]').trigger('click')
+    await wrapper.find('[data-testid="input-snap-grid-size"]').setValue('45')
+    await wrapper.find('[data-testid="input-snap-grid-size"]').trigger('change')
+
+    expect(wrapper.findComponent({ name: 'VueFlow' }).props('snapGrid')).toEqual([45, 45])
+    expect(wrapper.findComponent({ name: 'Background' }).props('gap')).toBe(45)
+    expect(localStorage.setItem).toHaveBeenCalledWith('obs-logic-snap-grid-size', '45')
   })
 })
 

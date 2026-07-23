@@ -24,6 +24,7 @@ from obs.db.database import Database
 from obs.ringbuffer.persisted_config import (
     LEGACY_DECISION_DISCARDED,
     LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_MIGRATED,
     LEGACY_DECISION_PENDING,
     LEGACY_DECISION_SKIPPED,
     LEGACY_DECISIONS_PROTECTED,
@@ -78,6 +79,31 @@ async def test_ensure_sets_pending_only_with_legacy_file(tmp_path: Path):
         # Bereits entschieden → ensure überschreibt NICHT.
         await persist_legacy_migration_decision(db, LEGACY_DECISION_KEEP)
         assert await ensure_legacy_migration_decision(db, legacy_db_path=str(missing)) == LEGACY_DECISION_KEEP
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_decision", [LEGACY_DECISION_MIGRATED, LEGACY_DECISION_DISCARDED])
+async def test_ensure_reopens_terminal_decision_when_legacy_file_is_present(
+    tmp_path: Path,
+    terminal_decision: str,
+):
+    """Eine kopierte app-DB darf eine vorhandene Legacy-Quelle nicht verstecken.
+
+    Reproduziert den Demo-Zustand: ``obs.db`` bringt einen terminalen Marker mit,
+    neben ihr liegt aber weiterhin eine andere ``obs_ringbuffer.db``. Terminal
+    bedeutet, dass die damalige Quelle entfernt wurde; eine jetzt vorhandene
+    Datei muss deshalb erneut als ausstehende Quelle behandelt werden.
+    """
+    db = await _memory_db()
+    try:
+        legacy = tmp_path / "obs_ringbuffer.db"
+        legacy.write_bytes(b"legacy source exists")
+        await persist_legacy_migration_decision(db, terminal_decision)
+
+        assert await ensure_legacy_migration_decision(db, legacy_db_path=str(legacy)) == LEGACY_DECISION_PENDING
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_PENDING
     finally:
         await db.disconnect()
 
@@ -311,6 +337,29 @@ async def test_overview_reports_attached_legacy_cheaply(tmp_path: Path):
         assert overview["from_ts"] == _iso(0)
         assert overview["to_ts"] == _iso(2)
         assert overview["retention_protected"] is True
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
+async def test_overview_reports_valid_empty_legacy_as_exact_zero(tmp_path: Path):
+    """Eine lesbare Alt-DB ohne Events ist leer, nicht unbekannt oder verschwunden."""
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy_db(legacy, [])
+
+    rb = _segmented_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        overview = await rb.legacy_migration_overview()
+        assert overview is not None
+        assert overview["row_estimate"] == 0
+        assert overview["from_ts"] is None
+        assert overview["to_ts"] is None
+
+        stats = await rb.stats()
+        legacy_stat = next(segment for segment in stats["store"]["backend_extra"]["segments"] if segment["status"] == "legacy")
+        assert legacy_stat["row_count"] == 0
+        assert legacy_stat["row_count_accuracy"] == "exact"
     finally:
         await rb.stop()
 

@@ -27,6 +27,31 @@
         :title="$t('logic.debugMode')" data-testid="btn-debug">
         &#128270; {{ $t('logic.debugBtn') }}
       </button>
+      <div v-if="auth.isAdmin && activeGraphId" class="flex items-center gap-1">
+        <button
+          type="button"
+          :class="['btn-secondary btn-sm', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+          :title="$t('logic.snapToGridTitle')"
+          data-testid="btn-snap-to-grid"
+          @click="snapToGrid = !snapToGrid"
+        >
+          # {{ $t('logic.snapToGrid') }}
+        </button>
+        <label v-if="snapToGrid" class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+          <span class="sr-only">{{ $t('logic.gridSize') }}</span>
+          <input
+            :value="snapGridSize"
+            type="number"
+            min="5"
+            max="100"
+            step="5"
+            class="input w-16 px-2 py-1 text-xs"
+            data-testid="input-snap-grid-size"
+            @change="updateSnapGridSize"
+          />
+          px
+        </label>
+      </div>
       <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
         :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
         :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
@@ -85,12 +110,14 @@
           :nodes-draggable="auth.isAdmin"
           :nodes-connectable="auth.isAdmin"
           :edges-updatable="auth.isAdmin"
+          :snap-to-grid="snapToGrid"
+          :snap-grid="snapGrid"
           fit-view-on-init
           class="logic-canvas"
           @connect="onConnect"
           @node-click="onNodeClick"
         >
-          <Background :pattern-color="bgPatternColor" :gap="20" />
+          <Background :pattern-color="bgPatternColor" :gap="snapGridSize" :offset="0.5" />
           <Controls class="logic-controls" />
           <MiniMap
             ref="minimapRef"
@@ -210,6 +237,35 @@ const bgPatternColor = computed(() => {
 // ── Vue Flow state ─────────────────────────────────────────────────────────
 const nodes = ref([])
 const edges = ref([])
+
+// ── Grid snapping ─────────────────────────────────────────────────────────
+const SNAP_ENABLED_KEY = 'obs-logic-snap-to-grid'
+const SNAP_SIZE_KEY = 'obs-logic-snap-grid-size'
+const DEFAULT_SNAP_GRID_SIZE = 20
+const MIN_SNAP_GRID_SIZE = 5
+const MAX_SNAP_GRID_SIZE = 100
+const savedSnapGridSize = Number(localStorage.getItem(SNAP_SIZE_KEY))
+const snapToGrid = ref(localStorage.getItem(SNAP_ENABLED_KEY) === '1')
+const snapGridSize = ref(
+  savedSnapGridSize >= MIN_SNAP_GRID_SIZE && savedSnapGridSize <= MAX_SNAP_GRID_SIZE
+    ? savedSnapGridSize
+    : DEFAULT_SNAP_GRID_SIZE
+)
+const snapGrid = computed(() => [snapGridSize.value, snapGridSize.value])
+
+watch(snapToGrid, enabled => {
+  localStorage.setItem(SNAP_ENABLED_KEY, enabled ? '1' : '0')
+})
+
+function updateSnapGridSize(event) {
+  const requestedSize = Number(event.target.value)
+  snapGridSize.value = Math.min(
+    MAX_SNAP_GRID_SIZE,
+    Math.max(MIN_SNAP_GRID_SIZE, Number.isFinite(requestedSize) ? requestedSize : DEFAULT_SNAP_GRID_SIZE)
+  )
+  event.target.value = String(snapGridSize.value)
+  localStorage.setItem(SNAP_SIZE_KEY, String(snapGridSize.value))
+}
 
 // ── Node type → component mapping ─────────────────────────────────────────
 const _generic      = markRaw(GenericNode)
