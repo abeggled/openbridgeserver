@@ -7,12 +7,13 @@ are all pure / near-pure methods that can be tested without asyncio.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from obs.adapters.zeitschaltuhr.adapter import (
     HolidayMode,
+    SunDirection,
     TimeRef,
     TimerType,
     ZeitschaltuhrAdapter,
@@ -342,6 +343,68 @@ class TestCalculateTargetTime:
         result = adapter._calculate_target_time(cfg, date(2026, 4, 6))
         assert result.hour == 8
         assert result.minute == 50
+
+
+# ---------------------------------------------------------------------------
+# _get_solar_azimuth_time — gerichteter Sonnenschutz (z.B. Südfassade)
+# ---------------------------------------------------------------------------
+
+
+class TestGetSolarAzimuthTime:
+    """Munich coordinates (48.08629, 11.50588) — same site as the Heinleinstraße Velux setup."""
+
+    def _munich_adapter(self) -> ZeitschaltuhrAdapter:
+        return _make_adapter(latitude=48.08629, longitude=11.50588)
+
+    def test_setting_azimuth_roundtrips_to_requested_value(self):
+        from astral import LocationInfo
+        from astral.sun import azimuth as sun_azimuth
+
+        adapter = self._munich_adapter()
+        result = adapter._get_solar_azimuth_time(260.0, SunDirection.SETTING, date(2026, 7, 9))
+        assert result is not None
+
+        location = LocationInfo(name="t", region="", timezone="UTC", latitude=48.08629, longitude=11.50588)
+        actual_az = sun_azimuth(location.observer, result)
+        assert abs(actual_az - 260.0) < 0.5
+
+    def test_setting_azimuth_is_in_afternoon_window(self):
+        adapter = self._munich_adapter()
+        result = adapter._get_solar_azimuth_time(260.0, SunDirection.SETTING, date(2026, 7, 9))
+        assert result is not None
+        # Solar noon at this site/date is ~11:19 UTC; a westward azimuth of 260° must fall after it.
+        assert result.hour >= 11
+
+    def test_rising_azimuth_roundtrips_to_requested_value(self):
+        from astral import LocationInfo
+        from astral.sun import azimuth as sun_azimuth
+
+        adapter = self._munich_adapter()
+        result = adapter._get_solar_azimuth_time(100.0, SunDirection.RISING, date(2026, 7, 9))
+        assert result is not None
+
+        location = LocationInfo(name="t", region="", timezone="UTC", latitude=48.08629, longitude=11.50588)
+        actual_az = sun_azimuth(location.observer, result)
+        assert abs(actual_az - 100.0) < 0.5
+
+    def test_unreachable_azimuth_in_window_returns_none(self):
+        adapter = self._munich_adapter()
+        # In the rising (morning) window the azimuth never reaches 260° (that's an afternoon value).
+        result = adapter._get_solar_azimuth_time(260.0, SunDirection.RISING, date(2026, 7, 9))
+        assert result is None
+
+    def test_used_via_calculate_target_time(self):
+        adapter = self._munich_adapter()
+        cfg = _cfg(time_ref=TimeRef.SOLAR_AZIMUTH, solar_azimuth_deg=260.0, sun_direction=SunDirection.SETTING)
+        result = adapter._calculate_target_time(cfg, date(2026, 7, 9))
+        assert result is not None
+        assert result.hour >= 11
+
+    def test_unexpected_error_is_caught_and_returns_none(self):
+        adapter = self._munich_adapter()
+        with patch("astral.sun.sun", side_effect=RuntimeError("boom")):
+            result = adapter._get_solar_azimuth_time(180.0, SunDirection.SETTING, date(2026, 7, 9))
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ Imports used in production code:
   from astral import SunDirection
   from astral.sun import sun
   from astral.sun import time_at_elevation
+  from astral.sun import azimuth
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import pytest
 astral = pytest.importorskip("astral", reason="astral not installed")
 
 from astral import LocationInfo, SunDirection
-from astral.sun import sun, time_at_elevation
+from astral.sun import azimuth, sun, time_at_elevation
 
 
 _BERLIN = LocationInfo(
@@ -95,3 +96,21 @@ class TestTimeAtElevation:
         assert isinstance(result, datetime), (
             "astral.sun.time_at_elevation() must return a datetime. Used in zeitschaltuhr for civil/nautical/astronomical twilight calculations."
         )
+
+
+class TestAzimuth:
+    def test_callable(self):
+        assert callable(azimuth)
+
+    def test_returns_float_in_range(self):
+        result = azimuth(_BERLIN.observer, datetime(2024, 6, 21, 12, 0, tzinfo=timezone.utc))
+        assert isinstance(result, float), (
+            "astral.sun.azimuth() must return a float. Used in zeitschaltuhr._get_solar_azimuth_time() "
+            "for directional shading (e.g. when the sun leaves a south-facing facade)."
+        )
+        assert 0.0 <= result <= 360.0
+
+    def test_accepts_positional_dateandtime(self):
+        # zeitschaltuhr calls azimuth(observer, some_datetime) positionally.
+        result = azimuth(_BERLIN.observer, datetime(2024, 6, 21, 6, 0, tzinfo=timezone.utc))
+        assert isinstance(result, float)

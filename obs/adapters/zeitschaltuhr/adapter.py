@@ -30,12 +30,17 @@ Binding-Konfiguration (1 Binding = 1 Schaltpunkt):
   day_of_month:   Tag im Monat 0-31 (0 = alle; nur für annual)
 
   ─── Zeitreferenz ────────────────────────────────────────────────────────────
-  time_ref:             "absolute" | "sunrise" | "sunset" | "solar_noon" | "solar_altitude"
+  time_ref:             "absolute" | "sunrise" | "sunset" | "solar_noon" | "solar_altitude" | "solar_azimuth"
   hour:                 0-23  (nur bei time_ref=absolute)
   minute:               0-59
   offset_minutes:       Offset in Minuten (positiv/negativ) relativ zur Zeitreferenz
   solar_altitude_deg:   Sonnenhöhenwinkel in Grad (−18 … 90; nur bei time_ref=solar_altitude)
-  sun_direction:        "rising" | "setting"  (nur bei time_ref=solar_altitude)
+  solar_azimuth_deg:    Sonnenazimut in Grad (0-360, 180=Süd; nur bei time_ref=solar_azimuth) —
+                         für Beschattung nach Himmelsrichtung, z.B. wann die Sonne eine Südfassade
+                         verlässt, unabhängig von der Sonnenhöhe
+  sun_direction:        "rising" | "setting"  (nur bei time_ref=solar_altitude/solar_azimuth;
+                         bei solar_azimuth: rising = Suche vormittags [Sonnenaufgang..Mittag],
+                         setting = Suche nachmittags [Mittag..Sonnenuntergang])
 
   ─── Takt ────────────────────────────────────────────────────────────────────
   every_hour:     bool — jede Stunde zur angegebenen Minute schalten
@@ -179,6 +184,7 @@ class TimeRef(str, Enum):
     SUNSET = "sunset"
     SOLAR_NOON = "solar_noon"
     SOLAR_ALTITUDE = "solar_altitude"
+    SOLAR_AZIMUTH = "solar_azimuth"
 
 
 class SunDirection(str, Enum):
@@ -306,11 +312,24 @@ class ZeitschaltuhrBindingConfig(BaseModel):
             "Beispiele: 0° = Horizont, −6° = bürgerliche Dämmerung, 30° = mittlerer Vormittag"
         ),
     )
+    solar_azimuth_deg: float = Field(
+        180.0,
+        ge=0.0,
+        le=360.0,
+        description=(
+            "Sonnenazimut in Grad (0-360, 0=Nord, 90=Ost, 180=Süd, 270=West) — nur bei "
+            "time_ref=solar_azimuth. Für gerichteten Sonnenschutz: schaltet, sobald die Sonne "
+            "diesen Kompasswinkel erreicht, unabhängig von ihrer Höhe. Beispiel: 260° markiert "
+            "grob, wann die Sonne eine Südfassade Richtung Westen verlässt."
+        ),
+    )
     sun_direction: SunDirection = Field(
         SunDirection.RISING,
         description=(
-            "Richtung der Sonnenbewegung — nur bei time_ref=solar_altitude. "
-            "rising = Sonne steigt (morgens), setting = Sonne sinkt (nachmittags/abends)"
+            "Richtung der Sonnenbewegung — nur bei time_ref=solar_altitude/solar_azimuth. "
+            "Bei solar_altitude: rising = Sonne steigt (morgens), setting = Sonne sinkt (nachmittags/abends). "
+            "Bei solar_azimuth: rising = Suche im Vormittagsfenster (Sonnenaufgang bis Mittag), "
+            "setting = Suche im Nachmittagsfenster (Mittag bis Sonnenuntergang)."
         ),
     )
 
@@ -573,6 +592,8 @@ class ZeitschaltuhrAdapter(AdapterBase):
             )
         elif cfg.time_ref == TimeRef.SOLAR_ALTITUDE:
             base = self._get_solar_altitude_time(cfg.solar_altitude_deg, cfg.sun_direction, for_date)
+        elif cfg.time_ref == TimeRef.SOLAR_AZIMUTH:
+            base = self._get_solar_azimuth_time(cfg.solar_azimuth_deg, cfg.sun_direction, for_date)
         else:
             base = self._get_sun_event(cfg.time_ref, for_date)
 
@@ -635,6 +656,68 @@ class ZeitschaltuhrAdapter(AdapterBase):
             logger.warning(
                 "Sonnenhöhenwinkel-Berechnung für %s°/%s am %s fehlgeschlagen: %s",
                 altitude_deg,
+                direction.value,
+                for_date,
+                exc,
+            )
+        return None
+
+    def _get_solar_azimuth_time(
+        self,
+        azimuth_deg: float,
+        direction: SunDirection,
+        for_date: date,
+    ) -> datetime | None:
+        """Zeitpunkt, zu dem die Sonne den angegebenen Kompasswinkel (Azimut) erreicht.
+
+        Im Gegensatz zu time_at_elevation bietet astral keine eingebaute Umkehrfunktion für
+        den Azimut, daher wird per Bisektion im Vormittags- (rising) bzw. Nachmittagsfenster
+        (setting) gesucht. Der Azimut verläuft dort für die in Mitteleuropa relevanten
+        Breitengrade monoton, ein Grenzfall an sehr hohen Breitengraden wird nicht abgedeckt.
+        """
+        try:
+            from astral import LocationInfo
+            from astral.sun import azimuth as sun_azimuth
+            from astral.sun import sun
+
+            location = LocationInfo(
+                name="open bridge server",
+                region="",
+                timezone=str(self._tz),
+                latitude=self._cfg.latitude,
+                longitude=self._cfg.longitude,
+            )
+            observer = location.observer
+            s = sun(observer, date=for_date, tzinfo=self._tz)
+            lo, hi = (s["sunrise"], s["noon"]) if direction == SunDirection.RISING else (s["noon"], s["sunset"])
+
+            az_lo, az_hi = sun_azimuth(observer, lo), sun_azimuth(observer, hi)
+            if not (min(az_lo, az_hi) <= azimuth_deg <= max(az_lo, az_hi)):
+                logger.debug(
+                    "Sonnenazimut %s° wird am %s im %s-Fenster nicht erreicht (Bereich %.1f°-%.1f°)",
+                    azimuth_deg,
+                    for_date,
+                    direction.value,
+                    az_lo,
+                    az_hi,
+                )
+                return None
+
+            increasing = az_lo < az_hi
+            for _ in range(40):
+                mid = lo + (hi - lo) / 2
+                az_mid = sun_azimuth(observer, mid)
+                if (az_mid < azimuth_deg) == increasing:
+                    lo = mid
+                else:
+                    hi = mid
+            return lo + (hi - lo) / 2
+        except ImportError:
+            logger.warning("astral nicht installiert — Sonnenazimut-Berechnung nicht verfügbar (pip install astral)")
+        except Exception as exc:
+            logger.warning(
+                "Sonnenazimut-Berechnung für %s°/%s am %s fehlgeschlagen: %s",
+                azimuth_deg,
                 direction.value,
                 for_date,
                 exc,
