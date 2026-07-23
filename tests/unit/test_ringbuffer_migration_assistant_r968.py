@@ -2061,6 +2061,8 @@ async def test_reclaimable_migrating_bytes_preserve_interrupted_commit_chunks(tm
             await rb._store.manifest.update_segment_stats(segment.segment_id, row_count=1, size_bytes=size, from_ts=_iso(0), to_ts=_iso(0))
 
         assert await rb.reclaimable_migrating_total_bytes() == 500
+        rb._legacy_migration_progress = {"phase": "copying"}
+        assert await rb.reclaimable_migrating_total_bytes() == 0, "aktive Job-Chunks sind nicht reclaimable"
     finally:
         await rb.stop()
 

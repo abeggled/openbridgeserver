@@ -1204,6 +1204,11 @@ class RingBuffer:
         """
         if not self._segmented or self._store is None:
             return 0
+        # Während eines aktiven Jobs sind die neu entstehenden ``migrating``-Chunks
+        # keine stale Reste: ein paralleler Start wird abgelehnt und führt den Cleanup
+        # daher nicht aus. Status-Schätzungen dürfen diese Bytes nicht vorweg freigeben.
+        if self.legacy_migration_in_progress():
+            return 0
         missing_source_ids = {
             segment.segment_id for segment in await self._store.manifest.list_schema_legacy_segments() if not Path(segment.filename).exists()
         }
