@@ -372,7 +372,11 @@
         "invalidXml": "Kein gültiges XML: {msg}",
         "noChildElementsFound": "Keine Kind-Elemente gefunden",
         "sampleMustBeJsonObjectOrArray": "Sample muss ein JSON-Objekt oder Array sein",
-        "selectAdapterInstance": "Bitte eine Adapter-Instanz wählen"
+        "selectAdapterInstance": "Bitte eine Adapter-Instanz wählen",
+        "selectOnewireInstanceFirst": "Bitte zuerst eine 1-Wire-Instanz wählen",
+        "noSensorsFound": "Keine Sensoren gefunden",
+        "onewireScanFailed": "1-Wire-Sensor-Scan fehlgeschlagen",
+        "onewireAliasSaveFailed": "Alias konnte nicht gespeichert werden"
       },
       "knxSection": "KNX-Verknüpfung",
       "dptLabel": "DPT *",
@@ -429,10 +433,12 @@
       "xmlPathHint": "Pfad relativ zum Root-Element (ET-XPath, z.B. data/temperature). Numerische Textwerte werden automatisch konvertiert.",
       "onewireSection": "1-Wire Binding",
       "onewireSensorIdLabel": "Sensor-ID *",
-      "onewireSensorIdPlaceholder": "z.B. 28-000000000001",
-      "onewireSensorTypeLabel": "Sensor-Typ",
-      "onewireSensorTypePlaceholder": "DS18B20",
-      "onewireSensorTypeHint": "Standard: DS18B20",
+      "onewireSensorIdPlaceholder": "z.B. 28.4B057F0A1C10",
+      "onewirePropertyLabel": "Property",
+      "onewirePropertyPlaceholder": "temperature",
+      "onewireScanButton": "Scannen",
+      "onewireAliasPlaceholder": "Label (z.B. Gästebad)",
+      "onewireAliasSave": "Speichern",
       "haSection": "Home Assistant Binding",
       "haEntityIdLabel": "Entity ID *",
       "haEntityIdPlaceholder": "z.B. light.living_room, sensor.temperature",
@@ -1010,13 +1016,21 @@
         }
       },
       "ONEWIRE": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des owserver-Prozesses"
+        },
+        "port": {
+          "title": "Port",
+          "description": "owserver-Port (Standard: 4304)"
+        },
         "poll_interval": {
           "title": "Abfrageintervall (s)",
           "description": "Wie oft Sensoren gelesen werden, in Sekunden"
         },
-        "w1_path": {
-          "title": "1-Wire-Pfad",
-          "description": "Sysfs-Pfad zum 1-Wire-Bus (Standard: /sys/bus/w1/devices)"
+        "request_timeout": {
+          "title": "Anfrage-Timeout (s)",
+          "description": "Sekunden pro owserver-Aufruf, bevor er als Fehler gewertet wird"
         }
       }
     },
@@ -1039,8 +1053,6 @@
       "couldNotOpenPort": "{port} konnte nicht geöffnet werden",
       "modbusSerialConnected": "Verbunden ({port} @ {baudrate} Baud)",
       "modbusReconnectBackoff": "Modbus-TCP-Neuverbindung pausiert (Backoff aktiv)",
-      "pathNotFound": "{path} nicht gefunden",
-      "onewireBusAt": "1-Wire-Bus an {path}",
       "socketConnectFailed": "Socket.IO-Verbindung fehlgeschlagen",
       "socketDisconnected": "Socket.IO getrennt",
       "socketUnstable": "ioBroker Socket.IO-Verbindung instabil: mehrere Disconnects in kurzer Zeit.",
