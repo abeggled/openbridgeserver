@@ -14,6 +14,16 @@ import pytest
 import asyncio
 import dataclasses
 
+import obs.api.v1.ringbuffer as _migration_api
+from obs.db.database import Database
+from obs.ringbuffer.persisted_config import (
+    LEGACY_DECISION_DISCARDED,
+    LEGACY_DECISION_KEEP,
+    LEGACY_DECISION_MIGRATED,
+    LEGACY_DECISION_PENDING,
+    load_legacy_migration_decision,
+    persist_legacy_migration_decision,
+)
 from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreEvent
 from obs.ringbuffer.store.manifest import LEGACY_SCHEMA_VERSION
@@ -1412,6 +1422,241 @@ async def test_legacy_migration_status_finalizes_under_lock(tmp_path: Path, monk
         await db.disconnect()
 
 
+class _StatusReconcileRb:
+    def __init__(self, *, attached: bool = True, committed: bool = False, protect_hook=None):
+        self.attached = attached
+        self.committed = committed
+        self.protect_hook = protect_hook
+        self.protection_calls: list[bool] = []
+
+    def legacy_migration_in_progress(self) -> bool:
+        return False
+
+    async def has_missing_file_legacy(self) -> bool:
+        return False
+
+    async def has_attached_legacy(self) -> bool:
+        return self.attached
+
+    async def has_committed_migration(self) -> bool:
+        return self.committed
+
+    async def set_legacy_retention_protected(self, value: bool) -> None:
+        self.protection_calls.append(value)
+        if self.protect_hook is not None:
+            await self.protect_hook(value)
+
+
+def _mock_migration_status(monkeypatch: pytest.MonkeyPatch, rb: _StatusReconcileRb) -> None:
+    monkeypatch.setattr(_migration_api, "get_optional_ringbuffer", lambda: rb)
+    monkeypatch.setattr(_migration_api, "is_ringbuffer_enabled", lambda: True)
+
+    async def _decision_only_status(db):
+        return await load_legacy_migration_decision(db)
+
+    monkeypatch.setattr(_migration_api, "_legacy_migration_status", _decision_only_status)
+
+
+async def _db_with_decision(decision: str) -> Database:
+    db = Database(":memory:")
+    await db.connect()
+    await persist_legacy_migration_decision(db, decision)
+    return db
+
+
+@pytest.mark.parametrize("terminal_decision", [LEGACY_DECISION_MIGRATED, LEGACY_DECISION_DISCARDED])
+async def test_legacy_migration_status_reopens_terminal_decision_with_attached_source(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_decision: str,
+):
+    """Ein Status-Poll repariert den mitkopierten Terminalmarker ohne Neustart."""
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(terminal_decision)
+    try:
+        assert await _migration_api.legacy_migration_status(_user="admin", db=db) == LEGACY_DECISION_PENDING
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_PENDING
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_keeps_terminal_decision_without_attached_source(monkeypatch: pytest.MonkeyPatch):
+    """Ein echter Terminalzustand ohne Legacy-Quelle bleibt unverändert."""
+    rb = _StatusReconcileRb(attached=False, committed=True)
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+    try:
+        assert await _migration_api.legacy_migration_status(_user="admin", db=db) == LEGACY_DECISION_MIGRATED
+        assert rb.protection_calls == []
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_keeps_protection_when_persist_fails_terminal_confirmed(monkeypatch: pytest.MonkeyPatch):
+    """Schlägt der pending-Write fehl und steht der Terminalmarker noch in der DB,
+    darf der Retention-Schutz NICHT zurückgerollt werden – die Legacy-Quelle ist
+    noch angehängt und könnte sonst bis zum nächsten Poll-Retry von der FIFO-Retention
+    zurückgewonnen werden."""
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+
+    async def _fail_persist(_db, _decision):
+        raise RuntimeError("app db is locked")
+
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _fail_persist)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_raises_and_keeps_protection_when_reopen_persistence_fails(monkeypatch: pytest.MonkeyPatch):
+    """Ein fehlgeschlagener pending-Write muss den originalen Fehler weiterleiten und
+    den Retention-Schutz aktiv lassen – kein Rollback auf False."""
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+
+    async def _fail_persist(_db, _decision):
+        raise RuntimeError("app db is locked")
+
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _fail_persist)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_propagates_persist_error_and_keeps_protection(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Schlägt der pending-Write fehl, wird der originale Fehler propagiert und
+    der Retention-Schutz bleibt aktiv – kein State-Readback mehr nötig."""
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+
+    async def _fail_persist(_db, _decision):
+        raise RuntimeError("app db is locked")
+
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _fail_persist)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_preserves_original_error_without_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Schlägt der pending-Write fehl, wird ausschließlich der originale Fehler
+    propagiert – kein Rollback-Aufruf erfolgt."""
+
+    async def _fail_persist(_db, _decision):
+        raise RuntimeError("app db is locked")
+
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_DISCARDED)
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _fail_persist)
+    try:
+        with pytest.raises(RuntimeError, match="locked"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_DISCARDED
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_does_not_persist_pending_when_protection_fails(monkeypatch: pytest.MonkeyPatch):
+    """Ohne wirksamen Retention-Schutz bleibt auch der persistierte Marker terminal."""
+
+    async def _fail_protection(value: bool):
+        assert value is True
+        raise RuntimeError("live protection failed")
+
+    rb = _StatusReconcileRb(protect_hook=_fail_protection)
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_DISCARDED)
+    try:
+        with pytest.raises(RuntimeError, match="protection failed"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_DISCARDED
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_keeps_protection_when_pending_commit_succeeded_before_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Commit-Erfolg plus nachgelagerter Fehler darf den Schutz nicht zurückrollen."""
+    rb = _StatusReconcileRb()
+    _mock_migration_status(monkeypatch, rb)
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+
+    async def _persist_then_fail(target_db, decision):
+        await persist_legacy_migration_decision(target_db, decision)
+        raise RuntimeError("response interrupted after commit")
+
+    monkeypatch.setattr(_migration_api, "persist_legacy_migration_decision", _persist_then_fail)
+    try:
+        with pytest.raises(RuntimeError, match="after commit"):
+            await _migration_api.legacy_migration_status(_user="admin", db=db)
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_PENDING
+        assert rb.protection_calls == [True]
+    finally:
+        await db.disconnect()
+
+
+async def test_legacy_migration_status_reopen_is_serialized_with_decision(monkeypatch: pytest.MonkeyPatch):
+    """Der Status-Abgleich hält denselben Lock wie eine parallele Admin-Entscheidung."""
+    entered_protection = asyncio.Event()
+    release_protection = asyncio.Event()
+
+    async def _block_protection(value: bool):
+        if value:
+            entered_protection.set()
+            await release_protection.wait()
+
+    rb = _StatusReconcileRb(protect_hook=_block_protection)
+    _mock_migration_status(monkeypatch, rb)
+    # Frühere Race-Tests können den Modul-Lock an einen anderen function-scoped
+    # Event-Loop binden; dieses Contention-Szenario braucht einen frischen Lock.
+    monkeypatch.setattr(_migration_api, "_LEGACY_DECISION_LOCK", asyncio.Lock())
+    db = await _db_with_decision(LEGACY_DECISION_MIGRATED)
+    try:
+        status_task = asyncio.create_task(_migration_api.legacy_migration_status(_user="admin", db=db))
+        await asyncio.wait_for(entered_protection.wait(), timeout=2)
+        decision_task = asyncio.create_task(
+            _migration_api.legacy_migration_decision(
+                _migration_api.LegacyMigrationDecisionIn(decision="keep"),
+                _user="admin",
+                db=db,
+            )
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not decision_task.done()
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_MIGRATED
+
+        release_protection.set()
+        assert await status_task == LEGACY_DECISION_PENDING
+        assert await decision_task == LEGACY_DECISION_KEEP
+        assert await load_legacy_migration_decision(db) == LEGACY_DECISION_KEEP
+    finally:
+        await db.disconnect()
+
+
 async def test_legacy_migration_decision_keep_finalizes_when_committed_no_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """``keep`` zementiert einen abgeschlossenen Zustand nicht mehr (#968, Q10j-): ist eine Migration
     committed und die letzte Quelle weg, aber die ``migrated``-Terminalisierung schlug fehl, zieht ein
@@ -2584,3 +2829,147 @@ async def test_partial_keep_migration_persists_protected(tmp_path: Path, monkeyp
     finally:
         await rb.stop()
         await db.disconnect()
+
+
+# ---------- #1013: durabler Repair nach partial keep-Migration ----------
+
+
+async def test_partial_keep_repair_survives_failed_write_and_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Schlägt ``keep`` → ``skipped`` nach einem partial commit fehl, muss der Commit
+    einen durablen Repair-Beleg hinterlassen. Der nächste Startup-Finalizer schützt
+    die verbleibende Quelle und zieht die Entscheidung nach, ohne ein später bewusst
+    gewähltes ``keep`` erneut zu überschreiben."""
+    import obs.ringbuffer.persisted_config as persisted
+    from obs.ringbuffer.persisted_config import (
+        LEGACY_DECISION_KEEP,
+        LEGACY_DECISION_SKIPPED,
+        finalize_committed_migration_decision,
+        load_legacy_migration_decision,
+        persist_legacy_migration_decision,
+    )
+
+    app_db_path = tmp_path / "app.db"
+    db1 = Database(str(app_db_path))
+    await db1.connect()
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, list(range(15)))
+    rb1 = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=False)
+    await rb1.start()
+    active_rb = {"value": rb1}
+    monkeypatch.setattr(_migration_api, "get_optional_ringbuffer", lambda: active_rb["value"])
+    monkeypatch.setattr(_migration_api, "is_ringbuffer_enabled", lambda: True)
+
+    original_persist = persisted.persist_legacy_migration_decision
+    failed_once = False
+
+    async def _fail_first_skipped(db: Database, decision: str) -> None:
+        nonlocal failed_once
+        if decision == LEGACY_DECISION_SKIPPED and not failed_once:
+            failed_once = True
+            raise OSError("app database locked")
+        await original_persist(db, decision)
+
+    try:
+        second = tmp_path / "legacy2.db"
+        second.write_bytes(b"z" * 128)
+        await rb1._store.manifest.register_legacy_segment(source_path=str(second), size_bytes=128)
+        await persist_legacy_migration_decision(db1, LEGACY_DECISION_KEEP)
+        monkeypatch.setattr(persisted, "persist_legacy_migration_decision", _fail_first_skipped)
+
+        await _migration_api.legacy_migration_start(_user="admin", db=db1)
+        await rb1._legacy_migration_task
+
+        assert rb1.legacy_migration_progress()["phase"] == "done"
+        assert await rb1.has_attached_legacy() is True
+        assert await load_legacy_migration_decision(db1) == LEGACY_DECISION_KEEP
+        assert await rb1.has_pending_keep_migration_repair() is True
+    finally:
+        await rb1.stop()
+        await db1.disconnect()
+
+    db2 = Database(str(app_db_path))
+    await db2.connect()
+    rb2 = _seg_rb(tmp_path, max_file_size_bytes=100, legacy_retention_protected=False)
+    await rb2.start()
+    active_rb["value"] = rb2
+    try:
+        assert rb2._legacy_retention_protected is True, "Store-Beleg schützt VOR der Startup-Retention"
+        assert second.exists(), "Startup-Retention darf die verbleibende Legacy-Quelle nicht reclaimen"
+
+        assert await finalize_committed_migration_decision(db2, rb2) is True
+        assert await load_legacy_migration_decision(db2) == LEGACY_DECISION_SKIPPED
+        assert rb2._legacy_retention_protected is True
+        assert await rb2.has_pending_keep_migration_repair() is False
+
+        await _migration_api._legacy_migration_decision_locked(_migration_api.LegacyMigrationDecisionIn(decision="keep"), db2)
+        assert await load_legacy_migration_decision(db2) == LEGACY_DECISION_KEEP
+        assert await finalize_committed_migration_decision(db2, rb2) is False
+        assert await load_legacy_migration_decision(db2) == LEGACY_DECISION_KEEP, "bewusstes späteres keep bleibt erhalten"
+    finally:
+        await rb2.stop()
+        await db2.disconnect()
+
+
+async def test_interrupted_partial_keep_commit_records_repair_during_reconcile(tmp_path: Path):
+    """Auch ein Crash zwischen Legacy-Unlink und Manifest-Commit muss den vorher
+    durabel gespeicherten keep-Intent beim Reconcile atomar in einen Repair-Beleg
+    für die verbleibende Quelle überführen."""
+    from obs.ringbuffer.store.offline_migration import reconcile_offline_migration
+
+    store = SqliteSegmentStore(tmp_path / "root")
+    await store.open()
+    try:
+        first_path = tmp_path / "legacy-1.db"
+        second_path = tmp_path / "legacy-2.db"
+        first_path.write_bytes(b"first")
+        second_path.write_bytes(b"second")
+        first = await store.manifest.register_legacy_segment(source_path=str(first_path), size_bytes=5)
+        await store.manifest.register_legacy_segment(source_path=str(second_path), size_bytes=6)
+        await store.manifest.prepare_offline_migration(first.segment_id, started_from_keep=True)
+        await store.manifest.create_migrating_segment(
+            filename="rb_migrated_interrupted.sqlite",
+            schema_version=SEGMENT_SCHEMA_VERSION,
+            legacy_source_id=first.segment_id,
+        )
+
+        first_path.unlink()
+        assert await reconcile_offline_migration(store) is True
+
+        assert await store.manifest.has_pending_keep_migration_repair() is True
+        remaining = await store.manifest.list_schema_legacy_segments()
+        assert [row.segment_id for row in remaining] != [first.segment_id]
+    finally:
+        await store.close()
+
+
+async def test_old_manifest_adds_partial_keep_repair_columns(tmp_path: Path):
+    """Ein bestehendes Manifest mit dem alten reinen Commit-Zähler wird beim
+    Öffnen idempotent um Intent + Repair-Beleg erweitert."""
+    import sqlite3
+
+    from obs.ringbuffer.store.manifest import Manifest
+
+    manifest_path = tmp_path / "manifest.sqlite"
+    conn = sqlite3.connect(manifest_path)
+    try:
+        conn.execute(
+            """CREATE TABLE migration_state (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   committed_migrations INTEGER NOT NULL DEFAULT 0
+               )"""
+        )
+        conn.execute("INSERT INTO migration_state (id, committed_migrations) VALUES (1, 3)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    manifest = Manifest(manifest_path)
+    await manifest.open()
+    try:
+        async with manifest._db.execute("PRAGMA table_info(migration_state)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        assert {"keep_migration_source_id", "pending_keep_migration_repair"} <= columns
+        assert await manifest.committed_migration_count() == 3
+        assert await manifest.has_pending_keep_migration_repair() is False
+    finally:
+        await manifest.close()
