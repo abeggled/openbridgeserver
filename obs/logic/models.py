@@ -97,6 +97,8 @@ class NodeTypeDef(BaseModel):
     outputs: list[NodeTypePort] = []
     config_schema: dict[str, Any] = {}  # JSON schema for node data
     color: str = "#475569"  # default node color (tailwind slate-600)
+    hidden_from_palette: bool = False
+    legacy: bool = False
 
 
 class LogicUsageOut(BaseModel):

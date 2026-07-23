@@ -6,6 +6,9 @@ import { useTz } from '@/composables/useTz'
 function setup() {
   const settings = useSettingsStore()
   settings.timezone = 'UTC'
+  settings.dateFormat = 'dd.MM.yyyy'
+  settings.timeFormat = 'HH:mm:ss'
+  settings.language = 'de'
   return useTz()
 }
 
@@ -75,12 +78,52 @@ describe('fmtDateTime', () => {
     expect(fmtDateTime(null)).toBe('—')
   })
 
+  it('returns "—" for an invalid timestamp', () => {
+    expect(setup().fmtDateTime('not-a-date')).toBe('—')
+  })
+
   it('formats an ISO datetime string (de-CH locale, UTC tz)', () => {
     const { fmtDateTime } = setup()
     const result = fmtDateTime('2024-06-15T12:30:00Z')
     expect(result).toContain('2024')
     expect(result).toContain('12')
     expect(result).toContain('30')
+  })
+
+  it('uses the configured date and time patterns', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'yyyy/MM/dd'
+    settings.timeFormat = 'H-mm'
+    settings.language = 'en'
+
+    expect(useTz().fmtDateTime('2024-06-15T02:03:04Z')).toBe('2024/06/15 2-03')
+  })
+
+  it('preserves literal words and token separators', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'yyyy-MM-ddTHH guguseli'
+
+    expect(useTz().fmtDate('2024-06-15T02:03:04Z')).toBe('2024-06-15T02 guguseli')
+  })
+
+  it('preserves accented literal words', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'EEEE día'
+    settings.language = 'es'
+
+    expect(useTz().fmtDate('2024-06-15T02:03:04Z')).toBe('sábado día')
+  })
+
+  it('formats EE and MMM consistently with the backend tables', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'EE EEE MMM'
+    settings.language = 'de'
+
+    expect(useTz().fmtDate('2024-06-15T02:03:04Z')).toBe('Sa Sa. Juni')
   })
 })
 
@@ -95,6 +138,15 @@ describe('fmtChartLabel', () => {
     const result = fmtChartLabel('2024-06-15T12:30:00Z')
     expect(result).toBeTruthy()
     expect(result).toContain('15')
+  })
+
+  it('uses configured formats for chart labels', () => {
+    const settings = useSettingsStore()
+    settings.timezone = 'UTC'
+    settings.dateFormat = 'yyyy/MM/dd'
+    settings.timeFormat = 'H-mm'
+
+    expect(useTz().fmtChartLabel('2024-06-15T12:30:00Z')).toBe('2024/06/15 12-30')
   })
 })
 

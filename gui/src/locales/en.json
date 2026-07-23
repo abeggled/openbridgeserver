@@ -1,4 +1,10 @@
 {
+  "datetimeNames": {
+    "weekdays": "Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday",
+    "weekdaysShort": "Mon|Tue|Wed|Thu|Fri|Sat|Sun", "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
+    "months": "January|February|March|April|May|June|July|August|September|October|November|December",
+    "monthsShort": "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+  },
   "nav": {
     "dashboard": "Overview",
     "datapoints": "Data Points",
@@ -1535,12 +1541,14 @@
       "timer_pulse": "Pulse",
       "value_sequence": "Sequence",
       "timer_cron": "Trigger",
+      "datetime": "Date/Time",
       "operating_hours": "Op. Hours",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
       "astro_sun": "Astro Sun",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "notify_message": "Notification",
       "message_archive": "Message Archive",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
@@ -1663,6 +1671,9 @@
       "min": "Min",
       "max": "Max",
       "avg": "∅"
+      ,"date": "Date",
+      "time": "Time",
+      "custom": "Custom"
     },
     "summary": {
       "inputs": "{n} Inputs",
@@ -1685,6 +1696,10 @@
       "ariaLabel": "Unknown block type"
     },
     "nodeConfig": {
+      "datetime": {
+        "custom_format": "Custom format",
+        "tokens": "Tokens: H/HH hour, m/mm minute, s/ss second, d/dd day, EE = Mo, EEE = Mon, EEEE = Monday, M/MM/MMM/MMMM month, yy/yyyy year. Names follow the selected language."
+      },
       "comment": {
         "text": "Text",
         "textPlaceholder": "Note text…",
@@ -2103,6 +2118,17 @@
         "sender": "Sender (max 11 chars)",
         "message": "Message (fallback)"
       },
+      "notification": {
+        "adapter": "Message/notification adapter",
+        "selectAdapter": "Select adapter",
+        "targets": "Targets",
+        "noTargets": "No active, configured targets available.",
+        "title": "Title",
+        "fallback": "Message (fallback)",
+        "placeholders": "The logic block has no datapoint context; MESSAGE placeholders are sent unchanged.",
+        "priority": "Priority",
+        "legacy": "Legacy block. Please use the Notification block for new notifications."
+      },
       "messageArchive": {
         "archive": "Message archive",
         "selectArchive": "Select message archive",
@@ -2224,6 +2250,7 @@
       "latencyMs": "Latency (ms)"
     },
     "nodeDescriptions": {
+      "datetime": "Outputs the current date and time in the configured timezone and format.",
       "const_value": "Outputs a fixed value — number, bool or text. Useful as threshold or reference.",
       "comment": "Free-form multi-line note placed directly on the canvas for documentation. Purely visual — has no effect on execution.",
       "and": "Output is true when ALL inputs are true. Inputs (2–30) and output can be individually negated.",
@@ -2255,6 +2282,7 @@
       "operating_hours": "Counts operating hours while 'Active' is true. Reset clears the counter.",
       "python_script": "Executes a Python script. Available: inputs dict → return value",
       "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
+      "notify_message": "Sends a notification through the configured targets of a Message/notification adapter.",
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
       "message_archive": "Writes a message to a message archive. Triggered automatically when a message arrives at the input or when the trigger is true.",
@@ -2289,6 +2317,9 @@
       "title": "General settings",
       "timezone": "Timezone",
       "timezoneHint": "All timestamps in the system are shown in this timezone.",
+      "dateFormat": "Default date format",
+      "timeFormat": "Default time format",
+      "formatHint": "Tokens: d/dd, EE/EEE/EEEE, M/MM/MMM/MMMM, yy/yyyy; time uses H/HH, m/mm, s/ss.",
       "timezonePlaceholder": "Search … e.g. Zurich, Berlin, UTC",
       "noResults": "No results",
       "save": "Save",

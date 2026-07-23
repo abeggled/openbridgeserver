@@ -666,6 +666,16 @@ CREATE INDEX IF NOT EXISTS idx_bind_instance_enabled
     ON adapter_bindings(adapter_instance_id, enabled);
 """
 
+_MIGRATION_V41 = """
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('date_format', 'dd.MM.yyyy');
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('time_format', 'HH:mm:ss');
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'de');
+"""
+
 
 _MIGRATION_V38 = """
 CREATE TABLE IF NOT EXISTS hierarchy_device_links (
@@ -728,6 +738,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (38, _MIGRATION_V38),
     (39, _MIGRATION_V39),
     (40, _MIGRATION_V40),
+    (41, _MIGRATION_V41),
 ]
 
 

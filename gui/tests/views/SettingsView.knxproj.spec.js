@@ -512,6 +512,17 @@ describe('SettingsView account and admin coverage', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Europe/Berlin')
 
+    const { useSettingsStore } = await import('@/stores/settings')
+    const settings = useSettingsStore()
+    const saveSettings = vi.spyOn(settings, 'save').mockResolvedValue()
+    const formatInputs = wrapper.findAll('input.font-mono').filter(input => input.attributes('type') === 'text')
+    await formatInputs[0].setValue('yyyy/MM/dd')
+    await formatInputs[1].setValue('H:mm')
+    const saveTimezone = wrapper.findAll('button').find(button => button.text() === 'Speichern')
+    await saveTimezone.trigger('click')
+    await flushPromises()
+    expect(saveSettings).toHaveBeenCalledWith('Europe/Berlin', 'yyyy/MM/dd', 'H:mm')
+
     const darkTheme = wrapper.findAll('input[type="radio"]').find(input => input.element.value === 'dark')
     await darkTheme.setValue()
     await flushPromises()

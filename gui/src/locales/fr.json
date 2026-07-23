@@ -1,9 +1,19 @@
 {
+  "datetimeNames": {
+    "weekdays": "lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche",
+    "weekdaysShort": "lun.|mar.|mer.|jeu.|ven.|sam.|dim.", "weekdaysTwo": "lu|ma|me|je|ve|sa|di",
+    "months": "janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre",
+    "monthsShort": "janv.|févr.|mars|avr.|mai|juin|juil.|août|sept.|oct.|nov.|déc."
+  },
   "login": {
     "username": "Nom d'utilisateur",
     "password": "Mot de passe",
     "submit": "Se connecter",
     "submitting": "Connexion en cours…"
+  },
+  "logic": {
+    "nodeConfig": { "datetime": { "custom_format": "Format personnalisé", "tokens": "Jetons : H/HH heure, m/mm minute, s/ss seconde, d/dd jour, EE/EEE/EEEE jour de la semaine, M/MM/MMM/MMMM mois, yy/yyyy année." } },
+    "nodeDescriptions": { "datetime": "Affiche la date et l’heure actuelles dans le fuseau horaire et le format configurés." }
   },
   "common": {
     "save": "Sauvegarder"

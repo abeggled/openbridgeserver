@@ -110,6 +110,7 @@ const NODE_DEFS = computed(() => ({
   timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   value_sequence: { label: t('logic.nodeTypes.value_sequence'), color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'condition',label:t('logic.ports.condition')}], outputs: [] },
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                                                                  outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
+  datetime:     { label: t('logic.nodeTypes.datetime'), color: '#b45309', inputs: [], outputs: [{id:'date',label:t('logic.ports.date')},{id:'time',label:t('logic.ports.time')},{id:'custom',label:t('logic.ports.custom')}] },
   mcp_tool:     { label: 'MCP Tool',    color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'input',label:t('logic.ports.input')}],            outputs: [{id:'result',     label:t('logic.portLabels.resultShort')},{id:'done',label:t('logic.ports.done')}] },
   python_script:{ label: 'Python',      color: '#be185d', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})},{id:'in3',label:t('logic.ports.in_n',{n:3})}], outputs: [{id:'result',label:t('logic.portLabels.resultShort')}] },
   // Astro
@@ -124,6 +125,7 @@ const NODE_DEFS = computed(() => ({
   // Timer (extended)
   operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:t('logic.ports.active')},{id:'reset',label:t('logic.ports.reset')}],     outputs: [{id:'hours',      label:t('logic.ports.hours')}]       },
   // Notification
+  notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   message_archive:    { label: t('logic.nodeTypes.message_archive'), color: '#2563eb', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'title',label:t('logic.portLabels.title')}], outputs: [{id:'stored', label:t('logic.ports.stored')}] },
@@ -280,6 +282,7 @@ const summary = computed(() => {
     return t('logic.summary.sequence', { n: parseRowList(d.steps).length, mode: te(key) ? t(key) : mode })
   }
   if (props.type === 'timer_cron')   return d.cron || '0 7 * * *'
+  if (props.type === 'datetime')     return d.custom_format || 'EEEE, MMMM d, yyyy HH:mm:ss'
   if (props.type === 'mcp_tool')     return d.tool_name || '—'
   if (props.type === 'astro_sun')       return `${d.latitude ?? 47.37}° N  ${d.longitude ?? 8.54}° E`
   if (props.type === 'clamp')           return `[${d.min ?? 0} … ${d.max ?? 100}]`
