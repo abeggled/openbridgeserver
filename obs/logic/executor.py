@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo as _ZoneInfo
 
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
+from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
@@ -678,7 +679,7 @@ class GraphExecutor:
                     "sent": False,
                 }
 
-            case "notify_sms":
+            case "notify_sms" | "notify_message":
                 # Fires when message arrives OR trigger is truthy (both optional).
                 msg = inputs.get("message")
                 triggered = self._to_bool(inputs.get("trigger")) if "trigger" in inputs else False
@@ -894,6 +895,19 @@ class GraphExecutor:
             case "timer_cron":
                 # Fired by manager via input_overrides; pass trigger signal downstream
                 return {"trigger": inputs.get("trigger", False)}
+
+            case "datetime":
+                try:
+                    tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
+                except Exception:
+                    tz = _ZoneInfo("UTC")
+                now = _datetime.now(tz)
+                language = str(self.app_config.get("language", "de"))
+                return {
+                    "date": format_datetime(now, str(self.app_config.get("date_format", DEFAULT_DATE_FORMAT)), language),
+                    "time": format_datetime(now, str(self.app_config.get("time_format", DEFAULT_TIME_FORMAT)), language),
+                    "custom": format_datetime(now, str(d.get("custom_format") or DEFAULT_CUSTOM_FORMAT), language),
+                }
 
             case "timer_delay" | "timer_pulse":
                 # Async nodes — handled by manager, not executor

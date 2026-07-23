@@ -37,6 +37,14 @@ describe('NodePalette — expanded', () => {
     expect(wrapper.text()).toContain('OR')
   })
 
+  it('hides legacy node types from the palette', () => {
+    const wrapper = mountPalette({
+      nodeTypes: [...NODE_TYPES, { type: 'notify_sms', label: 'SMS', category: 'notification', hidden_from_palette: true }],
+    })
+    expect(wrapper.text()).not.toContain('SMS')
+    expect(wrapper.findAll('.cursor-grab')).toHaveLength(3)
+  })
+
   it('emits toggle when the column header is clicked', async () => {
     const wrapper = mountPalette()
     await wrapper.findAll('button')[0].trigger('click')

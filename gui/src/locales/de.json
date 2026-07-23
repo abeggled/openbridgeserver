@@ -1,4 +1,10 @@
 {
+  "datetimeNames": {
+    "weekdays": "Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag",
+    "weekdaysShort": "Mo.|Di.|Mi.|Do.|Fr.|Sa.|So.", "weekdaysTwo": "Mo|Di|Mi|Do|Fr|Sa|So",
+    "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
+    "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
+  },
   "nav": {
     "dashboard": "Übersicht",
     "datapoints": "Objekte",
@@ -1499,6 +1505,9 @@
     "searchNodesPalette": "Knoten suchen …",
     "negateOutput": "Ausgang negieren",
     "debugMode": "Debug-Modus: zeigt Werte nach Ausführen",
+    "snapToGrid": "Raster",
+    "snapToGridTitle": "Funktionsblöcke am Raster einrasten",
+    "gridSize": "Rastermaß",
     "deleteBlock": "Block löschen",
     "deleteNode": "Ast löschen",
     "init": "Init",
@@ -1532,12 +1541,14 @@
       "timer_pulse": "Impuls",
       "value_sequence": "Sequenz",
       "timer_cron": "Trigger",
+      "datetime": "Datum/Zeit",
       "operating_hours": "Betriebsstd.",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
       "astro_sun": "Astro Sonne",
       "notify_pushover": "Pushover",
       "notify_sms": "SMS (seven.io)",
+      "notify_message": "Benachrichtigung",
       "message_archive": "Meldungsarchiv",
       "wake_on_lan": "Wake on LAN",
       "host_check": "Host Check",
@@ -1641,6 +1652,9 @@
       "min": "Min",
       "max": "Max",
       "avg": "∅"
+      ,"date": "Datum",
+      "time": "Zeit",
+      "custom": "Benutzerdefiniert"
     },
     "summary": {
       "inputs": "{n} Eingänge",
@@ -1663,6 +1677,10 @@
       "ariaLabel": "Unbekannter Block-Typ"
     },
     "nodeConfig": {
+      "datetime": {
+        "custom_format": "Benutzerdefiniertes Format",
+        "tokens": "Token: H/HH Stunde, m/mm Minute, s/ss Sekunde, d/dd Tag, EE = Mo, EEE = Mo., EEEE = Montag, M/MM/MMM/MMMM Monat, yy/yyyy Jahr. Namen folgen der gewählten Sprache."
+      },
       "comment": {
         "text": "Text",
         "textPlaceholder": "Notiztext…",
@@ -2081,6 +2099,17 @@
         "sender": "Absender (max 11 Zeichen)",
         "message": "Nachricht (Fallback)"
       },
+      "notification": {
+        "adapter": "Message-/Benachrichtigungsadapter",
+        "selectAdapter": "Adapter auswählen",
+        "targets": "Ziele",
+        "noTargets": "Keine aktiven, konfigurierten Ziele vorhanden.",
+        "title": "Titel",
+        "fallback": "Nachricht (Fallback)",
+        "placeholders": "Der Logikblock hat keinen Datenpunkt-Kontext; MESSAGE-Platzhalter werden unverändert gesendet.",
+        "priority": "Priorität",
+        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden."
+      },
       "messageArchive": {
         "archive": "Meldungsarchiv",
         "selectArchive": "Meldungsarchiv auswählen",
@@ -2202,6 +2231,7 @@
       "latencyMs": "Latenz (ms)"
     },
     "nodeDescriptions": {
+      "datetime": "Gibt aktuelles Datum und Uhrzeit in der konfigurierten Zeitzone und im gewählten Format aus.",
       "const_value": "Gibt einen festen Wert aus — Zahl, Bool oder Text. Nützlich als Schwellwert oder Referenz.",
       "comment": "Freier Mehrzeilen-Text zur Dokumentation direkt auf dem Graph-Canvas. Rein visuell, hat keinen Effekt auf die Ausführung.",
       "and": "Ausgang ist true wenn ALLE Eingänge true sind. Eingänge (2–30) und Ausgang einzeln negierbar.",
@@ -2233,6 +2263,7 @@
       "operating_hours": "Zählt Betriebsstunden solange 'Aktiv' wahr ist. Reset setzt den Zähler zurück.",
       "python_script": "Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
       "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
+      "notify_message": "Sendet eine Benachrichtigung über die konfigurierten Ziele eines Message-/Benachrichtigungsadapters.",
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "message_archive": "Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
@@ -2267,6 +2298,9 @@
       "title": "Allgemeine Einstellungen",
       "timezone": "Zeitzone",
       "timezoneHint": "Alle Zeitangaben im System werden in dieser Zeitzone dargestellt.",
+      "dateFormat": "Standard-Datumsformat",
+      "timeFormat": "Standard-Zeitformat",
+      "formatHint": "Token: d/dd Tag, EE = Mo, EEE = Mo., EEEE = Montag, M/MM/MMM/MMMM Monat, yy/yyyy Jahr; H/HH Stunde, m/mm Minute, s/ss Sekunde.",
       "timezonePlaceholder": "Suchen … z.B. Zurich, Berlin, UTC",
       "noResults": "Keine Treffer",
       "save": "Speichern",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from obs.datetime_format import DEFAULT_CUSTOM_FORMAT
 from obs.logic.models import NodeTypeDef, NodeTypePort
 
 # ---------------------------------------------------------------------------
@@ -672,6 +673,18 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         color="#b45309",
     ),
     NodeTypeDef(
+        type="datetime",
+        label="Datum/Zeit",
+        category="timer",
+        description="Gibt das aktuelle Datum und die aktuelle Zeit in der Anwendungs-Zeitzone aus.",
+        inputs=[],
+        outputs=[_port("date", "Datum"), _port("time", "Zeit"), _port("custom", "Benutzerdefiniert")],
+        config_schema={
+            "custom_format": {"type": "string", "default": DEFAULT_CUSTOM_FORMAT, "label": "Benutzerdefiniertes Format"},
+        },
+        color="#b45309",
+    ),
+    NodeTypeDef(
         type="operating_hours",
         label="Betriebsstunden",
         category="timer",
@@ -737,6 +750,22 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
     ),
     # ── Notification ──────────────────────────────────────────────────────
     NodeTypeDef(
+        type="notify_message",
+        label="Benachrichtigung",
+        category="notification",
+        description="Sendet eine Nachricht über konfigurierte Ziele eines Message-/Benachrichtigungsadapters.",
+        inputs=[_port("trigger", "Trigger", "trigger"), _port("message", "Nachricht")],
+        outputs=[_port("sent", "Gesendet", "trigger")],
+        config_schema={
+            "adapter_instance_id": {"type": "string", "default": "", "label": "MESSAGE-Adapter"},
+            "providers": {"type": "array", "default": [], "label": "Ziele"},
+            "title": {"type": "string", "default": "", "label": "Titel"},
+            "message": {"type": "string", "default": "", "label": "Nachricht (Fallback)"},
+            "priority": {"type": "integer", "default": 0, "min": -2, "max": 1, "label": "Priorität"},
+        },
+        color="#e11d48",
+    ),
+    NodeTypeDef(
         type="notify_pushover",
         label="Pushover",
         category="notification",
@@ -781,6 +810,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
+        hidden_from_palette=True,
+        legacy=True,
     ),
     NodeTypeDef(
         type="notify_sms",
@@ -804,6 +835,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
             },
         },
         color="#e11d48",
+        hidden_from_palette=True,
+        legacy=True,
     ),
     NodeTypeDef(
         type="message_archive",

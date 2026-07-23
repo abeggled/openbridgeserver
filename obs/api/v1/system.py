@@ -32,6 +32,7 @@ from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
+from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, validate_datetime_setting
 from obs.models.types import DataTypeRegistry
 
 router = APIRouter(tags=["system"])
@@ -67,10 +68,16 @@ class DataTypeOut(BaseModel):
 
 class AppSettingsOut(BaseModel):
     timezone: str
+    date_format: str
+    time_format: str
+    language: str
 
 
 class AppSettingsIn(BaseModel):
-    timezone: str
+    timezone: str | None = None
+    date_format: str | None = None
+    time_format: str | None = None
+    language: str | None = None
 
 
 class HistorySettingsOut(BaseModel):
@@ -214,8 +221,16 @@ async def get_app_settings(
     _user: str = Depends(get_current_user),
 ) -> AppSettingsOut:
     """Read current application settings."""
-    row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
-    return AppSettingsOut(timezone=row["value"] if row else "Europe/Zurich")
+    timezone_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
+    date_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'date_format'")
+    time_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'time_format'")
+    language_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'language'")
+    return AppSettingsOut(
+        timezone=timezone_row["value"] if timezone_row else "Europe/Zurich",
+        date_format=date_row["value"] if date_row else DEFAULT_DATE_FORMAT,
+        time_format=time_row["value"] if time_row else DEFAULT_TIME_FORMAT,
+        language=language_row["value"] if language_row else "de",
+    )
 
 
 @router.put("/settings", response_model=AppSettingsOut)
@@ -225,31 +240,45 @@ async def update_app_settings(
     _user: str = Depends(get_current_user),
 ) -> AppSettingsOut:
     """Update application settings. Changes are applied immediately."""
-    # Validate timezone using zoneinfo
-    try:
-        from zoneinfo import ZoneInfo
-
-        ZoneInfo(body.timezone)
-    except Exception:
+    supplied_fields = body.model_fields_set
+    if not supplied_fields:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail="At least one setting must be supplied")
+    format_fields = {"date_format", "time_format"} & supplied_fields
+    if len(format_fields) == 1:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Unknown timezone: {body.timezone!r}",
+            detail="Date and time formats must be supplied together",
         )
+    try:
+        for field in supplied_fields:
+            validate_datetime_setting(field, getattr(body, field))
+    except ValueError as exc:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
-    await db.execute_and_commit(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('timezone', ?)",
-        (body.timezone,),
-    )
+    current_settings = await get_app_settings(db=db, _user=_user)
+    updated_config = {
+        field: value
+        for field in ("timezone", "date_format", "time_format", "language")
+        if field in supplied_fields and (value := getattr(body, field)) is not None
+    }
+    placeholders = ", ".join("(?, ?)" for _ in updated_config)
+    parameters = tuple(item for pair in updated_config.items() for item in pair)
+    await db.execute_and_commit(f"INSERT OR REPLACE INTO app_settings (key, value) VALUES {placeholders}", parameters)
 
     # Hot-reload LogicManager so astro_sun picks up new timezone immediately
     try:
         from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().update_app_config({"timezone": body.timezone})
+        get_logic_manager().update_app_config(updated_config)
     except Exception:
         pass  # Manager may not be running — non-critical
 
-    return AppSettingsOut(timezone=body.timezone)
+    return AppSettingsOut(
+        timezone=updated_config.get("timezone", current_settings.timezone),
+        date_format=updated_config.get("date_format", current_settings.date_format),
+        time_format=updated_config.get("time_format", current_settings.time_format),
+        language=updated_config.get("language", current_settings.language),
+    )
 
 
 # ---------------------------------------------------------------------------
