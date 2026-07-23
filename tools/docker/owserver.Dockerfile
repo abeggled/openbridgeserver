@@ -14,7 +14,7 @@
 # scripts/ files as the LXC template, single source of truth):
 #   docker build -f tools/docker/owserver.Dockerfile .
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 LABEL org.opencontainers.image.title="open bridge server — owserver sidecar" \
       org.opencontainers.image.description="1-Wire bus server (OWFS/owserver) for the ONEWIRE adapter" \
