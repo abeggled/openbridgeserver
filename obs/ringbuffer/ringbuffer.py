@@ -1210,7 +1210,7 @@ class RingBuffer:
 
         Der erste Rückgabewert entspricht den Manifest-Größen, die nach dem Cleanup aus
         ``stats.file_size_bytes`` verschwinden. Der zweite zählt ausschließlich tatsächlich
-        vorhandene Hauptdateien und Sidecars, deren Unlink realen freien Platz schafft.
+        vorhandene Hauptdateien, deren Unlink bei einem erfolgreichen Cleanup garantiert ist.
         """
         if not self._segmented or self._store is None:
             return 0, 0
@@ -1219,19 +1219,35 @@ class RingBuffer:
         # daher nicht aus. Status-Schätzungen dürfen diese Bytes nicht vorweg freigeben.
         if self.legacy_migration_in_progress():
             return 0, 0
-        if any(not Path(segment.filename).exists() for segment in await self._store.manifest.list_schema_legacy_segments()):
+        from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY
+
+        legacy_segments = await self._store.manifest.list_schema_legacy_segments()
+        # Der Manifest-Read ist ein Context-Switch: Ein Start kann sich inzwischen
+        # reserviert haben. Ebenso führt ein Start ohne migrierbare älteste Quelle
+        # (keine Quelle, quarantänierte Quelle oder Commit-Recovery) den Cleanup nicht aus.
+        if self.legacy_migration_in_progress():
+            return 0, 0
+        if (
+            not legacy_segments
+            or legacy_segments[0].status != SEGMENT_STATUS_LEGACY
+            or any(not Path(segment.filename).exists() for segment in legacy_segments)
+        ):
             return 0, 0
 
         segments = await self._store.manifest.list_migrating_segments()
+        # Auch dieser Read kann mit ``start_legacy_migration()`` racen. Nach dem
+        # Snapshot folgt kein weiteres await, sodass der zweite Guard das verbleibende
+        # Reservierungsfenster schließt.
+        if self.legacy_migration_in_progress():
+            return 0, 0
         manifest_bytes = sum(max(0, int(segment.size_bytes or 0)) for segment in segments)
         disk_bytes = 0
         for segment in segments:
             base = self._store._segments_dir / segment.filename
-            for candidate in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
-                try:
-                    disk_bytes += max(0, candidate.stat().st_size)
-                except OSError:
-                    pass
+            try:
+                disk_bytes += max(0, base.stat().st_size)
+            except OSError:
+                pass
         return manifest_bytes, disk_bytes
 
     async def has_missing_file_legacy(self) -> bool:
