@@ -449,6 +449,14 @@ class RingBuffer:
             # über den durablen ``has_committed_migration``-State), nicht ein transientes Flag.
             await reconcile_offline_migration(store)
 
+            # Ein partial keep-Commit kann bereits durabel sein, während der
+            # App-DB-Write ``keep`` → ``skipped`` fehlte (#1013). Den eindeutigen
+            # Store-Beleg VOR der Startup-Retention anwenden: sonst könnte diese
+            # die verbleibende Quelle zurückgewinnen, noch bevor main.py den
+            # Decision-Finalizer nach dem Buffer-Start aufruft.
+            if await store.manifest.has_pending_keep_migration_repair():
+                await self.set_legacy_retention_protected(True)
+
             # Alt-Manifeste (vor dem ``migration_state``-Zähler) belegen einen Commit nur über das
             # promotete ``rb_migrated_*``-Segment (#968, Codex :459). Die Start-Retention unten
             # könnte genau dieses – über Budget/Alter liegende – Segment trimmen, BEVOR der
@@ -1219,6 +1227,18 @@ class RingBuffer:
             return 0
         return await self._store.manifest.committed_migration_count()
 
+    async def has_pending_keep_migration_repair(self) -> bool:
+        """True, wenn ein partial keep-Commit noch persistenten Schutz braucht (#1013)."""
+        if not self._segmented or self._store is None:
+            return False
+        return await self._store.manifest.has_pending_keep_migration_repair()
+
+    async def acknowledge_pending_keep_migration_repair(self) -> None:
+        """Quittiert den Store-Beleg nach erfolgreichem Decision-Repair (#1013)."""
+        if not self._segmented or self._store is None:
+            return
+        await self._store.manifest.acknowledge_pending_keep_migration_repair()
+
     @staticmethod
     async def _backfill_committed_migration_counter(store) -> None:
         """Alt-Manifest-Migration: den durablen Commit-Zähler aus dem promoteten Segment-Beleg
@@ -1279,13 +1299,15 @@ class RingBuffer:
             return True
         return (self._legacy_migration_progress or {}).get("phase") in ("starting", "precheck", "copying", "committing")
 
-    async def start_legacy_migration(self, *, on_success=None) -> dict[str, Any]:
+    async def start_legacy_migration(self, *, on_success=None, started_from_keep: bool = False) -> dict[str, Any]:
         """Startet den budget-gebundenen Offline-Migrationsjob (#965) als Hintergrund-Task.
 
         Genau EIN Lauf gleichzeitig. Der Job setzt das Legacy-Segment für seine
         Laufzeit unter Retention-Schutz (die Quelle muss bis zum Commit autoritativ
-        bleiben). ``on_success`` (optional, async) läuft nach erfolgreichem Commit –
-        die API persistiert darüber die Entscheidung ``migrated``.
+        bleiben). ``started_from_keep`` persistiert nur den Startkontext im Store;
+        erst ein erfolgreicher partial commit macht daraus einen Repair-Beleg (#1013).
+        ``on_success`` (optional, async) läuft nach erfolgreichem Commit – die API
+        persistiert darüber die Entscheidung ``migrated`` bzw. ``skipped``.
         """
         from obs.ringbuffer.store.offline_migration import OfflineLegacyMigrator, OfflineMigrationError
 
@@ -1339,6 +1361,10 @@ class RingBuffer:
             # NOCH im reservierten Fenster liegen (#968, Codex :1291): läge er nach dem ``finally``,
             # sähe ein zweiter fast-gleichzeitiger Start ``_legacy_migration_starting == False`` UND
             # noch keinen Task und startete einen zweiten Migrator gegen dieselbe Quelle.
+            await self._store.manifest.prepare_offline_migration(
+                oldest.segment_id,
+                started_from_keep=started_from_keep,
+            )
             commit_count_before = await self.committed_migration_count()
         except BaseException:
             # Fehler NACH dem Schutz-Aktivieren, aber VOR der Task-Erstellung (#968, Codex :1294):
