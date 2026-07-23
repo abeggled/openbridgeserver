@@ -120,6 +120,11 @@ export const adapterApi = {
   mqttBrowseTopics:   (id, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/browse`, { params: { timeout }, timeout: (timeout + 3) * 1000 }),
   mqttSamplePayload:  (id, topic, timeout = 5) => api.get(`/adapters/instances/${id}/mqtt/sample`, { params: { topic, timeout }, timeout: (timeout + 3) * 1000 }),
   iobrokerBrowseStates: (id, q = '', limit = 50) => api.get(`/adapters/instances/${id}/iobroker/states`, { params: { q, limit } }),
+  // browse_sensors() makes one owserver call per device/alias found (each bounded by the
+  // instance's configured request_timeout, default 10s), so a bus with several devices can
+  // easily exceed the client's default 15s timeout well before the backend itself would fail.
+  onewireBrowseSensors: (id) => api.get(`/adapters/instances/${id}/onewire/browse`, { timeout: 60_000 }),
+  onewireSetAlias:      (id, romId, label) => api.patch(`/adapters/instances/${id}/onewire/aliases`, { rom_id: romId, label }),
   iobrokerImportPreview: (id, data) => api.post(`/adapters/instances/${id}/iobroker/import-preview`, data),
   iobrokerImport:        (id, data) => api.post(`/adapters/instances/${id}/iobroker/import`, data),
   getZsuHolidays:        (id, year = 0) => api.get(`/adapters/instances/${id}/holidays`, { params: year ? { year } : {} }),

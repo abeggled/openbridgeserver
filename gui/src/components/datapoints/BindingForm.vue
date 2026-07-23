@@ -94,6 +94,14 @@
       <BindingFormOnewire
         v-if="selectedAdapterType === 'ONEWIRE'"
           :cfg="cfg"
+          :selected-instance-id="selectedInstanceId"
+          :onewire-sensors="onewireSensors"
+          :onewire-browse-loading="onewireBrowseLoading"
+          :onewire-browse-error="onewireBrowseError"
+          @onewire-browse="browseOnewireSensors"
+          @select-onewire-sensor="selectOnewireSensor"
+          @update-onewire-alias-draft="onOnewireAliasDraft"
+          @save-onewire-alias="saveOnewireAlias"
         />
 
       <!-- Home Assistant -->
@@ -371,7 +379,7 @@ const cfg = reactive({
   byte_order: 'big', word_order: 'big',
   topic: '', publish_topic: '', retain: false, payload_template: '',
   source_data_type: '', json_key: '', xml_path: '',
-  sensor_id: '', sensor_type: 'DS18B20',
+  sensor_id: '', property: 'temperature',
   // HOME_ASSISTANT
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
   // IOBROKER
@@ -457,6 +465,12 @@ const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
 let iobrokerBrowseTimer = null
+
+// 1-Wire sensor browser state
+const onewireSensors = ref([])
+const onewireBrowseLoading = ref(false)
+const onewireBrowseError = ref(null)
+const onewireAliasDrafts = reactive({})
 
 // SNMP Walk state
 const snmpWalkResults = ref([])
@@ -798,6 +812,56 @@ function selectIoBrokerState(state) {
   iobrokerBrowseError.value = null
 }
 
+async function browseOnewireSensors() {
+  const instanceId = selectedInstanceId.value
+  if (!instanceId) {
+    onewireBrowseError.value = t('adapters.bindingForm.errors.selectOnewireInstanceFirst')
+    return
+  }
+  onewireBrowseLoading.value = true
+  onewireBrowseError.value = null
+  try {
+    const { data } = await adapterApi.onewireBrowseSensors(instanceId)
+    // The selected instance may have changed while this scan was in flight —
+    // discard a late response for an instance that's no longer selected.
+    if (selectedInstanceId.value !== instanceId) return
+    onewireSensors.value = data
+    if (data.length === 0) onewireBrowseError.value = t('adapters.bindingForm.errors.noSensorsFound')
+  } catch (e) {
+    if (selectedInstanceId.value !== instanceId) return
+    onewireBrowseError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.onewireScanFailed')
+  } finally {
+    if (selectedInstanceId.value === instanceId) onewireBrowseLoading.value = false
+  }
+}
+
+function selectOnewireSensor({ rom_id, property }) {
+  cfg.sensor_id = rom_id
+  cfg.property = property
+}
+
+function onOnewireAliasDraft({ romId, label }) {
+  onewireAliasDrafts[romId] = label
+}
+
+async function saveOnewireAlias(romId) {
+  const instanceId = selectedInstanceId.value
+  const label = onewireAliasDrafts[romId]
+  if (!instanceId || label === undefined) return
+  try {
+    await adapterApi.onewireSetAlias(instanceId, romId, label)
+    // The selected instance may have changed while this PATCH was in flight —
+    // don't apply the saved label to whatever scan list is now displayed, since
+    // a same-rom_id sensor on the newly selected instance would get the wrong alias.
+    if (selectedInstanceId.value !== instanceId) return
+    const sensor = onewireSensors.value.find(s => s.rom_id === romId)
+    if (sensor) sensor.alias = label
+  } catch (e) {
+    if (selectedInstanceId.value !== instanceId) return
+    onewireBrowseError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.onewireAliasSaveFailed')
+  }
+}
+
 async function snmpWalk(append = false) {
   const instanceId = selectedInstanceId.value
   if (!instanceId || !cfg.host) return
@@ -885,9 +949,21 @@ watch(selectedAdapterType, type => {
 })
 
 watch(selectedInstanceId, (newId, oldId) => {
-  if (oldId && newId !== oldId && selectedAdapterType.value === 'MESSAGE') {
+  if (oldId && selectedAdapterType.value === 'MESSAGE') {
     cfg.providers = []
   }
+  // Discard the previous instance's 1-Wire scan — otherwise its sensors stay
+  // visible/selectable after switching instances, and a slow in-flight scan
+  // for the old instance could still overwrite this once it resolves (see
+  // the selectedInstanceId re-check in browseOnewireSensors()).
+  onewireSensors.value = []
+  onewireBrowseError.value = null
+  // Also unblock the Scan button immediately — otherwise a still-pending
+  // scan for the previous instance leaves it disabled until that request
+  // eventually settles (its own "finally" skips clearing this, since by
+  // then selectedInstanceId no longer matches the instance it was for).
+  onewireBrowseLoading.value = false
+  for (const key of Object.keys(onewireAliasDrafts)) delete onewireAliasDrafts[key]
 })
 
 // Zeitschaltuhr helpers
@@ -1155,7 +1231,7 @@ function buildConfig() {
     return c
   }
   if (type === 'ONEWIRE') {
-    return { sensor_id: cfg.sensor_id, sensor_type: cfg.sensor_type || 'DS18B20' }
+    return { sensor_id: cfg.sensor_id, property: cfg.property || 'temperature' }
   }
   if (type === 'HOME_ASSISTANT') {
     const c = { entity_id: cfg.entity_id }

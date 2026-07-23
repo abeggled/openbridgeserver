@@ -13,7 +13,9 @@
  *
  * Während ein Migrationsjob läuft (phase starting/precheck/copying/committing)
  * pollt der Composable den Status im 1-s-Intervall und stoppt selbsttätig,
- * sobald der Job terminal ist (done/failed) oder ein Refresh fehlschlägt.
+ * sobald der Job terminal ist (done/failed). Transiente Serverfehler werden
+ * höchstens dreimal im 1-s-Intervall versucht; danach und bei nicht retryfähigen
+ * Fehlern stoppt der Poller.
  */
 import { computed, ref } from 'vue'
 import { ringbufferApi } from '@/api/client'
@@ -25,6 +27,7 @@ export const RUNNING_JOB_PHASES = new Set(['starting', 'precheck', 'copying', 'c
 export const ESCALATION_WINDOW_SECONDS = 7 * 24 * 3600
 
 const POLL_INTERVAL_MS = 1000
+const MAX_SERVER_ERROR_RETRIES = 3
 
 // ── Modul-Singleton-Zustand ────────────────────────────────────────────────
 const status = ref(null)
@@ -36,6 +39,7 @@ const loadError = ref(false)
 // Legacy-Manifestzeile sichtbar bleiben.
 const completionRevision = ref(0)
 let pollTimer = null
+let serverErrorRetryCount = 0
 
 const decision = computed(() => status.value?.decision ?? null)
 const legacy = computed(() => status.value?.legacy ?? null)
@@ -106,6 +110,7 @@ function applyStatus(data) {
   const nextPhase = data?.job?.phase ?? null
   status.value = data
   loadError.value = false
+  serverErrorRetryCount = 0
   if (RUNNING_JOB_PHASES.has(previousPhase) && nextPhase === 'done') {
     completionRevision.value += 1
   }
@@ -120,8 +125,29 @@ async function refresh() {
     return data
   } catch (error) {
     loadError.value = true
-    // Kein Endlos-Polling gegen einen fehlschlagenden Endpoint.
-    stopPolling()
+    const responseStatus = error?.response?.status
+    if (responseStatus >= 500 && responseStatus < 600) {
+      // Der Status-Reconciler kann bei einem transienten app-DB-Lock mit 5xx
+      // antworten. Auch beim initialen Dashboard-Refresh automatisch erneut
+      // versuchen, damit die geschützte Legacy-Quelle nach erfolgreichem Repair
+      // ohne manuellen Reload wieder bedienbar wird. Die Zahl der Versuche bleibt
+      // begrenzt, damit ein dauerhaft defekter Endpoint keine Endlosschleife erzeugt.
+      if (serverErrorRetryCount < MAX_SERVER_ERROR_RETRIES) {
+        serverErrorRetryCount += 1
+        if (pollTimer == null) {
+          pollTimer = setInterval(() => {
+            refresh().catch(() => {})
+          }, POLL_INTERVAL_MS)
+        }
+      } else {
+        stopPolling()
+        serverErrorRetryCount = 0
+      }
+    } else {
+      // Auth-/Clientfehler sind nicht durch Wiederholen heilbar.
+      stopPolling()
+      serverErrorRetryCount = 0
+    }
     throw error
   } finally {
     loading.value = false
