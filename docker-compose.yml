@@ -98,6 +98,35 @@ services:
       retries: 5
       start_period: 10s
 
+  # ── 1-Wire bus server (optional, issue #1040) ────────────────────────────
+  # Bridges USB/serial 1-Wire bus masters (plain USB sticks, ElabNET PBM) into
+  # a TCP service that the ONEWIRE adapter connects to. Skipped by default via
+  # a Compose profile — most installs don't use 1-Wire, and an idle owserver
+  # is an unnecessary running service. To enable:
+  #   1. Set OBS_ONEWIRE_USB_ALL=true and/or OBS_ONEWIRE_PBM_DEVICES in .env
+  #   2. Uncomment the matching device(s) below (use a stable
+  #      /dev/serial/by-id/... path for the PBM — /dev/ttyUSB0 can shift
+  #      across reboots or when other serial devices are attached)
+  #   3. Run with the profile active: COMPOSE_PROFILES=onewire docker compose up -d
+  #      (set COMPOSE_PROFILES=onewire in .env if your tooling can't pass it
+  #      on the command line, e.g. some Portainer stacks)
+  # If even setting COMPOSE_PROFILES isn't possible in your environment,
+  # delete the `profiles:` line below to make the service always-on.
+  owserver:
+    build:
+      context: .
+      dockerfile: tools/docker/owserver.Dockerfile
+    restart: unless-stopped
+    profiles: ["onewire"]
+    environment:
+      OBS_ONEWIRE__USB_ALL: ${OBS_ONEWIRE_USB_ALL:-}
+      OBS_ONEWIRE__PBM_DEVICES: ${OBS_ONEWIRE_PBM_DEVICES:-}
+    ports:
+      - "${OBS_ONEWIRE_HOST_PORT:-4304}:4304"
+    # devices:
+    #   - "/dev/bus/usb/002/007:/dev/bus/usb/002/007"                # plain USB busmaster
+    #   - "/dev/serial/by-id/usb-FTDI_...:/dev/ttyUSB0"                # ElabNET PBM (stable path!)
+
 
 volumes:
   obs_data:
