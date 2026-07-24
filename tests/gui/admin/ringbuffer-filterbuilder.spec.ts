@@ -214,21 +214,17 @@ test('Topbar-Chip-Toggle schaltet das Set ein und aus', async ({ page }) => {
     const dpOutRows = page.locator(`[data-testid="ringbuffer-entry"][data-dp="${dpOut.id}"]`)
 
     await expectTopbarChip(page, setId)
-    // Pause the live feed: once the set is toggled inactive there are no
-    // active topbar sets, so the live feed would run unfiltered and a
-    // background WS push could repopulate the table between the toggle and
-    // the empty-state assertion. This test isolates the query-path behaviour.
+    // Pause the live feed so this test isolates the query-path behaviour.
     await page.click('[data-testid="btn-live-pause"]')
     await expect(dpInRows).toHaveCount(1, { timeout: 10_000 })
     await expect(dpOutRows).toHaveCount(0)
 
     // Toggle (●→○) flips is_active=false. The set stays pinned to the topbar
-    // (topbar_active=true) but the backend multi-query skips inactive sets,
-    // so the OR-union is empty and the table renders nothing.
+    // (topbar_active=true), but with no participating sets the monitor falls
+    // back to the unfiltered query and shows both DPs.
     await page.click(`[data-testid="topbar-chip-toggle-${setId}"]`)
-    await expect(page.locator('[data-testid="ringbuffer-empty"]')).toBeVisible({ timeout: 10_000 })
-    await expect(dpInRows).toHaveCount(0)
-    await expect(dpOutRows).toHaveCount(0)
+    await expect(dpInRows).toHaveCount(1, { timeout: 10_000 })
+    await expect(dpOutRows).toHaveCount(1)
 
     // Toggle back on → multi-query returns only dpIn.
     await page.click(`[data-testid="topbar-chip-toggle-${setId}"]`)
