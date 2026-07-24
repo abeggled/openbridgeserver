@@ -154,7 +154,7 @@ async def test_api_client_variable_yields_source_direction(client, auth_headers)
 async def test_api_client_variable_json_string_yields_source_direction(client, auth_headers):
     dp = await _create_dp(client, auth_headers, "dp_api_client_variable_json_test")
     api_node = _api_client_node(dp["id"])
-    api_node["data"]["variables"] = '[{"slot": 1, "datapoint_id": "%s", "datapoint_name": "test"}]' % dp["id"]
+    api_node["data"]["variables"] = '[{{"slot": 1, "datapoint_id": "{}", "datapoint_name": "test"}}]'.format(dp["id"])
     gid = await _create_graph(client, auth_headers, "graph_api_client_variable_json", [api_node])
     try:
         usages = await _get_usages(client, auth_headers, dp["id"])

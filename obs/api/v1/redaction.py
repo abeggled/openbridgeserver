@@ -17,8 +17,6 @@ def redact_sensitive_fields(
     redacted = dict(data)
     for field in sensitive_fields:
         value = redacted.get(field)
-        if isinstance(value, str) and value:
-            redacted[field] = replacement
-        elif value is not None and value != "":
+        if isinstance(value, str) and value or value is not None and value != "":
             redacted[field] = replacement
     return redacted

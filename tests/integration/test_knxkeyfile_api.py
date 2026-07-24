@@ -7,10 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from obs.api.auth import create_access_token
 from xknx.secure.keyring import InterfaceType
 
 import obs.api.v1.knxkeyfile as _knxkeyfile_module
+from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
 

@@ -106,11 +106,10 @@ def apply_source_type(
                     )
             else:
                 pub_value = (root.text or "").strip()
-        except Exception as xml_exc:
-            logger.warning(
-                "Transformation XML: parse error for binding %s: %s",
+        except Exception:
+            logger.exception(
+                "Transformation XML: parse error for binding %s",
                 binding_id,
-                xml_exc,
             )
 
     elif source_data_type == "int":

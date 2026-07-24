@@ -39,10 +39,9 @@ def mosquitto_port():
         port = sock.getsockname()[1]
 
     # Write a minimal mosquitto config that allows anonymous connections
-    cfg = tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False, prefix="obs_test_mosquitto_")
-    cfg.write("listener 1883\nallow_anonymous true\n")
-    cfg.flush()
-    cfg.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False, prefix="obs_test_mosquitto_") as cfg:
+        cfg.write("listener 1883\nallow_anonymous true\n")
+        cfg.flush()
 
     cid = (
         subprocess.check_output(
@@ -114,8 +113,8 @@ async def app(mosquitto_port):
         reset_settings,
     )
 
-    db_file = tempfile.NamedTemporaryFile(mode="w", suffix=".db", delete=False, prefix="obs_test_db_")
-    db_file.close()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".db", delete=False, prefix="obs_test_db_") as db_file:
+        pass
     db_path = db_file.name
     allowlist_path = db_path.replace(".db", "_url_targets.yaml")
 
@@ -174,8 +173,8 @@ async def app(mosquitto_port):
 
             mod = importlib.import_module(module_path)
             getattr(mod, fn_name)()
-        except Exception:
-            pass  # best-effort — never fail teardown
+        except Exception:  # noqa: S110, BLE001 -- best-effort teardown across many optional modules, must never fail the test
+            pass
 
     cleanup_paths = [
         db_path,

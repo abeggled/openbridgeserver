@@ -6,10 +6,12 @@ without the optional dependency.
 """
 
 from __future__ import annotations
+
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from xknx.core.connection_state import XknxConnectionState
 from xknx.dpt import DPTArray, DPTBinary
 from xknx.telegram import Telegram
@@ -26,10 +28,6 @@ from obs.adapters.knx.adapter import (
 )
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.core.event_bus import AdapterStatusEvent
-
-
-import pytest
-
 from tests.adapters.conftest import make_binding
 
 # ---------------------------------------------------------------------------
@@ -618,7 +616,7 @@ class TestKnxAdapterMiscSetters:
 
     def test_set_value_getter(self, mock_bus):
         adapter = KnxAdapter(event_bus=mock_bus, config={"host": "127.0.0.1"})
-        getter = lambda dp_id: None  # noqa: E731
+        getter = lambda dp_id: None
         adapter.set_value_getter(getter)
         assert adapter._value_getter is getter
 
@@ -1166,6 +1164,7 @@ class TestHandleReadRequest:
     @pytest.mark.asyncio
     async def test_good_boolean_value_sends_dpt_binary_response(self, mock_bus):
         from unittest.mock import MagicMock
+
         from xknx.dpt import DPTBinary
 
         adapter, mock_xknx = self._make_adapter(mock_bus)
@@ -1352,6 +1351,7 @@ class TestOnTelegramEdgeCases:
 class TestBuildSniffer:
     def test_sniffer_is_xknx_device(self):
         from unittest.mock import MagicMock
+
         from xknx.devices import Device as XknxDevice
 
         from obs.adapters.knx.adapter import _build_sniffer
@@ -1416,7 +1416,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.from_knx([0xAB, 0xCD]) == bytes([0xAB, 0xCD])
 
     def test_passthrough_rv_from_knx_empty(self):
@@ -1429,7 +1429,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.from_knx(None) == b""
         assert rv.from_knx([]) == b""
 
@@ -1443,7 +1443,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.to_knx("anything") == []
 
     def test_passthrough_rv_unit_of_measurement_is_none(self):
@@ -1456,7 +1456,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.unit_of_measurement is None
 
 
@@ -1790,7 +1790,7 @@ class TestKnxConnectErrorDetail:
 
         class _FakeXKNX:
             async def start(self):
-                raise Exception("Could not fetch gateway info from 192.168.1.152:3671")
+                raise RuntimeError("Could not fetch gateway info from 192.168.1.152:3671")
 
             async def stop(self):
                 pass
@@ -1819,6 +1819,7 @@ class TestSecureConfigFromKeyfile:
 
     def _make_keyring_mock(self, *, user_id: int = 2, individual_address: str = "1.1.100") -> Any:
         from unittest.mock import MagicMock
+
         from xknx.secure.keyring import InterfaceType
 
         iface = MagicMock()
@@ -1852,7 +1853,7 @@ class TestSecureConfigFromKeyfile:
         AND the keyring object (for data_secure_init) but NOT a keyfile path."""
         from xknx.io import SecureConfig
 
-        keyring, iface = self._make_keyring_mock()
+        keyring, _iface = self._make_keyring_mock()
         monkeypatch.setattr(
             "obs.adapters.knx.adapter.sync_load_keyring",
             lambda path, pw: keyring,
@@ -1966,6 +1967,7 @@ class TestSecureConfigFromKeyfile:
         """_do_connect() with keyfile calls _secure_config_from_keyfile — no keyfile
         path reaches xknx, so no UDP DescriptionRequest is triggered."""
         from unittest.mock import MagicMock
+
         from xknx.io import SecureConfig
 
         # Return a SecureConfig with explicit credentials (no keyfile path)
@@ -2028,6 +2030,7 @@ class TestSecureConfigFromKeyfile:
         _do_connect() must use the fallback's individual_address in ConnectionConfig,
         not the stale configured value (e.g. '1.1.255')."""
         from unittest.mock import MagicMock
+
         from xknx.io import SecureConfig
 
         fallback_sc = SecureConfig(device_authentication_password="devauth", user_id=3, user_password="pw")

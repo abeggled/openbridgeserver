@@ -237,9 +237,12 @@ async def test_commit_failure_rolls_back_and_no_leak(tmp_path: Path):
         async def failing_commit():
             raise aiosqlite.OperationalError("disk I/O error")
 
-        with patch.object(conn, "commit", failing_commit), patch.object(conn, "rollback", counting_rollback):
-            with pytest.raises(aiosqlite.OperationalError):
-                await store.append([_event("leak", "2024-01-01T00:00:00.000Z")])
+        with (
+            patch.object(conn, "commit", failing_commit),
+            patch.object(conn, "rollback", counting_rollback),
+            pytest.raises(aiosqlite.OperationalError),
+        ):
+            await store.append([_event("leak", "2024-01-01T00:00:00.000Z")])
 
         assert rollback_calls["n"] == 1, "commit-Fehler muss die Transaktion zurueckrollen"
 

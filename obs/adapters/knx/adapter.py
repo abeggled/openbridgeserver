@@ -39,7 +39,7 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.knx.dpt_registry import DPTRegistry
@@ -183,7 +183,7 @@ class KnxAdapter(AdapterBase):
             try:
                 await self._xknx.stop()
             except Exception:
-                pass
+                logger.exception("KNX cleanup of previous instance failed")
             self._xknx = None
 
         cfg = KnxAdapterConfig(**self._config)
@@ -267,7 +267,7 @@ class KnxAdapter(AdapterBase):
                     code="knxIpSecureConfigError",
                     params={"error": str(exc)},
                 )
-                logger.error("KNX IP Secure Konfigurationsfehler: %s", exc)
+                logger.exception("KNX IP Secure Konfigurationsfehler")
                 return
 
         is_routing = cfg.connection_type in ("routing", "routing_secure")
@@ -324,11 +324,7 @@ class KnxAdapter(AdapterBase):
         except Exception as exc:
             detail = _knx_connect_error_detail(exc, cfg.connection_type)
             await self._publish_status(False, detail, severity="error")
-            cause = exc.__cause__
-            if cause:
-                logger.warning("KNX connect failed: %s (cause: %s)", exc, cause)
-            else:
-                logger.warning("KNX connect failed: %s", exc)
+            logger.exception("KNX connect failed")
 
     async def _reconnect_loop(self) -> None:
         """Background task: reconnect every 30 s when not connected."""
@@ -440,7 +436,7 @@ class KnxAdapter(AdapterBase):
                 continue
             try:
                 bc = KnxBindingConfig(**binding.config)
-            except Exception:
+            except (ValidationError, TypeError):
                 logger.warning("Invalid KNX binding config for %s — skipped", binding.id)
                 continue
 
@@ -468,8 +464,8 @@ class KnxAdapter(AdapterBase):
             try:
                 self._xknx.devices.async_remove(self._sniffer)
                 logger.debug("KNX: old sniffer removed")
-            except Exception as exc:
-                logger.debug("KNX: sniffer remove: %s", exc)
+            except Exception:
+                logger.exception("KNX: sniffer remove failed")
             self._sniffer = None
 
         if not self._ga_source_map:
@@ -531,8 +527,8 @@ class KnxAdapter(AdapterBase):
                 try:
                     value = dpt.decoder(raw)
                     quality = "good"
-                except Exception as exc:
-                    logger.warning("KNX DPT decode error for %s (%s): %s", ga, dpt.dpt_id, exc)
+                except Exception:
+                    logger.exception("KNX DPT decode error for %s (%s)", ga, dpt.dpt_id)
                     value = raw.hex() if isinstance(raw, (bytes, bytearray)) else raw
                     quality = "uncertain"
 

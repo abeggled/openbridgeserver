@@ -6,6 +6,7 @@ statt erst beim Laufzeit-Fehler im Adapter zu scheitern.
 """
 
 import asyncio
+
 import pytest
 
 pysnmp = pytest.importorskip("pysnmp", reason="pysnmp nicht installiert")
@@ -133,11 +134,11 @@ def test_usm_user_data_no_auth():
 def _import_auth_constants():
     """Auth/priv constants moved from hlapi to hlapi.asyncio in pysnmp 6.x."""
     try:
-        from pysnmp.hlapi.v3arch.asyncio import usmHMACMD5AuthProtocol, usmDESPrivProtocol  # noqa: F401
+        from pysnmp.hlapi.v3arch.asyncio import usmDESPrivProtocol, usmHMACMD5AuthProtocol
 
         return usmHMACMD5AuthProtocol, usmDESPrivProtocol
     except ImportError:
-        from pysnmp.hlapi.asyncio import usmHMACMD5AuthProtocol, usmDESPrivProtocol  # noqa: F401
+        from pysnmp.hlapi.asyncio import usmDESPrivProtocol, usmHMACMD5AuthProtocol
 
         return usmHMACMD5AuthProtocol, usmDESPrivProtocol
 

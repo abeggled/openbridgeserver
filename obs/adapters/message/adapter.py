@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.message import providers as message_providers
@@ -24,8 +24,8 @@ from obs.adapters.message.providers.base import MessageSendResult
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps
-from obs.db.database import get_db
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
+from obs.db.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class MessageAdapterConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_providers(self) -> "MessageAdapterConfig":
+    def _validate_providers(self) -> MessageAdapterConfig:
         for provider_type, provider_config in self.providers.items():
             provider = message_providers.get_provider(provider_type)
             if provider is None:
@@ -74,7 +74,7 @@ class MessageBindingConfig(BaseModel):
     archive_strategy: ArchiveStrategy = "send_only"
 
     @model_validator(mode="after")
-    def _validate_targets(self) -> "MessageBindingConfig":
+    def _validate_targets(self) -> MessageBindingConfig:
         if not self.message.strip():
             raise ValueError("MESSAGE binding message must not be empty")
         sends_notification = self.archive_strategy in {"send_only", "send_and_archive"}
@@ -137,6 +137,7 @@ def _values_equal(left: Any, right: Any) -> bool:
     try:
         return left == right
     except Exception:
+        logger.exception("MESSAGE: comparing binding values failed — treating as unequal")
         return False
 
 
@@ -290,7 +291,7 @@ class MessageAdapter(AdapterBase):
                 continue
             try:
                 cfg = _binding_config(binding)
-            except Exception:
+            except (ValidationError, TypeError):
                 logger.warning("Invalid MESSAGE binding config for %s skipped", binding.id)
                 continue
             if not cfg.enabled:
@@ -374,7 +375,7 @@ class MessageAdapter(AdapterBase):
             from zoneinfo import ZoneInfo
 
             display_ts = event_ts.astimezone(ZoneInfo(app_settings["timezone"]))
-        except Exception:
+        except (KeyError, ValueError):
             display_ts = event_ts
         rendered = render_message(
             cfg.message,
@@ -552,5 +553,5 @@ def _lookup_datapoint(datapoint_id: uuid.UUID) -> Any | None:
         from obs.core.registry import get_registry
 
         return get_registry().get(datapoint_id)
-    except Exception:
+    except RuntimeError:
         return None

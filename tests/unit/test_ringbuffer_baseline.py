@@ -41,6 +41,29 @@ async def test_ringbuffer_trim_is_count_based_and_drops_oldest_first():
 
 
 @pytest.mark.asyncio
+async def test_ringbuffer_fetchall_defaults_params_to_empty_list():
+    """``_fetchall`` accepts an optional ``params`` argument; when omitted it must
+    default to an empty parameter list rather than passing ``None`` to the
+    underlying aiosqlite cursor (which would raise)."""
+    rb = RingBuffer(storage="memory", max_entries=3)
+    await rb.start()
+    try:
+        await rb.record(
+            ts="2026-01-01T00:00:00.000Z",
+            datapoint_id="dp-fetchall",
+            topic="dp/dp-fetchall/value",
+            old_value=None,
+            new_value=1,
+            source_adapter="api",
+            quality="good",
+        )
+        rows = await rb._fetchall("SELECT COUNT(*) AS c FROM ringbuffer")
+        assert rows[0]["c"] == 1
+    finally:
+        await rb.stop()
+
+
+@pytest.mark.asyncio
 async def test_ringbuffer_no_trim_when_count_equals_limit():
     rb = RingBuffer(storage="memory", max_entries=3)
     await rb.start()

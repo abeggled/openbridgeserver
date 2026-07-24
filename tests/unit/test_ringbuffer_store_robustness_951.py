@@ -20,9 +20,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 import aiosqlite
+import pytest
 
 from obs.ringbuffer.store.config import StoreRetentionConfig
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery

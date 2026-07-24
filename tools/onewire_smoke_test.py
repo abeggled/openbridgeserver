@@ -26,14 +26,14 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from obs.adapters.onewire.adapter import OneWireAdapter  # noqa: E402
+from obs.adapters.onewire.adapter import OneWireAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("onewire-smoke-test")
 
 
 class _NullBus:
-    async def publish(self, event) -> None:  # noqa: ANN001 — DataValueEvent, unused here
+    async def publish(self, event) -> None:
         pass
 
 

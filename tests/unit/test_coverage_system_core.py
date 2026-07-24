@@ -824,6 +824,74 @@ class TestDataPointRegistryLoadFromDb:
         state = reg._values[dp_id]
         assert state.value == "not-a-time"
 
+    @pytest.mark.asyncio
+    async def test_load_from_db_persisted_value_malformed_json_kept_as_raw_string(self):
+        """A persisted last-value that isn't valid JSON (e.g. corrupted/legacy raw
+        text) must fall back to the raw stored string rather than raising."""
+        from obs.core.registry import DataPointRegistry
+
+        dp_id = uuid.uuid4()
+        dp_rows = _make_db_rows_for_registry(dp_id)
+        last_val_rows = [
+            _row(
+                datapoint_id=str(dp_id),
+                value="not valid json {",
+                unit="°C",
+                ts=datetime.now(UTC).isoformat(),
+            )
+        ]
+
+        class _DbWithMalformedValue(_DbStub):
+            async def fetchall(self, query, params=()):
+                if "datapoint_last_values" in query:
+                    return last_val_rows
+                return dp_rows
+
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = _DbWithMalformedValue(rows=dp_rows)
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+        reg._points = {}
+        reg._values = {}
+        await reg.load_from_db()
+        state = reg._values[dp_id]
+        assert state.value == "not valid json {"
+        assert state.quality == "good"
+
+    @pytest.mark.asyncio
+    async def test_load_from_db_persisted_value_invalid_ts_falls_back_to_now(self):
+        """A persisted last-value row with an unparsable ``ts`` must not blow up
+        startup — it falls back to the current time instead."""
+        from obs.core.registry import DataPointRegistry
+
+        dp_id = uuid.uuid4()
+        dp_rows = _make_db_rows_for_registry(dp_id)
+        last_val_rows = [
+            _row(
+                datapoint_id=str(dp_id),
+                value="22.5",
+                unit="°C",
+                ts="not-a-valid-timestamp",
+            )
+        ]
+
+        class _DbWithBadTs(_DbStub):
+            async def fetchall(self, query, params=()):
+                if "datapoint_last_values" in query:
+                    return last_val_rows
+                return dp_rows
+
+        before = datetime.now(UTC)
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = _DbWithBadTs(rows=dp_rows)
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+        reg._points = {}
+        reg._values = {}
+        await reg.load_from_db()
+        state = reg._values[dp_id]
+        assert state.ts >= before
+
 
 class TestDataPointRegistryCRUD:
     @pytest.mark.asyncio
@@ -1563,7 +1631,7 @@ class TestSystemHealth:
 
         fake_reg = SimpleNamespace(count=lambda: 5)
         monkeypatch.setattr("obs.core.registry.get_registry", lambda: fake_reg)
-        monkeypatch.setattr(adapter_registry, "get_all_instances", lambda: {})
+        monkeypatch.setattr(adapter_registry, "get_all_instances", dict)
 
         result = await sys_api.health()
         assert result.status == "ok"
@@ -1579,7 +1647,7 @@ class TestSystemHealth:
             raise RuntimeError("not initialized")
 
         monkeypatch.setattr("obs.core.registry.get_registry", _raise)
-        monkeypatch.setattr(adapter_registry, "get_all_instances", lambda: {})
+        monkeypatch.setattr(adapter_registry, "get_all_instances", dict)
 
         result = await sys_api.health()
         assert result.status == "ok"
@@ -1648,8 +1716,9 @@ class TestSystemAppSettings:
 
     @pytest.mark.asyncio
     async def test_update_app_settings_invalid_timezone_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub()
         body = sys_api.AppSettingsIn(timezone="Invalid/Timezone/XYZ")
@@ -1692,8 +1761,9 @@ class TestSystemNavLinks:
 
     @pytest.mark.asyncio
     async def test_update_nav_link_not_found_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub(one=None)
         body = sys_api.NavLinkPatch(label="New")
@@ -1714,8 +1784,9 @@ class TestSystemNavLinks:
 
     @pytest.mark.asyncio
     async def test_delete_nav_link_not_found_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub(one=None)
         with pytest.raises(HTTPException) as exc_info:
@@ -1791,8 +1862,9 @@ class TestSystemLogs:
 
     @pytest.mark.asyncio
     async def test_set_log_level_invalid_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         body = sys_api.LogLevelIn(level="SUPERVERBOSE")
         with pytest.raises(HTTPException) as exc_info:
@@ -1825,8 +1897,9 @@ class TestSystemHistorySettings:
 
     @pytest.mark.asyncio
     async def test_update_history_settings_invalid_plugin_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub()
         body = sys_api.HistorySettingsIn(plugin="badplugin")
@@ -1881,6 +1954,29 @@ class TestSystemHistorySettings:
         body = sys_api.HistorySettingsIn(plugin="unknownplugin")
         result = await sys_api.test_history_connection(body=body, _admin="admin")
         assert result.ok is False
+
+    @pytest.mark.asyncio
+    async def test_test_history_connection_logs_and_reports_unexpected_error(self, monkeypatch):
+        """A genuinely unexpected error (not a missing optional dependency, which
+        raises RuntimeError and is handled separately) must be logged via
+        logger.exception and reported back as ok=False with the error message."""
+        import obs.api.v1.system as sys_api
+
+        class _InfluxPlugin:
+            def __init__(self, **kwargs):
+                pass
+
+            async def ping(self):
+                raise ValueError("simulated unexpected ping failure")
+
+        monkeypatch.setattr("obs.history.influxdb_plugin.InfluxDBHistoryPlugin", _InfluxPlugin)
+        db = _DbStub(rows=[])
+        body = sys_api.HistorySettingsIn(plugin="influxdb")
+
+        result = await sys_api.test_history_connection(body=body, db=db, _admin="admin")
+
+        assert result.ok is False
+        assert "simulated unexpected ping failure" in result.message
 
 
 # ===========================================================================

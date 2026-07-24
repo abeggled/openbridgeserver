@@ -33,7 +33,7 @@ import asyncio
 import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
@@ -211,19 +211,19 @@ def _coerce_value(snmp_value: Any, data_type: str) -> Any:
     if data_type == "int" or (data_type == "auto" and type_name in _INT_AUTO_TYPES):
         try:
             return int(snmp_value)
-        except Exception:
+        except (ValueError, TypeError):
             return _pretty(snmp_value)
 
     if data_type in ("counter", "gauge") or (data_type == "auto" and type_name in ("Counter32", "Counter64", "Gauge32", "Gauge")):
         try:
             return int(snmp_value)
-        except Exception:
+        except (ValueError, TypeError):
             return _pretty(snmp_value)
 
     if data_type == "timeticks" or (data_type == "auto" and type_name == "TimeTicks"):
         try:
             return int(snmp_value)
-        except Exception:
+        except (ValueError, TypeError):
             return _pretty(snmp_value)
 
     if data_type == "float":
@@ -236,7 +236,7 @@ def _coerce_value(snmp_value: Any, data_type: str) -> Any:
         try:
             raw = bytes(snmp_value)
             return raw.hex()
-        except Exception:
+        except (ValueError, TypeError):
             return _pretty(snmp_value)
 
     # "string" or "auto" fallback
@@ -357,7 +357,7 @@ class SnmpAdapter(AdapterBase):
     async def _poll_loop(self, binding: Any) -> None:
         try:
             bc = SnmpBindingConfig(**binding.config)
-        except Exception:
+        except (ValidationError, TypeError):
             logger.warning("Ungültige SNMP-Binding-Konfiguration %s — übersprungen", binding.id)
             return
 
@@ -390,8 +390,8 @@ class SnmpAdapter(AdapterBase):
                 )
             except asyncio.CancelledError:
                 return
-            except Exception as exc:
-                logger.warning("SNMP Poll-Fehler (Binding %s): %s", binding.id, exc)
+            except Exception:
+                logger.exception("SNMP Poll-Fehler (Binding %s)", binding.id)
                 await self._bus.publish(
                     DataValueEvent(
                         datapoint_id=binding.datapoint_id,

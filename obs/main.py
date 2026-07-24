@@ -125,16 +125,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await _reload_mqtt(_m.reload_command, _m.reload_pid)
 
     # 8. Adapters — import triggers @register, then start_all loads DB configs + bindings
+    import obs.adapters.anwesenheit.adapter
     import obs.adapters.homeassistant.adapter
     import obs.adapters.iobroker.adapter
     import obs.adapters.knx.adapter
+    import obs.adapters.message.adapter
     import obs.adapters.modbus_rtu.adapter
     import obs.adapters.modbus_tcp.adapter
-    import obs.adapters.message.adapter
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
-    import obs.adapters.snmp.adapter  # noqa: F401
-    import obs.adapters.anwesenheit.adapter  # noqa: F401
+    import obs.adapters.snmp.adapter
     import obs.adapters.zeitschaltuhr.adapter  # noqa: F401
 
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
@@ -410,6 +410,7 @@ async def _read_persistent_log_level(db: object) -> str | None:
     try:
         row = await db.fetchone("SELECT value FROM app_settings WHERE key='server.log_level'")
     except Exception:
+        logger.exception("Could not read persisted log level — using default")
         return None
     if row is None:
         return None

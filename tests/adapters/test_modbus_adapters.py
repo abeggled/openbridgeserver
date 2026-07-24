@@ -194,7 +194,7 @@ class TestModbusTcpConnect:
         assert status_event.connected is False
 
     async def test_disconnect_cancels_tasks_and_closes(self):
-        adapter, bus = _make_tcp()
+        adapter, _bus = _make_tcp()
         client = _make_client()
         adapter._client = client
         t = asyncio.create_task(asyncio.sleep(100))
@@ -264,7 +264,7 @@ class TestModbusRtuConnect:
         assert status_event.connected is False
 
     async def test_disconnect_cancels_tasks(self):
-        adapter, bus = _make_rtu()
+        adapter, _bus = _make_rtu()
         client = _make_client()
         adapter._client = client
         t = asyncio.create_task(asyncio.sleep(100))
@@ -1050,9 +1050,8 @@ class TestBindingsReloadedAwaitAndReconnect:
             old_task_done_when_new_started.append(old_task.done())
             return original_create_task(coro, **kwargs)
 
-        with patch.object(adapter, "_poll_loop", new=AsyncMock()):
-            with patch("asyncio.create_task", side_effect=recording_create_task):
-                await adapter._on_bindings_reloaded()
+        with patch.object(adapter, "_poll_loop", new=AsyncMock()), patch("asyncio.create_task", side_effect=recording_create_task):
+            await adapter._on_bindings_reloaded()
 
         assert old_task_done_when_new_started, "No new task was created"
         assert all(old_task_done_when_new_started), "New task was created before old task finished — gather() was not awaited properly."
@@ -1122,6 +1121,23 @@ class TestBindingsReloadedAwaitAndReconnect:
 
         for t in adapter._poll_tasks:
             t.cancel()
+
+    async def test_close_failure_on_previous_client_is_swallowed(self):
+        """If closing the previous client raises, reload must still proceed to a new client."""
+        adapter, _ = _make_tcp()
+        client = _make_client(connected=True)
+        client.close = MagicMock(side_effect=RuntimeError("close failed"))
+        new_client = _make_client(connected=True)
+        adapter._client = client
+        _install_client_factory(adapter, new_client)
+        adapter._initial_load_done = True
+        adapter._bindings = []
+
+        await adapter._on_bindings_reloaded()
+
+        client.close.assert_called_once()
+        new_client.connect.assert_awaited_once()
+        assert adapter._client is new_client
 
     async def test_no_reconnect_attempt_when_no_client(self):
         """If _client is None, no AttributeError must be raised."""
@@ -1532,10 +1548,7 @@ class TestDisconnectAwaitsGather:
         task_done_at_close = []
 
         async def slow_task():
-            try:
-                await asyncio.sleep(100)
-            except asyncio.CancelledError:
-                raise
+            await asyncio.sleep(100)
 
         task = asyncio.create_task(slow_task())
         adapter._poll_tasks.append(task)
@@ -1945,7 +1958,7 @@ class TestReconnectBackoff:
         With poll_interval=0.05s the backoff expires every cycle, producing one connect()
         call per cycle rather than one per backoff window.
         """
-        adapter, bus = _make_tcp()
+        adapter, _bus = _make_tcp()
         connect_calls = 0
 
         async def failing_connect():
@@ -2014,6 +2027,19 @@ class TestReconnectBackoff:
         adapter._bindings = [slow_binding, fast_binding]
 
         assert adapter._reconnect_backoff_delay(slow_binding.config["poll_interval"]) == 1.0
+
+    async def test_backoff_skips_binding_with_invalid_config(self):
+        """A binding whose config no longer validates must be skipped, not raise."""
+        adapter, _ = _make_tcp()
+        client = _make_client(connected=False)
+        client.connect = AsyncMock()
+        adapter._client = client
+
+        fast_binding = make_binding({**_HOLDING_CFG, "poll_interval": 1.0}, direction="SOURCE")
+        invalid_binding = make_binding({**_HOLDING_CFG, "poll_interval": "not-a-number"}, direction="SOURCE")
+        adapter._bindings = [fast_binding, invalid_binding]
+
+        assert adapter._reconnect_backoff_delay(fast_binding.config["poll_interval"]) == 1.0
 
 
 class TestModbusTcpSharedBus:

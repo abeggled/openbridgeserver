@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-import obs.api.v1.weather as weather
+from obs.api.v1 import weather
 from obs.config import SecuritySettings, Settings, override_settings
 
 
@@ -223,6 +223,26 @@ async def test_fetch_weather_httpx_request_error_returns_502(monkeypatch):
 
     assert exc.value.status_code == 502
     assert "nicht erreichbar" in exc.value.detail
+
+
+class _RawPageConfigDbStub:
+    """Like _PageDbStub, but stores the raw ``page_config`` string verbatim
+    (no JSON re-encoding) so malformed/invalid payloads can be exercised."""
+
+    def __init__(self, raw_page_config: str):
+        self._raw = raw_page_config
+
+    async def fetchone(self, _query: str, _params: tuple[str, ...]):
+        return {"page_config": self._raw}
+
+
+@pytest.mark.asyncio
+async def test_load_page_config_returns_none_for_malformed_json():
+    """``_load_page_config`` must not propagate a validation/parse error for a
+    corrupted or schema-incompatible stored page_config — it degrades to None
+    so callers (e.g. weather-URL allow-listing) treat the page as if absent."""
+    db = _RawPageConfigDbStub("not valid json {")
+    assert await weather._load_page_config(db, "broken-page") is None
 
 
 @pytest.mark.asyncio

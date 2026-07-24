@@ -35,8 +35,9 @@ from obs.api.v1.ringbuffer import (
     ],
 )
 def test_color_validation(color, ok):
-    from obs.api.v1.ringbuffer import RingBufferFiltersetIn
     from pydantic import ValidationError
+
+    from obs.api.v1.ringbuffer import RingBufferFiltersetIn
 
     if ok:
         assert RingBufferFiltersetIn(name="x", color=color).color == color
@@ -126,4 +127,4 @@ def test_filter_criteria_forbids_extras():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        FilterCriteria.model_validate({"datapoint_ids": ["dp-1"]})  # noqa: typo
+        FilterCriteria.model_validate({"datapoint_ids": ["dp-1"]})  # intentional typo

@@ -147,10 +147,11 @@ Alle zentralen Systeme folgen dem **Registry-Pattern** — neue Komponenten regi
 
 ```python
 class DataTypeDefinition:
-    name: str                          # z.B. "FLOAT"
-    python_type: type                  # float
-    mqtt_serializer: Callable          # value → JSON-string
-    mqtt_deserializer: Callable        # JSON-string → value
+    name: str  # z.B. "FLOAT"
+    python_type: type  # float
+    mqtt_serializer: Callable  # value → JSON-string
+    mqtt_deserializer: Callable  # JSON-string → value
+
 
 class DataTypeRegistry:
     _types: dict[str, DataTypeDefinition] = {}
@@ -179,8 +180,8 @@ class DataTypeRegistry:
 
 ```python
 class AdapterBase(ABC):
-    adapter_type: str                  # z.B. "KNX"
-    config_schema: type[BaseModel]     # Pydantic-Schema für /adapters/{type}/schema
+    adapter_type: str  # z.B. "KNX"
+    config_schema: type[BaseModel]  # Pydantic-Schema für /adapters/{type}/schema
 
     @abstractmethod
     async def connect(self): ...
@@ -218,19 +219,17 @@ class HistoryPlugin(ABC):
     async def write(self, point: DataPointValue): ...
 
     @abstractmethod
-    async def query(self,
-                    datapoint_id: UUID,
-                    from_ts: datetime,
-                    to_ts: datetime,
-                    limit: int) -> list[DataPointValue]: ...
+    async def query(self, datapoint_id: UUID, from_ts: datetime, to_ts: datetime, limit: int) -> list[DataPointValue]: ...
 
     @abstractmethod
-    async def aggregate(self,
-                        datapoint_id: UUID,
-                        fn: str,           # avg | min | max | last
-                        interval: str,     # 1m | 1h | 1d
-                        from_ts: datetime,
-                        to_ts: datetime) -> list[AggregatedValue]: ...
+    async def aggregate(
+        self,
+        datapoint_id: UUID,
+        fn: str,  # avg | min | max | last
+        interval: str,  # 1m | 1h | 1d
+        from_ts: datetime,
+        to_ts: datetime,
+    ) -> list[AggregatedValue]: ...
 ```
 
 ---
@@ -241,13 +240,13 @@ class HistoryPlugin(ABC):
 
 ```python
 class DataPoint(BaseModel):
-    id: UUID                           # Systemweit eindeutig
-    name: str                          # Freitext, max. 255 Zeichen
-    data_type: str                     # Verweis auf DataTypeRegistry
-    unit: str | None                   # Einheit für Visualisierung (z.B. "°C")
-    tags: list[str]                    # Freie Tags für Gruppierung/Suche
-    mqtt_topic: str                    # Auto-generiert: dp/{uuid}/value
-    mqtt_alias: str | None             # Optional: alias/{tag}/{name}/value
+    id: UUID  # Systemweit eindeutig
+    name: str  # Freitext, max. 255 Zeichen
+    data_type: str  # Verweis auf DataTypeRegistry
+    unit: str | None  # Einheit für Visualisierung (z.B. "°C")
+    tags: list[str]  # Freie Tags für Gruppierung/Suche
+    mqtt_topic: str  # Auto-generiert: dp/{uuid}/value
+    mqtt_alias: str | None  # Optional: alias/{tag}/{name}/value
     created_at: datetime
     updated_at: datetime
 ```
@@ -257,10 +256,10 @@ class DataPoint(BaseModel):
 ```python
 class AdapterBinding(BaseModel):
     id: UUID
-    datapoint_id: UUID                 # FK → DataPoint
-    adapter_type: str                  # "KNX" | "MODBUS_RTU" | "MODBUS_TCP" | "ONEWIRE"
+    datapoint_id: UUID  # FK → DataPoint
+    adapter_type: str  # "KNX" | "MODBUS_RTU" | "MODBUS_TCP" | "ONEWIRE"
     direction: Literal["SOURCE", "DEST", "BOTH"]
-    config: dict                       # Adapterspezifisch, validiert via Adapter-Schema
+    config: dict  # Adapterspezifisch, validiert via Adapter-Schema
     enabled: bool = True
 ```
 
@@ -315,7 +314,8 @@ Konvertierungsverluste werden **still akzeptiert** (keine Laufzeit-Exception, ke
 class ConversionResult:
     value: Any
     loss: bool = False
-    loss_description: str = ""   # Nur zur Konfigurationszeit, nicht im Betrieb
+    loss_description: str = ""  # Nur zur Konfigurationszeit, nicht im Betrieb
+
 
 # Konvertierungsmatrix (Auswahl)
 # FLOAT → INTEGER   : int(value), loss wenn value != int(value)

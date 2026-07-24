@@ -13,7 +13,6 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-
 # ---------------------------------------------------------------------------
 # Minimal test app
 # ---------------------------------------------------------------------------

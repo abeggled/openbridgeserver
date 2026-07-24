@@ -69,11 +69,10 @@ def _validate_tree(tree: ast.AST) -> str | None:
         if isinstance(node, ast.Name) and node.id not in {"x", "math", *_ALLOWED_FUNC_NAMES, *_ALLOWED_MATH_NAMES}:
             return f"Nicht erlaubter Name: '{node.id}'"
 
-        if isinstance(node, ast.Attribute):
-            if not (
-                isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in _ALLOWED_MATH_NAMES and not node.attr.startswith("_")
-            ):
-                return "Nicht erlaubter Attributzugriff"
+        if isinstance(node, ast.Attribute) and not (
+            isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in _ALLOWED_MATH_NAMES and not node.attr.startswith("_")
+        ):
+            return "Nicht erlaubter Attributzugriff"
 
         if isinstance(node, ast.Call) and not _is_allowed_call(node):
             return "Nicht erlaubter Funktionsaufruf"
@@ -189,7 +188,7 @@ def apply_formula(formula: str, value: Any) -> Any:
             logger.warning("Formula '%s' rejected by AST validation: %s", formula, err)
             return value
         code = compile(tree, "<formula>", "eval")
-        result = eval(code, {"__builtins__": {}}, locals_)  # noqa: S307
+        result = eval(code, {"__builtins__": {}}, locals_)
 
         if not isinstance(result, (int, float)):
             logger.warning("Formula '%s' returned non-numeric: %r", formula, result)
@@ -222,11 +221,11 @@ def _try_eval(formula: str, x: float) -> str | None:
         locals_: dict[str, Any] = {**_SAFE_GLOBALS, "x": x}
         tree = ast.parse(formula, mode="eval")
         code = compile(tree, "<formula>", "eval")
-        result = eval(code, {"__builtins__": {}}, locals_)  # noqa: S307
+        result = eval(code, {"__builtins__": {}}, locals_)
         if isinstance(result, (int, float)) and (math.isnan(result) or math.isinf(result)):
             return "Ergebnis ist nan oder inf"
         return None
     except ZeroDivisionError:
         return "Division durch Null"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- validates arbitrary user formulas; any exception is expected input, not a bug
         return str(exc)

@@ -6,7 +6,6 @@ import sys
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # obs/tools/tws2opentws.py
 # ---------------------------------------------------------------------------
@@ -129,6 +128,7 @@ async def test_rebuild_passwd_file_no_users(tmp_path):
 @pytest.mark.asyncio
 async def test_reload_mosquitto_no_config(caplog):
     import logging
+
     from obs.core.mqtt_passwd import reload_mosquitto
 
     with caplog.at_level(logging.WARNING):
@@ -157,3 +157,39 @@ async def test_reload_mosquitto_command_failure():
 
     # 'false' exits with code 1
     await reload_mosquitto(reload_command="false")  # Should log warning, not raise
+
+
+@pytest.mark.asyncio
+async def test_reload_mosquitto_command_oserror(monkeypatch, caplog):
+    """If launching the reload_command subprocess itself raises OSError (e.g. shell
+    binary missing), it must be logged as a warning, not propagated."""
+    import asyncio
+    import logging
+
+    from obs.core.mqtt_passwd import reload_mosquitto
+
+    async def _raise_oserror(*args, **kwargs):
+        raise OSError("simulated subprocess launch failure")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _raise_oserror)
+    with caplog.at_level(logging.WARNING):
+        await reload_mosquitto(reload_command="true")
+    assert "Mosquitto reload command error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reload_mosquitto_pid_oserror(monkeypatch, caplog):
+    """A generic OSError from os.kill (distinct from ProcessLookupError/PermissionError)
+    must be logged as a warning, not propagated."""
+    import logging
+    import os
+
+    from obs.core.mqtt_passwd import reload_mosquitto
+
+    def _raise_oserror(pid, sig):
+        raise OSError("simulated kill failure")
+
+    monkeypatch.setattr(os, "kill", _raise_oserror)
+    with caplog.at_level(logging.WARNING):
+        await reload_mosquitto(reload_pid=1)
+    assert "Mosquitto SIGHUP failed" in caplog.text

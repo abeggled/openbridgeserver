@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-
 _DATAPOINT_KEYS_EXACT = {
     "datapoint_id",
     "status_datapoint_id",
@@ -37,9 +36,7 @@ def _is_datapoint_config_key(key: str, parent_key: str | None) -> bool:
     # Widgets with array items that store datapoint IDs as `id`.
     # - Info: extra_datapoints[].id
     # - Energiefluss: entities[].id
-    if key == "id" and parent_key in {"extra_datapoints", "entities"}:
-        return True
-    return False
+    return bool(key == "id" and parent_key in {"extra_datapoints", "entities"})
 
 
 def collect_datapoint_ids_from_config(

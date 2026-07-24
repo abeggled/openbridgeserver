@@ -103,17 +103,16 @@ class DataPointRegistry:
                 import json as _json
 
                 value = _json.loads(row["value"])
-            except Exception:
+            except (_json.JSONDecodeError, TypeError):
                 value = row["value"]
             if dp.data_type in {"DATE", "TIME", "DATETIME"}:
                 try:
                     value = DataTypeRegistry.get(dp.data_type).mqtt_deserializer(row["value"])
-                except Exception as exc:
+                except (_json.JSONDecodeError, ValueError, TypeError):
                     logger.debug(
-                        "DataPointRegistry: persisted %s value for %s could not be deserialized: %s",
+                        "DataPointRegistry: persisted %s value for %s could not be deserialized",
                         dp.data_type,
                         dp.id,
-                        exc,
                     )
             state.value = value
             state.quality = "good"
@@ -121,7 +120,7 @@ class DataPointRegistry:
 
             try:
                 state.ts = datetime.fromisoformat(row["ts"])
-            except Exception:
+            except (ValueError, TypeError):
                 state.ts = datetime.now(UTC)
             restored += 1
         if restored:

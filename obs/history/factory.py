@@ -75,8 +75,8 @@ async def handle_value_event(event: Any) -> None:
             ts=event.ts,
             source_adapter=event.source_adapter,
         )
-    except Exception as exc:
-        logger.error("History write failed for %s: %s", event.datapoint_id, exc)
+    except Exception:
+        logger.exception("History write failed for %s", event.datapoint_id)
 
 
 async def init_history_plugin(db: Any) -> HistoryPlugin:
@@ -113,8 +113,8 @@ async def reload_history_plugin(db: Any) -> HistoryPlugin:
     if _plugin is not None and hasattr(_plugin, "disconnect"):
         try:
             await _plugin.disconnect()
-        except Exception as exc:
-            logger.warning("Error disconnecting old history plugin: %s", exc)
+        except Exception:
+            logger.exception("Error disconnecting old history plugin")
 
     _plugin = None
     return await init_history_plugin(db)

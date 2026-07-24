@@ -640,7 +640,7 @@ async def test_multi_query_rejects_too_many_set_ids():
 async def test_multi_query_empty_set_ids_invokes_underlying_query(monkeypatch):
     captured: list[rb_api.RingBufferQueryV2] = []
 
-    async def _fake_query(query, *, limit_override=None, offset_override=None):  # noqa: ARG001
+    async def _fake_query(query, *, limit_override=None, offset_override=None):
         captured.append(query)
         return []
 

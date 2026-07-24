@@ -200,15 +200,15 @@ async def test_windowed_q_inline_string_rejects_like_legacy(tmp_path: Path):
     seg = await _make(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "gt", "value": 1}]
-        kwargs = dict(
-            q="hot",
-            value_filters=vf,
-            datapoint_types=types,
-            from_ts="2026-01-01T00:00:30.000Z",
-            to_ts="2026-01-01T00:02:00.000Z",
-            limit=10,
-            is_export=True,
-        )
+        kwargs = {
+            "q": "hot",
+            "value_filters": vf,
+            "datapoint_types": types,
+            "from_ts": "2026-01-01T00:00:30.000Z",
+            "to_ts": "2026-01-01T00:02:00.000Z",
+            "limit": 10,
+            "is_export": True,
+        }
         with pytest.raises(ValueError):
             await legacy.query_v2(**kwargs)
         with pytest.raises(ValueError):
@@ -234,15 +234,15 @@ async def test_windowed_metadata_inline_string_rejects_like_legacy(tmp_path: Pat
     seg = await _make(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "gt", "value": 1}]
-        kwargs = dict(
-            metadata_tags_any_of=["klima"],
-            value_filters=vf,
-            datapoint_types=types,
-            from_ts="2026-01-01T00:00:30.000Z",
-            to_ts="2026-01-01T00:02:00.000Z",
-            limit=10,
-            is_export=True,
-        )
+        kwargs = {
+            "metadata_tags_any_of": ["klima"],
+            "value_filters": vf,
+            "datapoint_types": types,
+            "from_ts": "2026-01-01T00:00:30.000Z",
+            "to_ts": "2026-01-01T00:02:00.000Z",
+            "limit": 10,
+            "is_export": True,
+        }
         with pytest.raises(ValueError):
             await legacy.query_v2(**kwargs)
         with pytest.raises(ValueError):
@@ -299,7 +299,7 @@ async def test_q_and_metadata_combined_capped_rejects_like_legacy(tmp_path: Path
     seg = await _make(tmp_path / "seg", segmented=True)
     try:
         vf = [{"operator": "gt", "value": 1}]
-        kwargs = dict(q="hot", metadata_tags_any_of=["klima"], value_filters=vf, datapoint_types=types, limit=10, is_export=True)
+        kwargs = {"q": "hot", "metadata_tags_any_of": ["klima"], "value_filters": vf, "datapoint_types": types, "limit": 10, "is_export": True}
         with pytest.raises(ValueError):
             await legacy.query_v2(**kwargs)
         with pytest.raises(ValueError):
