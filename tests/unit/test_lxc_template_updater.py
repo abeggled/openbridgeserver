@@ -11,6 +11,11 @@ def _workflow_text() -> str:
     return (root / ".github" / "workflows" / "lxc-template.yml").read_text(encoding="utf-8")
 
 
+def _release_workflow_text() -> str:
+    root = Path(__file__).resolve().parents[2]
+    return (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+
 def _obs_update_text() -> str:
     root = Path(__file__).resolve().parents[2]
     return (root / "scripts" / "obs-update").read_text(encoding="utf-8")
@@ -20,6 +25,13 @@ def _extract_checksum_injection_script(workflow: str) -> str:
     """Extract the Python HEREDOC used for checksum injection."""
     m = re.search(r"python3 <<'PYEOF'[^\n]*\n(.*?)\n[ \t]*PYEOF", workflow, re.DOTALL)
     assert m, "Could not find PYEOF block"
+    return textwrap.dedent(m.group(1))
+
+
+def _extract_channel_info_script(obs_update: str) -> str:
+    """Extract the channel-manifest-parsing Python snippet embedded in `python3 -c "..."`."""
+    m = re.search(r'CHANNEL_INFO=\$\(echo "\$MANIFEST" \| python3 -c "\n(.*?)\n"\)', obs_update, re.DOTALL)
+    assert m, "Could not find CHANNEL_INFO python block"
     return textwrap.dedent(m.group(1))
 
 
@@ -173,3 +185,107 @@ def test_checksum_injection_is_idempotent(tmp_path):
     second_run = run_script(first_run)
     assert second_run.count("### Checksums") == 1, "Duplicate checksum section on second run"
     assert second_run.count(fake_hash) == 1
+
+
+def test_release_workflow_writes_docker_digest_to_canary_manifest():
+    workflow = _release_workflow_text()
+
+    # docker/build-push-action needs an id for steps.build.outputs.digest to exist
+    assert "id: build\n        uses: docker/build-push-action@v7" in workflow
+    assert "uses: ./.github/actions/update-ops-manifest" in workflow
+    assert "channel: canary" in workflow
+    assert "token: ${{ secrets.OPS_REPO_TOKEN }}" in workflow
+    assert '"digest": "${{ steps.build.outputs.digest }}"' in workflow
+    assert '"image": "ghcr.io/${{ github.repository }}"' in workflow
+
+
+def test_release_workflow_skips_manifest_update_without_secret():
+    workflow = _release_workflow_text()
+
+    # secrets context is not allowed in `if:` — guard must go through a job-level env var
+    assert "HAS_OPS_TOKEN: ${{ secrets.OPS_REPO_TOKEN != '' }}" in workflow
+    assert "if: ${{ env.HAS_OPS_TOKEN == 'true' }}" in workflow
+
+
+def test_lxc_workflow_writes_bundle_info_to_canary_manifest():
+    workflow = _workflow_text()
+
+    assert "OPS_REPO: abeggled/openbridgeserver-ops" in workflow
+    assert 'BUNDLE_FILE="openbridgeserver-app-bundle_${VERSION}.tar.gz"' in workflow
+    assert "uses: ./.github/actions/update-ops-manifest" in workflow
+    assert '"lxc": {"version": "${{ steps.bundle-info.outputs.version }}"' in workflow
+    # This job downloads artifacts but previously never checked out the repo —
+    # the composite action reference (./.github/actions/...) requires it to exist locally.
+    assert "uses: actions/checkout@v7" in workflow
+
+
+def test_lxc_workflow_substitutes_ops_repo_placeholder_in_obs_update():
+    workflow = _workflow_text()
+    obs_update = _obs_update_text()
+
+    assert "s|__OPS_REPO__|${{ env.OPS_REPO }}|g" in workflow
+    assert 'OPS_REPO="__OPS_REPO__"' in obs_update
+
+
+def test_updater_supports_channel_flag():
+    obs_update = _obs_update_text()
+
+    assert 'CHANNEL=""' in obs_update
+    assert '--channel=*) CHANNEL="${arg#--channel=}" ;;' in obs_update
+    assert "raw.githubusercontent.com/${OPS_REPO}/main/channels/${CHANNEL}.json" in obs_update
+    # Channel mode reuses the existing sha256 verification path (CHECKSUM_LINE
+    # dispatch already handles the "sha256:<hex>" prefix for the interactive flow).
+    assert 'CHECKSUM_LINE="sha256:${CHANNEL_SHA256}"' in obs_update
+
+
+def test_updater_errors_clearly_when_channel_has_no_published_version():
+    obs_update = _obs_update_text()
+
+    assert "Error: channel '$CHANNEL' has no published version yet." in obs_update
+    assert 'if [[ -z "$TARGET" ]]; then' in obs_update
+
+
+def _run_channel_info_script(obs_update: str, manifest: dict) -> list[str]:
+    script = _extract_channel_info_script(obs_update)
+    old_stdin, old_stdout = sys.stdin, sys.stdout
+    sys.stdin = io.StringIO(json.dumps(manifest))
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        exec(script, {})  # noqa: S102
+    finally:
+        sys.stdin, sys.stdout = old_stdin, old_stdout
+    return buf.getvalue().splitlines()
+
+
+def test_channel_info_script_extracts_lxc_fields_from_full_manifest():
+    obs_update = _obs_update_text()
+    manifest = {
+        "channel": "stable",
+        "version": "2026.7.0",
+        "docker": {"image": "ghcr.io/abeggled/openbridgeserver", "digest": "sha256:abc"},
+        "lxc": {
+            "version": "2026.7.0",
+            "asset_url": "https://example.invalid/openbridgeserver-app-bundle_2026.7.0.tar.gz",
+            "sha256": "d" * 64,
+        },
+        "promoted_at": "2026-07-15T10:00:00Z",
+        "promoted_by": "starwarsfan",
+    }
+
+    lines = _run_channel_info_script(obs_update, manifest)
+
+    assert lines == [
+        "2026.7.0",
+        "https://example.invalid/openbridgeserver-app-bundle_2026.7.0.tar.gz",
+        "d" * 64,
+    ]
+
+
+def test_channel_info_script_yields_empty_lines_when_lxc_not_yet_published():
+    obs_update = _obs_update_text()
+    manifest = {"channel": "canary", "version": None, "docker": None, "lxc": None, "promoted_at": None, "promoted_by": None}
+
+    lines = _run_channel_info_script(obs_update, manifest)
+
+    assert lines == ["", "", ""]

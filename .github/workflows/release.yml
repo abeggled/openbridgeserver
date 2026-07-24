@@ -29,6 +29,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      HAS_OPS_TOKEN: ${{ secrets.OPS_REPO_TOKEN != '' }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -244,6 +246,7 @@ jobs:
             type=raw,value=${{ env.GITHASH }}
 
       - name: Build and Push Image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -253,6 +256,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             OBS_VERSION=${{ env.OBS_VERSION }}
+
+      - name: Update canary channel manifest (docker)
+        if: ${{ env.HAS_OPS_TOKEN == 'true' }}
+        uses: ./.github/actions/update-ops-manifest
+        with:
+          channel: canary
+          version: ${{ env.VERSION }}
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+          patch-json: >-
+            {"docker": {"image": "ghcr.io/${{ github.repository }}", "digest": "${{ steps.build.outputs.digest }}"}}
 
   prepare-next-release:
     name: Prepare next release on main

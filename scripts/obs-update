@@ -9,23 +9,46 @@
 # downloads and verifies the app bundle, and performs the in-place upgrade.
 # Also self-updates this script from the bundle on each run.
 #
-# The __REPO__ placeholder is replaced with the actual GitHub repository path
-# (owner/name) at build time by the CI pipeline before the script is bundled.
+# The __REPO__ / __OPS_REPO__ placeholders are replaced with the actual GitHub
+# repository paths (owner/name) at build time by the CI pipeline before the
+# script is bundled.
 set -euo pipefail
 
 REPO="__REPO__"
+OPS_REPO="__OPS_REPO__"
 INSTALL_DIR="/opt/obs"
 SERVICE="obs"
 
 CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
 
 SHOW_NIGHTLIES=false
+CHANNEL=""
 for arg in "$@"; do
     case "$arg" in
         --nightly|-n) SHOW_NIGHTLIES=true ;;
+        --channel=*) CHANNEL="${arg#--channel=}" ;;
     esac
 done
 
+if [[ -n "$CHANNEL" ]]; then
+    echo "Fetching channel manifest ($CHANNEL)..."
+    MANIFEST=$(curl -sf "https://raw.githubusercontent.com/${OPS_REPO}/main/channels/${CHANNEL}.json")
+    CHANNEL_INFO=$(echo "$MANIFEST" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+lxc = data.get('lxc') or {}
+print(lxc.get('version') or '')
+print(lxc.get('asset_url') or '')
+print(lxc.get('sha256') or '')
+")
+    TARGET=$(echo "$CHANNEL_INFO" | sed -n '1p')
+    CHANNEL_BUNDLE_URL=$(echo "$CHANNEL_INFO" | sed -n '2p')
+    CHANNEL_SHA256=$(echo "$CHANNEL_INFO" | sed -n '3p')
+    if [[ -z "$TARGET" ]]; then
+        echo "Error: channel '$CHANNEL' has no published version yet." >&2
+        exit 1
+    fi
+else
 echo "Fetching release information..."
 ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
 
@@ -114,6 +137,7 @@ if [[ "$CHOICE" -eq 0 ]]; then
 fi
 
 TARGET="${OPTIONS[$((CHOICE-1))]}"
+fi
 
 if [[ "$TARGET" == "$CURRENT" ]]; then
     echo "$TARGET is already installed."
@@ -122,6 +146,7 @@ fi
 
 echo "Installing $TARGET ..."
 
+if [[ -z "$CHANNEL" ]]; then
 ASSET_INFO=$(echo "$ALL_RELEASES" | python3 -c "
 import sys, json, re
 target = '${TARGET}'
@@ -152,8 +177,12 @@ if r:
             print('')
 ")
 
-BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
-CHECKSUM_LINE=$(echo "$ASSET_INFO" | sed -n '2p')
+    BUNDLE_URL=$(echo "$ASSET_INFO" | sed -n '1p')
+    CHECKSUM_LINE=$(echo "$ASSET_INFO" | sed -n '2p')
+else
+    BUNDLE_URL="$CHANNEL_BUNDLE_URL"
+    CHECKSUM_LINE="sha256:${CHANNEL_SHA256}"
+fi
 
 if [[ -z "$BUNDLE_URL" ]]; then
     echo "Error: missing app-bundle asset for $TARGET" >&2
