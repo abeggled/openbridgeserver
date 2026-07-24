@@ -593,9 +593,11 @@ class TestApiClientManagerHttp:
             (None, None, None, None, ("93.184.216.34", 443)),
             (None, None, None, None, ("93.184.216.35", 443)),
         ]
-        with patch("obs.security.url_targets.socket.getaddrinfo", return_value=dns_answers):
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                outputs = self._run(manager, flow)
+        with (
+            patch("obs.security.url_targets.socket.getaddrinfo", return_value=dns_answers),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
+            outputs = self._run(manager, flow)
 
         assert outputs["ac"]["success"] is True
         assert outputs["ac"]["status"] == 200
@@ -624,9 +626,11 @@ class TestApiClientManagerHttp:
             (None, None, None, None, ("93.184.216.34", 443)),
             (None, None, None, None, ("93.184.216.35", 443)),
         ]
-        with patch("obs.security.url_targets.socket.getaddrinfo", return_value=dns_answers):
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                outputs = self._run(manager, flow)
+        with (
+            patch("obs.security.url_targets.socket.getaddrinfo", return_value=dns_answers),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
+            outputs = self._run(manager, flow)
 
         assert captured_urls == [
             "https://93.184.216.34/api",
@@ -656,9 +660,11 @@ class TestApiClientManagerHttp:
             (None, None, None, None, ("93.184.216.34", 443)),
             (None, None, None, None, ("93.184.216.35", 443)),
         ]
-        with patch("obs.security.url_targets.socket.getaddrinfo", return_value=dns_answers):
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                outputs = self._run(manager, flow, {"ac": {"trigger": True, "body": {"x": 1}}})
+        with (
+            patch("obs.security.url_targets.socket.getaddrinfo", return_value=dns_answers),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
+            outputs = self._run(manager, flow, {"ac": {"trigger": True, "body": {"x": 1}}})
 
         assert captured_urls == ["https://93.184.216.34/api"]
         assert outputs["ac"]["response"] == "post address refused"
@@ -802,9 +808,11 @@ class TestApiClientAuthentication:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.logic.manager.httpx.AsyncClient", _FakeClient):
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"ac": {"trigger": True}}))
+        with (
+            patch("obs.logic.manager.httpx.AsyncClient", _FakeClient),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"ac": {"trigger": True}}))
         return outputs, captured_auth
 
     def test_basic_auth_passes_httpx_basic_auth(self):
@@ -885,10 +893,12 @@ class TestApiClientAuthentication:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.logic.manager.httpx.AsyncClient", _FakeClient):
-            with patch("obs.logic.manager.httpx.BasicAuth", side_effect=_capture_basic_auth):
-                with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"ac": {"trigger": True}}))
+        with (
+            patch("obs.logic.manager.httpx.AsyncClient", _FakeClient),
+            patch("obs.logic.manager.httpx.BasicAuth", side_effect=_capture_basic_auth),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"ac": {"trigger": True}}))
 
         assert outputs["ac"]["success"] is True
         assert captured_auth == [("alice", "  secret  ")]

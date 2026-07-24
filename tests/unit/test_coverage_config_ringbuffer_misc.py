@@ -1836,9 +1836,11 @@ async def test_update_history_settings_reload_failure():
     db = _DbStub()
     body = system_api.HistorySettingsIn(plugin="sqlite")
 
-    with patch("obs.history.factory.reload_history_plugin", AsyncMock(side_effect=RuntimeError("reload fail"))):
-        with pytest.raises(HTTPException) as exc_info:
-            await system_api.update_history_settings(body=body, db=db, _admin="admin")
+    with (
+        patch("obs.history.factory.reload_history_plugin", AsyncMock(side_effect=RuntimeError("reload fail"))),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await system_api.update_history_settings(body=body, db=db, _admin="admin")
     assert exc_info.value.status_code == 500
 
 

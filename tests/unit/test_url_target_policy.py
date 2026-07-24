@@ -158,9 +158,11 @@ def test_rejects_unresolvable_fqdn_allowlist_target(tmp_path):
     allowlist = tmp_path / "allow.yaml"
     override_settings(_settings_for(allowlist))
 
-    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
-        with pytest.raises(ValueError, match="FQDN target must resolve"):
-            add_allowed_url_target("internal.example", reason="invalid")
+    with (
+        patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")),
+        pytest.raises(ValueError, match="FQDN target must resolve"),
+    ):
+        add_allowed_url_target("internal.example", reason="invalid")
 
     assert not allowlist.exists()
 

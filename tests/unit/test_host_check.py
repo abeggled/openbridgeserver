@@ -202,9 +202,11 @@ def _run_manager(host: str, trigger: bool, ping_return: tuple = (True, 5.0)):
     manager._graphs[graph_id] = ("test", True, flow)
     manager._node_state[graph_id] = {}
 
-    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-        with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=ping_return) as mock_ping:
-            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": trigger}}))
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=ping_return) as mock_ping,
+    ):
+        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": trigger}}))
     return outputs, mock_ping
 
 
@@ -245,9 +247,11 @@ class TestHostCheckManager:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, side_effect=OSError("fail")):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, side_effect=OSError("fail")),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         assert outputs["hc"]["reachable"] is False
 
@@ -263,9 +267,11 @@ class TestHostCheckManager:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping:
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping,
+        ):
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         call_args = mock_ping.call_args
         assert call_args.args[1] == 2  # count
@@ -327,11 +333,13 @@ class TestHostCheckRisingEdge:
         manager._node_state[graph_id] = {}
 
         cron_overrides = {"cron": {"trigger": True}}
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping:
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping,
+        ):
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
 
         assert mock_ping.await_count == 3
 
@@ -356,11 +364,13 @@ class TestHostCheckRisingEdge:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping:
-                    asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
-                    asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
-                    asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping,
+            ):
+                asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+                asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+                asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -390,9 +400,11 @@ class TestHostCheckDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         assert outputs["hc"]["reachable"] is True
         assert outputs["gate"]["out"] is True
@@ -415,9 +427,11 @@ class TestHostCheckDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(False, None)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(False, None)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         assert outputs["hc"]["reachable"] is False
         assert outputs["gate"]["out"] is False
@@ -441,9 +455,11 @@ class TestHostCheckDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         assert outputs["hc"]["reachable"] is True
         assert outputs["unrelated"]["out"] is False
@@ -528,10 +544,12 @@ class TestHostCheckSustainedTrigger:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 7.5)) as mock_ping:
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
-                out2 = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 7.5)) as mock_ping,
+        ):
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            out2 = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
 
         assert mock_ping.await_count == 1
         assert out2["hc"]["reachable"] is True
@@ -579,9 +597,11 @@ class TestHostCheckConfigGuard:
         graph_id = "g"
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
         assert "hc" in outputs
 
     def test_nonnumeric_count_does_not_crash(self):
@@ -590,9 +610,11 @@ class TestHostCheckConfigGuard:
         graph_id = "g"
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
         assert "hc" in outputs
 
     def test_ping_config_is_clamped_before_dispatch(self):
@@ -601,9 +623,11 @@ class TestHostCheckConfigGuard:
         graph_id = "g-clamp"
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping:
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)) as mock_ping,
+        ):
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
         assert mock_ping.await_args.args[1] == 10
         assert mock_ping.await_args.args[2] == pytest.approx(30.0)
 
@@ -625,9 +649,11 @@ class TestHostCheckReplayState:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         assert outputs["stats"]["count"] == 1
         assert outputs["stats"]["avg"] == pytest.approx(1.0)
@@ -656,9 +682,11 @@ class TestHostCheckReplayState:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -688,10 +716,12 @@ class TestHostCheckReplayState:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -709,9 +739,11 @@ class TestHostCheckReplayState:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc": {"trigger": True}}))
 
         assert outputs["hours"]["_active"] is True
         assert manager._node_state[graph_id]["hours"]["last_start"] is not None
@@ -727,9 +759,11 @@ class TestHostCheckReplayState:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, side_effect=[(True, 1.0), (True, 2.0)]) as mock_ping:
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc_a": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, side_effect=[(True, 1.0), (True, 2.0)]) as mock_ping,
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"hc_a": {"trigger": True}}))
 
         assert mock_ping.await_count == 2
         assert outputs["hc_a"]["reachable"] is True
@@ -763,9 +797,11 @@ class TestHostCheckReplayState:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -919,10 +955,12 @@ class TestHostCheckPostApiExtraPaths:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -952,10 +990,12 @@ class TestHostCheckPostApiExtraPaths:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(False, None)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_tt:
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(False, None)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_tt,
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -991,9 +1031,11 @@ class TestHostCheckPostApiExtraPaths:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(False, None)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(False, None)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1084,9 +1126,11 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1106,9 +1150,11 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1127,9 +1173,11 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1148,9 +1196,11 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1177,9 +1227,11 @@ class TestHostCheckPostApiApiClientPaths:
 
         mock_client.request = AsyncMock(side_effect=_selective)
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1191,9 +1243,11 @@ class TestHostCheckPostApiApiClientPaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "http://93.184.216.34/two", "method": "GET", "verify_ssl": "false"})
         patcher = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1204,9 +1258,11 @@ class TestHostCheckPostApiApiClientPaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "http://93.184.216.34/two", "method": "GET", "headers": '{"X-Custom": "val"}'})
         patcher = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1217,9 +1273,11 @@ class TestHostCheckPostApiApiClientPaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "http://93.184.216.34/two", "method": "GET", "response_type": "text/plain"})
         patcher = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1253,9 +1311,11 @@ class TestHostCheckPostApiApiClientPaths:
 
         mock_client.request = AsyncMock(side_effect=_selective)
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1267,9 +1327,11 @@ class TestHostCheckPostApiApiClientPaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "http://93.184.216.34/two", "method": "GET", "headers": "not-valid-json"})
         patcher = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1295,9 +1357,11 @@ class TestHostCheckPostApiApiClientPaths:
 
         mock_client.request = AsyncMock(side_effect=_selective)
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1371,10 +1435,12 @@ class TestReplayOrderingFixes:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 5.0)) as mock_ping:
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 5.0)) as mock_ping,
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
 
         mock_ping.assert_awaited_once()
         assert outputs["wol"]["sent"] is True
@@ -1403,10 +1469,12 @@ class TestReplayOrderingFixes:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -1444,10 +1512,12 @@ class TestReplayOrderingFixes:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 2.0)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -1479,10 +1549,12 @@ class TestReplayOrderingFixes:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 5.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+            patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 5.0)),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
 
         assert outputs["wol"]["sent"] is True
         assert outputs["hc"]["reachable"] is True
@@ -1626,14 +1698,16 @@ class TestPostWolReplayChainedHc:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                with patch(
-                    "obs.logic.manager._ping_host",
-                    new_callable=AsyncMock,
-                    side_effect=[(True, 1.0), (True, 2.0)],
-                ) as mock_ping:
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+            patch(
+                "obs.logic.manager._ping_host",
+                new_callable=AsyncMock,
+                side_effect=[(True, 1.0), (True, 2.0)],
+            ) as mock_ping,
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
 
         assert mock_ping.await_count == 2
         assert outputs["hc1"]["reachable"] is True
@@ -1669,9 +1743,11 @@ class TestPostApiHcReplayHystUpdate:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -1709,10 +1785,12 @@ class TestPostApiWolEdgeCases:
         outputs = {}
         try:
             for _ in range(executions):
-                with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                    with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                        with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+                with (
+                    patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                    patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+                    patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+                ):
+                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         return outputs
@@ -1748,10 +1826,12 @@ class TestPostApiWolEdgeCases:
         mock_client_cls = _patch_api_success()
         try:
             for _ in range(2):
-                with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                    with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                        with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                            asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+                with (
+                    patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                    patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+                    patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+                ):
+                    asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -1844,9 +1924,11 @@ class TestPostApiHcApiEdgePaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "", "method": "GET"})
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         # ac2 was skipped — success key may be absent or None
@@ -1857,9 +1939,11 @@ class TestPostApiHcApiEdgePaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "http://93.184.216.34/###OBS1###", "method": "GET"})
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is False
@@ -1872,9 +1956,11 @@ class TestPostApiHcApiEdgePaths:
         )
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         # Request still completes (exception in headers file is swallowed)
@@ -1887,10 +1973,12 @@ class TestPostApiHcApiEdgePaths:
         )
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    with patch("obs.logic.manager._read_secret_file", return_value='{"X-Custom": "value"}'):
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+                patch("obs.logic.manager._read_secret_file", return_value='{"X-Custom": "value"}'),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is True
@@ -1902,9 +1990,11 @@ class TestPostApiHcApiEdgePaths:
         )
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is False
@@ -1917,10 +2007,12 @@ class TestPostApiHcApiEdgePaths:
         )
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    with patch("obs.logic.manager._read_secret_file", return_value="my-bearer-token"):
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+                patch("obs.logic.manager._read_secret_file", return_value="my-bearer-token"),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is True
@@ -1938,9 +2030,11 @@ class TestPostApiHcApiEdgePaths:
         )
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is False
@@ -1953,9 +2047,11 @@ class TestPostApiHcApiEdgePaths:
         )
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is True
@@ -1965,9 +2061,11 @@ class TestPostApiHcApiEdgePaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "http://93.184.216.34/two", "method": "POST", "content_type": "text/plain"})
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is True
@@ -1977,9 +2075,11 @@ class TestPostApiHcApiEdgePaths:
         flow, manager, graph_id = _setup_post_api_hc_ac2_graph({"url": "https://93.184.216.34/two", "method": "GET"})
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is True
@@ -2002,9 +2102,11 @@ class TestPostApiHcApiEdgePaths:
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_LargeResponse())
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             patcher.stop()
 
@@ -2042,9 +2144,11 @@ class TestFinalApiReplayStateful:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -2139,10 +2243,12 @@ class TestFinalWolDownstream:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
@@ -2183,10 +2289,12 @@ class TestFinalWolReplayExtended:
 
         mock_client_cls = _patch_api_success()
         try:
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                with patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)):
-                    with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                        outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+            with (
+                patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+                patch("obs.logic.manager._ping_host", new_callable=AsyncMock, return_value=(True, 1.0)),
+                patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+            ):
+                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
         finally:
             mock_client_cls.stop()
 
