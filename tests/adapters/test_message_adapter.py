@@ -14,6 +14,7 @@ from obs.adapters.message.adapter import (
     MessageAdapter,
     MessageAdapterConfig,
     MessageBindingConfig,
+    _datetime_settings,
     evaluate_condition,
     render_message,
 )
@@ -126,6 +127,25 @@ def test_render_message_replaces_value_unit_and_metadata():
     )
 
     assert rendered == f"Temperatur {dp_id} 29.4 °C 2026-06-28T12:00:00+00:00"
+
+
+def test_render_message_formats_date_and_time_without_changing_timestamp():
+    dp_id = uuid.uuid4()
+    ts = datetime(2026, 6, 8, 2, 4, 5, tzinfo=UTC)
+
+    rendered = render_message(
+        "###DATE### ###TIME### ###TS###",
+        value=1,
+        unit=None,
+        name="Sensor",
+        datapoint_id=dp_id,
+        ts=ts,
+        date_format="EEEE, MMMM d, yyyy",
+        time_format="H:m:s",
+        language="en",
+    )
+
+    assert rendered == "Monday, June 8, 2026 2:4:5 2026-06-08T02:04:05+00:00"
 
 
 def test_render_message_does_not_reprocess_inserted_placeholder_text():
@@ -281,6 +301,99 @@ async def test_datapoint_update_sends_message_to_provider(bus, dummy_provider, m
     assert kwargs["title"] == "OBS Alarm"
     assert kwargs["message"] == "Temperatur kritisch: 29.4 °C"
     assert kwargs["target_name"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_direct_notification_uses_shared_provider_path_for_all_targets(bus, dummy_provider):
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"first": {}, "second": {}}}}},
+    )
+
+    results = await adapter.send_notification(
+        message="Alarm",
+        title="OBS",
+        providers=[
+            {"provider": "dummy", "target": "first"},
+            {"provider": "dummy", "target": "second"},
+        ],
+    )
+
+    assert [result.ok for result in results] == [True, True]
+    assert [call.kwargs["target_name"] for call in dummy_provider.send.await_args_list] == ["first", "second"]
+    assert all(call.kwargs["message"] == "Alarm" for call in dummy_provider.send.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_date_and_time_placeholders_use_event_timestamp(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    monkeypatch.setattr(
+        "obs.adapters.message.adapter._datetime_settings",
+        AsyncMock(return_value={"timezone": "Europe/Zurich", "date_format": "yyyy-MM-dd", "time_format": "HH:mm:ss", "language": "de"}),
+    )
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, message="###DATE### ###TIME### ###TS###")
+    await adapter.reload_bindings([binding])
+    event_ts = datetime(2026, 1, 2, 23, 4, 5, tzinfo=UTC)
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=29.4, quality="good", source_adapter="test", ts=event_ts))
+    await _drain_sends(adapter)
+
+    assert dummy_provider.send.await_args.kwargs["message"] == "2026-01-03 00:04:05 2026-01-02T23:04:05+00:00"
+
+
+@pytest.mark.asyncio
+async def test_datetime_settings_use_defaults_before_database_initialization(monkeypatch):
+    monkeypatch.setattr("obs.adapters.message.adapter.get_db", MagicMock(side_effect=RuntimeError))
+
+    settings = await _datetime_settings()
+
+    assert settings == {
+        "timezone": "Europe/Zurich",
+        "date_format": "dd.MM.yyyy",
+        "time_format": "HH:mm:ss",
+        "language": "de",
+    }
+
+
+@pytest.mark.asyncio
+async def test_datetime_settings_merge_database_values(monkeypatch):
+    db = MagicMock()
+    db.fetchall = AsyncMock(return_value=[{"key": "timezone", "value": "UTC"}, {"key": "language", "value": "en"}])
+    monkeypatch.setattr("obs.adapters.message.adapter.get_db", lambda: db)
+
+    settings = await _datetime_settings()
+
+    assert settings["timezone"] == "UTC"
+    assert settings["language"] == "en"
+    assert settings["date_format"] == "dd.MM.yyyy"
+
+
+@pytest.mark.asyncio
+async def test_date_and_time_placeholders_fall_back_to_event_timezone_for_invalid_setting(bus, dummy_provider, monkeypatch):
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    monkeypatch.setattr(
+        "obs.adapters.message.adapter._datetime_settings",
+        AsyncMock(return_value={"timezone": "invalid", "date_format": "yyyy-MM-dd", "time_format": "HH:mm:ss", "language": "de"}),
+    )
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, message="###DATE### ###TIME###")
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(
+        DataValueEvent(datapoint_id=dp_id, value=29.4, quality="good", source_adapter="test", ts=datetime(2026, 1, 2, 23, 4, 5))
+    )
+    await _drain_sends(adapter)
+
+    assert dummy_provider.send.await_args.kwargs["message"] == "2026-01-02 23:04:05"
 
 
 @pytest.mark.asyncio

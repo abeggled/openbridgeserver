@@ -42,6 +42,20 @@ def test_comment_node_has_no_ports():
     assert comment.config_schema["height"]["default"] == 140
 
 
+def test_generic_notification_replaces_legacy_nodes_in_palette_metadata():
+    notification = _node_type("notify_message")
+    assert notification.category == "notification"
+    assert [port.id for port in notification.inputs] == ["trigger", "message"]
+    assert [port.id for port in notification.outputs] == ["sent"]
+    assert "app_token" not in notification.config_schema
+    assert "api_key" not in notification.config_schema
+
+    for legacy_type in ("notify_pushover", "notify_sms"):
+        legacy = _node_type(legacy_type)
+        assert legacy.hidden_from_palette is True
+        assert legacy.legacy is True
+
+
 def test_timer_durations_are_non_negative():
     assert _node_type("timer_delay").config_schema["delay_s"]["min"] == 0
     assert _node_type("timer_pulse").config_schema["duration_s"]["min"] == 0

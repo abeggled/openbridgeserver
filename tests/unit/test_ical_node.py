@@ -26,7 +26,7 @@ from tests.unit.conftest import make_executor, node  # noqa: E402
 # Minimal ICS fixtures
 # ---------------------------------------------------------------------------
 
-_TODAY = datetime.date.today()
+_TODAY = datetime.datetime.now(datetime.UTC).date()
 _TOMORROW = _TODAY + datetime.timedelta(days=1)
 _NEXT_WEEK = _TODAY + datetime.timedelta(days=7)
 

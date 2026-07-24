@@ -300,8 +300,33 @@ async def ensure_legacy_migration_decision(db: Database, *, legacy_db_path: str 
     return LEGACY_DECISION_PENDING
 
 
+async def repair_pending_keep_migration_decision(db: Database, rb) -> bool:
+    """Repariert einen durabel belegten partial keep-Commit (#1013).
+
+    Der Store-Beleg entsteht atomar mit Promote + Detach und ist deshalb auch
+    nach einem Crash oder fehlgeschlagenen App-DB-Write eindeutig. Solange eine
+    Legacy-Quelle verbleibt, wird zuerst ihr Runtime-Schutz aktiviert, danach
+    ``skipped`` persistiert und erst zuletzt der Beleg quittiert. Scheitert einer
+    der letzten beiden Schritte, bleibt der Beleg für Startup/Status-Retry stehen.
+    """
+    has_pending_repair = getattr(rb, "has_pending_keep_migration_repair", None)
+    if rb is None or has_pending_repair is None or not await has_pending_repair():
+        return False
+    if not await rb.has_attached_legacy():
+        await rb.acknowledge_pending_keep_migration_repair()
+        return False
+
+    decision = await load_legacy_migration_decision(db)
+    await rb.set_legacy_retention_protected(True)
+    changed = decision not in LEGACY_DECISIONS_PROTECTED
+    if changed:
+        await persist_legacy_migration_decision(db, LEGACY_DECISION_SKIPPED)
+    await rb.acknowledge_pending_keep_migration_repair()
+    return changed
+
+
 async def finalize_committed_migration_decision(db: Database, rb) -> bool:
-    """Zieht die terminale ``migrated``-Entscheidung state-basiert nach (#968, Codex :326/:2423/:1273).
+    """Repariert partial keep bzw. zieht terminales ``migrated`` nach.
 
     Deckt drei Post-Commit-Lücken ab, in denen ein Offline-Commit bereits durchlief (Legacy
     detached, Kopien promotet), die Entscheidung aber NICHT terminal persistiert wurde und der
@@ -312,13 +337,14 @@ async def finalize_committed_migration_decision(db: Database, rb) -> bool:
     * Runtime-Init (Monitor-Enable via ``POST /config``) reconciled nach einem Crash im
       Commit-Fenster, spiegelt aber den Startup-Finalizer nicht.
 
-    Durable & idempotent: Grundlage ist der promotete ``rb_migrated_*``-Segment-State
-    (``has_committed_migration``), nicht ein transientes Flag – über Prozess-Neustarts
-    reparierbar. No-op, wenn bereits terminal, noch eine Legacy-Quelle attached ist oder kein
-    Migrations-Commit belegt ist. Gibt ``True`` zurück, wenn ``migrated`` nachgezogen wurde.
+    Zusätzlich repariert der durabel commit-gebundene Store-Beleg aus #1013 einen
+    gescheiterten ``keep`` → ``skipped``-Write nach einem partial commit. Gibt
+    ``True`` zurück, wenn eine Decision nachgezogen wurde.
     """
     if rb is None:
         return False
+    if await repair_pending_keep_migration_decision(db, rb):
+        return True
     decision = await load_legacy_migration_decision(db)
     if decision in LEGACY_DECISIONS_TERMINAL:
         return False

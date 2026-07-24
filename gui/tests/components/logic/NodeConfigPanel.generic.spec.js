@@ -45,6 +45,27 @@ async function mountGenericPanel(data = {}) {
   })
 }
 
+async function mountDatetimePanel(data = {}) {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const { useAuthStore } = await import('@/stores/auth')
+  useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+
+  const mod = await import('@/components/logic/NodeConfigPanel.vue')
+  return mount(mod.default, {
+    props: {
+      node: { id: 'datetime1', type: 'datetime', data },
+      nodeTypes: [{
+        type: 'datetime',
+        label: 'Date/Time',
+        config_schema: { custom_format: { type: 'string', default: 'yyyy-MM-dd', label: 'Custom format' } },
+      }],
+      nodeOutputs: {},
+    },
+    global: { plugins: [pinia] },
+  })
+}
+
 // clamp has no dedicated NodeConfigPanel block — this exercises the generic
 // "all other node types" fallback (config_schema-driven form rendering),
 // which no other spec covers.
@@ -76,6 +97,16 @@ describe('NodeConfigPanel generic fallback (no dedicated block)', () => {
     await maxInput.setValue(75)
     await maxInput.trigger('change')
     expect(wrapper.emitted('update')[0][0]).toMatchObject({ max: 75 })
+    wrapper.unmount()
+  })
+})
+
+describe('NodeConfigPanel datetime help', () => {
+  it('renders the localized token reference below the custom format', async () => {
+    const wrapper = await mountDatetimePanel({ custom_format: 'yyyy-MM-dd' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Token: H/HH Stunde')
     wrapper.unmount()
   })
 })
