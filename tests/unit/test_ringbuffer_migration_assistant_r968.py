@@ -2037,6 +2037,76 @@ async def test_attached_legacy_total_bytes_sums_all_sources(tmp_path: Path):
         await rb.stop()
 
 
+async def test_reclaimable_migrating_bytes_preserve_interrupted_commit_chunks(tmp_path: Path):
+    """Nur sofort gelöschte Dateien zählen; ein offener Commit schützt alle Copy-Reste (#1009)."""
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        present_path = tmp_path / "present-legacy.db"
+        present_path.write_bytes(b"legacy")
+        present = await rb._store.manifest.register_legacy_segment(source_path=str(present_path), size_bytes=6)
+        missing = await rb._store.manifest.register_legacy_segment(source_path=str(tmp_path / "missing-legacy.db"), size_bytes=12)
+
+        stale = await rb._store.manifest.create_migrating_segment(
+            filename="rb_migrated_stale.sqlite", schema_version=2, legacy_source_id=present.segment_id
+        )
+        interrupted = await rb._store.manifest.create_migrating_segment(
+            filename="rb_migrated_interrupted.sqlite", schema_version=2, legacy_source_id=missing.segment_id
+        )
+        unscoped = await rb._store.manifest.create_migrating_segment(filename="rb_migrated_unscoped.sqlite", schema_version=2)
+        orphan = await rb._store.manifest.create_migrating_segment(
+            filename="rb_migrated_orphan.sqlite", schema_version=2, legacy_source_id=missing.segment_id + 1000
+        )
+        for segment, size in ((stale, 100), (interrupted, 200), (unscoped, 300), (orphan, 400)):
+            await rb._store.manifest.update_segment_stats(segment.segment_id, row_count=1, size_bytes=size, from_ts=_iso(0), to_ts=_iso(0))
+
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "pending commit führt beim nächsten Start noch keinen Cleanup aus"
+
+        await rb._store.manifest.delete_segment(missing.segment_id)
+        segments_dir = rb._store._segments_dir
+        (segments_dir / stale.filename).write_bytes(b"1234567")
+        Path(f"{segments_dir / stale.filename}-wal").write_bytes(b"wal")
+        Path(f"{segments_dir / orphan.filename}-shm").write_bytes(b"shm!")
+        assert await rb.reclaimable_migrating_bytes() == (1000, 7), "nur garantiert gelöschte Hauptdateien zählen als Disk-Freigabe"
+
+        rb._legacy_migration_progress = {"phase": "copying"}
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "aktive Job-Chunks sind nicht reclaimable"
+    finally:
+        await rb.stop()
+
+
+async def test_reclaimable_migrating_bytes_require_migratable_source_and_recheck_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Quarantäne und ein während der Manifest-Reads reservierter Start verhindern jede Vorab-Freigabe."""
+    rb = _seg_rb(tmp_path, max_file_size_bytes=10**9, legacy_retention_protected=True)
+    await rb.start()
+    try:
+        stale = await rb._store.manifest.create_migrating_segment(filename="rb_migrated_stale.sqlite", schema_version=2)
+        await rb._store.manifest.update_segment_stats(stale.segment_id, row_count=1, size_bytes=100, from_ts=_iso(0), to_ts=_iso(0))
+        (rb._store._segments_dir / stale.filename).write_bytes(b"stale")
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "ohne migrierbare Quelle erreicht ein Start den Cleanup nicht"
+
+        legacy_path = tmp_path / "legacy.db"
+        legacy_path.write_bytes(b"legacy")
+        legacy = await rb._store.manifest.register_legacy_segment(source_path=str(legacy_path), size_bytes=6)
+        await rb._store.manifest.mark_quarantined(legacy.segment_id, "read error")
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "quarantänierte älteste Quelle blockiert den Start vor dem Cleanup"
+
+        await rb._store.manifest.delete_segment(legacy.segment_id)
+        await rb._store.manifest.register_legacy_segment(source_path=str(legacy_path), size_bytes=6)
+        original_list = rb._store.manifest.list_migrating_segments
+
+        async def _list_and_reserve_start():
+            result = await original_list()
+            rb._legacy_migration_starting = True
+            return result
+
+        monkeypatch.setattr(rb._store.manifest, "list_migrating_segments", _list_and_reserve_start)
+        assert await rb.reclaimable_migrating_bytes() == (0, 0), "Aktivitäts-Guard wird nach dem letzten Manifest-await erneut geprüft"
+    finally:
+        rb._legacy_migration_starting = False
+        await rb.stop()
+
+
 # ---------- Runde 19, Codex :1291: Reservierung deckt das commit_count-await ----------
 
 

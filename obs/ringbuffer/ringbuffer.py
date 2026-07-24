@@ -1201,6 +1201,55 @@ class RingBuffer:
             return 0
         return sum(s.size_bytes for s in await self._store.manifest.list_schema_legacy_segments())
 
+    async def reclaimable_migrating_bytes(self) -> tuple[int, int]:
+        """Manifest- und Disk-Bytes, die ein neuer Copy-Lauf sicher verwirft (#1009).
+
+        Fehlt die Datei einer Legacy-Manifest-Zeile, liegt ein recoverbares Commit-Fenster
+        vor. Der nächste Start beendet dann nur diesen Commit und führt den normalen Cleanup
+        nicht aus; deshalb ist in diesem Zustand noch kein ``migrating``-Segment reclaimable.
+
+        Der erste Rückgabewert entspricht den Manifest-Größen, die nach dem Cleanup aus
+        ``stats.file_size_bytes`` verschwinden. Der zweite zählt ausschließlich tatsächlich
+        vorhandene Hauptdateien, deren Unlink bei einem erfolgreichen Cleanup garantiert ist.
+        """
+        if not self._segmented or self._store is None:
+            return 0, 0
+        # Während eines aktiven Jobs sind die neu entstehenden ``migrating``-Chunks
+        # keine stale Reste: ein paralleler Start wird abgelehnt und führt den Cleanup
+        # daher nicht aus. Status-Schätzungen dürfen diese Bytes nicht vorweg freigeben.
+        if self.legacy_migration_in_progress():
+            return 0, 0
+        from obs.ringbuffer.store.manifest import SEGMENT_STATUS_LEGACY
+
+        legacy_segments = await self._store.manifest.list_schema_legacy_segments()
+        # Der Manifest-Read ist ein Context-Switch: Ein Start kann sich inzwischen
+        # reserviert haben. Ebenso führt ein Start ohne migrierbare älteste Quelle
+        # (keine Quelle, quarantänierte Quelle oder Commit-Recovery) den Cleanup nicht aus.
+        if self.legacy_migration_in_progress():
+            return 0, 0
+        if (
+            not legacy_segments
+            or legacy_segments[0].status != SEGMENT_STATUS_LEGACY
+            or any(not Path(segment.filename).exists() for segment in legacy_segments)
+        ):
+            return 0, 0
+
+        segments = await self._store.manifest.list_migrating_segments()
+        # Auch dieser Read kann mit ``start_legacy_migration()`` racen. Nach dem
+        # Snapshot folgt kein weiteres await, sodass der zweite Guard das verbleibende
+        # Reservierungsfenster schließt.
+        if self.legacy_migration_in_progress():
+            return 0, 0
+        manifest_bytes = sum(max(0, int(segment.size_bytes or 0)) for segment in segments)
+        disk_bytes = 0
+        for segment in segments:
+            base = self._store._segments_dir / segment.filename
+            try:
+                disk_bytes += max(0, base.stat().st_size)
+            except OSError:
+                pass
+        return manifest_bytes, disk_bytes
+
     async def has_missing_file_legacy(self) -> bool:
         """True, wenn eine schema-legacy Manifest-Row eine FEHLENDE Datei hat (#968, Codex :2110).
 

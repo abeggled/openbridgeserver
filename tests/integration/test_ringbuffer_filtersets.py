@@ -119,6 +119,33 @@ async def _seed_knx_pa_ga_link(pa: str, ga: str) -> None:
     await db.commit()
 
 
+async def _seed_empty_hierarchy_node() -> tuple[str, str]:
+    from obs.db.database import get_db
+
+    db = get_db()
+    tree_id = str(uuid.uuid4())
+    node_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "INSERT INTO hierarchy_trees (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (tree_id, "Empty RingBuffer test tree", "", now, now),
+    )
+    await db.execute(
+        """INSERT INTO hierarchy_nodes
+           (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (node_id, tree_id, None, "Empty RingBuffer test node", "", 0, None, now, now),
+    )
+    await db.commit()
+    return tree_id, node_id
+
+
+async def _delete_hierarchy_tree(tree_id: str) -> None:
+    from obs.db.database import get_db
+
+    await get_db().execute_and_commit("DELETE FROM hierarchy_trees WHERE id=?", (tree_id,))
+
+
 async def _create_filterset(client, auth_headers, payload: dict) -> dict:
     resp = await client.post("/api/v1/ringbuffer/filtersets", json=payload, headers=auth_headers)
     assert resp.status_code == 201, resp.text
@@ -435,6 +462,81 @@ async def test_multi_query_unknown_set_id_is_skipped(client, auth_headers):
         assert resp.status_code == 200, resp.text
     finally:
         await _delete_filterset(client, auth_headers, set_a["id"])
+
+
+async def test_multi_query_unknown_hierarchy_node_returns_no_entries(client, auth_headers):
+    dp = await _create_dp(client, auth_headers, f"RB1061 unknown hierarchy {uuid.uuid4()}")
+    await _write_value(client, auth_headers, dp["id"], 10.0)
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {
+            "name": f"RB1061 unknown hierarchy set {uuid.uuid4()}",
+            "filter": {
+                "hierarchy_nodes": [
+                    {
+                        "tree_id": str(uuid.uuid4()),
+                        "node_id": str(uuid.uuid4()),
+                        "include_descendants": True,
+                    }
+                ]
+            },
+        },
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/ringbuffer/filtersets/query",
+            json={"set_ids": [created["id"]], "limit": 100},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+    finally:
+        await _delete_filterset(client, auth_headers, created["id"])
+
+
+async def test_multi_query_empty_hierarchy_set_does_not_widen_or_union(client, auth_headers):
+    tag = f"rb1061-valid-{uuid.uuid4().hex[:8]}"
+    included = await _create_dp(client, auth_headers, f"RB1061 included {uuid.uuid4()}", tags=[tag])
+    unrelated = await _create_dp(client, auth_headers, f"RB1061 unrelated {uuid.uuid4()}")
+    await _write_value(client, auth_headers, included["id"], 11.0)
+    await _write_value(client, auth_headers, unrelated["id"], 12.0)
+    tree_id, node_id = await _seed_empty_hierarchy_node()
+    empty_set = await _create_filterset(
+        client,
+        auth_headers,
+        {
+            "name": f"RB1061 empty hierarchy set {uuid.uuid4()}",
+            "filter": {
+                "hierarchy_nodes": [
+                    {
+                        "tree_id": tree_id,
+                        "node_id": node_id,
+                        "include_descendants": True,
+                    }
+                ]
+            },
+        },
+    )
+    valid_set = await _create_filterset(
+        client,
+        auth_headers,
+        {"name": f"RB1061 valid set {uuid.uuid4()}", "filter": {"tags": [tag]}},
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/ringbuffer/filtersets/query",
+            json={"set_ids": [empty_set["id"], valid_set["id"]], "limit": 500},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        matched = {row["datapoint_id"]: row["matched_set_ids"] for row in resp.json()}
+        assert matched[included["id"]] == [valid_set["id"]]
+        assert unrelated["id"] not in matched
+    finally:
+        await _delete_filterset(client, auth_headers, empty_set["id"])
+        await _delete_filterset(client, auth_headers, valid_set["id"])
+        await _delete_hierarchy_tree(tree_id)
 
 
 async def test_multi_query_inactive_set_is_skipped(client, auth_headers):
