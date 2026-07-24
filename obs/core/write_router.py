@@ -65,7 +65,7 @@ def _cached_value_equals(current_value: Any, cached_value: Any) -> bool:
 def _unwrap_mqtt_set_payload(raw_payload: str) -> tuple[Any, bool]:
     try:
         payload = json.loads(raw_payload)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return raw_payload, False
 
     if isinstance(payload, dict) and "v" in payload:
@@ -176,7 +176,7 @@ class WriteRouter:
         else:
             try:
                 value = _deserialize_typed_mqtt_set_value(dt, raw_payload, payload_value, payload_was_json)
-            except Exception:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 logger.warning(
                     "WriteRouter: invalid MQTT set payload for dp=%s data_type=%s payload=%r",
                     dp_id,
@@ -268,12 +268,11 @@ class WriteRouter:
         for row in rows:
             try:
                 binding = _row_to_binding(row)
-            except Exception as exc:
-                logger.error(
-                    "WriteRouter: invalid writable binding skipped for dp=%s binding=%s: %s",
+            except Exception:
+                logger.exception(
+                    "WriteRouter: invalid writable binding skipped for dp=%s binding=%s",
                     dp_id,
                     _row_value(row, "id") or "<unknown>",
-                    exc,
                 )
                 continue
             if skip_binding_id and binding.id == skip_binding_id:
@@ -421,7 +420,7 @@ class WriteRouter:
 def _row_value(row: Any, key: str) -> str | None:
     try:
         value = row[key]
-    except Exception:
+    except (KeyError, IndexError, TypeError):
         return None
     return str(value) if value is not None else None
 

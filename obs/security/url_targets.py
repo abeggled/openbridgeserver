@@ -137,7 +137,7 @@ def _normalise_target(raw: str) -> str:
     parsed = urlparse(value if is_url else f"//{value}")
     try:
         hostname = parsed.hostname
-        parsed.port
+        _ = parsed.port  # accessing .port forces lazy validation; raises ValueError if malformed
     except ValueError as exc:
         raise ValueError("target must contain a valid hostname and port") from exc
     if hostname:
@@ -340,7 +340,7 @@ def evaluate_url_target(
 ) -> UrlTargetDecision:
     try:
         parsed = urlparse(url)
-    except Exception as exc:
+    except ValueError as exc:
         return UrlTargetDecision(False, url, "", [], [], f"Invalid URL: {exc}")
 
     allowed_schemes = {"https"} if require_https else {"http", "https"}

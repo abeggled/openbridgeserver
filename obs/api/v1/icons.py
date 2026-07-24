@@ -11,6 +11,7 @@ POST   /icons/fontawesome — import icons from FontAwesome
 from __future__ import annotations
 
 import io
+import logging
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -24,6 +25,8 @@ from pydantic import BaseModel
 from obs.api.auth import get_admin_user, get_current_user
 from obs.config import get_settings
 from obs.db.database import Database, get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["icons"])
 
@@ -521,7 +524,7 @@ async def _fa_exchange_token(
             return token
     except Exception:
         # dbg.append(f"[token-exchange] Exception: {exc}")
-        pass
+        logger.exception("FontAwesome token exchange failed")
     return None
 
 
@@ -557,7 +560,7 @@ async def _fa_get_version(
                 return v
     except Exception:
         # dbg.append(f"[version-discovery] Exception: {exc}")
-        pass
+        logger.exception("FontAwesome version discovery failed")
     # dbg.append("[version-discovery] Fallback → 7.2.0")
     return "7.2.0"
 
@@ -624,7 +627,7 @@ async def _fa_graphql_svg(
 
     except Exception:
         # dbg.append(f"[graphql:{icon_name}] Exception: {exc}")
-        pass
+        logger.exception("FontAwesome GraphQL icon lookup failed for %s", icon_name)
     return None
 
 
@@ -644,7 +647,7 @@ async def _fa_cdn_svg(
             if r.status_code == 200 and _is_svg(r.content):
                 return r.content
         except Exception:
-            pass
+            logger.exception("FontAwesome CDN fetch failed for %s", name)
         return None
 
     svg = await _fetch(icon_name)

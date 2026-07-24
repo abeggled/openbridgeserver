@@ -24,12 +24,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from obs.adapters import registry as adapter_registry
 from obs.adapters.knx.dpt_registry import DPTRegistry
@@ -37,6 +38,8 @@ from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.api.v1.redaction import REDACTED
 from obs.db.database import Database, get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["adapters"])
 
@@ -459,7 +462,8 @@ async def create_instance(
         try:
             await adapter_registry.start_instance(instance_id, get_event_bus(), db)
         except Exception:
-            pass  # Verbindungsfehler → Instanz existiert, aber running=False
+            # Verbindungsfehler → Instanz existiert, aber running=False
+            logger.exception("Start der neu angelegten Adapter-Instanz %s fehlgeschlagen", instance_id)
 
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (instance_id,))
     instance = adapter_registry.get_instance_by_id(instance_id)
@@ -608,6 +612,7 @@ async def test_instance(
     try:
         cls.config_schema(**config_dict)
     except Exception as exc:
+        logger.exception("Adapter config validation failed for instance %s", instance_id)
         return TestResult(success=False, detail=f"Config-Fehler: {exc}", detail_code="configError", detail_params={"error": str(exc)})
 
     from obs.core.event_bus import EventBus
@@ -632,6 +637,7 @@ async def test_instance(
             )
         return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
     except Exception as exc:
+        logger.exception("Verbindungstest für Instanz %s fehlgeschlagen", instance_id)
         return TestResult(success=False, detail=str(exc))
 
 
@@ -867,7 +873,7 @@ async def mqtt_browse_topics(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             f"MQTT-Verbindung fehlgeschlagen: {exc}",
-        )
+        ) from exc
 
     return sorted(topics)
 
@@ -928,7 +934,7 @@ async def mqtt_sample_payload(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             f"MQTT-Verbindung fehlgeschlagen: {exc}",
-        )
+        ) from exc
 
     raise HTTPException(
         status.HTTP_404_NOT_FOUND,
@@ -1121,7 +1127,7 @@ async def _iobroker_candidates(
             cfg = json.loads(row["config"] or "{}")
             if cfg.get("state_id"):
                 existing_states.add(str(cfg["state_id"]))
-        except Exception:
+        except (json.JSONDecodeError, AttributeError):
             pass
 
     result: list[IoBrokerImportItem] = []
@@ -1216,6 +1222,7 @@ async def iobroker_import_states(
             )
             result.created_bindings += 1
         except Exception as exc:
+            logger.exception("ioBroker-Import fehlgeschlagen für State %s", item.state_id)
             result.errors.append(f"{item.state_id}: {exc}")
     return result
 
@@ -1255,7 +1262,7 @@ async def anwesenheit_health(
 
     try:
         cfg = AnwesenheitssimulationConfig(**config_dict)
-    except Exception as exc:
+    except (ValidationError, TypeError) as exc:
         return AnwesenheitHealthResult(healthy=False, message=f"Config-Fehler: {exc}")
 
     try:
@@ -1293,7 +1300,7 @@ async def anwesenheit_health(
             if records:
                 with_data += 1
         except Exception:
-            pass
+            logger.exception("Anwesenheit-Health-Check: Historienabfrage für Binding %s fehlgeschlagen", b_row["id"])
 
     healthy = with_data > 0
     if healthy:
@@ -1428,6 +1435,7 @@ async def anwesenheit_sync_bindings(
             )
             result.created += 1
         except Exception as exc:
+            logger.exception("Anwesenheit-Sync: Anlegen der Bindung für DataPoint %s fehlgeschlagen", dp_id_str)
             result.errors.append(f"{dp_id_str}: {exc}")
 
     # Remove bindings for deselected DataPoints
@@ -1438,6 +1446,7 @@ async def anwesenheit_sync_bindings(
             await delete_binding(dp_uuid, binding_uuid, _user, db)
             result.removed += 1
         except Exception as exc:
+            logger.exception("Anwesenheit-Sync: Entfernen der Bindung für DataPoint %s fehlgeschlagen", dp_id_str)
             result.errors.append(f"{dp_id_str}: {exc}")
 
     # Reload adapter bindings if the instance is running
@@ -1446,7 +1455,8 @@ async def anwesenheit_sync_bindings(
         if inst is not None:
             await adapter_registry.reload_instance_bindings(instance_id, db)
     except Exception:
-        pass  # non-critical — bindings take effect on next restart
+        # non-critical — bindings take effect on next restart
+        logger.exception("Anwesenheit-Sync: Reload der Bindings für Instanz %s fehlgeschlagen", instance_id)
 
     return result
 
@@ -1590,7 +1600,7 @@ async def test_adapter(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Adapter '{adapter_type}' nicht registriert")
     try:
         cls.config_schema(**body.config)
-    except Exception as exc:
+    except ValidationError as exc:
         return TestResult(
             success=False,
             detail=f"Config-Validierungsfehler: {exc}",
@@ -1620,6 +1630,7 @@ async def test_adapter(
             )
         return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
     except Exception as exc:
+        logger.exception("Verbindungstest für Adapter-Typ %s fehlgeschlagen", adapter_type)
         return TestResult(success=False, detail=str(exc))
 
 

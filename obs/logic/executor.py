@@ -13,9 +13,10 @@ import math
 import operator
 import re
 from datetime import datetime as _datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo as _ZoneInfo
+from zoneinfo import ZoneInfoNotFoundError
 
 from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 from obs.logic.graph_analysis import analyze_topology
@@ -106,7 +107,7 @@ class GraphExecutor:
             try:
                 result = self._eval_node(node, inputs)
             except Exception as exc:
-                logger.warning("Node %s (%s) error: %s", node.id, node.type, exc)
+                logger.exception("Node %s (%s) error", node.id, node.type)
                 result = {"__error__": str(exc)}
 
             outputs[node.id] = result
@@ -542,7 +543,7 @@ class GraphExecutor:
                 if formula and raw is not None:
                     try:
                         raw = self._safe_eval(formula, {"x": self._to_num(raw)})
-                    except Exception as exc:
+                    except ExecutionError as exc:
                         logger.debug("datapoint_read formula error: %s", exc)
                 value_map = d.get("value_map")
                 if value_map and raw is not None:
@@ -558,7 +559,7 @@ class GraphExecutor:
                 if formula and write_val is not None:
                     try:
                         write_val = self._safe_eval(formula, {"x": self._to_num(write_val)})
-                    except Exception as exc:
+                    except ExecutionError as exc:
                         logger.debug("datapoint_write formula error: %s", exc)
                 value_map = d.get("value_map")
                 if value_map and write_val is not None:
@@ -653,8 +654,8 @@ class GraphExecutor:
                 except ImportError:
                     logger.warning("astral not installed — astro_sun needs: pip install astral")
                     return {"sunrise": None, "sunset": None, "is_day": False}
-                except Exception as exc:
-                    logger.warning("astro_sun error: %s", exc)
+                except Exception:
+                    logger.exception("astro_sun error")
                     return {"sunrise": None, "sunset": None, "is_day": False}
 
             case "operating_hours":
@@ -748,14 +749,14 @@ class GraphExecutor:
                     preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
                     if len(preview) > 20_000:
                         preview = preview[:20_000] + "…"
-                except Exception:
+                except (TypeError, ValueError, RecursionError):
                     preview = str(data_obj) if data_obj is not None else None
 
                 # Multi-path mode: json_paths is a JSON array of {label, path} entries
                 if json_paths_raw:
                     try:
                         path_list = _json_mod.loads(json_paths_raw)
-                    except Exception:
+                    except (_json_mod.JSONDecodeError, TypeError):
                         path_list = []
 
                     if isinstance(path_list, list) and path_list:
@@ -803,7 +804,7 @@ class GraphExecutor:
                 if xml_paths_raw:
                     try:
                         path_list = _json_xml.loads(xml_paths_raw)
-                    except Exception:
+                    except (_json_xml.JSONDecodeError, TypeError):
                         path_list = []
 
                     if isinstance(path_list, list) and path_list:
@@ -886,7 +887,7 @@ class GraphExecutor:
                                 if m:
                                     group = int(d.get("group") or 0)
                                     value = m.group(group)
-                    except Exception:
+                    except (_re.error, ValueError, IndexError):
                         value = None
 
                 preview_str = raw_text[:20_000] if raw_text and len(raw_text) > 20_000 else raw_text
@@ -899,7 +900,7 @@ class GraphExecutor:
             case "datetime":
                 try:
                     tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
-                except Exception:
+                except (ValueError, ZoneInfoNotFoundError):
                     tz = _ZoneInfo("UTC")
                 now = _datetime.now(tz)
                 language = str(self.app_config.get("language", "de"))
@@ -1055,7 +1056,7 @@ class GraphExecutor:
                 # process timezone (usually UTC in Docker).
                 try:
                     tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
-                except Exception:
+                except (ValueError, ZoneInfoNotFoundError):
                     tz = _ZoneInfo("Europe/Zurich")
                 today = _datetime.now(tz).date()
                 day_key = today.isoformat()
@@ -1181,7 +1182,7 @@ class GraphExecutor:
                 # not the timezone of the server process (usually UTC in Docker).
                 try:
                     tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
-                except Exception:
+                except (ValueError, ZoneInfoNotFoundError):
                     tz = _ZoneInfo("Europe/Zurich")
                 today = _datetime.now(tz).date()
                 day_key = today.isoformat()
@@ -1256,7 +1257,7 @@ class GraphExecutor:
                     filters: list[dict] = _json_ic.loads(filters_json) if filters_json else []
                     if not isinstance(filters, list):
                         filters = []
-                except Exception:
+                except (_json_ic.JSONDecodeError, TypeError):
                     filters = []
 
                 out: dict[str, Any] = {"raw": raw_text}
@@ -1395,8 +1396,8 @@ class GraphExecutor:
 
                 except ImportError as exc:
                     logger.warning("ical node %s: missing library — %s", node.id[:8], exc)
-                except Exception as exc:
-                    logger.warning("ical node %s: parse error — %s", node.id[:8], exc)
+                except Exception:
+                    logger.exception("ical node %s: parse error", node.id[:8])
                     for i in range(len(filters)):
                         out.setdefault(f"f{i}_array", [])
                         out.setdefault(f"f{i}_next_date", None)
@@ -1462,7 +1463,7 @@ class GraphExecutor:
             quant = Decimal(10) ** -ndigits
             result = float(d.quantize(quant, rounding=ROUND_HALF_UP))
             return int(result) if ndigits <= 0 else result
-        except Exception:
+        except (InvalidOperation, TypeError):
             return round(x, ndigits)  # fallback
 
     @staticmethod

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -133,7 +134,7 @@ async def test_influxdb_v3_write_uses_db_query_param(client, auth_headers, fake_
 
         deadline = time.time() + 2.0
         while time.time() < deadline and not fake_influx_v3_server.captured_writes:  # type: ignore[attr-defined]
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
 
         assert fake_influx_v3_server.captured_writes, "expected at least one v3 write request"  # type: ignore[attr-defined]
         req = fake_influx_v3_server.captured_writes[0]  # type: ignore[attr-defined]

@@ -308,7 +308,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
                     if hist_ts.tzinfo is None:
                         hist_ts = hist_ts.replace(tzinfo=UTC)
                     fire_at = hist_ts + delta
-                except Exception:
+                except (KeyError, ValueError, TypeError):
                     continue
 
                 if fire_at <= now:

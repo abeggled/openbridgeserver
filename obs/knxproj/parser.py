@@ -388,7 +388,7 @@ def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list
                     m = re.search(r'xmlns="http://knx\.org/xml/project/(\d+)"', master)
                     if m:
                         schema_version = int(m.group(1))
-        except Exception:
+        except (zipfile.BadZipFile, KeyError, ValueError):
             pass
 
         if schema_version < ets6_schema_version:
@@ -419,8 +419,8 @@ def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list
                     xml_bytes = inner.read(zero_xml)
                     records = _parse_trades_from_xml(xml_bytes)
 
-    except Exception as e:
-        logger.warning("parse_knxproj_trades failed (ignored): %s", e)
+    except Exception:
+        logger.exception("parse_knxproj_trades failed (ignored)")
 
     logger.info("parse_knxproj_trades: %d Gewerke gefunden", len(records))
     return records

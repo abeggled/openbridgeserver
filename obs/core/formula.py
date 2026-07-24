@@ -227,5 +227,5 @@ def _try_eval(formula: str, x: float) -> str | None:
         return None
     except ZeroDivisionError:
         return "Division durch Null"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- validates arbitrary user formulas; any exception is expected input, not a bug
         return str(exc)

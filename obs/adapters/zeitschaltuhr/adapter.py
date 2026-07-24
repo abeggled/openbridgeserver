@@ -601,8 +601,8 @@ class ZeitschaltuhrAdapter(AdapterBase):
             return s.get({"sunrise": "sunrise", "sunset": "sunset", "solar_noon": "noon"}[ref.value])
         except ImportError:
             logger.warning("astral nicht installiert — Sonnenzeit-Berechnungen nicht verfügbar (pip install astral)")
-        except Exception as exc:
-            logger.warning("Sonnenzeit-Berechnung für %s fehlgeschlagen: %s", for_date, exc)
+        except Exception:
+            logger.exception("Sonnenzeit-Berechnung für %s fehlgeschlagen", for_date)
         return None
 
     def _get_solar_altitude_time(
@@ -635,13 +635,12 @@ class ZeitschaltuhrAdapter(AdapterBase):
             return result
         except ImportError:
             logger.warning("astral nicht installiert — Sonnenhöhenwinkel-Berechnung nicht verfügbar (pip install astral)")
-        except Exception as exc:
-            logger.warning(
-                "Sonnenhöhenwinkel-Berechnung für %s°/%s am %s fehlgeschlagen: %s",
+        except Exception:
+            logger.exception(
+                "Sonnenhöhenwinkel-Berechnung für %s°/%s am %s fehlgeschlagen",
                 altitude_deg,
                 direction.value,
                 for_date,
-                exc,
             )
         return None
 
@@ -746,7 +745,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
             except Exception:
                 kwargs.pop("language", None)
-                logger.debug(
+                logger.exception(
                     "Sprache '%s' für Land '%s' nicht unterstützt — nutze Standardsprache",
                     self._cfg.holiday_language,
                     self._cfg.holiday_country,
@@ -755,15 +754,15 @@ class ZeitschaltuhrAdapter(AdapterBase):
             result.update(dict(hol_obj.items()))
         except ImportError:
             logger.info("holidays-Bibliothek nicht installiert — Feiertagserkennung deaktiviert (pip install holidays)")
-        except Exception as exc:
-            logger.warning("Feiertagskalender konnte nicht geladen werden: %s", exc)
+        except Exception:
+            logger.exception("Feiertagskalender konnte nicht geladen werden")
 
         # Custom holidays (merged on top — custom entries override library names for same date)
         for y in years:
             for entry in self._cfg.custom_holidays:
                 try:
                     result.update(self._parse_custom_holiday_entry(entry, y))
-                except Exception as exc:
+                except ValueError as exc:
                     logger.warning("Benutzerdefinierter Feiertag '%s' konnte nicht geparst werden: %s", entry, exc)
 
         return result
@@ -883,7 +882,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
                     if h["name"].upper() == name_up:
                         return date.fromisoformat(h["date"]) + timedelta(days=offset)
             except Exception:
-                pass
+                logger.exception("Feiertagssuche für '%s' (Jahr %s) fehlgeschlagen", name_up, year)
             return None
 
         logger.debug("Unbekanntes Datum-Fenster-Ausdruck: '%s'", expr_s)
@@ -920,17 +919,22 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
             except Exception:
                 kwargs.pop("language", None)
+                logger.exception(
+                    "Sprache '%s' für Land '%s' nicht unterstützt — nutze Standardsprache",
+                    self._cfg.holiday_language,
+                    self._cfg.holiday_country,
+                )
                 hol_obj = hol_lib.country_holidays(self._cfg.holiday_country, **kwargs)
             result.update(dict(hol_obj.items()))
         except ImportError:
             pass
-        except Exception as exc:
-            logger.warning("Feiertagskalender konnte nicht geladen werden: %s", exc)
+        except Exception:
+            logger.exception("Feiertagskalender konnte nicht geladen werden")
 
         for entry in self._cfg.custom_holidays:
             try:
                 result.update(self._parse_custom_holiday_entry(entry, year))
-            except Exception:
+            except ValueError:
                 pass
 
         return [{"date": d.isoformat(), "name": n} for d, n in sorted(result.items())]
@@ -941,7 +945,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
     def _holiday_name(self, d: date) -> str:
         try:
             return self._hol.get(d, "")
-        except Exception:
+        except TypeError:
             return ""
 
     def _parse_vacation_period(self, n: int) -> tuple[date | None, date | None]:
@@ -979,11 +983,11 @@ class ZeitschaltuhrAdapter(AdapterBase):
                 if row:
                     tz_name = row["value"]
             except Exception:
-                pass
+                logger.exception("Zeitzone konnte nicht aus app_settings gelesen werden")
         if not tz_name:
             tz_name = "UTC"
         try:
             return zoneinfo.ZoneInfo(tz_name)
-        except Exception:
+        except (ValueError, zoneinfo.ZoneInfoNotFoundError):
             logger.warning("Zeitzone '%s' unbekannt — nutze UTC", tz_name)
             return UTC

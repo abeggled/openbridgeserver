@@ -20,7 +20,7 @@ import asyncio
 import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.modbus_base import (
@@ -138,7 +138,7 @@ class ModbusRtuAdapter(AdapterBase):
     async def _poll_loop(self, binding: Any) -> None:
         try:
             bc = ModbusBindingConfig(**binding.config)
-        except Exception:
+        except (ValidationError, TypeError):
             logger.warning("Invalid Modbus RTU binding config %s — skipped", binding.id)
             return
 
@@ -166,8 +166,8 @@ class ModbusRtuAdapter(AdapterBase):
                 )
             except asyncio.CancelledError:
                 return
-            except Exception as exc:
-                logger.warning("Modbus RTU poll error (binding %s): %s", binding.id, exc)
+            except Exception:
+                logger.exception("Modbus RTU poll error (binding %s)", binding.id)
                 await self._bus.publish(
                     DataValueEvent(
                         datapoint_id=binding.datapoint_id,

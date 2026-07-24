@@ -2922,7 +2922,7 @@ class SqliteSegmentStore(RingBufferStore):
         estimate: tuple[int | None, str | None, str | None] = (None, None, None)
         try:
             conn = await self._connection_for_read(segment)
-        except Exception:
+        except aiosqlite.Error:
             conn = None
         if conn is not None:
             try:
@@ -2934,7 +2934,7 @@ class SqliteSegmentStore(RingBufferStore):
                 async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
                     last = await cur.fetchone()
                 estimate = (rows, first[0] if first else None, last[0] if last else None)
-            except Exception:
+            except (aiosqlite.Error, ValueError, TypeError):
                 estimate = (None, None, None)
             finally:
                 await conn.close()

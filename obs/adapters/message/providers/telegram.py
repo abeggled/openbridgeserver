@@ -70,7 +70,7 @@ class TelegramProvider:
 def _telegram_response_ok(response: httpx.Response) -> tuple[bool, str]:
     try:
         body = response.json()
-    except Exception:
+    except ValueError:
         return True, ""
 
     if not isinstance(body, dict) or "ok" not in body:

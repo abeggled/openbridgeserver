@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.message import providers as message_providers
@@ -137,6 +137,7 @@ def _values_equal(left: Any, right: Any) -> bool:
     try:
         return left == right
     except Exception:
+        logger.exception("MESSAGE: comparing binding values failed — treating as unequal")
         return False
 
 
@@ -290,7 +291,7 @@ class MessageAdapter(AdapterBase):
                 continue
             try:
                 cfg = _binding_config(binding)
-            except Exception:
+            except (ValidationError, TypeError):
                 logger.warning("Invalid MESSAGE binding config for %s skipped", binding.id)
                 continue
             if not cfg.enabled:
@@ -370,7 +371,7 @@ class MessageAdapter(AdapterBase):
             from zoneinfo import ZoneInfo
 
             display_ts = event_ts.astimezone(ZoneInfo(app_settings["timezone"]))
-        except Exception:
+        except (KeyError, ValueError):
             display_ts = event_ts
         rendered = render_message(
             cfg.message,
@@ -548,5 +549,5 @@ def _lookup_datapoint(datapoint_id: uuid.UUID) -> Any | None:
         from obs.core.registry import get_registry
 
         return get_registry().get(datapoint_id)
-    except Exception:
+    except RuntimeError:
         return None

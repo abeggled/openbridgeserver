@@ -19,7 +19,7 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -91,7 +91,7 @@ async def _application_timezone(db: Database) -> ZoneInfo:
     row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
     try:
         return ZoneInfo(row["value"] if row else "Europe/Zurich")
-    except Exception:
+    except (ZoneInfoNotFoundError, TypeError):
         return ZoneInfo("Europe/Zurich")
 
 
@@ -377,8 +377,8 @@ class AutobackupScheduler:
                         last_backup_day = today
                         if deleted:
                             logger.info("Autobackup: %d alte Sicherung(en) gelöscht.", deleted)
-                    except Exception as exc:
-                        logger.error("Autobackup fehlgeschlagen: %s", exc)
+                    except Exception:
+                        logger.exception("Autobackup fehlgeschlagen")
 
                 # Jede Minute prüfen (oder auf Konfigurationsänderung warten)
                 try:
@@ -393,8 +393,8 @@ class AutobackupScheduler:
 
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                logger.error("Autobackup-Scheduler Fehler: %s", exc)
+            except Exception:
+                logger.exception("Autobackup-Scheduler Fehler")
                 await asyncio.sleep(60)
 
 

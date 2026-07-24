@@ -142,7 +142,7 @@ async def test_empty_pending_checkpoint_is_treated_as_lost(tmp_path: Path):
     # pending-Datei auf 0 Bytes truncaten (abgeschnittener Write / Crash). Ein
     # schreibendes connect + wal_checkpoint(TRUNCATE) meldet auf der leeren DB busy=0,
     # sodass der Läufer das Segment sonst faelschlich als sauber closed + resize 0 markiert.
-    with open(seg_path, "wb") as fh:
+    with open(seg_path, "wb") as fh:  # noqa: ASYNC230 -- test setup, no concurrent async work in flight
         fh.truncate(0)
     assert seg_path.stat().st_size == 0
 

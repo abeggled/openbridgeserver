@@ -210,7 +210,7 @@ async def test_truncated_closed_segment_is_quarantined_on_read(store: SqliteSegm
     assert closed.status == SEGMENT_STATUS_CLOSED
     assert closed.row_count > 0
     seg_path = tmp_path / "root" / "segments" / closed.filename
-    with open(seg_path, "wb") as fh:
+    with open(seg_path, "wb") as fh:  # noqa: ASYNC230 -- test setup, no concurrent async work in flight
         fh.truncate(0)
     assert seg_path.stat().st_size == 0
 

@@ -69,7 +69,7 @@ def verify_password(plain: str, stored: str) -> bool:
             int(iterations),
         )
         return hmac.compare_digest(dk.hex(), hash_hex)
-    except Exception:
+    except ValueError:
         return False
 
 

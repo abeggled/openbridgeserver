@@ -383,7 +383,7 @@ async def _page_has_datapoint(db: Database, page_id: str, dp_id: uuid.UUID) -> b
 
     try:
         page = PageConfig.model_validate_json(raw)
-    except Exception:
+    except ValueError:
         return False
 
     dp_id_str = str(dp_id)

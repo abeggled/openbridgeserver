@@ -19,6 +19,7 @@ PUT    /api/v1/system/log-level        change log level at runtime (admin only)
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -34,6 +35,8 @@ from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, validate_datetime_setting
 from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system"])
 
@@ -270,7 +273,7 @@ async def update_app_settings(
         from obs.logic.manager import get_logic_manager
 
         get_logic_manager().update_app_config(updated_config)
-    except Exception:
+    except RuntimeError:
         pass  # Manager may not be running — non-critical
 
     return AppSettingsOut(
@@ -400,10 +403,11 @@ async def update_history_settings(
 
         await reload_history_plugin(db)
     except Exception as exc:
+        logger.exception("History plugin reload failed")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Settings saved but plugin reload failed: {exc}",
-        )
+        ) from exc
 
     audit_writer = AuditLogWriter(
         db=db,
@@ -514,6 +518,7 @@ async def test_history_connection(
         # Missing optional dependency
         return HistoryTestResult(ok=False, message=str(exc))
     except Exception as exc:
+        logger.exception("History connection test failed")
         return HistoryTestResult(ok=False, message=str(exc))
 
 

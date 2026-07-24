@@ -211,7 +211,7 @@ def _safe_loads(s: str | None) -> Any:
         return None
     try:
         return json.loads(s)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return s
 
 
@@ -234,7 +234,7 @@ def _bucket_key(ts_str: str, minutes: int) -> str:
         rounded = (total_minutes // minutes) * minutes
         dt_rounded = dt.replace(hour=rounded // 60, minute=rounded % 60, second=0, microsecond=0)
         return dt_rounded.strftime("%Y-%m-%dT%H:%M:00") + "Z"
-    except Exception:
+    except (ValueError, TypeError):
         return ts_str[:16]
 
 

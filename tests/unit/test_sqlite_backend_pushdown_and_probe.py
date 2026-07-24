@@ -75,7 +75,7 @@ async def test_truncated_active_segment_is_treated_as_lost(tmp_path: Path):
     root = tmp_path / "root"
     filename = await _seed_and_close(root)
     seg_path = root / "segments" / filename
-    with open(seg_path, "wb") as fh:
+    with open(seg_path, "wb") as fh:  # noqa: ASYNC230 -- test setup, no concurrent async work in flight
         fh.truncate(0)
     assert seg_path.stat().st_size == 0
 

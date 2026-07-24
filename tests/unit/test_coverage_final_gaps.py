@@ -580,7 +580,7 @@ async def test_import_db_saves_to_tmp_and_calls_restore(monkeypatch, tmp_path):
     try:
         # Non-SQLite content triggers validation error
         await config_api.import_db(file=fake_file, _admin="admin", db=MagicMock())
-    except (HTTPException, Exception):
+    except (HTTPException, TypeError):
         pass  # expected
 
 
@@ -605,7 +605,7 @@ async def test_init_autobackup_scheduler_and_get(tmp_path, monkeypatch):
             scheduler._task.cancel()
             try:
                 await scheduler._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
     finally:
         ab_api_2._scheduler = original

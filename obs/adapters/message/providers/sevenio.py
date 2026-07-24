@@ -79,7 +79,7 @@ class SevenIoProvider:
 def _sevenio_response_ok(response: httpx.Response) -> tuple[bool, str]:
     try:
         body = response.json()
-    except Exception:
+    except ValueError:
         body_text = (getattr(response, "text", "") or "").strip()
         if not body_text:
             return True, ""

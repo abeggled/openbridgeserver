@@ -410,6 +410,7 @@ async def _read_persistent_log_level(db: object) -> str | None:
     try:
         row = await db.fetchone("SELECT value FROM app_settings WHERE key='server.log_level'")
     except Exception:
+        logger.exception("Could not read persisted log level — using default")
         return None
     if row is None:
         return None

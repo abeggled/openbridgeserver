@@ -53,7 +53,7 @@ import logging
 import re
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
@@ -276,7 +276,7 @@ class OneWireAdapter(AdapterBase):
     async def _poll_loop(self, binding: Any) -> None:
         try:
             bc = OneWireBindingConfig(**binding.config)
-        except Exception:
+        except (ValidationError, TypeError):
             logger.warning("Invalid 1-Wire binding config %s — skipped", binding.id)
             return
 
@@ -329,8 +329,8 @@ class OneWireAdapter(AdapterBase):
                         code="couldNotConnectTo",
                         params={"host": self._cfg.host, "port": self._cfg.port},
                     )
-                    logger.warning("1-Wire adapter: connection to owserver lost: %s", exc)
-                logger.warning("1-Wire poll error (sensor %s/%s): %s", bc.sensor_id, bc.property, exc)
+                    logger.exception("1-Wire adapter: connection to owserver lost")
+                logger.exception("1-Wire poll error (sensor %s/%s)", bc.sensor_id, bc.property)
                 await self._bus.publish(
                     DataValueEvent(
                         datapoint_id=binding.datapoint_id,
@@ -387,7 +387,7 @@ class OneWireAdapter(AdapterBase):
         except Exception as exc:
             # No adapter-side writability allowlist is maintained — owserver's own
             # error is the source of truth for whether a property is writable.
-            logger.warning("1-Wire write failed for binding %s (%s): %s", binding.id, path, exc)
+            logger.exception("1-Wire write failed for binding %s (%s)", binding.id, path)
             if (
                 self._owprotocol is not None
                 and isinstance(exc, (self._owprotocol.ConnError, self._owprotocol.OwnetTimeout, self._owprotocol.ProtocolError))
@@ -403,7 +403,7 @@ class OneWireAdapter(AdapterBase):
                     code="couldNotConnectTo",
                     params={"host": self._cfg.host, "port": self._cfg.port},
                 )
-                logger.warning("1-Wire adapter: connection to owserver lost: %s", exc)
+                logger.exception("1-Wire adapter: connection to owserver lost")
 
     async def _read_property(self, sensor_id: str, property_name: str) -> float | int | bool | str | None:
         path = f"/{_normalize_sensor_id(sensor_id)}/{property_name}"

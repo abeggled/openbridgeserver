@@ -203,7 +203,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
                 raw = row[col_idx.get("raw", 0)] if "raw" in col_idx else None
                 try:
                     v = json.loads(raw) if raw is not None else None
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     v = raw
                 q = row[col_idx.get("quality", 0)] if "quality" in col_idx else ""
                 u = row[col_idx.get("unit", 0)] if "unit" in col_idx else None
@@ -268,15 +268,15 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
             self._write_backoff_until = 0.0
             self._write_backoff_seconds = _WRITE_BACKOFF_INITIAL_SECONDS
             self._write_skip_logged = False
-        except Exception as exc:
+        except Exception:
             try:
                 await self.disconnect()
             except Exception:
-                pass
+                logger.exception("InfluxDB disconnect after write failure also failed")
             self._write_backoff_until = time.monotonic() + self._write_backoff_seconds
             self._write_backoff_seconds = min(self._write_backoff_seconds * 2, _WRITE_BACKOFF_MAX_SECONDS)
             self._write_skip_logged = False
-            logger.error("InfluxDB write failed: %s", exc)
+            logger.exception("InfluxDB write failed")
             raise
 
     async def query(
@@ -300,8 +300,8 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         try:
             data = await self._run_influxql(q)
             return self._parse_influxql_series(data, raw_field=True)
-        except Exception as exc:
-            logger.error("InfluxDB query failed: %s", exc)
+        except Exception:
+            logger.exception("InfluxDB query failed")
             return []
 
     async def aggregate(
@@ -327,8 +327,8 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         try:
             data = await self._run_influxql(q)
             return self._parse_influxql_series(data, raw_field=False)
-        except Exception as exc:
-            logger.error("InfluxDB aggregate failed: %s", exc)
+        except Exception:
+            logger.exception("InfluxDB aggregate failed")
             return []
 
     # ------------------------------------------------------------------
@@ -353,8 +353,8 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
                 # Try a trivial InfluxQL query against the database
                 data = await self._run_influxql(f'SHOW MEASUREMENTS ON "{self._database}" LIMIT 1')
                 return "results" in data
-        except Exception as exc:
-            logger.debug("InfluxDB ping failed: %s", exc)
+        except Exception:
+            logger.exception("InfluxDB ping failed")
             return False
 
 

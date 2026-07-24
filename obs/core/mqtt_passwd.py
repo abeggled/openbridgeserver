@@ -86,7 +86,7 @@ async def reload_mosquitto(
                 logger.info("Mosquitto reloaded via reload_command")
         except TimeoutError:
             logger.warning("Mosquitto reload command timed out")
-        except Exception as exc:
+        except OSError as exc:
             logger.warning("Mosquitto reload command error: %s", exc)
         return
 
@@ -101,7 +101,7 @@ async def reload_mosquitto(
                 "Permission denied sending SIGHUP to PID %d (hint: use pid: container:mosquitto in docker-compose.yml)",
                 reload_pid,
             )
-        except Exception as exc:
+        except OSError as exc:
             logger.warning("Mosquitto SIGHUP failed: %s", exc)
         return
 

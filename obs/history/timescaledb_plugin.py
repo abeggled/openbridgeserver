@@ -106,7 +106,7 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
                 logger.info("TimescaleDB hypertable active for dp_history")
             except Exception:
                 self._has_timescaledb = False
-                logger.info("TimescaleDB extension not available — using plain PostgreSQL for history")
+                logger.exception("TimescaleDB extension not available — using plain PostgreSQL for history")
 
             await conn.execute("CREATE INDEX IF NOT EXISTS dp_history_dp_id_time ON dp_history (dp_id, time DESC)")
 
@@ -185,7 +185,7 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
         for r in rows:
             try:
                 v = json.loads(r["raw"]) if r["raw"] is not None else None
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
                 v = r["raw"]
             result.append(
                 {
@@ -312,8 +312,8 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
             return True
         except ImportError:
             raise RuntimeError("asyncpg is required for the TimescaleDB history plugin. Install it with: pip install asyncpg")
-        except Exception as exc:
-            logger.debug("TimescaleDB ping failed: %s", exc)
+        except Exception:
+            logger.exception("TimescaleDB ping failed")
             return False
 
 

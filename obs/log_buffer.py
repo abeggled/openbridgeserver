@@ -74,9 +74,11 @@ class LogBufferHandler(logging.Handler):
             # Fire-and-forget WS broadcast — must never block the logging call.
             if _loop is not None and _loop.is_running():
                 _loop.call_soon_threadsafe(_broadcast_nowait, entry)
-        except Exception:
+        except Exception:  # noqa: S110, BLE001
             # During interpreter shutdown sys.meta_path is None and imports/loop
-            # operations raise — a logging handler must never crash its caller.
+            # operations raise — a logging handler must never crash its caller,
+            # and must not log here either (this IS a logging handler; calling
+            # logger.exception() would recursively re-enter this same emit()).
             pass
 
     @classmethod

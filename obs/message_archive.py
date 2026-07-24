@@ -130,7 +130,7 @@ def _json_loads_object(raw: str | None) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -140,7 +140,7 @@ def _json_loads_list(raw: str | None) -> list[str]:
         return []
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return []
     if not isinstance(parsed, list):
         return []
@@ -922,7 +922,7 @@ async def init_message_archive_store(settings: Settings | None = None) -> Messag
         _store.status = "degraded"
         _store.last_error = str(exc)
         _service = None
-        logger.error("Message archive database degraded: %s", exc)
+        logger.exception("Message archive database degraded")
     else:
         _service = MessageArchiveService(_store)
     return _store

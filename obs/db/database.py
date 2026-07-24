@@ -137,7 +137,7 @@ async def _migration_v5(conn: aiosqlite.Connection) -> None:
     try:
         await conn.execute("ALTER TABLE adapter_bindings ADD COLUMN adapter_instance_id TEXT")
         await conn.commit()
-    except Exception:
+    except aiosqlite.OperationalError:
         pass  # Spalte existiert bereits
 
     # 3. adapter_configs → adapter_instances migrieren

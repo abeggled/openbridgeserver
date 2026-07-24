@@ -10,7 +10,7 @@ import datetime
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 # ---------------------------------------------------------------------------
 # Definition
@@ -34,7 +34,7 @@ class DataTypeDefinition:
 class DataTypeRegistry:
     """Global registry for DataTypeDefinitions. Thread-safe for reads."""
 
-    _types: dict[str, DataTypeDefinition] = {}
+    _types: ClassVar[dict[str, DataTypeDefinition]] = {}
 
     @classmethod
     def register(cls, definition: DataTypeDefinition) -> None:

@@ -301,7 +301,7 @@ async def _bulk_import_datapoints(
                 reg._points[dp.id] = dp
                 if dp.id not in reg._values:
                     reg._values[dp.id] = ValueState()
-        except Exception:
+        except RuntimeError:
             pass  # Registry nicht verfügbar (z.B. in Tests) — kein Fehler
 
     # --- Adapter-Instanz neu laden ---
@@ -310,7 +310,9 @@ async def _bulk_import_datapoints(
 
         await reload_instance_bindings(adapter_instance_id, db)
     except Exception:
-        pass  # Adapter nicht geladen — kein Fehler
+        # Best-effort live reload — the DB write already succeeded, so a failure
+        # here (adapter not loaded, transient I/O) must not fail the import.
+        logger.exception("Adapter-Instanz %s konnte nicht neu geladen werden", adapter_instance_id)
 
     return len(dp_inserts), len(dp_updates)
 
@@ -701,8 +703,8 @@ async def import_knxproj_file(
         try:
             loc_records, fn_records = await run_in_threadpool(parse_knxproj_locations, content, pwd)
             return loc_records, fn_records, True
-        except Exception as exc:
-            logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", exc)
+        except Exception:
+            logger.exception("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert)")
             return [], [], False
 
     try:
@@ -789,10 +791,10 @@ async def import_knxproj_file(
                 )
             await db.commit()
             functions_count = len(fn_records)
-    except Exception as e:
+    except Exception:
         # Discard any partial inserts so they can't be made durable by a later commit.
         await db.rollback()
-        logger.warning("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert): %s", e)
+        logger.exception("Gebäude/Gewerke-Import fehlgeschlagen (wird ignoriert)")
 
     # Import Trades (Gewerke) — direct ZIP/XML parsing; password forwarded for protected files
     trades_count = 0
@@ -836,19 +838,19 @@ async def import_knxproj_file(
                         updates,
                     )
                     await db.commit()
-    except Exception as e:
+    except Exception:
         # Discard any partial inserts so they can't be made durable by a later commit.
         await db.rollback()
-        logger.warning("Trades-Import fehlgeschlagen (wird ignoriert): %s", e)
+        logger.exception("Trades-Import fehlgeschlagen (wird ignoriert)")
 
     # Import Device Model (V34/V35) — optional and backward compatible.
     # On failure roll back the partial device snapshot so the GA/location/trade
     # import path stays intact and the subsequent adapter import can still commit.
     try:
         await _import_knx_devices_and_comm_objects(file_bytes=content, password=pwd, db=db, now=now)
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.warning("KNX-Geräteimport fehlgeschlagen (wird ignoriert): %s", e)
+        logger.exception("KNX-Geräteimport fehlgeschlagen (wird ignoriert)")
 
     created = 0
     updated = 0
@@ -940,6 +942,7 @@ async def import_ga_csv_file(
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     except Exception as e:
+        logger.exception("Unerwarteter Fehler beim Parsen der GA-CSV-Datei")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             f"Unerwarteter Fehler beim Parsen: {e}",

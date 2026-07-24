@@ -259,7 +259,7 @@ def _dpt10_encode(v: Any) -> bytes:
         else:
             t = datetime.datetime.now().time()
         return bytes([t.hour & 0x1F, t.minute & 0x3F, t.second & 0x3F])
-    except Exception:
+    except (ValueError, TypeError, OSError, OverflowError):
         return bytes(3)
 
 
@@ -291,7 +291,7 @@ def _dpt11_encode(v: Any) -> bytes:
             d = datetime.date.today()
         yr = d.year % 100  # 2025 → 25, 1990 → 90
         return bytes([d.day & 0x1F, d.month & 0x0F, yr & 0x7F])
-    except Exception:
+    except (ValueError, TypeError, OSError, OverflowError):
         return bytes(3)
 
 
@@ -382,7 +382,7 @@ def _dpt19_decode(b: bytes) -> str:
         minute = b[4] & 0x3F
         second = b[5] & 0x3F
         return datetime.datetime(year, month, day, hour, minute, second).isoformat()
-    except Exception:
+    except (ValueError, IndexError):
         return ""
 
 
@@ -409,7 +409,7 @@ def _dpt19_encode(v: Any) -> bytes:
                 0x00,
             ],
         )
-    except Exception:
+    except (ValueError, TypeError, OSError, OverflowError):
         return bytes(8)
 
 

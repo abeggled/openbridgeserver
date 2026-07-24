@@ -40,7 +40,7 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
@@ -136,7 +136,7 @@ def _coerce_iobroker_value(value: Any) -> Any:
         pass
     try:
         return json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return value
 
 
@@ -275,7 +275,7 @@ class IoBrokerAdapter(AdapterBase):
                 continue
             try:
                 bc = IoBrokerBindingConfig(**binding.config)
-            except Exception:
+            except (ValidationError, TypeError):
                 logger.warning(
                     "Ungültige ioBroker Binding-Konfiguration für %s — übersprungen",
                     binding.id,
@@ -548,7 +548,7 @@ class IoBrokerAdapter(AdapterBase):
                     try:
                         value = await self._read_binding_value(binding, suppress_errors=False)
                     except Exception:
-                        logger.warning(
+                        logger.exception(
                             "ioBroker adapter skipped publish after failed read during subscribe/resync for binding %s",
                             binding.id,
                         )
@@ -702,6 +702,7 @@ class IoBrokerAdapter(AdapterBase):
                 state = await self._call_socket("getState", item["id"], timeout=4.0)
                 item["value"] = self._extract_state_value(state)
             except Exception:
+                logger.exception("ioBroker: getState failed for %s", item["id"])
                 item["value"] = None
 
     @staticmethod

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from obs.api.v1 import sessions as sessions_api
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
@@ -109,7 +109,8 @@ class WebSocketManager:
             ws = entry[0]
             try:
                 await ws.close()
-            except Exception:
+            except (RuntimeError, WebSocketDisconnect):
+                # Already closed / invalid ASGI state — nothing left to clean up.
                 pass
         logger.debug(
             "WS client disconnected: %s  (total: %d)",
@@ -196,6 +197,7 @@ class WebSocketManager:
                 return True
             except Exception:
                 # Actual transport error — signal caller to close the connection.
+                logger.exception("WS transport error on connection %s — closing", conn_id)
                 return False
 
     async def broadcast(self, msg: dict) -> None:
@@ -371,14 +373,14 @@ async def _page_allowed_datapoints(
             else:
                 try:
                     page_config_raw = row["page_config"]
-                except Exception:
+                except (KeyError, IndexError, TypeError):
                     page_config_raw = None
         if not row or not page_config_raw:
             page_cache[target_page_id] = None
             return None
         try:
             parsed = PageConfig.model_validate_json(page_config_raw)
-        except Exception:
+        except ValueError:
             parsed = None
         page_cache[target_page_id] = parsed
         return parsed
@@ -510,14 +512,14 @@ async def _page_allowed_message_archive_predicates(
             else:
                 try:
                     page_config_raw = row["page_config"]
-                except Exception:
+                except (KeyError, IndexError, TypeError):
                     page_config_raw = None
         if not row or not page_config_raw:
             page_cache[target_page_id] = None
             return None
         try:
             parsed = PageConfig.model_validate_json(page_config_raw)
-        except Exception:
+        except ValueError:
             parsed = None
         page_cache[target_page_id] = parsed
         return parsed
@@ -727,7 +729,7 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
         try:
             decode_token(auth_header[7:])
             return True, "OK"
-        except Exception:
+        except HTTPException:
             return False, "Invalid token"
 
     subprotocol_jwt, _session_token, _selected = _extract_subprotocol_tokens(ws)
@@ -735,7 +737,7 @@ async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
         try:
             decode_token(subprotocol_jwt)
             return True, "OK"
-        except Exception:
+        except HTTPException:
             return False, "Invalid token"
 
     api_key = ws.headers.get("x-api-key")
@@ -859,7 +861,7 @@ async def websocket_endpoint(
     if resolved_token is not None:
         try:
             user = decode_token(resolved_token)
-        except Exception:
+        except HTTPException:
             invalid_token = True
             user = None
 

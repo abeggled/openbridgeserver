@@ -637,7 +637,7 @@ async def import_message_archive_db(
             try:
                 await store.disconnect()
             except Exception:
-                pass
+                logger.exception("Message archive disconnect before rollback failed")
             if target_exists and os.path.exists(backup_path):
                 try:
                     shutil.copy2(backup_path, target_path)
@@ -686,8 +686,10 @@ async def import_message_archive_db(
         for path in cleanup_paths:
             try:
                 os.unlink(path)
-            except Exception:
+            except FileNotFoundError:
                 pass
+            except OSError:
+                logger.warning("Could not remove temporary file %s", path)
 
 
 @router.get("/entries", response_model=MessageEntryPage)

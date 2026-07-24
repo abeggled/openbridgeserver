@@ -1054,7 +1054,7 @@ class RingBuffer:
         to_ts: str | None = None
         try:
             conn = await self._store._connection_for_read(segment)
-        except Exception:
+        except aiosqlite.Error:
             conn = None
         if conn is not None:
             try:
@@ -1067,7 +1067,7 @@ class RingBuffer:
                 async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
                     row = await cur.fetchone()
                 to_ts = row[0] if row else None
-            except Exception:
+            except (aiosqlite.Error, ValueError, TypeError):
                 logger.warning("RingBuffer: Legacy-Analyse unlesbar (%s) – Overview liefert nur Manifest-Daten", segment.filename)
             finally:
                 await conn.close()
@@ -2540,7 +2540,7 @@ def _safe_loads(s: str | None) -> Any:
         return None
     try:
         return json.loads(s)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return s
 
 
