@@ -1531,10 +1531,7 @@ class TestDisconnectAwaitsGather:
         task_done_at_close = []
 
         async def slow_task():
-            try:
-                await asyncio.sleep(100)
-            except asyncio.CancelledError:
-                raise
+            await asyncio.sleep(100)
 
         task = asyncio.create_task(slow_task())
         adapter._poll_tasks.append(task)

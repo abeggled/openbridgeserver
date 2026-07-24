@@ -110,7 +110,7 @@ def _list_backups() -> list[AutobackupEntry]:
         if not _BACKUP_STEM_RE.fullmatch(stem):
             continue
         try:
-            dt = datetime.strptime(stem[:13], "%Y%m%d-%H%M")
+            dt = datetime.strptime(stem[:13], "%Y%m%d-%H%M")  # noqa: DTZ007 -- filename encodes app-local wall-clock; no DB access here to resolve the configured tz
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
@@ -332,7 +332,6 @@ class AutobackupScheduler:
 
         while True:
             try:
-                global _config_changed_event
                 cfg = await _load_config(self._db)
 
                 if not cfg.enabled:

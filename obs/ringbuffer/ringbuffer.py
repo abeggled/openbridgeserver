@@ -2929,7 +2929,7 @@ def _is_boolean_type(data_type: str, value: Any) -> bool:
 
 def _to_number(value: Any, *, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{field} must be numeric")
+        raise ValueError(f"{field} must be numeric")  # noqa: TRY004 -- must stay ValueError to hit the API's 422-conversion path (see obs/ringbuffer/store/sqlite_backend.py)
     return float(value)
 
 
@@ -2974,7 +2974,7 @@ def _match_numeric_operator(value: Any, vf: dict[str, Any]) -> bool:
 async def _match_string_operator(value: Any, vf: dict[str, Any]) -> bool:
     operator = vf["operator"]
     if not isinstance(value, str):
-        raise ValueError("row value must be string")
+        raise ValueError("row value must be string")  # noqa: TRY004 -- must stay ValueError to hit the API's 422-conversion path
 
     if operator == "contains":
         needle = vf["value"]

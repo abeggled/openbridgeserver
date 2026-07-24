@@ -963,8 +963,12 @@ class GraphExecutor:
                 else:
                     threshold = float(d.get("threshold_temp", 14.0))
                     hysteresis = float(d.get("hysteresis", 2.0))
-                today = inputs.get("_date") or _dt.date.today().isoformat()
-                hour = inputs.get("_hour", _dt.datetime.now().hour)
+                try:
+                    tz = _ZoneInfo(str(self.app_config.get("timezone", "Europe/Zurich")))
+                except (ValueError, ZoneInfoNotFoundError):
+                    tz = _ZoneInfo("UTC")
+                today = inputs.get("_date") or _dt.datetime.now(tz).date().isoformat()
+                hour = inputs.get("_hour", _dt.datetime.now(tz).hour)
                 val = inputs.get("value")
 
                 # History fallback: fill missing slots pre-queried by the manager
@@ -1570,7 +1574,7 @@ class GraphExecutor:
         try:
             tree = ast.parse(script, mode="exec")
             GraphExecutor._validate_script_ast(tree)
-            exec(
+            exec(  # noqa: S102 -- the "python_script" node feature; AST-validated above and run with a locked-down __builtins__ dict
                 compile(tree, "<script>", "exec"),
                 {
                     "__builtins__": {

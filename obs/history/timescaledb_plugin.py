@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -132,7 +133,7 @@ class TimescaleDBHistoryPlugin(HistoryPlugin):
 
         try:
             v_float = float(value)
-            if v_float != v_float:  # NaN
+            if math.isnan(v_float):
                 v_float = None
         except (TypeError, ValueError):
             v_float = None

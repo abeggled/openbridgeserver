@@ -1790,7 +1790,7 @@ class TestKnxConnectErrorDetail:
 
         class _FakeXKNX:
             async def start(self):
-                raise Exception("Could not fetch gateway info from 192.168.1.152:3671")
+                raise RuntimeError("Could not fetch gateway info from 192.168.1.152:3671")
 
             async def stop(self):
                 pass

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 import uuid
 from datetime import UTC, datetime
@@ -176,7 +177,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         ]
         try:
             v_float = float(value)
-            if v_float == v_float:  # not NaN
+            if not math.isnan(v_float):
                 fields.append(f"v={v_float}")
         except (TypeError, ValueError):
             pass

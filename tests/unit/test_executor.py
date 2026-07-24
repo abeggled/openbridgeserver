@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import ClassVar
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1661,7 +1662,7 @@ class TestHeatingCircuit:
     """
 
     # Default: heating ON below 14 °C, OFF at or above 16 °C (14 + 2 hysteresis)
-    _CFG = {"threshold_temp": 14.0, "hysteresis": 2.0}
+    _CFG: ClassVar[dict[str, float]] = {"threshold_temp": 14.0, "hysteresis": 2.0}
 
     @staticmethod
     def _d(day: int) -> str:

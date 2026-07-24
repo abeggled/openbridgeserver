@@ -9,6 +9,7 @@ Rückwärtskompatibel: Alter Export mit adapter_configs wird beim Import erkannt
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -17,6 +18,7 @@ import sqlite3
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -487,8 +489,8 @@ async def export_db(
     if not os.path.exists(src_path):
         raise HTTPException(status_code=404, detail="Datenbankdatei nicht gefunden.")
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        pass
     try:
         src = sqlite3.connect(src_path)
         dst = sqlite3.connect(tmp.name)
@@ -523,11 +525,11 @@ async def import_db(
     dst_path = get_settings().database.path
 
     # Hochgeladene Datei in temporäre Datei speichern
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        pass
     try:
         content = await file.read()
-        tmp.write(content)
-        tmp.close()
+        await asyncio.to_thread(Path(tmp.name).write_bytes, content)
 
         # SQLite-Magic-Header prüfen (erste 16 Bytes: "SQLite format 3\000")
         if len(content) < 16 or not content.startswith(b"SQLite format 3\x00"):

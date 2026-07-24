@@ -922,8 +922,6 @@ class LogicManager:
                     return
                 if mode == "repeat_count" and not slept:
                     await asyncio.sleep(0)
-        except asyncio.CancelledError:
-            raise
         finally:
             if self._sequence_tasks.get(key) is asyncio.current_task():
                 self._sequence_tasks.pop(key, None)

@@ -1204,7 +1204,7 @@ async def export_ringbuffer_csv(
     # /Nicht-row-lazy-Pfade bleibt der Cursor ungenutzt und aendert nichts.
     export_store_cursor = RowLazyExportCursor()
 
-    spool = tempfile.SpooledTemporaryFile(
+    spool = tempfile.SpooledTemporaryFile(  # noqa: SIM115 -- closed later via background_tasks, must outlive this function
         mode="w+",
         encoding="utf-8",
         newline="",
@@ -1880,7 +1880,7 @@ async def export_ringbuffer_filtersets_csv(
     if body.include_matched_set_ids:
         fieldnames.append("matched_set_ids")
 
-    spool = tempfile.SpooledTemporaryFile(
+    spool = tempfile.SpooledTemporaryFile(  # noqa: SIM115 -- closed later via background_tasks, must outlive this function
         mode="w+",
         encoding="utf-8",
         newline="",
@@ -2087,14 +2087,12 @@ async def _finalize_decision_under_lock(db: Database, rb) -> None:
             # Schutz zuerst aktivieren: zwischen Decision-Write und Live-Reconfigure
             # darf die FIFO-Retention die gerade wiederentdeckte Quelle nicht reclaimen.
             await rb.set_legacy_retention_protected(True)
-            try:
-                await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
-            except BaseException:
-                # Protection bleibt in jedem Fehlerfall aktiv: die Legacy-Quelle ist
-                # noch angehängt; ein Rollback auf False wäre datenunsicher, weil die
-                # FIFO-Retention die Quelle vor dem nächsten Poll-Retry zurückgewinnen
-                # könnte. Der Fehler wird weitergeleitet; der nächste Poll wiederholt.
-                raise
+            # Kein Rollback bei Fehlschlag: Protection bleibt in jedem Fehlerfall aktiv,
+            # die Legacy-Quelle ist noch angehängt; ein Rollback auf False wäre
+            # datenunsicher, weil die FIFO-Retention die Quelle vor dem nächsten
+            # Poll-Retry zurückgewinnen könnte. Der Fehler propagiert unverändert;
+            # der nächste Poll wiederholt.
+            await persist_legacy_migration_decision(db, LEGACY_DECISION_PENDING)
             return
         try:
             await finalize_committed_migration_decision(db, rb)

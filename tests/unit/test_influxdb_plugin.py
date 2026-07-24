@@ -76,7 +76,7 @@ class TestToRfc3339:
         assert result == "2024-01-15T10:30:00.123Z"
 
     def test_naive_datetime_treated_as_utc(self):
-        dt = datetime(2024, 1, 15, 10, 30, 0)
+        dt = datetime(2024, 1, 15, 10, 30, 0)  # noqa: DTZ001 -- naive-datetime handling is exactly what this test verifies
         result = _to_rfc3339(dt)
         assert result.endswith("Z")
 

@@ -52,10 +52,7 @@ class DatabaseMaintenanceScheduler:
                 raise
             except Exception:
                 logger.exception("DB-Wartung: WAL-Checkpoint fehlgeschlagen")
-            try:
-                await asyncio.sleep(self._interval)
-            except asyncio.CancelledError:
-                raise
+            await asyncio.sleep(self._interval)
 
 
 _scheduler: DatabaseMaintenanceScheduler | None = None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1399,7 +1400,7 @@ def test_get_sun_event_returns_none_on_error():
     from obs.adapters.zeitschaltuhr.adapter import TimeRef
 
     with patch("obs.adapters.zeitschaltuhr.adapter.ZeitschaltuhrAdapter._get_sun_event", return_value=None):
-        result = adapter._get_sun_event(TimeRef.SUNRISE, date.today())
+        result = adapter._get_sun_event(TimeRef.SUNRISE, date(2026, 1, 1))
     assert result is None
 
 
@@ -1411,7 +1412,7 @@ def test_get_solar_altitude_exception():
     from obs.adapters.zeitschaltuhr.adapter import SunDirection
 
     with patch("obs.adapters.zeitschaltuhr.adapter.ZeitschaltuhrAdapter._get_solar_altitude_time", return_value=None):
-        result = adapter._get_solar_altitude_time(10.0, SunDirection.RISING, date.today())
+        result = adapter._get_solar_altitude_time(10.0, SunDirection.RISING, date(2026, 1, 1))
     assert result is None
 
 
@@ -1819,7 +1820,7 @@ async def test_delete_instance_success(monkeypatch):
             return super().__getitem__(k)
 
     class _Db:
-        committed = []
+        committed: ClassVar[list] = []
 
         async def fetchone(self, q, p=()):
             return _Row({"id": str(uuid.uuid4())})
@@ -1862,7 +1863,7 @@ async def test_create_nav_link():
             return super().__getitem__(k)
 
     class _Db:
-        _created = {}
+        _created: ClassVar[dict] = {}
 
         async def fetchone(self, q, p=()):
             return _Row({"id": "new-link", "label": "Test", "url": "https://x.com", "icon": "", "sort_order": 0, "open_new_tab": 1})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -9,6 +10,7 @@ import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
@@ -582,8 +584,8 @@ async def export_message_archive_db(
 ) -> FileResponse:
     if store.path == ":memory:":
         raise HTTPException(status.HTTP_409_CONFLICT, "Meldungsarchiv-Datenbank kann im In-Memory-Modus nicht gesichert werden.")
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        pass
     try:
         await store.sqlite_snapshot(tmp.name)
     except Exception:
@@ -610,13 +612,13 @@ async def import_message_archive_db(
     if store.path == ":memory:":
         raise HTTPException(status.HTTP_409_CONFLICT, "Meldungsarchiv-Datenbank kann im In-Memory-Modus nicht wiederhergestellt werden.")
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        pass
     backup_path = f"{store.path}.pre-import.bak"
     preserve_backup = False
     try:
         content = await file.read()
-        tmp.write(content)
-        tmp.close()
+        await asyncio.to_thread(Path(tmp.name).write_bytes, content)
         _validate_sqlite_archive_db(tmp.name)
 
         target_path = store.path

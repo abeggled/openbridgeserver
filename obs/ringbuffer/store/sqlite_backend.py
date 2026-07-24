@@ -872,12 +872,12 @@ def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
         raise ValueError(f"operator '{operator}' is not supported for null value")
     if isinstance(expected, (bool, str)):
         data_type = "BOOLEAN" if isinstance(expected, bool) else "STRING"
-        raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+        raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")  # noqa: TRY004 -- must stay ValueError, see 422-path comment above
     # Komplexe (list/dict) Vergleichswerte werfen bei ``actual > [..]`` ebenfalls einen
     # TypeError. Wie der v2-Pushdown (``value_type == 'json'`` → STRING-Ablehnung) und
     # die Referenz als ungültigen Range-Filter ablehnen (#951, Codex :467).
     if isinstance(expected, (list, dict)):
-        raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")
+        raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")  # noqa: TRY004 -- must stay ValueError, see 422-path comment above
     # Cross-Typ (numerischer Vergleichswert, nicht-numerische Zeile) ist bedeutungslos
     # → wie v2/Legacy kein Treffer.
     if _is_number(expected) and not _is_number(actual):

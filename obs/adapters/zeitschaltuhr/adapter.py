@@ -728,7 +728,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
     # ------------------------------------------------------------------
 
     def _build_holidays(self) -> dict[date, str]:
-        year = datetime.now().year
+        year = datetime.now(self._tz).year
         years = [year, year + 1]
         result: dict[date, str] = {}
 

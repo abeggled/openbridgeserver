@@ -1765,7 +1765,7 @@ class TestZeitschaltuhrBuildHolidays:
         def _country_holidays(country, **kwargs):
             call_count["n"] += 1
             if "language" in kwargs:
-                raise Exception("language not supported")
+                raise RuntimeError("language not supported")
             return _FakeHolidays()
 
         mock_holidays = MagicMock()

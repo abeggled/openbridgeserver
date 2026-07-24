@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
-from typing import Self
+from typing import ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -71,7 +71,7 @@ class _FakeResponse:
 
 
 class _FakeAsyncClient:
-    calls: list[tuple[str, dict, float | None]] = []
+    calls: ClassVar[list[tuple[str, dict, float | None]]] = []
     json_body = None
     status_code = 200
     text = "100"
@@ -390,7 +390,7 @@ async def test_date_and_time_placeholders_fall_back_to_event_timezone_for_invali
     await adapter.reload_bindings([binding])
 
     await adapter._on_value_event(
-        DataValueEvent(datapoint_id=dp_id, value=29.4, quality="good", source_adapter="test", ts=datetime(2026, 1, 2, 23, 4, 5))
+        DataValueEvent(datapoint_id=dp_id, value=29.4, quality="good", source_adapter="test", ts=datetime(2026, 1, 2, 23, 4, 5, tzinfo=UTC))
     )
     await _drain_sends(adapter)
 
