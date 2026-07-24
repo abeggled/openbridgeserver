@@ -7,7 +7,7 @@ Zeichnet jede Werteänderung auf. Storage-Modelle:
 
 Filterfunktionen:
   q       — Substring in datapoint_id oder source_adapter
-  adapter — exakt source_adapter
+  adapter — source_adapter als casing-unabhängiger Adapter-Typ
   from_ts — ISO-8601 Timestamp (exkl.)
   limit   — max. Einträge (default: 100)
 
@@ -1821,7 +1821,7 @@ class RingBuffer:
                 params += dp_ids_by_name
             sql += f" AND ({' OR '.join(parts)})"
 
-        normalized_adapters = [adapter.strip() for adapter in (adapter_any_of or []) if adapter.strip()]
+        normalized_adapters = _source_adapter_filter_variants(adapter_any_of)
         if normalized_adapters:
             placeholders = ",".join("?" * len(normalized_adapters))
             sql += f" AND source_adapter IN ({placeholders})"
@@ -2004,7 +2004,7 @@ class RingBuffer:
             raise ValueError("invalid time filter: effective 'from' must be earlier than effective 'to'")
 
         normalized_dps = [dp_id.strip() for dp_id in (datapoint_ids or []) if dp_id.strip()]
-        normalized_adapters = [adapter.strip() for adapter in (adapter_any_of or []) if adapter.strip()]
+        normalized_adapters = _source_adapter_filter_variants(adapter_any_of)
         normalized_names = [dp_id.strip() for dp_id in (dp_ids_by_name or []) if dp_id.strip()]
 
         metadata_binding_filters = {
@@ -2577,6 +2577,27 @@ def _normalize_string_filters(values: list[str] | None) -> list[str]:
         seen.add(token)
         normalized.append(token)
     return normalized
+
+
+def _source_adapter_filter_variants(values: list[str] | None) -> list[str]:
+    """Keep source-adapter matching stable across legacy casing conventions.
+
+    Adapter types are identifiers, but persisted filtersets and RingBuffer rows
+    have historically used both registry-style uppercase (``KNX``) and
+    lowercase (``knx``). Expanding the bounded filter list keeps the indexed
+    ``IN`` query in both storage implementations while treating those forms as
+    the same adapter type.
+    """
+    variants: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        token = str(value).strip()
+        for candidate in (token, token.upper(), token.lower()):
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            variants.append(candidate)
+    return variants
 
 
 def _normalize_binding_metadata(config: dict[str, Any]) -> dict[str, Any]:

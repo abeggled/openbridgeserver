@@ -7,7 +7,7 @@
  * Field semantics (mirroring `FilterCriteria` from obs/api/v1/ringbuffer.py):
  *   - datapoints[]  — OR over entry.datapoint_id
  *   - devices[]     — server-resolved KNX physical addresses; pass-through
- *   - adapters[]    — OR over entry.source_adapter
+ *   - adapters[]    — case-insensitive OR over entry.source_adapter
  *   - tags[]        — OR over entry.metadata.datapoint.tags
  *   - q             — substring (case-insensitive) over name | datapoint_id | source_adapter
  *   - value_filter  — operator + value/lower/upper/pattern over entry.new_value
@@ -157,7 +157,9 @@ export function matchEntry(entry, criteria) {
 
   // adapters
   if (Array.isArray(criteria.adapters) && criteria.adapters.length > 0) {
-    if (!criteria.adapters.includes(entry.source_adapter)) return false
+    const requestedAdapters = _normalizedStrings(criteria.adapters)
+    const sourceAdapter = String(entry.source_adapter ?? '').trim().toLowerCase()
+    if (!sourceAdapter || !requestedAdapters.includes(sourceAdapter)) return false
   }
 
   // tags

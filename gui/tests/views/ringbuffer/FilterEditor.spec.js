@@ -881,6 +881,32 @@ describe('FilterEditor (#436)', () => {
     expect(wrapper.find('[data-testid="filter-editor-value-operator"]').element.value).toBe('')
   })
 
+  it('saves and activates a filter whose only criterion is an adapter', async () => {
+    const ringbufferApi = makeRingbufferApi()
+    const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi, leaveEmpty: true })
+    await wrapper.find('[data-testid="filter-editor-name"]').setValue('KNX only')
+
+    const adapterStub = wrapper.findComponent({ name: 'AdapterCombobox' })
+    await adapterStub.vm.$emit('update:modelValue', ['KNX'])
+    await flushPromises()
+
+    const save = wrapper.find('[data-testid="filter-editor-save-topbar"]')
+    expect(save.element.disabled).toBe(false)
+    await save.trigger('click')
+    await flushPromises()
+
+    expect(ringbufferApi.createFilterset.mock.calls[0][0].filter).toMatchObject({
+      hierarchy_nodes: [],
+      datapoints: [],
+      devices: [],
+      tags: [],
+      adapters: ['KNX'],
+      q: null,
+      value_filter: null,
+    })
+    expect(ringbufferApi.patchFiltersetTopbar).toHaveBeenCalledWith('fs-new', { topbar_active: true })
+  })
+
   it('tag and adapter combobox updates are reflected in the payload', async () => {
     const ringbufferApi = makeRingbufferApi()
     const { wrapper } = await mountEditor({ props: { setId: null }, ringbufferApi })

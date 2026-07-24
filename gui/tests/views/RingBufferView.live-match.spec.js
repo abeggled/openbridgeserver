@@ -48,11 +48,11 @@ const ACTIVE_SET_KNX = {
     hierarchy_nodes: [],
     datapoints: [],
     tags: [],
-    adapters: ['knx'],
+    adapters: ['KNX'],
     q: null,
     value_filter: null,
   },
-  filter_json: '{"adapters":["knx"]}',
+  filter_json: '{"adapters":["KNX"]}',
 }
 
 const ACTIVE_SET_HIERARCHY = {
@@ -106,7 +106,8 @@ describe('RingBufferView — live-entry matching (#36 follow-up)', () => {
     const { wrapper, emitLive } = await mountRingBufferView({ ringbufferApi })
     await flushPromises()
 
-    // Live entry with tag "heizung" AND adapter "knx" — should be matched by both sets
+    // The persisted adapter identifier is registry-style uppercase while the
+    // live source uses a legacy lowercase spelling. Both represent KNX.
     emitLive(makeLiveEntry({ metadata: { datapoint: { tags: ['heizung'] } }, source_adapter: 'knx' }))
     await flushPromises()
     await new Promise((r) => setTimeout(r, 120))

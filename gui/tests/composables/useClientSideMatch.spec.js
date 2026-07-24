@@ -103,6 +103,11 @@ describe('matchEntry — adapters (OR)', () => {
     expect(matchEntry(makeEntry({ source_adapter: 'mqtt' }), { adapters: ['knx', 'mqtt'] })).toBe(true)
   })
 
+  it('matches adapter type identifiers independent of casing', () => {
+    expect(matchEntry(makeEntry({ source_adapter: 'KNX' }), { adapters: ['knx'] })).toBe(true)
+    expect(matchEntry(makeEntry({ source_adapter: 'mqtt' }), { adapters: ['MQTT'] })).toBe(true)
+  })
+
   it('does not match when entry.source_adapter is not in the list', () => {
     expect(matchEntry(makeEntry({ source_adapter: 'modbus' }), { adapters: ['knx', 'mqtt'] })).toBe(false)
   })

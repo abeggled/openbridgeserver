@@ -72,6 +72,22 @@ async def test_default_is_not_segmented_and_builds_no_store(tmp_path: Path):
         await rb.stop()
 
 
+@pytest.mark.parametrize("segmented", [False, True])
+@pytest.mark.asyncio
+async def test_adapter_filter_matches_type_identifier_independent_of_casing(tmp_path: Path, segmented: bool):
+    rb = _rb(tmp_path, segmented=segmented)
+    await rb.start()
+    try:
+        await _record(rb, 1, "2026-01-01T00:00:00.000Z", adapter="KNX")
+        await _record(rb, 2, "2026-01-01T00:00:01.000Z", adapter="MQTT")
+
+        entries = await rb.query_v2(adapter_any_of=["knx"], limit=10)
+
+        assert [entry.new_value for entry in entries] == [1]
+    finally:
+        await rb.stop()
+
+
 # ---------------------------------------------------------------------------
 # Flag AN: Schreiben → Segment, Read-back über den Store
 # ---------------------------------------------------------------------------
