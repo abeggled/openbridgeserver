@@ -674,3 +674,29 @@ class TestBindingsReloaded:
             await adapter._on_bindings_reloaded()
 
         preload_mock.assert_not_called()
+
+
+class TestInitializationEvents:
+    @pytest.mark.asyncio
+    async def test_initialization_event_does_not_toggle_simulation(self):
+        """Save-time seeding by the logic initialization pass (issue #1031)
+        is not a real presence change — the simulation must not start/stop."""
+        ctrl = uuid.uuid4()
+        adapter = _make_adapter({"control_dp_id": str(ctrl)})
+        adapter._active = True
+        adapter._bindings = []
+
+        init_event = DataValueEvent(
+            datapoint_id=ctrl,
+            value=True,
+            quality="good",
+            source_adapter="logic",
+            initialization=True,
+        )
+        await adapter._handle_control_event(init_event)
+
+        assert adapter._active is True
+
+        # A real event afterwards still toggles
+        await adapter._handle_control_event(_evt(ctrl, True))
+        assert adapter._active is False

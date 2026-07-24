@@ -1436,3 +1436,27 @@ async def test_sevenio_provider_reports_json_success_error_code(monkeypatch):
 
     assert result.ok is False
     assert result.detail == "seven.io response success=false"
+
+
+@pytest.mark.asyncio
+async def test_initialization_event_does_not_send_message(bus, dummy_provider, monkeypatch):
+    """Save-time seeding by the logic initialization pass (issue #1031) is
+    not a value change — no notification may be sent for it."""
+    dp_id = uuid.uuid4()
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _Registry(_Dp(dp_id)))
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {"id": "x"}}}}},
+    )
+    binding = _message_binding(dp_id)
+    await adapter.reload_bindings([binding])
+
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=29.4, quality="good", source_adapter="logic", initialization=True))
+    await _drain_sends(adapter)
+
+    dummy_provider.send.assert_not_awaited()
+
+    # A real event afterwards still notifies
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=30.1, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+    dummy_provider.send.assert_awaited_once()
