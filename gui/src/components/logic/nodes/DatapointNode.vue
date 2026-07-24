@@ -28,7 +28,6 @@
           <span ref="portRef2" class="gn-port-label">{{ $t('logic.ports.changed') }}</span>
         </div>
       </div>
-      <div v-if="data._dbg" class="gn-debug" data-testid="debug-band">{{ data._dbg }}</div>
     </div>
 
     <template v-if="!isWrite">
@@ -40,7 +39,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 
 const props = defineProps({
@@ -73,7 +72,6 @@ function updateHandlePositions() {
 }
 
 onMounted(updateHandlePositions)
-watch(() => props.data._dbg, updateHandlePositions)
 
 const hasFilter = computed(() => {
   const d = props.data
@@ -137,16 +135,4 @@ const hasFilter = computed(() => {
 .gn-ports  { padding: 2px 10px 6px; display:flex; }
 .gn-port-col { display:flex; flex-direction:column; gap:2px; }
 .gn-port-label { font-size:9px; color:var(--node-port-label); }
-.gn-debug {
-  font-size: 9px;
-  color: var(--node-debug-color);
-  font-family: ui-monospace, monospace;
-  padding: 2px 10px 5px;
-  border-top: 1px solid var(--node-card-border);
-  background: var(--node-debug-bg);
-  border-radius: 0 0 6px 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 </style>

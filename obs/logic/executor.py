@@ -63,6 +63,7 @@ class GraphExecutor:
         flow: FlowData,
         hysteresis_state: dict[str, Any] | None = None,
         app_config: dict[str, Any] | None = None,
+        input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
     ):
         self.flow = flow
         # NOTE: use `is not None` instead of `or {}` — an empty dict {} is falsy,
@@ -70,6 +71,7 @@ class GraphExecutor:
         # using the passed-in reference, breaking state persistence between runs.
         self.hysteresis_state = hysteresis_state if hysteresis_state is not None else {}
         self.app_config = app_config or {}
+        self.input_capture = input_capture
 
     def execute(
         self,
@@ -98,6 +100,18 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 inputs[handle] = self._get_output_value(src_out, src_handle)
+
+            if self.input_capture is not None:
+                node_overrides = input_overrides.get(node.id, {})
+                ports = inputs.keys() | node_overrides.keys()
+                self.input_capture[node.id] = {
+                    port: {
+                        "incoming": inputs.get(port),
+                        "effective": node_overrides.get(port, inputs.get(port)),
+                        "overridden": port in node_overrides,
+                    }
+                    for port in ports
+                }
 
             # Apply overrides (for datapoint_read triggers)
             if node.id in input_overrides:

@@ -45,6 +45,17 @@ describe('supportApi client', () => {
   })
 })
 
+describe('logicApi client', () => {
+  it('passes optional debug input overrides to graph runs', async () => {
+    const { logicApi } = await import('@/api/client')
+    const payload = { input_overrides: { node: { value: 42 } } }
+
+    await logicApi.runGraph('graph-1', payload)
+
+    expect(api.post).toHaveBeenCalledWith('/logic/graphs/graph-1/run', payload)
+  })
+})
+
 describe('adapterApi onewire client', () => {
   it('calls the onewire browse and alias endpoints', async () => {
     const { adapterApi } = await import('@/api/client')

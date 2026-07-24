@@ -23,6 +23,20 @@ from obs.logic.executor import ExecutionError, GraphExecutor
 from tests.unit.conftest import edge, make_executor, node
 
 
+def test_execute_captures_incoming_and_effective_inputs_without_mutating_values():
+    base = make_executor(
+        [node("source", "const_value", {"value": 3}), node("target", "math_formula", {"formula": "a * 2"})],
+        [edge("source", "target", "value", "in1")],
+    )
+    captured = {}
+    executor = GraphExecutor(base.flow, input_capture=captured)
+
+    outputs = executor.execute({"target": {"in1": 7}})
+
+    assert outputs["target"]["result"] == 14
+    assert captured["target"]["in1"] == {"incoming": 3.0, "effective": 7, "overridden": True}
+
+
 def test_datetime_node_uses_application_formats():
     executor = make_executor(
         [node("clock", "datetime", {"custom_format": "yyyy-MM-dd HH:mm:ss"})],

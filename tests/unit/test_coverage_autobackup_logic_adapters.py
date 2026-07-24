@@ -991,6 +991,42 @@ class TestRunGraph:
         assert result["outputs"] == {"output": 1}
 
     @pytest.mark.asyncio
+    async def test_run_uses_ephemeral_input_overrides_and_returns_debug_metadata(self):
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        captured = {"node": {"in": {"incoming": 1, "effective": 7, "overridden": True}}}
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": {"out": 7}}, captured))
+        body = LogicGraphRun(input_overrides={"node": {"in": 7}})
+
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
+            result = await run_graph(graph_id=row["id"], body=body, _user="user", db=db)
+
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}})
+        assert result["debug"]["inputs"] == captured
+        assert result["debug"]["used_overrides"] is True
+        assert result["debug"]["duration_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_explicit_debug_run_captures_inputs_without_overrides(self):
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": 1}, {"node": {}}))
+
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
+            result = await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="user", db=db)
+
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {})
+        assert result["debug"]["inputs"] == {"node": {}}
+
+    @pytest.mark.asyncio
     async def test_raises_500_on_execution_error(self):
         from fastapi import HTTPException
 

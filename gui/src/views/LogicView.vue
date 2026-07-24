@@ -138,12 +138,24 @@
 
       <!-- Config Panel -->
       <NodeConfigPanel
-        v-if="selectedNode && auth.isAdmin"
+        v-if="selectedNode && auth.isAdmin && !debugNode"
         :node="selectedNode"
         :node-types="store.nodeTypes"
         :node-outputs="lastRunOutputs"
         @update="onNodeDataUpdate"
         @close="selectedNode = null"
+      />
+      <DebugInspector
+        v-if="debugNode"
+        :node="debugNode"
+        :inputs="debugInputs"
+        :outputs="lastRunOutputs[debugNode.id] || {}"
+        :metadata="lastRunMetadata"
+        :has-overrides="hasDebugOverrides"
+        @close="debugNode = null"
+        @set-override="setDebugOverride"
+        @clear-override="clearDebugOverride"
+        @clear-all="clearAllDebugOverrides"
       />
     </div>
 
@@ -211,6 +223,7 @@ import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
+import DebugInspector      from '@/components/logic/DebugInspector.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
@@ -467,9 +480,9 @@ async function saveGraph() {
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
     showStatus(false, t('logic.graphValidationSaveBlocked', { count: graphWarnings.length }), 6000)
-    applyDebugValues(Object.fromEntries(
+    lastRunOutputs.value = Object.fromEntries(
       graphWarnings.map(w => [w.node_id, { __error__: t('logic.graphValidationNodeError'), __diagnostic__: w.code }])
-    ))
+    )
     return
   }
   saving.value = true
@@ -485,92 +498,15 @@ async function saveGraph() {
 }
 
 // ── Debug mode ─────────────────────────────────────────────────────────────
-const debugMode = ref(localStorage.getItem('logic_debug_mode') === '1')
-const DEBUG_TOOLTIP_MAX_CHARS = 1000
-
-function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
-  if (!nodeOut || typeof nodeOut !== 'object') return null
-
-  function maybeClip(text) {
-    return maxChars !== null && text.length > maxChars ? `${text.slice(0, maxChars)}…` : text
-  }
-
-  function fv(v) {
-    if (v === null || v === undefined) return '—'
-    if (typeof v === 'boolean') return v ? '✓' : '✗'
-    if (typeof v === 'number') return String(parseFloat(v.toPrecision(5)))
-    const text = String(v)
-    return full ? maybeClip(text) : text.slice(0, 18)
-  }
-
-  function clipped(v, limit) {
-    if (v === null || v === undefined) return '—'
-    const text = String(v)
-    if (full) return maybeClip(text)
-    return text.length <= limit ? text : `${text.slice(0, limit)}…`
-  }
-
-  // node execution error — show prominently before any other key handling
-  if ('__error__' in nodeOut) {
-    return `${t('logic.nodeError')}: ${clipped(nodeOut.__error__, 50)}`
-  }
-
-  // notify nodes — show message content + sent status (before generic key loop)
-  if ('_message' in nodeOut) {
-    const msg  = nodeOut._message !== null && nodeOut._message !== undefined
-      ? `"${String(nodeOut._message).slice(0, 24)}"`
-      : '—'
-    const sent = 'sent' in nodeOut ? `  sent=${fv(nodeOut.sent)}` : ''
-    return msg + sent
-  }
-
-  // datapoint_read — show value compactly with = prefix
-  if ('value' in nodeOut && 'changed' in nodeOut) {
-    return `= ${fv(nodeOut.value)}`
-  }
-
-  // datapoint_write outputs are all _private — show write value with → prefix
-  if ('_write_value' in nodeOut) {
-    return `→ ${fv(nodeOut._write_value)}`
-  }
-
-  // api_client — response text is often the useful error and needs more room
-  if ('response' in nodeOut && 'status' in nodeOut && 'success' in nodeOut) {
-    return `response=${clipped(nodeOut.response, 80)}   status=${fv(nodeOut.status)}   success=${fv(nodeOut.success)}`
-  }
-
-  // Public keys (no leading _) — generic fallback
-  const pairs = Object.entries(nodeOut)
-    .filter(([k]) => !k.startsWith('_'))
-    .map(([k, v]) => `${k}=${fv(v)}`)
-  if (pairs.length) return pairs.join('   ')
-
-  return null
-}
+const debugMode = ref(false)
+const debugNode = ref(null)
+const debugOverrides = ref({})
+const lastRunMetadata = ref(null)
+const lastRunInputs = ref({})
 
 // Last run outputs — always kept (not just in debug mode) so that
 // json_extractor / xml_extractor config panels can read _preview data.
 const lastRunOutputs = ref({})
-
-function applyDebugValues(outputs) {
-  lastRunOutputs.value = outputs
-  nodes.value = nodes.value.map(n => ({
-    ...n,
-    data: {
-      ...n.data,
-      _dbg: fmtDebugVal(outputs[n.id]) ?? undefined,
-      _dbg_title: fmtDebugVal(outputs[n.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS }) ?? undefined,
-    }
-  }))
-}
-
-function clearDebugValues() {
-  nodes.value = nodes.value.map(n => {
-    // eslint-disable-next-line no-unused-vars
-    const { _dbg, _dbg_title, ...rest } = n.data
-    return { ...n, data: rest }
-  })
-}
 
 function countGraphDiagnostics(outputs) {
   return Object.values(outputs || {}).filter(out =>
@@ -583,14 +519,79 @@ function countGraphDiagnostics(outputs) {
 
 function toggleDebug() {
   debugMode.value = !debugMode.value
-  localStorage.setItem('logic_debug_mode', debugMode.value ? '1' : '0')
-  if (!debugMode.value) clearDebugValues()
+  sendDebugSubscription(activeGraphId.value, debugMode.value)
+  if (!debugMode.value) {
+    clearAllDebugOverrides()
+    debugNode.value = null
+    lastRunMetadata.value = null
+    lastRunInputs.value = {}
+  }
 }
+
+function parseOverride(text) {
+  if (!text.trim()) return undefined
+  try { return JSON.parse(text) } catch { return text }
+}
+
+function setDebugOverride(inputId, text) {
+  if (!auth.isAdmin || !debugNode.value) return
+  const nodeValues = { ...(debugOverrides.value[debugNode.value.id] || {}) }
+  if (!text.trim()) delete nodeValues[inputId]
+  else nodeValues[inputId] = text
+  debugOverrides.value = { ...debugOverrides.value, [debugNode.value.id]: nodeValues }
+}
+
+function clearDebugOverride(inputId) { setDebugOverride(inputId, '') }
+function clearAllDebugOverrides() { debugOverrides.value = {} }
+const hasDebugOverrides = computed(() => Object.values(debugOverrides.value).some(values => Object.keys(values).length > 0))
+
+const debugInputs = computed(() => {
+  if (!debugNode.value) return []
+  const definition = store.nodeTypes.find(type => type.type === debugNode.value.type)
+  let ports = definition?.inputs || []
+  const count = Number(debugNode.value.data?.input_count) || 2
+  if (['and', 'or', 'xor'].includes(debugNode.value.type)) {
+    ports = Array.from({ length: Math.max(2, Math.min(30, count)) }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
+  } else if (debugNode.value.type === 'avg_multi') {
+    ports = Array.from({ length: Math.max(2, Math.min(20, count)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
+  } else if (debugNode.value.type === 'string_concat') {
+    const stringCount = Number(debugNode.value.data?.count) || 2
+    ports = Array.from({ length: Math.max(2, Math.min(20, stringCount)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
+  }
+  const known = new Set(ports.map(port => port.id))
+  for (const edge of edges.value.filter(item => item.target === debugNode.value.id)) {
+    const id = edge.targetHandle || 'in'
+    if (!known.has(id)) {
+      ports = [...ports, { id, label: id }]
+      known.add(id)
+    }
+  }
+  for (const id of Object.keys(lastRunInputs.value[debugNode.value.id] || {})) {
+    if (!known.has(id)) {
+      ports = [...ports, { id, label: id }]
+      known.add(id)
+    }
+  }
+  return ports.map(port => {
+    const edge = edges.value.find(item => item.target === debugNode.value.id && (item.targetHandle || 'in') === port.id)
+    const captured = lastRunInputs.value[debugNode.value.id]?.[port.id]
+    const hasCapturedInput = captured && Object.prototype.hasOwnProperty.call(captured, 'incoming')
+    const incoming = hasCapturedInput ? captured.incoming : (edge ? lastRunOutputs.value[edge.source]?.[edge.sourceHandle || 'out'] : undefined)
+    const overrideText = debugOverrides.value[debugNode.value.id]?.[port.id]
+    return { id: port.id, label: port.label || port.id, incoming, overridden: overrideText !== undefined, overrideText: overrideText ?? '' }
+  })
+})
 
 async function runGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
   try {
-    const { data } = await logicApi.runGraph(activeGraphId.value)
+    const parsedOverrides = Object.fromEntries(Object.entries(debugOverrides.value).map(([nodeId, values]) => [
+      nodeId,
+      Object.fromEntries(Object.entries(values).map(([port, value]) => [port, parseOverride(value)])),
+    ]).filter(([, values]) => Object.keys(values).length))
+    const { data } = debugMode.value || Object.keys(parsedOverrides).length
+      ? await logicApi.runGraph(activeGraphId.value, { debug: debugMode.value, input_overrides: parsedOverrides })
+      : await logicApi.runGraph(activeGraphId.value)
     const outputs = data.outputs || {}
     const evalCount = Object.keys(outputs).length
     const diagnosticCount = Array.isArray(data.warnings) ? data.warnings.length : countGraphDiagnostics(outputs)
@@ -603,8 +604,8 @@ async function runGraph() {
     )
     // Always update lastRunOutputs (needed for extractor config panels)
     lastRunOutputs.value = outputs
-    if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs)
-    else clearDebugValues()
+    lastRunMetadata.value = data.debug || { timestamp: new Date().toISOString(), used_overrides: false }
+    lastRunInputs.value = data.debug?.inputs || {}
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('common.error'))
   }
@@ -786,6 +787,11 @@ function onDrop(event) {
 const selectedNode = ref(null)
 
 function onNodeClick({ node }) {
+  if (debugMode.value) {
+    debugNode.value = { ...node }
+    selectedNode.value = null
+    return
+  }
   if (!auth.isAdmin) return
   selectedNode.value = { ...node }
 }
@@ -817,6 +823,8 @@ function _wsConnect() {
     _ws = new WebSocket(url, [`obs.jwt.${token}`])
   } catch { return }
 
+  _ws.onopen = () => sendDebugSubscription(activeGraphId.value, debugMode.value)
+
   _ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data)
@@ -825,7 +833,9 @@ function _wsConnect() {
         msg.graph_id === activeGraphId.value &&
         debugMode.value
       ) {
-        applyDebugValues(msg.outputs || {})
+        lastRunOutputs.value = msg.outputs || {}
+        lastRunInputs.value = msg.inputs || {}
+        lastRunMetadata.value = msg.debug || { timestamp: new Date().toISOString(), used_overrides: false }
       }
     } catch { /* ignore parse errors */ }
   }
@@ -839,6 +849,11 @@ function _wsConnect() {
   _ws.onerror = () => { try { _ws?.close() } catch { /* ignore */ } }
 }
 
+function sendDebugSubscription(graphId, enabled) {
+  if (!graphId || !_ws || typeof _ws.send !== 'function' || _ws.readyState !== WebSocket.OPEN) return
+  _ws.send(JSON.stringify({ action: 'logic_debug', graph_id: graphId, enabled }))
+}
+
 function _wsDisconnect() {
   clearTimeout(_wsTimer)
   _wsTimer = null
@@ -847,7 +862,16 @@ function _wsDisconnect() {
 }
 
 // ── Persist active graph selection ────────────────────────────────────────
-watch(activeGraphId, (id) => {
+watch(activeGraphId, (id, previousId) => {
+  if (previousId && id !== previousId) {
+    sendDebugSubscription(previousId, false)
+    debugMode.value = false
+    debugNode.value = null
+    debugOverrides.value = {}
+    lastRunOutputs.value = {}
+    lastRunInputs.value = {}
+    lastRunMetadata.value = null
+  }
   if (id) localStorage.setItem('logic_active_graph', id)
   else localStorage.removeItem('logic_active_graph')
 })

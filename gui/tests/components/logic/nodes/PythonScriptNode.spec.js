@@ -69,10 +69,10 @@ describe('PythonScriptNode', () => {
     expect(w.find('.gn-label').text()).toBe('Python Script')
   })
 
-  it('shows debug value when data._dbg is set', async () => {
+  it('does not show the legacy debug value when data._dbg is set', async () => {
     const w = await mountPy({ data: { _dbg: 'result=99' } })
     await flushPromises()
-    expect(w.text()).toContain('result=99')
+    expect(w.text()).not.toContain('result=99')
   })
 
   it('calls removeNodes on delete button click', async () => {

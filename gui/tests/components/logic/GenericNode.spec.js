@@ -43,16 +43,11 @@ describe('GenericNode memory rendering', () => {
   })
 })
 
-describe('GenericNode debug band', () => {
-  it('uses the full debug title when present', () => {
+describe('GenericNode legacy debug band', () => {
+  it('does not render debug data in the block', () => {
     const wrapper = mountNode({ _dbg: 'short response', _dbg_title: 'full response body' })
 
-    expect(wrapper.find('[data-testid="debug-band"]').attributes('title')).toBe('full response body')
-  })
-
-  it('falls back to the visible debug value for the title', () => {
-    const wrapper = mountNode({ _dbg: 'visible debug' })
-
-    expect(wrapper.find('[data-testid="debug-band"]').attributes('title')).toBe('visible debug')
+    expect(wrapper.find('[data-testid="debug-band"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('short response')
   })
 })

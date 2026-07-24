@@ -1778,7 +1778,8 @@ class TestApiClientWsBroadcast:
         ws_payloads: list[dict] = []
 
         mock_ws_manager = MagicMock()
-        mock_ws_manager.broadcast = AsyncMock(side_effect=lambda p: ws_payloads.append(p))
+        mock_ws_manager.has_logic_debug_subscribers.return_value = True
+        mock_ws_manager.broadcast_logic_debug = AsyncMock(side_effect=lambda _graph_id, payload: ws_payloads.append(payload))
 
         manager = _make_manager()
         n = node("ac", "api_client", {"url": "http://93.184.216.34", "method": "GET"})
@@ -1795,6 +1796,22 @@ class TestApiClientWsBroadcast:
         # success must be the real value (True), not the placeholder (False)
         assert ac_out["success"] is True
         assert ac_out["status"] == 200
+
+    def test_ws_broadcast_stringifies_non_json_native_values(self):
+        mock_ws_manager = MagicMock()
+        mock_ws_manager.has_logic_debug_subscribers.return_value = True
+        mock_ws_manager.broadcast_logic_debug = AsyncMock()
+        manager = _make_manager()
+        flow = _flow([node("n", "const_value", {"value": 1})])
+
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", return_value=mock_ws_manager),
+            patch("obs.logic.manager.GraphExecutor.execute", return_value={"n": {"out": {1, 2}}}),
+        ):
+            asyncio.run(manager._execute_graph("g", "test", flow, {}))
+
+        payload = mock_ws_manager.broadcast_logic_debug.await_args.args[1]
+        assert isinstance(payload["outputs"]["n"]["out"], str)
 
 
 # ===========================================================================

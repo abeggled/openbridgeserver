@@ -17,6 +17,7 @@ GET    /api/v1/logic/graphs/{id}/export       export graph as JSON download
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -32,6 +33,7 @@ from obs.logic.models import (
     LogicGraphCreate,
     LogicGraphImport,
     LogicGraphOut,
+    LogicGraphRun,
     LogicGraphUpdate,
     LogicNode,
     LogicUsageOut,
@@ -396,10 +398,11 @@ async def import_graph(
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
 async def run_graph(
     graph_id: str,
+    body: LogicGraphRun | None = None,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
-    row = await db.fetchone("SELECT id, enabled FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT id, enabled, flow_data FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
     if not bool(row["enabled"]):
@@ -407,8 +410,25 @@ async def run_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        outputs = await get_logic_manager().execute_graph(graph_id)
-        return {"status": "ok", "outputs": outputs, "warnings": _logic_run_warnings(outputs)}
+        started = time.perf_counter()
+        overrides = body.input_overrides if body else {}
+        debug_requested = bool(body and body.debug) or bool(overrides)
+        if debug_requested:
+            outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
+        else:
+            outputs = await get_logic_manager().execute_graph(graph_id)
+            inputs = {}
+        return {
+            "status": "ok",
+            "outputs": outputs,
+            "warnings": _logic_run_warnings(outputs),
+            "debug": {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "used_overrides": bool(overrides),
+                "inputs": inputs,
+            },
+        }
     except Exception as exc:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
 
