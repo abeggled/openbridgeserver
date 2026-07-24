@@ -1055,3 +1055,69 @@ def test_extract_subprotocol_tokens_accepts_session_when_jwt_missing():
     assert jwt_token is None
     assert session_token == "session-only-token"
     assert selected == "obs.session.session-only-token"
+
+
+class _NonDictRow:
+    """Mimics a sqlite3.Row-like object: not a dict, raises on item access for unknown keys."""
+
+    def __getitem__(self, key):
+        raise KeyError(key)
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_datapoints_handles_non_dict_row_item_access_error():
+    class _DbStub:
+        async def fetchone(self, _sql, _params):
+            return _NonDictRow()
+
+    ids = await _page_allowed_datapoints(_DbStub(), "page-1")
+
+    assert ids is None
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_datapoints_handles_invalid_page_config_json():
+    class _DbStub:
+        async def fetchone(self, _sql, _params):
+            return {"page_config": "not-valid-json"}
+
+    ids = await _page_allowed_datapoints(_DbStub(), "page-1")
+
+    assert ids is None
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_handles_non_dict_row_item_access_error():
+    class _DbStub:
+        async def fetchone(self, _sql, _params):
+            return _NonDictRow()
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-1")
+
+    assert predicates == []
+
+
+@pytest.mark.asyncio
+async def test_page_allowed_message_archive_predicates_handles_invalid_page_config_json():
+    class _DbStub:
+        async def fetchone(self, _sql, _params):
+            return {"page_config": "not-valid-json"}
+
+    predicates = await _page_allowed_message_archive_predicates(_DbStub(), "page-1")
+
+    assert predicates == []
+
+
+@pytest.mark.asyncio
+async def test_disconnect_swallows_runtime_error_from_already_closed_socket():
+    class _FailingCloseWebSocket(_FakeWebSocket):
+        async def close(self) -> None:
+            raise RuntimeError("already closed")
+
+    manager = WebSocketManager()
+    ws = _FailingCloseWebSocket()
+    conn_id = await manager.connect(ws)
+
+    await manager.disconnect(conn_id)
+
+    assert conn_id not in manager._connections

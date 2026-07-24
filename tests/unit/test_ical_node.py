@@ -359,6 +359,27 @@ class TestICalNoCachedData:
         out = ex.execute()["n1"]
         assert out["raw"] == ""
 
+    def test_malformed_ics_content_returns_empty_outputs_and_logs(self):
+        """Content that isn't valid iCal (parse error deep inside icalendar)
+        must not blow up the node — it's logged and every filter output
+        falls back to its empty default."""
+        out = _run_ical("this is not an ics file at all", [{"name": "x", "fields": ["summary"], "pattern": "x"}])
+        assert out["f0_array"] == []
+        assert out["f0_next_date"] is None
+        assert out["f0_today"] is False
+        assert out["f0_tomorrow"] is False
+
+    def test_malformed_filters_json_falls_back_to_no_filters(self):
+        """A corrupted 'filters' config value (not valid JSON) must not blow
+        up the node — it's treated as if no filters were configured."""
+        ics = _make_ics(_allday_event("ev1", _TODAY, "Event"))
+        hyst = {"n1": {"raw": ics}}
+        n = node("n1", "ical", {"filters": "not-valid-json{{", "filter_count": 1})
+        ex = make_executor([n], hysteresis_state=hyst, app_config={"timezone": "UTC"})
+        out = ex.execute()["n1"]
+        assert out["raw"] == ics
+        assert "f0_array" not in out
+
 
 # ---------------------------------------------------------------------------
 # Array row format

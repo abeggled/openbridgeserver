@@ -68,6 +68,37 @@ def test_emit_adds_entry_to_buffer():
     assert "hello log viewer" in entries[0]["message"]
 
 
+def test_emit_swallows_broadcast_scheduling_failure(monkeypatch):
+    """``emit()`` must never crash its caller. If the fire-and-forget WS broadcast
+    scheduling itself raises (e.g. ``call_soon_threadsafe`` failing during interpreter
+    shutdown chaos, per the noqa comment on the except clause), the exception must be
+    swallowed silently — but the entry, already appended before the broadcast attempt,
+    must still land in the buffer.
+    """
+    import obs.log_buffer as log_buffer_module
+    from obs.log_buffer import get_log_buffer
+
+    class _FlakyLoop:
+        def is_running(self):
+            return True
+
+        def call_soon_threadsafe(self, *args, **kwargs):
+            raise RuntimeError("simulated scheduling failure during shutdown")
+
+    monkeypatch.setattr(log_buffer_module, "_loop", _FlakyLoop())
+
+    logger = logging.getLogger("test.emit_broadcast_failure")
+    logger.addHandler(_make_handler())
+    logger.setLevel(logging.DEBUG)
+
+    # Must not raise despite the broadcast scheduling blowing up.
+    logger.info("still buffered despite broadcast failure")
+
+    entries = get_log_buffer()
+    assert len(entries) == 1
+    assert "still buffered despite broadcast failure" in entries[0]["message"]
+
+
 def test_entry_contains_all_fields():
     from obs.log_buffer import get_log_buffer
 

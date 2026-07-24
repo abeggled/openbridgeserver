@@ -196,3 +196,36 @@ class TestNotifyPushoverPinnedFetch:
 
         mock_client.post.assert_not_awaited()
         assert outputs["push"]["sent"] is False
+
+
+class TestNotifySmsSevenIoErrorHandling:
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_transport_failure_is_logged_and_reports_not_sent(self, mock_client_cls):
+        """An unexpected error while calling the seven.io gateway (e.g. a
+        network failure) must not blow up graph execution — it's logged and
+        the node output reports sent=False."""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=RuntimeError("network down"))
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        manager = _make_manager()
+        flow = _flow(
+            [
+                node(
+                    "sms",
+                    "notify_sms",
+                    {"api_key": "key", "to": "+491234567", "message": "hi"},
+                ),
+            ],
+        )
+        graph_id = "g"
+        manager._graphs[graph_id] = ("test", True, flow)
+        manager._node_state[graph_id] = {}
+
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(
+                manager._execute_graph(graph_id, "test", flow, {"sms": {"trigger": True, "message": "hi"}}),
+            )
+
+        assert outputs["sms"]["sent"] is False

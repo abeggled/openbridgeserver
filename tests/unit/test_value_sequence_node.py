@@ -258,6 +258,39 @@ def test_sequence_publish_finishes_before_self_cancellation() -> None:
     asyncio.run(exercise())
 
 
+def test_sequence_cleanup_reawait_failure_after_cancellation_is_logged() -> None:
+    """If the cleanup re-await (after the sequence task itself was cancelled)
+    raises a *different* exception, that failure is logged — and the original
+    CancelledError still propagates so the task ends up cancelled."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        publish_started = asyncio.Event()
+        allow_publish = asyncio.Event()
+
+        async def publish(event) -> None:
+            publish_started.set()
+            await allow_publish.wait()
+            raise RuntimeError("publish failed after cancellation")
+
+        manager._event_bus.publish.side_effect = publish
+        task = asyncio.create_task(manager._run_value_sequence("graph", "node", {"steps": [{"datapoint_id": str(target), "value": 1}]}))
+        await publish_started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        allow_publish.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("sequence task must remain cancelled")
+
+    asyncio.run(exercise())
+
+
 def test_value_sequence_handles_pause_invalid_values_and_while_condition() -> None:
     async def exercise() -> None:
         manager = _manager()

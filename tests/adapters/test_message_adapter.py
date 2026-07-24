@@ -16,6 +16,8 @@ from obs.adapters.message.adapter import (
     MessageAdapterConfig,
     MessageBindingConfig,
     _datetime_settings,
+    _lookup_datapoint,
+    _values_equal,
     evaluate_condition,
     render_message,
 )
@@ -112,6 +114,26 @@ class _FakeAsyncClient:
 )
 def test_evaluate_condition(value, operator, compare_value, expected):
     assert evaluate_condition(value, operator, compare_value) is expected
+
+
+def test_values_equal_treats_comparison_error_as_unequal():
+    class _RaisingEq:
+        def __eq__(self, other):
+            raise RuntimeError("comparison exploded")
+
+        def __hash__(self):
+            return id(self)
+
+    assert _values_equal(_RaisingEq(), _RaisingEq()) is False
+
+
+def test_lookup_datapoint_returns_none_when_registry_not_initialized(monkeypatch):
+    def _raise_not_initialized():
+        raise RuntimeError("registry not initialized")
+
+    monkeypatch.setattr("obs.core.registry.get_registry", _raise_not_initialized)
+
+    assert _lookup_datapoint(uuid.uuid4()) is None
 
 
 def test_render_message_replaces_value_unit_and_metadata():
@@ -848,6 +870,24 @@ async def test_bad_quality_event_is_ignored(bus, dummy_provider):
 
 
 @pytest.mark.asyncio
+async def test_invalid_binding_config_is_skipped_on_reload(bus, dummy_provider):
+    """A binding whose config fails MessageBindingConfig validation must be skipped, not raise."""
+    dp_id = uuid.uuid4()
+    adapter = MessageAdapter(
+        event_bus=bus,
+        config={"providers": {"dummy": {"enabled": True, "targets": {"default": {}}}}},
+    )
+    binding = _message_binding(dp_id, message="   ")  # blank message -> ValidationError
+
+    await adapter.reload_bindings([binding])
+    await adapter._on_value_event(DataValueEvent(datapoint_id=dp_id, value=99, quality="good", source_adapter="test"))
+    await _drain_sends(adapter)
+
+    assert binding.id not in adapter._states
+    dummy_provider.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_disabled_binding_is_not_reloaded(bus, dummy_provider):
     dp_id = uuid.uuid4()
     adapter = MessageAdapter(
@@ -1286,6 +1326,27 @@ async def test_pushover_provider_reports_body_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pushover_provider_treats_non_json_success_body_as_ok(monkeypatch):
+    """A 2xx response whose body isn't valid JSON must still be treated as success."""
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.json_body = None  # _FakeResponse.json() raises ValueError
+    _FakeAsyncClient.status_code = 200
+    _FakeAsyncClient.text = "not json"
+    monkeypatch.setattr("obs.adapters.message.providers.pushover.httpx.AsyncClient", _FakeAsyncClient)
+
+    result = await PushoverProvider().send(
+        provider_config={"enabled": True, "api_token": "app", "targets": {}},
+        target_name="phone",
+        target_config={"user_key": "user"},
+        title=None,
+        message="Body",
+        context={},
+    )
+
+    assert result.ok is True
+
+
+@pytest.mark.asyncio
 async def test_pushover_provider_rejects_priority_two_before_posting(monkeypatch):
     _FakeAsyncClient.calls = []
     _FakeAsyncClient.json_body = {"status": 1}
@@ -1349,6 +1410,27 @@ async def test_telegram_provider_reports_body_failure(monkeypatch):
 
     assert result.ok is False
     assert result.detail == "Bad Request: chat not found"
+
+
+@pytest.mark.asyncio
+async def test_telegram_provider_treats_non_json_success_body_as_ok(monkeypatch):
+    """A 2xx response whose body isn't valid JSON must still be treated as success."""
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.json_body = None  # _FakeResponse.json() raises ValueError
+    _FakeAsyncClient.status_code = 200
+    _FakeAsyncClient.text = "not json"
+    monkeypatch.setattr("obs.adapters.message.providers.telegram.httpx.AsyncClient", _FakeAsyncClient)
+
+    result = await TelegramProvider().send(
+        provider_config={"enabled": True, "bot_token": "secret", "targets": {}},
+        target_name="chat",
+        target_config={"chat_id": "123"},
+        title=None,
+        message="Hello",
+        context={},
+    )
+
+    assert result.ok is True
 
 
 @pytest.mark.asyncio

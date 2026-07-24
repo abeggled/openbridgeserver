@@ -275,6 +275,23 @@ async def test_partial_update_graph_name(client, auth_headers):
     assert resp.json()["name"] == new_name
 
 
+async def test_partial_update_graph_name_manager_failure_logged(client, auth_headers, monkeypatch):
+    """Name-only PATCH refreshes the logic manager cache best-effort (#…);
+    a manager failure (e.g. not initialized) must not fail the request, only
+    log it — covers the except branch around update_cached_graph_name.
+    """
+    graph = await _create_graph(client, auth_headers)
+
+    def _boom():
+        raise RuntimeError("logic manager unavailable")
+
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", _boom)
+    new_name = f"Patched-{uuid.uuid4().hex[:6]}"
+    resp = await client.patch(f"/api/v1/logic/graphs/{graph['id']}", json={"name": new_name}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["name"] == new_name
+
+
 async def test_partial_update_graph_enabled_false(client, auth_headers):
     graph = await _create_graph(client, auth_headers, enabled=True)
     resp = await client.patch(f"/api/v1/logic/graphs/{graph['id']}", json={"enabled": False}, headers=auth_headers)
@@ -520,6 +537,48 @@ async def test_import_graph_success(client, auth_headers):
     imported = resp.json()
     assert imported["name"] == original["name"]
     assert imported["id"] != original["id"]
+
+
+async def test_import_graph_invalid_datapoint_id_is_ignored(client, auth_headers):
+    """A node/step referencing a malformed datapoint_id must not fail the
+    import — the datapoint_name enrichment is best-effort and swallows
+    ValueError/TypeError/AttributeError from uuid.UUID() parsing.
+    """
+    resp = await client.post(
+        "/api/v1/logic/graphs/import",
+        json={
+            "obs_export": "logic_graph",
+            "version": 1,
+            "name": f"BadDpId-{uuid.uuid4().hex[:6]}",
+            "description": "",
+            "enabled": True,
+            "flow_data": {
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "type": "datapoint_read",
+                        "position": {"x": 0, "y": 0},
+                        "data": {"datapoint_id": "not-a-valid-uuid"},
+                    },
+                    {
+                        "id": "n2",
+                        "type": "value_sequence",
+                        "position": {"x": 0, "y": 0},
+                        "data": {"steps": [{"datapoint_id": "also-not-a-uuid", "value": 1}]},
+                    },
+                ],
+                "edges": [],
+            },
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    imported = resp.json()
+    nodes = imported["flow_data"]["nodes"]
+    n1 = next(n for n in nodes if n["id"] == "n1")
+    n2 = next(n for n in nodes if n["id"] == "n2")
+    assert "datapoint_name" not in n1["data"]
+    assert "datapoint_name" not in n2["data"]["steps"][0]
 
 
 async def test_import_graph_non_admin_forbidden(client, auth_headers):

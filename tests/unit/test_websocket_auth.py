@@ -427,3 +427,41 @@ async def _resolve_protected_access(_db, _node_id: str) -> tuple[str, str | None
 
 async def _resolve_user_access(_db, _node_id: str) -> tuple[str, str | None]:
     return "user", "node-user"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_ws_request_rejects_invalid_bearer_token(monkeypatch):
+    """Covers the Bearer-header branch's own except HTTPException (distinct from the subprotocol one)."""
+
+    def _decode_token(_token: str, expected_type: str = "access") -> str:
+        raise HTTPException(401, "invalid")
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+
+    ws = _FakeWebSocket(headers={"authorization": "Bearer bad.token"})
+    ok, reason = await ws_api._authenticate_ws_request(ws)
+
+    assert ok is False
+    assert reason == "Invalid token"
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_closes_when_second_decode_fails_without_page_context(monkeypatch):
+    """`_authenticate_ws_request` succeeds first, but the endpoint's own follow-up decode
+    (used to resolve `user` for scoping) fails independently — covers that second except
+    HTTPException branch, distinct from the one inside `_authenticate_ws_request`.
+    """
+    calls = {"n": 0}
+
+    def _decode_token(_token: str, expected_type: str = "access") -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "admin"
+        raise HTTPException(401, "expired mid-handshake")
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+
+    ws = _FakeWebSocket(headers={"authorization": "Bearer sometoken"})
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.close_calls == [(4001, "Invalid token")]

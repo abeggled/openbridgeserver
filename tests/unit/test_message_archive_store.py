@@ -13,6 +13,8 @@ from obs.message_archive import (
     EntryPredicate,
     EntryQuery,
     MessageArchiveStore,
+    _json_loads_list,
+    _json_loads_object,
     activate_message_archive_service,
     broadcast_message_archive_entry,
     close_message_archive_store,
@@ -434,6 +436,20 @@ async def test_message_archive_store_json_helpers_fall_back_for_malformed_payloa
         assert fetched["payload"] == {}
     finally:
         await store.disconnect()
+
+
+def test_json_loads_object_falls_back_on_malformed_json():
+    """Genuinely unparsable JSON (not just wrong-shaped JSON) must fall back to
+    ``{}`` via the ``json.JSONDecodeError`` branch, not raise."""
+    assert _json_loads_object("{not valid json") == {}
+    assert _json_loads_object(None) == {}
+
+
+def test_json_loads_list_falls_back_on_malformed_json():
+    """Genuinely unparsable JSON (not just wrong-shaped JSON) must fall back to
+    ``[]`` via the ``json.JSONDecodeError`` branch, not raise."""
+    assert _json_loads_list("[not valid json") == []
+    assert _json_loads_list(None) == []
 
 
 async def test_message_archive_store_applies_default_type_and_clears_explicit_nulls(tmp_path):

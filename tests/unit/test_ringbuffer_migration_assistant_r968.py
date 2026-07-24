@@ -166,6 +166,32 @@ async def test_overview_shows_quarantined_legacy(tmp_path: Path):
         await rb.stop()
 
 
+async def test_overview_falls_back_to_manifest_when_legacy_unopenable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """If the legacy segment file can't even be opened (e.g. locked/corrupt at the
+    connection level, not just at the query level), the overview must not blow up —
+    it degrades to manifest-only data (row_estimate/from_ts/to_ts stay None)."""
+    import aiosqlite
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [10, 11])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+
+        async def raise_connect_error(segment):
+            raise aiosqlite.OperationalError("simulated unopenable legacy segment")
+
+        monkeypatch.setattr(rb._store, "_connection_for_read", raise_connect_error)
+
+        ov = await rb.legacy_migration_overview()
+        assert ov is not None
+        assert ov["row_estimate"] is None
+        assert ov["from_ts"] is None
+        assert ov["to_ts"] is None
+    finally:
+        await rb.stop()
+
+
 # ---------- #4: protect_legacy nach fehlgeschlagener Migration zurückrollen ----------
 
 

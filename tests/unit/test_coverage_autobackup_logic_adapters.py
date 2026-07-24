@@ -230,6 +230,41 @@ class TestAutobackupSchedulerTimezone:
         with pytest.raises(asyncio.CancelledError):
             await scheduler._loop()
 
+    @pytest.mark.asyncio
+    async def test_scheduler_logs_exception_when_backup_creation_fails(self, monkeypatch, caplog):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        now = datetime(2026, 7, 17, 3, 1, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        scheduler = ab.AutobackupScheduler(db)
+        monkeypatch.setattr(ab, "_config_changed_event", asyncio.Event())
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(return_value=ab.AutobackupConfig(enabled=True, hour=3, retention_days=7)))
+        monkeypatch.setattr(ab, "_application_now", AsyncMock(return_value=now))
+        monkeypatch.setattr(ab, "_create_backup_now", AsyncMock(side_effect=RuntimeError("disk full")))
+        monkeypatch.setattr(ab.asyncio, "wait_for", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+        assert "Autobackup fehlgeschlagen" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_scheduler_loop_logs_and_backs_off_on_unexpected_error(self, monkeypatch, caplog):
+        """An exception raised before the daily-backup branch (e.g. while loading config) is
+        caught by the loop's own outer handler, logged, and the loop backs off via sleep(60)."""
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        scheduler = ab.AutobackupScheduler(db)
+        monkeypatch.setattr(ab, "_config_changed_event", asyncio.Event())
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(side_effect=RuntimeError("db exploded")))
+        monkeypatch.setattr(ab.asyncio, "sleep", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+        assert "Autobackup-Scheduler Fehler" in caplog.text
+
 
 class TestListBackups:
     def test_returns_empty_list_for_empty_dir(self, tmp_path):
@@ -1774,6 +1809,99 @@ class TestZeitschaltuhrBuildHolidays:
             hols = adapter._build_holidays()
 
         assert isinstance(hols, dict)
+
+
+class TestZeitschaltuhrSunEventRealException:
+    """Exercises the *real* astral call path (not the mocked-away shortcut used elsewhere)."""
+
+    def test_get_sun_event_logs_and_returns_none_on_astral_exception(self, caplog):
+        from obs.adapters.zeitschaltuhr.adapter import TimeRef
+
+        adapter = _make_zs_adapter()
+        with patch("astral.sun.sun", side_effect=RuntimeError("astral boom")):
+            result = adapter._get_sun_event(TimeRef.SUNRISE, date(2026, 6, 21))
+        assert result is None
+        assert "Sonnenzeit-Berechnung" in caplog.text
+
+    def test_get_solar_altitude_time_logs_and_returns_none_on_astral_exception(self, caplog):
+        from obs.adapters.zeitschaltuhr.adapter import SunDirection
+
+        adapter = _make_zs_adapter()
+        with patch("astral.sun.time_at_elevation", side_effect=RuntimeError("astral boom")):
+            result = adapter._get_solar_altitude_time(10.0, SunDirection.RISING, date(2026, 6, 21))
+        assert result is None
+        assert "Sonnenhöhenwinkel-Berechnung" in caplog.text
+
+
+class TestZeitschaltuhrHolidayLookupHardFailure:
+    """Both the language-retry call and the outer holiday-loading fail — covers the outer except."""
+
+    def test_build_holidays_outer_exception_logged_when_retry_also_fails(self, caplog):
+        adapter = _make_zs_adapter(holiday_language="fr")
+
+        def _always_raise(country, **kwargs):
+            raise RuntimeError("holidays boom")
+
+        mock_holidays = MagicMock()
+        mock_holidays.country_holidays = _always_raise
+        with patch.dict("sys.modules", {"holidays": mock_holidays}):
+            hols = adapter._build_holidays()
+
+        assert hols == {}
+        assert "Feiertagskalender konnte nicht geladen werden" in caplog.text
+
+    def test_get_holidays_for_year_outer_exception_logged_when_retry_also_fails(self, caplog):
+        adapter = _make_zs_adapter(holiday_language="fr")
+
+        def _always_raise(country, **kwargs):
+            raise RuntimeError("holidays boom")
+
+        mock_holidays = MagicMock()
+        mock_holidays.country_holidays = _always_raise
+        with patch.dict("sys.modules", {"holidays": mock_holidays}):
+            result = adapter.get_holidays_for_year(2026)
+
+        assert result == []
+        assert "Sprache 'fr' für Land" in caplog.text
+        assert "Feiertagskalender konnte nicht geladen werden" in caplog.text
+
+
+class TestZeitschaltuhrCustomHolidayParseErrors:
+    def test_build_holidays_logs_warning_for_unparseable_custom_entry(self, caplog):
+        adapter = _make_zs_adapter(custom_holidays=["13-45:BadDate"])
+        with patch.dict("sys.modules", {"holidays": None}):
+            hols = adapter._build_holidays()
+        assert isinstance(hols, dict)
+        assert "BadDate" not in hols.values()
+        assert "konnte nicht geparst werden" in caplog.text
+
+    def test_get_holidays_for_year_skips_unparseable_custom_entry_silently(self):
+        adapter = _make_zs_adapter(custom_holidays=["13-45:BadDate", "01-01:Neujahr"])
+        with patch.dict("sys.modules", {"holidays": None}):
+            result = adapter.get_holidays_for_year(2026)
+        assert any(h["name"] == "Neujahr" for h in result)
+        assert not any(h["name"] == "BadDate" for h in result)
+
+
+class TestZeitschaltuhrParseDateExpressionSlowPathException:
+    def test_holiday_slow_path_logs_exception_on_failure(self, caplog):
+        adapter = _make_zs_adapter()
+        adapter._hol = {}  # empty -> fast path finds nothing -> falls through to slow path
+
+        with patch.object(adapter, "get_holidays_for_year", side_effect=RuntimeError("boom")):
+            result = adapter._parse_date_expression("holiday:Foo", 2026)
+
+        assert result is None
+        assert "Feiertagssuche" in caplog.text
+
+
+class TestZeitschaltuhrHolidayNameTypeError:
+    def test_holiday_name_returns_empty_string_on_type_error(self):
+        adapter = _make_zs_adapter()
+        adapter._hol = {}
+        # An unhashable key makes dict.get raise TypeError, exercising the except clause.
+        result = adapter._holiday_name([1, 2, 3])
+        assert result == ""
 
 
 # ===========================================================================

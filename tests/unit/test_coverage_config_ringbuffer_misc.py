@@ -86,6 +86,27 @@ class _DbStub:
         pass
 
 
+class _SelectiveFailDb(_DbStub):
+    """_DbStub variant that raises for specific queries — used to hit the
+    per-item except-blocks in import_config/factory_reset/clear_* without
+    disturbing unrelated queries in the same call."""
+
+    def __init__(self, *, fail_on_commit=(), fail_on_fetchone=(), **kwargs):
+        super().__init__(**kwargs)
+        self._fail_on_commit = fail_on_commit
+        self._fail_on_fetchone = fail_on_fetchone
+
+    async def execute_and_commit(self, query, params=()):
+        if any(needle in query for needle in self._fail_on_commit):
+            raise RuntimeError(f"forced execute_and_commit failure: {query.strip()[:60]}")
+        return await super().execute_and_commit(query, params)
+
+    async def fetchone(self, query, params=()):
+        if any(needle in query for needle in self._fail_on_fetchone):
+            raise RuntimeError(f"forced fetchone failure: {query.strip()[:60]}")
+        return await super().fetchone(query, params)
+
+
 class _RegistryStub:
     def __init__(self, dps=None):
         self._dps = dps or []
@@ -310,6 +331,25 @@ async def test_export_config_icons_dir_error_is_swallowed(monkeypatch):
     assert result.icons == []
 
 
+@pytest.mark.asyncio
+async def test_export_config_unreadable_icon_file_is_skipped(monkeypatch):
+    """export_config skips a single unreadable SVG file (OSError) but keeps exporting others."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub(fetchone_result=None, fetchall_results=[])
+
+    bad_icon = MagicMock()
+    bad_icon.stem = "broken-icon"
+    bad_icon.read_bytes.side_effect = OSError("permission denied")
+
+    fake_dir = MagicMock()
+    fake_dir.glob.return_value = [bad_icon]
+
+    with patch("obs.api.v1.icons._icons_dir", return_value=fake_dir):
+        result = await config_api.export_config(_user="u", db=db)
+
+    assert result.icons == []
+
+
 # ===========================================================================
 # obs/api/v1/config.py — import_config
 # ===========================================================================
@@ -395,6 +435,38 @@ async def test_import_config_creates_new_datapoint(monkeypatch):
     assert result.datapoints_created == 1
     assert result.datapoints_updated == 0
     assert len(db.committed) > 0
+
+
+@pytest.mark.asyncio
+async def test_import_config_datapoint_invalid_uuid_records_error(monkeypatch):
+    """import_config records an error when a DataPoint id is not a valid UUID."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub()
+
+    body = _make_config_export(
+        datapoints=[
+            config_api.ExportedDataPoint(
+                id="not-a-uuid",
+                name="Broken",
+                data_type="FLOAT",
+                unit=None,
+                tags=[],
+                mqtt_alias=None,
+            )
+        ]
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.datapoints_created == 0
+    assert result.datapoints_updated == 0
+    assert any("not-a-uuid" in e for e in result.errors)
 
 
 @pytest.mark.asyncio
@@ -621,6 +693,35 @@ async def test_import_config_knx_group_addresses(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_import_config_knx_group_address_failure_recorded(monkeypatch):
+    """import_config records an error when a KNX group address upsert fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT INTO knx_group_addresses"])
+
+    body = _make_config_export(
+        knx_group_addresses=[
+            config_api.ExportedKnxGroupAddress(
+                address="1/2/3",
+                name="Licht Wohnzimmer",
+                description="",
+                dpt="1.001",
+            )
+        ]
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.knx_group_addresses_upserted == 0
+    assert any("1/2/3" in e for e in result.errors)
+
+
+@pytest.mark.asyncio
 async def test_import_config_creates_logic_graph(monkeypatch):
     """import_config inserts a new logic graph."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
@@ -767,6 +868,25 @@ async def test_import_config_fa_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_import_config_fa_api_key_failure_recorded(monkeypatch):
+    """import_config records an error when persisting fa_api_key fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT OR REPLACE INTO app_settings"])
+
+    body = _make_config_export(fa_api_key="test-fa-key-xyz")
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert any("FA API Key import failed" in e for e in result.errors)
+
+
+@pytest.mark.asyncio
 async def test_import_config_nav_links(monkeypatch):
     """import_config upserts nav links."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
@@ -794,6 +914,38 @@ async def test_import_config_nav_links(monkeypatch):
         result = await config_api.import_config(body=body, _user="u", db=db)
 
     assert result.nav_links_upserted == 1
+
+
+@pytest.mark.asyncio
+async def test_import_config_nav_link_failure_recorded(monkeypatch):
+    """import_config records an error when a nav_link upsert fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    nav_link_id = str(uuid.uuid4())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT INTO nav_links"])
+
+    body = _make_config_export(
+        nav_links=[
+            config_api.ExportedNavLink(
+                id=nav_link_id,
+                label="GitHub",
+                url="https://github.com",
+                icon="github",
+                sort_order=1,
+                open_new_tab=True,
+            )
+        ]
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.nav_links_upserted == 0
+    assert any(nav_link_id in e for e in result.errors)
 
 
 @pytest.mark.asyncio
@@ -843,6 +995,27 @@ async def test_import_config_invalid_timezone_does_not_hot_update_logic(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_import_config_hot_apply_datetime_settings_runtime_error_swallowed(monkeypatch):
+    """import_config swallows RuntimeError when the logic manager isn't running yet
+    while hot-applying imported date/time settings (non-critical, see comment above the call)."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub()
+    body = _make_config_export(app_settings=[config_api.ExportedAppSetting(key="timezone", value="Europe/Zurich")])
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.logic.manager.get_logic_manager", side_effect=RuntimeError("logic manager not initialized")),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.app_settings_upserted == 1
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
 async def test_import_config_hierarchy_trees_and_nodes(monkeypatch):
     """import_config upserts hierarchy trees, nodes and dp links."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
@@ -888,6 +1061,82 @@ def test_exported_hierarchy_tree_accepts_legacy_payload_without_source():
     tree = config_api.ExportedHierarchyTree(id="tree-1", name="Legacy", description="")
 
     assert tree.source == ""
+
+
+@pytest.mark.asyncio
+async def test_import_config_hierarchy_tree_failure_recorded(monkeypatch):
+    """import_config records an error when a hierarchy_tree upsert fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    tree_id = str(uuid.uuid4())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT INTO hierarchy_trees"])
+
+    body = _make_config_export(
+        hierarchy_trees=[config_api.ExportedHierarchyTree(id=tree_id, name="Gebäude", description="", source="")],
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert any(tree_id in e for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_import_config_hierarchy_node_failure_recorded(monkeypatch):
+    """import_config records an error when a hierarchy_node upsert fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    node_id = str(uuid.uuid4())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT INTO hierarchy_nodes"])
+
+    body = _make_config_export(
+        hierarchy_nodes=[
+            config_api.ExportedHierarchyNode(
+                id=node_id,
+                tree_id=str(uuid.uuid4()),
+                parent_id=None,
+                name="EG",
+                description="",
+                node_order=0,
+                icon=None,
+            )
+        ],
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert any(node_id in e for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_import_config_hierarchy_dp_link_failure_recorded(monkeypatch):
+    """import_config records an error when a hierarchy_dp_link upsert fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    link_id = str(uuid.uuid4())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT OR IGNORE INTO hierarchy_datapoint_links"])
+
+    body = _make_config_export(
+        hierarchy_dp_links=[config_api.ExportedHierarchyDpLink(id=link_id, node_id=str(uuid.uuid4()), datapoint_id=str(uuid.uuid4()))],
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert any(link_id in e for e in result.errors)
 
 
 @pytest.mark.asyncio
@@ -978,6 +1227,81 @@ async def test_import_config_visu_node_orphan_gets_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_import_config_visu_node_insert_failure_recorded(monkeypatch):
+    """import_config records an error when the visu_node insert itself fails."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    node_id = str(uuid.uuid4())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT INTO visu_nodes"])
+
+    body = _make_config_export(
+        visu_nodes=[
+            config_api.ExportedVisuNode(
+                id=node_id,
+                parent_id=None,
+                name="Hauptbereich",
+                type="AREA",
+                node_order=0,
+                icon=None,
+                access=None,
+                access_pin=None,
+                page_config=None,
+                users=[],
+            )
+        ]
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.visu_nodes_upserted == 0
+    assert any(node_id in e for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_import_config_visu_node_user_assignment_failure_is_swallowed(monkeypatch):
+    """import_config swallows (logs) a failed per-user visu_node assignment without
+    failing the whole node — the node itself must still count as upserted."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    node_id = str(uuid.uuid4())
+    db = _SelectiveFailDb(fail_on_commit=["INSERT OR IGNORE INTO visu_node_users"])
+
+    body = _make_config_export(
+        visu_nodes=[
+            config_api.ExportedVisuNode(
+                id=node_id,
+                parent_id=None,
+                name="Hauptbereich",
+                type="AREA",
+                node_order=0,
+                icon=None,
+                access="public",
+                access_pin=None,
+                page_config=None,
+                users=["alice"],
+            )
+        ]
+    )
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    # The node insert succeeded; only the user assignment failed and was logged —
+    # no error is appended to result.errors for this sub-failure.
+    assert result.visu_nodes_upserted == 1
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
 async def test_import_config_icons(monkeypatch):
     """import_config decodes and writes valid SVG icons."""
     import base64
@@ -1034,6 +1358,28 @@ async def test_import_config_icon_invalid_svg_adds_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_import_config_icon_decode_exception_recorded(monkeypatch):
+    """import_config records an error when an icon fails to decode entirely
+    (e.g. malformed base64) rather than merely failing SVG sanitization."""
+    monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
+    db = _DbStub()
+
+    body = _make_config_export(icons=[config_api.ExportedIcon(name="broken-icon", content_b64="abc")])
+
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.api.v1.icons._icons_dir", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(body=body, _user="u", db=db)
+
+    assert result.icons_imported == 0
+    assert any("broken-icon" in e for e in result.errors)
+
+
+@pytest.mark.asyncio
 async def test_import_config_adapter_restart_error_recorded(monkeypatch):
     """import_config records error when adapter restart fails."""
     monkeypatch.setattr(config_api, "get_registry", lambda: _RegistryStub())
@@ -1050,6 +1396,59 @@ async def test_import_config_adapter_restart_error_recorded(monkeypatch):
         result = await config_api.import_config(body=body, _user="u", db=db)
 
     assert any("Adapter restart" in e for e in result.errors)
+
+
+# ===========================================================================
+# obs/api/v1/config.py — import_db
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_import_db_records_stop_and_restart_failures_but_completes(monkeypatch, tmp_path):
+    """import_db logs+continues when adapter stop, logic engine restart and
+    adapter restart each fail independently, and still returns a success result."""
+    import sqlite3
+
+    src_path = tmp_path / "upload.sqlite"
+    dst_path = tmp_path / "target.sqlite"
+
+    conn = sqlite3.connect(str(src_path))
+    conn.execute("CREATE TABLE t (id INTEGER)")
+    conn.commit()
+    conn.close()
+
+    settings = MagicMock()
+    settings.database.path = str(dst_path)
+    monkeypatch.setattr("obs.config.get_settings", lambda: settings)
+
+    reg = MagicMock()
+    reg._points = {}
+    reg._values = {}
+    reg.load_from_db = AsyncMock()
+    monkeypatch.setattr(config_api, "get_registry", lambda: reg)
+
+    logic_manager = MagicMock()
+    logic_manager.stop = AsyncMock(side_effect=RuntimeError("logic engine stop failed"))
+    logic_manager.start = AsyncMock(side_effect=RuntimeError("logic engine restart failed"))
+
+    db = _DbStub()
+
+    fake_file = MagicMock()
+    fake_file.read = AsyncMock(return_value=src_path.read_bytes())
+
+    with (
+        patch("obs.adapters.registry.stop_all", AsyncMock(side_effect=RuntimeError("adapter stop failed"))),
+        patch("obs.adapters.registry.start_all", AsyncMock(side_effect=RuntimeError("adapter restart failed"))),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+        patch("obs.logic.manager.get_logic_manager", return_value=logic_manager),
+    ):
+        result = await config_api.import_db(file=fake_file, _admin="admin", db=db)
+
+    assert result["ok"] is True
+    assert result["adapters_restarted"] == 0
+    logic_manager.stop.assert_awaited_once()
+    logic_manager.start.assert_awaited_once()
 
 
 # ===========================================================================
@@ -1156,6 +1555,50 @@ async def test_factory_reset_counts_icons(monkeypatch):
     assert result.icons_deleted == 2
 
 
+@pytest.mark.asyncio
+async def test_factory_reset_all_independent_steps_record_errors(monkeypatch):
+    """factory_reset's steps (adapter stop, logic graphs, bindings, datapoints,
+    adapter instances, KNX GAs, visu nodes, nav links, hierarchy, app settings,
+    icons) are each wrapped in their own try/except — a failure in one must not
+    stop the others from running, and each records its own error."""
+    reg = _RegistryStub()
+    monkeypatch.setattr(config_api, "get_registry", lambda: reg)
+
+    class _AlwaysFailDb(_DbStub):
+        async def fetchone(self, query, params=()):
+            raise RuntimeError(f"forced fetchone failure: {query.strip()[:40]}")
+
+        async def execute_and_commit(self, query, params=()):
+            raise RuntimeError(f"forced execute_and_commit failure: {query.strip()[:40]}")
+
+    db = _AlwaysFailDb()
+
+    with (
+        patch("obs.adapters.registry.stop_all", AsyncMock(side_effect=RuntimeError("adapter stop failed"))),
+        patch("obs.logic.manager.get_logic_manager") as mock_lm,
+        patch("obs.api.v1.icons._icons_dir", side_effect=RuntimeError("icons dir failed")),
+    ):
+        mock_lm.return_value.reload = AsyncMock()
+        mock_lm.return_value.update_app_config = MagicMock()
+
+        result = await config_api.factory_reset(_admin="admin", db=db)
+
+    # One error entry per independent stage — all eleven must be present.
+    joined_errors = " | ".join(result.errors)
+    assert "Adapter stop failed" in joined_errors
+    assert "Logic graphs reset failed" in joined_errors
+    assert "Bindings reset failed" in joined_errors
+    assert "DataPoints reset failed" in joined_errors
+    assert "Adapter instances reset failed" in joined_errors
+    assert "KNX group addresses reset failed" in joined_errors
+    assert "Visu nodes reset failed" in joined_errors
+    assert "NavLinks reset failed" in joined_errors
+    assert "Hierarchy reset failed" in joined_errors
+    assert "App settings reset failed" in joined_errors
+    assert "Icons reset failed" in joined_errors
+    assert len(result.errors) == 11
+
+
 # ===========================================================================
 # obs/api/v1/config.py — clear_bindings / clear_datapoints / clear_logic / clear_adapters
 # ===========================================================================
@@ -1220,6 +1663,19 @@ async def test_clear_datapoints(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_clear_datapoints_error_recorded(monkeypatch):
+    """clear_datapoints records an error if adapter stop fails."""
+    reg = _RegistryStub()
+    monkeypatch.setattr(config_api, "get_registry", lambda: reg)
+    db = _DbStub(fetchone_result=_row({"n": 0}))
+
+    with patch("obs.adapters.registry.stop_all", AsyncMock(side_effect=RuntimeError("fail"))):
+        result = await config_api.clear_datapoints(_admin="admin", db=db)
+
+    assert any("DataPoints clear failed" in e for e in result.errors)
+
+
+@pytest.mark.asyncio
 async def test_clear_logic(monkeypatch):
     """clear_logic deletes all logic graphs and reloads manager."""
     db = _DbStub(fetchone_result=_row({"n": 4}))
@@ -1230,6 +1686,21 @@ async def test_clear_logic(monkeypatch):
 
     assert result.deleted == 4
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_clear_logic_error_recorded(monkeypatch):
+    """clear_logic records an error if the DB delete fails."""
+
+    class _FailingFetchoneDb(_DbStub):
+        async def fetchone(self, query, params=()):
+            raise RuntimeError("db failure")
+
+    db = _FailingFetchoneDb()
+
+    result = await config_api.clear_logic(_admin="admin", db=db)
+
+    assert any("Logic graphs clear failed" in e for e in result.errors)
 
 
 @pytest.mark.asyncio
@@ -1252,6 +1723,17 @@ async def test_clear_adapters(monkeypatch):
     assert result.bindings_deleted == 7
     assert result.deleted == 3
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_clear_adapters_error_recorded(monkeypatch):
+    """clear_adapters records an error if adapter stop fails."""
+    db = _DbStub(fetchone_result=_row({"n": 0}))
+
+    with patch("obs.adapters.registry.stop_all", AsyncMock(side_effect=RuntimeError("fail"))):
+        result = await config_api.clear_adapters(_admin="admin", db=db)
+
+    assert any("Adapters clear failed" in e for e in result.errors)
 
 
 # ===========================================================================

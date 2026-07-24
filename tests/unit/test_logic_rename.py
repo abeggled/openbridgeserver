@@ -145,6 +145,37 @@ async def test_rename_uses_current_graph_after_cache_mutation():
 
 
 @pytest.mark.asyncio
+async def test_rename_persist_failure_is_logged_and_swallowed():
+    """A DB failure while persisting the renamed flow must not propagate —
+    it is logged and the rename loop continues to the next graph."""
+    dp_id = uuid.uuid4()
+    flow = _flow_with_nodes({"datapoint_id": str(dp_id), "datapoint_name": "Alt"})
+    mgr, db = _make_manager({"g1": ("MyGraph", True, flow)})
+    db.execute_and_commit.side_effect = RuntimeError("db write failed")
+
+    event = DataPointRenamedEvent(dp_id=dp_id, old_name="Alt", new_name="Neu")
+    await mgr._on_datapoint_renamed(event)  # must not raise
+
+    assert flow.nodes[0].data["datapoint_name"] == "Neu"
+    db.execute_and_commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rename_ignores_malformed_json_variables_string():
+    """A 'variables' field holding malformed JSON is left untouched (returned
+    as-is) instead of raising — the node itself still doesn't need persisting."""
+    dp_id = uuid.uuid4()
+    flow = _flow_with_nodes({"variables": "not valid json {"})
+    mgr, db = _make_manager({"g1": ("MyGraph", True, flow)})
+
+    event = DataPointRenamedEvent(dp_id=dp_id, old_name="Alt", new_name="Neu")
+    await mgr._on_datapoint_renamed(event)
+
+    assert flow.nodes[0].data["variables"] == "not valid json {"
+    db.execute_and_commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_rename_handles_node_without_datapoint_id():
     """Nodes that have no datapoint_id (e.g. math nodes) must not be touched."""
     dp_id = uuid.uuid4()

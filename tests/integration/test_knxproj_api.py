@@ -325,6 +325,30 @@ async def test_import_csv_with_adapter_direction_dest(client, auth_headers):
     assert resp.json()["created"] == 1
 
 
+async def test_import_csv_with_adapter_survives_reload_instance_bindings_failure(client, auth_headers, monkeypatch):
+    """The live adapter-instance reload after a successful CSV import is best-effort:
+    the DB write already committed, so a failure reloading the running adapter (e.g.
+    adapter not loaded, transient I/O) must be logged, not fail the request."""
+    import obs.adapters.registry as adapters_registry
+
+    inst = await _make_adapter_instance(client, auth_headers)
+    unique_csv = (_CSV_HEADER + f"Reload-{uuid.uuid4().hex[:4]};9/9/3;Test reload;DPT-1\n").encode("utf-8")
+
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("simulated adapter reload failure")
+
+    monkeypatch.setattr(adapters_registry, "reload_instance_bindings", _raise)
+
+    resp = await client.post(
+        "/api/v1/knxproj/import-csv",
+        files={"file": ("test.csv", unique_csv, "text/csv")},
+        params={"adapter_name": inst["name"], "direction": "SOURCE"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["created"] == 1
+
+
 async def test_import_csv_reimport_updates_existing(client, auth_headers):
     inst = await _make_adapter_instance(client, auth_headers)
     unique_addr = f"7/{uuid.uuid4().int % 8}/1"

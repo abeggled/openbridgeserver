@@ -53,6 +53,25 @@ async def test_connect_sets_wal_bounding_pragmas(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_migration_v5_swallows_duplicate_adapter_instance_id_column(tmp_path):
+    """Migration v5 adds ``adapter_bindings.adapter_instance_id`` and is idempotent:
+    re-running it against an already-migrated schema must swallow the resulting
+    ``ALTER TABLE ... ADD COLUMN`` duplicate-column ``OperationalError`` instead of
+    raising, since a fresh DB already applies v5 once via the normal connect() path.
+    """
+    from obs.db.database import _migration_v5
+
+    db = Database(str(tmp_path / "obs.db"))
+    await db.connect()
+    try:
+        # connect() already ran the full migration chain (including v5) once.
+        # Re-invoking it directly hits the "column already exists" branch.
+        await _migration_v5(db.conn)
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_truncates_wal_file(tmp_path):
     db_path = tmp_path / "obs.db"
     db = Database(str(db_path))

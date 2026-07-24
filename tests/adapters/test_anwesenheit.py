@@ -535,6 +535,67 @@ class TestPreloadWindow:
 
         assert len(adapter._pending) == 0
 
+    @pytest.mark.asyncio
+    async def test_naive_timestamp_gets_utc_tzinfo(self):
+        """A record whose 'ts' has no tzinfo must be treated as UTC (not raise)."""
+        adapter = _make_adapter({"offset_days": 1})
+        adapter._active = True
+        dp_id = uuid.uuid4()
+        adapter._bindings = [_make_binding(dp_id=dp_id)]
+
+        now = _utcnow()
+        naive_hist_ts = (now - timedelta(days=1) + timedelta(minutes=30)).replace(tzinfo=None)
+
+        history = self._mock_history([{"ts": naive_hist_ts.isoformat(), "v": True, "q": "good"}])
+        with patch("obs.adapters.anwesenheit.adapter.get_history_plugin", return_value=history):
+            await adapter._preload_window(now, now + timedelta(hours=1))
+
+        assert len(adapter._pending) == 1
+        fire_at = adapter._pending[0][0]
+        assert fire_at.tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_malformed_record_is_skipped(self):
+        """Records with a missing/unparsable 'ts' must be skipped, not raise."""
+        adapter = _make_adapter()
+        adapter._active = True
+        adapter._bindings = [_make_binding()]
+
+        history = self._mock_history(
+            [
+                {"v": True, "q": "good"},  # missing "ts" -> KeyError
+                {"ts": "not-a-timestamp", "v": True, "q": "good"},  # ValueError
+                {"ts": None, "v": True, "q": "good"},  # TypeError
+            ]
+        )
+        with patch("obs.adapters.anwesenheit.adapter.get_history_plugin", return_value=history):
+            await adapter._preload_window(_utcnow(), _utcnow() + timedelta(hours=1))
+
+        assert len(adapter._pending) == 0
+
+
+# ---------------------------------------------------------------------------
+# Hour window helpers
+# ---------------------------------------------------------------------------
+
+
+class TestHourWindows:
+    def test_current_hour_window(self):
+        start, end = AnwesenheitssimulationAdapter._current_hour_window()
+        assert start.tzinfo is not None
+        assert end.tzinfo is not None
+        assert end > start
+
+    def test_next_hour_window(self):
+        start, end = AnwesenheitssimulationAdapter._next_hour_window()
+        assert start.tzinfo is not None
+        assert end.tzinfo is not None
+        assert end > start
+        now = _utcnow()
+        assert start > now
+        assert start.minute == 0 and start.second == 0
+        assert end.minute == 59 and end.second == 59
+
 
 # ---------------------------------------------------------------------------
 # Firing due events (_fire_due)

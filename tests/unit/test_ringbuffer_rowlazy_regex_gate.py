@@ -95,3 +95,17 @@ async def test_row_lazy_regex_consistent_with_store_gate(pattern: str) -> None:
         row_lazy_rejects = True
 
     assert row_lazy_rejects == store_rejects, f"Divergenz für Muster {pattern!r}: store={store_rejects} row_lazy={row_lazy_rejects}"
+
+
+@pytest.mark.parametrize("non_string_value", [5, None, 3.5])
+async def test_row_lazy_string_operator_rejects_non_string_row_value(non_string_value: Any) -> None:
+    """``_match_string_operator`` must raise ``ValueError`` (not silently skip or crash)
+    when a STRING-typed datapoint's stored value is actually non-string (null/number) and
+    the filter uses a string-only operator like ``contains``. This ``ValueError`` is the
+    exact one the API layer converts into a 422 response, so it must stay reachable.
+    """
+    entries = [_entry(non_string_value)]
+    value_filters = [{"operator": "contains", "value": "x"}]
+    datapoint_types = {"dp-1": "STRING"}
+    with pytest.raises(ValueError, match="row value must be string"):
+        await _apply_value_filters(entries=entries, value_filters=value_filters, datapoint_types=datapoint_types)

@@ -60,6 +60,9 @@ class TestCoerceIoBrokerValue:
     def test_json_object(self):
         assert _coerce_iobroker_value('{"val": 12}') == {"val": 12}
 
+    def test_non_numeric_non_json_string_returned_as_is(self):
+        assert _coerce_iobroker_value("Hello World") == "Hello World"
+
 
 class TestCallSocket:
     @pytest.mark.asyncio
@@ -736,6 +739,42 @@ class TestBrowseStates:
         assert [item["id"] for item in result] == ["system.adapter.hue.0.alive"]
         assert adapter._socket.call.await_args_list[0].args[1][2]["startkey"] == "alive."
         assert adapter._socket.call.await_args_list[1].args[1][2]["startkey"] == ""
+
+    @pytest.mark.asyncio
+    async def test_get_state_failure_during_enrichment_is_handled(self, adapter):
+        """A getState failure while enriching browse results must be swallowed, not raised."""
+        adapter._socket.call = AsyncMock(
+            side_effect=[
+                [
+                    None,
+                    {
+                        "rows": [
+                            {
+                                "id": "hue.0.SZ_Hue_white_lamp_1.on",
+                                "value": {
+                                    "common": {
+                                        "name": "Lamp on",
+                                        "type": "boolean",
+                                        "role": "switch.light",
+                                        "write": True,
+                                    }
+                                },
+                            },
+                        ]
+                    },
+                ],
+                [
+                    None,
+                    {"rows": []},
+                ],
+                ["not allowed", None],  # getState fails for the matched row
+            ]
+        )
+
+        result = await adapter.browse_states("hue", 10)
+
+        assert [item["id"] for item in result] == ["hue.0.SZ_Hue_white_lamp_1.on"]
+        assert result[0]["value"] is None
 
 
 class TestBuildSocket:
