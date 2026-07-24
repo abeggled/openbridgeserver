@@ -16,7 +16,6 @@ from fastapi import HTTPException
 
 from obs.security.url_targets import UrlTargetDecision
 
-
 # ---------------------------------------------------------------------------
 # Stubs
 # ---------------------------------------------------------------------------
@@ -287,9 +286,8 @@ class TestGetBackground:
 
     @pytest.mark.asyncio
     async def test_not_found_raises_404(self, tmp_path):
-        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc:
-                await get_background("nonexistent")
+        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc:
+            await get_background("nonexistent")
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -329,9 +327,8 @@ class TestDeleteBackgrounds:
         from obs.api.v1.visu_backgrounds import DeleteRequest
 
         body = DeleteRequest(names=["../evil"])
-        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc:
-                await delete_backgrounds(body=body, _user="admin")
+        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc:
+            await delete_backgrounds(body=body, _user="admin")
         assert exc.value.status_code == 400
 
 
@@ -355,9 +352,8 @@ class TestImportBackgrounds:
         upload = AsyncMock()
         upload.filename = "test.png"
         upload.read = AsyncMock(return_value=b"not an image")
-        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc:
-                await import_backgrounds(files=[upload], _user="admin")
+        with patch("obs.api.v1.visu_backgrounds._backgrounds_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc:
+            await import_backgrounds(files=[upload], _user="admin")
         assert exc.value.status_code == 422
 
     @pytest.mark.asyncio
@@ -401,23 +397,27 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_loopback_blocked(self):
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Blocked URL target"),
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Blocked URL target"),
+            ),
+            pytest.raises(HTTPException) as exc,
         ):
-            with pytest.raises(HTTPException) as exc:
-                await _check_ssrf("http://localhost/stream")
+            await _check_ssrf("http://localhost/stream")
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_metadata_blocked(self):
         # 169.254.169.254 is the cloud metadata address
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Blocked URL target"),
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Blocked URL target"),
+            ),
+            pytest.raises(HTTPException) as exc,
         ):
-            with pytest.raises(HTTPException) as exc:
-                await _check_ssrf("http://metadata.internal/")
+            await _check_ssrf("http://metadata.internal/")
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -432,22 +432,26 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_dns_failure_raises_502(self):
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Hostname could not be resolved: no address"),
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Hostname could not be resolved: no address"),
+            ),
+            pytest.raises(HTTPException) as exc,
         ):
-            with pytest.raises(HTTPException) as exc:
-                await _check_ssrf("http://nonexistent.local/stream")
+            await _check_ssrf("http://nonexistent.local/stream")
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_ipv6_loopback_blocked(self):
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Blocked URL target"),
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Blocked URL target"),
+            ),
+            pytest.raises(HTTPException) as exc,
         ):
-            with pytest.raises(HTTPException) as exc:
-                await _check_ssrf("http://[::1]/stream")
+            await _check_ssrf("http://[::1]/stream")
         assert exc.value.status_code == 400
 
 
@@ -1545,9 +1549,8 @@ class TestImportGaCsvFile:
         upload.filename = "data.csv"
         upload.read = AsyncMock(return_value=b"garbage")
         db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=ValueError("bad csv")):
-            with pytest.raises(HTTPException) as exc:
-                await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=ValueError("bad csv")), pytest.raises(HTTPException) as exc:
+            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -1556,9 +1559,8 @@ class TestImportGaCsvFile:
         upload.filename = "data.csv"
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[]):
-            with pytest.raises(HTTPException) as exc:
-                await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+        with patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[]), pytest.raises(HTTPException) as exc:
+            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
         assert exc.value.status_code == 422
 
     @pytest.mark.asyncio
@@ -1567,9 +1569,8 @@ class TestImportGaCsvFile:
         upload.filename = "data.csv"
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=RuntimeError("parser broken")):
-            with pytest.raises(HTTPException) as exc:
-                await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
+        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=RuntimeError("parser broken")), pytest.raises(HTTPException) as exc:
+            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -1679,8 +1680,10 @@ from obs.api.v1.config import (
     ExportedKnxGroupAddress,
     ExportedLogicGraph,
     ExportedVisuNode,
-    ImportResult as ConfigImportResult,
     ResetResult,
+)
+from obs.api.v1.config import (
+    ImportResult as ConfigImportResult,
 )
 
 

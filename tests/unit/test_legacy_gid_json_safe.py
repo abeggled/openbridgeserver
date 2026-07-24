@@ -94,7 +94,7 @@ def test_read_path_buckets_disjoint_no_collision():
     Da rowids strikt < STRIDE bleiben, sind die Blöcke disjunkt.
     """
     gids: set[int] = set()
-    for segment_id in range(0, 6):
+    for segment_id in range(6):
         for rowid in range(1, 200):
             gid = _read_path_gid(rowid, segment_id)
             assert gid not in gids, f"Kollision bei seg={segment_id} rowid={rowid}"

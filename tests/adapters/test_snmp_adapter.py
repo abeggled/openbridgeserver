@@ -19,7 +19,6 @@ from obs.adapters.snmp.adapter import (
 )
 from tests.adapters.conftest import make_binding
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -215,6 +214,47 @@ class TestCoerceValue:
         v = _make_snmp_value("750", "Gauge32", int_val=750)
         result = _coerce_value(v, "auto")
         assert result == 750
+
+    def test_int_conversion_error_falls_back_to_pretty(self):
+        class _RaisingIntValue:
+            def prettyPrint(self):
+                return "unrepresentable-int"
+
+            def __int__(self):
+                raise ValueError("cannot parse as int")
+
+        result = _coerce_value(_RaisingIntValue(), "int")
+        assert result == "unrepresentable-int"
+
+    def test_counter_conversion_error_falls_back_to_pretty(self):
+        class _RaisingCounterValue:
+            def prettyPrint(self):
+                return "unrepresentable-counter"
+
+            def __int__(self):
+                raise TypeError("cannot parse as counter")
+
+        result = _coerce_value(_RaisingCounterValue(), "counter")
+        assert result == "unrepresentable-counter"
+
+    def test_timeticks_conversion_error_falls_back_to_pretty(self):
+        class _RaisingTimeticksValue:
+            def prettyPrint(self):
+                return "unrepresentable-timeticks"
+
+            def __int__(self):
+                raise ValueError("cannot parse as timeticks")
+
+        result = _coerce_value(_RaisingTimeticksValue(), "timeticks")
+        assert result == "unrepresentable-timeticks"
+
+    def test_hex_conversion_error_falls_back_to_pretty(self):
+        class _RaisingHexValue:
+            def prettyPrint(self):
+                return "unrepresentable-hex"
+
+        result = _coerce_value(_RaisingHexValue(), "hex")
+        assert result == "unrepresentable-hex"
 
 
 # ---------------------------------------------------------------------------

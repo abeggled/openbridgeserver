@@ -35,7 +35,7 @@ async def _cleanup_dps(client, auth_headers):
         if resp.status_code == 200:
             for item in resp.json().get("items", []):
                 await client.delete(f"/api/v1/datapoints/{item['id']}", headers=auth_headers)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110 -- best-effort test cleanup, must never fail the test
         pass
 
 

@@ -94,14 +94,14 @@ Zielgruppe: Bestehende Timberwolf Server (TWS) Anwender und Neueinsteiger in der
 
 ```python
 # Kern-Datentypen — beim Start in DataTypeRegistry registriert
-UNKNOWN    # Fallback für unbekannte Typen, speichert Raw-Bytes
-BOOLEAN    # bool
-INTEGER    # int
-FLOAT      # float
-STRING     # str
-DATE       # datetime.date, ISO 8601
-TIME       # datetime.time, ISO 8601
-DATETIME   # datetime.datetime, ISO 8601 mit Timezone
+UNKNOWN  # Fallback für unbekannte Typen, speichert Raw-Bytes
+BOOLEAN  # bool
+INTEGER  # int
+FLOAT  # float
+STRING  # str
+DATE  # datetime.date, ISO 8601
+TIME  # datetime.time, ISO 8601
+DATETIME  # datetime.datetime, ISO 8601 mit Timezone
 ```
 
 Neue Datentypen werden über `DataTypeRegistry.register()` hinzugefügt — kein Core-Code nötig.

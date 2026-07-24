@@ -65,7 +65,7 @@ async def _insert_binding(dp_id: str, ga: str) -> None:
             dp_id,
             "knx",
             "SOURCE",
-            '{"group_address": "%s"}' % ga,
+            f'{{"group_address": "{ga}"}}',
             1,
             now,
             now,
@@ -195,7 +195,7 @@ async def test_knx_traceability_context_endpoints(client, auth_headers):
     dp = await _create_dp(client, auth_headers, f"KNX-CTX-{uuid.uuid4()}")
     await _insert_binding_config(
         dp["id"],
-        '{"group_address": "%s", "state_group_address": "%s"}' % (ga, state_ga),
+        f'{{"group_address": "{ga}", "state_group_address": "{state_ga}"}}',
         direction="BOTH",
     )
 
@@ -241,7 +241,7 @@ async def test_device_datapoints_found_when_binding_ga_has_whitespace(client, au
 
     dp = await _create_dp(client, auth_headers, f"KNX-WS-{uuid.uuid4()}")
     # Store GA with surrounding whitespace in the binding config
-    await _insert_binding_config(dp["id"], '{"group_address": " %s "}' % ga)
+    await _insert_binding_config(dp["id"], f'{{"group_address": " {ga} "}}')
 
     try:
         device_ctx_resp = await client.get(f"/api/v1/knxproj/devices/{pa}/datapoints", headers=auth_headers)

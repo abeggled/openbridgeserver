@@ -161,8 +161,8 @@ def _row_to_segment(row: aiosqlite.Row) -> SegmentRecord:
         schema_version=row["schema_version"],
         integrity_status=row["integrity_status"],
         recovery_status=row["recovery_status"],
-        quarantine_reason=row["quarantine_reason"] if "quarantine_reason" in row.keys() else None,
-        legacy_source_id=row["legacy_source_id"] if "legacy_source_id" in row.keys() else None,
+        quarantine_reason=row["quarantine_reason"] if "quarantine_reason" in row.keys() else None,  # noqa: SIM118 -- Row.__contains__ checks values, not keys
+        legacy_source_id=row["legacy_source_id"] if "legacy_source_id" in row.keys() else None,  # noqa: SIM118 -- Row.__contains__ checks values, not keys
     )
 
 

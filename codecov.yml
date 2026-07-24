@@ -1,0 +1,22 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+
+flag_management:
+  default_rules:
+    carryforward: false
+  individual_flags:
+    - name: unittests
+      paths:
+        - "obs/"
+      carryforward: false
+    - name: gui
+      paths:
+        - "gui/src/"
+      carryforward: false

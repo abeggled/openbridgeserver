@@ -33,7 +33,7 @@ import datetime
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 # ---------------------------------------------------------------------------
 # DPTDefinition
@@ -57,7 +57,7 @@ class DPTDefinition:
 
 
 class DPTRegistry:
-    _dpts: dict[str, DPTDefinition] = {}
+    _dpts: ClassVar[dict[str, DPTDefinition]] = {}
 
     @classmethod
     def register(cls, d: DPTDefinition) -> None:
@@ -257,9 +257,9 @@ def _dpt10_encode(v: Any) -> bytes:
             total = int(v)
             t = datetime.time(total // 3600 % 24, total // 60 % 60, total % 60)
         else:
-            t = datetime.datetime.now().time()
+            t = datetime.datetime.now().time()  # noqa: DTZ005 -- KNX DPT10 encodes device-local wall-clock time, not UTC
         return bytes([t.hour & 0x1F, t.minute & 0x3F, t.second & 0x3F])
-    except Exception:
+    except (ValueError, TypeError, OSError, OverflowError):
         return bytes(3)
 
 
@@ -286,12 +286,12 @@ def _dpt11_encode(v: Any) -> bytes:
         elif isinstance(v, str):
             d = datetime.date.fromisoformat(v)
         elif isinstance(v, (int, float)):
-            d = datetime.date.fromtimestamp(float(v))
+            d = datetime.date.fromtimestamp(float(v))  # noqa: DTZ012 -- KNX DPT11 encodes device-local date, not UTC
         else:
-            d = datetime.date.today()
+            d = datetime.date.today()  # noqa: DTZ011 -- KNX DPT11 encodes device-local date, not UTC
         yr = d.year % 100  # 2025 → 25, 1990 → 90
         return bytes([d.day & 0x1F, d.month & 0x0F, yr & 0x7F])
-    except Exception:
+    except (ValueError, TypeError, OSError, OverflowError):
         return bytes(3)
 
 
@@ -381,8 +381,8 @@ def _dpt19_decode(b: bytes) -> str:
         hour = b[3] & 0x1F
         minute = b[4] & 0x3F
         second = b[5] & 0x3F
-        return datetime.datetime(year, month, day, hour, minute, second).isoformat()
-    except Exception:
+        return datetime.datetime(year, month, day, hour, minute, second).isoformat()  # noqa: DTZ001 -- KNX DPT19 is device-local wall-clock, not UTC
+    except (ValueError, IndexError):
         return ""
 
 
@@ -393,9 +393,9 @@ def _dpt19_encode(v: Any) -> bytes:
         if isinstance(v, str):
             dt = datetime.datetime.fromisoformat(v)
         elif isinstance(v, (int, float)):
-            dt = datetime.datetime.fromtimestamp(float(v))
+            dt = datetime.datetime.fromtimestamp(float(v))  # noqa: DTZ006 -- KNX DPT19 is device-local wall-clock, not UTC
         else:
-            dt = datetime.datetime.now()
+            dt = datetime.datetime.now()  # noqa: DTZ005 -- KNX DPT19 is device-local wall-clock, not UTC
         dow = dt.isoweekday()  # 1=Mo … 7=So
         return bytes(
             [
@@ -409,7 +409,7 @@ def _dpt19_encode(v: Any) -> bytes:
                 0x00,
             ],
         )
-    except Exception:
+    except (ValueError, TypeError, OSError, OverflowError):
         return bytes(8)
 
 

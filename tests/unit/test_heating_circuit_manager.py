@@ -392,6 +392,96 @@ class TestHeatingCircuitHistoryPrefill:
         # "warm" → 22.5 via value_map; slot must be filled (not skipped due to float() error)
         assert out["hc"]["t1"] == pytest.approx(22.5)
 
+    def test_value_formula_exception_is_logged_and_raw_value_used(self):
+        """A broken value_formula on the datapoint_read node must not crash the
+        history pre-fill — the error is logged and the raw (untransformed)
+        history value is used for the slot instead."""
+        dp_id = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    {
+                        "id": "dp",
+                        "type": "datapoint_read",
+                        "position": {"x": 0, "y": 0},
+                        "data": {"datapoint_id": str(dp_id), "value_formula": "x +"},  # invalid syntax
+                    },
+                    {
+                        "id": "hc",
+                        "type": "heating_circuit",
+                        "position": {"x": 200, "y": 0},
+                        "data": {"threshold_temp": 14.0, "hysteresis": 2.0},
+                    },
+                ],
+                "edges": [
+                    {
+                        "id": "e1",
+                        "source": "dp",
+                        "target": "hc",
+                        "sourceHandle": "value",
+                        "targetHandle": "value",
+                    }
+                ],
+            }
+        )
+        manager = _make_manager()
+        plugin = _mock_plugin(5.0)
+
+        with (
+            _fixed_now(real_dt.datetime(2025, 1, 1, 10, 0, 0, tzinfo=_ZURICH)),
+            patch("obs.history.factory.get_history_plugin", return_value=plugin),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
+            out = _run(manager, flow)  # must not raise
+
+        # formula failed → raw history value (5.0) used unmodified
+        assert out["hc"]["t1"] == pytest.approx(5.0)
+
+    def test_value_map_exception_is_logged_and_raw_value_used(self):
+        """If apply_value_map raises, the error is logged and the raw
+        (post-formula) history value is used for the slot instead."""
+        dp_id = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    {
+                        "id": "dp",
+                        "type": "datapoint_read",
+                        "position": {"x": 0, "y": 0},
+                        "data": {"datapoint_id": str(dp_id), "value_map": {"warm": 22.5}},
+                    },
+                    {
+                        "id": "hc",
+                        "type": "heating_circuit",
+                        "position": {"x": 200, "y": 0},
+                        "data": {"threshold_temp": 14.0, "hysteresis": 2.0},
+                    },
+                ],
+                "edges": [
+                    {
+                        "id": "e1",
+                        "source": "dp",
+                        "target": "hc",
+                        "sourceHandle": "value",
+                        "targetHandle": "value",
+                    }
+                ],
+            }
+        )
+        manager = _make_manager()
+        plugin = _mock_plugin(5.0)
+
+        with (
+            _fixed_now(real_dt.datetime(2025, 1, 1, 10, 0, 0, tzinfo=_ZURICH)),
+            patch("obs.history.factory.get_history_plugin", return_value=plugin),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.core.transformation.apply_value_map", side_effect=RuntimeError("value_map failed")),
+        ):
+            out = _run(manager, flow)  # must not raise
+
+        # value_map failed → raw history value (5.0) used unmapped
+        assert out["hc"]["t1"] == pytest.approx(5.0)
+
     def test_app_timezone_date_injected_for_executor(self):
         """Manager injects _date in app timezone so executor and manager agree on today.
 

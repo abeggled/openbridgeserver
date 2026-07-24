@@ -465,6 +465,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class GatewayClient:
     """
     Baut eine ausgehende WS-Verbindung zum Gateway auf.
@@ -472,10 +473,10 @@ class GatewayClient:
     """
 
     def __init__(self, config: dict):
-        self.server_url = config['server_url']
-        self.instance_id = config['instance_id']
-        self.secret = config['secret'].encode()
-        self.reconnect_interval = config.get('reconnect_interval', 30)
+        self.server_url = config["server_url"]
+        self.instance_id = config["instance_id"]
+        self.secret = config["secret"].encode()
+        self.reconnect_interval = config.get("reconnect_interval", 30)
         self.local_obs_url = "http://127.0.0.1:8000"
         self._running = False
 
@@ -483,11 +484,7 @@ class GatewayClient:
         """HMAC-SHA256 Token: instance_id:timestamp:signature"""
         timestamp = str(int(time.time()))
         payload = f"{self.instance_id}:{timestamp}"
-        signature = hmac_lib.new(
-            self.secret,
-            payload.encode(),
-            hashlib.sha256
-        ).hexdigest()
+        signature = hmac_lib.new(self.secret, payload.encode(), hashlib.sha256).hexdigest()
         return f"{payload}:{signature}"
 
     async def connect_and_serve(self):
@@ -498,10 +495,7 @@ class GatewayClient:
                 await self._run_session()
             except websockets.exceptions.InvalidStatus as e:
                 if e.response.status_code in (401, 403):
-                    logger.error(
-                        "Gateway: Authentifizierung fehlgeschlagen "
-                        "(instance_id oder secret falsch). Kein Retry."
-                    )
+                    logger.error("Gateway: Authentifizierung fehlgeschlagen (instance_id oder secret falsch). Kein Retry.")
                     self._running = False
                     return
                 logger.warning(f"Gateway abgelehnt ({e}), Retry in {self.reconnect_interval}s")
@@ -515,10 +509,7 @@ class GatewayClient:
         headers = {"Authorization": f"Bearer {self._make_token()}"}
 
         async with websockets.connect(url, extra_headers=headers) as ws:
-            client_url = (
-                f"{self.server_url.replace('wss://', 'https://')}"
-                f"/client/{self.instance_id}/"
-            )
+            client_url = f"{self.server_url.replace('wss://', 'https://')}/client/{self.instance_id}/"
             logger.info(f"Gateway verbunden | App-URL: {client_url}")
 
             async for message in ws:
@@ -531,23 +522,23 @@ class GatewayClient:
         async with httpx.AsyncClient() as client:
             try:
                 r = await client.request(
-                    method=req['method'],
+                    method=req["method"],
                     url=f"{self.local_obs_url}{req['path']}",
-                    params=req.get('query'),
-                    headers=req.get('headers', {}),
-                    content=req.get('body', b''),
+                    params=req.get("query"),
+                    headers=req.get("headers", {}),
+                    content=req.get("body", b""),
                     timeout=25.0,
                 )
                 return {
-                    "id": req['id'],
+                    "id": req["id"],
                     "status_code": r.status_code,
                     "headers": dict(r.headers),
-                    "body": r.content.decode('utf-8', errors='replace'),
+                    "body": r.content.decode("utf-8", errors="replace"),
                 }
             except Exception as e:
                 logger.error(f"Lokaler OBS-Request fehlgeschlagen: {e}")
                 return {
-                    "id": req['id'],
+                    "id": req["id"],
                     "status_code": 502,
                     "headers": {},
                     "body": f"Gateway-Client-Fehler: {e}",
@@ -559,6 +550,7 @@ class GatewayClient:
 ```python
 # backend/main.py (Erweiterung)
 from gateway.client.gateway_client import GatewayClient
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

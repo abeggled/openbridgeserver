@@ -130,6 +130,17 @@ class TestJsonExtractor:
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["value"] is True
 
+    def test_preview_falls_back_to_str_when_not_json_serializable(self):
+        """A non-serializable data object (e.g. containing a circular
+        reference) must not blow up the preview snapshot — it falls back to
+        str(data_obj) instead of raising."""
+        circular: list = []
+        circular.append(circular)
+        nodes = [_jnode("j1", "")]
+        overrides = {"j1": {"data": circular}}
+        out = _run(nodes, input_overrides=overrides)
+        assert out["j1"]["_preview"] == str(circular)
+
 
 class TestJsonExtractorMultiPath:
     """Tests for multi-output mode (json_paths config key)."""

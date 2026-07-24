@@ -86,7 +86,7 @@ class HierarchyNode(BaseModel):
     icon: str | None
     created_at: str
     updated_at: str
-    children: list["HierarchyNode"] = []
+    children: list[HierarchyNode] = []
 
 
 class HierarchyNodeCreate(BaseModel):

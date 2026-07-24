@@ -9,7 +9,7 @@ import asyncio
 import concurrent.futures
 import sys
 import time
-import unittest.mock as mock
+from unittest import mock
 
 import pyownet.protocol as owprotocol
 import pytest

@@ -10,7 +10,7 @@ Imports used in production code:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -18,7 +18,6 @@ astral = pytest.importorskip("astral", reason="astral not installed")
 
 from astral import LocationInfo, SunDirection
 from astral.sun import sun, time_at_elevation
-
 
 _BERLIN = LocationInfo(
     name="Berlin",
@@ -67,7 +66,7 @@ class TestSunFunction:
         assert result["sunrise"] < result["sunset"]
 
     def test_accepts_tzinfo_kwarg(self):
-        result = sun(_BERLIN.observer, date=date(2024, 6, 21), tzinfo=timezone.utc)
+        result = sun(_BERLIN.observer, date=date(2024, 6, 21), tzinfo=UTC)
         assert "sunrise" in result
 
 

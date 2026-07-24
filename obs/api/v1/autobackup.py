@@ -19,7 +19,7 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -91,7 +91,7 @@ async def _application_timezone(db: Database) -> ZoneInfo:
     row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'timezone'")
     try:
         return ZoneInfo(row["value"] if row else "Europe/Zurich")
-    except Exception:
+    except (ZoneInfoNotFoundError, TypeError):
         return ZoneInfo("Europe/Zurich")
 
 
@@ -110,7 +110,7 @@ def _list_backups() -> list[AutobackupEntry]:
         if not _BACKUP_STEM_RE.fullmatch(stem):
             continue
         try:
-            dt = datetime.strptime(stem[:13], "%Y%m%d-%H%M")
+            dt = datetime.strptime(stem[:13], "%Y%m%d-%H%M")  # noqa: DTZ007 -- filename encodes app-local wall-clock; no DB access here to resolve the configured tz
             created_at = dt.isoformat()
         except ValueError:
             created_at = stem
@@ -332,7 +332,6 @@ class AutobackupScheduler:
 
         while True:
             try:
-                global _config_changed_event
                 cfg = await _load_config(self._db)
 
                 if not cfg.enabled:
@@ -343,7 +342,7 @@ class AutobackupScheduler:
                             timeout=300,
                         )
                         _config_changed_event.clear()
-                    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                    except (TimeoutError, asyncio.CancelledError) as exc:
                         if isinstance(exc, asyncio.CancelledError):
                             raise
                     continue
@@ -364,7 +363,7 @@ class AutobackupScheduler:
                             timeout=min(wait_s, 270),
                         )
                         _config_changed_event.clear()
-                    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                    except (TimeoutError, asyncio.CancelledError) as exc:
                         if isinstance(exc, asyncio.CancelledError):
                             raise
                     continue
@@ -377,8 +376,8 @@ class AutobackupScheduler:
                         last_backup_day = today
                         if deleted:
                             logger.info("Autobackup: %d alte Sicherung(en) gelöscht.", deleted)
-                    except Exception as exc:
-                        logger.error("Autobackup fehlgeschlagen: %s", exc)
+                    except Exception:
+                        logger.exception("Autobackup fehlgeschlagen")
 
                 # Jede Minute prüfen (oder auf Konfigurationsänderung warten)
                 try:
@@ -387,14 +386,14 @@ class AutobackupScheduler:
                         timeout=60,
                     )
                     _config_changed_event.clear()
-                except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                except (TimeoutError, asyncio.CancelledError) as exc:
                     if isinstance(exc, asyncio.CancelledError):
                         raise
 
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                logger.error("Autobackup-Scheduler Fehler: %s", exc)
+            except Exception:
+                logger.exception("Autobackup-Scheduler Fehler")
                 await asyncio.sleep(60)
 
 

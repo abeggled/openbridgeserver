@@ -31,6 +31,8 @@ from obs.config import get_settings
 from obs.db.database import Database, get_db
 from obs.log_buffer import get_log_buffer, set_log_buffer_level
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["support"])
 
 _PROCESS_STARTED_AT = datetime.now(UTC)
@@ -477,6 +479,7 @@ async def _build_history_info(db: Database) -> dict[str, Any]:
     try:
         table_stats = await _history_table_stats(db)
     except Exception as exc:
+        logger.exception("History table stats unavailable")
         table_stats = {"available": False, "reason": _support_unavailable_reason(exc)}
     runtime_plugin = None
     try:
@@ -528,6 +531,7 @@ async def _build_monitor_info(db: Database) -> dict[str, Any]:
         recent_entries = await ringbuffer.query(limit=200)
         storage_files = ringbuffer.disk_file_sizes()
     except Exception as exc:
+        logger.exception("Monitor/ring-buffer info unavailable")
         return {"available": False, "reason": _support_unavailable_reason(exc)}
 
     source_counts: dict[str, int] = {}
@@ -573,6 +577,7 @@ async def _ringbuffer_tps(window_seconds: int = 60) -> tuple[bool, dict[str, flo
         since = _iso(datetime.now(UTC) - timedelta(seconds=window_seconds))
         entries = await get_ringbuffer().query(from_ts=since or "", limit=10000)
     except Exception:
+        logger.exception("Ring-buffer TPS query unavailable")
         return False, {}, {}
 
     instance_counts: dict[str, int] = {}

@@ -13,10 +13,10 @@ from obs.adapters.message.providers.base import MessageSendResult
 class TelegramConfig(BaseModel):
     enabled: bool = False
     bot_token: str = Field(default="", json_schema_extra={"format": "password"})
-    targets: dict[str, "TelegramTarget"] = Field(default_factory=dict)
+    targets: dict[str, TelegramTarget] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_enabled_provider(self) -> "TelegramConfig":
+    def _validate_enabled_provider(self) -> TelegramConfig:
         if self.enabled and not self.bot_token.strip():
             raise ValueError("Telegram bot_token is required when provider is enabled")
         return self
@@ -27,7 +27,7 @@ class TelegramTarget(BaseModel):
     disable_notification: bool = False
 
     @model_validator(mode="after")
-    def _validate_target(self) -> "TelegramTarget":
+    def _validate_target(self) -> TelegramTarget:
         if not self.chat_id.strip():
             raise ValueError("Telegram chat_id is required")
         return self
@@ -70,7 +70,7 @@ class TelegramProvider:
 def _telegram_response_ok(response: httpx.Response) -> tuple[bool, str]:
     try:
         body = response.json()
-    except Exception:
+    except ValueError:
         return True, ""
 
     if not isinstance(body, dict) or "ok" not in body:

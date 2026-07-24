@@ -21,7 +21,6 @@ import json
 import pytest
 
 from obs.db.database import Database
-from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.persisted_config import (
     DEFAULT_MAX_FILE_SIZE_BYTES,
     DEFAULT_SEGMENT_MAX_AGE_SECONDS,
@@ -30,6 +29,7 @@ from obs.ringbuffer.persisted_config import (
     load_persisted_ringbuffer_config,
     persist_ringbuffer_config,
 )
+from obs.ringbuffer.ringbuffer import RingBuffer
 
 
 def test_default_max_file_size_is_hundred_mebibytes():

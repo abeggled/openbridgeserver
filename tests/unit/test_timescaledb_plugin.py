@@ -13,7 +13,6 @@ import pytest
 
 from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin, _pg_bucket_expr
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -106,7 +105,7 @@ class TestPgBucketExpr:
 
 class TestConnect:
     async def test_connect_creates_pool_and_schema(self):
-        pool, conn = _make_pool_mock()
+        pool, _conn = _make_pool_mock()
         asyncpg = _make_asyncpg_mock(pool)
         p = _plugin()
         with mock.patch.dict(__import__("sys").modules, {"asyncpg": asyncpg}):
@@ -120,7 +119,7 @@ class TestConnect:
         assert p._pool is pool
 
     async def test_connect_detects_timescaledb(self):
-        pool, conn = _make_pool_mock()
+        pool, _conn = _make_pool_mock()
         asyncpg = _make_asyncpg_mock(pool)
         p = _plugin()
         with mock.patch.dict(__import__("sys").modules, {"asyncpg": asyncpg}):
@@ -130,7 +129,7 @@ class TestConnect:
     async def test_connect_without_timescaledb_extension(self):
         """When the hypertable call raises, has_timescaledb=False."""
         calls = [None, Exception("extension not found"), None]
-        pool, conn = _make_pool_mock(execute_side_effect=calls)
+        pool, _conn = _make_pool_mock(execute_side_effect=calls)
         asyncpg = _make_asyncpg_mock(pool)
         p = _plugin()
         with mock.patch.dict(__import__("sys").modules, {"asyncpg": asyncpg}):
@@ -140,9 +139,8 @@ class TestConnect:
     async def test_connect_import_error(self):
         import sys
 
-        with mock.patch.dict(sys.modules, {"asyncpg": None}):
-            with pytest.raises(RuntimeError, match="asyncpg"):
-                await _plugin().connect()
+        with mock.patch.dict(sys.modules, {"asyncpg": None}), pytest.raises(RuntimeError, match="asyncpg"):
+            await _plugin().connect()
 
     async def test_disconnect_closes_pool(self):
         pool, _ = _make_pool_mock()
@@ -227,7 +225,7 @@ class TestTimescaleQuery:
     async def test_query_returns_formatted_rows(self):
         # raw stores JSON; "42.5" (no quotes) → json.loads → float 42.5
         row = _make_row(_ts(), "42.5", "°C", "good")
-        pool, conn = _make_pool_mock(rows=[row])
+        pool, _conn = _make_pool_mock(rows=[row])
         p = _plugin()
         p._pool = pool
         result = await p.query(uuid.uuid4(), _ts(-1), _ts(1))
@@ -238,7 +236,7 @@ class TestTimescaleQuery:
 
     async def test_query_invalid_json_raw_returns_string(self):
         row = _make_row(_ts(), "not-json", None, "")
-        pool, conn = _make_pool_mock(rows=[row])
+        pool, _conn = _make_pool_mock(rows=[row])
         p = _plugin()
         p._pool = pool
         result = await p.query(uuid.uuid4(), _ts(-1), _ts(1))
@@ -246,14 +244,14 @@ class TestTimescaleQuery:
 
     async def test_query_none_raw_returns_none(self):
         row = _make_row(_ts(), None, None, "")
-        pool, conn = _make_pool_mock(rows=[row])
+        pool, _conn = _make_pool_mock(rows=[row])
         p = _plugin()
         p._pool = pool
         result = await p.query(uuid.uuid4(), _ts(-1), _ts(1))
         assert result[0]["v"] is None
 
     async def test_query_empty_returns_empty_list(self):
-        pool, conn = _make_pool_mock(rows=[])
+        pool, _conn = _make_pool_mock(rows=[])
         p = _plugin()
         p._pool = pool
         result = await p.query(uuid.uuid4(), _ts(-1), _ts(1))
@@ -294,7 +292,7 @@ class TestTimescaleAggregate:
 
     async def test_aggregate_unknown_interval_falls_back(self):
         p = _plugin()
-        result, conn = await self._run(p, fn="avg", interval="bad_interval")
+        _result, conn = await self._run(p, fn="avg", interval="bad_interval")
         sql = conn.fetch.call_args.args[0]
         # Should have fallen back to "1h" → bucket_str = "1 hour"
         assert "1 hour" in sql
@@ -334,7 +332,7 @@ class TestTimescaleAggregate:
     async def test_aggregate_bucket_isoformat(self):
         """Bucket with isoformat() method is serialised as ISO string."""
         row = _make_agg_row(_ts(), 3.0)
-        pool, conn = _make_pool_mock(rows=[row])
+        pool, _conn = _make_pool_mock(rows=[row])
         p = _plugin()
         p._pool = pool
         p._has_timescaledb = True
@@ -345,7 +343,7 @@ class TestTimescaleAggregate:
         """Bucket without isoformat (plain str) falls back to str()."""
         row = mock.MagicMock()
         row.__getitem__ = lambda self, k: {"bucket": "2024-06-01", "v": 1.0, "n": 2}[k]
-        pool, conn = _make_pool_mock(rows=[row])
+        pool, _conn = _make_pool_mock(rows=[row])
         p = _plugin()
         p._pool = pool
         p._has_timescaledb = True
@@ -384,6 +382,5 @@ class TestTimescalePing:
     async def test_ping_import_error_raises(self):
         import sys
 
-        with mock.patch.dict(sys.modules, {"asyncpg": None}):
-            with pytest.raises(RuntimeError, match="asyncpg"):
-                await _plugin().ping()
+        with mock.patch.dict(sys.modules, {"asyncpg": None}), pytest.raises(RuntimeError, match="asyncpg"):
+            await _plugin().ping()

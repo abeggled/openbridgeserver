@@ -1,7 +1,8 @@
 {
   "datetimeNames": {
     "weekdays": "Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday",
-    "weekdaysShort": "Mon|Tue|Wed|Thu|Fri|Sat|Sun", "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
+    "weekdaysShort": "Mon|Tue|Wed|Thu|Fri|Sat|Sun",
+    "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
     "months": "January|February|March|April|May|June|July|August|September|October|November|December",
     "monthsShort": "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
   },
@@ -807,6 +808,27 @@
         },
         "priv_key": {
           "title": "Privacy key (v3)"
+        },
+        "host": {
+          "title": "Host (IP/DNS)"
+        },
+        "port": {
+          "title": "UDP port"
+        },
+        "oid": {
+          "title": "OID"
+        },
+        "data_type": {
+          "title": "Data type"
+        },
+        "poll_interval": {
+          "title": "Poll interval (s)"
+        },
+        "timeout": {
+          "title": "Timeout (s)"
+        },
+        "retries": {
+          "title": "Retries"
         }
       },
       "ZEITSCHALTUHR": {
@@ -889,6 +911,66 @@
         "custom_holidays": {
           "title": "Custom holidays",
           "description": "User-defined holidays as a list of expressions. Formats: 'MM-DD[:Name]' (fixed date), 'easter+N[:Name]' / 'easter-N[:Name]' (relative to Easter Sunday), 'advent+N[:Name]' / 'advent-N[:Name]' (relative to the 1st Advent), 'last_WD_MON[:Name]' (last weekday of the month), 'N_WD_MON[:Name]' (n-th weekday). Weekday codes: MO TU WE TH FR SA SU. Month codes: JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC. Separate multiple entries with a comma or newline."
+        },
+        "timer_type": {
+          "description": "Timer type"
+        },
+        "meta_type": {
+          "description": "Metadata type (only for timer_type=meta)"
+        },
+        "weekdays": {
+          "description": "Active weekdays (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun)"
+        },
+        "months": {
+          "description": "Active months 1-12 (empty = all; annual timer only)"
+        },
+        "day_of_month": {
+          "description": "Day of month (0 = all; annual timer only)"
+        },
+        "time_ref": {
+          "description": "Time reference"
+        },
+        "hour": {
+          "description": "Hour (only for time_ref=absolute)"
+        },
+        "minute": {
+          "description": "Minute"
+        },
+        "offset_minutes": {
+          "description": "Offset in minutes (positive/negative) relative to the time reference"
+        },
+        "solar_altitude_deg": {
+          "description": "Sun elevation angle in degrees (−18 … 90) — only for time_ref=solar_altitude. Examples: 0° = horizon, −6° = civil twilight, 30° = mid-morning"
+        },
+        "sun_direction": {
+          "description": "Direction of the sun's movement — only for time_ref=solar_altitude. rising = sun ascending (morning), setting = sun descending (afternoon/evening)"
+        },
+        "every_hour": {
+          "description": "Switch every hour at the given minute"
+        },
+        "every_minute": {
+          "description": "Switch every minute"
+        },
+        "holiday_mode": {
+          "description": "Holiday handling"
+        },
+        "vacation_mode": {
+          "description": "Vacation handling"
+        },
+        "selected_holidays": {
+          "description": "Selected holidays for timer_type=holiday (empty = all holidays)"
+        },
+        "date_window_enabled": {
+          "description": "Date window: only switch within a date range"
+        },
+        "date_window_from": {
+          "description": "Window start (MM-DD | easter±N | advent±N | holiday:Name±N)"
+        },
+        "date_window_to": {
+          "description": "Window end (MM-DD | easter±N | advent±N | holiday:Name±N)"
+        },
+        "value": {
+          "description": "Output value when switching. Allowed: 0/1, true/false, on/off, ein/aus, integer, decimal, or string"
         }
       },
       "HOME_ASSISTANT": {
@@ -1651,8 +1733,8 @@
       "count": "N",
       "min": "Min",
       "max": "Max",
-      "avg": "∅"
-      ,"date": "Date",
+      "avg": "∅",
+      "date": "Date",
       "time": "Time",
       "custom": "Custom"
     },
@@ -2068,7 +2150,26 @@
         "duration_s": "Duration (s)"
       },
       "value_sequence": {
-        "run_mode": "Run mode", "repeat_count": "Repeat count", "restart_policy": "On new trigger", "cancel_when_condition_false": "Cancel when condition becomes false", "add": "Add step", "blink": "Blink preset", "step": "Step {n}", "duplicate": "Duplicate", "object": "Object (empty = pause)", "value": "Value", "modes": { "once": "Once", "repeat_count": "Repeat a fixed count", "while_condition": "Repeat while condition is true" }, "policies": { "ignore": "Ignore", "restart": "Restart", "queue": "Queue" }
+        "run_mode": "Run mode",
+        "repeat_count": "Repeat count",
+        "restart_policy": "On new trigger",
+        "cancel_when_condition_false": "Cancel when condition becomes false",
+        "add": "Add step",
+        "blink": "Blink preset",
+        "step": "Step {n}",
+        "duplicate": "Duplicate",
+        "object": "Object (empty = pause)",
+        "value": "Value",
+        "modes": {
+          "once": "Once",
+          "repeat_count": "Repeat a fixed count",
+          "while_condition": "Repeat while condition is true"
+        },
+        "policies": {
+          "ignore": "Ignore",
+          "restart": "Restart",
+          "queue": "Queue"
+        }
       },
       "timer_cron": {
         "cron": "Cron expression"

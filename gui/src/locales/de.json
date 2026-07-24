@@ -1,7 +1,8 @@
 {
   "datetimeNames": {
     "weekdays": "Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag",
-    "weekdaysShort": "Mo.|Di.|Mi.|Do.|Fr.|Sa.|So.", "weekdaysTwo": "Mo|Di|Mi|Do|Fr|Sa|So",
+    "weekdaysShort": "Mo.|Di.|Mi.|Do.|Fr.|Sa.|So.",
+    "weekdaysTwo": "Mo|Di|Mi|Do|Fr|Sa|So",
     "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
     "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
   },
@@ -807,6 +808,27 @@
         },
         "priv_key": {
           "title": "Privacy-Key (v3)"
+        },
+        "host": {
+          "title": "Host (IP/DNS)"
+        },
+        "port": {
+          "title": "UDP-Port"
+        },
+        "oid": {
+          "title": "OID"
+        },
+        "data_type": {
+          "title": "Datentyp"
+        },
+        "poll_interval": {
+          "title": "Poll-Intervall (s)"
+        },
+        "timeout": {
+          "title": "Timeout (s)"
+        },
+        "retries": {
+          "title": "Wiederholungen"
         }
       },
       "ZEITSCHALTUHR": {
@@ -889,6 +911,66 @@
         "custom_holidays": {
           "title": "Benutzerdefinierte Feiertage",
           "description": "Benutzerdefinierte Feiertage als Liste von Ausdrücken. Formate: 'MM-TT[:Name]' (fixes Datum, z.B. '12-26:Stephanstag'), 'easter+N[:Name]' / 'easter-N[:Name]' (relativ zu Ostersonntag), 'advent+N[:Name]' / 'advent-N[:Name]' (relativ zum 1. Advent), 'last_WT_MON[:Name]' (letzter Wochentag des Monats), 'N_WT_MON[:Name]' (n-ter Wochentag). Wochentags-Kürzel: MO DI MI DO FR SA SO. Monats-Kürzel: JAN FEB MAR APR MAI JUN JUL AUG SEP OKT NOV DEZ. Mehrere Einträge durch Komma oder Zeilenumbruch trennen."
+        },
+        "timer_type": {
+          "description": "Schaltuhrentyp"
+        },
+        "meta_type": {
+          "description": "Metadaten-Typ (nur bei timer_type=meta)"
+        },
+        "weekdays": {
+          "description": "Aktive Wochentage (0=Mo, 1=Di, 2=Mi, 3=Do, 4=Fr, 5=Sa, 6=So)"
+        },
+        "months": {
+          "description": "Aktive Monate 1-12 (leer = alle; nur Jahresschaltuhr)"
+        },
+        "day_of_month": {
+          "description": "Tag im Monat (0 = alle; nur Jahresschaltuhr)"
+        },
+        "time_ref": {
+          "description": "Zeitreferenz"
+        },
+        "hour": {
+          "description": "Stunde (nur bei time_ref=absolute)"
+        },
+        "minute": {
+          "description": "Minute"
+        },
+        "offset_minutes": {
+          "description": "Offset in Minuten (positiv/negativ) relativ zur Zeitreferenz"
+        },
+        "solar_altitude_deg": {
+          "description": "Sonnenhöhenwinkel in Grad (−18 … 90) — nur bei time_ref=solar_altitude. Beispiele: 0° = Horizont, −6° = bürgerliche Dämmerung, 30° = mittlerer Vormittag"
+        },
+        "sun_direction": {
+          "description": "Richtung der Sonnenbewegung — nur bei time_ref=solar_altitude. rising = Sonne steigt (morgens), setting = Sonne sinkt (nachmittags/abends)"
+        },
+        "every_hour": {
+          "description": "Jede Stunde zur angegebenen Minute schalten"
+        },
+        "every_minute": {
+          "description": "Jede Minute schalten"
+        },
+        "holiday_mode": {
+          "description": "Feiertagsbehandlung"
+        },
+        "vacation_mode": {
+          "description": "Ferienbehandlung"
+        },
+        "selected_holidays": {
+          "description": "Ausgewählte Feiertage für timer_type=holiday (leer = alle Feiertage)"
+        },
+        "date_window_enabled": {
+          "description": "Datum-Fenster: nur innerhalb eines Zeitraums schalten"
+        },
+        "date_window_from": {
+          "description": "Fenster-Beginn (MM-TT | easter±N | advent±N | holiday:Name±N)"
+        },
+        "date_window_to": {
+          "description": "Fenster-Ende (MM-TT | easter±N | advent±N | holiday:Name±N)"
+        },
+        "value": {
+          "description": "Ausgabewert beim Schalten. Erlaubt: 0/1, true/false, on/off, ein/aus, Ganzzahl, Dezimalzahl oder String"
         }
       },
       "HOME_ASSISTANT": {
@@ -1651,8 +1733,8 @@
       "count": "N",
       "min": "Min",
       "max": "Max",
-      "avg": "∅"
-      ,"date": "Datum",
+      "avg": "∅",
+      "date": "Datum",
       "time": "Zeit",
       "custom": "Benutzerdefiniert"
     },
@@ -2068,7 +2150,26 @@
         "duration_s": "Dauer (s)"
       },
       "value_sequence": {
-        "run_mode": "Ausführung", "repeat_count": "Wiederholungen", "restart_policy": "Bei neuem Trigger", "cancel_when_condition_false": "Abbrechen, wenn Bedingung false wird", "add": "Schritt hinzufügen", "blink": "Blink-Vorlage", "step": "Schritt {n}", "duplicate": "Duplizieren", "object": "Objekt (leer = Pause)", "value": "Wert", "modes": { "once": "Einmal", "repeat_count": "Feste Anzahl", "while_condition": "Solange Bedingung wahr ist" }, "policies": { "ignore": "Ignorieren", "restart": "Neu starten", "queue": "Einreihen" }
+        "run_mode": "Ausführung",
+        "repeat_count": "Wiederholungen",
+        "restart_policy": "Bei neuem Trigger",
+        "cancel_when_condition_false": "Abbrechen, wenn Bedingung false wird",
+        "add": "Schritt hinzufügen",
+        "blink": "Blink-Vorlage",
+        "step": "Schritt {n}",
+        "duplicate": "Duplizieren",
+        "object": "Objekt (leer = Pause)",
+        "value": "Wert",
+        "modes": {
+          "once": "Einmal",
+          "repeat_count": "Feste Anzahl",
+          "while_condition": "Solange Bedingung wahr ist"
+        },
+        "policies": {
+          "ignore": "Ignorieren",
+          "restart": "Neu starten",
+          "queue": "Einreihen"
+        }
       },
       "timer_cron": {
         "cron": "Cron-Ausdruck"

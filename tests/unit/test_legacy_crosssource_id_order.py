@@ -32,10 +32,10 @@ from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreQuery
 from obs.ringbuffer.store.migration import LegacyMigrator
 from obs.ringbuffer.store.sqlite_backend import (
-    SqliteSegmentStore,
     _LEGACY_GID_OFFSET,
     _LEGACY_GID_STRIDE,
     _LEGACY_SOURCE_BUCKETS,
+    SqliteSegmentStore,
 )
 
 JS_MAX = 2**53 - 1  # größter exakt als IEEE-754-Double darstellbarer Integer
@@ -185,7 +185,7 @@ def test_all_strictly_negative():
 def test_buckets_disjoint_no_collision():
     """Zwei Quellen kollidieren nie auf denselben synthetischen gid (Invarianten c, e)."""
     gids: set[int] = set()
-    for seg in range(0, 6):
+    for seg in range(6):
         for rowid in range(1, 200):
             gid = _read_path_gid(rowid, seg)
             assert gid not in gids, f"Kollision bei seg={seg} rowid={rowid}"

@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+
 from obs.api.auth import create_access_token
 from obs.message_archive import MIGRATIONS
 
@@ -1947,6 +1948,98 @@ async def test_message_archive_database_import_returns_500_when_recovery_reconne
         if not store.is_connected:
             await store.connect()
         message_archives_api.activate_message_archive_service(store)
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_database_import_logs_when_rollback_disconnect_fails(client, auth_headers, monkeypatch):
+    """After a failed integrity check, the handler tries to disconnect the store before
+    restoring the pre-import backup. If that disconnect itself raises, it must be logged
+    (not propagated raw) and the rollback must still proceed to completion."""
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("import-disconnect-fail")
+    store = message_archives_api.get_message_archive_store()
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Disconnect Fail"})
+        assert create.status_code == 201, create.text
+        exported = await client.get("/api/v1/message-archives/export/db", headers=auth_headers)
+        assert exported.status_code == 200, exported.text
+
+        async def failing_integrity_check(self):
+            return {"ok": False, "result": "not ok", "path": self.path, "status": "error"}
+
+        original_disconnect = message_archives_api.MessageArchiveStore.disconnect
+        disconnect_calls = 0
+
+        async def flaky_disconnect(self):
+            nonlocal disconnect_calls
+            disconnect_calls += 1
+            # First call (before copying the imported file in) must succeed so the
+            # import can proceed far enough to hit the integrity-check failure.
+            if disconnect_calls == 1:
+                await original_disconnect(self)
+                return
+            raise RuntimeError("simulated disconnect failure before rollback")
+
+        monkeypatch.setattr(message_archives_api.MessageArchiveStore, "integrity_check", failing_integrity_check)
+        monkeypatch.setattr(message_archives_api.MessageArchiveStore, "disconnect", flaky_disconnect)
+
+        imported = await client.post(
+            "/api/v1/message-archives/import/db",
+            headers=auth_headers,
+            files={"file": ("message-archives.sqlite", exported.content, "application/octet-stream")},
+        )
+        assert imported.status_code == 500
+        assert disconnect_calls >= 2
+    finally:
+        monkeypatch.undo()
+        if not store.is_connected:
+            await store.connect()
+        message_archives_api.activate_message_archive_service(store)
+        restored = await client.get(f"/api/v1/message-archives/{archive_id}", headers=auth_headers)
+        assert restored.status_code == 200, restored.text
+        await client.delete(
+            f"/api/v1/message-archives/{archive_id}",
+            headers=auth_headers,
+            params={"confirm": "true"},
+        )
+
+
+async def test_message_archive_database_import_success_warns_when_temp_cleanup_fails(client, auth_headers, monkeypatch):
+    """The final `finally` block best-effort-removes the temp upload and the
+    pre-import backup after a successful import. If removing one of them fails
+    with something other than FileNotFoundError (e.g. a permission error), it
+    must be logged as a warning rather than raised — the import already succeeded."""
+    from obs.api.v1 import message_archives as message_archives_api
+
+    archive_id = _archive_id("import-cleanup-warn")
+    try:
+        create = await client.post("/api/v1/message-archives", headers=auth_headers, json={"id": archive_id, "name": "Cleanup Warn"})
+        assert create.status_code == 201, create.text
+        exported = await client.get("/api/v1/message-archives/export/db", headers=auth_headers)
+        assert exported.status_code == 200, exported.text
+
+        real_unlink = os.unlink
+
+        def fail_backup_unlink(path, *args, **kwargs):
+            if str(path).endswith(".pre-import.bak"):
+                raise PermissionError("simulated cleanup failure")
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(message_archives_api.os, "unlink", fail_backup_unlink)
+
+        imported = await client.post(
+            "/api/v1/message-archives/import/db",
+            headers=auth_headers,
+            files={"file": ("message-archives.sqlite", exported.content, "application/octet-stream")},
+        )
+        assert imported.status_code == 200, imported.text
+    finally:
+        monkeypatch.undo()
         await client.delete(
             f"/api/v1/message-archives/{archive_id}",
             headers=auth_headers,

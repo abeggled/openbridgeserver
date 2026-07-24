@@ -9,7 +9,7 @@ import pytest
 
 from obs.admin_cli import (
     AdminCliError,
-    main as admin_main,
+    _normalize_global_options,
     build_parser,
     create_backup,
     create_support_package,
@@ -25,7 +25,9 @@ from obs.admin_cli import (
     status,
     validate_config,
 )
-from obs.admin_cli import _normalize_global_options
+from obs.admin_cli import (
+    main as admin_main,
+)
 
 
 def _make_db(path: Path) -> dict[str, str]:

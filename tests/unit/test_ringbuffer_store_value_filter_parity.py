@@ -135,9 +135,9 @@ async def test_ne_text_and_bool_match_cross_type(store: SqliteSegmentStore):
     await store.append([_event(v, f"2026-01-01T00:00:{i:02d}.000Z") for i, v in enumerate(values)])
 
     ne_text = await store.query(StoreQuery(limit=50, value_filters=[{"operator": "ne", "value": "on"}]))
-    assert {r["new_value"] for r in ne_text} == {"off", 1, True, None}
+    assert {r["new_value"] for r in ne_text} == {"off", 1, None}
     # Legacy-Referenz bestätigt.
-    assert await _legacy_reference(values, [{"operator": "ne", "value": "on"}]) == {"off", 1, True, None}
+    assert await _legacy_reference(values, [{"operator": "ne", "value": "on"}]) == {"off", 1, None}
 
     # Python-Äquivalenz True==1: ``ne True`` schließt sowohl bool True als auch die
     # numerische 1 aus (Legacy ``not (row == True)``).
@@ -154,7 +154,7 @@ async def test_eq_bool_int_equivalence(store: SqliteSegmentStore, tmp_path: Path
 
     # eq True matcht bool True UND numerische 1 (nicht "1", nicht 2).
     eq_true = await store.query(StoreQuery(limit=50, value_filters=[{"operator": "eq", "value": True}]))
-    assert {r["new_value"] for r in eq_true} == {1, True}  # als Set kollabieren 1/True
+    assert {r["new_value"] for r in eq_true} == {1}  # als Set kollabieren 1/True
     assert len(eq_true) == 2
 
     # eq 1 (numerisch) matcht ebenfalls bool True UND numerische 1.
@@ -166,7 +166,7 @@ async def test_eq_bool_int_equivalence(store: SqliteSegmentStore, tmp_path: Path
     assert len(eq_zero) == 2
 
     # Legacy-Referenz-Parität (Anzahl, da Set 1/True kollabiert).
-    ref_true = [v for v in values if v == True]  # noqa: E712 - Python-Gleichheit gewollt
+    ref_true = [v for v in values if v == True]
     assert len(ref_true) == 2
 
 
@@ -290,7 +290,7 @@ async def test_eq_null_and_ne_null(store: SqliteSegmentStore, tmp_path: Path):
     exp_eq = await _legacy_reference(values, eq_null)
     exp_ne = await _legacy_reference(values, ne_null)
     assert exp_eq == {None}
-    assert exp_ne == {1, "x", True}
+    assert exp_ne == {1, "x"}
 
     await store.append([_event(v, f"2026-01-01T00:00:{i:02d}.000Z") for i, v in enumerate(values)])
     v2_eq = await store.query(StoreQuery(limit=50, value_filters=eq_null))

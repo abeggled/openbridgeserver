@@ -230,6 +230,41 @@ class TestAutobackupSchedulerTimezone:
         with pytest.raises(asyncio.CancelledError):
             await scheduler._loop()
 
+    @pytest.mark.asyncio
+    async def test_scheduler_logs_exception_when_backup_creation_fails(self, monkeypatch, caplog):
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        now = datetime(2026, 7, 17, 3, 1, tzinfo=ZoneInfo("Pacific/Kiritimati"))
+        scheduler = ab.AutobackupScheduler(db)
+        monkeypatch.setattr(ab, "_config_changed_event", asyncio.Event())
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(return_value=ab.AutobackupConfig(enabled=True, hour=3, retention_days=7)))
+        monkeypatch.setattr(ab, "_application_now", AsyncMock(return_value=now))
+        monkeypatch.setattr(ab, "_create_backup_now", AsyncMock(side_effect=RuntimeError("disk full")))
+        monkeypatch.setattr(ab.asyncio, "wait_for", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+        assert "Autobackup fehlgeschlagen" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_scheduler_loop_logs_and_backs_off_on_unexpected_error(self, monkeypatch, caplog):
+        """An exception raised before the daily-backup branch (e.g. while loading config) is
+        caught by the loop's own outer handler, logged, and the loop backs off via sleep(60)."""
+        from obs.api.v1 import autobackup as ab
+
+        db = _DbStub()
+        scheduler = ab.AutobackupScheduler(db)
+        monkeypatch.setattr(ab, "_config_changed_event", asyncio.Event())
+        monkeypatch.setattr(ab, "_load_config", AsyncMock(side_effect=RuntimeError("db exploded")))
+        monkeypatch.setattr(ab.asyncio, "sleep", AsyncMock(side_effect=asyncio.CancelledError))
+
+        with pytest.raises(asyncio.CancelledError):
+            await scheduler._loop()
+
+        assert "Autobackup-Scheduler Fehler" in caplog.text
+
 
 class TestListBackups:
     def test_returns_empty_list_for_empty_dir(self, tmp_path):
@@ -417,9 +452,8 @@ class TestDeleteAutobackupEndpoint:
 
         from obs.api.v1.autobackup import delete_autobackup
 
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await delete_autobackup(name="20260101-0300", _admin="admin")
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await delete_autobackup(name="20260101-0300", _admin="admin")
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -441,9 +475,8 @@ class TestRestoreAutobackupEndpoint:
         from obs.api.v1.autobackup import restore_autobackup
 
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="../bad-name", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="../bad-name", _admin="admin", db=db)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -453,9 +486,8 @@ class TestRestoreAutobackupEndpoint:
         from obs.api.v1.autobackup import restore_autobackup
 
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -466,9 +498,8 @@ class TestRestoreAutobackupEndpoint:
 
         (tmp_path / "20260101-0300.json").write_text("NOT JSON")
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -479,9 +510,8 @@ class TestRestoreAutobackupEndpoint:
 
         (tmp_path / "20260101-0300.json").write_text(json.dumps({"bad_key": "bad_value"}))
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
         assert exc_info.value.status_code == 400
 
 
@@ -575,7 +605,7 @@ class TestRunAutobackupNowEndpoint:
 
 
 def _make_graph_row(
-    gid: str = None,
+    gid: str | None = None,
     name: str = "Test Graph",
     description: str = "",
     enabled: int = 1,
@@ -675,7 +705,6 @@ class TestCreateGraph:
     @pytest.mark.asyncio
     async def test_creates_and_returns_graph(self):
         from obs.api.v1.logic import create_graph
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         body = LogicGraphCreate(name="New Graph", description="desc", enabled=True, flow_data=FlowData())
@@ -691,7 +720,6 @@ class TestCreateGraph:
     @pytest.mark.asyncio
     async def test_reloads_logic_manager_on_create(self):
         from obs.api.v1.logic import create_graph
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         body = LogicGraphCreate(name="Graph", flow_data=FlowData())
@@ -713,7 +741,6 @@ class TestUpdateGraphFull:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import update_graph_full
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         body = LogicGraphCreate(name="Updated", flow_data=FlowData())
@@ -725,7 +752,6 @@ class TestUpdateGraphFull:
     @pytest.mark.asyncio
     async def test_updates_and_returns_graph(self):
         from obs.api.v1.logic import update_graph_full
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         row = _make_graph_row(name="Old Name")
@@ -756,7 +782,6 @@ class TestUpdateGraphPartial:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import update_graph_partial
-
         from obs.logic.models import LogicGraphUpdate
 
         body = LogicGraphUpdate(name="New")
@@ -768,7 +793,6 @@ class TestUpdateGraphPartial:
     @pytest.mark.asyncio
     async def test_partial_update_name_only(self):
         from obs.api.v1.logic import update_graph_partial
-
         from obs.logic.models import LogicGraphUpdate
 
         row = _make_graph_row(name="Old", description="Desc")
@@ -801,7 +825,6 @@ class TestUpdateGraphPartial:
     @pytest.mark.asyncio
     async def test_partial_update_enabled_only(self):
         from obs.api.v1.logic import update_graph_partial
-
         from obs.logic.models import LogicGraphUpdate
 
         row = _make_graph_row(enabled=1, name="G")
@@ -901,7 +924,6 @@ class TestImportGraph:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import import_graph
-
         from obs.logic.models import FlowData, LogicGraphImport
 
         body = LogicGraphImport(obs_export="wrong_type", version=1, name="G", flow_data=FlowData())
@@ -913,7 +935,6 @@ class TestImportGraph:
     @pytest.mark.asyncio
     async def test_imports_valid_graph(self):
         from obs.api.v1.logic import import_graph
-
         from obs.logic.models import FlowData, LogicGraphImport
 
         body = LogicGraphImport(obs_export="logic_graph", version=1, name="Imported", flow_data=FlowData())
@@ -931,7 +952,6 @@ class TestImportGraph:
     @pytest.mark.asyncio
     async def test_missing_node_type_replaced(self):
         from obs.api.v1.logic import import_graph
-
         from obs.logic.models import FlowData, LogicGraphImport, LogicNode, NodePosition
 
         node = LogicNode(id="n1", type="unknown_type_xyz", position=NodePosition(x=0, y=0), data={})
@@ -1001,9 +1021,8 @@ class TestRunGraph:
         mock_manager = MagicMock()
         mock_manager.execute_graph = AsyncMock(side_effect=RuntimeError("execution failed"))
 
-        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
-            with pytest.raises(HTTPException) as exc_info:
-                await run_graph(graph_id=row["id"], _user="user", db=db)
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager), pytest.raises(HTTPException) as exc_info:
+            await run_graph(graph_id=row["id"], _user="user", db=db)
         assert exc_info.value.status_code == 500
 
 
@@ -1022,7 +1041,6 @@ class TestDuplicateGraph:
     @pytest.mark.asyncio
     async def test_duplicate_creates_copy(self):
         from obs.api.v1.logic import duplicate_graph
-
         from obs.logic.models import FlowData, LogicEdge, LogicNode, NodePosition
 
         node = LogicNode(id="n1", type="and", position=NodePosition(x=0, y=0), data={})
@@ -1055,7 +1073,6 @@ class TestDuplicateGraph:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import duplicate_graph
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         flow = FlowData(nodes=[LogicNode(id="timer", type="timer_delay", position=NodePosition(x=0, y=0), data={"delay_s": -1})])
@@ -1106,7 +1123,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_finds_datapoint_read_usage(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1121,7 +1137,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_finds_datapoint_write_usage(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1136,7 +1151,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_finds_value_sequence_target_usage(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1156,7 +1170,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_ignores_invalid_or_unrelated_sequence_steps(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1168,7 +1181,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_ignores_other_node_types(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1788,7 +1800,7 @@ class TestZeitschaltuhrBuildHolidays:
         def _country_holidays(country, **kwargs):
             call_count["n"] += 1
             if "language" in kwargs:
-                raise Exception("language not supported")
+                raise RuntimeError("language not supported")
             return _FakeHolidays()
 
         mock_holidays = MagicMock()
@@ -1797,6 +1809,99 @@ class TestZeitschaltuhrBuildHolidays:
             hols = adapter._build_holidays()
 
         assert isinstance(hols, dict)
+
+
+class TestZeitschaltuhrSunEventRealException:
+    """Exercises the *real* astral call path (not the mocked-away shortcut used elsewhere)."""
+
+    def test_get_sun_event_logs_and_returns_none_on_astral_exception(self, caplog):
+        from obs.adapters.zeitschaltuhr.adapter import TimeRef
+
+        adapter = _make_zs_adapter()
+        with patch("astral.sun.sun", side_effect=RuntimeError("astral boom")):
+            result = adapter._get_sun_event(TimeRef.SUNRISE, date(2026, 6, 21))
+        assert result is None
+        assert "Sonnenzeit-Berechnung" in caplog.text
+
+    def test_get_solar_altitude_time_logs_and_returns_none_on_astral_exception(self, caplog):
+        from obs.adapters.zeitschaltuhr.adapter import SunDirection
+
+        adapter = _make_zs_adapter()
+        with patch("astral.sun.time_at_elevation", side_effect=RuntimeError("astral boom")):
+            result = adapter._get_solar_altitude_time(10.0, SunDirection.RISING, date(2026, 6, 21))
+        assert result is None
+        assert "Sonnenhöhenwinkel-Berechnung" in caplog.text
+
+
+class TestZeitschaltuhrHolidayLookupHardFailure:
+    """Both the language-retry call and the outer holiday-loading fail — covers the outer except."""
+
+    def test_build_holidays_outer_exception_logged_when_retry_also_fails(self, caplog):
+        adapter = _make_zs_adapter(holiday_language="fr")
+
+        def _always_raise(country, **kwargs):
+            raise RuntimeError("holidays boom")
+
+        mock_holidays = MagicMock()
+        mock_holidays.country_holidays = _always_raise
+        with patch.dict("sys.modules", {"holidays": mock_holidays}):
+            hols = adapter._build_holidays()
+
+        assert hols == {}
+        assert "Feiertagskalender konnte nicht geladen werden" in caplog.text
+
+    def test_get_holidays_for_year_outer_exception_logged_when_retry_also_fails(self, caplog):
+        adapter = _make_zs_adapter(holiday_language="fr")
+
+        def _always_raise(country, **kwargs):
+            raise RuntimeError("holidays boom")
+
+        mock_holidays = MagicMock()
+        mock_holidays.country_holidays = _always_raise
+        with patch.dict("sys.modules", {"holidays": mock_holidays}):
+            result = adapter.get_holidays_for_year(2026)
+
+        assert result == []
+        assert "Sprache 'fr' für Land" in caplog.text
+        assert "Feiertagskalender konnte nicht geladen werden" in caplog.text
+
+
+class TestZeitschaltuhrCustomHolidayParseErrors:
+    def test_build_holidays_logs_warning_for_unparseable_custom_entry(self, caplog):
+        adapter = _make_zs_adapter(custom_holidays=["13-45:BadDate"])
+        with patch.dict("sys.modules", {"holidays": None}):
+            hols = adapter._build_holidays()
+        assert isinstance(hols, dict)
+        assert "BadDate" not in hols.values()
+        assert "konnte nicht geparst werden" in caplog.text
+
+    def test_get_holidays_for_year_skips_unparseable_custom_entry_silently(self):
+        adapter = _make_zs_adapter(custom_holidays=["13-45:BadDate", "01-01:Neujahr"])
+        with patch.dict("sys.modules", {"holidays": None}):
+            result = adapter.get_holidays_for_year(2026)
+        assert any(h["name"] == "Neujahr" for h in result)
+        assert not any(h["name"] == "BadDate" for h in result)
+
+
+class TestZeitschaltuhrParseDateExpressionSlowPathException:
+    def test_holiday_slow_path_logs_exception_on_failure(self, caplog):
+        adapter = _make_zs_adapter()
+        adapter._hol = {}  # empty -> fast path finds nothing -> falls through to slow path
+
+        with patch.object(adapter, "get_holidays_for_year", side_effect=RuntimeError("boom")):
+            result = adapter._parse_date_expression("holiday:Foo", 2026)
+
+        assert result is None
+        assert "Feiertagssuche" in caplog.text
+
+
+class TestZeitschaltuhrHolidayNameTypeError:
+    def test_holiday_name_returns_empty_string_on_type_error(self):
+        adapter = _make_zs_adapter()
+        adapter._hol = {}
+        # An unhashable key makes dict.get raise TypeError, exercising the except clause.
+        result = adapter._holiday_name([1, 2, 3])
+        assert result == ""
 
 
 # ===========================================================================

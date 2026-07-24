@@ -26,7 +26,6 @@ import pytest
 
 from obs.ringbuffer.ringbuffer import RingBuffer
 
-
 # ===========================================================================
 # F1 – gelöschte (nicht-Registry) Datapoints: STRING-Filter nicht ablehnen
 # ===========================================================================

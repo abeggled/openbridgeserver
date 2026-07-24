@@ -14,23 +14,22 @@ import pytest
 
 from obs.history.influxdb_plugin import InfluxDBHistoryPlugin, _to_rfc3339
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _plugin(version: int = 2, **kwargs) -> InfluxDBHistoryPlugin:
-    defaults = dict(
-        url="http://localhost:8086",
-        version=version,
-        token="mytoken",
-        org="myorg",
-        bucket="mybucket",
-        database="mydb",
-        username="user",
-        password="pass",
-    )
+    defaults = {
+        "url": "http://localhost:8086",
+        "version": version,
+        "token": "mytoken",
+        "org": "myorg",
+        "bucket": "mybucket",
+        "database": "mydb",
+        "username": "user",
+        "password": "pass",
+    }
     defaults.update(kwargs)
     return InfluxDBHistoryPlugin(**defaults)
 
@@ -77,7 +76,7 @@ class TestToRfc3339:
         assert result == "2024-01-15T10:30:00.123Z"
 
     def test_naive_datetime_treated_as_utc(self):
-        dt = datetime(2024, 1, 15, 10, 30, 0)
+        dt = datetime(2024, 1, 15, 10, 30, 0)  # noqa: DTZ001 -- naive-datetime handling is exactly what this test verifies
         result = _to_rfc3339(dt)
         assert result.endswith("Z")
 
@@ -262,9 +261,8 @@ class TestInfluxDBWrite:
         ctx.post = mock.AsyncMock(return_value=resp)
         ctx.aclose = mock.AsyncMock()
         ctx.is_closed = False
-        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
-            with pytest.raises(Exception, match="HTTP 500"):
-                await _plugin().write(uuid.uuid4(), 1.0, None, "ok", ts=_ts())
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx), pytest.raises(Exception, match="HTTP 500"):
+            await _plugin().write(uuid.uuid4(), 1.0, None, "ok", ts=_ts())
         ctx.aclose.assert_awaited_once()
 
     async def test_write_without_ts_uses_now(self):
@@ -385,7 +383,7 @@ class TestInfluxDBAggregate:
 
     async def test_aggregate_all_fns(self):
         for fn in ("avg", "min", "max", "last"):
-            ctx, client = _make_httpx_mock(status=200, json_body=self._agg_response())
+            ctx, _client = _make_httpx_mock(status=200, json_body=self._agg_response())
             with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
                 result = await _plugin().aggregate(uuid.uuid4(), fn, "1h", _ts(0), _ts(1))
             assert isinstance(result, list)

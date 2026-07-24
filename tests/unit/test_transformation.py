@@ -12,6 +12,8 @@ Covers:
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from obs.core.transformation import _extract_nested, apply_source_type, apply_value_map
@@ -41,7 +43,7 @@ class TestApplyValueMapBasic:
 class TestApplyValueMapNValues:
     """N-value maps with numeric keys — the primary use case from issue #208."""
 
-    MAP_11 = {
+    MAP_11: ClassVar[dict[str, str]] = {
         "0": "Aus",
         "1": "Initialisierung",
         "2": "Isolationsmessung",
@@ -78,7 +80,7 @@ class TestApplyValueMapFloatNormalisation:
     The lookup must normalise 5.0 → "5" so the map is applied correctly.
     """
 
-    MAP = {"0": "Aus", "5": "Betrieb", "10": "Standby"}
+    MAP: ClassVar[dict[str, str]] = {"0": "Aus", "5": "Betrieb", "10": "Standby"}
 
     def test_float_zero_matches(self):
         assert apply_value_map(0.0, self.MAP) == "Aus"
@@ -171,7 +173,7 @@ def _run(raw, source_data_type=None, json_key=None, xml_path=None):
         import json
 
         auto = json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         auto = raw
     return apply_source_type(raw, auto, source_data_type, json_key, xml_path)
 

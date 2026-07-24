@@ -388,7 +388,7 @@ def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list
                     m = re.search(r'xmlns="http://knx\.org/xml/project/(\d+)"', master)
                     if m:
                         schema_version = int(m.group(1))
-        except Exception:
+        except (zipfile.BadZipFile, KeyError, ValueError):
             pass
 
         if schema_version < ets6_schema_version:
@@ -419,8 +419,8 @@ def parse_knxproj_trades(file_bytes: bytes, password: str | None = None) -> list
                     xml_bytes = inner.read(zero_xml)
                     records = _parse_trades_from_xml(xml_bytes)
 
-    except Exception as e:
-        logger.warning("parse_knxproj_trades failed (ignored): %s", e)
+    except Exception:
+        logger.exception("parse_knxproj_trades failed (ignored)")
 
     logger.info("parse_knxproj_trades: %d Gewerke gefunden", len(records))
     return records
@@ -476,7 +476,7 @@ def _walk_spaces(
                 ga_refs = dict(getattr(fn, "group_addresses", {}) or {})
 
             ga_addresses: list[str] = []
-            for _ref_key, ref in ga_refs.items():
+            for ref in ga_refs.values():
                 if isinstance(ref, dict):
                     addr = str(ref.get("address") or "").strip()
                 else:
@@ -527,7 +527,7 @@ def parse_knxproj_locations(
         msg = str(e).lower()
         if any(kw in msg for kw in ("password", "decrypt", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen: {str(e)}") from e
+        raise ValueError(f"Fehler beim Parsen: {e!s}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -736,7 +736,7 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
         msg = str(e).lower()
         if any(kw in msg for kw in ("password", "decrypt", "bad password", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {str(e)}") from e
+        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {e!s}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

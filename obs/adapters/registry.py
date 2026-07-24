@@ -308,7 +308,7 @@ def load_valid_bindings(rows: list[Any]) -> tuple[list[Any], list[BindingLoadIss
     for row in rows:
         try:
             bindings.append(_row_to_binding(row))
-        except Exception as exc:
+        except (KeyError, ValueError, TypeError) as exc:
             issue = BindingLoadIssue(
                 binding_id=_row_value(row, "id") or "<unknown>",
                 adapter_instance_id=_row_value(row, "adapter_instance_id"),
@@ -386,6 +386,6 @@ async def _set_instance_status(
 def _row_value(row: Any, key: str) -> str | None:
     try:
         value = row[key]
-    except Exception:
+    except (KeyError, IndexError):
         return None
     return str(value) if value is not None else None

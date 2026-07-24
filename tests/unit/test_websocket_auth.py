@@ -92,7 +92,7 @@ class _ApiKeyOwnerDbStub:
 @pytest.mark.asyncio
 async def test_authenticate_ws_rejects_missing_credentials():
     ws = _FakeWebSocket()
-    ok, reason = await ws_api._authenticate_ws_request(ws)  # noqa: SLF001
+    ok, reason = await ws_api._authenticate_ws_request(ws)
     assert ok is False
     assert reason == "Missing credentials"
 
@@ -326,7 +326,7 @@ async def test_ws_log_access_allows_authenticated_user_without_admin_lookup(monk
 
     monkeypatch.setattr(ws_api, "get_db", fail_get_db)
 
-    assert await ws_api._ws_has_log_access("regular-user", None) is True  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("regular-user", None) is True
 
 
 @pytest.mark.asyncio
@@ -335,7 +335,7 @@ async def test_ws_log_access_revalidates_api_key_with_legacy_name_fallback(monke
     db = _LogAccessDbStub({"subject": "automation-client"})
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
-    assert await ws_api._ws_has_log_access("__api_key__", "obs_valid") is True  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("__api_key__", "obs_valid") is True
     assert "COALESCE(NULLIF(owner, ''), name)" in db.queries[0]
 
 
@@ -345,7 +345,7 @@ async def test_ws_log_access_rejects_revoked_api_key(monkeypatch):
     db = _LogAccessDbStub(None)
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
-    assert await ws_api._ws_has_log_access("__api_key__", "obs_revoked") is False  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("__api_key__", "obs_revoked") is False
 
 
 @pytest.mark.asyncio
@@ -354,7 +354,7 @@ async def test_ws_log_access_revalidates_resolved_api_key_owner(monkeypatch):
     db = _LogAccessDbStub(None)
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
-    assert await ws_api._ws_has_log_access("alice", "obs_revoked") is False  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("alice", "obs_revoked") is False
     assert db.queries
 
 
@@ -365,9 +365,7 @@ async def test_ws_log_access_ignores_stray_api_key_for_jwt_identity(monkeypatch)
 
     monkeypatch.setattr(ws_api, "get_db", fail_get_db)
 
-    assert (
-        await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True  # noqa: SLF001
-    )
+    assert await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True
 
 
 @pytest.mark.asyncio
@@ -429,3 +427,41 @@ async def _resolve_protected_access(_db, _node_id: str) -> tuple[str, str | None
 
 async def _resolve_user_access(_db, _node_id: str) -> tuple[str, str | None]:
     return "user", "node-user"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_ws_request_rejects_invalid_bearer_token(monkeypatch):
+    """Covers the Bearer-header branch's own except HTTPException (distinct from the subprotocol one)."""
+
+    def _decode_token(_token: str, expected_type: str = "access") -> str:
+        raise HTTPException(401, "invalid")
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+
+    ws = _FakeWebSocket(headers={"authorization": "Bearer bad.token"})
+    ok, reason = await ws_api._authenticate_ws_request(ws)
+
+    assert ok is False
+    assert reason == "Invalid token"
+
+
+@pytest.mark.asyncio
+async def test_websocket_endpoint_closes_when_second_decode_fails_without_page_context(monkeypatch):
+    """`_authenticate_ws_request` succeeds first, but the endpoint's own follow-up decode
+    (used to resolve `user` for scoping) fails independently — covers that second except
+    HTTPException branch, distinct from the one inside `_authenticate_ws_request`.
+    """
+    calls = {"n": 0}
+
+    def _decode_token(_token: str, expected_type: str = "access") -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "admin"
+        raise HTTPException(401, "expired mid-handshake")
+
+    monkeypatch.setattr(auth_api, "decode_token", _decode_token)
+
+    ws = _FakeWebSocket(headers={"authorization": "Bearer sometoken"})
+    await ws_api.websocket_endpoint(ws)
+
+    assert ws.close_calls == [(4001, "Invalid token")]

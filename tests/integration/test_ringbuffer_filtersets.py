@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import uuid
-
 from datetime import UTC, datetime
 
 import pytest
@@ -251,6 +250,22 @@ async def test_filterset_color_validation_rejects_garbage(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 422, resp.text
+
+
+async def test_filterset_rejects_empty_criteria(client, auth_headers):
+    """A filterset whose ``filter`` declares none of hierarchy_nodes/datapoints/devices/
+    tags/adapters/q/value_filter must be rejected with 422 — an empty filter would
+    otherwise silently match every entry (#36 UX regression guard)."""
+    resp = await client.post(
+        "/api/v1/ringbuffer/filtersets",
+        json={
+            "name": f"RB empty criteria {uuid.uuid4()}",
+            "filter": {"q": "   "},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "at least one criterion" in resp.text
 
 
 async def test_filterset_color_validation_accepts_hex_variants(client, auth_headers):

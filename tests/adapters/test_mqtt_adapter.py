@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import unittest.mock as mock
+from unittest import mock
 
 import pytest
 
@@ -691,13 +691,12 @@ class TestSubscriberLoop:
         mock_aiomqtt = mock.MagicMock()
         mock_aiomqtt.Client.return_value = FailingCM()
 
-        with mock.patch.dict("sys.modules", {"aiomqtt": mock_aiomqtt}):
-            with mock.patch("asyncio.sleep", new_callable=mock.AsyncMock):
-                task = asyncio.create_task(adapter._subscriber_loop())
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        with mock.patch.dict("sys.modules", {"aiomqtt": mock_aiomqtt}), mock.patch("asyncio.sleep", new_callable=mock.AsyncMock):
+            task = asyncio.create_task(adapter._subscriber_loop())
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
         assert attempt >= 3
 
@@ -798,12 +797,11 @@ class TestPublisherLoop:
         mock_aiomqtt = mock.MagicMock()
         mock_aiomqtt.Client.return_value = FailingCM()
 
-        with mock.patch.dict("sys.modules", {"aiomqtt": mock_aiomqtt}):
-            with mock.patch("asyncio.sleep", new_callable=mock.AsyncMock):
-                task = asyncio.create_task(adapter._publisher_loop())
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        with mock.patch.dict("sys.modules", {"aiomqtt": mock_aiomqtt}), mock.patch("asyncio.sleep", new_callable=mock.AsyncMock):
+            task = asyncio.create_task(adapter._publisher_loop())
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
         assert attempt >= 3

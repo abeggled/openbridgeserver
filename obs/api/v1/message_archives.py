@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -9,6 +10,7 @@ import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
@@ -20,15 +22,15 @@ from obs.api.auth import Principal, decode_token, get_admin_user, get_current_pr
 from obs.config import get_settings
 from obs.db.database import Database, get_db
 from obs.message_archive import (
+    MIGRATIONS,
+    RESERVED_ARCHIVE_IDS,
     ArchiveInput,
     ArchivePatch,
     EntryInput,
     EntryPatch,
     EntryPredicate,
     EntryQuery,
-    MIGRATIONS,
     MessageArchiveStore,
-    RESERVED_ARCHIVE_IDS,
     activate_message_archive_service,
     broadcast_message_archive_entry,
     broadcast_message_archive_refresh,
@@ -64,7 +66,7 @@ class MessageArchiveUpdate(BaseModel):
     retention_max_age_days: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def validate_required_nulls(self) -> "MessageArchiveUpdate":
+    def validate_required_nulls(self) -> MessageArchiveUpdate:
         for field in ("name", "description", "color"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} must not be null")
@@ -582,8 +584,8 @@ async def export_message_archive_db(
 ) -> FileResponse:
     if store.path == ":memory:":
         raise HTTPException(status.HTTP_409_CONFLICT, "Meldungsarchiv-Datenbank kann im In-Memory-Modus nicht gesichert werden.")
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        pass
     try:
         await store.sqlite_snapshot(tmp.name)
     except Exception:
@@ -610,13 +612,13 @@ async def import_message_archive_db(
     if store.path == ":memory:":
         raise HTTPException(status.HTTP_409_CONFLICT, "Meldungsarchiv-Datenbank kann im In-Memory-Modus nicht wiederhergestellt werden.")
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as tmp:
+        pass
     backup_path = f"{store.path}.pre-import.bak"
     preserve_backup = False
     try:
         content = await file.read()
-        tmp.write(content)
-        tmp.close()
+        await asyncio.to_thread(Path(tmp.name).write_bytes, content)
         _validate_sqlite_archive_db(tmp.name)
 
         target_path = store.path
@@ -637,7 +639,7 @@ async def import_message_archive_db(
             try:
                 await store.disconnect()
             except Exception:
-                pass
+                logger.exception("Message archive disconnect before rollback failed")
             if target_exists and os.path.exists(backup_path):
                 try:
                     shutil.copy2(backup_path, target_path)
@@ -686,8 +688,10 @@ async def import_message_archive_db(
         for path in cleanup_paths:
             try:
                 os.unlink(path)
-            except Exception:
+            except FileNotFoundError:
                 pass
+            except OSError:
+                logger.warning("Could not remove temporary file %s", path)
 
 
 @router.get("/entries", response_model=MessageEntryPage)

@@ -80,7 +80,7 @@ async def _load_page_config(db: Database, page_id: str) -> PageConfig | None:
 
     try:
         return PageConfig.model_validate_json(row["page_config"])
-    except Exception:
+    except ValueError:
         return None
 
 

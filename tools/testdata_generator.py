@@ -238,7 +238,7 @@ class KnxTunnelingServer:
             try:
                 self._transport.sendto(frame, client.data_addr)
                 client.seq_send = (client.seq_send + 1) & 0xFF
-            except Exception:
+            except OSError:
                 logger.warning("KNX: sendto %s failed", client.data_addr)
 
     # ------------------------------------------------------------------
@@ -248,7 +248,7 @@ class KnxTunnelingServer:
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if len(data) < 6:
             return
-        hdr_len, version, svc_type, total_len = struct.unpack_from(">BBHH", data, 0)
+        hdr_len, version, svc_type, _total_len = struct.unpack_from(">BBHH", data, 0)
         if hdr_len != 6 or version != 0x10:
             return
         body = data[6:]
@@ -645,7 +645,7 @@ async def _main(config_path: str) -> None:
         logger.error("Config file not found: %s", config_path)
         sys.exit(1)
 
-    with config_file.open(encoding="utf-8") as f:
+    with config_file.open(encoding="utf-8") as f:  # noqa: ASYNC230 -- one-off startup read, before any tasks run
         config = yaml.safe_load(f) or {}
 
     tasks: list[asyncio.Task] = []

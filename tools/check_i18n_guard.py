@@ -13,9 +13,9 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 TARGET_FILE_RE = re.compile(r"^(gui/src|frontend/src)/.+\.(vue|js|ts)$")
 LOCALE_FILE_RE = re.compile(r"^(gui|frontend)/src/locales/(de|en)\.json$")
@@ -80,7 +80,7 @@ def run_git_diff(repo_root: Path, base: str | None, head: str | None) -> list[st
     )
 
     for cmd in candidates:
-        proc = subprocess.run(cmd, cwd=repo_root, text=True, capture_output=True)
+        proc = subprocess.run(cmd, cwd=repo_root, text=True, capture_output=True, check=False)
         if proc.returncode == 0:
             files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
             if files:
@@ -118,9 +118,7 @@ def is_technical_token(text: str) -> bool:
         return True
     if compact.upper() == compact and re.fullmatch(r"[A-Z0-9_./:+-]+", compact):
         return True
-    if re.fullmatch(r"[A-Za-z0-9_./:+-]+", compact):
-        return True
-    return False
+    return bool(re.fullmatch(r"[A-Za-z0-9_./:+-]+", compact))
 
 
 def should_flag(candidate: str, allowlist: Allowlist, *, allow_technical_tokens: bool = True) -> bool:
@@ -139,9 +137,7 @@ def should_flag(candidate: str, allowlist: Allowlist, *, allow_technical_tokens:
         return False
     if allow_technical_tokens and is_technical_token(text):
         return False
-    if allowlist.contains(text):
-        return False
-    return True
+    return not allowlist.contains(text)
 
 
 def strip_translated_template_interpolations(text: str) -> str:

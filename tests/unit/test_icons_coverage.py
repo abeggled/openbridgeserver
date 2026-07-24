@@ -469,10 +469,12 @@ async def test_import_fontawesome_api_key_from_db(tmp_path, monkeypatch):
     monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
     db = _DbStub(row=_Row({"value": "stored_key"}))
 
-    with patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value=None):
-        with patch("obs.api.v1.icons._fa_cdn_svg", new_callable=AsyncMock, return_value=_SIMPLE_SVG):
-            body = icons_api.FontAwesomeRequest(icons=["home"], style="solid", api_key=None)
-            result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
+    with (
+        patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value=None),
+        patch("obs.api.v1.icons._fa_cdn_svg", new_callable=AsyncMock, return_value=_SIMPLE_SVG),
+    ):
+        body = icons_api.FontAwesomeRequest(icons=["home"], style="solid", api_key=None)
+        result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
     assert result.imported == 1
 
 
@@ -482,11 +484,13 @@ async def test_import_fontawesome_with_access_token_graphql(tmp_path, monkeypatc
     monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
     db = _DbStub()
 
-    with patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value="tok"):
-        with patch("obs.api.v1.icons._fa_get_version", new_callable=AsyncMock, return_value="7.0.0"):
-            with patch("obs.api.v1.icons._fa_graphql_svg", new_callable=AsyncMock, return_value=_SIMPLE_SVG):
-                body = icons_api.FontAwesomeRequest(icons=["home"], style="solid", api_key="mykey")
-                result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
+    with (
+        patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value="tok"),
+        patch("obs.api.v1.icons._fa_get_version", new_callable=AsyncMock, return_value="7.0.0"),
+        patch("obs.api.v1.icons._fa_graphql_svg", new_callable=AsyncMock, return_value=_SIMPLE_SVG),
+    ):
+        body = icons_api.FontAwesomeRequest(icons=["home"], style="solid", api_key="mykey")
+        result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
     assert result.imported == 1
 
 
@@ -496,12 +500,14 @@ async def test_import_fontawesome_graphql_miss_falls_to_cdn(tmp_path, monkeypatc
     monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
     db = _DbStub()
 
-    with patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value="tok"):
-        with patch("obs.api.v1.icons._fa_get_version", new_callable=AsyncMock, return_value="7.0.0"):
-            with patch("obs.api.v1.icons._fa_graphql_svg", new_callable=AsyncMock, return_value=None):
-                with patch("obs.api.v1.icons._fa_cdn_svg", new_callable=AsyncMock, return_value=_SIMPLE_SVG):
-                    body = icons_api.FontAwesomeRequest(icons=["home"], style="solid", api_key="mykey")
-                    result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
+    with (
+        patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value="tok"),
+        patch("obs.api.v1.icons._fa_get_version", new_callable=AsyncMock, return_value="7.0.0"),
+        patch("obs.api.v1.icons._fa_graphql_svg", new_callable=AsyncMock, return_value=None),
+        patch("obs.api.v1.icons._fa_cdn_svg", new_callable=AsyncMock, return_value=_SIMPLE_SVG),
+    ):
+        body = icons_api.FontAwesomeRequest(icons=["home"], style="solid", api_key="mykey")
+        result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
     assert result.imported == 1
 
 
@@ -519,11 +525,13 @@ async def test_import_fontawesome_fa5_alias_graphql(tmp_path, monkeypatch):
             return None  # first call fails
         return _SIMPLE_SVG  # alias call succeeds
 
-    with patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value="tok"):
-        with patch("obs.api.v1.icons._fa_get_version", new_callable=AsyncMock, return_value="7.0.0"):
-            with patch("obs.api.v1.icons._fa_graphql_svg", side_effect=_mock_graphql):
-                body = icons_api.FontAwesomeRequest(icons=["cog"], style="solid", api_key="key")
-                result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
+    with (
+        patch("obs.api.v1.icons._fa_exchange_token", new_callable=AsyncMock, return_value="tok"),
+        patch("obs.api.v1.icons._fa_get_version", new_callable=AsyncMock, return_value="7.0.0"),
+        patch("obs.api.v1.icons._fa_graphql_svg", side_effect=_mock_graphql),
+    ):
+        body = icons_api.FontAwesomeRequest(icons=["cog"], style="solid", api_key="key")
+        result = await icons_api.import_fontawesome(body=body, _user="admin", db=db)
     assert result.imported == 1
 
 

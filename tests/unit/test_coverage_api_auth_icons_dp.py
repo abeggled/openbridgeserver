@@ -50,7 +50,6 @@ from obs.api.v1.icons import (
 from obs.models.binding import AdapterBindingCreate, AdapterBindingUpdate
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
 
-
 # ---------------------------------------------------------------------------
 # Helpers / Stubs
 # ---------------------------------------------------------------------------
@@ -2347,7 +2346,7 @@ class TestCoerceValueForType:
         import datetime
 
         result = self.coerce("2025-01-15T10:30:00+00:00", "DATETIME")
-        assert result == datetime.datetime(2025, 1, 15, 10, 30, 0, tzinfo=datetime.timezone.utc)
+        assert result == datetime.datetime(2025, 1, 15, 10, 30, 0, tzinfo=datetime.UTC)
 
     def test_datetime_invalid_string_raises(self):
         with pytest.raises(ValueError):

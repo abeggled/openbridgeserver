@@ -29,6 +29,21 @@ line-length = 150
     "E402",    # Module level import not at top of file
 ]
 
+[lint.flake8-bugbear]
+# FastAPI's dependency-injection style requires calling Depends()/Query()/etc. as
+# argument defaults; these are framework singletons, not mutable-default bugs (B008).
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.Header",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Security",
+]
+
 [lint.flake8-pytest-style]
 fixture-parentheses = false
 

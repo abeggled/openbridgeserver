@@ -201,16 +201,18 @@ class TestWakeOnLanManager:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                outputs = asyncio.run(
-                    manager._execute_graph(
-                        graph_id,
-                        "test",
-                        flow,
-                        {"wol": {"trigger": trigger}},
-                    ),
-                )
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+        ):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"wol": {"trigger": trigger}},
+                ),
+            )
         return outputs, mock_to_thread
 
     def test_packet_sent_when_triggered(self):
@@ -243,16 +245,18 @@ class TestWakeOnLanManager:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                asyncio.run(
-                    manager._execute_graph(
-                        graph_id,
-                        "test",
-                        flow,
-                        {"wol": {"trigger": True}},
-                    ),
-                )
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+        ):
+            asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"wol": {"trigger": True}},
+                ),
+            )
 
         mock_to_thread.assert_not_awaited()
 
@@ -263,16 +267,18 @@ class TestWakeOnLanManager:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock, side_effect=OSError("network error")):
-                outputs = asyncio.run(
-                    manager._execute_graph(
-                        graph_id,
-                        "test",
-                        flow,
-                        {"wol": {"trigger": True}},
-                    ),
-                )
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock, side_effect=OSError("network error")),
+        ):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"wol": {"trigger": True}},
+                ),
+            )
 
         assert outputs["wol"]["sent"] is False
 
@@ -284,16 +290,18 @@ class TestWakeOnLanManager:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                outputs = asyncio.run(
-                    manager._execute_graph(
-                        graph_id,
-                        "test",
-                        flow,
-                        {"wol": {"trigger": trigger}},
-                    ),
-                )
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+        ):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"wol": {"trigger": trigger}},
+                ),
+            )
         return outputs, mock_to_thread
 
     def test_whitespace_only_broadcast_defaults_to_global(self):
@@ -335,7 +343,7 @@ class TestWakeOnLanManager:
 class TestWakeOnLanRisingEdge:
     """Packet must only be sent on the False→True edge, not on sustained True."""
 
-    def _make_flow(self) -> "FlowData":
+    def _make_flow(self) -> FlowData:
         return _flow([node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"})])
 
     def _exec(self, manager, flow, trigger: bool, mock_to_thread):
@@ -390,11 +398,13 @@ class TestWakeOnLanRisingEdge:
         # Simulate three cron ticks — overrides use the cron node id as the key,
         # exactly as _cron_loop does: overrides = {node_id: {"trigger": True}}
         cron_overrides = {"cron": {"trigger": True}}
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
-                asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+        ):
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
+            asyncio.run(manager._execute_graph(graph_id, "test", flow, cron_overrides))
 
         assert mock_to_thread.await_count == 3
 
@@ -429,16 +439,18 @@ class TestWakeOnLanDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                outputs = asyncio.run(
-                    manager._execute_graph(
-                        graph_id,
-                        "test",
-                        flow,
-                        {"wol": {"trigger": True}},
-                    ),
-                )
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+        ):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"wol": {"trigger": True}},
+                ),
+            )
 
         assert outputs["wol"]["sent"] is True
         assert outputs["gate"]["out"] is True
@@ -463,16 +475,18 @@ class TestWakeOnLanDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock, side_effect=OSError("net err")):
-                outputs = asyncio.run(
-                    manager._execute_graph(
-                        graph_id,
-                        "test",
-                        flow,
-                        {"wol": {"trigger": True}},
-                    ),
-                )
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock, side_effect=OSError("net err")),
+        ):
+            outputs = asyncio.run(
+                manager._execute_graph(
+                    graph_id,
+                    "test",
+                    flow,
+                    {"wol": {"trigger": True}},
+                ),
+            )
 
         assert outputs["wol"]["sent"] is False
         assert outputs["gate"]["out"] is False
@@ -505,9 +519,11 @@ class TestWakeOnLanDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-            with patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"wol": {"trigger": True}}))
+        with (
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+            patch("obs.logic.manager.asyncio.to_thread", new_callable=AsyncMock),
+        ):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"wol": {"trigger": True}}))
 
         # WoL fired but has no outgoing edges; unrelated_gate must keep its
         # first-pass value (False AND True = False), not be overwritten.

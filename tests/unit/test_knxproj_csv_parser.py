@@ -12,7 +12,6 @@ import pytest
 
 from obs.knxproj.csv_parser import _decode_csv, _dpt_from_csv, parse_ga_csv
 
-
 # ---------------------------------------------------------------------------
 # _dpt_from_csv
 # ---------------------------------------------------------------------------

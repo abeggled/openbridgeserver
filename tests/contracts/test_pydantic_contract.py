@@ -38,7 +38,7 @@ class _AfterValidatorModel(BaseModel):
     full: str = ""
 
     @model_validator(mode="after")
-    def _set_full(self) -> "_AfterValidatorModel":
+    def _set_full(self) -> _AfterValidatorModel:
         if not self.full:
             self.full = f"{self.first} {self.last}"
         return self

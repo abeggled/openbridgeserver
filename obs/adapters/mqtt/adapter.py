@@ -59,7 +59,7 @@ import json
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
@@ -186,7 +186,7 @@ class MqttAdapter(AdapterBase):
                 continue
             try:
                 bc = MqttBindingConfig(**binding.config)
-            except Exception:
+            except (ValidationError, TypeError):
                 logger.warning("Invalid MQTT binding config for %s — skipped", binding.id)
                 continue
             self._topic_map.setdefault(bc.topic, []).append(binding)
@@ -253,7 +253,7 @@ class MqttAdapter(AdapterBase):
         # Auto-parse baseline (used as fallback and for "json" source type)
         try:
             auto_value = json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
             auto_value = raw
 
         for binding in entries:

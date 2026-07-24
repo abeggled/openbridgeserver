@@ -45,10 +45,10 @@ import json
 import logging
 import os
 import re
-from time import monotonic as _monotonic
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any, NamedTuple
 
 import aiosqlite
@@ -741,7 +741,7 @@ def _parse_ts(value: str | None) -> float | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(value).timestamp()
     except ValueError:
         return None
 
@@ -870,14 +870,14 @@ def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
     # ablehnen, BEVOR verglichen wird.
     if expected is None:
         raise ValueError(f"operator '{operator}' is not supported for null value")
-    if isinstance(expected, bool) or isinstance(expected, str):
+    if isinstance(expected, (bool, str)):
         data_type = "BOOLEAN" if isinstance(expected, bool) else "STRING"
-        raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
+        raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")  # noqa: TRY004 -- must stay ValueError, see 422-path comment above
     # Komplexe (list/dict) Vergleichswerte werfen bei ``actual > [..]`` ebenfalls einen
     # TypeError. Wie der v2-Pushdown (``value_type == 'json'`` → STRING-Ablehnung) und
     # die Referenz als ungültigen Range-Filter ablehnen (#951, Codex :467).
     if isinstance(expected, (list, dict)):
-        raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")
+        raise ValueError(f"operator '{operator}' is not supported for data_type 'STRING'")  # noqa: TRY004 -- must stay ValueError, see 422-path comment above
     # Cross-Typ (numerischer Vergleichswert, nicht-numerische Zeile) ist bedeutungslos
     # → wie v2/Legacy kein Treffer.
     if _is_number(expected) and not _is_number(actual):
@@ -1477,7 +1477,6 @@ class SqliteSegmentStore(RingBufferStore):
         if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id:
             raise exc
         await self.manifest.mark_quarantined(segment.segment_id, reason=str(exc))
-        return None
 
     async def _connection_for_read(self, segment: SegmentRecord) -> aiosqlite.Connection:
         if _is_legacy_segment(segment):
@@ -1531,18 +1530,21 @@ class SqliteSegmentStore(RingBufferStore):
         physischen ``-wal``-Dirty-Zustands NACH dem Checkpoint-Versuch (``_wal_is_dirty``).
         """
         legacy_path = Path(segment.filename)
-        if segment.recovery_status == "dirty_wal" and self._legacy_is_small(segment, legacy_path):
-            if await self._checkpoint_small_legacy(legacy_path):
-                # Checkpoint hat die committeten WAL-Frames in die Haupt-DB gefaltet/
-                # getruncatet (#951, Codex :758). Die im Manifest hinterlegte
-                # pre-checkpoint-``size_bytes`` überschätzt jetzt die reale Disk-Nutzung
-                # (Phantom-WAL-Bytes) und ``dirty_wal`` würde bei jedem weiteren Read
-                # erneut einen Checkpoint auslösen. Beides mit dem REALEN post-checkpoint-
-                # Zustand nachziehen – analog zum v2-Rotations-Checkpoint-Größen-Refresh.
-                await self.manifest.mark_legacy_wal_recovered(
-                    segment.segment_id,
-                    size_bytes=self._segment_file_size(segment.filename),
-                )
+        if (
+            segment.recovery_status == "dirty_wal"
+            and self._legacy_is_small(segment, legacy_path)
+            and await self._checkpoint_small_legacy(legacy_path)
+        ):
+            # Checkpoint hat die committeten WAL-Frames in die Haupt-DB gefaltet/
+            # getruncatet (#951, Codex :758). Die im Manifest hinterlegte
+            # pre-checkpoint-``size_bytes`` überschätzt jetzt die reale Disk-Nutzung
+            # (Phantom-WAL-Bytes) und ``dirty_wal`` würde bei jedem weiteren Read
+            # erneut einen Checkpoint auslösen. Beides mit dem REALEN post-checkpoint-
+            # Zustand nachziehen – analog zum v2-Rotations-Checkpoint-Größen-Refresh.
+            await self.manifest.mark_legacy_wal_recovered(
+                segment.segment_id,
+                size_bytes=self._segment_file_size(segment.filename),
+            )
         params = "mode=ro" if self._legacy_wal_still_dirty(legacy_path) else "mode=ro&immutable=1"
         uri = _sqlite_ro_uri(legacy_path, params=params)
         conn = await aiosqlite.connect(uri, uri=True)
@@ -2424,7 +2426,7 @@ class SqliteSegmentStore(RingBufferStore):
                 return (f"{field_name}_type != 'null'", [])
             raise ValueError(f"operator '{operator}' is not supported for null value")
 
-        value_type, num, text, bool_val = _typed_columns_for(value)
+        value_type, num, _text, _bool_val = _typed_columns_for(value)
 
         # Range-Operatoren sind wie Legacy nur für numerische Werte definiert. Ein
         # gt/gte/lt/lte gegen einen text-/bool-Vergleichswert würde sonst zu einem
@@ -2920,7 +2922,7 @@ class SqliteSegmentStore(RingBufferStore):
         estimate: tuple[int | None, str | None, str | None] = (None, None, None)
         try:
             conn = await self._connection_for_read(segment)
-        except Exception:
+        except aiosqlite.Error:
             conn = None
         if conn is not None:
             try:
@@ -2932,7 +2934,7 @@ class SqliteSegmentStore(RingBufferStore):
                 async with conn.execute("SELECT ts FROM ringbuffer ORDER BY id DESC LIMIT 1") as cur:
                     last = await cur.fetchone()
                 estimate = (rows, first[0] if first else None, last[0] if last else None)
-            except Exception:
+            except (aiosqlite.Error, ValueError, TypeError):
                 estimate = (None, None, None)
             finally:
                 await conn.close()
@@ -3122,10 +3124,9 @@ class SqliteSegmentStore(RingBufferStore):
             if len(parts) < 3:
                 continue
             mount_point, fstype = parts[1], parts[2]
-            if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
-                if len(mount_point) >= len(best_match):
-                    best_match = mount_point
-                    best_fstype = fstype
+            if (resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/")) and len(mount_point) >= len(best_match):
+                best_match = mount_point
+                best_fstype = fstype
         return best_fstype in _NETWORK_FS_TYPES
 
     # ------------------------------------------------------------------

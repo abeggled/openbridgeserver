@@ -42,7 +42,7 @@ import logging
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.registry import register
@@ -199,7 +199,7 @@ class HomeAssistantAdapter(AdapterBase):
                 continue
             try:
                 bc = HaBindingConfig(**binding.config)
-            except Exception:
+            except (ValidationError, TypeError):
                 logger.warning(
                     "Ungültige HA Binding-Konfiguration für %s — übersprungen",
                     binding.id,

@@ -29,7 +29,7 @@ import random
 import time
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.modbus_base import (
@@ -230,7 +230,7 @@ class ModbusTcpAdapter(AdapterBase):
                     try:
                         self._client.close()
                     except Exception:
-                        pass
+                        logger.exception("Modbus TCP: closing previous client failed")
                     try:
                         self._client = self._new_client()
                         await self._client.connect()
@@ -253,7 +253,7 @@ class ModbusTcpAdapter(AdapterBase):
                             logger.warning("Modbus TCP: reconnect after reload left client disconnected")
                     except Exception as exc:
                         await self._publish_status(False, str(exc))
-                        logger.warning("Modbus TCP: reconnect after reload failed: %s", exc)
+                        logger.exception("Modbus TCP: reconnect after reload failed")
 
             # Jitter is only useful on the very first load (spreading out the initial
             # burst after an adapter restart). Subsequent reloads triggered by binding
@@ -281,7 +281,7 @@ class ModbusTcpAdapter(AdapterBase):
     async def _poll_loop(self, binding: Any, *, apply_jitter: bool = True) -> None:
         try:
             bc = ModbusBindingConfig(**binding.config)
-        except Exception:
+        except (ValidationError, TypeError):
             logger.warning("Invalid Modbus TCP binding config %s — skipped", binding.id)
             return
 
@@ -338,7 +338,7 @@ class ModbusTcpAdapter(AdapterBase):
                                     bc.poll_interval,
                                 )
                                 await self._publish_disconnected_if_needed(str(exc))
-                                logger.warning("Modbus TCP: reconnect failed (binding %s): %s", binding.id, exc)
+                                logger.exception("Modbus TCP: reconnect failed (binding %s)", binding.id)
                                 reconnect_failed = True
 
                 if reconnect_failed:
@@ -378,8 +378,8 @@ class ModbusTcpAdapter(AdapterBase):
                 )
             except asyncio.CancelledError:
                 return
-            except Exception as exc:
-                logger.warning("Modbus TCP poll error (binding %s): %s", binding.id, exc)
+            except Exception:
+                logger.exception("Modbus TCP poll error (binding %s)", binding.id)
                 await self._bus.publish(
                     DataValueEvent(
                         datapoint_id=binding.datapoint_id,
@@ -468,9 +468,8 @@ class ModbusTcpAdapter(AdapterBase):
                 yield self._client if self._client_ready() else None
             return
 
-        async with self._io_sem:
-            async with self._inflight_modbus_call():
-                yield self._client if self._client_ready() else None
+        async with self._io_sem, self._inflight_modbus_call():
+            yield self._client if self._client_ready() else None
 
     def _client_ready(self) -> bool:
         return bool(not self._stopping and self._client and self._client.connected)
@@ -482,7 +481,7 @@ class ModbusTcpAdapter(AdapterBase):
                 continue
             try:
                 intervals.append(ModbusBindingConfig(**binding.config).poll_interval)
-            except Exception:
+            except (ValidationError, TypeError):
                 continue
         return max(0.0, min(intervals))
 

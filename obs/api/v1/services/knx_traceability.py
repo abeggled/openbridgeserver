@@ -85,7 +85,7 @@ def normalize_nonempty(values: list[str]) -> list[str]:
 
 async def table_columns(db: Database, table_name: str) -> set[str]:
     rows = await db.fetchall(f"PRAGMA table_info({table_name})")
-    return {str(row["name"]) for row in rows if "name" in row.keys()}
+    return {str(row["name"]) for row in rows if "name" in row.keys()}  # noqa: SIM118 -- Row.__contains__ checks values, not keys
 
 
 async def knx_device_schema_ready(db: Database) -> bool:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+
 from obs.api.auth import create_access_token
 from obs.db.database import get_db
 

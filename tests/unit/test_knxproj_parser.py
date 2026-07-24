@@ -101,7 +101,7 @@ class TestExtractGroupNames:
         }
 
     def test_dict_project_main_names(self):
-        main, mid = _extract_group_names(self._make_dict_project())
+        main, _mid = _extract_group_names(self._make_dict_project())
         assert main["1"] == "Lichtsteuerung"
         assert main["2"] == "Heizung"
 
@@ -464,7 +464,7 @@ class TestWalkSpaces:
                 "spaces": {},
             }
         }
-        locs, fns = self._call(spaces, {"FN-1": fn_ns})
+        _locs, fns = self._call(spaces, {"FN-1": fn_ns})
         assert fns[0].name == "Dimmer"
         assert fns[0].usage_text == "Dimmen"
         assert fns[0].ga_addresses == ["2/3/4"]
@@ -482,14 +482,14 @@ class TestWalkSpaces:
                 "spaces": {},
             }
         }
-        locs, fns = self._call(spaces, {"FN-1": fn})
+        _locs, fns = self._call(spaces, {"FN-1": fn})
         assert fns[0].ga_addresses == ["5/6/7"]
 
     def test_empty_ga_address_skipped(self):
         """GA refs with blank address should not be added."""
         fn = {"name": "X", "usage_text": "Y", "group_addresses": {"r": {"address": ""}}}
         spaces = {"S-1": {"identifier": "S-1", "name": "Z", "type": "Room", "functions": ["FN-1"], "spaces": {}}}
-        locs, fns = self._call(spaces, {"FN-1": fn})
+        _locs, fns = self._call(spaces, {"FN-1": fn})
         assert fns[0].ga_addresses == []
 
     def test_recursive_sub_spaces(self):
@@ -541,14 +541,12 @@ class TestWalkSpaces:
 
 class TestImportErrorPaths:
     def test_parse_knxproj_import_error(self):
-        with mock.patch.dict(sys.modules, {"xknxproject": None}):
-            with pytest.raises(ValueError, match="xknxproject"):
-                parse_knxproj(b"irrelevant")
+        with mock.patch.dict(sys.modules, {"xknxproject": None}), pytest.raises(ValueError, match="xknxproject"):
+            parse_knxproj(b"irrelevant")
 
     def test_parse_knxproj_locations_import_error(self):
-        with mock.patch.dict(sys.modules, {"xknxproject": None}):
-            with pytest.raises(ValueError, match="xknxproject"):
-                parse_knxproj_locations(b"irrelevant")
+        with mock.patch.dict(sys.modules, {"xknxproject": None}), pytest.raises(ValueError, match="xknxproject"):
+            parse_knxproj_locations(b"irrelevant")
 
 
 # ---------------------------------------------------------------------------
@@ -561,16 +559,14 @@ class TestParseKnxprojPasswordError:
         """When xknxproject raises a password-related error it must be re-raised as ValueError."""
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("bad password detected")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_locations_password_error(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("decrypt failed")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj_locations(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj_locations(b"fake")
 
 
 class TestParseKnxprojObjectStyleProject:
@@ -769,6 +765,50 @@ class TestParseKnxprojTradesPasswordProtected:
         records = parse_knxproj_trades(outer_buf.getvalue(), password=_PWD)
         assert len(records) == 2
 
+    def test_knx_master_read_raising_bad_zip_file_falls_back_to_ets6(self, monkeypatch):
+        """If reading ``knx_master.xml`` itself raises (e.g. a corrupt member with
+        good directory metadata but broken data — surfaces as ``zipfile.BadZipFile``
+        from ``ZipFile.read()``), the schema-version detection must swallow it and
+        fall back to the ETS6 default rather than propagating out of parse_knxproj_trades
+        as an unhandled error (it has its own outer ``except Exception`` too, but the
+        inner ``except (zipfile.BadZipFile, KeyError, ValueError)`` must be what
+        actually catches it so schema_version stays at the ETS6 default)."""
+        import obs.knxproj.parser as parser_module
+
+        real_zipfile = parser_module.zipfile.ZipFile
+        call_count = {"n": 0}
+
+        class _FlakyZipFile:
+            def __init__(self, *args, **kwargs):
+                call_count["n"] += 1
+                self._raise_on_read = call_count["n"] == 2
+                self._real = real_zipfile(*args, **kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self._real.__exit__(exc_type, exc, tb)
+
+            def namelist(self):
+                return self._real.namelist()
+
+            def read(self, name, *args, **kwargs):
+                if self._raise_on_read and name == "knx_master.xml":
+                    raise zipfile.BadZipFile("simulated corrupt knx_master.xml entry")
+                return self._real.read(name, *args, **kwargs)
+
+        monkeypatch.setattr(parser_module.zipfile, "ZipFile", _FlakyZipFile)
+
+        records = parser_module.parse_knxproj_trades(_PROTECTED_ETS6, password=_PWD)
+
+        # Second zipfile.ZipFile() call (the schema-version detection) must have
+        # happened and raised — otherwise this test exercises nothing.
+        assert call_count["n"] >= 2
+        # Despite the read() failure, ETS6 AES decryption (the default schema_version)
+        # still succeeds and returns the trades.
+        assert len(records) == 2
+
 
 # ---------------------------------------------------------------------------
 # parse_knxproj error detection — HMAC / bad zip (ETS6 wrong password)
@@ -781,27 +821,23 @@ class TestParseKnxprojHmacError:
     def test_hmac_error_detected_as_password_error(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Bad HMAC check for file '0.xml'")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_bad_zip_error_detected_as_password_error(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("bad zip file")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_invalid_password_msg_detected(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Invalid password.")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_locations_hmac_error_detected(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Bad HMAC check for file '0.xml'")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj_locations(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj_locations(b"fake")

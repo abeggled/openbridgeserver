@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from obs.api.auth import generate_api_key, hash_api_key, hash_password, verify_password
 
-
 # ---------------------------------------------------------------------------
 # verify_password
 # ---------------------------------------------------------------------------

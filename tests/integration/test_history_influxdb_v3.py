@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -13,7 +14,7 @@ pytestmark = pytest.mark.integration
 
 
 class _InfluxV3Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/query":
             body = json.dumps({"results": []}).encode()
@@ -26,7 +27,7 @@ class _InfluxV3Handler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path != "/api/v3/write_lp":
             self.send_response(404)
@@ -133,7 +134,7 @@ async def test_influxdb_v3_write_uses_db_query_param(client, auth_headers, fake_
 
         deadline = time.time() + 2.0
         while time.time() < deadline and not fake_influx_v3_server.captured_writes:  # type: ignore[attr-defined]
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
 
         assert fake_influx_v3_server.captured_writes, "expected at least one v3 write request"  # type: ignore[attr-defined]
         req = fake_influx_v3_server.captured_writes[0]  # type: ignore[attr-defined]

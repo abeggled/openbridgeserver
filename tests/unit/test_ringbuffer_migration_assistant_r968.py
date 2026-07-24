@@ -7,12 +7,11 @@ Precheck-Timing, Eskalations-Prognose-Pfade und den Job-Race.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 from pathlib import Path
 
 import pytest
-
-import asyncio
-import dataclasses
 
 import obs.api.v1.ringbuffer as _migration_api
 from obs.db.database import Database
@@ -163,6 +162,32 @@ async def test_overview_shows_quarantined_legacy(tmp_path: Path):
         ov = await rb.legacy_migration_overview()
         assert ov is not None, "quarantaeniertes Legacy muss im Assistenten sichtbar bleiben"
         assert ov["status"] == "quarantined"
+    finally:
+        await rb.stop()
+
+
+async def test_overview_falls_back_to_manifest_when_legacy_unopenable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """If the legacy segment file can't even be opened (e.g. locked/corrupt at the
+    connection level, not just at the query level), the overview must not blow up —
+    it degrades to manifest-only data (row_estimate/from_ts/to_ts stay None)."""
+    import aiosqlite
+
+    legacy = tmp_path / "obs_ringbuffer.db"
+    await _seed_legacy(legacy, [10, 11])
+    rb = _seg_rb(tmp_path, legacy_retention_protected=True)
+    await rb.start()
+    try:
+
+        async def raise_connect_error(segment):
+            raise aiosqlite.OperationalError("simulated unopenable legacy segment")
+
+        monkeypatch.setattr(rb._store, "_connection_for_read", raise_connect_error)
+
+        ov = await rb.legacy_migration_overview()
+        assert ov is not None
+        assert ov["row_estimate"] is None
+        assert ov["from_ts"] is None
+        assert ov["to_ts"] is None
     finally:
         await rb.stop()
 
@@ -2187,7 +2212,7 @@ async def test_enable_rollback_keeps_preexisting_legacy(tmp_path: Path, monkeypa
     try:
         try:
             await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
-        except Exception:
+        except RuntimeError:
             pass  # der Save-Fehler propagiert erwartungsgemäß
         assert rb_path.exists(), "pre-existing Legacy-DB darf beim Rollback NICHT gelöscht werden"
     finally:
@@ -2306,7 +2331,7 @@ async def test_enable_rollback_keeps_preexisting_legacy_mode_db(tmp_path: Path, 
     try:
         try:
             await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=False), _user="admin", db=db)
-        except Exception:
+        except RuntimeError:
             pass
         assert rb_path.exists(), "pre-existing Legacy-Mode-DB darf beim Rollback NICHT gelöscht werden"
     finally:
@@ -2392,9 +2417,9 @@ async def test_has_missing_file_legacy_detects_interrupted_commit(tmp_path: Path
 async def test_keep_rejected_during_interrupted_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """``keep`` (und ``discard``) müssen 409 liefern, solange ein unterbrochener Commit auf den
     Reconciler wartet (#968, Codex :2110) – sonst hebt keep den Schutz der einzigen Kopie auf."""
-    import obs.api.v1.ringbuffer as rb_api
     from fastapi import HTTPException
 
+    import obs.api.v1.ringbuffer as rb_api
     from obs.db.database import Database
 
     class _Rb:
@@ -2449,7 +2474,7 @@ async def test_enable_rollback_keeps_preexisting_segment_root(tmp_path: Path, mo
     try:
         try:
             await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
-        except Exception:
+        except RuntimeError:
             pass
         assert seg_root.exists(), "pre-existing Segment-Root darf beim Rollback NICHT gelöscht werden"
         assert rb_path.exists(), "pre-existing Legacy-DB bleibt ebenfalls"

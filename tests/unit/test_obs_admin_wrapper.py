@@ -26,16 +26,7 @@ printf '%s\\n' "args=$*"
 
     env_file = tmp_path / "obs.env"
     env_file.write_text(
-        "\n".join(
-            [
-                "# systemd EnvironmentFile syntax, not shell code",
-                "OBS_DATABASE__PATH=/data/obs.db",
-                "OBS_CONFIG=/data/config with spaces.yaml",
-                "OPENTWS_DATABASE__PATH=/legacy/opentws.db",
-                "OPENTWS_CONFIG=/legacy/config.yaml",
-                "OBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto",
-            ]
-        ),
+        "# systemd EnvironmentFile syntax, not shell code\nOBS_DATABASE__PATH=/data/obs.db\nOBS_CONFIG=/data/config with spaces.yaml\nOPENTWS_DATABASE__PATH=/legacy/opentws.db\nOPENTWS_CONFIG=/legacy/config.yaml\nOBS_MOSQUITTO__RELOAD_COMMAND=systemctl reload mosquitto",
         encoding="utf-8",
     )
 

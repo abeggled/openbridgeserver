@@ -13,9 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from fastapi import HTTPException
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers / stubs
@@ -1022,9 +1020,9 @@ class TestGetAdapterSchema:
 
     @pytest.mark.asyncio
     async def test_schema_found(self, monkeypatch):
-        from obs.api.v1 import adapters as adp_api
-
         from pydantic import BaseModel
+
+        from obs.api.v1 import adapters as adp_api
 
         class FakeConfig(BaseModel):
             host: str = "localhost"
@@ -1081,10 +1079,10 @@ class TestUpdateAdapterConfig:
 
     @pytest.mark.asyncio
     async def test_update_config_success(self, monkeypatch):
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             host: str = "localhost"
@@ -1099,11 +1097,11 @@ class TestUpdateAdapterConfig:
 
     @pytest.mark.asyncio
     async def test_update_config_preserves_legacy_message_redacted_secrets(self, monkeypatch):
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
         from obs.api.v1.redaction import REDACTED
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             providers: dict
@@ -1143,11 +1141,11 @@ class TestUpdateAdapterConfig:
     @pytest.mark.asyncio
     async def test_update_config_legacy_message_unresolvable_redaction_returns_422(self, monkeypatch):
         """PATCH /{type}/config must return 422 (not 500) when redacted target secret is unresolvable."""
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
         from obs.api.v1.redaction import REDACTED
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             providers: dict
@@ -1184,11 +1182,11 @@ class TestUpdateAdapterConfig:
 
     @pytest.mark.asyncio
     async def test_update_config_legacy_message_rejects_redacted_secrets_without_stored_config(self, monkeypatch):
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
         from obs.api.v1.redaction import REDACTED
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             providers: dict
@@ -1552,6 +1550,159 @@ class TestSnmpWalk:
                 _user="admin",
             )
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_snmp_walk_reconnects_when_instance_not_connected(self, monkeypatch):
+        """Instance is not running -> a dummy SnmpAdapter is built inline (covers the local import)."""
+        from obs.api.v1 import adapters as adp_api
+
+        row = _inst_row(adapter_type="SNMP", config={})
+        db = _DbStub(one=row)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        with patch("obs.adapters.snmp.adapter._import_pysnmp", return_value=None), pytest.raises(HTTPException) as exc_info:
+            await adp_api.snmp_walk(
+                instance_id=uuid.UUID(row["id"]),
+                host="10.0.0.1",
+                db=db,
+                _user="admin",
+            )
+        assert exc_info.value.status_code == 503
+
+
+class TestListInstanceHolidays:
+    @pytest.mark.asyncio
+    async def test_reconstructs_dummy_adapter_when_instance_not_running(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        row = _inst_row(adapter_type="ZEITSCHALTUHR", config={"custom_holidays": ["01-01:Neujahr"]})
+        db = _DbStub(one=row)
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: None)
+
+        result = await adp_api.list_instance_holidays(
+            instance_id=uuid.UUID(row["id"]),
+            year=2026,
+            _user="admin",
+            db=db,
+        )
+
+        assert any(h.name == "Neujahr" for h in result)
+
+
+class TestIoBrokerCandidatesInvalidBindingConfig:
+    @pytest.mark.asyncio
+    async def test_skips_binding_with_unparseable_config_json(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        instance = MagicMock()
+        instance.browse_states = AsyncMock(return_value=[{"id": "state.1", "type": "boolean"}])
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: instance)
+
+        bad_row = _row(config="{not-json")
+        db = _DbStub(rows=[bad_row])
+
+        body = adp_api.IoBrokerImportRequest(prefix="", states=[], direction="auto", tags=[], limit=10)
+        result = await adp_api._iobroker_candidates("iid", body, db)
+
+        assert result[0].state_id == "state.1"
+        assert result[0].exists is False
+
+
+class TestIoBrokerImportStatesFailure:
+    @pytest.mark.asyncio
+    async def test_logs_exception_and_records_error_on_datapoint_creation_failure(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        row = _inst_row(adapter_type="IOBROKER")
+        db = _DbStub(one=row, rows=[])
+
+        instance = MagicMock()
+        instance.browse_states = AsyncMock(return_value=[{"id": "state.1", "type": "boolean", "name": "Lamp"}])
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: instance)
+
+        fake_registry = MagicMock()
+        fake_registry.create = AsyncMock(side_effect=RuntimeError("db boom"))
+        monkeypatch.setattr("obs.core.registry.get_registry", lambda: fake_registry)
+
+        body = adp_api.IoBrokerImportRequest(prefix="", states=[], direction="auto", tags=[], limit=10)
+        result = await adp_api.iobroker_import_states(
+            instance_id=uuid.UUID(row["id"]),
+            body=body,
+            _user="admin",
+            db=db,
+        )
+
+        assert result.errors == ["state.1: db boom"]
+        assert result.created_datapoints == 0
+
+
+class TestAnwesenheitHealth:
+    @pytest.mark.asyncio
+    async def test_returns_unhealthy_on_invalid_config(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        row = _inst_row(adapter_type="ANWESENHEITSSIMULATION", config={"offset_days": "not-a-number"})
+        db = _DbStub(one=row)
+
+        result = await adp_api.anwesenheit_health(instance_id=uuid.UUID(row["id"]), _user="admin", db=db)
+
+        assert result.healthy is False
+        assert "Config-Fehler" in result.message
+
+    @pytest.mark.asyncio
+    async def test_logs_exception_when_history_query_fails_for_a_binding(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+
+        dp_id = str(uuid.uuid4())
+        binding_row = _row(id=str(uuid.uuid4()), datapoint_id=dp_id)
+        row = _inst_row(adapter_type="ANWESENHEITSSIMULATION", config={"offset_days": 3})
+        db = _DbStub(one=row, rows=[binding_row])
+
+        fake_history = MagicMock()
+        fake_history.query = AsyncMock(side_effect=RuntimeError("history boom"))
+
+        with patch("obs.history.factory.get_history_plugin", return_value=fake_history):
+            result = await adp_api.anwesenheit_health(instance_id=uuid.UUID(row["id"]), _user="admin", db=db)
+
+        assert result.bindings_total == 1
+        assert result.healthy is False
+
+
+class TestAnwesenheitSyncBindingsFailurePaths:
+    @pytest.mark.asyncio
+    async def test_logs_exceptions_for_create_delete_and_reload_failures(self, monkeypatch):
+        from obs.api.v1 import adapters as adp_api
+        from obs.api.v1 import bindings as bindings_api
+
+        inst_id = uuid.uuid4()
+        existing_dp = str(uuid.uuid4())
+        existing_binding_id = str(uuid.uuid4())
+        new_dp = str(uuid.uuid4())
+
+        row = _inst_row(adapter_type="ANWESENHEITSSIMULATION")
+        binding_row = _row(datapoint_id=existing_dp, id=existing_binding_id)
+        db = _DbStub(one=row, rows=[binding_row])
+
+        monkeypatch.setattr(bindings_api, "create_binding", AsyncMock(side_effect=RuntimeError("create boom")))
+        monkeypatch.setattr(bindings_api, "delete_binding", AsyncMock(side_effect=RuntimeError("delete boom")))
+        monkeypatch.setattr(adp_api.adapter_registry, "get_instance_by_id", lambda iid: object())
+        monkeypatch.setattr(
+            adp_api.adapter_registry,
+            "reload_instance_bindings",
+            AsyncMock(side_effect=RuntimeError("reload boom")),
+        )
+
+        body = adp_api.AnwesenheitSyncRequest(datapoint_ids=[new_dp])
+        result = await adp_api.anwesenheit_sync_bindings(
+            instance_id=inst_id,
+            body=body,
+            _user="admin",
+            db=db,
+        )
+
+        assert result.created == 0
+        assert result.removed == 0
+        assert len(result.errors) == 2
 
 
 # ============================================================================
@@ -3037,7 +3188,7 @@ class TestIoBrokerAdapterExtras:
         a._cfg = IoBrokerAdapterConfig(socket_instability_window_s=60)
         import datetime
 
-        t0 = datetime.datetime(2024, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        t0 = datetime.datetime(2024, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
         t1 = t0 + timedelta(seconds=61)
         t2 = t0 + timedelta(seconds=70)
         a._disconnect_times = deque([t0, t1])
@@ -3398,7 +3549,7 @@ class TestLogicManagerBasics:
 
     @pytest.mark.asyncio
     async def test_stop_cancels_cron_tasks(self):
-        mgr, _, event_bus, _ = _make_logic_manager()
+        mgr, _, _event_bus, _ = _make_logic_manager()
         task = MagicMock()
         task.cancel = MagicMock()
         mgr._cron_tasks[("g1", "n1")] = task
@@ -3460,7 +3611,7 @@ class TestLogicManagerBasics:
     @pytest.mark.asyncio
     async def test_execute_graph_success(self):
         flow = _make_flow()
-        mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr, _db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
         with patch("obs.api.v1.websocket.get_ws_manager") as mock_ws:
             mock_ws.return_value.broadcast = AsyncMock()
             result = await mgr.execute_graph("g1")
@@ -3498,12 +3649,26 @@ class TestLogicManagerBasics:
         await mgr._load_graphs()
         assert mgr._hysteresis.get("g1") == state
 
+    @pytest.mark.asyncio
+    async def test_load_graphs_ignores_malformed_node_state(self):
+        """A malformed node_state column (not valid JSON) must not abort
+        loading the graph itself — only the node_state restore is skipped."""
+        from obs.logic.models import FlowData
+
+        flow = FlowData.model_validate({"nodes": [], "edges": []})
+        db_rows = [_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state="not-json{")]
+        mgr, db, _, _ = _make_logic_manager()
+        db.fetchall = AsyncMock(return_value=db_rows)
+        await mgr._load_graphs()
+        assert "g1" in mgr._graphs
+        assert "g1" not in mgr._hysteresis
+
 
 class TestLogicManagerValueEvent:
     @pytest.mark.asyncio
     async def test_on_value_event_no_matching_graph(self):
         """When no graph has a node watching the DP, no execute call is made."""
-        mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr, _db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
         event = MagicMock()
         event.datapoint_id = uuid.uuid4()
         event.value = 42.0
@@ -3917,12 +4082,89 @@ class TestLogicManagerExecuteGraph:
     async def test_execute_graph_ws_error_ignored(self):
         """If websocket broadcast fails, execution should still succeed."""
         flow = _make_flow()
-        mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr, db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
         db.execute_and_commit = AsyncMock()
 
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=Exception("ws not ready")):
             result = await mgr._execute_graph("g1", "G1", flow, {})
         assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_execute_graph_skips_registry_seed_for_invalid_datapoint_id(self):
+        """A datapoint_read node whose datapoint_id isn't a valid UUID must not
+        blow up graph execution — the registry seed is simply skipped for it."""
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "n1",
+                    "type": "datapoint_read",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"datapoint_id": "not-a-valid-uuid"},
+                },
+            ],
+        )
+        mgr, db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        db.execute_and_commit = AsyncMock()
+
+        with patch("obs.api.v1.websocket.get_ws_manager") as mock_ws:
+            mock_ws.return_value.broadcast = AsyncMock()
+            result = await mgr._execute_graph("g1", "G1", flow, {})
+
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_execute_graph_ical_fetch_failure_is_logged(self):
+        """An unexpected error while pre-fetching an iCal URL (e.g. building the
+        fetch targets) must not blow up graph execution — it's logged per node
+        and the graph still produces its normal outputs."""
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "i1",
+                    "type": "ical",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"url": "https://example.com/cal.ics"},
+                },
+            ],
+        )
+        mgr, db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        db.execute_and_commit = AsyncMock()
+
+        with (
+            patch("obs.logic.manager._build_ical_fetch_targets", side_effect=RuntimeError("blocked")),
+            patch("obs.api.v1.websocket.get_ws_manager") as mock_ws,
+        ):
+            mock_ws.return_value.broadcast = AsyncMock()
+            result = await mgr._execute_graph("g1", "G1", flow, {})
+
+        assert isinstance(result, dict)
+        assert mgr._hysteresis["g1"]["i1"].get("raw") is None
+
+    @pytest.mark.asyncio
+    async def test_execute_graph_executor_error_returns_empty_dict(self):
+        """If GraphExecutor.execute() itself raises, _execute_graph logs the
+        failure and returns an empty dict rather than propagating."""
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "n1",
+                    "type": "datapoint_write",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"datapoint_id": str(uuid.uuid4())},
+                },
+            ],
+        )
+        mgr, db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        db.execute_and_commit = AsyncMock()
+
+        with (
+            patch("obs.logic.manager.GraphExecutor.execute", side_effect=RuntimeError("executor blew up")),
+            patch("obs.api.v1.websocket.get_ws_manager") as mock_ws,
+        ):
+            mock_ws.return_value.broadcast = AsyncMock()
+            result = await mgr._execute_graph("g1", "G1", flow, {})
+
+        assert result == {}
 
 
 class TestStartCronTasks:
@@ -4000,3 +4242,49 @@ class TestStartCronTasks:
         mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", False, flow)})
         mgr._start_cron_tasks()
         assert ("g1", "c1") not in mgr._cron_tasks
+
+    @pytest.mark.asyncio
+    async def test_cron_loop_logs_and_backs_off_on_error(self):
+        """_cron_loop swallows an unexpected exception (e.g. from croniter),
+        logs it and backs off for 60s rather than letting the loop die."""
+        import asyncio
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            if len(sleep_calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "not-a-valid-cron-expression"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert sleep_calls == [60, 60]
+
+    @pytest.mark.asyncio
+    async def test_ical_loop_logs_and_backs_off_on_error(self):
+        """_ical_loop swallows an unexpected exception from _execute_graph,
+        logs it and backs off for 60s rather than letting the loop die."""
+        import asyncio
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr._execute_graph = AsyncMock(side_effect=RuntimeError("execute failed"))
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            if len(sleep_calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._ical_loop("g1", "i1", 30))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert sleep_calls == [60, 60]
+        assert mgr._execute_graph.await_count == 2

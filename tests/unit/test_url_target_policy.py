@@ -6,8 +6,8 @@ import pytest
 from fastapi import HTTPException
 
 from obs.api.v1.security import (
-    UrlTargetCheckIn,
     UrlTargetAllowlistCreate,
+    UrlTargetCheckIn,
     check_url_target,
     create_url_target_allowlist_entry,
     delete_url_target_allowlist_entry,
@@ -158,9 +158,11 @@ def test_rejects_unresolvable_fqdn_allowlist_target(tmp_path):
     allowlist = tmp_path / "allow.yaml"
     override_settings(_settings_for(allowlist))
 
-    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
-        with pytest.raises(ValueError, match="FQDN target must resolve"):
-            add_allowed_url_target("internal.example", reason="invalid")
+    with (
+        patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")),
+        pytest.raises(ValueError, match="FQDN target must resolve"),
+    ):
+        add_allowed_url_target("internal.example", reason="invalid")
 
     assert not allowlist.exists()
 
@@ -246,9 +248,8 @@ def test_allowlist_read_errors_block_writes(tmp_path):
     allowlist.write_text("version: 1\nallowed_targets: []\n", encoding="utf-8")
     override_settings(_settings_for(allowlist))
 
-    with patch("builtins.open", side_effect=OSError("permission denied")):
-        with pytest.raises(UrlTargetAllowlistReadError):
-            add_allowed_url_target("10.38.113.23/32", reason="unit")
+    with patch("builtins.open", side_effect=OSError("permission denied")), pytest.raises(UrlTargetAllowlistReadError):
+        add_allowed_url_target("10.38.113.23/32", reason="unit")
 
 
 def test_invalid_allowlist_items_are_skipped(tmp_path):
@@ -565,9 +566,8 @@ async def test_security_api_rejects_unresolvable_fqdn_create_target(tmp_path):
     allowlist = tmp_path / "allow.yaml"
     override_settings(_settings_for(allowlist))
 
-    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")):
-        with pytest.raises(HTTPException) as exc:
-            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="internal.example"), admin="admin")
+    with patch("obs.security.url_targets.socket.getaddrinfo", side_effect=OSError("dns down")), pytest.raises(HTTPException) as exc:
+        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="internal.example"), admin="admin")
 
     assert exc.value.status_code == 400
     assert "FQDN target must resolve" in exc.value.detail
@@ -578,9 +578,8 @@ async def test_security_api_rejects_unresolvable_fqdn_create_target(tmp_path):
 async def test_security_api_reports_allowlist_write_error(tmp_path):
     override_settings(_settings_for(tmp_path / "allow.yaml"))
 
-    with patch("obs.api.v1.security.add_allowed_url_target", side_effect=OSError("permission denied")):
-        with pytest.raises(HTTPException) as exc:
-            await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="10.38.113.23/32", reason="unit"), admin="admin")
+    with patch("obs.api.v1.security.add_allowed_url_target", side_effect=OSError("permission denied")), pytest.raises(HTTPException) as exc:
+        await create_url_target_allowlist_entry(UrlTargetAllowlistCreate(target="10.38.113.23/32", reason="unit"), admin="admin")
 
     assert exc.value.status_code == 500
     assert "Could not write URL target allowlist" in exc.value.detail
