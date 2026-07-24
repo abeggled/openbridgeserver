@@ -127,4 +127,4 @@ def test_filter_criteria_forbids_extras():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        FilterCriteria.model_validate({"datapoint_ids": ["dp-1"]})  # noqa: typo
+        FilterCriteria.model_validate({"datapoint_ids": ["dp-1"]})  # intentional typo
