@@ -1,0 +1,70 @@
+name: "Update ops manifest"
+description: >
+  Checks out abeggled/openbridgeserver-ops and merges a JSON patch into
+  channels/<channel>.json via tools/ops_manifest_patch.py, then commits and
+  pushes the result to main. Used by release.yml (docker block) and
+  lxc-template.yml (lxc block) to keep the canary channel manifest current.
+
+inputs:
+  channel:
+    description: "Target channel, e.g. canary"
+    required: true
+  patch-json:
+    description: 'JSON object to shallow-merge, e.g. {"docker": {"image": "...", "digest": "..."}}'
+    required: true
+  version:
+    description: "Release version to stamp onto the manifest, e.g. 2026.8.0"
+    required: true
+  token:
+    description: "Token with contents:write on abeggled/openbridgeserver-ops"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout openbridgeserver-ops
+      uses: actions/checkout@v7
+      with:
+        repository: abeggled/openbridgeserver-ops
+        token: ${{ inputs.token }}
+        path: ops-repo
+
+    - name: Merge patch into channel manifest
+      shell: bash
+      env:
+        CHANNEL: ${{ inputs.channel }}
+        PATCH_JSON: ${{ inputs.patch-json }}
+        VERSION: ${{ inputs.version }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        python3 tools/ops_manifest_patch.py \
+          --file "ops-repo/channels/${CHANNEL}.json" \
+          --patch-json "$PATCH_JSON" \
+          --channel "$CHANNEL" \
+          --version "$VERSION" \
+          --actor "$ACTOR"
+
+    - name: Commit and push
+      shell: bash
+      env:
+        CHANNEL: ${{ inputs.channel }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        cd ops-repo
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add "channels/${CHANNEL}.json"
+        if git diff --cached --quiet; then
+          echo "No changes — channels/${CHANNEL}.json already reflects ${VERSION}."
+          exit 0
+        fi
+        git commit -m "chore(ops-manifest): update ${CHANNEL} to ${VERSION}"
+        for attempt in 1 2 3; do
+          if git push origin HEAD:main; then
+            exit 0
+          fi
+          echo "Push attempt ${attempt} failed — rebasing onto latest main and retrying."
+          git pull --rebase origin main
+        done
+        echo "Error: failed to push channels/${CHANNEL}.json after 3 attempts." >&2
+        exit 1
