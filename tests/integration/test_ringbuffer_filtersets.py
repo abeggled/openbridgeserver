@@ -361,6 +361,33 @@ async def test_patch_order_batch(client, auth_headers):
 # ---------------------------------------------------------------------------
 
 
+async def test_multi_query_adapter_only_filter_matches_source_adapter_independent_of_casing(client, auth_headers):
+    dp = await _create_dp(client, auth_headers, f"RB1077 adapter-only {uuid.uuid4()}")
+    await _write_value(client, auth_headers, dp["id"], 1077.0)
+    created = await _create_filterset(
+        client,
+        auth_headers,
+        {
+            "name": f"RB1077 adapter-only {uuid.uuid4()}",
+            "filter": {"adapters": ["API"]},
+        },
+    )
+    try:
+        resp = await client.post(
+            "/api/v1/ringbuffer/filtersets/query",
+            json={"set_ids": [created["id"]], "limit": 500},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        target_rows = [row for row in rows if row["datapoint_id"] == dp["id"]]
+        assert target_rows
+        assert all(row["source_adapter"].lower() == "api" for row in rows)
+        assert all(row["matched_set_ids"] == [created["id"]] for row in rows)
+    finally:
+        await _delete_filterset(client, auth_headers, created["id"])
+
+
 async def test_multi_query_or_union_with_matched_set_ids(client, auth_headers):
     tag_a = f"rb431a-{uuid.uuid4().hex[:8]}"
     tag_b = f"rb431b-{uuid.uuid4().hex[:8]}"
