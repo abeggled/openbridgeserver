@@ -122,7 +122,7 @@ def _normalise_api_client_variables(raw: Any) -> dict[int, dict[str, str]]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             raw = []
     if not isinstance(raw, list):
         return {}
@@ -154,7 +154,7 @@ def _rename_api_client_variable_datapoint_names(raw: Any, datapoint_id: str, new
     if was_string:
         try:
             variables = json.loads(raw)
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             return raw, False
     if not isinstance(variables, list):
         return raw, False
@@ -483,7 +483,7 @@ def _store_response_cookies(
         jar = http.cookies.SimpleCookie()
         try:
             jar.load(raw)
-        except Exception:
+        except http.cookies.CookieError:
             continue
         for morsel in jar.values():
             name = morsel.key
@@ -510,7 +510,7 @@ def _store_response_cookies(
                     if exp_dt.tzinfo is None:
                         exp_dt = exp_dt.replace(tzinfo=UTC)
                     delete_cookie = exp_dt <= datetime.now(UTC)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
             key = (domain, path, name, host_only)
             if delete_cookie:
@@ -626,6 +626,7 @@ async def _ping_host(host: str, count: int, timeout_s: float) -> tuple[bool, flo
         logger.warning("ping binary not found — install iputils-ping to enable Host Check")
         return False, None
     except Exception:
+        logger.exception("Host Check ping subprocess for %s failed unexpectedly", host)
         return False, None
 
 
@@ -893,10 +894,15 @@ class LogicManager:
                                 try:
                                     await asyncio.shield(publish_task)
                                 except Exception:
-                                    pass
+                                    logger.exception(
+                                        "Value sequence graph=%s node=%s target=%s: cleanup re-await after cancellation failed",
+                                        graph_id[:8],
+                                        node_id[:8],
+                                        target,
+                                    )
                                 raise
-                        except Exception as exc:
-                            logger.warning("Value sequence graph=%s node=%s target=%s failed: %s", graph_id[:8], node_id[:8], target, exc)
+                        except Exception:
+                            logger.exception("Value sequence graph=%s node=%s target=%s failed", graph_id[:8], node_id[:8], target)
                     try:
                         delay_s = max(0.0, float(step.get("delay_ms") or 0) / 1000)
                     except (TypeError, ValueError):
@@ -995,8 +1001,8 @@ class LogicManager:
             for row in rows:
                 self._app_config[row["key"]] = row["value"]
             logger.debug("LogicManager: app_config loaded: %s", self._app_config)
-        except Exception as exc:
-            logger.warning("LogicManager: could not load app_settings: %s", exc)
+        except Exception:
+            logger.exception("LogicManager: could not load app_settings")
 
     def update_app_config(self, config: dict[str, Any]) -> None:
         """Hot-update app config (called by settings API on PUT /system/settings)."""
@@ -1091,8 +1097,8 @@ class LogicManager:
 
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                logger.error("Cron loop error graph=%s: %s", graph_id[:8], exc)
+            except Exception:
+                logger.exception("Cron loop error graph=%s", graph_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
     async def _ical_loop(self, graph_id: str, node_id: str, refresh_min: float) -> None:
@@ -1115,8 +1121,8 @@ class LogicManager:
 
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
-                logger.error("iCal loop error graph=%s node=%s: %s", graph_id[:8], node_id[:8], exc)
+            except Exception:
+                logger.exception("iCal loop error graph=%s node=%s", graph_id[:8], node_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
     # ── Event Handler ─────────────────────────────────────────────────────
@@ -1244,8 +1250,8 @@ class LogicManager:
                         event.new_name,
                         graph_id[:8],
                     )
-                except Exception as exc:
-                    logger.warning("LogicManager: failed to persist renamed datapoint in graph %s: %s", graph_id[:8], exc)
+                except Exception:
+                    logger.exception("LogicManager: failed to persist renamed datapoint in graph %s", graph_id[:8])
 
     # ── Execution ─────────────────────────────────────────────────────────
 
@@ -1290,7 +1296,7 @@ class LogicManager:
                 vs = self._registry.get_value(dp_id)
                 if vs is not None:
                     aug_overrides[node.id] = {"value": vs.value, "changed": False}
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 pass
         # Event / manual overrides take priority over registry seed
         aug_overrides.update(overrides)
@@ -1414,8 +1420,8 @@ class LogicManager:
                         hyst_node["last_fetch_ts"] = execute_now.timestamp()
                         logger.info("Graph %s: iCal fetched from %s (%d bytes)", graph_id[:8], current_url, len(_resp_bytes))
                         break
-                except Exception as _exc:
-                    logger.warning("Graph %s: iCal fetch failed for node %s (%s): %s", graph_id[:8], node.id[:8], url, _exc)
+                except Exception:
+                    logger.exception("Graph %s: iCal fetch failed for node %s (%s)", graph_id[:8], node.id[:8], url)
                 finally:
                     if active_client is not None:
                         await active_client.aclose()
@@ -1483,7 +1489,11 @@ class LogicManager:
 
                                     _hist_val = _GE._safe_eval(_hc_formula, {"x": float(_hist_val)})
                                 except Exception:
-                                    pass
+                                    logger.exception(
+                                        "Graph %s: heating_circuit %s: history value_formula failed, using raw value",
+                                        graph_id[:8],
+                                        _hc_slot,
+                                    )
                             _hc_vmap = _hc_dp_read_node.data.get("value_map")
                             if _hc_vmap:
                                 try:
@@ -1491,7 +1501,11 @@ class LogicManager:
 
                                     _hist_val = _avm(_hist_val, _hc_vmap)
                                 except Exception:
-                                    pass
+                                    logger.exception(
+                                        "Graph %s: heating_circuit %s: history value_map failed, using pre-map value",
+                                        graph_id[:8],
+                                        _hc_slot,
+                                    )
                         try:
                             _hc_node_aug[f"_history_{_hc_slot}"] = float(_hist_val)
                             logger.debug(
@@ -1508,16 +1522,16 @@ class LogicManager:
                                 node.id[:8],
                                 _hc_slot,
                             )
-            except Exception as _hc_exc:
-                logger.debug("Graph %s: heating_circuit history pre-fill failed: %s", graph_id[:8], _hc_exc)
+            except Exception:
+                logger.exception("Graph %s: heating_circuit history pre-fill failed", graph_id[:8])
 
         executor = GraphExecutor(flow, hyst, self._app_config)
         try:
             pre_execute_hyst = copy.deepcopy(hyst) if needs_async_replay_snapshot else None
             pre_execute_node_state = copy.deepcopy(graph_state) if needs_async_replay_snapshot else None
             outputs = executor.execute(aug_overrides, commit_memory=False)
-        except Exception as exc:
-            logger.error("Graph %s (%s) execution error: %s", graph_id, name, exc)
+        except Exception:
+            logger.exception("Graph %s (%s) execution error", graph_id, name)
             return {}
 
         def _apply_operating_hours_state(node_ids: set[str] | None = None, base_state: dict[str, Any] | None = None) -> None:
@@ -1578,8 +1592,8 @@ class LogicManager:
             try:
                 timeout_s, count = _normalise_host_check_ping_config(node.data.get("timeout_s"), node.data.get("count"))
                 config_sig = f"{host}\0{timeout_s:g}\0{count}"
-            except Exception as exc:
-                logger.warning("Graph %s: host_check %s failed: %s", graph_id[:8], host, exc)
+            except Exception:
+                logger.exception("Graph %s: host_check %s failed", graph_id[:8], host)
                 return False
             if (
                 was_triggered
@@ -1610,8 +1624,8 @@ class LogicManager:
                     f"{latency_ms:.1f}" if latency_ms is not None else "—",
                 )
                 return True
-            except Exception as exc:
-                logger.warning("Graph %s: host_check %s failed: %s", graph_id[:8], host, exc)
+            except Exception:
+                logger.exception("Graph %s: host_check %s failed", graph_id[:8], host)
                 return False
 
         # ── Handle host_check ─────────────────────────────────────────────
@@ -1770,8 +1784,8 @@ class LogicManager:
                 target_set.add(node.id)
                 logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
                 return True
-            except Exception as exc:
-                logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
+            except Exception:
+                logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], node.id[:8])
                 return False
 
         # ── Handle wake_on_lan ────────────────────────────────────────────
@@ -1954,7 +1968,7 @@ class LogicManager:
             if hdr_str:
                 try:
                     extra_headers = _json.loads(hdr_str)
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     pass
             hdr_file = (node.data.get("headers_secret_file") or "").strip()
             if hdr_file:
@@ -1963,7 +1977,7 @@ class LogicManager:
                         **extra_headers,
                         **_json.loads(_read_secret_file(hdr_file)),
                     }
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     pass
             try:
                 extra_headers = _replace_api_client_placeholders(extra_headers, variable_resolver)
@@ -2052,7 +2066,7 @@ class LogicManager:
                 if resp_type in ("json", "application/json"):
                     try:
                         resp_data: Any = resp.json()
-                    except Exception:
+                    except ValueError:
                         resp_data = resp_text
                 else:
                     resp_data = resp_text
@@ -2073,7 +2087,7 @@ class LogicManager:
                 target_set.add(node.id)
                 return True
             except Exception as exc:
-                logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
+                logger.exception("Graph %s: api_client failed", graph_id[:8])
                 outputs[node.id].update({"response": str(exc), "status": None, "success": False})
                 target_set.add(node.id)
                 return True
@@ -2244,8 +2258,8 @@ class LogicManager:
                     post_api_wol_nodes.add(node.id)
                     triggered_wol_nodes.add(node.id)
                     logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
-                except Exception as exc:
-                    logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], node.id[:8], type(exc).__name__)
+                except Exception:
+                    logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], node.id[:8])
 
         if post_api_wol_nodes:
             _add_resolved_outputs(post_api_wol_nodes)
@@ -2381,7 +2395,7 @@ class LogicManager:
                 if hdr_str:
                     try:
                         extra_headers = _json.loads(hdr_str)
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         pass
                 hdr_file = (node.data.get("headers_secret_file") or "").strip()
                 if hdr_file:
@@ -2390,7 +2404,7 @@ class LogicManager:
                             **extra_headers,
                             **_json.loads(_read_secret_file(hdr_file)),
                         }
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         pass
                 try:
                     extra_headers = _replace_api_client_placeholders(extra_headers, variable_resolver)
@@ -2480,7 +2494,7 @@ class LogicManager:
                     if resp_type in ("json", "application/json"):
                         try:
                             resp_data: Any = resp.json()
-                        except Exception:
+                        except ValueError:
                             resp_data = resp_text
                     else:
                         resp_data = resp_text
@@ -2501,7 +2515,7 @@ class LogicManager:
                     post_api_hc_api_clients.add(node.id)
                     triggered_api_clients.add(node.id)
                 except Exception as exc:
-                    logger.warning("Graph %s: api_client failed: %s", graph_id[:8], exc)
+                    logger.exception("Graph %s: api_client failed", graph_id[:8])
                     outputs[node.id].update({"response": str(exc), "status": None, "success": False})
                     post_api_hc_api_clients.add(node.id)
                     triggered_api_clients.add(node.id)
@@ -2646,8 +2660,8 @@ class LogicManager:
                 _final_wol_candidates.add(_fw_node.id)
                 triggered_wol_nodes.add(_fw_node.id)
                 logger.info("Graph %s: WoL sent by node %s", graph_id[:8], _fw_node.id[:8])
-            except Exception as exc:
-                logger.warning("Graph %s: WoL failed on node %s: %s", graph_id[:8], _fw_node.id[:8], type(exc).__name__)
+            except Exception:
+                logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], _fw_node.id[:8])
         if _final_wol_candidates:
             _add_resolved_outputs(_final_wol_candidates)
             _fwol_dn_ovr: dict[str, dict[str, Any]] = {}
@@ -2770,8 +2784,8 @@ class LogicManager:
                 target_set.add(node.id)
                 logger.info("Graph %s: message archived in %s (msg=%r)", graph_id[:8], archive_id, msg[:40])
                 return True
-            except Exception as exc:
-                logger.warning("Graph %s: message archive write failed (node=%s): %s", graph_id[:8], node.id[:8], exc)
+            except Exception:
+                logger.exception("Graph %s: message archive write failed (node=%s)", graph_id[:8], node.id[:8])
                 return False
 
         triggered_notify_nodes: set[str] = set()
@@ -2821,7 +2835,7 @@ class LogicManager:
                     return True
                 except Exception as exc:
                     outputs[node.id]["__error__"] = str(exc)
-                    logger.warning("Graph %s: notification failed: %s", graph_id[:8], exc)
+                    logger.exception("Graph %s: notification failed", graph_id[:8])
                     return False
 
             if node.type == "notify_pushover":
@@ -2907,12 +2921,11 @@ class LogicManager:
                         target_set.add(node.id)
                         logger.info("Graph %s: Pushover sent (msg=%r)", graph_id[:8], msg[:40])
                         return True
-                except Exception as exc:
-                    logger.warning(
-                        "Graph %s: Pushover failed (msg=%r): %s",
+                except Exception:
+                    logger.exception(
+                        "Graph %s: Pushover failed (msg=%r)",
                         graph_id[:8],
                         msg[:40],
-                        exc,
                     )
                     return False
 
@@ -2970,12 +2983,11 @@ class LogicManager:
                             msg[:40],
                         )
                         return True
-                except Exception as exc:
-                    logger.warning(
-                        "Graph %s: seven.io SMS failed (msg=%r): %s",
+                except Exception:
+                    logger.exception(
+                        "Graph %s: seven.io SMS failed (msg=%r)",
                         graph_id[:8],
                         msg[:40],
-                        exc,
                     )
                     return False
 
@@ -3223,8 +3235,8 @@ class LogicManager:
                 )
                 await self._event_bus.publish(event)
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
-            except Exception as exc:
-                logger.warning("Graph %s: failed to write dp %s: %s", graph_id, dp_id_str, exc)
+            except Exception:
+                logger.exception("Graph %s: failed to write dp %s", graph_id, dp_id_str)
 
         # Value sequences are intentionally started after synchronous graph
         # writes, so an execution that triggers both has deterministic order.
@@ -3252,8 +3264,8 @@ class LogicManager:
                     "UPDATE logic_graphs SET node_state = ? WHERE id = ?",
                     (json.dumps(state_to_save), graph_id),
                 )
-            except Exception as exc:
-                logger.warning("Graph %s: failed to persist node_state: %s", graph_id[:8], exc)
+            except Exception:
+                logger.exception("Graph %s: failed to persist node_state", graph_id[:8])
 
         # ── Broadcast final execution results to all WS clients ──────────
         # Broadcast happens here — after all async ops (api_client HTTP calls,
@@ -3276,7 +3288,7 @@ class LogicManager:
                 },
             )
         except Exception:
-            pass  # WS not ready or no clients — non-critical
+            logger.exception("Graph %s: WS broadcast failed — ignoring (non-critical)", graph_id[:8])
 
         return outputs
 
@@ -3304,10 +3316,10 @@ class LogicManager:
                                 row["id"][:8],
                                 len(saved),
                             )
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         pass
-            except Exception as exc:
-                logger.warning("Failed to parse graph %s: %s", row["id"], exc)
+            except Exception:
+                logger.exception("Failed to parse graph %s", row["id"])
 
     def invalidate_cache(self, graph_id: str) -> None:
         self._graphs.pop(graph_id, None)
