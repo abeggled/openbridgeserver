@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import sqlite3
 import tempfile
@@ -30,6 +31,8 @@ from obs.db.database import Database, get_db
 from obs.logic.models import FlowData
 from obs.logic.validation import validate_timer_durations
 from obs.models.datapoint import DataPoint
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"])
 
@@ -162,6 +165,7 @@ async def _validate_import_message_instance_configs(
                     instance_config=instance.config,
                 )
         except Exception as exc:
+            logger.exception(f"Binding validation for instance {instance_id} failed")
             invalid[instance_id] = str(exc)
     return invalid
 
@@ -381,9 +385,9 @@ async def export_config(
                     ),
                 )
             except OSError:
-                pass
+                logger.exception(f"Skipping unreadable icon {svg_file}")
     except Exception:
-        pass
+        logger.exception("Icon export failed — continuing export without icons")
 
     # FontAwesome API Key
     fa_key_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'icons.fontawesome_api_key'")
@@ -536,14 +540,14 @@ async def import_db(
 
             await adapter_registry.stop_all()
         except Exception:
-            pass
+            logger.exception("Adapter stop before DB restore failed — continuing restore anyway")
 
         try:
             from obs.logic.manager import get_logic_manager
 
             await get_logic_manager().stop()
         except Exception:
-            pass
+            logger.exception("Logic engine stop before DB restore failed — continuing restore anyway")
 
         # Aiosqlite-Verbindung trennen
         await db.disconnect()
@@ -574,7 +578,7 @@ async def import_db(
             logic_mgr = get_logic_manager()
             await logic_mgr.start()
         except Exception:
-            pass
+            logger.exception("Logic engine restart after DB restore failed")
 
         # Adapter neu starten
         adapters_restarted = 0
@@ -586,14 +590,14 @@ async def import_db(
             await adapter_registry.start_all(event_bus, db)
             adapters_restarted = len(adapter_registry.get_all_instances())
         except Exception:
-            pass
+            logger.exception("Adapter restart after DB restore failed")
 
         return {"ok": True, "message": "Datenbankwiederherstellung erfolgreich.", "adapters_restarted": adapters_restarted}
 
     finally:
         try:
             os.unlink(tmp.name)
-        except Exception:
+        except OSError:
             pass
 
 
@@ -668,6 +672,7 @@ async def import_config(
                 reg._values[dp_id] = ValueState()
                 result.datapoints_created += 1
         except Exception as exc:
+            logger.exception(f"DataPoint {dp_data.id} failed")
             result.errors.append(f"DataPoint {dp_data.id}: {exc}")
 
     # --- Adapter Instances ---
@@ -711,6 +716,7 @@ async def import_config(
             )
             result.adapter_instances_upserted += 1
         except Exception as exc:
+            logger.exception(f"AdapterInstance {ai.id} failed")
             result.errors.append(f"AdapterInstance {ai.id}: {exc}")
 
     # --- Bindings ---
@@ -793,6 +799,7 @@ async def import_config(
                 )
                 result.bindings_created += 1
         except Exception as exc:
+            logger.exception(f"Binding {b_data.id} failed")
             result.errors.append(f"Binding {b_data.id}: {exc}")
 
     # --- KNX Group Addresses ---
@@ -807,6 +814,7 @@ async def import_config(
             )
             result.knx_group_addresses_upserted += 1
         except Exception as exc:
+            logger.exception(f"KNX GA {ga.address} failed")
             result.errors.append(f"KNX GA {ga.address}: {exc}")
 
     # --- Logic Graphs ---
@@ -840,6 +848,7 @@ async def import_config(
                 )
                 result.logic_graphs_created += 1
         except Exception as exc:
+            logger.exception(f"LogicGraph {lg.id} failed")
             result.errors.append(f"LogicGraph {lg.id}: {exc}")
 
     if body.logic_graphs:
@@ -848,6 +857,7 @@ async def import_config(
 
             await get_logic_manager().reload()
         except Exception as exc:
+            logger.exception("Logic manager reload failed")
             result.errors.append(f"Logic manager reload: {exc}")
 
     # Restart all adapter instances so they pick up new configs and bindings
@@ -860,6 +870,7 @@ async def import_config(
         await adapter_registry.start_all(event_bus, db)
         result.adapters_restarted = len(adapter_registry.get_all_instances())
     except Exception as exc:
+        logger.exception("Adapter restart failed")
         result.errors.append(f"Adapter restart failed: {exc}")
 
     # --- FontAwesome API Key ---
@@ -870,6 +881,7 @@ async def import_config(
                 ("icons.fontawesome_api_key", body.fa_api_key),
             )
         except Exception as exc:
+            logger.exception("FA API Key import failed")
             result.errors.append(f"FA API Key import failed: {exc}")
 
     # --- Icons ---
@@ -891,6 +903,7 @@ async def import_config(
                 (icons_dir / f"{safe}.svg").write_bytes(sanitized)
                 result.icons_imported += 1
             except Exception as exc:
+                logger.exception(f"Icon '{icon.name}' failed")
                 result.errors.append(f"Icon '{icon.name}': {exc}")
 
     # --- Visu Nodes (topologisch sortiert: Eltern vor Kindern) ---
@@ -945,8 +958,9 @@ async def import_config(
                                         (node.id, username),
                                     )
                                 except Exception:
-                                    pass
+                                    logger.exception(f"VisuNode {node.id} user assignment {username!r} failed")
                     except Exception as exc:
+                        logger.exception(f"VisuNode {node.id} failed")
                         result.errors.append(f"VisuNode {node.id}: {exc}")
                         inserted_ids.add(node.id)
                 else:
@@ -969,6 +983,7 @@ async def import_config(
             )
             result.nav_links_upserted += 1
         except Exception as exc:
+            logger.exception(f"NavLink {nl.id} failed")
             result.errors.append(f"NavLink {nl.id}: {exc}")
 
     # --- App Settings ---
@@ -985,6 +1000,7 @@ async def import_config(
             if s.key in DATETIME_SETTING_KEYS:
                 imported_datetime_settings[s.key] = s.value
         except Exception as exc:
+            logger.exception(f"AppSetting {s.key} failed")
             result.errors.append(f"AppSetting {s.key}: {exc}")
 
     # Apply imported date/time settings immediately. Logic graphs may already
@@ -995,7 +1011,7 @@ async def import_config(
             from obs.logic.manager import get_logic_manager
 
             get_logic_manager().update_app_config(imported_datetime_settings)
-        except Exception:
+        except RuntimeError:
             pass  # Manager may not be running — non-critical
 
     # --- Hierarchy Trees ---
@@ -1010,6 +1026,7 @@ async def import_config(
             )
             result.hierarchy_upserted += 1
         except Exception as exc:
+            logger.exception(f"HierarchyTree {ht.id} failed")
             result.errors.append(f"HierarchyTree {ht.id}: {exc}")
 
     # --- Hierarchy Nodes (topologisch sortiert) ---
@@ -1040,6 +1057,7 @@ async def import_config(
                         inserted_h_ids.add(hn.id)
                         result.hierarchy_upserted += 1
                     except Exception as exc:
+                        logger.exception(f"HierarchyNode {hn.id} failed")
                         result.errors.append(f"HierarchyNode {hn.id}: {exc}")
                         inserted_h_ids.add(hn.id)
                 else:
@@ -1056,6 +1074,7 @@ async def import_config(
             )
             result.hierarchy_upserted += 1
         except Exception as exc:
+            logger.exception(f"HierarchyDpLink {link.id} failed")
             result.errors.append(f"HierarchyDpLink {link.id}: {exc}")
 
     return result
@@ -1081,6 +1100,7 @@ async def factory_reset(
 
         await adapter_registry.stop_all()
     except Exception as exc:
+        logger.exception("Adapter stop failed")
         result.errors.append(f"Adapter stop failed: {exc}")
 
     try:
@@ -1091,6 +1111,7 @@ async def factory_reset(
 
         await get_logic_manager().reload()
     except Exception as exc:
+        logger.exception("Logic graphs reset failed")
         result.errors.append(f"Logic graphs reset failed: {exc}")
 
     try:
@@ -1098,6 +1119,7 @@ async def factory_reset(
         result.bindings_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM adapter_bindings")
     except Exception as exc:
+        logger.exception("Bindings reset failed")
         result.errors.append(f"Bindings reset failed: {exc}")
 
     try:
@@ -1108,6 +1130,7 @@ async def factory_reset(
         reg._points.clear()
         reg._values.clear()
     except Exception as exc:
+        logger.exception("DataPoints reset failed")
         result.errors.append(f"DataPoints reset failed: {exc}")
 
     try:
@@ -1115,6 +1138,7 @@ async def factory_reset(
         result.adapter_instances_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM adapter_instances")
     except Exception as exc:
+        logger.exception("Adapter instances reset failed")
         result.errors.append(f"Adapter instances reset failed: {exc}")
 
     try:
@@ -1124,6 +1148,7 @@ async def factory_reset(
         result.knx_group_addresses_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM knx_group_addresses")
     except Exception as exc:
+        logger.exception("KNX group addresses reset failed")
         result.errors.append(f"KNX group addresses reset failed: {exc}")
 
     # Visu-Nodes löschen (Kinder werden durch CASCADE automatisch gelöscht)
@@ -1132,6 +1157,7 @@ async def factory_reset(
         result.visu_nodes_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM visu_nodes WHERE parent_id IS NULL")
     except Exception as exc:
+        logger.exception("Visu nodes reset failed")
         result.errors.append(f"Visu nodes reset failed: {exc}")
 
     # NavLinks löschen
@@ -1140,6 +1166,7 @@ async def factory_reset(
         result.nav_links_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM nav_links")
     except Exception as exc:
+        logger.exception("NavLinks reset failed")
         result.errors.append(f"NavLinks reset failed: {exc}")
 
     # Hierarchy löschen
@@ -1148,6 +1175,7 @@ async def factory_reset(
         result.hierarchy_deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM hierarchy_trees")
     except Exception as exc:
+        logger.exception("Hierarchy reset failed")
         result.errors.append(f"Hierarchy reset failed: {exc}")
 
     # App-Settings zurücksetzen (Autobackup-Einstellungen behalten, Standard-Timezone wiederherstellen)
@@ -1161,6 +1189,7 @@ async def factory_reset(
 
         get_logic_manager().update_app_config({"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"})
     except Exception as exc:
+        logger.exception("App settings reset failed")
         result.errors.append(f"App settings reset failed: {exc}")
 
     # Icons (SVG-Dateien) löschen
@@ -1172,6 +1201,7 @@ async def factory_reset(
             svg_file.unlink()
             result.icons_deleted += 1
     except Exception as exc:
+        logger.exception("Icons reset failed")
         result.errors.append(f"Icons reset failed: {exc}")
 
     return result
@@ -1194,6 +1224,7 @@ async def clear_bindings(
         await db.execute_and_commit("DELETE FROM adapter_bindings")
         await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
+        logger.exception("Bindings clear failed")
         result.errors.append(f"Bindings clear failed: {exc}")
     return result
 
@@ -1221,6 +1252,7 @@ async def clear_datapoints(
         reg._values.clear()
         await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
+        logger.exception("DataPoints clear failed")
         result.errors.append(f"DataPoints clear failed: {exc}")
     return result
 
@@ -1240,6 +1272,7 @@ async def clear_logic(
 
         await get_logic_manager().reload()
     except Exception as exc:
+        logger.exception("Logic graphs clear failed")
         result.errors.append(f"Logic graphs clear failed: {exc}")
     return result
 
@@ -1262,5 +1295,6 @@ async def clear_adapters(
         result.deleted = row["n"] if row else 0
         await db.execute_and_commit("DELETE FROM adapter_instances")
     except Exception as exc:
+        logger.exception("Adapters clear failed")
         result.errors.append(f"Adapters clear failed: {exc}")
     return result
