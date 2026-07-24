@@ -810,6 +810,7 @@ async def import_config(
             result.errors.append(f"KNX GA {ga.address}: {exc}")
 
     # --- Logic Graphs ---
+    imported_graph_ids: list[str] = []
     for lg in body.logic_graphs:
         try:
             row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (lg.id,))
@@ -839,6 +840,9 @@ async def import_config(
                     ),
                 )
                 result.logic_graphs_created += 1
+            # Duplicate ids collapse to one row — initialize each id once
+            if lg.id not in imported_graph_ids:
+                imported_graph_ids.append(lg.id)
         except Exception as exc:
             result.errors.append(f"LogicGraph {lg.id}: {exc}")
 
@@ -846,7 +850,16 @@ async def import_config(
         try:
             from obs.logic.manager import get_logic_manager
 
-            await get_logic_manager().reload()
+            manager = get_logic_manager()
+            # The imported sheet carries no node state: drop the cached graph
+            # plus all in-memory and persisted node state of the upserted
+            # graphs, so neither stale read/write-filter state nor old
+            # hysteresis/accumulator state of a reused graph id leaks into
+            # the restored sheet.
+            for graph_id in imported_graph_ids:
+                manager.invalidate_cache(graph_id)
+                await manager.reset_node_state(graph_id)
+            await manager.reload()
         except Exception as exc:
             result.errors.append(f"Logic manager reload: {exc}")
 
@@ -997,6 +1010,22 @@ async def import_config(
             get_logic_manager().update_app_config(imported_datetime_settings)
         except Exception:
             pass  # Manager may not be running — non-critical
+
+    # Seed Read Object nodes of the restored graphs with the current registry
+    # values (issue #1031) — after the adapter restart, so the WriteRouter can
+    # resolve newly imported adapter instances for the published writes, and
+    # after the app-settings import, so timezone-dependent nodes evaluate
+    # with the restored configuration. Only successfully upserted graphs
+    # qualify — a failed entry reusing an existing graph id must not
+    # re-initialize the old graph. The bulk pass suppresses cascades between
+    # the restored graphs so each one initializes exactly once.
+    if imported_graph_ids:
+        try:
+            from obs.logic.manager import get_logic_manager
+
+            await get_logic_manager().initialize_graphs(imported_graph_ids)
+        except Exception as exc:
+            result.errors.append(f"Logic graph initialization: {exc}")
 
     # --- Hierarchy Trees ---
     for ht in body.hierarchy_trees:

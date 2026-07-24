@@ -52,6 +52,25 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
+def _without_positions(raw: dict) -> dict:
+    """Strip node positions and purely visual comment nodes for layout-only
+    save detection — neither affects execution semantics.
+    """
+    raw = dict(raw)
+    raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", []) if node.get("type") != "comment"]
+    return raw
+
+
+def _normalized_without_positions(raw: dict) -> dict:
+    """Normalize a flow through FlowData, then strip positions.
+
+    Stored graphs (e.g. from older exports) may omit optional fields that a
+    freshly parsed request body carries explicitly as null — comparing raw
+    dicts would misclassify a move-only save as an execution change.
+    """
+    return _without_positions(json.loads(FlowData.model_validate(raw).model_dump_json()))
+
+
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     return LogicGraphOut(
@@ -132,7 +151,9 @@ async def create_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        await manager.reload()
+        await manager.initialize_graph(gid)
     except Exception:
         pass
     return _row_to_out(row)
@@ -176,15 +197,10 @@ async def update_graph_full(
         ),
     )
 
-    def _without_positions(raw: dict) -> dict:
-        raw = dict(raw)
-        raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", [])]
-        return raw
-
     try:
-        layout_only = bool(row["enabled"]) == body.enabled and _without_positions(json.loads(row["flow_data"] or "{}")) == _without_positions(
-            json.loads(body.flow_data.model_dump_json())
-        )
+        layout_only = bool(row["enabled"]) == body.enabled and _normalized_without_positions(
+            json.loads(row["flow_data"] or "{}")
+        ) == _normalized_without_positions(json.loads(body.flow_data.model_dump_json()))
     except (TypeError, ValueError):
         layout_only = False
 
@@ -196,8 +212,7 @@ async def update_graph_full(
         if layout_only:
             manager.update_cached_graph(graph_id, body.name, body.enabled, body.flow_data)
         else:
-            manager.invalidate_cache(graph_id)
-            await manager.reload()
+            await manager.reinitialize_graph(graph_id)
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
@@ -234,12 +249,29 @@ async def update_graph_partial(
     # A title/description change does not alter execution.  Keeping the cache
     # intact preserves in-flight value sequences; flow or enabled changes need
     # the normal reload and cancellation semantics.
-    if body.flow_data is not None or body.enabled is not None:
+    # A PATCH repeating the stored enabled value without flow_data is a
+    # no-op for execution semantics — it must not cancel/reload the running
+    # sheet or re-run the initialization writes.
+    enabled_changed = body.enabled is not None and body.enabled != bool(row["enabled"])
+    if body.flow_data is not None or enabled_changed:
+        # Position-only canvas saves keep execution semantics — mirror the
+        # PUT path: refresh the cache without re-initializing the sheet.
+        try:
+            layout_only = (
+                body.flow_data is not None
+                and (body.enabled is None or body.enabled == bool(row["enabled"]))
+                and _normalized_without_positions(json.loads(row["flow_data"] or "{}")) == _normalized_without_positions(json.loads(flow_json))
+            )
+        except (TypeError, ValueError):
+            layout_only = False
         try:
             from obs.logic.manager import get_logic_manager
 
-            get_logic_manager().invalidate_cache(graph_id)
-            await get_logic_manager().reload()
+            manager = get_logic_manager()
+            if layout_only:
+                manager.update_cached_graph(graph_id, name, enabled, body.flow_data)
+            else:
+                await manager.reinitialize_graph(graph_id)
         except Exception:
             pass
     else:
@@ -352,7 +384,9 @@ async def import_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        await manager.reload()
+        await manager.initialize_graph(gid)
     except Exception:
         pass
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
@@ -431,7 +465,9 @@ async def duplicate_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        await get_logic_manager().reload()
+        manager = get_logic_manager()
+        await manager.reload()
+        await manager.initialize_graph(new_id)
     except Exception:
         pass
     result = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (new_id,))
