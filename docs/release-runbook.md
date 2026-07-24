@@ -119,10 +119,23 @@ git push origin 2026.7.1
 
 ## G) Rollback (Kanalzeiger zurücksetzen)
 
-*Gilt für Phase 2 — kanalbasierter Update-Pfad (→ #945).*
+Seit Phase 2 (#945) sind LXC-Installationen, die über `obs-update --channel=<name>`
+aktualisiert werden, an den Kanalzeiger im Repo `abeggled/openbridgeserver-ops` gebunden.
+Rollback bedeutet: den Kanalzeiger auf eine vorherige Version zurücksetzen, nicht das
+Ausrollen einer neuen Version.
 
-Bis Phase 2 aktiv ist: LXC-Rollback durch manuelles Ausführen von
-`obs-update` und Auswahl der vorherigen stabilen Version.
+1. Im Repo `abeggled/openbridgeserver-ops` → **Actions → Promote channel → Run workflow**.
+2. `action: rollback`, `channel: staging` oder `stable` (der betroffene Kanal).
+3. `ref` optional: Git-SHA/Tag des gewünschten vorherigen Stands von
+   `channels/<channel>.json`. Leer gelassen wird automatisch der vorherige Commit
+   verwendet, der diese Datei geändert hat.
+4. Der Workflow committet das zurückgesetzte Manifest direkt auf `main` im Ops-Repo.
+   Betroffene LXC-Hosts übernehmen den vorherigen Stand beim nächsten
+   `obs-update --channel=<name>`-Lauf.
+
+Für Installationen, die noch nicht auf den Kanal-Modus umgestellt sind (kein
+`--channel`-Flag verwendet): weiterhin klassisches Rollback durch manuelles Ausführen von
+`obs-update` (ohne `--channel`) und Auswahl der vorherigen stabilen Version.
 
 ---
 

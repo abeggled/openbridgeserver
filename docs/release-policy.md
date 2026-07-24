@@ -74,12 +74,25 @@ Betrifft ein Fehler das aktuelle Release:
 Kein „fix direkt auf main und dann hoffen" — Divergenz zwischen `main` und dem Bugfix-Branch
 führt zu Chaos beim nächsten Forward-Merge.
 
-## 8. Nicht in Scope (nachrüstbar)
+## 8. Kanäle (Phase 2, #945)
+
+Docker- und LXC-Artefakte werden zusätzlich zum Tag-Vertrag (§5) über kanalbasierte
+Manifeste im separaten Repo `abeggled/openbridgeserver-ops` ausgeliefert
+(`canary → staging → stable`). `canary` wird nach jedem erfolgreichen Release-Tag-Push
+automatisch befüllt (Docker-Digest aus `release.yml`, LXC-Bundle-Info aus
+`lxc-template.yml`); `staging`/`stable` werden manuell per `workflow_dispatch`
+(„Promote channel") im Ops-Repo promotet. `obs-update --channel=<name>` löst auf LXC-Hosts
+gegen diese Manifeste auf. Details, Schema und Setup: README des Ops-Repos; Rollback-Ablauf:
+[release-runbook.md §G](release-runbook.md#g-rollback-kanalzeiger-zurücksetzen).
+
+## 9. Nicht in Scope (nachrüstbar)
 
 Folgendes wurde bewusst für ein späteres Release zurückgestellt:
 
 - CODEOWNERS (sinnvoll wenn das Team wächst)
 - Milestone-CI-Enforcement (blockierender Gate)
 - Merge Queue
-- Automatische Promotion-Zeitfenster / Health-Gates
+- Automatische Promotion-Zeitfenster / Health-Gates (Kanal-Promotion selbst ist seit
+  Phase 2 vorhanden — siehe §8; automatische Zeitfenster/Health-Checks vor einer
+  Promotion bleiben zurückgestellt)
 - Supply-Chain-Signatur / Attestation
