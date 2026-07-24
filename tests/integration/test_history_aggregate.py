@@ -151,7 +151,7 @@ async def test_aggregate_bucket_is_returned_as_utc_iso_timestamp(client, auth_he
     assert buckets
     assert buckets[0]["bucket"] == "2026-06-03T12:00:00Z"
     assert buckets[0]["n"] == 1
-    assert datetime.datetime.fromisoformat(buckets[0]["bucket"].replace("Z", "+00:00")).tzinfo is not None
+    assert datetime.datetime.fromisoformat(buckets[0]["bucket"]).tzinfo is not None
 
 
 async def test_aggregate_min_fn(client, auth_headers):

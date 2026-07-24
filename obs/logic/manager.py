@@ -559,9 +559,7 @@ def _should_send_cookie(
         return False
     if not _cookie_path_matches(req_path, cookie_path):
         return False
-    if bool(cookie_secure) and not req_is_https:
-        return False
-    return True
+    return not (bool(cookie_secure) and not req_is_https)
 
 
 def _send_wol_packet(mac: str, broadcast: str, port: int) -> None:
@@ -1160,9 +1158,8 @@ class LogicManager:
 
                 # ── Filter: trigger_on_change ────────────────────────────
                 toc = d.get("trigger_on_change")
-                if toc is True or toc == "true":
-                    if new_val == last_val:
-                        continue
+                if (toc is True or toc == "true") and new_val == last_val:
+                    continue
 
                 # ── Filter: min_delta ────────────────────────────────────
                 raw_delta = d.get("min_delta")
@@ -1211,7 +1208,7 @@ class LogicManager:
             entry = self._graphs.get(graph_id)
             if entry is None:
                 continue
-            name, enabled, flow = entry
+            _name, _enabled, flow = entry
             changed = False
             for node in flow.nodes:
                 if node.data.get("datapoint_id") == dp_id_str and node.data.get("datapoint_name") != event.new_name:
@@ -1261,7 +1258,7 @@ class LogicManager:
         entry = self._graphs.get(graph_id)
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
-        name, enabled, flow = entry
+        name, _enabled, flow = entry
         return await self._execute_graph(graph_id, name, flow, {})
 
     async def _execute_graph(
@@ -2760,9 +2757,14 @@ class LogicManager:
             try:
                 from obs.message_archive import get_message_archive_service
 
-                payload = dict(graph_id=graph_id, graph_name=name, node_id=node.id, node_label=node.data.get("label") or node.data.get("name") or "")
+                payload = {
+                    "graph_id": graph_id,
+                    "graph_name": name,
+                    "node_id": node.id,
+                    "node_label": node.data.get("label") or node.data.get("name") or "",
+                }
                 source = f"logic.graph.{graph_id}.node.{node.id}"
-                record_kwargs = dict(type=message_type, severity=severity, source=source, title=title, message=msg, payload=payload)
+                record_kwargs = {"type": message_type, "severity": severity, "source": source, "title": title, "message": msg, "payload": payload}
                 await get_message_archive_service().record(archive_id, **record_kwargs)
                 outputs[node.id]["stored"] = True
                 target_set.add(node.id)
@@ -3007,9 +3009,12 @@ class LogicManager:
                     elif node.type == "message_archive" and node.id not in triggered_message_archive_nodes:
                         if await _run_message_archive_node(node, newly_triggered):
                             triggered_message_archive_nodes.add(node.id)
-                    elif node.type in {"notify_message", "notify_pushover", "notify_sms"} and node.id not in triggered_notify_nodes:
-                        if await _run_notify_node(node, newly_triggered) or GraphExecutor._to_bool(outputs.get(node.id, {}).get("_trigger")):
-                            triggered_notify_nodes.add(node.id)
+                    elif (
+                        node.type in {"notify_message", "notify_pushover", "notify_sms"}
+                        and node.id not in triggered_notify_nodes
+                        and (await _run_notify_node(node, newly_triggered) or GraphExecutor._to_bool(outputs.get(node.id, {}).get("_trigger")))
+                    ):
+                        triggered_notify_nodes.add(node.id)
                 if not newly_triggered:
                     break
                 _add_resolved_outputs(newly_triggered)
@@ -3180,9 +3185,8 @@ class LogicManager:
 
             # ── Filter: only_on_change ───────────────────────────────────
             ooc = d.get("only_on_change")
-            if ooc is True or ooc == "true":
-                if write_val == last_wr:
-                    continue
+            if (ooc is True or ooc == "true") and write_val == last_wr:
+                continue
 
             # ── Filter: min_delta (write side) ───────────────────────────
             raw_delta = d.get("min_delta")

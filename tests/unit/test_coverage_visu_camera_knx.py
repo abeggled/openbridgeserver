@@ -397,20 +397,26 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_loopback_blocked(self):
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Blocked URL target"),
-        ), pytest.raises(HTTPException) as exc:
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Blocked URL target"),
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
             await _check_ssrf("http://localhost/stream")
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_metadata_blocked(self):
         # 169.254.169.254 is the cloud metadata address
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Blocked URL target"),
-        ), pytest.raises(HTTPException) as exc:
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Blocked URL target"),
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
             await _check_ssrf("http://metadata.internal/")
         assert exc.value.status_code == 400
 
@@ -426,19 +432,25 @@ class TestCheckSsrf:
 
     @pytest.mark.asyncio
     async def test_dns_failure_raises_502(self):
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Hostname could not be resolved: no address"),
-        ), pytest.raises(HTTPException) as exc:
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Hostname could not be resolved: no address"),
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
             await _check_ssrf("http://nonexistent.local/stream")
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_ipv6_loopback_blocked(self):
-        with patch(
-            "obs.api.v1.camera.build_pinned_url_targets",
-            side_effect=ValueError("Blocked URL target"),
-        ), pytest.raises(HTTPException) as exc:
+        with (
+            patch(
+                "obs.api.v1.camera.build_pinned_url_targets",
+                side_effect=ValueError("Blocked URL target"),
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
             await _check_ssrf("http://[::1]/stream")
         assert exc.value.status_code == 400
 

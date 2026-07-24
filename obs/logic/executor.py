@@ -1509,9 +1509,10 @@ class GraphExecutor:
         for node in ast.walk(tree):
             if not isinstance(node, allowed_nodes):
                 raise ExecutionError(f"Formula contains disallowed syntax: {type(node).__name__}")
-            if isinstance(node, ast.Attribute):
-                if not (isinstance(node.value, ast.Name) and node.value.id == "math" and not node.attr.startswith("_")):
-                    raise ExecutionError("Formula attribute access is not allowed")
+            if isinstance(node, ast.Attribute) and not (
+                isinstance(node.value, ast.Name) and node.value.id == "math" and not node.attr.startswith("_")
+            ):
+                raise ExecutionError("Formula attribute access is not allowed")
 
     @staticmethod
     def _validate_script_ast(tree: ast.AST) -> None:
@@ -1537,9 +1538,10 @@ class GraphExecutor:
         for node in ast.walk(tree):
             if isinstance(node, blocked):
                 raise ExecutionError(f"Script contains disallowed syntax: {type(node).__name__}")
-            if isinstance(node, ast.Attribute):
-                if not (isinstance(node.value, ast.Name) and node.value.id == "math" and not node.attr.startswith("_")):
-                    raise ExecutionError("Script attribute access is not allowed")
+            if isinstance(node, ast.Attribute) and not (
+                isinstance(node.value, ast.Name) and node.value.id == "math" and not node.attr.startswith("_")
+            ):
+                raise ExecutionError("Script attribute access is not allowed")
 
     @staticmethod
     def _safe_eval(expr: str, ctx: dict[str, Any]) -> Any:

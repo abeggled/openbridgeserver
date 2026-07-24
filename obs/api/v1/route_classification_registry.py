@@ -7,9 +7,9 @@ Anti-drift tests compare it against the live FastAPI router so new
 
 from __future__ import annotations
 
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal
 
-RouteCategory: TypeAlias = Literal[
+type RouteCategory = Literal[
     "config_mutation",
     "data_mutation",
     "read_live",
@@ -17,7 +17,7 @@ RouteCategory: TypeAlias = Literal[
     "public",
 ]
 
-RouteSignature: TypeAlias = tuple[str, str]
+type RouteSignature = tuple[str, str]
 
 PUBLIC_ROUTE_ALLOWLIST: Final[frozenset[RouteSignature]] = frozenset(
     {

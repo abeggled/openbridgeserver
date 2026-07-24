@@ -130,7 +130,5 @@ def _is_success_value(value: Any) -> bool:
             return True
         if normalized in {"", "0", "false", "no", "failed", "error"}:
             return False
-        if normalized.isdecimal():
-            return False
-        return True
+        return not normalized.isdecimal()
     return bool(value)

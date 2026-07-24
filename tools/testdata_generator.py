@@ -248,7 +248,7 @@ class KnxTunnelingServer:
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         if len(data) < 6:
             return
-        hdr_len, version, svc_type, total_len = struct.unpack_from(">BBHH", data, 0)
+        hdr_len, version, svc_type, _total_len = struct.unpack_from(">BBHH", data, 0)
         if hdr_len != 6 or version != 0x10:
             return
         body = data[6:]

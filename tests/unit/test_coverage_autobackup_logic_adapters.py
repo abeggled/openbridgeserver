@@ -570,7 +570,7 @@ class TestRunAutobackupNowEndpoint:
 
 
 def _make_graph_row(
-    gid: str = None,
+    gid: str | None = None,
     name: str = "Test Graph",
     description: str = "",
     enabled: int = 1,

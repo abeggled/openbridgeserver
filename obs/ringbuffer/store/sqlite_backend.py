@@ -741,7 +741,7 @@ def _parse_ts(value: str | None) -> float | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(value).timestamp()
     except ValueError:
         return None
 
@@ -870,7 +870,7 @@ def _legacy_compare(operator: str, actual: Any, expected: Any) -> bool:
     # ablehnen, BEVOR verglichen wird.
     if expected is None:
         raise ValueError(f"operator '{operator}' is not supported for null value")
-    if isinstance(expected, bool) or isinstance(expected, str):
+    if isinstance(expected, (bool, str)):
         data_type = "BOOLEAN" if isinstance(expected, bool) else "STRING"
         raise ValueError(f"operator '{operator}' is not supported for data_type '{data_type}'")
     # Komplexe (list/dict) Vergleichswerte werfen bei ``actual > [..]`` ebenfalls einen
@@ -1530,18 +1530,21 @@ class SqliteSegmentStore(RingBufferStore):
         physischen ``-wal``-Dirty-Zustands NACH dem Checkpoint-Versuch (``_wal_is_dirty``).
         """
         legacy_path = Path(segment.filename)
-        if segment.recovery_status == "dirty_wal" and self._legacy_is_small(segment, legacy_path):
-            if await self._checkpoint_small_legacy(legacy_path):
-                # Checkpoint hat die committeten WAL-Frames in die Haupt-DB gefaltet/
-                # getruncatet (#951, Codex :758). Die im Manifest hinterlegte
-                # pre-checkpoint-``size_bytes`` überschätzt jetzt die reale Disk-Nutzung
-                # (Phantom-WAL-Bytes) und ``dirty_wal`` würde bei jedem weiteren Read
-                # erneut einen Checkpoint auslösen. Beides mit dem REALEN post-checkpoint-
-                # Zustand nachziehen – analog zum v2-Rotations-Checkpoint-Größen-Refresh.
-                await self.manifest.mark_legacy_wal_recovered(
-                    segment.segment_id,
-                    size_bytes=self._segment_file_size(segment.filename),
-                )
+        if (
+            segment.recovery_status == "dirty_wal"
+            and self._legacy_is_small(segment, legacy_path)
+            and await self._checkpoint_small_legacy(legacy_path)
+        ):
+            # Checkpoint hat die committeten WAL-Frames in die Haupt-DB gefaltet/
+            # getruncatet (#951, Codex :758). Die im Manifest hinterlegte
+            # pre-checkpoint-``size_bytes`` überschätzt jetzt die reale Disk-Nutzung
+            # (Phantom-WAL-Bytes) und ``dirty_wal`` würde bei jedem weiteren Read
+            # erneut einen Checkpoint auslösen. Beides mit dem REALEN post-checkpoint-
+            # Zustand nachziehen – analog zum v2-Rotations-Checkpoint-Größen-Refresh.
+            await self.manifest.mark_legacy_wal_recovered(
+                segment.segment_id,
+                size_bytes=self._segment_file_size(segment.filename),
+            )
         params = "mode=ro" if self._legacy_wal_still_dirty(legacy_path) else "mode=ro&immutable=1"
         uri = _sqlite_ro_uri(legacy_path, params=params)
         conn = await aiosqlite.connect(uri, uri=True)
@@ -2423,7 +2426,7 @@ class SqliteSegmentStore(RingBufferStore):
                 return (f"{field_name}_type != 'null'", [])
             raise ValueError(f"operator '{operator}' is not supported for null value")
 
-        value_type, num, text, bool_val = _typed_columns_for(value)
+        value_type, num, _text, _bool_val = _typed_columns_for(value)
 
         # Range-Operatoren sind wie Legacy nur für numerische Werte definiert. Ein
         # gt/gte/lt/lte gegen einen text-/bool-Vergleichswert würde sonst zu einem
@@ -3121,10 +3124,9 @@ class SqliteSegmentStore(RingBufferStore):
             if len(parts) < 3:
                 continue
             mount_point, fstype = parts[1], parts[2]
-            if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
-                if len(mount_point) >= len(best_match):
-                    best_match = mount_point
-                    best_fstype = fstype
+            if (resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/")) and len(mount_point) >= len(best_match):
+                best_match = mount_point
+                best_fstype = fstype
         return best_fstype in _NETWORK_FS_TYPES
 
     # ------------------------------------------------------------------

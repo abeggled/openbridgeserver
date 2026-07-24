@@ -69,11 +69,10 @@ def _validate_tree(tree: ast.AST) -> str | None:
         if isinstance(node, ast.Name) and node.id not in {"x", "math", *_ALLOWED_FUNC_NAMES, *_ALLOWED_MATH_NAMES}:
             return f"Nicht erlaubter Name: '{node.id}'"
 
-        if isinstance(node, ast.Attribute):
-            if not (
-                isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in _ALLOWED_MATH_NAMES and not node.attr.startswith("_")
-            ):
-                return "Nicht erlaubter Attributzugriff"
+        if isinstance(node, ast.Attribute) and not (
+            isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in _ALLOWED_MATH_NAMES and not node.attr.startswith("_")
+        ):
+            return "Nicht erlaubter Attributzugriff"
 
         if isinstance(node, ast.Call) and not _is_allowed_call(node):
             return "Nicht erlaubter Funktionsaufruf"

@@ -440,9 +440,7 @@ def _is_empty_criteria(c: FilterCriteria | None) -> bool:
         return False
     if c.q and c.q.strip():
         return False
-    if c.value_filter and c.value_filter.operator:
-        return False
-    return True
+    return not (c.value_filter and c.value_filter.operator)
 
 
 def _color_must_be_hex(value: str) -> str:
@@ -1000,17 +998,17 @@ def _row_to_filterset(row: Any, *, user_state: tuple[bool, bool, int] | None = N
         is_active, topbar_active, topbar_order = user_state
     else:
         is_active, topbar_active, topbar_order = True, False, 0
-    created_by = row["created_by"] if "created_by" in row.keys() else None
+    created_by = row["created_by"] if "created_by" in row.keys() else None  # noqa: SIM118 -- Row.__contains__ checks values, not keys
     return RingBufferFiltersetOut(
         id=row["id"],
         name=row["name"],
         description=row["description"],
         dsl_version=int(row["dsl_version"]),
         is_active=is_active,
-        color=_normalize_color(row["color"] if "color" in row.keys() else None),
+        color=_normalize_color(row["color"] if "color" in row.keys() else None),  # noqa: SIM118 -- Row.__contains__ checks values, not keys
         topbar_active=topbar_active,
         topbar_order=topbar_order,
-        filter=_decode_filter(row["filter_json"] if "filter_json" in row.keys() else None),
+        filter=_decode_filter(row["filter_json"] if "filter_json" in row.keys() else None),  # noqa: SIM118 -- Row.__contains__ checks values, not keys
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         created_by=created_by,

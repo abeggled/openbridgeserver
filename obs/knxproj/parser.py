@@ -476,7 +476,7 @@ def _walk_spaces(
                 ga_refs = dict(getattr(fn, "group_addresses", {}) or {})
 
             ga_addresses: list[str] = []
-            for _ref_key, ref in ga_refs.items():
+            for ref in ga_refs.values():
                 if isinstance(ref, dict):
                     addr = str(ref.get("address") or "").strip()
                 else:

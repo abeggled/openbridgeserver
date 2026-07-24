@@ -194,7 +194,7 @@ class TestModbusTcpConnect:
         assert status_event.connected is False
 
     async def test_disconnect_cancels_tasks_and_closes(self):
-        adapter, bus = _make_tcp()
+        adapter, _bus = _make_tcp()
         client = _make_client()
         adapter._client = client
         t = asyncio.create_task(asyncio.sleep(100))
@@ -264,7 +264,7 @@ class TestModbusRtuConnect:
         assert status_event.connected is False
 
     async def test_disconnect_cancels_tasks(self):
-        adapter, bus = _make_rtu()
+        adapter, _bus = _make_rtu()
         client = _make_client()
         adapter._client = client
         t = asyncio.create_task(asyncio.sleep(100))
@@ -1944,7 +1944,7 @@ class TestReconnectBackoff:
         With poll_interval=0.05s the backoff expires every cycle, producing one connect()
         call per cycle rather than one per backoff window.
         """
-        adapter, bus = _make_tcp()
+        adapter, _bus = _make_tcp()
         connect_calls = 0
 
         async def failing_connect():

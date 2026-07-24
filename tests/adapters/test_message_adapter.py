@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -78,7 +79,7 @@ class _FakeAsyncClient:
     def __init__(self, timeout: float | None = None) -> None:
         self.timeout = timeout
 
-    async def __aenter__(self) -> _FakeAsyncClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:

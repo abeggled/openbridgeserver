@@ -88,7 +88,7 @@ class TestIcalendarContract:
         from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
-        allday = [c for c in cal.walk() if c.name == "VEVENT" and "Neujahr" in str(c.get("SUMMARY", ""))][0]
+        allday = next(c for c in cal.walk() if c.name == "VEVENT" and "Neujahr" in str(c.get("SUMMARY", "")))
         dt = allday.get("DTSTART").dt
         assert isinstance(dt, datetime.date)
         assert not isinstance(dt, datetime.datetime)  # pure DATE, not DATETIME
@@ -97,7 +97,7 @@ class TestIcalendarContract:
         from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
-        timed = [c for c in cal.walk() if c.name == "VEVENT" and "Meeting" in str(c.get("SUMMARY", ""))][0]
+        timed = next(c for c in cal.walk() if c.name == "VEVENT" and "Meeting" in str(c.get("SUMMARY", "")))
         dt = timed.get("DTSTART").dt
         assert isinstance(dt, datetime.datetime)
 
@@ -105,28 +105,28 @@ class TestIcalendarContract:
         from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
-        ev = [c for c in cal.walk() if c.name == "VEVENT"][0]
+        ev = next(c for c in cal.walk() if c.name == "VEVENT")
         assert str(ev.get("SUMMARY", "")) != ""
 
     def test_get_location(self):
         from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
-        ev = [c for c in cal.walk() if "Neujahr" in str(c.get("SUMMARY", ""))][0]
+        ev = next(c for c in cal.walk() if "Neujahr" in str(c.get("SUMMARY", "")))
         assert str(ev.get("LOCATION", "")) == "Zuhause"
 
     def test_get_description(self):
         from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
-        ev = [c for c in cal.walk() if "Neujahr" in str(c.get("SUMMARY", ""))][0]
+        ev = next(c for c in cal.walk() if "Neujahr" in str(c.get("SUMMARY", "")))
         assert "Jahr" in str(ev.get("DESCRIPTION", ""))
 
     def test_get_dtend(self):
         from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
-        ev = [c for c in cal.walk() if c.name == "VEVENT"][0]
+        ev = next(c for c in cal.walk() if c.name == "VEVENT")
         dtend = ev.get("DTEND")
         assert dtend is not None
         assert hasattr(dtend, "dt")

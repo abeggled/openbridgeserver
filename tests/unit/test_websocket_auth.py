@@ -365,9 +365,7 @@ async def test_ws_log_access_ignores_stray_api_key_for_jwt_identity(monkeypatch)
 
     monkeypatch.setattr(ws_api, "get_db", fail_get_db)
 
-    assert (
-        await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True
-    )
+    assert await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True
 
 
 @pytest.mark.asyncio

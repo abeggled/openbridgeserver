@@ -1416,7 +1416,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.from_knx([0xAB, 0xCD]) == bytes([0xAB, 0xCD])
 
     def test_passthrough_rv_from_knx_empty(self):
@@ -1429,7 +1429,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.from_knx(None) == b""
         assert rv.from_knx([]) == b""
 
@@ -1443,7 +1443,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.to_knx("anything") == []
 
     def test_passthrough_rv_unit_of_measurement_is_none(self):
@@ -1456,7 +1456,7 @@ class TestBuildSniffer:
         mock_xknx.devices.async_add = MagicMock()
         adapter = MagicMock()
         sniffer = _build_sniffer(mock_xknx, {"1/2/3": []}, adapter)
-        rv = list(sniffer._iter_remote_values())[0]
+        rv = next(iter(sniffer._iter_remote_values()))
         assert rv.unit_of_measurement is None
 
 
@@ -1853,7 +1853,7 @@ class TestSecureConfigFromKeyfile:
         AND the keyring object (for data_secure_init) but NOT a keyfile path."""
         from xknx.io import SecureConfig
 
-        keyring, iface = self._make_keyring_mock()
+        keyring, _iface = self._make_keyring_mock()
         monkeypatch.setattr(
             "obs.adapters.knx.adapter.sync_load_keyring",
             lambda path, pw: keyring,

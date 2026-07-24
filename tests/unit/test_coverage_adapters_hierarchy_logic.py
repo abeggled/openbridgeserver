@@ -3396,7 +3396,7 @@ class TestLogicManagerBasics:
 
     @pytest.mark.asyncio
     async def test_stop_cancels_cron_tasks(self):
-        mgr, _, event_bus, _ = _make_logic_manager()
+        mgr, _, _event_bus, _ = _make_logic_manager()
         task = MagicMock()
         task.cancel = MagicMock()
         mgr._cron_tasks[("g1", "n1")] = task
@@ -3458,7 +3458,7 @@ class TestLogicManagerBasics:
     @pytest.mark.asyncio
     async def test_execute_graph_success(self):
         flow = _make_flow()
-        mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr, _db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
         with patch("obs.api.v1.websocket.get_ws_manager") as mock_ws:
             mock_ws.return_value.broadcast = AsyncMock()
             result = await mgr.execute_graph("g1")
@@ -3501,7 +3501,7 @@ class TestLogicManagerValueEvent:
     @pytest.mark.asyncio
     async def test_on_value_event_no_matching_graph(self):
         """When no graph has a node watching the DP, no execute call is made."""
-        mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr, _db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
         event = MagicMock()
         event.datapoint_id = uuid.uuid4()
         event.value = 42.0
@@ -3915,7 +3915,7 @@ class TestLogicManagerExecuteGraph:
     async def test_execute_graph_ws_error_ignored(self):
         """If websocket broadcast fails, execution should still succeed."""
         flow = _make_flow()
-        mgr, db, event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr, db, _event_bus, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
         db.execute_and_commit = AsyncMock()
 
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=Exception("ws not ready")):

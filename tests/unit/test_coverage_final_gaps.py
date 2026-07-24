@@ -773,12 +773,12 @@ import obs.api.v1.adapters as adapters_api
 
 
 def test_iobroker_obs_type_known():
-    data_type, unit = adapters_api._iobroker_obs_type("number")
+    data_type, _unit = adapters_api._iobroker_obs_type("number")
     assert data_type == "FLOAT"
 
 
 def test_iobroker_obs_type_unknown():
-    data_type, unit = adapters_api._iobroker_obs_type("unknown_type_xyz")
+    _data_type, unit = adapters_api._iobroker_obs_type("unknown_type_xyz")
     assert unit is None
 
 

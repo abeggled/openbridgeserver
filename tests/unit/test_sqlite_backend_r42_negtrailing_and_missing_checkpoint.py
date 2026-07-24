@@ -186,7 +186,7 @@ async def test_present_checkpoint_pending_segment_unchanged(tmp_path: Path):
         quarantined = [s for s in segments_after if s.status == "quarantined" and s.segment_id == target.segment_id]
         assert quarantined == [], "ein vorhandenes pending-Segment darf nicht quarantänisiert werden"
         # Es wurde entweder sauber closed (Truncate ok) oder bleibt pending – aber nicht verloren.
-        current = [s for s in segments_after if s.segment_id == target.segment_id][0]
+        current = next(s for s in segments_after if s.segment_id == target.segment_id)
         assert current.status in ("closed", "checkpoint_pending")
     finally:
         await rb.stop()

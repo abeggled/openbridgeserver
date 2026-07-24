@@ -489,9 +489,13 @@ class ZeitschaltuhrAdapter(AdapterBase):
         today = now.date()
 
         # Date window gate (DAILY / ANNUAL / HOLIDAY — checked before all other gates)
-        if cfg.date_window_enabled and cfg.date_window_from and cfg.date_window_to:
-            if not self._in_date_window(cfg.date_window_from, cfg.date_window_to, today):
-                return False
+        if (
+            cfg.date_window_enabled
+            and cfg.date_window_from
+            and cfg.date_window_to
+            and not self._in_date_window(cfg.date_window_from, cfg.date_window_to, today)
+        ):
+            return False
 
         # Feiertagsschaltuhr: fires on specific holidays only
         if cfg.timer_type == TimerType.HOLIDAY:
@@ -899,9 +903,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
         if d_to_next is not None and d_from <= today <= d_to_next:
             return True
         d_from_prev = self._parse_date_expression(from_expr, year - 1)
-        if d_from_prev is not None and d_from_prev <= today <= d_to:
-            return True
-        return False
+        return bool(d_from_prev is not None and d_from_prev <= today <= d_to)
 
     def get_holidays_for_year(self, year: int) -> list[dict]:
         """Returns all holidays for the given year as a date-sorted list of {date, name} dicts."""

@@ -316,24 +316,24 @@ async def test_export_config_icons_dir_error_is_swallowed(monkeypatch):
 
 
 def _make_config_export(**kwargs):
-    defaults = dict(
-        obs_version="5",
-        exported_at=datetime.now(UTC).isoformat(),
-        datapoints=[],
-        bindings=[],
-        adapter_instances=[],
-        knx_group_addresses=[],
-        logic_graphs=[],
-        adapter_configs=[],
-        icons=[],
-        fa_api_key=None,
-        visu_nodes=[],
-        nav_links=[],
-        app_settings=[],
-        hierarchy_trees=[],
-        hierarchy_nodes=[],
-        hierarchy_dp_links=[],
-    )
+    defaults = {
+        "obs_version": "5",
+        "exported_at": datetime.now(UTC).isoformat(),
+        "datapoints": [],
+        "bindings": [],
+        "adapter_instances": [],
+        "knx_group_addresses": [],
+        "logic_graphs": [],
+        "adapter_configs": [],
+        "icons": [],
+        "fa_api_key": None,
+        "visu_nodes": [],
+        "nav_links": [],
+        "app_settings": [],
+        "hierarchy_trees": [],
+        "hierarchy_nodes": [],
+        "hierarchy_dp_links": [],
+    }
     defaults.update(kwargs)
     return config_api.ConfigExport(**defaults)
 

@@ -83,7 +83,7 @@ def run_git_diff(repo_root: Path, base: str | None, head: str | None) -> list[st
         ],
     )
     for cmd in candidates:
-        proc = subprocess.run(cmd, cwd=repo_root, text=True, capture_output=True)
+        proc = subprocess.run(cmd, cwd=repo_root, text=True, capture_output=True, check=False)
         if proc.returncode == 0:
             files = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
             return sorted(set(files)) if files else []

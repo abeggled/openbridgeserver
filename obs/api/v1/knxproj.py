@@ -1070,7 +1070,7 @@ async def list_knx_devices(
             {where_sql}
             ORDER BY individual_address
             LIMIT ? OFFSET ?""",
-        tuple([*params, size, page * size]),
+        (*params, size, page * size),
     )
     pages = max(1, (total + size - 1) // size)
     device_ids = [row["id"] for row in rows]

@@ -101,7 +101,7 @@ class TestExtractGroupNames:
         }
 
     def test_dict_project_main_names(self):
-        main, mid = _extract_group_names(self._make_dict_project())
+        main, _mid = _extract_group_names(self._make_dict_project())
         assert main["1"] == "Lichtsteuerung"
         assert main["2"] == "Heizung"
 
@@ -464,7 +464,7 @@ class TestWalkSpaces:
                 "spaces": {},
             }
         }
-        locs, fns = self._call(spaces, {"FN-1": fn_ns})
+        _locs, fns = self._call(spaces, {"FN-1": fn_ns})
         assert fns[0].name == "Dimmer"
         assert fns[0].usage_text == "Dimmen"
         assert fns[0].ga_addresses == ["2/3/4"]
@@ -482,14 +482,14 @@ class TestWalkSpaces:
                 "spaces": {},
             }
         }
-        locs, fns = self._call(spaces, {"FN-1": fn})
+        _locs, fns = self._call(spaces, {"FN-1": fn})
         assert fns[0].ga_addresses == ["5/6/7"]
 
     def test_empty_ga_address_skipped(self):
         """GA refs with blank address should not be added."""
         fn = {"name": "X", "usage_text": "Y", "group_addresses": {"r": {"address": ""}}}
         spaces = {"S-1": {"identifier": "S-1", "name": "Z", "type": "Room", "functions": ["FN-1"], "spaces": {}}}
-        locs, fns = self._call(spaces, {"FN-1": fn})
+        _locs, fns = self._call(spaces, {"FN-1": fn})
         assert fns[0].ga_addresses == []
 
     def test_recursive_sub_spaces(self):

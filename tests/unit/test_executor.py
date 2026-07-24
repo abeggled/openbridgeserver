@@ -2130,7 +2130,7 @@ class TestMinMaxTracker:
 
     def test_no_value_returns_current_state(self):
         state = {}
-        out, state = self._run(5.0, state)
+        _out, state = self._run(5.0, state)
         # Execute without a new value — state must persist
         n1 = node("m", "min_max_tracker", {})
         exc = make_executor([n1], hysteresis_state=state)

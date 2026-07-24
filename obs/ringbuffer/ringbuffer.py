@@ -1926,8 +1926,8 @@ class RingBuffer:
                 new_value=_safe_loads(r["new_value"]),
                 source_adapter=r["source_adapter"],
                 quality=r["quality"],
-                metadata_version=int(r["metadata_version"]) if "metadata_version" in r.keys() else 1,
-                metadata=_safe_loads_dict(r["metadata"]) if "metadata" in r.keys() else {},
+                metadata_version=int(r["metadata_version"]) if "metadata_version" in r.keys() else 1,  # noqa: SIM118 -- Row.__contains__ checks values, not keys
+                metadata=_safe_loads_dict(r["metadata"]) if "metadata" in r.keys() else {},  # noqa: SIM118 -- Row.__contains__ checks values, not keys
             )
             for r in rows
         ]
@@ -2331,7 +2331,9 @@ class RingBuffer:
     # Internal
     # ------------------------------------------------------------------
 
-    async def _fetchall(self, sql: str, params: list = []) -> list:
+    async def _fetchall(self, sql: str, params: list | None = None) -> list:
+        if params is None:
+            params = []
         async with self._conn.execute(sql, params) as cur:
             return await cur.fetchall()
 

@@ -186,7 +186,7 @@ async def adapters_detail(
     """Alle laufenden Adapter-Instanzen mit Status."""
     all_instances = adapter_registry.get_all_instances()
     result = []
-    for instance_id, instance in all_instances.items():
+    for instance in all_instances.values():
         result.append(
             AdapterDetailOut(
                 id=instance._instance_id,

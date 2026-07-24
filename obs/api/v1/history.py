@@ -53,7 +53,7 @@ def _parse_ts(s: str | None, default: datetime) -> datetime:
     if not s:
         return default
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return datetime.fromisoformat(s)
     except ValueError:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -67,7 +67,7 @@ def _format_utc_bucket(bucket: Any) -> str:
         dt = bucket
     else:
         try:
-            dt = datetime.fromisoformat(str(bucket).replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(str(bucket))
         except ValueError:
             return str(bucket)
 

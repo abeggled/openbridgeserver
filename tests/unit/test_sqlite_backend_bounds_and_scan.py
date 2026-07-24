@@ -167,7 +167,7 @@ async def test_nonempty_pending_checkpoint_is_recovered(tmp_path: Path):
     # Gegenprobe: ein intaktes, befülltes pending-Segment wird korrekt gecheckpointet
     # und wieder als sauber closed markiert (kein Quarantäne-Fehlalarm).
     root = tmp_path / "root"
-    filename, seg_id = await _seed_two_segments_second_pending(root)
+    _filename, seg_id = await _seed_two_segments_second_pending(root)
 
     s = SqliteSegmentStore(root)
     await s.open()

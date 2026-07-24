@@ -555,10 +555,13 @@ class TestApiClientManagerHttp:
                 "headers": '{"host": "attacker.invalid", "X-Test": "kept"}',
             },
         )
-        with patch(
-            "obs.security.url_targets.socket.getaddrinfo",
-            return_value=[(None, None, None, None, ("93.184.216.34", 8443))],
-        ), patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        with (
+            patch(
+                "obs.security.url_targets.socket.getaddrinfo",
+                return_value=[(None, None, None, None, ("93.184.216.34", 8443))],
+            ),
+            patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        ):
             outputs = self._run(manager, flow)
 
         assert outputs["ac"]["success"] is True
@@ -833,7 +836,7 @@ class TestApiClientAuthentication:
 
     def test_basic_auth_empty_username_skipped(self):
         """If username is empty, no auth object must be passed."""
-        outputs, captured = self._run_with_auth(
+        _outputs, captured = self._run_with_auth(
             {
                 "auth_type": "basic",
                 "auth_username": "",

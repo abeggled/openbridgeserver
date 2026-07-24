@@ -229,7 +229,7 @@ def _sqlite_bucket_expr(fmt: str, minutes: int) -> str:
 def _bucket_key(ts_str: str, minutes: int) -> str:
     """Round ts_str down to the nearest *minutes* bucket."""
     try:
-        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(ts_str)
         total_minutes = dt.hour * 60 + dt.minute
         rounded = (total_minutes // minutes) * minutes
         dt_rounded = dt.replace(hour=rounded // 60, minute=rounded % 60, second=0, microsecond=0)

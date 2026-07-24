@@ -788,9 +788,7 @@ async def _ws_has_log_access(user: str | None, api_key: str | None, *, identity_
             (key_hash,),
         )
         return row is not None
-    if user and user != "__api_key__":
-        return True
-    return False
+    return bool(user and user != "__api_key__")
 
 
 # ---------------------------------------------------------------------------

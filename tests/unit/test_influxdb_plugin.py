@@ -20,16 +20,16 @@ from obs.history.influxdb_plugin import InfluxDBHistoryPlugin, _to_rfc3339
 
 
 def _plugin(version: int = 2, **kwargs) -> InfluxDBHistoryPlugin:
-    defaults = dict(
-        url="http://localhost:8086",
-        version=version,
-        token="mytoken",
-        org="myorg",
-        bucket="mybucket",
-        database="mydb",
-        username="user",
-        password="pass",
-    )
+    defaults = {
+        "url": "http://localhost:8086",
+        "version": version,
+        "token": "mytoken",
+        "org": "myorg",
+        "bucket": "mybucket",
+        "database": "mydb",
+        "username": "user",
+        "password": "pass",
+    }
     defaults.update(kwargs)
     return InfluxDBHistoryPlugin(**defaults)
 
@@ -383,7 +383,7 @@ class TestInfluxDBAggregate:
 
     async def test_aggregate_all_fns(self):
         for fn in ("avg", "min", "max", "last"):
-            ctx, client = _make_httpx_mock(status=200, json_body=self._agg_response())
+            ctx, _client = _make_httpx_mock(status=200, json_body=self._agg_response())
             with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
                 result = await _plugin().aggregate(uuid.uuid4(), fn, "1h", _ts(0), _ts(1))
             assert isinstance(result, list)
