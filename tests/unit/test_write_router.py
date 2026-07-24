@@ -9,8 +9,8 @@ import pytest
 
 from obs.adapters import registry as adapter_registry
 from obs.adapters.mqtt.adapter import MqttAdapter
-from obs.core.event_bus import DataValueEvent
 from obs.core import write_router
+from obs.core.event_bus import DataValueEvent
 from obs.core.write_router import WriteRouter, _cached_value_equals, _row_value, _to_cached_value
 from tests.adapters.conftest import make_binding
 

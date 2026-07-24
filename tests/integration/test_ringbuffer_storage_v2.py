@@ -86,7 +86,7 @@ async def test_file_storage_recovers_malformed_database_during_record(tmp_path: 
     await rb.start()
     try:
         calls = {"count": 0}
-        original_record_locked = rb._record_locked  # noqa: SLF001
+        original_record_locked = rb._record_locked
 
         async def _raise_malformed_once(*args, **kwargs):
             calls["count"] += 1
@@ -118,7 +118,7 @@ async def test_handle_value_event_preserves_last_value_after_record_recovery(tmp
         monkeypatch.setattr("obs.core.registry.get_registry", _raise_runtime_error)
 
         calls = {"count": 0}
-        original_record_locked = rb._record_locked  # noqa: SLF001
+        original_record_locked = rb._record_locked
 
         async def _raise_malformed_once(*args, **kwargs):
             calls["count"] += 1
@@ -206,7 +206,7 @@ async def test_file_storage_recovers_malformed_database_during_query(tmp_path: P
         await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
 
         calls = {"count": 0}
-        original_fetchall = rb._fetchall  # noqa: SLF001
+        original_fetchall = rb._fetchall
 
         async def _raise_malformed_once(*args, **kwargs):
             calls["count"] += 1
@@ -233,7 +233,7 @@ async def test_file_storage_skips_duplicate_recovery_after_stale_query_error(tmp
         await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
 
         calls = {"count": 0, "recoveries": 0}
-        original_fetchall = rb._fetchall  # noqa: SLF001
+        original_fetchall = rb._fetchall
 
         async def _raise_stale_malformed_once(*args, **kwargs):
             calls["count"] += 1
@@ -263,7 +263,7 @@ async def test_file_storage_recovers_malformed_database_during_stats(tmp_path: P
     try:
         await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
 
-        original_execute = rb._conn.execute  # noqa: SLF001
+        original_execute = rb._conn.execute
         calls = {"count": 0}
 
         def _raise_malformed_once(sql, *args, **kwargs):
@@ -273,7 +273,7 @@ async def test_file_storage_recovers_malformed_database_during_stats(tmp_path: P
                     raise aiosqlite.DatabaseError("SQLite integrity_check failed: bad page")
             return original_execute(sql, *args, **kwargs)
 
-        monkeypatch.setattr(rb._conn, "execute", _raise_malformed_once)  # noqa: SLF001
+        monkeypatch.setattr(rb._conn, "execute", _raise_malformed_once)
 
         stats = await rb.stats()
 
@@ -348,7 +348,7 @@ async def test_reconfigure_same_model_recovers_malformed_file_storage(tmp_path: 
         await _record_value(rb, 1, "2026-01-01T00:00:00.000Z")
 
         calls = {"count": 0}
-        original_trim = rb._trim  # noqa: SLF001
+        original_trim = rb._trim
 
         async def _raise_malformed_once(*args, **kwargs):
             calls["count"] += 1

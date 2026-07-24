@@ -6,10 +6,12 @@ without the optional dependency.
 """
 
 from __future__ import annotations
+
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from xknx.core.connection_state import XknxConnectionState
 from xknx.dpt import DPTArray, DPTBinary
 from xknx.telegram import Telegram
@@ -26,10 +28,6 @@ from obs.adapters.knx.adapter import (
 )
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.core.event_bus import AdapterStatusEvent
-
-
-import pytest
-
 from tests.adapters.conftest import make_binding
 
 # ---------------------------------------------------------------------------
@@ -618,7 +616,7 @@ class TestKnxAdapterMiscSetters:
 
     def test_set_value_getter(self, mock_bus):
         adapter = KnxAdapter(event_bus=mock_bus, config={"host": "127.0.0.1"})
-        getter = lambda dp_id: None  # noqa: E731
+        getter = lambda dp_id: None
         adapter.set_value_getter(getter)
         assert adapter._value_getter is getter
 
@@ -1166,6 +1164,7 @@ class TestHandleReadRequest:
     @pytest.mark.asyncio
     async def test_good_boolean_value_sends_dpt_binary_response(self, mock_bus):
         from unittest.mock import MagicMock
+
         from xknx.dpt import DPTBinary
 
         adapter, mock_xknx = self._make_adapter(mock_bus)
@@ -1352,6 +1351,7 @@ class TestOnTelegramEdgeCases:
 class TestBuildSniffer:
     def test_sniffer_is_xknx_device(self):
         from unittest.mock import MagicMock
+
         from xknx.devices import Device as XknxDevice
 
         from obs.adapters.knx.adapter import _build_sniffer
@@ -1819,6 +1819,7 @@ class TestSecureConfigFromKeyfile:
 
     def _make_keyring_mock(self, *, user_id: int = 2, individual_address: str = "1.1.100") -> Any:
         from unittest.mock import MagicMock
+
         from xknx.secure.keyring import InterfaceType
 
         iface = MagicMock()
@@ -1966,6 +1967,7 @@ class TestSecureConfigFromKeyfile:
         """_do_connect() with keyfile calls _secure_config_from_keyfile — no keyfile
         path reaches xknx, so no UDP DescriptionRequest is triggered."""
         from unittest.mock import MagicMock
+
         from xknx.io import SecureConfig
 
         # Return a SecureConfig with explicit credentials (no keyfile path)
@@ -2028,6 +2030,7 @@ class TestSecureConfigFromKeyfile:
         _do_connect() must use the fallback's individual_address in ConnectionConfig,
         not the stale configured value (e.g. '1.1.255')."""
         from unittest.mock import MagicMock
+
         from xknx.io import SecureConfig
 
         fallback_sc = SecureConfig(device_authentication_password="devauth", user_id=3, user_password="pw")

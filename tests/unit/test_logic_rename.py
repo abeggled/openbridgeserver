@@ -19,7 +19,6 @@ from obs.core.event_bus import DataPointRenamedEvent
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

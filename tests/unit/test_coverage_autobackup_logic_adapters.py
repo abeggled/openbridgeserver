@@ -417,9 +417,8 @@ class TestDeleteAutobackupEndpoint:
 
         from obs.api.v1.autobackup import delete_autobackup
 
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await delete_autobackup(name="20260101-0300", _admin="admin")
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await delete_autobackup(name="20260101-0300", _admin="admin")
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -441,9 +440,8 @@ class TestRestoreAutobackupEndpoint:
         from obs.api.v1.autobackup import restore_autobackup
 
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="../bad-name", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="../bad-name", _admin="admin", db=db)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -453,9 +451,8 @@ class TestRestoreAutobackupEndpoint:
         from obs.api.v1.autobackup import restore_autobackup
 
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -466,9 +463,8 @@ class TestRestoreAutobackupEndpoint:
 
         (tmp_path / "20260101-0300.json").write_text("NOT JSON")
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -479,9 +475,8 @@ class TestRestoreAutobackupEndpoint:
 
         (tmp_path / "20260101-0300.json").write_text(json.dumps({"bad_key": "bad_value"}))
         db = _DbStub()
-        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            with pytest.raises(HTTPException) as exc_info:
-                await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
+        with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
+            await restore_autobackup(name="20260101-0300", _admin="admin", db=db)
         assert exc_info.value.status_code == 400
 
 
@@ -675,7 +670,6 @@ class TestCreateGraph:
     @pytest.mark.asyncio
     async def test_creates_and_returns_graph(self):
         from obs.api.v1.logic import create_graph
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         body = LogicGraphCreate(name="New Graph", description="desc", enabled=True, flow_data=FlowData())
@@ -691,7 +685,6 @@ class TestCreateGraph:
     @pytest.mark.asyncio
     async def test_reloads_logic_manager_on_create(self):
         from obs.api.v1.logic import create_graph
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         body = LogicGraphCreate(name="Graph", flow_data=FlowData())
@@ -713,7 +706,6 @@ class TestUpdateGraphFull:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import update_graph_full
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         body = LogicGraphCreate(name="Updated", flow_data=FlowData())
@@ -725,7 +717,6 @@ class TestUpdateGraphFull:
     @pytest.mark.asyncio
     async def test_updates_and_returns_graph(self):
         from obs.api.v1.logic import update_graph_full
-
         from obs.logic.models import FlowData, LogicGraphCreate
 
         row = _make_graph_row(name="Old Name")
@@ -756,7 +747,6 @@ class TestUpdateGraphPartial:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import update_graph_partial
-
         from obs.logic.models import LogicGraphUpdate
 
         body = LogicGraphUpdate(name="New")
@@ -768,7 +758,6 @@ class TestUpdateGraphPartial:
     @pytest.mark.asyncio
     async def test_partial_update_name_only(self):
         from obs.api.v1.logic import update_graph_partial
-
         from obs.logic.models import LogicGraphUpdate
 
         row = _make_graph_row(name="Old", description="Desc")
@@ -801,7 +790,6 @@ class TestUpdateGraphPartial:
     @pytest.mark.asyncio
     async def test_partial_update_enabled_only(self):
         from obs.api.v1.logic import update_graph_partial
-
         from obs.logic.models import LogicGraphUpdate
 
         row = _make_graph_row(enabled=1, name="G")
@@ -901,7 +889,6 @@ class TestImportGraph:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import import_graph
-
         from obs.logic.models import FlowData, LogicGraphImport
 
         body = LogicGraphImport(obs_export="wrong_type", version=1, name="G", flow_data=FlowData())
@@ -913,7 +900,6 @@ class TestImportGraph:
     @pytest.mark.asyncio
     async def test_imports_valid_graph(self):
         from obs.api.v1.logic import import_graph
-
         from obs.logic.models import FlowData, LogicGraphImport
 
         body = LogicGraphImport(obs_export="logic_graph", version=1, name="Imported", flow_data=FlowData())
@@ -931,7 +917,6 @@ class TestImportGraph:
     @pytest.mark.asyncio
     async def test_missing_node_type_replaced(self):
         from obs.api.v1.logic import import_graph
-
         from obs.logic.models import FlowData, LogicGraphImport, LogicNode, NodePosition
 
         node = LogicNode(id="n1", type="unknown_type_xyz", position=NodePosition(x=0, y=0), data={})
@@ -1001,9 +986,8 @@ class TestRunGraph:
         mock_manager = MagicMock()
         mock_manager.execute_graph = AsyncMock(side_effect=RuntimeError("execution failed"))
 
-        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
-            with pytest.raises(HTTPException) as exc_info:
-                await run_graph(graph_id=row["id"], _user="user", db=db)
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager), pytest.raises(HTTPException) as exc_info:
+            await run_graph(graph_id=row["id"], _user="user", db=db)
         assert exc_info.value.status_code == 500
 
 
@@ -1022,7 +1006,6 @@ class TestDuplicateGraph:
     @pytest.mark.asyncio
     async def test_duplicate_creates_copy(self):
         from obs.api.v1.logic import duplicate_graph
-
         from obs.logic.models import FlowData, LogicEdge, LogicNode, NodePosition
 
         node = LogicNode(id="n1", type="and", position=NodePosition(x=0, y=0), data={})
@@ -1055,7 +1038,6 @@ class TestDuplicateGraph:
         from fastapi import HTTPException
 
         from obs.api.v1.logic import duplicate_graph
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         flow = FlowData(nodes=[LogicNode(id="timer", type="timer_delay", position=NodePosition(x=0, y=0), data={"delay_s": -1})])
@@ -1106,7 +1088,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_finds_datapoint_read_usage(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1121,7 +1102,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_finds_datapoint_write_usage(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1136,7 +1116,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_finds_value_sequence_target_usage(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1156,7 +1135,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_ignores_invalid_or_unrelated_sequence_steps(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())
@@ -1168,7 +1146,6 @@ class TestGetDatapointLogicUsages:
     @pytest.mark.asyncio
     async def test_ignores_other_node_types(self):
         from obs.api.v1.logic import get_datapoint_logic_usages
-
         from obs.logic.models import FlowData, LogicNode, NodePosition
 
         dp_id = str(uuid.uuid4())

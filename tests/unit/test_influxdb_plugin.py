@@ -14,7 +14,6 @@ import pytest
 
 from obs.history.influxdb_plugin import InfluxDBHistoryPlugin, _to_rfc3339
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -262,9 +261,8 @@ class TestInfluxDBWrite:
         ctx.post = mock.AsyncMock(return_value=resp)
         ctx.aclose = mock.AsyncMock()
         ctx.is_closed = False
-        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
-            with pytest.raises(Exception, match="HTTP 500"):
-                await _plugin().write(uuid.uuid4(), 1.0, None, "ok", ts=_ts())
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx), pytest.raises(Exception, match="HTTP 500"):
+            await _plugin().write(uuid.uuid4(), 1.0, None, "ok", ts=_ts())
         ctx.aclose.assert_awaited_once()
 
     async def test_write_without_ts_uses_now(self):

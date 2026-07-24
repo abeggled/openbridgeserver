@@ -558,9 +558,8 @@ class TestApiClientManagerHttp:
         with patch(
             "obs.security.url_targets.socket.getaddrinfo",
             return_value=[(None, None, None, None, ("93.184.216.34", 8443))],
-        ):
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                outputs = self._run(manager, flow)
+        ), patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = self._run(manager, flow)
 
         assert outputs["ac"]["success"] is True
         assert captured["method"] == "GET"
@@ -1749,9 +1748,8 @@ class TestApiClientDownstreamPropagation:
         manager._graphs[graph_id] = ("test", True, flow)
         manager._node_state[graph_id] = {}
 
-        with patch("random.randint", side_effect=[11, 99]):
-            with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
-                outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
+        with patch("random.randint", side_effect=[11, 99]), patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(manager._execute_graph(graph_id, "test", flow, {}))
 
         assert outputs["rand"]["value"] == 11
         assert outputs["write"]["_write_value"] == 11

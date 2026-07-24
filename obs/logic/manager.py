@@ -42,7 +42,7 @@ def _msg_to_str(v: object) -> str:
     (0, False, 0.0, "") are preserved as their string representation instead
     of being silently replaced by a fallback.
     """
-    import json as _j  # noqa: PLC0415
+    import json as _j
 
     if isinstance(v, (dict, list)):
         return _j.dumps(v, ensure_ascii=False)
@@ -597,7 +597,7 @@ async def _ping_host(host: str, count: int, timeout_s: float) -> tuple[bool, flo
     timeout_s is passed to ping as the per-packet deadline; an additional
     2-second asyncio safety timeout is layered on top to handle hangs.
     """
-    import sys  # noqa: PLC0415
+    import sys
 
     timeout_s, count = _normalise_host_check_ping_config(timeout_s, count)
     timeout_int = int(timeout_s)
@@ -613,7 +613,7 @@ async def _ping_host(host: str, count: int, timeout_s: float) -> tuple[bool, flo
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s * count + 2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             return False, None
@@ -654,7 +654,7 @@ def _build_ical_fetch_targets(url: str) -> tuple[list[str], dict[str, str], dict
     if parsed.username is not None:
         username = unquote(parsed.username)
         password = unquote(parsed.password or "")
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
         headers["Authorization"] = f"Basic {token}"
     extensions = {"sni_hostname": hostname_ascii} if parsed.scheme == "https" else {}
     fetch_urls: list[str] = []
@@ -1428,8 +1428,8 @@ class LogicManager:
         # and the clock has already passed the slot's threshold hour, query the history
         # for the last value at or before that hour and inject it as _history_{slot}.
         # This covers restarts where the slot would otherwise stay empty all day.
-        import datetime as _hc_dt  # noqa: PLC0415
-        import zoneinfo as _hc_zi  # noqa: PLC0415
+        import datetime as _hc_dt
+        import zoneinfo as _hc_zi
 
         _hc_tz = _hc_zi.ZoneInfo(self._app_config.get("timezone", "Europe/Zurich"))
         _hc_now = _hc_dt.datetime.now(tz=_hc_tz)
@@ -1459,7 +1459,7 @@ class LogicManager:
             # cause slots to be tagged with the wrong date and re-filled on every run.
             _hc_node_aug["_date"] = _hc_today
             try:
-                from obs.history.factory import get_history_plugin as _get_hp  # noqa: PLC0415
+                from obs.history.factory import get_history_plugin as _get_hp
 
                 _hc_dp_id = uuid.UUID(_hc_dp_id_str)
                 _hc_plugin = _get_hp()
@@ -1482,7 +1482,7 @@ class LogicManager:
                             _hc_formula = (_hc_dp_read_node.data.get("value_formula") or "").strip()
                             if _hc_formula:
                                 try:
-                                    from obs.logic.executor import GraphExecutor as _GE  # noqa: PLC0415
+                                    from obs.logic.executor import GraphExecutor as _GE
 
                                     _hist_val = _GE._safe_eval(_hc_formula, {"x": float(_hist_val)})
                                 except Exception:
@@ -1490,7 +1490,7 @@ class LogicManager:
                             _hc_vmap = _hc_dp_read_node.data.get("value_map")
                             if _hc_vmap:
                                 try:
-                                    from obs.core.transformation import apply_value_map as _avm  # noqa: PLC0415
+                                    from obs.core.transformation import apply_value_map as _avm
 
                                     _hist_val = _avm(_hist_val, _hc_vmap)
                                 except Exception:
@@ -1915,7 +1915,7 @@ class LogicManager:
             if priority >= execution_value_priority_by_datapoint_id.get(dp_id_str, 0):
                 execution_values_by_datapoint_id[dp_id_str] = node_override["value"]
                 execution_value_priority_by_datapoint_id[dp_id_str] = priority
-        import json as _json  # noqa: PLC0415
+        import json as _json
 
         async def _run_api_client_node(node: Any, target_set: set[str]) -> bool:
             out = outputs.get(node.id, {})

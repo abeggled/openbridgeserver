@@ -15,7 +15,6 @@ while sort and pagination remain owned by the caller of the query endpoint.
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 import csv
 import json
 import logging
@@ -24,6 +23,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -51,13 +51,6 @@ from obs.ringbuffer.persisted_config import (
     persist_ringbuffer_config,
     repair_pending_keep_migration_decision,
 )
-from obs.ringbuffer.store.config import (
-    SEGMENT_MAX_AGE_MIN,
-    SegmentConfig,
-    StoreRetentionConfig,
-    validate_explicit_segment_bounds,
-    validate_store_config,
-)
 from obs.ringbuffer.ringbuffer import (
     RingBufferStorageDeleteIncompleteError,
     RowLazyExportCursor,
@@ -73,6 +66,13 @@ from obs.ringbuffer.ringbuffer import (
     is_ringbuffer_enabled,
     reset_ringbuffer,
     set_ringbuffer_enabled,
+)
+from obs.ringbuffer.store.config import (
+    SEGMENT_MAX_AGE_MIN,
+    SegmentConfig,
+    StoreRetentionConfig,
+    validate_explicit_segment_bounds,
+    validate_store_config,
 )
 
 logger = logging.getLogger(__name__)

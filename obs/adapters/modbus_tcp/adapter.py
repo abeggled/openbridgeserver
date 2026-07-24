@@ -468,9 +468,8 @@ class ModbusTcpAdapter(AdapterBase):
                 yield self._client if self._client_ready() else None
             return
 
-        async with self._io_sem:
-            async with self._inflight_modbus_call():
-                yield self._client if self._client_ready() else None
+        async with self._io_sem, self._inflight_modbus_call():
+            yield self._client if self._client_ready() else None
 
     def _client_ready(self) -> bool:
         return bool(not self._stopping and self._client and self._client.connected)

@@ -16,8 +16,8 @@ from obs.message_archive import (
     activate_message_archive_service,
     broadcast_message_archive_entry,
     close_message_archive_store,
-    get_message_archive_store,
     get_message_archive_service,
+    get_message_archive_store,
     init_message_archive_store,
     reset_message_archive_store,
 )

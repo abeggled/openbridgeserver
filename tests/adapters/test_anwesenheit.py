@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import heapq
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,7 +23,6 @@ from obs.adapters.anwesenheit.adapter import (
     OnPresence,
 )
 from obs.core.event_bus import DataValueEvent
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,7 +65,7 @@ def _evt(dp_id: uuid.UUID, value: Any) -> DataValueEvent:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 # ---------------------------------------------------------------------------

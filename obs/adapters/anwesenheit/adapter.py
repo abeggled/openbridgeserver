@@ -33,7 +33,7 @@ import asyncio
 import heapq
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -165,10 +165,10 @@ class AnwesenheitssimulationAdapter(AdapterBase):
         self._seq = 0
         await self._publish_status(False, "Anwesenheitssimulation gestoppt", code="stopped")
 
-    async def read(self, binding: Any) -> None:  # noqa: ARG002
+    async def read(self, binding: Any) -> None:
         return None
 
-    async def write(self, binding: Any, value: Any) -> None:  # noqa: ARG002
+    async def write(self, binding: Any, value: Any) -> None:
         pass
 
     async def _on_bindings_reloaded(self) -> None:
@@ -253,13 +253,13 @@ class AnwesenheitssimulationAdapter(AdapterBase):
 
     @staticmethod
     def _current_hour_window() -> tuple[datetime, datetime]:
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         end = now.replace(minute=59, second=59, microsecond=999999)
         return now, end
 
     @staticmethod
     def _next_hour_window() -> tuple[datetime, datetime]:
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         start = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
         end = start.replace(minute=59, second=59, microsecond=999999)
         return start, end
@@ -274,7 +274,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             logger.warning("AnwesenheitssimulationAdapter: History-Plugin nicht verfügbar — Vorabruf übersprungen")
             return
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         new_entries: list[_HeapEntry] = []
 
         for binding in self._bindings:
@@ -306,7 +306,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
                     raw_ts = rec["ts"]
                     hist_ts = datetime.fromisoformat(raw_ts)
                     if hist_ts.tzinfo is None:
-                        hist_ts = hist_ts.replace(tzinfo=timezone.utc)
+                        hist_ts = hist_ts.replace(tzinfo=UTC)
                     fire_at = hist_ts + delta
                 except Exception:
                     continue
@@ -347,7 +347,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
             return
         from obs.core.event_bus import DataValueEvent
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         while self._pending and self._pending[0][0] <= now:
             fire_at, _, dp_id_str, binding_id_str, value, quality = heapq.heappop(self._pending)
             try:
@@ -405,7 +405,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
 
         while True:
             try:
-                now = datetime.now(tz=timezone.utc)
+                now = datetime.now(tz=UTC)
 
                 # Pre-load next hour at minute :55
                 if now.minute >= 55 and not next_hour_preloaded:

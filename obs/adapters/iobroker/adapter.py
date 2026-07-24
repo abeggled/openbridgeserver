@@ -372,7 +372,7 @@ class IoBrokerAdapter(AdapterBase):
 
     def _register_socket_handlers(self, sio: Any) -> None:
         @sio.event
-        async def connect():  # noqa: ANN202
+        async def connect():
             if self._socket is not sio:
                 return
             logger.info("ioBroker Socket.IO connected → %s", self._connect_url)
@@ -385,7 +385,7 @@ class IoBrokerAdapter(AdapterBase):
             await self._subscribe_bound_states(force_publish_initial=True, publish_connected_status=False)
 
         @sio.event
-        async def disconnect():  # noqa: ANN202
+        async def disconnect():
             if self._socket is not sio:
                 return
             logger.info("ioBroker Socket.IO disconnected")
@@ -395,7 +395,7 @@ class IoBrokerAdapter(AdapterBase):
             self._ensure_reconnect_task()
 
         @sio.on("stateChange")
-        async def state_change(*args):  # noqa: ANN202
+        async def state_change(*args):
             if self._socket is not sio:
                 return
             await self._on_state_change_event(*args)

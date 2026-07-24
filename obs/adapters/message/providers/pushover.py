@@ -13,10 +13,10 @@ from obs.adapters.message.providers.base import MessageSendResult
 class PushoverConfig(BaseModel):
     enabled: bool = False
     api_token: str = Field(default="", json_schema_extra={"format": "password"})
-    targets: dict[str, "PushoverTarget"] = Field(default_factory=dict)
+    targets: dict[str, PushoverTarget] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_enabled_provider(self) -> "PushoverConfig":
+    def _validate_enabled_provider(self) -> PushoverConfig:
         if self.enabled and not self.api_token.strip():
             raise ValueError("Pushover api_token is required when provider is enabled")
         return self
@@ -28,7 +28,7 @@ class PushoverTarget(BaseModel):
     sound: str | None = None
 
     @model_validator(mode="after")
-    def _validate_target(self) -> "PushoverTarget":
+    def _validate_target(self) -> PushoverTarget:
         if not self.user_key.strip():
             raise ValueError("Pushover user_key is required")
         return self

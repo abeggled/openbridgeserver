@@ -541,14 +541,12 @@ class TestWalkSpaces:
 
 class TestImportErrorPaths:
     def test_parse_knxproj_import_error(self):
-        with mock.patch.dict(sys.modules, {"xknxproject": None}):
-            with pytest.raises(ValueError, match="xknxproject"):
-                parse_knxproj(b"irrelevant")
+        with mock.patch.dict(sys.modules, {"xknxproject": None}), pytest.raises(ValueError, match="xknxproject"):
+            parse_knxproj(b"irrelevant")
 
     def test_parse_knxproj_locations_import_error(self):
-        with mock.patch.dict(sys.modules, {"xknxproject": None}):
-            with pytest.raises(ValueError, match="xknxproject"):
-                parse_knxproj_locations(b"irrelevant")
+        with mock.patch.dict(sys.modules, {"xknxproject": None}), pytest.raises(ValueError, match="xknxproject"):
+            parse_knxproj_locations(b"irrelevant")
 
 
 # ---------------------------------------------------------------------------
@@ -561,16 +559,14 @@ class TestParseKnxprojPasswordError:
         """When xknxproject raises a password-related error it must be re-raised as ValueError."""
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("bad password detected")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_locations_password_error(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("decrypt failed")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj_locations(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj_locations(b"fake")
 
 
 class TestParseKnxprojObjectStyleProject:
@@ -781,27 +777,23 @@ class TestParseKnxprojHmacError:
     def test_hmac_error_detected_as_password_error(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Bad HMAC check for file '0.xml'")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_bad_zip_error_detected_as_password_error(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("bad zip file")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_invalid_password_msg_detected(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Invalid password.")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj(b"fake")
 
     def test_locations_hmac_error_detected(self):
         fake_xknx = mock.MagicMock()
         fake_xknx.XKNXProj.return_value.parse.side_effect = Exception("Bad HMAC check for file '0.xml'")
-        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}):
-            with pytest.raises(ValueError, match="Passwort|verschlüsselt"):
-                parse_knxproj_locations(b"fake")
+        with mock.patch.dict(sys.modules, {"xknxproject": fake_xknx}), pytest.raises(ValueError, match="Passwort|verschlüsselt"):
+            parse_knxproj_locations(b"fake")

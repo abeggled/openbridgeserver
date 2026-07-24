@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import aiosqlite
+import pytest
 
 from obs.ringbuffer.store.manifest import (
     LEGACY_SCHEMA_VERSION,

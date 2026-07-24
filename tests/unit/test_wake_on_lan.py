@@ -335,7 +335,7 @@ class TestWakeOnLanManager:
 class TestWakeOnLanRisingEdge:
     """Packet must only be sent on the False→True edge, not on sustained True."""
 
-    def _make_flow(self) -> "FlowData":
+    def _make_flow(self) -> FlowData:
         return _flow([node("wol", "wake_on_lan", {"mac_address": "AA:BB:CC:DD:EE:FF"})])
 
     def _exec(self, manager, flow, trigger: bool, mock_to_thread):

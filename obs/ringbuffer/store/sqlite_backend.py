@@ -45,10 +45,10 @@ import json
 import logging
 import os
 import re
-from time import monotonic as _monotonic
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any, NamedTuple
 
 import aiosqlite
@@ -1477,7 +1477,6 @@ class SqliteSegmentStore(RingBufferStore):
         if self._active_segment is not None and segment.segment_id == self._active_segment.segment_id:
             raise exc
         await self.manifest.mark_quarantined(segment.segment_id, reason=str(exc))
-        return None
 
     async def _connection_for_read(self, segment: SegmentRecord) -> aiosqlite.Connection:
         if _is_legacy_segment(segment):

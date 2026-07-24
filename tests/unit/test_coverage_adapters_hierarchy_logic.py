@@ -13,9 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from fastapi import HTTPException
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers / stubs
@@ -1022,9 +1020,9 @@ class TestGetAdapterSchema:
 
     @pytest.mark.asyncio
     async def test_schema_found(self, monkeypatch):
-        from obs.api.v1 import adapters as adp_api
-
         from pydantic import BaseModel
+
+        from obs.api.v1 import adapters as adp_api
 
         class FakeConfig(BaseModel):
             host: str = "localhost"
@@ -1081,10 +1079,10 @@ class TestUpdateAdapterConfig:
 
     @pytest.mark.asyncio
     async def test_update_config_success(self, monkeypatch):
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             host: str = "localhost"
@@ -1099,11 +1097,11 @@ class TestUpdateAdapterConfig:
 
     @pytest.mark.asyncio
     async def test_update_config_preserves_legacy_message_redacted_secrets(self, monkeypatch):
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
         from obs.api.v1.redaction import REDACTED
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             providers: dict
@@ -1143,11 +1141,11 @@ class TestUpdateAdapterConfig:
     @pytest.mark.asyncio
     async def test_update_config_legacy_message_unresolvable_redaction_returns_422(self, monkeypatch):
         """PATCH /{type}/config must return 422 (not 500) when redacted target secret is unresolvable."""
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
         from obs.api.v1.redaction import REDACTED
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             providers: dict
@@ -1184,11 +1182,11 @@ class TestUpdateAdapterConfig:
 
     @pytest.mark.asyncio
     async def test_update_config_legacy_message_rejects_redacted_secrets_without_stored_config(self, monkeypatch):
+        from pydantic import BaseModel
+
         from obs.api.v1 import adapters as adp_api
         from obs.api.v1.adapters import ConfigPatch
         from obs.api.v1.redaction import REDACTED
-
-        from pydantic import BaseModel
 
         class Cfg(BaseModel):
             providers: dict
@@ -3037,7 +3035,7 @@ class TestIoBrokerAdapterExtras:
         a._cfg = IoBrokerAdapterConfig(socket_instability_window_s=60)
         import datetime
 
-        t0 = datetime.datetime(2024, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        t0 = datetime.datetime(2024, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
         t1 = t0 + timedelta(seconds=61)
         t2 = t0 + timedelta(seconds=70)
         a._disconnect_times = deque([t0, t1])

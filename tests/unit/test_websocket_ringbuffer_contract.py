@@ -15,8 +15,8 @@ from obs.api.v1.websocket import (
     WebSocketManager,
     _extract_subprotocol_tokens,
     _page_allowed_datapoints,
-    _page_allowed_message_archives,
     _page_allowed_message_archive_predicates,
+    _page_allowed_message_archives,
 )
 from obs.core.event_bus import DataValueEvent
 
@@ -167,7 +167,7 @@ async def test_send_drops_non_serializable_message_without_disconnect():
     manager = WebSocketManager()
     conn_id = await manager.connect(ws)
 
-    ok = await manager._send(conn_id, {"action": "ringbuffer_entry", "entry": object()})  # noqa: SLF001
+    ok = await manager._send(conn_id, {"action": "ringbuffer_entry", "entry": object()})
 
     assert ok is True
     assert manager.connection_count == 1
@@ -507,8 +507,8 @@ async def test_handle_value_event_accepts_six_field_connection_entries(monkeypat
     conn_id = await manager.connect(ws)
     manager.subscribe(conn_id, [dp_id])
 
-    ws_entry = manager._connections[conn_id]  # noqa: SLF001
-    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None)  # noqa: SLF001
+    ws_entry = manager._connections[conn_id]
+    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None)
 
     class _RegistryStub:
         def get(self, _dp_id):

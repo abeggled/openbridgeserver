@@ -31,8 +31,8 @@ from obs.adapters import registry as adapter_registry
 from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, get_current_user
 from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
-from obs.db.database import Database, get_db
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, validate_datetime_setting
+from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
 
 router = APIRouter(tags=["system"])

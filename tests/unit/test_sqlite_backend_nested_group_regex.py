@@ -22,7 +22,6 @@ import pytest
 
 from obs.ringbuffer.store.sqlite_backend import _assert_safe_regex
 
-
 # ===========================================================================
 # Neue nesting-aware Reject-Faelle (Wrapper-Klammern verstecken den Kern)
 # ===========================================================================

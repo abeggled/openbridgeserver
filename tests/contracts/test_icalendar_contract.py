@@ -49,25 +49,25 @@ class TestIcalendarContract:
     """Verify icalendar API surface used by the executor."""
 
     def test_calendar_import(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         assert callable(Calendar.from_ical)
 
     def test_from_ical_returns_calendar(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         assert cal is not None
 
     def test_walk_yields_vevents(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         events = [c for c in cal.walk() if c.name == "VEVENT"]
         assert len(events) >= 1
 
     def test_component_name_attribute(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         for comp in cal.walk():
@@ -75,7 +75,7 @@ class TestIcalendarContract:
             break
 
     def test_dtstart_get(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         events = [c for c in cal.walk() if c.name == "VEVENT"]
@@ -85,7 +85,7 @@ class TestIcalendarContract:
         assert hasattr(dtstart, "dt")  # executor uses dtstart.dt
 
     def test_allday_dtstart_is_date(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         allday = [c for c in cal.walk() if c.name == "VEVENT" and "Neujahr" in str(c.get("SUMMARY", ""))][0]
@@ -94,7 +94,7 @@ class TestIcalendarContract:
         assert not isinstance(dt, datetime.datetime)  # pure DATE, not DATETIME
 
     def test_timed_dtstart_is_datetime(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         timed = [c for c in cal.walk() if c.name == "VEVENT" and "Meeting" in str(c.get("SUMMARY", ""))][0]
@@ -102,28 +102,28 @@ class TestIcalendarContract:
         assert isinstance(dt, datetime.datetime)
 
     def test_get_summary(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         ev = [c for c in cal.walk() if c.name == "VEVENT"][0]
         assert str(ev.get("SUMMARY", "")) != ""
 
     def test_get_location(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         ev = [c for c in cal.walk() if "Neujahr" in str(c.get("SUMMARY", ""))][0]
         assert str(ev.get("LOCATION", "")) == "Zuhause"
 
     def test_get_description(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         ev = [c for c in cal.walk() if "Neujahr" in str(c.get("SUMMARY", ""))][0]
         assert "Jahr" in str(ev.get("DESCRIPTION", ""))
 
     def test_get_dtend(self):
-        from icalendar import Calendar  # noqa: PLC0415
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         ev = [c for c in cal.walk() if c.name == "VEVENT"][0]
@@ -141,18 +141,18 @@ class TestRecurringIcalEventsContract:
     """Verify recurring_ical_events API surface used by the executor."""
 
     def test_module_import(self):
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
 
         assert recurring_ical_events is not None
 
     def test_of_function_exists(self):
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
 
         assert callable(recurring_ical_events.of)
 
     def test_between_method_exists(self):
-        from icalendar import Calendar  # noqa: PLC0415
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         adapter = recurring_ical_events.of(cal)
@@ -160,8 +160,8 @@ class TestRecurringIcalEventsContract:
         assert callable(adapter.between)
 
     def test_between_returns_iterable(self):
-        from icalendar import Calendar  # noqa: PLC0415
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         start = datetime.date(2026, 1, 1)
@@ -172,8 +172,8 @@ class TestRecurringIcalEventsContract:
 
     def test_between_expands_recurring(self):
         """The RRULE;FREQ=WEEKLY;COUNT=3 event should expand to 3 occurrences."""
-        from icalendar import Calendar  # noqa: PLC0415
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         start = datetime.date(2026, 6, 1)
@@ -184,8 +184,8 @@ class TestRecurringIcalEventsContract:
 
     def test_between_date_range_parameter(self):
         """between() must accept datetime.date objects (not just datetime)."""
-        from icalendar import Calendar  # noqa: PLC0415
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         # Pure date objects — executor passes date, not datetime
@@ -197,8 +197,8 @@ class TestRecurringIcalEventsContract:
 
     def test_expanded_event_has_dtstart(self):
         """Expanded events must expose DTSTART the same way as raw events."""
-        from icalendar import Calendar  # noqa: PLC0415
-        import recurring_ical_events  # noqa: PLC0415
+        import recurring_ical_events
+        from icalendar import Calendar
 
         cal = Calendar.from_ical(_SAMPLE_ICS)
         events = list(recurring_ical_events.of(cal).between(datetime.date(2026, 1, 1), datetime.date(2026, 12, 31)))

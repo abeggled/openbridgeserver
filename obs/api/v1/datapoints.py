@@ -353,9 +353,7 @@ async def get_value(
             validate_id = defining_node_id or page_id
             if not session_token or not validate_session(session_token, validate_id):
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Valid session token required")
-        elif access == "user":
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-        elif access not in ("public", "readonly"):
+        elif access == "user" or access not in ("public", "readonly"):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
     state = reg.get_value(dp_id)

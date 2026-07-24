@@ -22,7 +22,6 @@ from obs.api.v1 import config as config_api
 from obs.api.v1 import history as history_api
 from obs.api.v1 import system as system_api
 
-
 # ===========================================================================
 # Shared stubs
 # ===========================================================================
@@ -1424,17 +1423,16 @@ async def test_query_history_dp_not_found(monkeypatch):
     request = MagicMock()
     dp_id = uuid.uuid4()
 
-    with patch.object(history_api, "_check_history_access", AsyncMock()):
-        with pytest.raises(HTTPException) as exc_info:
-            await history_api.query_history(
-                dp_id=dp_id,
-                from_ts=None,
-                to_ts=None,
-                limit=100,
-                request=request,
-                user="admin",
-                db=db,
-            )
+    with patch.object(history_api, "_check_history_access", AsyncMock()), pytest.raises(HTTPException) as exc_info:
+        await history_api.query_history(
+            dp_id=dp_id,
+            from_ts=None,
+            to_ts=None,
+            limit=100,
+            request=request,
+            user="admin",
+            db=db,
+        )
     assert exc_info.value.status_code == 404
 
 
@@ -1479,18 +1477,17 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
     db = _DbStub(fetchone_result=None)
     request = MagicMock()
 
-    with patch.object(history_api, "_check_history_access", AsyncMock()):
-        with pytest.raises(HTTPException) as exc_info:
-            await history_api.aggregate_history(
-                dp_id=dp.id,
-                fn="median",
-                interval="1h",
-                from_ts=None,
-                to_ts=None,
-                request=request,
-                user="admin",
-                db=db,
-            )
+    with patch.object(history_api, "_check_history_access", AsyncMock()), pytest.raises(HTTPException) as exc_info:
+        await history_api.aggregate_history(
+            dp_id=dp.id,
+            fn="median",
+            interval="1h",
+            from_ts=None,
+            to_ts=None,
+            request=request,
+            user="admin",
+            db=db,
+        )
     assert exc_info.value.status_code == 422
 
 
@@ -1535,18 +1532,17 @@ async def test_aggregate_history_dp_not_found(monkeypatch):
     db = _DbStub(fetchone_result=None)
     request = MagicMock()
 
-    with patch.object(history_api, "_check_history_access", AsyncMock()):
-        with pytest.raises(HTTPException) as exc_info:
-            await history_api.aggregate_history(
-                dp_id=uuid.uuid4(),
-                fn="avg",
-                interval="1h",
-                from_ts=None,
-                to_ts=None,
-                request=request,
-                user="admin",
-                db=db,
-            )
+    with patch.object(history_api, "_check_history_access", AsyncMock()), pytest.raises(HTTPException) as exc_info:
+        await history_api.aggregate_history(
+            dp_id=uuid.uuid4(),
+            fn="avg",
+            interval="1h",
+            from_ts=None,
+            to_ts=None,
+            request=request,
+            user="admin",
+            db=db,
+        )
     assert exc_info.value.status_code == 404
 
 
@@ -2199,13 +2195,12 @@ async def test_update_datapoint_unknown_data_type(monkeypatch):
     from obs.models.datapoint import DataPointUpdate
     from obs.models.types import DataTypeRegistry
 
-    with patch.object(DataTypeRegistry, "is_registered", return_value=False):
-        with pytest.raises(HTTPException) as exc_info:
-            await dp_api.update_datapoint(
-                dp_id=dp.id,
-                body=DataPointUpdate(data_type="UNKNOWN_TYPE"),
-                _user="admin",
-            )
+    with patch.object(DataTypeRegistry, "is_registered", return_value=False), pytest.raises(HTTPException) as exc_info:
+        await dp_api.update_datapoint(
+            dp_id=dp.id,
+            body=DataPointUpdate(data_type="UNKNOWN_TYPE"),
+            _user="admin",
+        )
     assert exc_info.value.status_code == 422
 
 

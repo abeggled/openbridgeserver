@@ -6,7 +6,6 @@ import sys
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # obs/tools/tws2opentws.py
 # ---------------------------------------------------------------------------
@@ -129,6 +128,7 @@ async def test_rebuild_passwd_file_no_users(tmp_path):
 @pytest.mark.asyncio
 async def test_reload_mosquitto_no_config(caplog):
     import logging
+
     from obs.core.mqtt_passwd import reload_mosquitto
 
     with caplog.at_level(logging.WARNING):

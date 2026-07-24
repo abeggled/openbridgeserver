@@ -10,8 +10,7 @@ import datetime
 
 import pytest
 
-from obs.adapters.knx.dpt_registry import DPTRegistry, _UNKNOWN_DPT
-
+from obs.adapters.knx.dpt_registry import _UNKNOWN_DPT, DPTRegistry
 
 # ---------------------------------------------------------------------------
 # DPTRegistry class methods

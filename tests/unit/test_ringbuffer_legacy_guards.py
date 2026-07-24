@@ -71,10 +71,10 @@ async def test_guard_paths_when_connection_is_missing():
         source_adapter="api",
         quality="good",
     )
-    await rb._trim(reference_ts="2026-01-01T00:00:00.000Z")  # noqa: SLF001
-    assert await rb._trim_by_count() == 0  # noqa: SLF001
-    assert await rb._delete_oldest(0) == 0  # noqa: SLF001
-    assert await rb._count_entries() == 0  # noqa: SLF001
+    await rb._trim(reference_ts="2026-01-01T00:00:00.000Z")
+    assert await rb._trim_by_count() == 0
+    assert await rb._delete_oldest(0) == 0
+    assert await rb._count_entries() == 0
     stats = await rb.stats()
     assert stats["total"] == 0
 
@@ -84,7 +84,7 @@ async def test_trim_by_age_without_reference_on_empty_buffer_returns_zero():
     rb = RingBuffer(storage="memory", max_entries=5, max_age=10)
     await rb.start()
     try:
-        assert await rb._trim_by_age(reference_ts=None) == 0  # noqa: SLF001
+        assert await rb._trim_by_age(reference_ts=None) == 0
     finally:
         await rb.stop()
 
@@ -202,7 +202,7 @@ def test_safe_loads_and_singleton_guard_paths():
 async def test_init_ringbuffer_start_failure_keeps_disabled_state(monkeypatch, tmp_path):
     rb_mod.set_ringbuffer_enabled(False)
 
-    async def _fail_start(self):  # noqa: ARG001
+    async def _fail_start(self):
         raise OSError("cannot open ringbuffer")
 
     monkeypatch.setattr(rb_mod.RingBuffer, "start", _fail_start)

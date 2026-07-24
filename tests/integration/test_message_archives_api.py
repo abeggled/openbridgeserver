@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+
 from obs.api.auth import create_access_token
 from obs.message_archive import MIGRATIONS
 

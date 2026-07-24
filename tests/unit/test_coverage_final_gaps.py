@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import asyncio
 import pytest
-
+from fastapi import HTTPException
 
 # ===========================================================================
 # obs/api/v1/camera.py — _check_ssrf, _camera_auth
 # ===========================================================================
-
-from obs.api.v1.camera import _build_fetch_targets as _check_ssrf, _camera_auth
-from fastapi import HTTPException
+from obs.api.v1.camera import _build_fetch_targets as _check_ssrf
+from obs.api.v1.camera import _camera_auth
 from obs.security.url_targets import UrlTargetDecision
 
 
@@ -111,11 +110,11 @@ async def test_camera_auth_missing_raises_401():
 
 import obs.api.v1.autobackup as ab_api
 from obs.api.v1.autobackup import (
-    _load_config,
-    _save_config,
-    _list_backups,
-    _prune_old_backups,
     AutobackupConfig,
+    _list_backups,
+    _load_config,
+    _prune_old_backups,
+    _save_config,
 )
 
 
@@ -265,7 +264,7 @@ async def test_delete_autobackup_success(tmp_path, monkeypatch):
 # obs/api/v1/icons.py — FA import path, export path coverage
 # ===========================================================================
 
-from obs.api.v1.icons import _secure_filename, _safe_name
+from obs.api.v1.icons import _safe_name, _secure_filename
 
 
 def test_secure_filename_strips_slashes():
@@ -681,8 +680,8 @@ async def test_run_autobackup_now_when_disabled(tmp_path, monkeypatch):
 from obs.api.v1.visu import (
     _now_iso,
     _row_to_node,
-    get_tree,
     get_children,
+    get_tree,
 )
 
 
@@ -849,7 +848,7 @@ async def test_restore_autobackup_valid_config(tmp_path, monkeypatch):
         patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
         patch("obs.adapters.registry.get_all_instances", return_value={}),
         patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
-        patch("obs.api.v1.config.get_registry", return_value=MagicMock(all=lambda: [])),
+        patch("obs.api.v1.config.get_registry", return_value=MagicMock(all=list)),
         patch("obs.api.v1.icons._icons_dir") as mock_dir,
     ):
         mock_dir.return_value = tmp_path
@@ -893,7 +892,7 @@ async def test_anwesenheit_handle_control_event_wrong_dp():
 # obs/api/v1/visu.py — _get_node_or_404, _check_user_access
 # ===========================================================================
 
-from obs.api.v1.visu import _get_node_or_404, _check_user_access
+from obs.api.v1.visu import _check_user_access, _get_node_or_404
 
 
 @pytest.mark.asyncio
@@ -955,7 +954,7 @@ async def test_check_user_access_empty():
 @pytest.mark.asyncio
 async def test_clear_bindings_and_restart(monkeypatch):
     """clear_bindings stops + restarts adapters."""
-    monkeypatch.setattr(config_api, "get_registry", lambda: MagicMock(all=lambda: []))
+    monkeypatch.setattr(config_api, "get_registry", lambda: MagicMock(all=list))
 
     class _Db:
         async def fetchone(self, q, p=()):
@@ -980,7 +979,7 @@ async def test_clear_bindings_and_restart(monkeypatch):
 @pytest.mark.asyncio
 async def test_export_config_with_icon_dir(monkeypatch, tmp_path):
     """export_config includes icons from icon dir."""
-    monkeypatch.setattr(config_api, "get_registry", lambda: MagicMock(all=lambda: []))
+    monkeypatch.setattr(config_api, "get_registry", lambda: MagicMock(all=list))
     (tmp_path / "test_icon.svg").write_text('<svg><path d="M0 0"/></svg>')
     monkeypatch.setattr("obs.api.v1.icons._icons_dir", lambda: tmp_path)
 
@@ -1159,8 +1158,9 @@ def test_registry_get_value_missing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_bindings_for_dp_empty():
-    from obs.api.v1.bindings import _get_bindings_for_dp
     import uuid
+
+    from obs.api.v1.bindings import _get_bindings_for_dp
 
     class _Db:
         async def fetchall(self, q, p=()):
@@ -1178,8 +1178,8 @@ async def test_get_bindings_for_dp_empty():
 @pytest.mark.asyncio
 async def test_broadcast_nowait_no_manager(monkeypatch):
     """_broadcast_nowait silently drops when WS manager not initialized."""
-    from obs.log_buffer import _broadcast_nowait
     import obs.api.v1.websocket as ws_mod
+    from obs.log_buffer import _broadcast_nowait
 
     monkeypatch.setattr(ws_mod, "get_ws_manager", lambda: (_ for _ in ()).throw(RuntimeError("not init")))
     _broadcast_nowait({"level": "INFO", "message": "test"})  # should not raise
@@ -1189,6 +1189,7 @@ def test_log_buffer_handler_install():
     """LogBufferHandler.install attaches to root logger."""
     import asyncio
     import logging
+
     from obs.log_buffer import LogBufferHandler
 
     loop = asyncio.new_event_loop()
@@ -1261,8 +1262,9 @@ async def test_get_node_found():
 @pytest.mark.asyncio
 async def test_reload_mosquitto_permission_error(monkeypatch):
     """reload_mosquitto handles PermissionError on SIGHUP."""
-    from obs.core.mqtt_passwd import reload_mosquitto
     import os
+
+    from obs.core.mqtt_passwd import reload_mosquitto
 
     monkeypatch.setattr(os, "kill", lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied")))
     await reload_mosquitto(reload_pid=1)  # should not raise
@@ -1309,8 +1311,9 @@ def test_build_tls_context_insecure():
 
 
 def _make_zs_adapter_for_fire():
-    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrAdapter
     from zoneinfo import ZoneInfo
+
+    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrAdapter
 
     adapter = ZeitschaltuhrAdapter.__new__(ZeitschaltuhrAdapter)
     adapter._instance_id = "test"
@@ -1331,8 +1334,9 @@ def _make_zs_adapter_for_fire():
 async def test_fire_binding_bool_true():
     """_fire_binding converts 'true' string to bool True."""
     adapter = _make_zs_adapter_for_fire()
-    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrBindingConfig, TimerType
     from datetime import time as dt_time
+
+    from obs.adapters.zeitschaltuhr.adapter import TimerType, ZeitschaltuhrBindingConfig
 
     cfg = ZeitschaltuhrBindingConfig(timer_type=TimerType.DAILY, time=dt_time(8, 0), value="true")
     binding = MagicMock(datapoint_id=uuid.uuid4(), id="b1")
@@ -1346,8 +1350,9 @@ async def test_fire_binding_bool_true():
 async def test_fire_binding_numeric_value():
     """_fire_binding converts numeric string to int."""
     adapter = _make_zs_adapter_for_fire()
-    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrBindingConfig, TimerType
     from datetime import time as dt_time
+
+    from obs.adapters.zeitschaltuhr.adapter import TimerType, ZeitschaltuhrBindingConfig
 
     cfg = ZeitschaltuhrBindingConfig(timer_type=TimerType.DAILY, time=dt_time(8, 0), value="42")
     binding = MagicMock(datapoint_id=uuid.uuid4(), id="b2")
@@ -1360,8 +1365,9 @@ async def test_fire_binding_numeric_value():
 async def test_fire_binding_float_value():
     """_fire_binding converts float string to float."""
     adapter = _make_zs_adapter_for_fire()
-    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrBindingConfig, TimerType
     from datetime import time as dt_time
+
+    from obs.adapters.zeitschaltuhr.adapter import TimerType, ZeitschaltuhrBindingConfig
 
     cfg = ZeitschaltuhrBindingConfig(timer_type=TimerType.DAILY, time=dt_time(8, 0), value="3.14")
     binding = MagicMock(datapoint_id=uuid.uuid4(), id="b3")
@@ -1374,8 +1380,9 @@ async def test_fire_binding_float_value():
 async def test_fire_binding_string_value():
     """_fire_binding passes through non-numeric strings as-is."""
     adapter = _make_zs_adapter_for_fire()
-    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrBindingConfig, TimerType
     from datetime import time as dt_time
+
+    from obs.adapters.zeitschaltuhr.adapter import TimerType, ZeitschaltuhrBindingConfig
 
     cfg = ZeitschaltuhrBindingConfig(timer_type=TimerType.DAILY, time=dt_time(8, 0), value="on_scene_2")
     binding = MagicMock(datapoint_id=uuid.uuid4(), id="b4")
@@ -1387,8 +1394,9 @@ async def test_fire_binding_string_value():
 def test_get_sun_event_returns_none_on_error():
     """_get_sun_event returns None when astral raises."""
     adapter = _make_zs_adapter_for_fire()
-    from obs.adapters.zeitschaltuhr.adapter import TimeRef
     from datetime import date
+
+    from obs.adapters.zeitschaltuhr.adapter import TimeRef
 
     with patch("obs.adapters.zeitschaltuhr.adapter.ZeitschaltuhrAdapter._get_sun_event", return_value=None):
         result = adapter._get_sun_event(TimeRef.SUNRISE, date.today())
@@ -1398,8 +1406,9 @@ def test_get_sun_event_returns_none_on_error():
 def test_get_solar_altitude_exception():
     """_get_solar_altitude_time returns None on exception."""
     adapter = _make_zs_adapter_for_fire()
-    from obs.adapters.zeitschaltuhr.adapter import SunDirection
     from datetime import date
+
+    from obs.adapters.zeitschaltuhr.adapter import SunDirection
 
     with patch("obs.adapters.zeitschaltuhr.adapter.ZeitschaltuhrAdapter._get_solar_altitude_time", return_value=None):
         result = adapter._get_solar_altitude_time(10.0, SunDirection.RISING, date.today())
@@ -1497,7 +1506,7 @@ def _make_visu_db(row=None):
 # obs/api/v1/visu.py — create_node with dual-mode cursor
 # ===========================================================================
 
-from obs.api.v1.visu import create_node, delete_node, update_node, get_breadcrumb
+from obs.api.v1.visu import create_node, delete_node, get_breadcrumb, update_node
 from obs.models.visu import VisuNodeCreate, VisuNodeUpdate
 
 
@@ -1546,7 +1555,7 @@ async def test_visu_get_breadcrumb_with_node():
 # obs/api/v1/visu.py — get_page, save_page, get_node, update_node more paths
 # ===========================================================================
 
-from obs.api.v1.visu import get_page, get_node, save_page
+from obs.api.v1.visu import get_node, get_page, save_page
 from obs.models.visu import PageConfig
 
 
@@ -1625,8 +1634,7 @@ async def test_visu_update_node_access_pin(monkeypatch):
 # obs/api/v1/adapters.py — create_instance, update_instance, delete_instance
 # ===========================================================================
 
-from obs.api.v1.adapters import create_instance, update_instance, delete_instance
-from obs.api.v1.adapters import AdapterInstanceCreate, AdapterInstanceUpdate
+from obs.api.v1.adapters import AdapterInstanceCreate, AdapterInstanceUpdate, create_instance, delete_instance, update_instance
 
 
 @pytest.mark.asyncio
@@ -1693,7 +1701,7 @@ import obs.api.v1.system as sys_api
 @pytest.mark.asyncio
 async def test_adapters_detail_empty(monkeypatch):
     """adapters_detail returns empty list when no running instances."""
-    monkeypatch.setattr("obs.adapters.registry.get_all_instances", lambda: {})
+    monkeypatch.setattr("obs.adapters.registry.get_all_instances", dict)
     result = await sys_api.adapters_detail(_user="admin")
     assert result == []
 
@@ -1755,8 +1763,7 @@ async def test_update_app_settings(monkeypatch):
 @pytest.mark.asyncio
 async def test_test_history_sqlite():
     """test_history_connection returns ok for SQLite."""
-    from obs.api.v1.system import test_history_connection
-    from obs.api.v1.system import HistorySettingsIn
+    from obs.api.v1.system import HistorySettingsIn, test_history_connection
 
     body = HistorySettingsIn(plugin="sqlite", default_window_hours=168)
     result = await test_history_connection(body=body, _admin="admin")
@@ -1767,7 +1774,7 @@ async def test_test_history_sqlite():
 # obs/api/v1/visu.py — pin_auth, get_node_users
 # ===========================================================================
 
-from obs.api.v1.visu import pin_auth, get_node_users
+from obs.api.v1.visu import get_node_users, pin_auth
 
 
 @pytest.mark.asyncio
@@ -1848,7 +1855,7 @@ async def test_test_instance_not_found():
 @pytest.mark.asyncio
 async def test_create_nav_link():
     """create_nav_link inserts and returns the link."""
-    from obs.api.v1.system import create_nav_link, NavLinkIn
+    from obs.api.v1.system import NavLinkIn, create_nav_link
 
     class _Row(dict):
         def __getitem__(self, k):
@@ -1926,8 +1933,8 @@ async def test_get_node_users_returns_usernames():
 # obs/api/v1/visu.py — import_nodes, export_node
 # ===========================================================================
 
-from obs.api.v1.visu import import_nodes, export_node
-from obs.models.visu import VisuImportRequest, VisuExportNode
+from obs.api.v1.visu import export_node, import_nodes
+from obs.models.visu import VisuExportNode, VisuImportRequest
 
 
 @pytest.mark.asyncio
@@ -1980,7 +1987,7 @@ async def test_export_node_not_found():
 @pytest.mark.asyncio
 async def test_test_history_influxdb_not_reachable():
     """test_history_connection returns error for unreachable influxdb."""
-    from obs.api.v1.system import test_history_connection, HistorySettingsIn
+    from obs.api.v1.system import HistorySettingsIn, test_history_connection
 
     body = HistorySettingsIn(
         plugin="influxdb",
@@ -1998,7 +2005,7 @@ async def test_test_history_influxdb_not_reachable():
 @pytest.mark.asyncio
 async def test_update_nav_link_not_found():
     """update_nav_link returns 404 when link not found."""
-    from obs.api.v1.system import update_nav_link, NavLinkIn
+    from obs.api.v1.system import NavLinkIn, update_nav_link
 
     class _Db:
         async def fetchone(self, q, p=()):
@@ -2067,7 +2074,7 @@ async def test_move_node_not_found():
 @pytest.mark.asyncio
 async def test_update_app_settings_invalid_timezone():
     """update_app_settings rejects invalid timezone."""
-    from obs.api.v1.system import update_app_settings, AppSettingsIn
+    from obs.api.v1.system import AppSettingsIn, update_app_settings
 
     class _Db:
         async def execute_and_commit(self, q, p=()):
@@ -2082,7 +2089,7 @@ async def test_update_app_settings_invalid_timezone():
 @pytest.mark.asyncio
 async def test_test_history_unknown_plugin():
     """test_history_connection returns error for unknown plugin."""
-    from obs.api.v1.system import test_history_connection, HistorySettingsIn
+    from obs.api.v1.system import HistorySettingsIn, test_history_connection
 
     body = HistorySettingsIn(plugin="unknown_plugin", default_window_hours=168)
     result = await test_history_connection(body=body, _admin="admin")
@@ -2092,7 +2099,7 @@ async def test_test_history_unknown_plugin():
 @pytest.mark.asyncio
 async def test_update_nav_link_success():
     """update_nav_link succeeds when link exists."""
-    from obs.api.v1.system import update_nav_link, NavLinkIn
+    from obs.api.v1.system import NavLinkIn, update_nav_link
 
     class _Row(dict):
         def __getitem__(self, k):
@@ -2118,7 +2125,7 @@ async def test_update_nav_link_success():
 @pytest.mark.asyncio
 async def test_test_history_timescaledb_not_reachable():
     """test_history_connection returns error for unreachable timescaledb."""
-    from obs.api.v1.system import test_history_connection, HistorySettingsIn
+    from obs.api.v1.system import HistorySettingsIn, test_history_connection
 
     body = HistorySettingsIn(
         plugin="timescaledb",
@@ -2190,8 +2197,9 @@ async def test_visu_get_page_unauthenticated_user_access():
 @pytest.mark.asyncio
 async def test_visu_get_page_protected_access_no_session():
     """get_page with protected access and no session raises 401."""
-    from obs.api.v1 import visu as visu_mod
     from unittest.mock import AsyncMock as _AsyncMock
+
+    from obs.api.v1 import visu as visu_mod
 
     node_row = _make_node_row(id="prot1", type="PAGE", name="Protected", access="protected")
     db = _make_visu_db(row=node_row)

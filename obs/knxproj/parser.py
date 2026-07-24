@@ -527,7 +527,7 @@ def parse_knxproj_locations(
         msg = str(e).lower()
         if any(kw in msg for kw in ("password", "decrypt", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen: {str(e)}") from e
+        raise ValueError(f"Fehler beim Parsen: {e!s}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -736,7 +736,7 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
         msg = str(e).lower()
         if any(kw in msg for kw in ("password", "decrypt", "bad password", "hmac", "bad zip", "invalid password")):
             raise ValueError("Falsches Passwort oder Datei ist verschlüsselt.") from e
-        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {str(e)}") from e
+        raise ValueError(f"Fehler beim Parsen der .knxproj Datei: {e!s}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

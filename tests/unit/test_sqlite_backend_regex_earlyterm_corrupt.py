@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 
+from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
 from obs.ringbuffer.store.manifest import (
     SEGMENT_STATUS_CLOSED,
@@ -34,8 +35,6 @@ from obs.ringbuffer.store.manifest import (
 )
 from obs.ringbuffer.store.migration import LegacyMigrator
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore, _assert_safe_regex
-
-from obs.ringbuffer.ringbuffer import RingBuffer
 
 
 def _event(value: Any, ts: str, *, dp: str = "dp-1", src: str = "api", old: Any = None) -> StoreEvent:
@@ -211,7 +210,7 @@ async def test_truncated_closed_segment_is_quarantined_on_read(store: SqliteSegm
     assert closed.status == SEGMENT_STATUS_CLOSED
     assert closed.row_count > 0
     seg_path = tmp_path / "root" / "segments" / closed.filename
-    with open(seg_path, "wb") as fh:  # noqa: PTH123 – bewusst truncate auf 0 Bytes
+    with open(seg_path, "wb") as fh:
         fh.truncate(0)
     assert seg_path.stat().st_size == 0
 

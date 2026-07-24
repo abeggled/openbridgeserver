@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
+from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -37,7 +38,6 @@ from obs.logic.models import (
     LogicUsageOut,
     NodeTypeDef,
 )
-from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.node_types import list_node_types
 from obs.logic.validation import validate_timer_durations
 

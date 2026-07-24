@@ -189,7 +189,7 @@ def apply_formula(formula: str, value: Any) -> Any:
             logger.warning("Formula '%s' rejected by AST validation: %s", formula, err)
             return value
         code = compile(tree, "<formula>", "eval")
-        result = eval(code, {"__builtins__": {}}, locals_)  # noqa: S307
+        result = eval(code, {"__builtins__": {}}, locals_)
 
         if not isinstance(result, (int, float)):
             logger.warning("Formula '%s' returned non-numeric: %r", formula, result)
@@ -222,7 +222,7 @@ def _try_eval(formula: str, x: float) -> str | None:
         locals_: dict[str, Any] = {**_SAFE_GLOBALS, "x": x}
         tree = ast.parse(formula, mode="eval")
         code = compile(tree, "<formula>", "eval")
-        result = eval(code, {"__builtins__": {}}, locals_)  # noqa: S307
+        result = eval(code, {"__builtins__": {}}, locals_)
         if isinstance(result, (int, float)) and (math.isnan(result) or math.isinf(result)):
             return "Ergebnis ist nan oder inf"
         return None

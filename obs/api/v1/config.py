@@ -25,8 +25,8 @@ from obs.api.auth import get_admin_user
 from obs.api.v1.bindings import _json_config, _validate_adapter_binding
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
-from obs.db.database import Database, get_db
 from obs.datetime_format import DATETIME_SETTING_KEYS, validate_datetime_setting
+from obs.db.database import Database, get_db
 from obs.logic.models import FlowData
 from obs.logic.validation import validate_timer_durations
 from obs.models.datapoint import DataPoint

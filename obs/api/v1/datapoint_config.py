@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-
 _DATAPOINT_KEYS_EXACT = {
     "datapoint_id",
     "status_datapoint_id",

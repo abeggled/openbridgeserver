@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
+
 from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration

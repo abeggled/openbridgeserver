@@ -23,7 +23,7 @@ def clear_buffer():
     Integration tests may leave a LogBufferHandler on the root logger. Without cleanup,
     log messages propagate to it and produce duplicate buffer entries in unit tests.
     """
-    from obs.log_buffer import LogBufferHandler, _NON_PROPAGATING_LOGGER_NAMES, _buffer
+    from obs.log_buffer import _NON_PROPAGATING_LOGGER_NAMES, LogBufferHandler, _buffer
 
     def _remove_handlers():
         loggers = [logging.getLogger(), *(logging.getLogger(name) for name in _NON_PROPAGATING_LOGGER_NAMES)]

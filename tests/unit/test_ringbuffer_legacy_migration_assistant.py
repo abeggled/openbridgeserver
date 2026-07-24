@@ -35,10 +35,9 @@ from obs.ringbuffer.persisted_config import (
 )
 from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.config import StoreRetentionConfig
+from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
 from obs.ringbuffer.store.migration import LegacyMigrator
 from obs.ringbuffer.store.sqlite_backend import SqliteSegmentStore
-from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
-
 
 # ---------------------------------------------------------------------------
 # Decision-Persistenz

@@ -343,7 +343,7 @@ class AutobackupScheduler:
                             timeout=300,
                         )
                         _config_changed_event.clear()
-                    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                    except (TimeoutError, asyncio.CancelledError) as exc:
                         if isinstance(exc, asyncio.CancelledError):
                             raise
                     continue
@@ -364,7 +364,7 @@ class AutobackupScheduler:
                             timeout=min(wait_s, 270),
                         )
                         _config_changed_event.clear()
-                    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                    except (TimeoutError, asyncio.CancelledError) as exc:
                         if isinstance(exc, asyncio.CancelledError):
                             raise
                     continue
@@ -387,7 +387,7 @@ class AutobackupScheduler:
                         timeout=60,
                     )
                     _config_changed_event.clear()
-                except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                except (TimeoutError, asyncio.CancelledError) as exc:
                     if isinstance(exc, asyncio.CancelledError):
                         raise
 

@@ -74,7 +74,7 @@ async def _make_rb_numeric_only(tmp_path: Path, *, segmented: bool) -> RingBuffe
     """Rein numerischer ``q``-Scope mit mehr Zeilen als der Row-Cap."""
     rb = _rb(tmp_path, segmented=segmented)
     await rb.start()
-    for i in range(0, 10):
+    for i in range(10):
         await _record(rb, i, f"2026-01-01T00:00:{i:02d}.000Z", datapoint_id="sensor-num", adapter="numeric-adapter")
     return rb
 

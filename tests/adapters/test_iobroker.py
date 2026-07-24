@@ -13,15 +13,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from obs.core.event_bus import AdapterStatusEvent, DataValueEvent
-from tests.adapters.conftest import make_binding
 from obs.adapters.iobroker.adapter import (
     WATCHDOG_SUBSCRIBE_WARNING_DETAIL,
     IoBrokerAdapter,
     IoBrokerAdapterConfig,
-    _EngineIOQueueFilter,
     _coerce_iobroker_value,
+    _EngineIOQueueFilter,
 )
+from obs.core.event_bus import AdapterStatusEvent, DataValueEvent
+from tests.adapters.conftest import make_binding
 
 
 @pytest.fixture
@@ -335,7 +335,7 @@ class TestReconnect:
             def __init__(self):
                 self.kwargs = None
 
-            def AsyncClient(self, **kwargs):  # noqa: N802
+            def AsyncClient(self, **kwargs):
                 self.kwargs = kwargs
                 return FakeSocket()
 

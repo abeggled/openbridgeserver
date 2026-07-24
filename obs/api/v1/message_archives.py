@@ -20,15 +20,15 @@ from obs.api.auth import Principal, decode_token, get_admin_user, get_current_pr
 from obs.config import get_settings
 from obs.db.database import Database, get_db
 from obs.message_archive import (
+    MIGRATIONS,
+    RESERVED_ARCHIVE_IDS,
     ArchiveInput,
     ArchivePatch,
     EntryInput,
     EntryPatch,
     EntryPredicate,
     EntryQuery,
-    MIGRATIONS,
     MessageArchiveStore,
-    RESERVED_ARCHIVE_IDS,
     activate_message_archive_service,
     broadcast_message_archive_entry,
     broadcast_message_archive_refresh,
@@ -64,7 +64,7 @@ class MessageArchiveUpdate(BaseModel):
     retention_max_age_days: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def validate_required_nulls(self) -> "MessageArchiveUpdate":
+    def validate_required_nulls(self) -> MessageArchiveUpdate:
         for field in ("name", "description", "color"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} must not be null")

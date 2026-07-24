@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import io
 import re
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -161,9 +161,7 @@ def _sanitize_svg(content: bytes) -> bytes:
             attr_name = local_name(attr)
             value = elem.attrib.get(attr) or ""
             normalized_scheme = re.sub(r"[\x00-\x20]+", "", value).lower()
-            if attr_name.startswith("on"):
-                del elem.attrib[attr]
-            elif attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
+            if attr_name.startswith("on") or attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
                 del elem.attrib[attr]
 
         for child in list(elem):
@@ -774,7 +772,7 @@ def _parse_knxuf_js(content: str) -> dict[str, str]:
 
 def _build_knxuf_svg(path_data: str) -> bytes:
     """Wrap a KNX UF path string in a minimal SVG element."""
-    import xml.etree.ElementTree as ET  # noqa: PLC0415 (local import for clarity)
+    import xml.etree.ElementTree as ET
 
     root = ET.Element("svg")
     root.set("xmlns", "http://www.w3.org/2000/svg")

@@ -1050,9 +1050,8 @@ class TestBindingsReloadedAwaitAndReconnect:
             old_task_done_when_new_started.append(old_task.done())
             return original_create_task(coro, **kwargs)
 
-        with patch.object(adapter, "_poll_loop", new=AsyncMock()):
-            with patch("asyncio.create_task", side_effect=recording_create_task):
-                await adapter._on_bindings_reloaded()
+        with patch.object(adapter, "_poll_loop", new=AsyncMock()), patch("asyncio.create_task", side_effect=recording_create_task):
+            await adapter._on_bindings_reloaded()
 
         assert old_task_done_when_new_started, "No new task was created"
         assert all(old_task_done_when_new_started), "New task was created before old task finished — gather() was not awaited properly."

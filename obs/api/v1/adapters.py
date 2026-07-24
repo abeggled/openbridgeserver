@@ -1239,8 +1239,8 @@ async def anwesenheit_health(
     db: Database = Depends(lambda: get_db()),
 ) -> AnwesenheitHealthResult:
     """Check whether history data is available for the configured offset window."""
-    from datetime import timedelta, timezone
     from datetime import datetime as _dt
+    from datetime import timedelta
 
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
@@ -1280,7 +1280,7 @@ async def anwesenheit_health(
             bindings_with_data=0,
         )
 
-    now = _dt.now(tz=timezone.utc)
+    now = _dt.now(tz=UTC)
     delta = timedelta(days=cfg.offset_days)
     hist_from = now - delta - timedelta(hours=12)
     hist_to = now - delta + timedelta(hours=12)
@@ -1486,9 +1486,10 @@ async def snmp_walk(
 
     instance = adapter_registry.get_instance_by_id(str(instance_id))
     if instance is None or not instance.connected:
+        import json as _json
+
         from obs.adapters.snmp.adapter import SnmpAdapter
         from obs.core.event_bus import EventBus
-        import json as _json
 
         raw_config = row["config"] or "{}"
         config_dict = _json.loads(raw_config) if isinstance(raw_config, str) else raw_config

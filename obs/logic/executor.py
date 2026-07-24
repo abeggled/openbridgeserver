@@ -17,9 +17,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from zoneinfo import ZoneInfo as _ZoneInfo
 
+from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
-from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
@@ -630,11 +630,11 @@ class GraphExecutor:
 
             case "astro_sun":
                 try:
-                    import datetime as _dt  # noqa: PLC0415
-                    from zoneinfo import ZoneInfo  # noqa: PLC0415
+                    import datetime as _dt
+                    from zoneinfo import ZoneInfo
 
-                    from astral import LocationInfo  # noqa: PLC0415
-                    from astral.sun import sun as _astral_sun  # noqa: PLC0415
+                    from astral import LocationInfo
+                    from astral.sun import sun as _astral_sun
 
                     lat = float(d.get("latitude", 47.37))
                     lon = float(d.get("longitude", 8.54))
@@ -726,7 +726,7 @@ class GraphExecutor:
                 }
 
             case "json_extractor":
-                import json as _json_mod  # noqa: PLC0415
+                import json as _json_mod
 
                 raw = inputs.get("data")
                 json_path = (d.get("json_path") or "").strip()
@@ -782,8 +782,8 @@ class GraphExecutor:
                 return {"value": value, "_preview": preview}
 
             case "xml_extractor":
-                import json as _json_xml  # noqa: PLC0415
-                import xml.etree.ElementTree as _ET  # noqa: PLC0415
+                import json as _json_xml
+                import xml.etree.ElementTree as _ET
 
                 raw_xml = inputs.get("data")
                 xml_path = (d.get("xml_path") or "").strip()
@@ -828,7 +828,7 @@ class GraphExecutor:
                 return {"value": value, "_preview": preview_str}
 
             case "substring_extractor":
-                import re as _re  # noqa: PLC0415
+                import re as _re
 
                 raw_text = inputs.get("data")
                 mode = (d.get("mode") or "rechts_von").strip()
@@ -1117,7 +1117,7 @@ class GraphExecutor:
                 }
 
             case "avg_multi":
-                import datetime as _dt  # noqa: PLC0415
+                import datetime as _dt
 
                 state = self.hysteresis_state.setdefault(node.id, {"samples": []})
                 count = max(2, min(20, int(d.get("input_count", 2))))
@@ -1246,8 +1246,8 @@ class GraphExecutor:
             case "ical":
                 # The raw iCal text is pre-fetched by LogicManager and stored in
                 # hysteresis_state[node.id]["raw"] before each executor run.
-                import json as _json_ic  # noqa: PLC0415
-                import re as _re_ic  # noqa: PLC0415
+                import json as _json_ic
+                import re as _re_ic
 
                 hyst_node = self.hysteresis_state.setdefault(node.id, {})
                 raw_text: str = hyst_node.get("raw", "")
@@ -1270,13 +1270,13 @@ class GraphExecutor:
                     return out
 
                 try:
-                    import datetime as _dt_ic  # noqa: PLC0415
-                    from zoneinfo import ZoneInfo as _ZI  # noqa: PLC0415
+                    import datetime as _dt_ic
+                    from zoneinfo import ZoneInfo as _ZI
 
-                    from icalendar import Calendar as _ICal  # noqa: PLC0415
+                    from icalendar import Calendar as _ICal
 
                     try:
-                        import recurring_ical_events as _rie  # noqa: PLC0415
+                        import recurring_ical_events as _rie
 
                         _HAS_RIE = True
                     except ImportError:
@@ -1556,7 +1556,7 @@ class GraphExecutor:
         try:
             tree = ast.parse(expr, mode="eval")
             GraphExecutor._validate_formula_ast(tree)
-            return eval(compile(tree, "<formula>", "eval"), {"__builtins__": {}}, allowed)  # noqa: S307
+            return eval(compile(tree, "<formula>", "eval"), {"__builtins__": {}}, allowed)
         except Exception as exc:
             raise ExecutionError(f"Formula error: {exc}") from exc
 

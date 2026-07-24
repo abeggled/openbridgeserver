@@ -24,8 +24,8 @@ from obs.adapters.message.providers.base import MessageSendResult
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps
-from obs.db.database import get_db
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
+from obs.db.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class MessageAdapterConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_providers(self) -> "MessageAdapterConfig":
+    def _validate_providers(self) -> MessageAdapterConfig:
         for provider_type, provider_config in self.providers.items():
             provider = message_providers.get_provider(provider_type)
             if provider is None:
@@ -74,7 +74,7 @@ class MessageBindingConfig(BaseModel):
     archive_strategy: ArchiveStrategy = "send_only"
 
     @model_validator(mode="after")
-    def _validate_targets(self) -> "MessageBindingConfig":
+    def _validate_targets(self) -> MessageBindingConfig:
         if not self.message.strip():
             raise ValueError("MESSAGE binding message must not be empty")
         sends_notification = self.archive_strategy in {"send_only", "send_and_archive"}

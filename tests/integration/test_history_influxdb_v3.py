@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 
 class _InfluxV3Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/query":
             body = json.dumps({"results": []}).encode()
@@ -26,7 +26,7 @@ class _InfluxV3Handler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path != "/api/v3/write_lp":
             self.send_response(404)

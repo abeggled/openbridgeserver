@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from obs.api.auth import create_access_token
 from obs.config import get_settings
 

@@ -911,10 +911,7 @@ async def websocket_endpoint(
             if not session_token or not sessions_api.validate_session(session_token, validate_id):
                 await ws.close(code=4001, reason="Valid session token required")
                 return
-        elif access == "user":
-            await ws.close(code=4001, reason="Authentication required")
-            return
-        elif access not in ("public", "readonly"):
+        elif access == "user" or access not in ("public", "readonly"):
             await ws.close(code=4001, reason="Authentication required")
             return
 

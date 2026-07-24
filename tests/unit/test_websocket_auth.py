@@ -92,7 +92,7 @@ class _ApiKeyOwnerDbStub:
 @pytest.mark.asyncio
 async def test_authenticate_ws_rejects_missing_credentials():
     ws = _FakeWebSocket()
-    ok, reason = await ws_api._authenticate_ws_request(ws)  # noqa: SLF001
+    ok, reason = await ws_api._authenticate_ws_request(ws)
     assert ok is False
     assert reason == "Missing credentials"
 
@@ -326,7 +326,7 @@ async def test_ws_log_access_allows_authenticated_user_without_admin_lookup(monk
 
     monkeypatch.setattr(ws_api, "get_db", fail_get_db)
 
-    assert await ws_api._ws_has_log_access("regular-user", None) is True  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("regular-user", None) is True
 
 
 @pytest.mark.asyncio
@@ -335,7 +335,7 @@ async def test_ws_log_access_revalidates_api_key_with_legacy_name_fallback(monke
     db = _LogAccessDbStub({"subject": "automation-client"})
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
-    assert await ws_api._ws_has_log_access("__api_key__", "obs_valid") is True  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("__api_key__", "obs_valid") is True
     assert "COALESCE(NULLIF(owner, ''), name)" in db.queries[0]
 
 
@@ -345,7 +345,7 @@ async def test_ws_log_access_rejects_revoked_api_key(monkeypatch):
     db = _LogAccessDbStub(None)
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
-    assert await ws_api._ws_has_log_access("__api_key__", "obs_revoked") is False  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("__api_key__", "obs_revoked") is False
 
 
 @pytest.mark.asyncio
@@ -354,7 +354,7 @@ async def test_ws_log_access_revalidates_resolved_api_key_owner(monkeypatch):
     db = _LogAccessDbStub(None)
     monkeypatch.setattr(ws_api, "get_db", lambda: db)
 
-    assert await ws_api._ws_has_log_access("alice", "obs_revoked") is False  # noqa: SLF001
+    assert await ws_api._ws_has_log_access("alice", "obs_revoked") is False
     assert db.queries
 
 
@@ -366,7 +366,7 @@ async def test_ws_log_access_ignores_stray_api_key_for_jwt_identity(monkeypatch)
     monkeypatch.setattr(ws_api, "get_db", fail_get_db)
 
     assert (
-        await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True  # noqa: SLF001
+        await ws_api._ws_has_log_access("alice", "stray-invalid-key", identity_from_jwt=True) is True
     )
 
 

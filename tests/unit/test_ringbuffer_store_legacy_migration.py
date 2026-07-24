@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-
 from obs.ringbuffer.ringbuffer import RingBuffer
 from obs.ringbuffer.store.interface import StoreEvent, StoreQuery
 from obs.ringbuffer.store.manifest import (

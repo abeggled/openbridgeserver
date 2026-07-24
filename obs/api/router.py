@@ -9,11 +9,12 @@ from fastapi import APIRouter
 
 from obs.api.auth import router as auth_router
 from obs.api.v1.adapters import router as adapters_router
+from obs.api.v1.autobackup import router as autobackup_router
 from obs.api.v1.bindings import router as bindings_router
 from obs.api.v1.camera import router as camera_router
-from obs.api.v1.autobackup import router as autobackup_router
 from obs.api.v1.config import router as config_router
 from obs.api.v1.datapoints import router as dp_router
+from obs.api.v1.hierarchy import router as hierarchy_router
 from obs.api.v1.history import router as history_router
 from obs.api.v1.icons import router as icons_router
 from obs.api.v1.knxkeyfile import router as knxkeyfile_router
@@ -23,11 +24,10 @@ from obs.api.v1.message_archives import router as message_archives_router
 from obs.api.v1.ringbuffer import router as rb_router
 from obs.api.v1.search import router as search_router
 from obs.api.v1.security import router as security_router
-from obs.api.v1.system import router as system_router
 from obs.api.v1.support import router as support_router
-from obs.api.v1.visu_backgrounds import router as visu_backgrounds_router
+from obs.api.v1.system import router as system_router
 from obs.api.v1.visu import router as visu_router
-from obs.api.v1.hierarchy import router as hierarchy_router
+from obs.api.v1.visu_backgrounds import router as visu_backgrounds_router
 from obs.api.v1.weather import router as weather_router
 from obs.api.v1.websocket import router as ws_router
 

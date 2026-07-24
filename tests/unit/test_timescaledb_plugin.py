@@ -13,7 +13,6 @@ import pytest
 
 from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin, _pg_bucket_expr
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -140,9 +139,8 @@ class TestConnect:
     async def test_connect_import_error(self):
         import sys
 
-        with mock.patch.dict(sys.modules, {"asyncpg": None}):
-            with pytest.raises(RuntimeError, match="asyncpg"):
-                await _plugin().connect()
+        with mock.patch.dict(sys.modules, {"asyncpg": None}), pytest.raises(RuntimeError, match="asyncpg"):
+            await _plugin().connect()
 
     async def test_disconnect_closes_pool(self):
         pool, _ = _make_pool_mock()
@@ -384,6 +382,5 @@ class TestTimescalePing:
     async def test_ping_import_error_raises(self):
         import sys
 
-        with mock.patch.dict(sys.modules, {"asyncpg": None}):
-            with pytest.raises(RuntimeError, match="asyncpg"):
-                await _plugin().ping()
+        with mock.patch.dict(sys.modules, {"asyncpg": None}), pytest.raises(RuntimeError, match="asyncpg"):
+            await _plugin().ping()

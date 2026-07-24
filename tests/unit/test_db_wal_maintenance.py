@@ -354,7 +354,7 @@ async def test_init_and_get_scheduler_singleton(tmp_path):
 
 
 def test_get_scheduler_before_init_raises(monkeypatch):
-    import obs.db.maintenance as maintenance
+    from obs.db import maintenance
 
     monkeypatch.setattr(maintenance, "_scheduler", None)
     with pytest.raises(RuntimeError):

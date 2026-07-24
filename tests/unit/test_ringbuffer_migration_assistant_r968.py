@@ -7,12 +7,11 @@ Precheck-Timing, Eskalations-Prognose-Pfade und den Job-Race.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 from pathlib import Path
 
 import pytest
-
-import asyncio
-import dataclasses
 
 import obs.api.v1.ringbuffer as _migration_api
 from obs.db.database import Database
@@ -2392,9 +2391,9 @@ async def test_has_missing_file_legacy_detects_interrupted_commit(tmp_path: Path
 async def test_keep_rejected_during_interrupted_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """``keep`` (und ``discard``) müssen 409 liefern, solange ein unterbrochener Commit auf den
     Reconciler wartet (#968, Codex :2110) – sonst hebt keep den Schutz der einzigen Kopie auf."""
-    import obs.api.v1.ringbuffer as rb_api
     from fastapi import HTTPException
 
+    import obs.api.v1.ringbuffer as rb_api
     from obs.db.database import Database
 
     class _Rb:

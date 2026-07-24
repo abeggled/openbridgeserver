@@ -121,7 +121,7 @@ def _deserialize_typed_mqtt_set_value(dt: Any, raw_payload: str, payload_value: 
 
 
 def _row_is_enabled(row: Any) -> bool:
-    return _row_value(row, "enabled") in {1, True, "1"}
+    return _row_value(row, "enabled") in {1, "1"}
 
 
 class WriteRouter:

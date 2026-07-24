@@ -19,7 +19,6 @@ from obs.adapters.snmp.adapter import (
 )
 from tests.adapters.conftest import make_binding
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

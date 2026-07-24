@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-import obs.api.v1.weather as weather
+from obs.api.v1 import weather
 from obs.config import SecuritySettings, Settings, override_settings
 
 

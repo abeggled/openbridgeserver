@@ -35,8 +35,9 @@ from obs.api.v1.ringbuffer import (
     ],
 )
 def test_color_validation(color, ok):
-    from obs.api.v1.ringbuffer import RingBufferFiltersetIn
     from pydantic import ValidationError
+
+    from obs.api.v1.ringbuffer import RingBufferFiltersetIn
 
     if ok:
         assert RingBufferFiltersetIn(name="x", color=color).color == color

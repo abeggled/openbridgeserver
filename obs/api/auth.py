@@ -17,8 +17,6 @@ First startup: if no users exist → create admin/admin (logged with warning).
 """
 
 from __future__ import annotations
-from obs.config import get_settings
-from obs.db.database import Database, get_db
 
 import hashlib
 import hmac
@@ -34,6 +32,9 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+
+from obs.config import get_settings
+from obs.db.database import Database, get_db
 
 # Rate limiter — mounted on app in main.py via app.state.limiter
 limiter = Limiter(key_func=get_remote_address)

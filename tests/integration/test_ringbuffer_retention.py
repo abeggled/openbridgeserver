@@ -28,14 +28,14 @@ async def test_retention_trims_by_size_on_disk(tmp_path: Path):
     rb = RingBuffer(storage="disk", max_entries=10_000, disk_path=str(db_path))
     await rb.start()
     try:
-        baseline_size = await rb._current_storage_bytes()  # noqa: SLF001
+        baseline_size = await rb._current_storage_bytes()
 
         for i in range(25):
             await _record_payload(rb, i, f"2026-01-01T00:00:{i:02d}.000Z")
 
         before_entries = await rb.query(q="dp-retention-int", limit=100)
         assert len(before_entries) == 25
-        before_size = await rb._current_storage_bytes()  # noqa: SLF001
+        before_size = await rb._current_storage_bytes()
 
         limit = max(baseline_size + 4096, before_size - 8192)
         await rb.reconfigure("disk", 10_000, max_file_size_bytes=limit)
@@ -49,7 +49,7 @@ async def test_retention_trims_by_size_on_disk(tmp_path: Path):
 
         seqs_asc = sorted(seqs_desc)
         assert seqs_asc == list(range(seqs_asc[0], 25))
-        assert await rb._current_storage_bytes() <= limit  # noqa: SLF001
+        assert await rb._current_storage_bytes() <= limit
     finally:
         await rb.stop()
 

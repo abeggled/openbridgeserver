@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("icalendar", reason="icalendar not installed")
 pytest.importorskip("recurring_ical_events", reason="recurring_ical_events not installed")
 
-from tests.unit.conftest import make_executor, node  # noqa: E402
+from tests.unit.conftest import make_executor, node
 
 # ---------------------------------------------------------------------------
 # Minimal ICS fixtures

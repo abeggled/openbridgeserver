@@ -1563,7 +1563,7 @@ class TestSystemHealth:
 
         fake_reg = SimpleNamespace(count=lambda: 5)
         monkeypatch.setattr("obs.core.registry.get_registry", lambda: fake_reg)
-        monkeypatch.setattr(adapter_registry, "get_all_instances", lambda: {})
+        monkeypatch.setattr(adapter_registry, "get_all_instances", dict)
 
         result = await sys_api.health()
         assert result.status == "ok"
@@ -1579,7 +1579,7 @@ class TestSystemHealth:
             raise RuntimeError("not initialized")
 
         monkeypatch.setattr("obs.core.registry.get_registry", _raise)
-        monkeypatch.setattr(adapter_registry, "get_all_instances", lambda: {})
+        monkeypatch.setattr(adapter_registry, "get_all_instances", dict)
 
         result = await sys_api.health()
         assert result.status == "ok"
@@ -1648,8 +1648,9 @@ class TestSystemAppSettings:
 
     @pytest.mark.asyncio
     async def test_update_app_settings_invalid_timezone_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub()
         body = sys_api.AppSettingsIn(timezone="Invalid/Timezone/XYZ")
@@ -1692,8 +1693,9 @@ class TestSystemNavLinks:
 
     @pytest.mark.asyncio
     async def test_update_nav_link_not_found_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub(one=None)
         body = sys_api.NavLinkPatch(label="New")
@@ -1714,8 +1716,9 @@ class TestSystemNavLinks:
 
     @pytest.mark.asyncio
     async def test_delete_nav_link_not_found_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub(one=None)
         with pytest.raises(HTTPException) as exc_info:
@@ -1791,8 +1794,9 @@ class TestSystemLogs:
 
     @pytest.mark.asyncio
     async def test_set_log_level_invalid_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         body = sys_api.LogLevelIn(level="SUPERVERBOSE")
         with pytest.raises(HTTPException) as exc_info:
@@ -1825,8 +1829,9 @@ class TestSystemHistorySettings:
 
     @pytest.mark.asyncio
     async def test_update_history_settings_invalid_plugin_raises(self):
-        import obs.api.v1.system as sys_api
         from fastapi import HTTPException
+
+        import obs.api.v1.system as sys_api
 
         db = _DbStub()
         body = sys_api.HistorySettingsIn(plugin="badplugin")
