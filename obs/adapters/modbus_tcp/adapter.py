@@ -82,6 +82,13 @@ class ModbusTcpAdapterConfig(BaseModel):
             "Verhindert gleichzeitige Requests konkurrierender Instanzen am selben Bus."
         ),
     )
+    inter_read_delay_ms: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=5000.0,
+        title="Wartefrist pro Read (ms)",
+        description="Pause nach jeder Modbus-Transaktion auf dem (geteilten) Bus, bevor die naechste startet. Gibt langsamen RS485/Modbus-TCP-Gateways Umschaltzeit und entzerrt mehrere Geraete an einem Bus. 0 = deaktiviert.",
+    )
     startup_jitter_s: float = Field(
         default=30.0,
         ge=0.0,
@@ -470,6 +477,9 @@ class ModbusTcpAdapter(AdapterBase):
 
         async with self._io_sem, self._inflight_modbus_call():
             yield self._client if self._client_ready() else None
+            _delay = self._adp_cfg.inter_read_delay_ms
+            if _delay > 0:
+                await asyncio.sleep(_delay / 1000.0)
 
     def _client_ready(self) -> bool:
         return bool(not self._stopping and self._client and self._client.connected)
