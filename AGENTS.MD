@@ -23,6 +23,36 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 
 **Rule of thumb:** if a file is only needed to build, test, or check the project, it goes in `tools/`. If it ends up on the host after installation, it goes in `scripts/`. Never mix the two.
 
+## Code Review Rules
+
+### Consolidated review
+
+- Review the complete current pull request at one frozen HEAD.
+- Do not post findings incrementally. Run repeated internal review passes, combine and deduplicate
+  their results, and post one consolidated review.
+- Continue until two consecutive passes produce no new findings. If that cannot be completed,
+  report review coverage as partial and list every deferred surface.
+
+### Reproduction evidence
+
+- Keep every discovered issue in the consolidated report. A failed or blocked reproduction must
+  never cause an issue to be omitted.
+- Every issue must include executable reproduction code, the exact command, expected and observed
+  behavior, exit status, validation logs, and one of these statuses: `reproduced`,
+  `not_reproduced`, or `blocked`.
+- A `not_reproduced` or `blocked` issue must include the attempted reproducer and the reason for
+  that status. Never present it as confirmed without successful reproduction.
+- Security issues must additionally state the attacker capabilities, crossed trust boundary,
+  affected asset, and demonstrated impact.
+
+### Re-review discipline
+
+- Bind every review to the exact reviewed HEAD and effective-diff fingerprint.
+- Re-review the complete current pull request, but deduplicate against existing findings by path,
+  violated invariant, affected data or control flow, and observed behavior.
+- Include earlier review findings and honor "will not fix", "later" or "follow-up" comments. And don't duplicate those findings.
+- A base-branch merge or line-number change does not make an existing finding new.
+
 ## Common Commands
 
 ```bash
