@@ -1,10 +1,10 @@
 # AGENTS/CLAUDE Alias Note
 
-`AGENTS.MD` is the canonical agent-instructions file in this repository.
+`AGENTS.md` is the canonical agent-instructions file in this repository.
 `CLAUDE.md` is a symlink to this same file for tool compatibility.
 You only need to read one of them; reading both is redundant.
 
-# AGENTS.MD
+# AGENTS.md
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
@@ -27,30 +27,49 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 
 ### Consolidated review
 
-- Review the complete current pull request at one frozen HEAD.
+- Review the complete current pull request at one frozen public GitHub PR HEAD.
 - Do not post findings incrementally. Run repeated internal review passes, combine and deduplicate
   their results, and post one consolidated review.
-- Continue until two consecutive passes produce no new findings. If that cannot be completed,
-  report review coverage as partial and list every deferred surface.
+- Continue until two consecutive complete passes on that same HEAD produce no new findings. If
+  that cannot be completed, report review coverage as partial and list every deferred surface.
 
 ### Reproduction evidence
 
-- Keep every discovered issue in the consolidated report. A failed or blocked reproduction must
-  never cause an issue to be omitted.
+- Keep every issue or candidate discovered on the reviewed HEAD in the consolidated report. A
+  failed or blocked reproduction must never cause it to be omitted.
 - Every issue must include executable reproduction code, the exact command, expected and observed
   behavior, exit status, validation logs, and one of these statuses: `reproduced`,
   `not_reproduced`, or `blocked`.
 - A `not_reproduced` or `blocked` issue must include the attempted reproducer and the reason for
   that status. Never present it as confirmed without successful reproduction.
-- Security issues must additionally state the attacker capabilities, crossed trust boundary,
-  affected asset, and demonstrated impact.
+- Every security item must additionally state the attacker capabilities, crossed trust boundary,
+  and affected asset. A `reproduced` security finding must include executable exploit or proof-of-
+  concept code that demonstrates the claimed impact. A `not_reproduced` or `blocked` security
+  candidate must instead include the attempted proof of concept, missing prerequisite or blocker,
+  and potential impact; label it unconfirmed and do not claim demonstrated exploitability.
 
 ### Re-review discipline
 
-- Bind every review to the exact reviewed HEAD and effective-diff fingerprint.
+- Bind every review to the publicly fetchable GitHub base and PR HEAD SHAs captured when the review
+  starts. If the local checkout uses a synthetic commit, report it separately; reproduction commands
+  must use the public SHAs or include the complete required patch.
+- Compute the effective-diff fingerprint from the exact NUL-delimited raw tree delta below, with no
+  further normalization. Set `BASE_SHA` to GitHub's captured base SHA and `HEAD_SHA` to the captured
+  `refs/pull/<number>/head` SHA, and report both inputs, `git --version`, and the SHA-256 output:
+
+  ```bash
+  MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+  git diff-tree --no-commit-id --raw -r -z --no-abbrev --no-renames "$MERGE_BASE" "$HEAD_SHA" \
+    | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  ```
+
 - Re-review the complete current pull request, but deduplicate against existing findings by path,
   violated invariant, affected data or control flow, and observed behavior.
-- Include earlier review findings and honor "will not fix", "later" or "follow-up" comments. And don't duplicate those findings.
+- Carry earlier findings and their dispositions into a separate prior-finding state. Keep the
+  existing thread authoritative; do not post a duplicate or count it as a new current finding.
+- Honor `will not fix`, `later`, and `follow-up` dispositions. Reopen an earlier finding only when a
+  fix regressed or materially new evidence changes its invariant, affected flow, or observed behavior,
+  and link the earlier thread.
 - A base-branch merge or line-number change does not make an existing finding new.
 
 ## Common Commands
