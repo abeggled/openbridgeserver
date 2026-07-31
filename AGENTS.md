@@ -35,16 +35,19 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 
 ### Reproduction evidence
 
-- Publish separate `Confirmed findings` and `Blocked candidates` sections in the consolidated
-  review. Put an item under confirmed findings only when it is `reproduced` and meets the bar for an
-  actionable defect; only confirmed findings may create inline defect comments or carry a severity.
+- The consolidated review has two reportable classes: `Confirmed findings` and `Blocked candidates`.
+  Put an item under confirmed findings only when it is `reproduced` and meets the bar for an
+  actionable defect; only confirmed findings carry a defect severity.
 - Use `not_reproduced` only when every required prerequisite was available, an adequate reproducer
   ran to completion, and the claimed behavior did not occur. Exclude such candidates from the
   published review and retain them only in internal deduplication state for the reviewed HEAD.
 - Use `blocked` only when reproduction could not complete because a required prerequisite such as
   credentials, hardware, a service, data, or permission was unavailable. Keep every blocked candidate
-  visible in the consolidated review, but do not present it as confirmed, count it as a finding, or
-  create an inline defect comment for it.
+  visible in the consolidated review, but do not present it as confirmed or count it as a finding.
+- When the review transport supports a summary body, publish confirmed findings and blocked candidates
+  in separate sections. When it accepts only a `findings` array, use that array as a transport envelope
+  for blocked candidates: prefix the title with `[BLOCKED]`, use the lowest supported priority only as
+  a schema placeholder, and state explicitly that the entry is not a confirmed finding or severity.
 - Every published finding or blocked candidate must include executable reproduction code, the exact
   command, expected and observed behavior, exit status, validation logs, and its status.
 - A blocked candidate must include the attempted reproducer and exact blocker. Never present it as
@@ -65,6 +68,9 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
   `refs/pull/<number>/head` SHA, and report both inputs, `git --version`, and the SHA-256 output:
 
   ```bash
+  set -euo pipefail
+  git cat-file -e "${BASE_SHA}^{commit}"
+  git cat-file -e "${HEAD_SHA}^{commit}"
   MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
   git diff-tree --no-commit-id --raw -r -z --no-abbrev --no-renames "$MERGE_BASE" "$HEAD_SHA" \
     | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
@@ -74,9 +80,10 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
   violated invariant, affected data or control flow, and observed behavior.
 - Carry earlier findings and their dispositions into a separate prior-finding state. Keep the
   existing thread authoritative; do not post a duplicate or count it as a new current finding.
-- Honor `will not fix`, `later`, and `follow-up` dispositions. Reopen an earlier finding only when a
-  fix regressed or materially new evidence changes its invariant, affected flow, or observed behavior,
-  and link the earlier thread.
+- Honor `will not fix`, `later`, and `follow-up` dispositions. Reopen the existing thread, without
+  posting a duplicate, when a claimed fix is incomplete or ineffective and the defect still
+  reproduces, when a fix regressed, or when materially new evidence changes the invariant, affected
+  flow, or observed behavior.
 - A base-branch merge or line-number change does not make an existing finding new.
 
 ## Common Commands
