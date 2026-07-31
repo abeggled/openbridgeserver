@@ -35,18 +35,25 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 
 ### Reproduction evidence
 
-- Keep every issue or candidate discovered on the reviewed HEAD in the consolidated report. A
-  failed or blocked reproduction must never cause it to be omitted.
-- Every issue must include executable reproduction code, the exact command, expected and observed
-  behavior, exit status, validation logs, and one of these statuses: `reproduced`,
-  `not_reproduced`, or `blocked`.
-- A `not_reproduced` or `blocked` issue must include the attempted reproducer and the reason for
-  that status. Never present it as confirmed without successful reproduction.
+- Publish separate `Confirmed findings` and `Blocked candidates` sections in the consolidated
+  review. Put an item under confirmed findings only when it is `reproduced` and meets the bar for an
+  actionable defect; only confirmed findings may create inline defect comments or carry a severity.
+- Use `not_reproduced` only when every required prerequisite was available, an adequate reproducer
+  ran to completion, and the claimed behavior did not occur. Exclude such candidates from the
+  published review and retain them only in internal deduplication state for the reviewed HEAD.
+- Use `blocked` only when reproduction could not complete because a required prerequisite such as
+  credentials, hardware, a service, data, or permission was unavailable. Keep every blocked candidate
+  visible in the consolidated review, but do not present it as confirmed, count it as a finding, or
+  create an inline defect comment for it.
+- Every published finding or blocked candidate must include executable reproduction code, the exact
+  command, expected and observed behavior, exit status, validation logs, and its status.
+- A blocked candidate must include the attempted reproducer and exact blocker. Never present it as
+  confirmed without successful reproduction.
 - Every security item must additionally state the attacker capabilities, crossed trust boundary,
   and affected asset. A `reproduced` security finding must include executable exploit or proof-of-
-  concept code that demonstrates the claimed impact. A `not_reproduced` or `blocked` security
-  candidate must instead include the attempted proof of concept, missing prerequisite or blocker,
-  and potential impact; label it unconfirmed and do not claim demonstrated exploitability.
+  concept code that demonstrates the claimed impact. A blocked security candidate must instead
+  include the attempted proof of concept, missing prerequisite, and potential impact; label it
+  unconfirmed and do not claim demonstrated exploitability.
 
 ### Re-review discipline
 
