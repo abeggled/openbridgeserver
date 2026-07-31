@@ -58,8 +58,9 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
   Failure to identify a reachable path is `not_reproduced`, not `blocked`.
 - When the review transport supports a summary body, publish confirmed findings and blocked candidates
   in separate sections. When it accepts only a `findings` array, use that array as a transport envelope
-  for blocked candidates: prefix the title with `[BLOCKED]`, use the lowest supported priority only as
-  a schema placeholder, and state explicitly that the entry is not a confirmed finding or severity.
+  for blocked candidates: place `[BLOCKED]` immediately after the transport's required priority prefix
+  (for example, `[P3] [BLOCKED] ...`), use the lowest supported priority only as a schema placeholder,
+  and state explicitly that the entry is not a confirmed finding and the priority is not a severity.
 - Every published finding or blocked candidate must include executable reproduction code, the exact
   command, expected and observed behavior, exit status, validation logs, and its status.
 - Every confirmed finding must also demonstrate the causal link to the effective diff. When practical,
@@ -81,7 +82,8 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
   must use the public SHAs or include the complete required patch.
 - Compute the effective-diff fingerprint from the exact NUL-delimited raw tree delta below, with no
   further normalization. Set `BASE_SHA` to GitHub's captured base SHA and `HEAD_SHA` to the captured
-  `refs/pull/<number>/head` SHA, and report both inputs, `git --version`, and the SHA-256 output:
+  `refs/pull/<number>/head` SHA. Always retain both inputs, `git --version`, and the SHA-256 output in
+  internal review state for the frozen HEAD:
 
   ```bash
   set -euo pipefail
@@ -92,7 +94,10 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
     | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
   ```
 
-- Re-review the complete current pull request, but deduplicate against existing findings by path,
+- Publish the fingerprint metadata in the consolidated summary when that surface exists. For a
+  `findings`-only transport, include it in every emitted confirmed finding or blocked-candidate body.
+  If the array is empty, emit no synthetic metadata finding; keep the metadata only in internal state.
+- Re-review the complete effective pull-request diff, but deduplicate against existing findings by path,
   violated invariant, affected data or control flow, and observed behavior.
 - Carry earlier findings and their dispositions into a separate prior-finding state. Keep the
   existing thread authoritative; do not post a duplicate or count it as a new current finding.
