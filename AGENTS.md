@@ -27,7 +27,12 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 
 ### Consolidated review
 
-- Review the complete current pull request at one frozen public GitHub PR HEAD.
+- Review the complete effective pull-request diff at one frozen public GitHub PR HEAD.
+- Limit reportable findings to defects introduced or materially worsened by that effective diff.
+  Inspect unchanged context only to understand the changed code's behavior; do not report unrelated
+  pre-existing defects from elsewhere in a touched or renamed file.
+- A case-only rename, file move, mode change, symlink-target update, formatting-only change, or line
+  movement does not make unchanged file contents part of the review scope.
 - Do not post findings incrementally. Run repeated internal review passes, combine and deduplicate
   their results, and post one consolidated review.
 - Continue until two consecutive complete passes on that same HEAD produce no new findings. If
@@ -36,20 +41,31 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 ### Reproduction evidence
 
 - The consolidated review has two reportable classes: `Confirmed findings` and `Blocked candidates`.
-  Put an item under confirmed findings only when it is `reproduced` and meets the bar for an
-  actionable defect; only confirmed findings carry a defect severity.
+  Put an item under confirmed findings only when it is `reproduced`, has a demonstrated reachable
+  execution or use path, and meets the bar for an actionable defect; only confirmed findings carry
+  a defect severity.
+- A meaningful reproducer must exercise an actual supported entry point, caller, request or API route,
+  event, command, configuration consumer, or documented workflow through the affected code to the
+  observed failure. A suspicious source pattern, isolated function invocation that production cannot
+  reach, or script that merely asserts a hypothetical condition is not evidence of a defect.
 - Use `not_reproduced` only when every required prerequisite was available, an adequate reproducer
-  ran to completion, and the claimed behavior did not occur. Exclude such candidates from the
+  ran to completion and the claimed behavior did not occur, or no reachable path from a supported
+  entry point to the claimed behavior could be demonstrated. Exclude such candidates from the
   published review and retain them only in internal deduplication state for the reviewed HEAD.
 - Use `blocked` only when reproduction could not complete because a required prerequisite such as
   credentials, hardware, a service, data, or permission was unavailable. Keep every blocked candidate
   visible in the consolidated review, but do not present it as confirmed or count it as a finding.
+  Failure to identify a reachable path is `not_reproduced`, not `blocked`.
 - When the review transport supports a summary body, publish confirmed findings and blocked candidates
   in separate sections. When it accepts only a `findings` array, use that array as a transport envelope
   for blocked candidates: prefix the title with `[BLOCKED]`, use the lowest supported priority only as
   a schema placeholder, and state explicitly that the entry is not a confirmed finding or severity.
 - Every published finding or blocked candidate must include executable reproduction code, the exact
   command, expected and observed behavior, exit status, validation logs, and its status.
+- Every confirmed finding must also demonstrate the causal link to the effective diff. When practical,
+  run the same reproducer against the captured base and head and show that the failure is absent at the
+  base and present at the head; otherwise explain why that comparison cannot run and prove the causal
+  link another way.
 - A blocked candidate must include the attempted reproducer and exact blocker. Never present it as
   confirmed without successful reproduction.
 - Every security item must additionally state the attacker capabilities, crossed trust boundary,
