@@ -643,7 +643,7 @@ class TestKnxAdapterMiscSetters:
     def test_set_value_getter(self, mock_bus):
         adapter = KnxAdapter(event_bus=mock_bus, config={"host": "127.0.0.1"})
 
-        def getter(dp_id):
+        def getter(_dp_id):
             return None
 
         adapter.set_value_getter(getter)

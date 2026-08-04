@@ -13,7 +13,11 @@ import logging
 import math
 import operator
 import re
+import sys
+from datetime import UTC as _UTC
+from datetime import date as _date
 from datetime import datetime as _datetime
+from datetime import time as _time
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo as _ZoneInfo
@@ -27,6 +31,58 @@ logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
 
 
+class _OpaqueRecoveredStr(str):
+    """String restored from an ``opaque_str`` persistence tag."""
+
+    def __new__(cls, value: str, type_name: str | None = None):
+        instance = super().__new__(cls, value)
+        instance.type_name = type_name if isinstance(type_name, str) else None
+        return instance
+
+
+def _opaque_recovered_matches(left: Any, right: Any, *, allow_unmarked: bool = False) -> bool:
+    if isinstance(right, _OpaqueRecoveredStr):
+        # ``opaque_str`` is deliberately a lossy persistence fallback.  Even
+        # the fully-qualified runtime type plus str(value) cannot prove that
+        # the restored value equals the next live instance: distinct objects
+        # of one type may share the same string representation. Treat the
+        # first live value after restore as changed and migrate to a lossless
+        # in-memory baseline for subsequent executions.
+        return False
+    elif not (allow_unmarked and isinstance(right, str)):
+        return False
+    try:
+        return str(left) == right
+    except Exception:  # noqa: BLE001 - opaque runtime values may define failing string conversion
+        return False
+
+
+class _OpaqueRecoveredSet:
+    """Lossless decoded set members awaiting opaque-type recovery."""
+
+    def __init__(self, items: list[Any], *, frozen: bool):
+        self.items = items
+        self.frozen = frozen
+
+
+class _OpaqueRecoveredDict:
+    """Lossless decoded mapping entries awaiting opaque-key recovery."""
+
+    def __init__(self, items: list[tuple[Any, Any]]):
+        self.items = items
+
+
+def _is_nan(value: Any) -> bool:
+    try:
+        if isinstance(value, float):
+            return bool(math.isnan(value))
+        if isinstance(value, Decimal):
+            return bool(value.is_nan())
+    except Exception:  # noqa: BLE001 - numeric subclasses may fail classification or truth conversion arbitrarily
+        return False
+    return False
+
+
 def _snapshot_debug_value(value: Any) -> Any:
     try:
         return copy.deepcopy(value)
@@ -35,6 +91,26 @@ def _snapshot_debug_value(value: Any) -> Any:
             return json.loads(json.dumps(value, default=str))
         except Exception:  # noqa: BLE001 - debug capture must never break graph execution
             return str(value)
+
+
+def _replay_known_output_value(value: Any) -> Any:
+    """Isolate a known_outputs value from in-place mutation by a downstream
+    node re-executed during a replay, without changing its type when that
+    isn't possible.
+
+    Unlike _snapshot_debug_value (used for pure debug capture, where only a
+    human-readable snapshot matters), a known_outputs value can be
+    genuinely CONSUMED by a downstream node inside the replayed island —
+    degrading its type to a JSON/str fallback there could replace that
+    consumer's own valid output with "__error__" instead of merely
+    misrepresenting it in a debug log. Falls back to the ORIGINAL reference
+    (accepting the narrow mutation risk the deep copy exists to avoid, for
+    this one value only) rather than a lossy snapshot.
+    """
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001 - a value with a failing copy hook must still reach downstream consumers unmutated in type
+        return value
 
 
 _COMPARE_OPS = {
@@ -77,6 +153,9 @@ class GraphExecutor:
         hysteresis_state: dict[str, Any] | None = None,
         app_config: dict[str, Any] | None = None,
         input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
+        ical_result_cache: dict[str, Any] | None = None,
+        ical_cache_outputs_owned: bool = False,
+        retained_boundary_handles: dict[str, set[str]] | None = None,
     ):
         self.flow = flow
         # NOTE: use `is not None` instead of `or {}` — an empty dict {} is falsy,
@@ -85,6 +164,12 @@ class GraphExecutor:
         self.hysteresis_state = hysteresis_state if hysteresis_state is not None else {}
         self.app_config = app_config or {}
         self.input_capture = input_capture
+        # Parsed/filtered calendar results are runtime-only and intentionally
+        # separate from hysteresis state, which LogicManager deep-copies for
+        # async replay passes.
+        self.ical_result_cache = ical_result_cache if ical_result_cache is not None else {}
+        self.ical_cache_outputs_owned = ical_cache_outputs_owned
+        self.retained_boundary_handles = retained_boundary_handles or {}
 
     def execute(
         self,
@@ -92,14 +177,42 @@ class GraphExecutor:
         *,
         commit_memory: bool = True,
         capture_incoming_overrides: dict[str, dict[str, Any]] | None = None,
+        known_outputs: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Run the graph. Returns output values for every node."""
+        """Run the graph. Returns output values for every node.
+
+        `known_outputs` lets a caller replay only a subset of the graph: any
+        node.id present there is not re-evaluated at all — its provided
+        output is used as-is and downstream nodes read it like any other via
+        the normal edge map. This is for replaying a specific node/descendant
+        island with a fresh hyst snapshot (e.g. to correct a held
+        change_filter) without re-invoking nodes outside that island a
+        second time — a non-deterministic producer (random_value) or a
+        real-world side effect (api_client, host_check, …) elsewhere in the
+        graph must not run twice just because the replay re-executes the
+        whole topological order.
+        """
         input_overrides = input_overrides or {}
         capture_incoming_overrides = capture_incoming_overrides or {}
+        known_outputs = known_outputs or {}
 
         # Build adjacency: edge target_node.handle ← source_node.handle value
         # edge_map[target_node_id][target_handle] = (source_node_id, source_handle)
         edge_map = self._build_edge_map()
+        retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type == "memory"}
+        for node_id, handles in self.retained_boundary_handles.items():
+            retained_boundary_handles.setdefault(node_id, set()).update(handles)
+        # Only failed-output paths that can influence a Change Filter need to
+        # retain absence through synchronous nodes. Elsewhere, the executor's
+        # longstanding missing-input/default behavior remains intentional.
+        change_filter_ancestors = {node.id for node in self.flow.nodes if node.type == "change_filter"}
+        pending_ancestors = list(change_filter_ancestors)
+        while pending_ancestors:
+            target_id = pending_ancestors.pop()
+            for source_id, _source_handle in edge_map.get(target_id, {}).values():
+                if source_id not in change_filter_ancestors:
+                    change_filter_ancestors.add(source_id)
+                    pending_ancestors.append(source_id)
 
         # Topological sort (Kahn's algorithm). Nodes left behind by the sort
         # are not executable in this single-pass DAG executor, so surface them
@@ -110,11 +223,42 @@ class GraphExecutor:
         outputs: dict[str, dict[str, Any]] = {}
 
         for node in topo.order:
+            if node.id in known_outputs:
+                # Deep copy: this replay's own nodes may still read a
+                # known_outputs entry as one of their inputs (e.g. a
+                # python_script downstream of the held island consuming a
+                # dict/list value from outside it) and — python_script is
+                # explicitly allowed to mutate its inputs in place — mutate
+                # it. Handing out the caller's own object here would let
+                # that mutation corrupt the original pass's outputs entry
+                # for the *same* node, which the caller (and any later
+                # correction pass reusing that same outputs dict) still
+                # relies on being untouched. Snapshotting per output port
+                # rather than the whole dict in one deepcopy call means a
+                # single non-deepcopyable value on a completely unrelated
+                # node — e.g. a permitted python_script legitimately
+                # returning a generator — degrades only that one port
+                # instead of raising TypeError and aborting this entire
+                # replay before the executor's own per-node exception
+                # boundary ever runs. Uses _replay_known_output_value, NOT
+                # _snapshot_debug_value: a value here may be genuinely
+                # CONSUMED by a downstream node inside the replayed island,
+                # so a lossy JSON/str fallback (fine for pure debug capture)
+                # would silently replace that consumer's valid output with
+                # "__error__" instead of merely misrepresenting it in a log.
+                outputs[node.id] = {port: _replay_known_output_value(val) for port, val in known_outputs[node.id].items()}
+                continue
+
             # Resolve inputs for this node
             inputs: dict[str, Any] = {}
+            missing_inputs: list[tuple[str, str, str]] = []
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
-                inputs[handle] = self._get_output_value(src_out, src_handle)
+                has_value, value = self._try_get_output_value(src_out, src_handle)
+                if has_value:
+                    inputs[handle] = value
+                else:
+                    missing_inputs.append((handle, src_id, src_handle))
 
             incoming_inputs = inputs.copy()
             incoming_inputs.update(capture_incoming_overrides.get(node.id, {}))
@@ -123,6 +267,44 @@ class GraphExecutor:
 
             try:
                 inputs = self._resolve_effective_inputs(node, inputs)
+                # A connected port that its producer did not emit is not the
+                # same thing as an unconnected/defaulted input. In particular,
+                # evaluating a synchronous node with its default here can turn
+                # an upstream failure into a plausible synthetic value (for
+                # example, failed_script -> NOT becomes True) which a later
+                # Change Filter would then commit. Keep the output absent so
+                # the missing state propagates through every intermediate hop.
+                unresolved = [
+                    item for item in missing_inputs if item[0] not in node_overrides and item[2] not in retained_boundary_handles.get(item[1], set())
+                ]
+                if node.type == "hysteresis":
+                    # An absent value deliberately means "emit retained
+                    # state" for Hysteresis, making it a taint boundary just
+                    # like Memory. Do not turn that defined fallback into an
+                    # error merely because a downstream Change Filter exists.
+                    unresolved = [item for item in unresolved if item[0] != "value"]
+                absorbed = False
+                if unresolved and node.type == "gate" and all(item[0] == "in" for item in unresolved):
+                    enable = self._to_bool(inputs.get("enable"))
+                    if node.data.get("negate_enable"):
+                        enable = not enable
+                    absorbed = not enable
+                elif unresolved and node.type in {"and", "or"}:
+                    resolved_values: list[bool] = []
+                    count = max(2, min(30, int(node.data.get("input_count", 2))))
+                    unresolved_handles = {item[0] for item in unresolved}
+                    for index in range(1, count + 1):
+                        port = f"in{index}"
+                        if port in unresolved_handles:
+                            continue
+                        value = self._to_bool(inputs.get(port))
+                        if node.data.get(f"negate_{port}"):
+                            value = not value
+                        resolved_values.append(value)
+                    absorbed = any(resolved_values) if node.type == "or" else any(not value for value in resolved_values)
+                if unresolved and not absorbed and node.id in change_filter_ancestors and node.type not in {"change_filter", "memory"}:
+                    details = ", ".join(f"{handle} <- {src_id}.{src_handle}" for handle, src_id, src_handle in unresolved)
+                    raise ExecutionError(f"Missing upstream output: {details}")
 
                 if self.input_capture is not None:
                     self.input_capture[node.id] = {
@@ -134,6 +316,19 @@ class GraphExecutor:
                         for port in inputs
                     }
 
+                # Python scripts are the only node type that can arbitrarily
+                # mutate their inputs.  Keep upstream outputs (including shared
+                # iCalendar cache entries) immutable across replay passes.
+                # Per-value (not a single dict-wide deepcopy): an upstream
+                # non-deepcopyable value (e.g. another permitted
+                # python_script's own generator/complex-object result)
+                # would otherwise make the WHOLE deepcopy raise, turning
+                # this node into "__error__" even though only one of its
+                # inputs is actually a problem — _replay_known_output_value
+                # isolates each input independently, falling back to the
+                # original reference only for that one value.
+                if node.type == "python_script":
+                    inputs = {port: _replay_known_output_value(val) for port, val in inputs.items()}
                 result = self._eval_node(node, inputs)
             except Exception as exc:
                 logger.exception("Node %s (%s) error", node.id, node.type)
@@ -207,24 +402,31 @@ class GraphExecutor:
         self,
         outputs: dict[str, dict[str, Any]],
         input_overrides: dict[str, dict[str, Any]] | None = None,
+        blocked_inputs: set[tuple[str, str]] | None = None,
     ) -> None:
-        self._commit_memory_inputs(outputs, input_overrides or {}, self._build_edge_map())
+        self._commit_memory_inputs(outputs, input_overrides or {}, self._build_edge_map(), blocked_inputs)
 
     def _commit_memory_inputs(
         self,
         outputs: dict[str, dict[str, Any]],
         input_overrides: dict[str, dict[str, Any]],
         edge_map: dict[str, dict[str, tuple[str, str]]],
+        blocked_inputs: set[tuple[str, str]] | None = None,
     ) -> None:
+        blocked_inputs = blocked_inputs or set()
         for node in self.flow.nodes:
             if node.type != "memory":
                 continue
             node_overrides = input_overrides.get(node.id, {})
-            has_reset, reset_value = self._memory_input_value(node, "reset", outputs, node_overrides, edge_map)
+            has_reset, reset_value = (
+                (False, None) if (node.id, "reset") in blocked_inputs else self._memory_input_value(node, "reset", outputs, node_overrides, edge_map)
+            )
             if has_reset and self._to_bool(reset_value):
                 self._set_memory_value(node, self._memory_initial_value(node))
                 continue
-            has_input, input_value = self._memory_input_value(node, "in", outputs, node_overrides, edge_map)
+            has_input, input_value = (
+                (False, None) if (node.id, "in") in blocked_inputs else self._memory_input_value(node, "in", outputs, node_overrides, edge_map)
+            )
             if has_input:
                 self._set_memory_value(node, self._coerce_memory_value(node, input_value))
                 continue
@@ -298,21 +500,824 @@ class GraphExecutor:
         if isinstance(v, bool):
             return v
         if isinstance(v, str):
-            s = v.strip().lower()
+            try:
+                s = v.strip().lower()
+            except Exception:  # noqa: BLE001 - string subclasses may fail normalization arbitrarily
+                return None
             if s in {"true", "1", "yes", "on"}:
                 return True
             if s in {"false", "0", "no", "off"}:
                 return False
+            try:
+                numeric = Decimal(s)
+            except Exception:  # noqa: BLE001 - normalized string subclasses may fail Decimal conversion arbitrarily
+                return None
+            v = numeric
+        # Numeric 0/1 are recognized too, so equality stays transitive across
+        # adapter representations: 1 == "1" == "true" must all agree.
+        if isinstance(v, Decimal):
+            try:
+                if not bool(v.is_finite()):
+                    return None
+                equals_zero = v == 0
+                equals_one = v == 1
+            except Exception:  # noqa: BLE001 - Decimal subclasses may fail classification or equality arbitrarily
+                return None
+            if type(equals_zero) is not bool or type(equals_one) is not bool:
+                return None
+            if equals_zero:
+                return False
+            if equals_one:
+                return True
+            return None
+        if isinstance(v, (int, float)):
+            try:
+                equals_zero = v == 0
+                equals_one = v == 1
+            except Exception:  # noqa: BLE001 - numeric subclasses may implement hostile equality
+                return None
+            if type(equals_zero) is not bool or type(equals_one) is not bool:
+                return None
+            if equals_zero:
+                return False
+            if equals_one:
+                return True
         return None
+
+    @staticmethod
+    def _try_exact_int(v: Any) -> int | None:
+        """Return an int only when it can be represented without a float round-trip."""
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, int):
+            try:
+                return int(v)
+            except Exception:  # noqa: BLE001 - user-provided int subclasses may fail conversion arbitrarily
+                return None
+        if isinstance(v, float):
+            # A float that already holds a whole number carries no more
+            # precision than its int() conversion — unlike converting the
+            # *other* operand (an arbitrary-precision int) through float(),
+            # which is exactly the precision loss this method exists to avoid.
+            try:
+                return int(v) if v.is_integer() else None
+            except Exception:  # noqa: BLE001 - user-provided float subclasses may fail conversion arbitrarily
+                return None
+        if isinstance(v, str):
+            try:
+                s = v.strip()
+            except Exception:  # noqa: BLE001 - string subclasses may fail normalization arbitrarily
+                return None
+            try:
+                return int(s)
+            except ValueError:
+                pass
+            # Decimal-form ("9007199254740993.0") or scientific-notation
+            # strings aren't accepted by int() directly but may still be an
+            # exact whole number — Decimal parses the literal digits without
+            # any binary-float rounding, unlike float().
+            try:
+                dec = Decimal(s)
+                if dec != dec.to_integral_value():
+                    return None
+                # A compact literal like "1e10000000000" parses instantly
+                # (Decimal stores it as a coefficient+exponent pair, not the
+                # expanded digit string) but int() on it would materialize
+                # an actual multi-gigabyte integer — unlike plain digit
+                # strings, which int(s) above already rejects past Python's
+                # own conversion-length guard, this scientific-notation path
+                # never touches that guard until it's too late. adjusted()
+                # gives the result's digit count via the stored exponent,
+                # without expanding it, so the bound check itself stays cheap.
+                if dec != 0 and dec.adjusted() >= sys.get_int_max_str_digits():
+                    return None
+                return int(dec)
+            except (InvalidOperation, OverflowError):
+                # OverflowError: int() rejects a finite-looking but infinite
+                # Decimal ("Infinity"/"-Infinity" are valid Decimal literals
+                # and compare equal to their own to_integral_value(), so they
+                # reach int() rather than being caught by the check above).
+                return None
+        return None
+
+    @staticmethod
+    def _try_decimal(v: Any) -> Decimal | None:
+        """Return an exact Decimal only when the value is numeric-like.
+
+        Unlike `_try_num`'s float() conversion, this preserves full
+        precision for high-precision decimal strings (e.g. an adapter
+        supplying "0.123456789012345678901") — float() would silently round
+        both that value and a distinct neighbour like
+        "0.123456789012345678902" to the same nearest binary value, making
+        two genuinely different readings compare as equal.
+        """
+        if isinstance(v, bool):
+            return Decimal(1) if v else Decimal(0)
+        if isinstance(v, Decimal):
+            dec = v
+        elif isinstance(v, int):
+            try:
+                dec = Decimal(v)
+            except Exception:  # noqa: BLE001 - integer subclasses may fail exact Decimal conversion arbitrarily
+                return None
+        elif isinstance(v, float):
+            # A plain float always produces a valid Decimal literal, but a
+            # float subclass may override __str__ with arbitrary behavior.
+            # Let comparison fall back to exception-safe equality when that
+            # conversion is unavailable.
+            try:
+                dec = Decimal(str(v))
+            except Exception:  # noqa: BLE001 - user-provided float subclasses may fail conversion arbitrarily
+                return None
+        elif isinstance(v, str):
+            try:
+                dec = Decimal(v.strip())
+            except Exception:  # noqa: BLE001 - string subclasses may fail normalization or Decimal conversion arbitrarily
+                return None
+        else:
+            return None
+        try:
+            return dec if bool(dec.is_finite()) else None
+        except Exception:  # noqa: BLE001 - Decimal subclasses may fail classification or truth conversion arbitrarily
+            return None
+
+    @classmethod
+    def _compare_values(
+        cls, left: Any, right: Any, *, right_is_recovered_str: bool = False, right_is_opaque_recovered_str: bool = False
+    ) -> tuple[bool, bool]:
+        """Return (are_equal, via_normalizing_path).
+
+        via_normalizing_path is True when equality was decided by a
+        normalizing equivalence — boolean/int/decimal aliasing, or
+        structural dict/list `==` — and False when it fell through to one of
+        the str()-recovery paths below. Those paths can equate a live value
+        with a persisted, JSON-lossy string left over from `default=str`
+        (e.g. a datetime.time vs. "10:30:00"), so a caller that wants to
+        keep emitting one side's own representation on an "equal" result
+        needs to know whether doing so is safe.
+
+        `right_is_recovered_str` must be set only when `right` (always the
+        previously-held/persisted side at the change_filter call site, per
+        that node's own state layout) is known to have come from a DB
+        restore rather than a live value received this session — otherwise
+        a source that legitimately emits the literal string "10:30:00" and
+        later emits datetime.time(10, 30) would have its genuine type
+        transition swallowed by the recovery path below.
+
+        `right_is_opaque_recovered_str` is the analogous flag for a value
+        _persist_default had to fall back to str() for because it recognized
+        no more specific type (e.g. a python_script's complex-number/custom-
+        object result) — LogicManager._load_graphs sets it from that state's
+        own "opaque_str" persistence tag. Unlike `right_is_recovered_str`
+        (deliberately restricted to date/time `left` types, since a LEGACY
+        pre-tag row could have flattened literally anything, including a
+        list/dict that might coincidentally str()-match), this tag is
+        unambiguous by construction: every JSON-native and specifically-
+        recognized type (list/dict/tuple/set/frozenset/bytes/date/time/
+        datetime) is tagged on its own, so an "opaque_str"-tagged value can
+        never have originally been one of those — a broader match here
+        carries none of that collision risk.
+        """
+        # IEEE NaN deliberately compares unequal to every value, including
+        # itself.  For change detection, however, two repeated invalid sensor
+        # readings are the same retained reading and must not emit a fresh
+        # pulse on every graph execution.
+        if _is_nan(left) and _is_nan(right):
+            return True, True
+        if _is_nan(left) or _is_nan(right):
+            return False, True
+        if isinstance(left, _datetime) and isinstance(right, _datetime):
+            try:
+                left_aware = left.tzinfo is not None and left.utcoffset() is not None
+                right_aware = right.tzinfo is not None and right.utcoffset() is not None
+                left_fold = left.fold
+                right_fold = right.fold
+            except Exception:  # noqa: BLE001 - arbitrary tzinfo implementations may fail awareness probing
+                try:
+                    return bool(left == right), True
+                except Exception:  # noqa: BLE001 - the same tzinfo may also fail datetime equality
+                    return False, True
+            if left_aware and right_aware:
+                try:
+                    return bool(left.astimezone(_UTC) == right.astimezone(_UTC)), True
+                except Exception:  # noqa: BLE001 - arbitrary tzinfo normalization may fail
+                    try:
+                        return bool(left == right), True
+                    except Exception:  # noqa: BLE001 - arbitrary tzinfo implementations may fail equality
+                        return False, True
+            if not left_aware and not right_aware and left_fold != right_fold:
+                return False, True
+        if isinstance(left, _time) and isinstance(right, _time):
+            try:
+                left_fold = left.fold
+                right_fold = right.fold
+            except Exception:  # noqa: BLE001 - arbitrary time subclasses may fail fold classification
+                try:
+                    return bool(left == right), True
+                except Exception:  # noqa: BLE001 - the same time subclass may also fail equality
+                    return False, True
+            try:
+                if isinstance(left.tzinfo, _ZoneInfo) and isinstance(right.tzinfo, _ZoneInfo):
+                    same_tz = left.tzinfo.key == right.tzinfo.key
+                else:
+                    same_tz = bool(left.tzinfo == right.tzinfo)
+            except Exception:  # noqa: BLE001 - arbitrary tzinfo equality may raise or be ambiguous
+                same_tz = False
+            if left_fold != right_fold or not same_tz:
+                return False, True
+        bool_left, bool_right = cls._try_bool_literal(left), cls._try_bool_literal(right)
+        if bool_left is not None and bool_right is not None:
+            return bool_left == bool_right, True
+        # Compare integral values exactly first — round-tripping through
+        # float() loses precision beyond 2**53 (e.g. 64-bit counters/IDs).
+        int_left, int_right = cls._try_exact_int(left), cls._try_exact_int(right)
+        if int_left is not None and int_right is not None:
+            return int_left == int_right, True
+        dec_left, dec_right = cls._try_decimal(left), cls._try_decimal(right)
+        if dec_left is not None and dec_right is not None:
+            try:
+                return bool(dec_left == dec_right), True
+            except Exception:  # noqa: BLE001 - Decimal subclasses may implement unsafe equality
+                dec_left = dec_right = None
+        container_types = (dict, list, tuple, set, frozenset, _OpaqueRecoveredSet, _OpaqueRecoveredDict)
+        if isinstance(left, container_types) and isinstance(right, container_types):
+            if right_is_opaque_recovered_str:
+                # An opaque_str tag can be nested arbitrarily deep inside a
+                # persisted container (e.g. a python_script's [3 + 4j]
+                # baseline persists as a list holding one opaque-tagged
+                # item, decoded to ['(3+4j)']) — plain structural equality
+                # would never match the live [3+4j] against that lossy
+                # stand-in. _opaque_aware_container_equal applies the same
+                # unambiguous str()-fallback recursively at every leaf,
+                # exactly like the scalar case below does for a top-level
+                # opaque value.
+                # Restored v2 state carries a marker subclass on each exact
+                # opaque leaf. Older in-memory/tests may only have the
+                # historical container-wide flag, so retain its broad
+                # behavior only when no precise leaf marker is available.
+                precise = cls._contains_opaque_recovered_leaf(right)
+                return cls._opaque_aware_container_equal(left, right, allow_unmarked=not precise), False
+            return cls._nan_aware_equal(left, right), True
+        # A persisted datetime.date/time/datetime (e.g. a KNX DPT10/11 value)
+        # survives a restart only as its str() form (`default=str` in
+        # _persist_node_state) — recognize *that specific* recovery, and
+        # only when `right` is actually flagged as such a restored value. A
+        # blanket str(left) == str(right) fallback would also equate a
+        # list/dict with a string that happens to match its repr (e.g.
+        # [1, 2] and "[1, 2]"), which are genuinely different values/types,
+        # not a persistence artifact, so it must not be treated as
+        # "unchanged".
+        if right_is_recovered_str and isinstance(right, str) and isinstance(left, (_date, _time)):
+            try:
+                return str(left) == right, False
+            except Exception:  # noqa: BLE001 - date/time subclasses may fail legacy string recovery arbitrarily
+                right_is_recovered_str = False
+        # See the docstring above: an "opaque_str" tag unambiguously means
+        # `right` is a lossy str() of some type _persist_default didn't
+        # otherwise recognize, so any `left` type may safely be compared via
+        # str() here — except dict/list, excluded defensively for the same
+        # coincidental-repr reason as above, even though a dict/list could
+        # never actually be the type this tag was generated from.
+        if right_is_opaque_recovered_str and isinstance(right, str) and not isinstance(left, container_types):
+            return _opaque_recovered_matches(left, right), False
+        try:
+            return bool(left == right), True
+        except Exception:  # noqa: BLE001 - arbitrary runtime values may define failing/non-scalar equality
+            return False, True
+
+    @classmethod
+    def _contains_opaque_recovered_leaf(cls, value: Any) -> bool:
+        pending = [value]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if isinstance(current, _OpaqueRecoveredStr):
+                return True
+            if isinstance(current, (dict, list, tuple, set, frozenset, _OpaqueRecoveredSet, _OpaqueRecoveredDict)):
+                if id(current) in seen:
+                    continue
+                seen.add(id(current))
+            if isinstance(current, dict):
+                for key, item in current.items():
+                    pending.extend((key, item))
+            elif isinstance(current, (list, tuple, set, frozenset)):
+                pending.extend(current)
+            elif isinstance(current, _OpaqueRecoveredSet):
+                pending.extend(current.items)
+            elif isinstance(current, _OpaqueRecoveredDict):
+                for key, item in current.items:
+                    pending.extend((key, item))
+        return False
+
+    @classmethod
+    def _nan_aware_equal(cls, left: Any, right: Any, seen: set[tuple[int, int]] | None = None) -> bool:
+        """Structural equality for leaves with non-standard equality.
+
+        Besides treating matching NaNs as one retained reading, compare aware
+        datetimes by UTC instant. Container ``==`` cannot be used before these
+        leaf checks: signaling Decimal NaNs may raise from it, and datetimes
+        using the same ZoneInfo can compare opposite DST folds as equal.
+        """
+        if _is_nan(left) and _is_nan(right):
+            return True
+        if _is_nan(left) or _is_nan(right):
+            return False
+        if isinstance(left, _datetime) and isinstance(right, _datetime):
+            try:
+                left_aware = left.tzinfo is not None and left.utcoffset() is not None
+                right_aware = right.tzinfo is not None and right.utcoffset() is not None
+                left_fold = left.fold
+                right_fold = right.fold
+            except Exception:  # noqa: BLE001 - arbitrary tzinfo implementations may fail awareness probing
+                try:
+                    return bool(left == right)
+                except Exception:  # noqa: BLE001 - the same tzinfo may also fail datetime equality
+                    return False
+            if left_aware and right_aware:
+                try:
+                    return bool(left.astimezone(_UTC) == right.astimezone(_UTC))
+                except Exception:  # noqa: BLE001 - arbitrary tzinfo normalization may fail
+                    try:
+                        return bool(left == right)
+                    except Exception:  # noqa: BLE001 - arbitrary tzinfo implementations may fail equality
+                        return False
+            if not left_aware and not right_aware and left_fold != right_fold:
+                return False
+        if isinstance(left, _time) and isinstance(right, _time):
+            try:
+                left_fold = left.fold
+                right_fold = right.fold
+            except Exception:  # noqa: BLE001 - arbitrary time subclasses may fail fold classification
+                try:
+                    return bool(left == right)
+                except Exception:  # noqa: BLE001 - the same time subclass may also fail equality
+                    return False
+            try:
+                if isinstance(left.tzinfo, _ZoneInfo) and isinstance(right.tzinfo, _ZoneInfo):
+                    same_tz = left.tzinfo.key == right.tzinfo.key
+                else:
+                    same_tz = bool(left.tzinfo == right.tzinfo)
+            except Exception:  # noqa: BLE001 - arbitrary tzinfo equality may raise or be ambiguous
+                same_tz = False
+            if left_fold != right_fold or not same_tz:
+                return False
+        container_types = (dict, list, tuple, set, frozenset)
+        if isinstance(left, container_types) and isinstance(right, container_types):
+            seen = set() if seen is None else seen
+            pair = (id(left), id(right))
+            if pair in seen:
+                return True
+            seen.add(pair)
+        # Keep ordinary JSON/container comparisons linear. Recursive
+        # matching is only needed when a leaf has deliberately unusual
+        # equality (NaN or an aware datetime whose DST fold Python's
+        # same-tzinfo comparison can hide).
+        if (
+            isinstance(left, container_types)
+            and isinstance(right, container_types)
+            and not cls._contains_nonstandard_equality_leaf(left)
+            and not cls._contains_nonstandard_equality_leaf(right)
+        ):
+            try:
+                return bool(left == right)
+            except RecursionError:
+                return cls._plain_container_equal_iterative(left, right)
+            except Exception:  # noqa: BLE001 - arbitrary runtime values may define failing equality
+                return False
+        if isinstance(left, dict) and isinstance(right, dict):
+            return cls._nonstandard_container_equal_iterative(left, right)
+        if isinstance(left, (list, tuple)) and isinstance(right, type(left)):
+            try:
+                return len(left) == len(right) and all(cls._nan_aware_equal(le, re, seen) for le, re in zip(left, right))
+            except RecursionError:
+                return cls._nonstandard_container_equal_iterative(left, right)
+        if isinstance(left, (set, frozenset)) and isinstance(right, type(left)):
+            if len(left) != len(right):
+                return False
+            remaining = list(right)
+            for left_item in left:
+                match = None
+                matched_seen = None
+                for index, right_item in enumerate(remaining):
+                    candidate_seen = set(seen)
+                    if cls._nan_aware_equal(left_item, right_item, candidate_seen):
+                        match = index
+                        matched_seen = candidate_seen
+                        break
+                if match is None:
+                    return False
+                if matched_seen is not None:
+                    seen.update(matched_seen)
+                remaining.pop(match)
+            return True
+        try:
+            return bool(left == right)
+        except Exception:  # noqa: BLE001 - arbitrary runtime values may define failing equality
+            return False
+
+    @classmethod
+    def _contains_nonstandard_equality_leaf(cls, value: Any, seen: set[int] | None = None) -> bool:
+        visited = set() if seen is None else seen
+        pending = [value]
+        while pending:
+            current = pending.pop()
+            if _is_nan(current):
+                return True
+            if isinstance(current, _datetime):
+                try:
+                    if (current.tzinfo is not None and current.utcoffset() is not None) or bool(current.fold):
+                        return True
+                except Exception:  # noqa: BLE001 - force arbitrary failing tzinfo through the guarded recursive path
+                    return True
+                continue
+            if isinstance(current, _time):
+                try:
+                    if current.tzinfo is not None or bool(current.fold):
+                        return True
+                except Exception:  # noqa: BLE001 - force arbitrary failing time subclasses through guarded comparison
+                    return True
+                continue
+            if isinstance(current, (dict, list, tuple, set, frozenset)):
+                if id(current) in visited:
+                    continue
+                visited.add(id(current))
+                if isinstance(current, dict):
+                    try:
+                        for key, item in current.items():
+                            pending.extend((key, item))
+                    except Exception:  # noqa: BLE001 - custom mappings may fail traversal arbitrarily
+                        return True
+                else:
+                    try:
+                        pending.extend(current)
+                    except Exception:  # noqa: BLE001 - custom containers may fail traversal arbitrarily
+                        return True
+        return False
+
+    @classmethod
+    def _plain_container_equal_iterative(cls, left: Any, right: Any) -> bool:
+        """Compare deeply nested ordinary containers without Python recursion."""
+        pending = [(left, right)]
+        seen: set[tuple[int, int]] = set()
+        while pending:
+            current_left, current_right = pending.pop()
+            if type(current_left) is not type(current_right):
+                return False
+            if isinstance(current_left, (list, tuple)):
+                if len(current_left) != len(current_right):
+                    return False
+                pair = (id(current_left), id(current_right))
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                pending.extend(zip(current_left, current_right))
+                continue
+            if isinstance(current_left, dict):
+                if len(current_left) != len(current_right):
+                    return False
+                pair = (id(current_left), id(current_right))
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                try:
+                    for key, item in current_left.items():
+                        if key not in current_right:
+                            return False
+                        pending.append((item, current_right[key]))
+                except Exception:  # noqa: BLE001 - arbitrary mapping keys may define unsafe equality
+                    return False
+                continue
+            if isinstance(current_left, (set, frozenset)):
+                try:
+                    if not bool(current_left == current_right):
+                        return False
+                except Exception:  # noqa: BLE001 - arbitrary set members may define unsafe equality
+                    return False
+                continue
+            try:
+                if not bool(current_left == current_right):
+                    return False
+            except Exception:  # noqa: BLE001 - arbitrary leaves may define unsafe equality
+                return False
+        return True
+
+    @classmethod
+    def _nonstandard_container_equal_iterative(
+        cls,
+        left: Any,
+        right: Any,
+        seen_pairs: set[tuple[int, int]] | None = None,
+    ) -> bool:
+        """Compare deeply nested containers while preserving NaN semantics."""
+        states: list[tuple[list[tuple[str, Any, Any]], set[tuple[int, int]]]] = [
+            ([("pair", left, right)], set() if seen_pairs is None else set(seen_pairs))
+        ]
+        while states:
+            work, seen = states.pop()
+            while work:
+                kind, current_left, current_right = work.pop()
+                if kind == "dict":
+                    left_items = current_left
+                    right_items = current_right
+                    if not left_items:
+                        continue
+                    left_key, left_value = left_items[0]
+                    candidates = [
+                        index
+                        for index, (right_key, _right_value) in enumerate(right_items)
+                        if cls._nonstandard_container_equal_iterative(left_key, right_key, seen)
+                    ]
+                    if not candidates:
+                        break
+                    if len(candidates) == 1:
+                        index = candidates[0]
+                        work.append(("dict", left_items[1:], right_items[:index] + right_items[index + 1 :]))
+                        work.append(("pair", left_value, right_items[index][1]))
+                        continue
+                    if not cls._ambiguous_dictionary_entries_equal(left_items, right_items, seen):
+                        break
+                    continue
+                if kind == "set":
+                    left_items = current_left
+                    right_items = current_right
+                    if not left_items:
+                        continue
+                    left_item = left_items[0]
+                    candidates = [
+                        index for index, right_item in enumerate(right_items) if cls._nonstandard_container_equal_iterative(left_item, right_item)
+                    ]
+                    if not candidates:
+                        break
+                    if len(candidates) == 1:
+                        index = candidates[0]
+                        work.append(("set", left_items[1:], right_items[:index] + right_items[index + 1 :]))
+                        continue
+                    adjacency = [
+                        [index for index, right_item in enumerate(right_items) if cls._nonstandard_container_equal_iterative(item, right_item)]
+                        for item in left_items
+                    ]
+                    if not cls._has_perfect_bipartite_matching(adjacency):
+                        break
+                    continue
+
+                if _is_nan(current_left) or _is_nan(current_right):
+                    if not (_is_nan(current_left) and _is_nan(current_right)):
+                        break
+                    continue
+                left_is_container = isinstance(current_left, (list, tuple, dict, set, frozenset))
+                right_is_container = isinstance(current_right, (list, tuple, dict, set, frozenset))
+                # Container kinds are structural and must match exactly, but
+                # scalar leaves retain ordinary Python equality semantics.
+                # In particular, 1 == 1.0 at shallow nesting and must remain
+                # equal when recursion depth selects this iterative fallback.
+                if (left_is_container or right_is_container) and type(current_left) is not type(current_right):
+                    break
+                if left_is_container:
+                    pair = (id(current_left), id(current_right))
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                if isinstance(current_left, (list, tuple)):
+                    if len(current_left) != len(current_right):
+                        break
+                    work.extend(("pair", left_item, right_item) for left_item, right_item in zip(current_left, current_right))
+                    continue
+                if isinstance(current_left, dict):
+                    try:
+                        if len(current_left) != len(current_right):
+                            break
+                        left_items = list(current_left.items())
+                        right_items = list(current_right.items())
+                    except Exception:  # noqa: BLE001 - custom mappings may fail sizing or traversal arbitrarily
+                        break
+                    work.append(("dict", left_items, right_items))
+                    continue
+                if isinstance(current_left, (set, frozenset)):
+                    if len(current_left) != len(current_right):
+                        break
+                    work.append(("set", list(current_left), list(current_right)))
+                    continue
+                if not cls._nan_aware_equal(current_left, current_right):
+                    break
+            else:
+                return True
+        return False
+
+    @classmethod
+    def _ambiguous_dictionary_entries_equal(
+        cls,
+        left_items: list[tuple[Any, Any]],
+        right_items: list[tuple[Any, Any]],
+        seen: set[tuple[int, int]],
+    ) -> bool:
+        """Polynomial bipartite matching for dictionaries with ambiguous keys."""
+        adjacency: list[list[int]] = []
+        for left_key, left_value in left_items:
+            candidates = []
+            for index, (right_key, right_value) in enumerate(right_items):
+                candidate_seen = set(seen)
+                if cls._nonstandard_container_equal_iterative(left_key, right_key, candidate_seen) and cls._nonstandard_container_equal_iterative(
+                    left_value, right_value, candidate_seen
+                ):
+                    candidates.append(index)
+            if not candidates:
+                return False
+            adjacency.append(candidates)
+
+        return cls._has_perfect_bipartite_matching(adjacency)
+
+    @staticmethod
+    def _has_perfect_bipartite_matching(adjacency: list[list[int]]) -> bool:
+        if any(not candidates for candidates in adjacency):
+            return False
+        match_left: dict[int, int] = {}
+        match_right: dict[int, int] = {}
+        for start in range(len(adjacency)):
+            queue = [start]
+            queue_index = 0
+            parents: dict[int, tuple[int, int]] = {}
+            seen_left = {start}
+            seen_right: set[int] = set()
+            endpoint: tuple[int, int] | None = None
+            while queue_index < len(queue) and endpoint is None:
+                left_index = queue[queue_index]
+                queue_index += 1
+                for right_index in adjacency[left_index]:
+                    if right_index in seen_right:
+                        continue
+                    seen_right.add(right_index)
+                    matched_left = match_right.get(right_index)
+                    if matched_left is None:
+                        endpoint = (left_index, right_index)
+                        break
+                    if matched_left not in seen_left:
+                        seen_left.add(matched_left)
+                        parents[matched_left] = (left_index, right_index)
+                        queue.append(matched_left)
+            if endpoint is None:
+                return False
+            left_index, right_index = endpoint
+            while True:
+                match_left[left_index] = right_index
+                match_right[right_index] = left_index
+                if left_index == start:
+                    break
+                left_index, right_index = parents[left_index]
+        return True
+
+    @classmethod
+    def _ambiguous_opaque_dictionary_entries_equal(
+        cls,
+        left_items: list[tuple[Any, Any]],
+        right_items: list[tuple[Any, Any]],
+        seen: set[tuple[int, int]],
+        *,
+        allow_unmarked: bool,
+    ) -> bool:
+        """Polynomial matching for recovered dictionaries with ambiguous keys."""
+        adjacency: list[list[int]] = []
+        for left_key, left_value in left_items:
+            candidates = []
+            for index, (right_key, right_value) in enumerate(right_items):
+                if cls._opaque_aware_container_equal(
+                    left_key,
+                    right_key,
+                    allow_unmarked=allow_unmarked,
+                    _seen_pairs=seen,
+                ) and cls._opaque_aware_container_equal(
+                    left_value,
+                    right_value,
+                    allow_unmarked=allow_unmarked,
+                    _seen_pairs=seen,
+                ):
+                    candidates.append(index)
+            if not candidates:
+                return False
+            adjacency.append(candidates)
+        return cls._has_perfect_bipartite_matching(adjacency)
+
+    @classmethod
+    def _opaque_aware_container_equal(
+        cls,
+        left: Any,
+        right: Any,
+        *,
+        allow_unmarked: bool = False,
+        _seen_pairs: set[tuple[int, int]] | None = None,
+    ) -> bool:
+        """Compare recovered opaque containers without Python call-stack recursion."""
+        states: list[tuple[list[tuple[str, Any, Any]], set[tuple[int, int]]]] = [
+            ([("pair", left, right)], set() if _seen_pairs is None else set(_seen_pairs))
+        ]
+        while states:
+            work, seen = states.pop()
+            while work:
+                kind, current_left, current_right = work.pop()
+                if kind == "dict":
+                    left_items = current_left
+                    right_items = current_right
+                    if not left_items:
+                        continue
+                    if not cls._ambiguous_opaque_dictionary_entries_equal(
+                        left_items,
+                        right_items,
+                        seen,
+                        allow_unmarked=allow_unmarked,
+                    ):
+                        break
+                    continue
+                if kind == "set":
+                    left_items = current_left
+                    right_items = current_right
+                    if not left_items:
+                        continue
+                    adjacency = [
+                        [
+                            index
+                            for index, right_item in enumerate(right_items)
+                            if cls._opaque_aware_container_equal(item, right_item, allow_unmarked=allow_unmarked)
+                        ]
+                        for item in left_items
+                    ]
+                    if not cls._has_perfect_bipartite_matching(adjacency):
+                        break
+                    continue
+
+                if _is_nan(current_left) or _is_nan(current_right):
+                    if not (_is_nan(current_left) and _is_nan(current_right)):
+                        break
+                    continue
+                if isinstance(current_right, _OpaqueRecoveredStr):
+                    if not _opaque_recovered_matches(current_left, current_right, allow_unmarked=allow_unmarked):
+                        break
+                    continue
+                pair = (id(current_left), id(current_right))
+                if isinstance(current_left, (dict, list, tuple, set, frozenset)) and isinstance(
+                    current_right, (dict, list, tuple, set, frozenset, _OpaqueRecoveredSet, _OpaqueRecoveredDict)
+                ):
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                if isinstance(current_left, dict) and isinstance(current_right, dict):
+                    if len(current_left) != len(current_right):
+                        break
+                    work.append(("dict", list(current_left.items()), list(current_right.items())))
+                    continue
+                if isinstance(current_left, dict) and isinstance(current_right, _OpaqueRecoveredDict):
+                    if len(current_left) != len(current_right.items):
+                        break
+                    work.append(("dict", list(current_left.items()), list(current_right.items)))
+                    continue
+                if isinstance(current_left, (list, tuple)) and isinstance(current_right, type(current_left)):
+                    if len(current_left) != len(current_right):
+                        break
+                    work.extend(("pair", left_item, right_item) for left_item, right_item in zip(current_left, current_right))
+                    continue
+                if isinstance(current_left, (set, frozenset)) and isinstance(current_right, type(current_left)):
+                    if len(current_left) != len(current_right):
+                        break
+                    work.append(("set", list(current_left), list(current_right)))
+                    continue
+                if isinstance(current_left, (set, frozenset)) and isinstance(current_right, _OpaqueRecoveredSet):
+                    if isinstance(current_left, frozenset) != current_right.frozen or len(current_left) != len(current_right.items):
+                        break
+                    work.append(("set", list(current_left), list(current_right.items)))
+                    continue
+                try:
+                    equal = bool(current_left == current_right)
+                except Exception:  # noqa: BLE001 - opaque runtime equality may fail
+                    equal = False
+                if not equal and not _opaque_recovered_matches(current_left, current_right, allow_unmarked=allow_unmarked):
+                    break
+            else:
+                return True
+        return False
 
     @classmethod
     def _values_equal(cls, left: Any, right: Any) -> bool:
+        """Type-tolerant equality for Decision/Value Mapping rule conditions.
+
+        Their `expected` value is entered through a NodeConfigPanel text
+        input and is therefore always a string — e.g. an API/JSON list
+        `[1, 2]` must still match a rule configured as the string `"[1, 2]"`.
+        Unlike `_compare_values` (change_filter's own persisted-state
+        comparison, which needs the stricter behavior to avoid silently
+        losing type information across a restart), this keeps the lenient
+        str(left) == str(right) fallback for any pair not already handled by
+        the normalizing paths below — narrowing it here too would silently
+        break existing rules built around that fallback.
+        """
         bool_left, bool_right = cls._try_bool_literal(left), cls._try_bool_literal(right)
         if bool_left is not None and bool_right is not None:
             return bool_left == bool_right
+        int_left, int_right = cls._try_exact_int(left), cls._try_exact_int(right)
+        if int_left is not None and int_right is not None:
+            return int_left == int_right
         num_left, num_right = cls._try_num(left), cls._try_num(right)
         if num_left is not None and num_right is not None:
             return num_left == num_right
+        if isinstance(left, (dict, list)) and isinstance(right, (dict, list)):
+            return left == right
         return str(left) == str(right)
 
     @staticmethod
@@ -497,6 +1502,125 @@ class GraphExecutor:
 
             case "memory":
                 return {"out": self._memory_value(node)}
+
+            case "change_filter":
+                state = self.hysteresis_state.get(node.id)
+                prev_value = state["value"] if isinstance(state, dict) and "value" in state else None
+                if inputs.get("_suppress_change_filter"):
+                    # Held by LogicManager: an upstream async node (api_client/
+                    # host_check/message_archive/notify) hasn't resolved on
+                    # this pass, so its output feeding "in" is a placeholder,
+                    # not a real value. Treat this exactly like an absent
+                    # input — no state write, no pulse — whether or not prior
+                    # state already exists; the manager re-runs this node with
+                    # the real value once the async result is known.
+                    return {"out": prev_value, "changed": False}
+                if "in" not in inputs:
+                    # Unwired input: this graph execution was not driven by
+                    # this node's source, so an absent value must not look
+                    # like "first value received" and fire a spurious pulse.
+                    return {"out": prev_value, "changed": False}
+                value = inputs["in"]
+                has_prev = isinstance(state, dict) and "value" in state
+                # `value` is stored as an isolated deep copy — never the same
+                # object (or containing the same nested mutable objects) as
+                # the one handed out as `out` — because a downstream node (a
+                # "python_script" is explicitly allowed to mutate its inputs
+                # in place) could otherwise mutate the object this filter is
+                # using as its own comparison baseline, corrupting both the
+                # next comparison and the persisted state without ever
+                # passing through "in" again. Deep-copying unconditionally
+                # (rather than only when the outer container is itself
+                # dict/list/set) is required because an outer immutable
+                # container — a tuple, e.g. ([1],) — can still hold a nested
+                # mutable member; deciding isolation from the outer type
+                # alone would miss that. A deepcopy of a genuinely atomic
+                # value (int/str/bool/None/float/datetime/date/time/bytes)
+                # is a cheap no-op, so there's no cost to doing this always.
+                # A bare copy.deepcopy() would raise for a permitted
+                # python_script legitimately returning a generator, or any
+                # other value with a failing __deepcopy__/__reduce__ hook,
+                # turning this node into "__error__" on its very first
+                # input. Use _replay_known_output_value's fallback (keep the
+                # ORIGINAL reference on a copy failure), not
+                # _snapshot_debug_value's (json round-trip, then str()):
+                # this baseline is semantic persisted state compared again
+                # on every future pass, not a one-off debug capture — a
+                # string stand-in here would permanently change its type,
+                # so a live value of the original (non-copyable) type could
+                # never compare equal to it again, reporting changed=True
+                # forever and repeating downstream side effects on every
+                # unrelated execution.
+                baseline = _replay_known_output_value(value)
+                if not has_prev:
+                    self.hysteresis_state[node.id] = {"value": baseline}
+                    return {"out": value, "changed": True}
+                equal, via_normalizing_path = self._compare_values(
+                    value,
+                    state["value"],
+                    right_is_recovered_str=bool(state.get("_recovered_str")),
+                    right_is_opaque_recovered_str=bool(state.get("_opaque_recovered_str")),
+                )
+                if not equal:
+                    self.hysteresis_state[node.id] = {"value": baseline}
+                    return {"out": value, "changed": True}
+                # On an "equal" result, normally keep emitting the persisted
+                # representation (matches existing numeric/boolean-alias and
+                # dict/list-key-order normalization). But when equality only
+                # held via the str() fallback, the two sides can be
+                # genuinely different types (e.g. a live datetime.time vs. a
+                # persisted, JSON-lossy string left over from a restart's
+                # `default=str` encoding) — emit the current input there
+                # instead, so `out`'s type doesn't silently degrade to
+                # whatever survived persistence. When emitting the persisted
+                # representation, hand out a deep copy unconditionally — same
+                # reasoning as the baseline above, since state["value"] is
+                # otherwise the exact object (or container of objects) this
+                # filter keeps comparing against on every future "unchanged"
+                # tick. Same _replay_known_output_value fallback as the
+                # baseline store above, for the same reason: state["value"]
+                # can now genuinely be a non-deepcopyable object (e.g. a
+                # generator a repeatedly-identical Memory source emits) once
+                # its baseline is no longer forced through a lossy str()
+                # snapshot — a bare copy.deepcopy() here would raise on the
+                # very next "unchanged" tick instead of just handing out the
+                # same reference again.
+                if via_normalizing_path:
+                    out_value = _replay_known_output_value(state["value"])
+                    if state.get("_recovered_str") or state.get("_opaque_recovered_str"):
+                        # A live value just confirmed the persisted,
+                        # restart-recovered representation via ORDINARY
+                        # equality (not either str()-recovery fallback
+                        # above) — e.g. a source that genuinely emits the
+                        # literal string "10:30:00" live, matching a
+                        # persisted string tagged "_recovered_str" from
+                        # before tagged persistence existed, or a live value
+                        # matching an "_opaque_recovered_str"-tagged string.
+                        # That resolves the ambiguity whichever marker
+                        # exists for: this source evidently emits this
+                        # representation live, not some other type that
+                        # only happens to str()-match it. Clear the marker
+                        # now so a LATER genuine type transition is reported
+                        # as a real change instead of being silently
+                        # swallowed by a recovery fallback forever.
+                        self.hysteresis_state[node.id] = {"value": out_value}
+                else:
+                    # Equality here only held through one of the str()-
+                    # recovery fallbacks above: state["value"] is still the
+                    # pre-migration persisted string (or the "opaque_str"-
+                    # tagged one) and its marker is still set. Migrate
+                    # stored state to the live, typed value now (dropping
+                    # the marker) so the *next* persist writes it properly
+                    # tagged under the version-2 envelope — otherwise a
+                    # future restart's loader (which only re-applies a
+                    # recovery heuristic to an untagged legacy string or an
+                    # "opaque_str"-tagged one, never to an already-migrated
+                    # value) would keep comparing this same unmigrated
+                    # value against a live value on every restart and
+                    # report a spurious changed=True each time.
+                    out_value = value
+                    self.hysteresis_state[node.id] = {"value": baseline}
+                return {"out": out_value, "changed": False}
 
             case "compare":
                 operator_key = str(d.get("operator", ">")).strip().lower()
@@ -1315,6 +2439,7 @@ class GraphExecutor:
                         out[f"f{i}_today"] = False
                     return out
 
+                cache_key: tuple[str, str, str] | None = None
                 try:
                     import datetime as _dt_ic
                     from zoneinfo import ZoneInfo as _ZI
@@ -1330,7 +2455,19 @@ class GraphExecutor:
 
                     tz_name = self.app_config.get("timezone", "Europe/Zurich")
                     tz = _ZI(tz_name)
-                    today = _dt_ic.datetime.now(tz).date()
+                    today = _datetime.now(tz).date()
+                    cache_key = (filters_json, tz_name, today.isoformat())
+                    cached = self.ical_result_cache.get(node.id)
+                    if (
+                        isinstance(cached, dict)
+                        and cached.get("raw") is raw_text
+                        and cached.get("key") == cache_key
+                        and isinstance(cached.get("outputs"), dict)
+                    ):
+                        cached_outputs = cached["outputs"]
+                        out.update(cached_outputs if self.ical_cache_outputs_owned else copy.deepcopy(cached_outputs))
+                        return out
+
                     tomorrow = today + _dt_ic.timedelta(days=1)
                     window_end = today + _dt_ic.timedelta(days=365)
 
@@ -1449,6 +2586,12 @@ class GraphExecutor:
                         out.setdefault(f"f{i}_today", False)
                         out.setdefault(f"f{i}_tomorrow", False)
 
+                if cache_key is not None:
+                    self.ical_result_cache[node.id] = {
+                        "raw": raw_text,
+                        "key": cache_key,
+                        "outputs": copy.deepcopy({key: value for key, value in out.items() if key != "raw"}),
+                    }
                 return out
 
             case _:

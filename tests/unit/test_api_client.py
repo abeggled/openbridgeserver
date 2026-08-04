@@ -19,19 +19,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from obs.api.v1.logic import _row_to_out
 from obs.config import SecuritySettings, Settings, override_settings
 from obs.core.registry import ValueState
 from obs.logic.manager import (
     LogicManager,
     _api_client_value_to_string,
     _build_api_client_fetch_targets,
+    _load_external_value_file,
     _make_api_client_variable_resolver,
+    _migrate_legacy_api_client_field_names,
     _normalise_api_client_variables,
-    _read_secret_file,
     _replace_api_client_placeholders,
     _replace_api_client_url_placeholders,
 )
-from obs.logic.models import FlowData
+from obs.logic.models import FlowData, LogicNode, NodePosition
 from obs.security.url_targets import add_allowed_url_target, evaluate_url_target
 from tests.unit.conftest import edge, make_executor, node
 
@@ -106,62 +108,155 @@ class TestApiClientSsrfHostGuard:
         assert decision.blocked_ips == ["127.0.0.1"]
 
 
-class TestApiClientSecretFileGuard:
-    """Unit tests for bounded API client secret-file reads."""
+class TestApiClientExternalValueFileGuard:
+    """Unit tests for bounded API client external-value-file reads."""
 
-    def test_reads_file_from_configured_secret_root(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+    def test_reads_file_from_configured_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "values"
         root.mkdir()
-        secret_file = root / "api-token"
-        secret_file.write_text(" secret-token \n", encoding="utf-8")
+        value_file = root / "api-value"
+        value_file.write_text(" configured-value \n", encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_file)) == "secret-token"
+        assert _load_external_value_file(str(value_file)) == "configured-value"
 
-    def test_rejects_file_outside_secret_root(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+    def test_rejects_file_outside_configured_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "values"
         root.mkdir()
-        outside_file = tmp_path / "outside-token"
+        outside_file = tmp_path / "outside-value"
         outside_file.write_text("outside", encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(outside_file)) == ""
+        assert _load_external_value_file(str(outside_file)) == ""
 
     def test_rejects_non_regular_file(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(root)) == ""
+        assert _load_external_value_file(str(root)) == ""
 
     def test_rejects_fifo_without_blocking(self, tmp_path, monkeypatch):
         if not hasattr(os, "mkfifo"):
             return
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
-        secret_pipe = root / "api-token-pipe"
-        os.mkfifo(secret_pipe)
+        fifo_entry = root / "api-value-pipe"
+        os.mkfifo(fifo_entry)
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_pipe)) == ""
+        assert _load_external_value_file(str(fifo_entry)) == ""
 
     def test_rejects_oversized_file(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
-        secret_file = root / "large-token"
-        secret_file.write_text("x" * 8193, encoding="utf-8")
+        value_file = root / "large-value"
+        value_file.write_text("x" * 8193, encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_file)) == ""
+        assert _load_external_value_file(str(value_file)) == ""
 
     def test_rejects_invalid_utf8(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
-        secret_file = root / "binary-token"
-        secret_file.write_bytes(b"\xff")
+        value_file = root / "binary-value"
+        value_file.write_bytes(b"\xff")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_file)) == ""
+        assert _load_external_value_file(str(value_file)) == ""
+
+    def test_rejects_file_that_grows_between_fstat_and_read(self, tmp_path, monkeypatch):
+        # fstat() reports a small, allowed size, but the underlying read()
+        # call itself returns more bytes than the size limit (e.g. because
+        # the file grew between the two syscalls) — this must still be
+        # rejected by the post-read size double-check, not just trusted
+        # because the earlier fstat-based check already passed.
+        root = tmp_path / "values"
+        root.mkdir()
+        value_file = root / "growing-value"
+        value_file.write_text("small", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        with patch("os.read", return_value=b"x" * 8193):
+            assert _load_external_value_file(str(value_file)) == ""
+
+
+class TestMigrateLegacyApiClientFieldNames:
+    """Unit tests for the _load_graphs() upgrade path (issue #1087 CodeQL cleanup)."""
+
+    @staticmethod
+    def _node(node_type: str, data: dict) -> LogicNode:
+        return LogicNode(id="n1", type=node_type, position=NodePosition(x=0, y=0), data=data)
+
+    def test_renames_legacy_keys_on_api_client_node(self):
+        flow = FlowData(nodes=[self._node("api_client", {"headers_secret_file": "/run/secrets/hdr", "auth_token_file": "/run/secrets/tok"})])
+
+        _migrate_legacy_api_client_field_names(flow)
+
+        assert flow.nodes[0].data == {"headers_value_file": "/run/secrets/hdr", "auth_value_file": "/run/secrets/tok"}
+
+    def test_does_not_overwrite_an_already_migrated_new_key(self):
+        flow = FlowData(
+            nodes=[self._node("api_client", {"headers_secret_file": "/run/secrets/legacy", "headers_value_file": "/run/secrets/current"})]
+        )
+
+        _migrate_legacy_api_client_field_names(flow)
+
+        assert flow.nodes[0].data == {"headers_value_file": "/run/secrets/current"}
+
+    def test_ignores_non_api_client_nodes(self):
+        flow = FlowData(nodes=[self._node("and", {"headers_secret_file": "/run/secrets/hdr"})])
+
+        _migrate_legacy_api_client_field_names(flow)
+
+        assert flow.nodes[0].data == {"headers_secret_file": "/run/secrets/hdr"}
+
+    def test_graph_api_output_exposes_legacy_file_fields_under_current_names(self):
+        raw_flow = self._flow_with_legacy_fields().model_dump_json()
+
+        result = _row_to_out(
+            {
+                "id": "g1",
+                "name": "Graph",
+                "description": "",
+                "enabled": 1,
+                "flow_data": raw_flow,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+
+        assert result.flow_data.nodes[0].data == {
+            "headers_value_file": "/run/secrets/hdr",
+            "auth_value_file": "/run/secrets/tok",
+        }
+
+    def test_update_cached_graph_migrates_legacy_fields_on_layout_only_save(self):
+        # A layout-only save (e.g. dragging a node) resubmits the flow_data
+        # exactly as GET returned it — which reads the raw, unmigrated DB
+        # row, not this manager's already-migrated in-memory cache. Without
+        # migrating again here, update_cached_graph() would overwrite the
+        # migrated cache with the legacy field names and silently drop the
+        # configured headers/bearer-token file until the next full reload.
+        manager = _make_manager()
+        graph_id = "g1"
+        manager._graphs[graph_id] = ("Graph", True, self._flow_with_legacy_fields())
+
+        legacy_flow = self._flow_with_legacy_fields()
+        manager.update_cached_graph(graph_id, "Graph", True, legacy_flow)
+
+        _, _, cached_flow = manager._graphs[graph_id]
+        assert cached_flow.nodes[0].data == {"headers_value_file": "/run/secrets/hdr", "auth_value_file": "/run/secrets/tok"}
+
+    @staticmethod
+    def _flow_with_legacy_fields() -> FlowData:
+        return FlowData(
+            nodes=[
+                TestMigrateLegacyApiClientFieldNames._node(
+                    "api_client", {"headers_secret_file": "/run/secrets/hdr", "auth_token_file": "/run/secrets/tok"}
+                )
+            ]
+        )
 
 
 class TestApiClientFetchTarget:
@@ -481,7 +576,7 @@ class TestApiClientManagerHttp:
         assert kwargs["verify"] is False
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    def test_invalid_inline_and_secret_headers_are_ignored(self, mock_client_cls, tmp_path, monkeypatch):
+    def test_invalid_inline_and_value_file_headers_are_ignored(self, mock_client_cls, tmp_path, monkeypatch):
         captured: dict = {}
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -492,7 +587,7 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {})
 
         mock_client.request = _capture
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
         headers_file = root / "headers.json"
         headers_file.write_text("not json", encoding="utf-8")
@@ -502,7 +597,7 @@ class TestApiClientManagerHttp:
         _, flow = self._build_graph(
             extra_data={
                 "headers": "not json",
-                "headers_secret_file": str(headers_file),
+                "headers_value_file": str(headers_file),
             },
         )
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
@@ -691,8 +786,8 @@ class TestApiClientManagerHttp:
         assert len(outputs["ac"]["response"]) == 1_000_000
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    def test_secret_files_supply_headers_and_bearer_token(self, mock_client_cls, tmp_path, monkeypatch):
-        """Secret-file fields are honored when paths stay inside the configured secret root."""
+    def test_value_files_supply_headers_and_bearer_token(self, mock_client_cls, tmp_path, monkeypatch):
+        """External-value-file fields are honored when paths stay inside the configured root."""
         captured_headers: list[dict] = []
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -704,11 +799,11 @@ class TestApiClientManagerHttp:
 
         mock_client.request = _capture
 
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
         headers_file = root / "api-headers.json"
         token_file = root / "api-token"
-        headers_file.write_text('{"X-Secret": "from-file"}', encoding="utf-8")
+        headers_file.write_text('{"X-Custom": "from-file"}', encoding="utf-8")
         token_file.write_text("file-token-###OBS1###", encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
@@ -723,8 +818,8 @@ class TestApiClientManagerHttp:
                 "headers": '{"X-Base": "inline"}',
                 "auth_type": "bearer",
                 "auth_token": "",
-                "auth_token_file": str(token_file),
-                "headers_secret_file": str(headers_file),
+                "auth_value_file": str(token_file),
+                "headers_value_file": str(headers_file),
                 "variables": [{"datapoint_id": str(dp_id), "datapoint_name": "Token Suffix"}],
             },
         )
@@ -734,7 +829,7 @@ class TestApiClientManagerHttp:
         assert outputs["ac"]["success"] is True
         assert len(captured_headers) == 1
         assert captured_headers[0]["X-Base"] == "inline"
-        assert captured_headers[0]["X-Secret"] == "from-file"
+        assert captured_headers[0]["X-Custom"] == "from-file"
         assert captured_headers[0]["Authorization"] == "Bearer file-token-from-variable"
 
     @patch("obs.logic.manager.httpx.AsyncClient")

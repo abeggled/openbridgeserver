@@ -163,6 +163,25 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         },
         color="#1d4ed8",
     ),
+    NodeTypeDef(
+        type="change_filter",
+        label="Änderungsfilter",
+        category="logic",
+        description=(
+            "Gibt den Eingangswert aus und setzt den changed-Trigger nur dann, wenn er sich vom zuletzt "
+            "empfangenen Wert unterscheidet. Wiederholt gleiche Werte werden unterdrückt (Edomi-artiges SendByChange)."
+        ),
+        inputs=[_port("in", "Eingang")],
+        outputs=[_port("out", "Ausgang"), _port("changed", "Geändert", "trigger")],
+        config_schema={
+            "persist_state": {
+                "type": "boolean",
+                "default": True,
+                "label": "Zustand nach Neustart wiederherstellen",
+            },
+        },
+        color="#1d4ed8",
+    ),
     # ── Comparison ────────────────────────────────────────────────────────
     NodeTypeDef(
         type="compare",
@@ -754,7 +773,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         label="Benachrichtigung",
         category="notification",
         description="Sendet eine Nachricht über konfigurierte Ziele eines Message-/Benachrichtigungsadapters.",
-        inputs=[_port("trigger", "Trigger", "trigger"), _port("message", "Nachricht")],
+        inputs=[_port("trigger", "Trigger", "trigger"), _port("message", "Nachricht", "trigger")],
         outputs=[_port("sent", "Gesendet", "trigger")],
         config_schema={
             "adapter_instance_id": {"type": "string", "default": "", "label": "MESSAGE-Adapter"},
@@ -771,8 +790,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         category="notification",
         description="Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
         inputs=[
-            _port("trigger", "Trigger"),
-            _port("message", "Nachricht"),
+            _port("trigger", "Trigger", "trigger"),
+            _port("message", "Nachricht", "trigger"),
             _port("url", "URL"),
             _port("url_title", "URL-Titel"),
             _port("image_url", "Bild-URL"),
@@ -818,7 +837,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         label="SMS (seven.io)",
         category="notification",
         description="Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
-        inputs=[_port("trigger", "Trigger"), _port("message", "Nachricht")],
+        inputs=[_port("trigger", "Trigger", "trigger"), _port("message", "Nachricht", "trigger")],
         outputs=[_port("sent", "Gesendet", "trigger")],
         config_schema={
             "api_key": {"type": "string", "default": "", "label": "API-Key"},
@@ -844,8 +863,8 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
         category="notification",
         description="Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
         inputs=[
-            _port("trigger", "Trigger"),
-            _port("message", "Nachricht"),
+            _port("trigger", "Trigger", "trigger"),
+            _port("message", "Nachricht", "trigger"),
             _port("title", "Titel"),
         ],
         outputs=[_port("stored", "Gespeichert", "trigger")],
@@ -996,6 +1015,13 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": 60,
                 "label": "Aktualisierungsintervall (Minuten)",
             },
+            "max_payload_size_mb": {
+                "type": "integer",
+                "default": 2,
+                "min": 1,
+                "max": 50,
+                "label": "Maximale Kalendergrösse (MiB)",
+            },
             "filter_count": {
                 "type": "integer",
                 "default": 0,
@@ -1056,7 +1082,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "default": "",
                 "label": "Header (JSON-Objekt, optional)",
             },
-            "headers_secret_file": {
+            "headers_value_file": {
                 "type": "string",
                 "default": "",
                 "label": "Header-Datei (/run/secrets)",
@@ -1090,7 +1116,7 @@ BUILTIN_NODE_TYPES: list[NodeTypeDef] = [
                 "label": "Bearer Token",
                 "subtype": "password",
             },
-            "auth_token_file": {
+            "auth_value_file": {
                 "type": "string",
                 "default": "",
                 "label": "Bearer-Token-Datei (/run/secrets)",

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -73,6 +74,42 @@ def _run_ical(raw_ical: str, filters: list[dict], app_config: dict | None = None
     n = node("n1", "ical", {"filters": json.dumps(filters), "filter_count": len(filters)})
     ex = make_executor([n], hysteresis_state=hyst, app_config=app_config or {"timezone": "UTC"})
     return ex.execute()["n1"]
+
+
+# ---------------------------------------------------------------------------
+# Runtime result cache
+# ---------------------------------------------------------------------------
+
+
+def test_ical_result_cache_reuses_parse_and_invalidates_for_raw_or_filter_changes():
+    from icalendar import Calendar
+
+    first_ics = _make_ics(_allday_event("ev1", _TODAY, "First"))
+    second_ics = _make_ics(_allday_event("ev2", _TODAY, "Second"))
+    first_filter = [{"name": "match", "fields": ["summary"], "pattern": "First"}]
+    second_filter = [{"name": "match", "fields": ["summary"], "pattern": "Second"}]
+    hyst = {"n1": {"raw": first_ics}}
+    n = node("n1", "ical", {"filters": json.dumps(first_filter), "filter_count": 1})
+    ex = make_executor([n], hysteresis_state=hyst, app_config={"timezone": "UTC"})
+
+    with patch.object(Calendar, "from_ical", wraps=Calendar.from_ical) as parse:
+        first = ex.execute()["n1"]
+        first["f0_array"][0][3] = "mutated first result"
+        cached = ex.execute()["n1"]
+        cached["f0_array"][0][3] = "mutated cached result"
+        cached_again = ex.execute()["n1"]
+        ex.flow.nodes[0].data["filters"] = json.dumps(second_filter)
+        changed_filter = ex.execute()["n1"]
+        hyst["n1"]["raw"] = second_ics
+        changed_raw = ex.execute()["n1"]
+
+    assert parse.call_count == 3
+    assert cached["f0_array"][0][3] == "mutated cached result"
+    assert cached_again["f0_array"][0][3] == "First"
+    assert changed_filter["f0_today"] is False
+    assert changed_raw["f0_today"] is True
+    assert "_ical_result_cache" not in hyst["n1"]
+    assert "n1" in ex.ical_result_cache
 
 
 # ---------------------------------------------------------------------------
