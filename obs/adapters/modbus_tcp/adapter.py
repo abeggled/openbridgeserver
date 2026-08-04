@@ -472,14 +472,33 @@ class ModbusTcpAdapter(AdapterBase):
     async def _modbus_io_context(self):
         if self._io_sem is None:
             async with self._inflight_modbus_call():
-                yield self._client if self._client_ready() else None
+                client = self._client if self._client_ready() else None
+                try:
+                    yield client
+                finally:
+                    await self._space_out_bus(client)
             return
 
         async with self._io_sem, self._inflight_modbus_call():
-            yield self._client if self._client_ready() else None
-            _delay = self._adp_cfg.inter_read_delay_ms
-            if _delay > 0:
-                await asyncio.sleep(_delay / 1000.0)
+            client = self._client if self._client_ready() else None
+            try:
+                yield client
+            finally:
+                await self._space_out_bus(client)
+
+    async def _space_out_bus(self, client) -> None:
+        """Pause after a Modbus transaction so a slow shared RS485 gateway can
+        settle before the next one.
+
+        Runs whether the transaction succeeded or raised (timeout/socket error),
+        is skipped when no transaction was performed (no ready client), and
+        applies regardless of whether an I/O semaphore is in use.
+        """
+        if client is None:
+            return
+        _delay = self._adp_cfg.inter_read_delay_ms
+        if _delay > 0:
+            await asyncio.sleep(_delay / 1000.0)
 
     def _client_ready(self) -> bool:
         return bool(not self._stopping and self._client and self._client.connected)
