@@ -19,6 +19,7 @@ interface Cfg {
   chart_type: ChartType
   primary_color: string
   primary_axis: Axis
+  primary_label: string
   series: Series[]
 }
 
@@ -48,6 +49,7 @@ const cfg = reactive<Cfg>({
   chart_type:    (props.modelValue.chart_type    as ChartType) ?? 'line',
   primary_color: (props.modelValue.primary_color as string)    ?? '#3b82f6',
   primary_axis:  (props.modelValue.primary_axis  as Axis)      ?? 'left',
+  primary_label: (props.modelValue.primary_label as string)    ?? '',
   series:        normalizeSeries(props.modelValue.series),
 })
 
@@ -57,6 +59,7 @@ watch(cfg, () => emit('update:modelValue', {
   chart_type:    cfg.chart_type,
   primary_color: cfg.primary_color,
   primary_axis:  cfg.primary_axis,
+  primary_label: cfg.primary_label,
   series:        cfg.series.map(s => ({ ...s })),
 }), { deep: true })
 
@@ -79,7 +82,7 @@ function removeSeries(i: number) {
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Temperaturverlauf"
+        :placeholder="$t('widgets.chart.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>
@@ -117,6 +120,12 @@ function removeSeries(i: number) {
     <!-- Primäre Reihe -->
     <div class="border-t border-gray-700 pt-3">
       <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">{{ $t('widgets.chart.primarySeries') }}</p>
+      <input
+        v-model="cfg.primary_label"
+        type="text"
+        :placeholder="$t('widgets.chart.primaryLabel')"
+        class="w-full mb-2 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+      />
       <div class="flex gap-2 items-center">
         <input
           v-model="cfg.primary_color"

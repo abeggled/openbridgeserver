@@ -18,6 +18,7 @@ import {
   historyRequestPlanForRange,
   resolveTimeRange,
 } from './timeRangePresets'
+import { buildSeriesDefs } from './seriesDefs'
 
 Chart.register(
   LineController, LineElement, PointElement,
@@ -53,11 +54,7 @@ watch(() => props.config.time_range, () => {
   selectedTimeRange.value = configTimeRange(props.config)
 })
 
-// 'y' = linke Achse, 'y1' = rechte Achse (Chart.js Achsen-IDs)
-interface SeriesDef { id: string; label: string; color: string; axis: 'y' | 'y1' }
 interface HistoryChartPoint { ts: string; v: unknown; u: string | null; q: string; n?: number }
-
-const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
 
 const canvas      = ref<HTMLCanvasElement | null>(null)
 let chart:        Chart | null = null
@@ -80,33 +77,6 @@ function buildBuckets(fromMs: number, toMs: number, count: number) {
     mid:   fromMs + (i + 0.5) * size,
     end:   fromMs + (i + 1) * size,
   }))
-}
-
-function buildSeriesDefs(): SeriesDef[] {
-  const result: SeriesDef[] = []
-
-  const primaryColor = (props.config.primary_color as string | undefined) ?? COLORS[0]
-  const primaryAxis  = (props.config.primary_axis  as string | undefined) === 'right' ? 'y1' : 'y'
-
-  if (props.datapointId) {
-    result.push({ id: props.datapointId, label: label.value, color: primaryColor, axis: primaryAxis })
-  }
-
-  const extra = (props.config.series as Array<{
-    dp_id?: string; label?: string; color?: string; axis?: string
-  }> | undefined) ?? []
-
-  for (const s of extra) {
-    if (!s.dp_id) continue
-    result.push({
-      id:    s.dp_id,
-      label: s.label ?? '',
-      color: s.color ?? COLORS[result.length % COLORS.length],
-      axis:  s.axis === 'right' ? 'y1' : 'y',
-    })
-  }
-
-  return result
 }
 
 function initChart() {
@@ -183,7 +153,7 @@ function initChart() {
 async function loadData() {
   if (props.editorMode) return
 
-  const defs = buildSeriesDefs()
+  const defs = buildSeriesDefs(props.config, props.datapointId, label.value)
   if (defs.length === 0 || !chart) return
 
   const { from: fromDate, to: toDate } = resolveTimeRange(selectedTimeRange.value)
@@ -317,7 +287,7 @@ onMounted(() => {
   wsOff = ws.onMessage((msg) => {
     if (!chart || props.editorMode) return
     if (!msg.id || msg.v === undefined) return
-    if (!buildSeriesDefs().some(d => d.id === (msg.id as string))) return
+    if (!buildSeriesDefs(props.config, props.datapointId, label.value).some(d => d.id === (msg.id as string))) return
     if (reloadTimer) clearTimeout(reloadTimer)
     reloadTimer = setTimeout(() => { reloadTimer = null; loadData() }, 2_000)
   })
