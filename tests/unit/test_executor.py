@@ -14,13 +14,16 @@ Covers:
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import math
+import time
+from datetime import UTC, datetime, timedelta, tzinfo
+from decimal import Decimal
 from typing import ClassVar
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from obs.logic.executor import ExecutionError, GraphExecutor
+from obs.logic.executor import ExecutionError, GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr
 from tests.unit.conftest import edge, make_executor, node
 
 
@@ -69,7 +72,7 @@ def test_execute_captures_configured_string_values_and_override_precedence():
     }
 
 
-def test_execute_snapshots_mutable_inputs_before_python_script_mutation():
+def test_execute_isolates_mutable_inputs_from_python_script_mutation():
     mutable = {"x": 1}
     base = make_executor(
         [node("target", "python_script", {"script": "inputs['a']['x'] = 2; result = inputs['a']"})],
@@ -82,13 +85,45 @@ def test_execute_snapshots_mutable_inputs_before_python_script_mutation():
         capture_incoming_overrides={"target": {"a": mutable}},
     )
 
-    assert mutable == {"x": 2}
+    assert mutable == {"x": 1}
     assert outputs["target"]["result"] == {"x": 2}
     assert captured["target"]["a"] == {
         "incoming": {"x": 1},
         "effective": {"x": 1},
         "overridden": True,
     }
+
+
+def test_python_script_cannot_mutate_shared_ical_outputs_between_replays():
+    today = datetime.now(UTC).strftime("%Y%m%d")
+    raw = f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:{today}\r\nSUMMARY:Original\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    base = make_executor(
+        [
+            node("calendar", "ical", {"filters": '[{"pattern": "Original"}]'}),
+            node(
+                "script",
+                "python_script",
+                {"script": "inputs['events'][0][3] = 'mutated'; result = inputs['events']"},
+            ),
+        ],
+        [edge("calendar", "script", "f0_array", "events")],
+    )
+    cache = {}
+    executor = GraphExecutor(
+        base.flow,
+        {"calendar": {"raw": raw}},
+        {"timezone": "UTC"},
+        ical_result_cache=cache,
+        ical_cache_outputs_owned=True,
+    )
+
+    first = executor.execute()
+    second = executor.execute()
+
+    assert first["script"]["result"][0][3] == "mutated"
+    assert first["calendar"]["f0_array"][0][3] == "Original"
+    assert second["calendar"]["f0_array"][0][3] == "Original"
+    assert cache["calendar"]["outputs"]["f0_array"][0][3] == "Original"
 
 
 def test_invalid_configured_string_input_count_is_isolated_to_its_node():
@@ -581,6 +616,49 @@ class TestDecisionNode:
 
         assert out["empty"] is True
 
+    def test_equality_condition_matches_large_integers_exactly(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "match", "operator": "eq", "value": 9007199254740993}]},
+            {"value": 9007199254740993},
+        )
+
+        assert out["match"] is True
+
+    def test_equality_condition_matches_numeric_values(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "match", "operator": "eq", "value": 5.5}]},
+            {"value": 5.5},
+        )
+
+        assert out["match"] is True
+
+    def test_equality_condition_matches_structurally_equal_lists(self):
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "match", "operator": "eq", "value": [1, 2]}]},
+            {"value": [1, 2]},
+        )
+
+        assert out["match"] is True
+
+    def test_equality_condition_matches_a_list_against_its_text_repr(self):
+        """Regression: a Decision rule's compare value is entered through a
+        NodeConfigPanel text input and is therefore always a string — an
+        API/JSON list [1, 2] must still match a rule configured as the
+        string "[1, 2]", same as before change_filter's stricter, type-
+        sensitive persisted-state comparison was introduced. That stricter
+        behavior must stay local to change_filter, not leak into Decision/
+        Value Mapping conditions and silently break existing rules."""
+        out = run_single(
+            "decision",
+            {"conditions": [{"handle": "match", "operator": "eq", "value": "[1, 2]"}]},
+            {"value": [1, 2]},
+        )
+
+        assert out["match"] is True
+
     @pytest.mark.parametrize(
         "input_value, expected_value, expected",
         [
@@ -910,6 +988,1634 @@ class TestHysteresisNode:
         exc.execute({"h": {"value": 26.0}})
         # State must have been written to the SAME dict object
         assert "h" in state
+
+
+# ===========================================================================
+# change_filter node
+# ===========================================================================
+
+
+class TestChangeFilterNode:
+    def test_first_value_is_always_reported_as_changed(self):
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"cf": {"in": "foo"}})
+        assert out["cf"] == {"out": "foo", "changed": True}
+
+    def test_repeated_identical_value_is_suppressed(self):
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": "foo"}})
+        out = exc.execute({"cf": {"in": "foo"}})
+        assert out["cf"] == {"out": "foo", "changed": False}
+
+    def test_repeated_nan_value_is_suppressed(self):
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": float("nan")}})
+
+        out = exc.execute({"cf": {"in": float("nan")}})
+
+        assert math.isnan(out["cf"]["out"])
+        assert out["cf"]["changed"] is False
+
+    @pytest.mark.parametrize("value", [Decimal("NaN"), [Decimal("NaN")], {"value": Decimal("NaN")}])
+    def test_repeated_decimal_nan_value_is_suppressed(self, value):
+        state = {}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+        exc.execute({"cf": {"in": value}})
+
+        repeated = Decimal("NaN") if isinstance(value, Decimal) else type(value)(value)
+        out = exc.execute({"cf": {"in": repeated}})
+
+        assert out["cf"]["changed"] is False
+
+    def test_signaling_decimal_nan_can_be_replaced_by_valid_reading(self):
+        state = {"cf": {"value": Decimal("sNaN")}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": Decimal("1.5")}})
+
+        assert out["cf"] == {"out": Decimal("1.5"), "changed": True}
+        assert state == {"cf": {"value": Decimal("1.5")}}
+
+    def test_ambiguous_aware_datetimes_compare_by_instant(self):
+        zone = ZoneInfo("Europe/Zurich")
+        first = datetime(2025, 10, 26, 2, 30, tzinfo=zone, fold=0)
+        second = datetime(2025, 10, 26, 2, 30, tzinfo=zone, fold=1)
+        state = {"cf": {"value": first}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": second}})
+
+        assert first == second  # documents Python's same-ZoneInfo fold behavior
+        assert out["cf"] == {"out": second, "changed": True}
+
+    def test_nested_ambiguous_aware_datetimes_compare_by_instant(self):
+        zone = ZoneInfo("Europe/Zurich")
+        first = datetime(2025, 10, 26, 2, 30, tzinfo=zone, fold=0)
+        second = datetime(2025, 10, 26, 2, 30, tzinfo=zone, fold=1)
+        state = {"cf": {"value": [first]}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [second]}})
+
+        assert out["cf"] == {"out": [second], "changed": True}
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_aware_datetime_utc_overflow_falls_back_safely(self, nested):
+        from datetime import datetime as datetime_type
+        from datetime import timedelta, timezone
+
+        value = datetime_type.min.replace(tzinfo=timezone(timedelta(hours=14)))
+        baseline = [value] if nested else value
+        state = {"cf": {"value": baseline}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        current = [value] if nested else value
+        out = exc.execute({"cf": {"in": current}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_datetime_awareness_probe_failure_falls_back_safely(self, nested):
+        class RaisingTimezone(tzinfo):
+            def utcoffset(self, _dt):
+                raise RuntimeError("offset unavailable")
+
+            def dst(self, _dt):
+                return timedelta(0)
+
+        retained = datetime(2025, 1, 1, tzinfo=RaisingTimezone())
+        live = retained
+        retained_value = [retained] if nested else retained
+        live_value = [live] if nested else live
+        state = {"cf": {"value": retained_value}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live_value}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_datetime_normalization_arbitrary_failure_falls_back_safely(self, nested):
+        class StatefulTimezone(tzinfo):
+            def __init__(self):
+                self.calls = 0
+
+            def utcoffset(self, _dt):
+                self.calls += 1
+                if self.calls > 1:
+                    raise RuntimeError("normalization unavailable")
+                return timedelta(0)
+
+        retained = datetime(2025, 1, 1, tzinfo=StatefulTimezone())
+        live = datetime(2025, 1, 1, tzinfo=StatefulTimezone())
+        state = {"cf": {"value": [retained] if nested else retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [live] if nested else live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_naive_datetime_fold_transitions_are_changes(self):
+        first = datetime(2025, 10, 26, 2, 30, fold=0)  # noqa: DTZ001 - specifically tests naive fold metadata
+        second = datetime(2025, 10, 26, 2, 30, fold=1)  # noqa: DTZ001 - specifically tests naive fold metadata
+        state = {"cf": {"value": first}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": second}})
+
+        assert first == second
+        assert out["cf"] == {"out": second, "changed": True}
+
+    def test_aware_datetime_normalized_equality_has_guarded_truth_conversion(self):
+        class UnsafeTruth:
+            def __bool__(self):
+                raise RuntimeError("truth conversion unavailable")
+
+        class UnsafeEquality:
+            def __eq__(self, other):
+                return UnsafeTruth()
+
+        class UnsafeNormalizedDatetime(datetime):
+            def astimezone(self, tz=None):
+                return UnsafeEquality()
+
+        first = UnsafeNormalizedDatetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+        second = UnsafeNormalizedDatetime(2026, 1, 1, 11, 0, tzinfo=UTC)
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={"cf": {"value": first}})
+
+        out = exc.execute({"cf": {"in": second}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_nested_naive_datetime_fold_transitions_are_changes(self):
+        first = datetime(2025, 10, 26, 2, 30, fold=0)  # noqa: DTZ001 - specifically tests naive fold metadata
+        second = datetime(2025, 10, 26, 2, 30, fold=1)  # noqa: DTZ001 - specifically tests naive fold metadata
+        state = {"cf": {"value": [first]}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [second]}})
+
+        assert out["cf"] == {"out": [second], "changed": True}
+
+    def test_time_timezone_and_fold_transitions_are_changes(self):
+        from datetime import time as datetime_time
+
+        zurich = ZoneInfo("Europe/Zurich")
+        first = datetime_time(2, 30, tzinfo=zurich, fold=0)
+        second = datetime_time(2, 30, tzinfo=zurich, fold=1)
+        state = {"cf": {"value": first}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        fold_out = exc.execute({"cf": {"in": second}})
+        naive_out = exc.execute({"cf": {"in": datetime_time(2, 30)}})
+
+        assert fold_out["cf"]["changed"] is True
+        assert naive_out["cf"]["changed"] is True
+
+    def test_equivalent_zoneinfo_time_instances_compare_by_key(self):
+        from datetime import time as datetime_time
+
+        cached = datetime_time(10, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+        uncached = datetime_time(10, 30, tzinfo=ZoneInfo.no_cache("Europe/Zurich"))
+        state = {"cf": {"value": cached}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": uncached}})
+
+        assert cached.tzinfo is not uncached.tzinfo
+        assert out["cf"]["changed"] is False
+
+    def test_nested_equivalent_zoneinfo_time_instances_compare_by_key(self):
+        from datetime import time as datetime_time
+
+        cached = datetime_time(10, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+        uncached = datetime_time(10, 30, tzinfo=ZoneInfo.no_cache("Europe/Zurich"))
+        state = {"cf": {"value": [cached]}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [uncached]}})
+
+        assert out["cf"]["changed"] is False
+
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_time_timezone_equality_failure_is_a_safe_change(self, nested):
+        from datetime import time as datetime_time
+
+        class RaisingTimezone(tzinfo):
+            def utcoffset(self, _dt):
+                return timedelta(0)
+
+            def __eq__(self, _other):
+                raise RuntimeError("timezone equality unavailable")
+
+        retained = datetime_time(10, 30, tzinfo=RaisingTimezone())
+        live = datetime_time(10, 30, tzinfo=RaisingTimezone())
+        state = {"cf": {"value": [retained] if nested else retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [live] if nested else live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_nested_signaling_decimal_nan_can_be_replaced(self):
+        state = {"cf": {"value": [Decimal("sNaN")]}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [1]}})
+
+        assert out["cf"] == {"out": [1], "changed": True}
+        assert state == {"cf": {"value": [1]}}
+
+    def test_ordinary_large_mapping_uses_linear_equality_fast_path(self):
+        class Key:
+            comparisons = 0
+
+            def __init__(self, value):
+                self.value = value
+
+            def __hash__(self):
+                return hash(self.value)
+
+            def __eq__(self, other):
+                type(self).comparisons += 1
+                return isinstance(other, Key) and self.value == other.value
+
+        size = 500
+        left = {Key(i): i for i in range(size)}
+        right = {Key(i): i for i in reversed(range(size))}
+
+        assert GraphExecutor._nan_aware_equal(left, right) is True
+        assert Key.comparisons <= size * 2
+
+    @pytest.mark.parametrize("value", [[float("nan")], {"value": float("nan")}, (float("nan"),), {float("nan")}])
+    def test_repeated_nested_nan_value_is_suppressed(self, value):
+        state = {}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+        exc.execute({"cf": {"in": value}})
+
+        if isinstance(value, dict):
+            repeated = {"value": float("nan")}
+        else:
+            repeated = type(value)([float("nan")])
+        out = exc.execute({"cf": {"in": repeated}})
+
+        assert out["cf"]["changed"] is False
+
+    def test_differing_value_is_reported_as_changed(self):
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": "foo"}})
+        out = exc.execute({"cf": {"in": "bar"}})
+        assert out["cf"] == {"out": "bar", "changed": True}
+
+    def test_type_tolerant_equality_does_not_count_as_changed(self):
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 1}})
+        out = exc.execute({"cf": {"in": "1"}})
+        assert out["cf"] == {"out": 1, "changed": False}
+
+    def test_state_persists_across_executions(self):
+        """Regression: state must survive across separate execute() calls on the same dict."""
+        state = {}
+        n1 = node("cf", "change_filter")
+
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": "foo"}})
+        assert "cf" in state
+
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"cf": {"in": "foo"}})
+        assert out["cf"] == {"out": "foo", "changed": False}
+
+    def test_unwired_input_does_not_report_changed(self):
+        """Regression: an unwired 'in' handle must not read as a first value."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({})
+        assert out["cf"] == {"out": None, "changed": False}
+        assert state == {}
+
+    def test_missing_producer_output_does_not_commit_none(self):
+        """A producer error has no requested output port; that is absent
+        input, not a genuine ``None`` reading."""
+        state = {}
+        exc = make_executor(
+            [node("producer", "python_script", {"script": "raise RuntimeError('boom')"}), node("cf", "change_filter")],
+            [edge("producer", "cf", "result", "in")],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute()
+
+        assert "__error__" in out["producer"]
+        assert out["cf"] == {"out": None, "changed": False}
+        assert state == {}
+
+    def test_missing_producer_output_propagates_through_intermediate_node(self):
+        state = {"cf": {"value": False}}
+        exc = make_executor(
+            [
+                node("producer", "python_script", {"script": "raise RuntimeError('boom')"}),
+                node("invert", "not"),
+                node("cf", "change_filter"),
+            ],
+            [edge("producer", "invert", "result", "in1"), edge("invert", "cf", "out", "in")],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute()
+
+        assert "__error__" in out["producer"]
+        assert "__error__" in out["invert"]
+        assert out["cf"] == {"out": False, "changed": False}
+        assert state == {"cf": {"value": False}}
+
+    def test_missing_producer_output_stops_at_retained_hysteresis(self):
+        state = {"h": False, "cf": {"value": False}}
+        nodes = [
+            node("producer", "python_script", {"script": "raise RuntimeError('boom')"}),
+            node("h", "hysteresis", {"threshold_on": 25.0, "threshold_off": 20.0}),
+            node("cf", "change_filter"),
+        ]
+        edges = [edge("producer", "h", "result", "value"), edge("h", "cf", "out", "in")]
+
+        out = make_executor(nodes, edges, hysteresis_state=state).execute()
+
+        assert "__error__" in out["producer"]
+        assert out["h"] == {"out": False}
+        assert out["cf"] == {"out": False, "changed": False}
+        assert state == {"h": False, "cf": {"value": False}}
+
+        recovered_nodes = [
+            node("producer", "python_script", {"script": "result = 10"}),
+            node("h", "hysteresis", {"threshold_on": 25.0, "threshold_off": 20.0}),
+            node("cf", "change_filter"),
+        ]
+        recovered = make_executor(recovered_nodes, edges, hysteresis_state=state).execute()
+
+        assert recovered["h"] == {"out": False}
+        assert recovered["cf"] == {"out": False, "changed": False}
+
+    @pytest.mark.parametrize(
+        ("logic_type", "decisive_value", "expected"),
+        [("or", True, True), ("and", False, False)],
+    )
+    def test_missing_producer_output_is_absorbed_by_decisive_logic(self, logic_type, decisive_value, expected):
+        state = {"cf": {"value": expected}}
+        exc = make_executor(
+            [
+                node("producer", "python_script", {"script": "raise RuntimeError('boom')"}),
+                node("decisive", "const_value", {"value": str(decisive_value).lower(), "data_type": "bool"}),
+                node("logic", logic_type, {"input_count": 2}),
+                node("cf", "change_filter"),
+            ],
+            [
+                edge("producer", "logic", "result", "in1"),
+                edge("decisive", "logic", "value", "in2"),
+                edge("logic", "cf", "out", "in"),
+            ],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute()
+
+        assert out["logic"] == {"out": expected}
+        assert out["cf"] == {"out": expected, "changed": False}
+
+    def test_missing_producer_output_is_absorbed_by_unwired_and_input(self):
+        state = {"cf": {"value": False}}
+        exc = make_executor(
+            [
+                node("producer", "python_script", {"script": "raise RuntimeError('boom')"}),
+                node("logic", "and", {"input_count": 2}),
+                node("cf", "change_filter"),
+            ],
+            [edge("producer", "logic", "result", "in1"), edge("logic", "cf", "out", "in")],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute()
+
+        assert out["logic"] == {"out": False}
+        assert out["cf"] == {"out": False, "changed": False}
+
+    def test_missing_producer_output_is_absorbed_by_closed_gate(self):
+        state = {"gate": 42, "cf": {"value": 42}}
+        exc = make_executor(
+            [
+                node("producer", "python_script", {"script": "raise RuntimeError('boom')"}),
+                node("disabled", "const_value", {"value": "false", "data_type": "bool"}),
+                node("gate", "gate"),
+                node("cf", "change_filter"),
+            ],
+            [
+                edge("producer", "gate", "result", "in"),
+                edge("disabled", "gate", "value", "enable"),
+                edge("gate", "cf", "out", "in"),
+            ],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute()
+
+        assert out["gate"] == {"out": 42}
+        assert out["cf"] == {"out": 42, "changed": False}
+
+    @pytest.mark.parametrize("mode", ["raises", "non_scalar"])
+    def test_live_value_with_unsafe_equality_replaces_change_filter_baseline(self, mode):
+        class UnsafeTruth:
+            def __bool__(self):
+                raise ValueError("ambiguous truth")
+
+        class UnsafeEquality:
+            def __eq__(self, other):
+                if mode == "raises":
+                    raise RuntimeError("comparison unavailable")
+                return UnsafeTruth()
+
+        old = UnsafeEquality()
+        new = UnsafeEquality()
+        state = {"cf": {"value": old}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": new}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+        assert isinstance(state["cf"]["value"], UnsafeEquality)
+
+    def test_float_subclass_with_failing_string_conversion_uses_safe_equality(self):
+        class FailingStringFloat(float):
+            def __str__(self):
+                raise RuntimeError("string conversion unavailable")
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": FailingStringFloat(1.25)}})
+        second = exc.execute({"cf": {"in": FailingStringFloat(2.5)}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    def test_float_subclass_with_failing_integrality_check_uses_safe_decimal_comparison(self):
+        class FailingIntegralFloat(float):
+            def is_integer(self):
+                raise RuntimeError("integrality check unavailable")
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": FailingIntegralFloat(1.25)}})
+        second = exc.execute({"cf": {"in": FailingIntegralFloat(2.5)}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    @pytest.mark.parametrize("mode", ["raises", "unsafe_truth"])
+    def test_decimal_subclass_with_unsafe_nan_classification_uses_safe_comparison(self, mode):
+        class UnsafeTruth:
+            def __bool__(self):
+                raise RuntimeError("truth conversion unavailable")
+
+        class UnsafeNanDecimal(Decimal):
+            def is_nan(self):
+                if mode == "raises":
+                    raise RuntimeError("NaN classification unavailable")
+                return UnsafeTruth()
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": UnsafeNanDecimal("1.25")}})
+        second = exc.execute({"cf": {"in": UnsafeNanDecimal("2.5")}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    @pytest.mark.parametrize("mode", ["raises", "unsafe_truth", "unsafe_equality"])
+    def test_decimal_subclass_with_unsafe_finiteness_or_equality_uses_safe_comparison(self, mode):
+        class UnsafeTruth:
+            def __bool__(self):
+                raise RuntimeError("truth conversion unavailable")
+
+        class UnsafeDecimal(Decimal):
+            def is_finite(self):
+                if mode == "raises":
+                    raise RuntimeError("finiteness check unavailable")
+                if mode == "unsafe_truth":
+                    return UnsafeTruth()
+                return super().is_finite()
+
+            def __eq__(self, other):
+                if mode == "unsafe_equality":
+                    raise RuntimeError("equality unavailable")
+                return super().__eq__(other)
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": UnsafeDecimal("2.25")}})
+        second = exc.execute({"cf": {"in": UnsafeDecimal("3.5")}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    def test_int_subclass_with_failing_conversion_uses_safe_equality(self):
+        class UnsafeInt(int):
+            def __int__(self):
+                raise RuntimeError("integer conversion unavailable")
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": UnsafeInt(2)}})
+        second = exc.execute({"cf": {"in": UnsafeInt(3)}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    @pytest.mark.parametrize("mode", ["strip", "lower"])
+    def test_string_subclass_with_failing_literal_normalization_uses_safe_equality(self, mode):
+        class UnsafeString(str):
+            def strip(self, *args):
+                if mode == "strip":
+                    raise RuntimeError("strip unavailable")
+                return self
+
+            def lower(self):
+                raise RuntimeError("lower unavailable")
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": UnsafeString("alpha")}})
+        second = exc.execute({"cf": {"in": UnsafeString("beta")}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    def test_container_subclass_with_ambiguous_equality_is_safe(self):
+        class UnsafeTruth:
+            def __bool__(self):
+                raise ValueError("ambiguous truth")
+
+        class AmbiguousList(list):
+            def __eq__(self, other):
+                return UnsafeTruth()
+
+        state = {"cf": {"value": AmbiguousList([1])}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": AmbiguousList([1])}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_recursive_container_leaf_with_ambiguous_equality_is_safe(self):
+        class UnsafeTruth:
+            def __bool__(self):
+                raise ValueError("ambiguous truth")
+
+        class AmbiguousValue:
+            def __eq__(self, other):
+                return UnsafeTruth()
+
+        state = {"cf": {"value": [float("nan"), AmbiguousValue()]}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [float("nan"), AmbiguousValue()]}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_dictionary_candidate_matching_isolates_visited_pairs(self):
+        retained = {float("nan"): [2], float("nan"): [1]}
+        shared = [1]
+        live = {float("nan"): shared, float("nan"): shared}
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+
+    def test_scalar_opaque_recovery_handles_failing_string_conversion(self):
+        class FailingString:
+            def __eq__(self, other):
+                return False
+
+            def __str__(self):
+                raise RuntimeError("string conversion unavailable")
+
+        state = {
+            "cf": {
+                "value": _OpaqueRecoveredStr("old opaque value"),
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": FailingString()}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_opaque_recovery_reports_transition_to_genuine_string(self):
+        state = {
+            "cf": {
+                "value": _OpaqueRecoveredStr("(3+4j)", "builtins.complex"),
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": "(3+4j)"}})
+
+        assert out["cf"]["changed"] is True
+        assert state["cf"] == {"value": "(3+4j)"}
+
+    def test_opaque_recovery_rejects_different_runtime_type_with_same_string(self):
+        class SameString:
+            def __str__(self):
+                return "(3+4j)"
+
+        state = {
+            "cf": {
+                "value": _OpaqueRecoveredStr("(3+4j)", "builtins.complex"),
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": SameString()}})
+
+        assert out["cf"]["changed"] is True
+
+    def test_opaque_recovery_treats_same_type_same_string_as_changed_once(self):
+        class Reading:
+            def __init__(self, value):
+                self.value = value
+
+            def __eq__(self, other):
+                return isinstance(other, Reading) and self.value == other.value
+
+            def __str__(self):
+                return "reading"
+
+        state = {
+            "cf": {
+                "value": _OpaqueRecoveredStr("reading", f"{Reading.__module__}.{Reading.__qualname__}"),
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        first = exc.execute({"cf": {"in": Reading(2)}})
+        second = exc.execute({"cf": {"in": Reading(2)}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is False
+
+    def test_large_recovered_dictionary_matches_without_recursion_error(self):
+        live = {index: index for index in range(1100)}
+        live[3 + 4j] = "opaque"
+        recovered = _OpaqueRecoveredDict([(index, index) for index in range(1100)] + [(_OpaqueRecoveredStr("(3+4j)", "builtins.complex"), "opaque")])
+        state = {"cf": {"value": recovered, "_opaque_recovered_str": True}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_large_recovered_set_matches_without_recursion_error(self):
+        live = set(range(1100)) | {3 + 4j}
+        recovered = _OpaqueRecoveredSet([*range(1100), _OpaqueRecoveredStr("(3+4j)", "builtins.complex")], frozen=False)
+        state = {"cf": {"value": recovered, "_opaque_recovered_str": True}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_self_referential_containers_compare_without_recursion_error(self):
+        first = []
+        first.append(first)
+        second = []
+        second.append(second)
+        state = {}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        exc.execute({"cf": {"in": first}})
+        out = exc.execute({"cf": {"in": second}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deeply_nested_plain_containers_compare_without_recursion_error(self):
+        retained: list = []
+        live: list = []
+        retained_cursor = retained
+        live_cursor = live
+        for _ in range(1100):
+            retained_child: list = []
+            live_child: list = []
+            retained_cursor.append(retained_child)
+            live_cursor.append(live_child)
+            retained_cursor = retained_child
+            live_cursor = live_child
+        retained_cursor.append("leaf")
+        live_cursor.append("leaf")
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deeply_nested_nan_containers_compare_without_recursion_error(self):
+        retained: list = []
+        live: list = []
+        retained_cursor = retained
+        live_cursor = live
+        for _ in range(1100):
+            retained_child: list = []
+            live_child: list = []
+            retained_cursor.append(retained_child)
+            live_cursor.append(live_child)
+            retained_cursor = retained_child
+            live_cursor = live_child
+        retained_cursor.append(float("nan"))
+        live_cursor.append(float("nan"))
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deeply_nested_nan_fallback_preserves_scalar_python_equality(self):
+        retained: list = []
+        live: list = []
+        retained_cursor = retained
+        live_cursor = live
+        for _ in range(1100):
+            retained_child: list = []
+            live_child: list = []
+            retained_cursor.append(retained_child)
+            live_cursor.append(live_child)
+            retained_cursor = retained_child
+            live_cursor = live_child
+        retained_cursor.extend([float("nan"), 1])
+        live_cursor.extend([float("nan"), 1.0])
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deeply_nested_nan_dictionary_keys_compare_equal(self):
+        retained: list = []
+        live: list = []
+        retained_cursor = retained
+        live_cursor = live
+        for _ in range(1100):
+            retained_child: list = []
+            live_child: list = []
+            retained_cursor.append(retained_child)
+            live_cursor.append(live_child)
+            retained_cursor = retained_child
+            live_cursor = live_child
+        retained_cursor.append({float("nan"): 1})
+        live_cursor.append({float("nan"): 1})
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deeply_nested_nan_dictionaries_compare_without_recursion_error(self):
+        retained: dict = {"leaf": float("nan")}
+        live: dict = {"leaf": float("nan")}
+        for _ in range(1100):
+            retained = {"nested": retained}
+            live = {"nested": live}
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deeply_nested_ambiguous_nan_dictionary_keys_backtrack(self):
+        retained: list = []
+        live: list = []
+        retained_cursor = retained
+        live_cursor = live
+        for _ in range(1100):
+            retained_child: list = []
+            live_child: list = []
+            retained_cursor.append(retained_child)
+            live_cursor.append(live_child)
+            retained_cursor = retained_child
+            live_cursor = live_child
+        retained_cursor.append({float("nan"): "a", float("nan"): "b"})
+        live_cursor.append({float("nan"): "b", float("nan"): "a"})
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_ambiguous_nan_dictionary_cycles_reuse_visited_pairs(self):
+        retained = {float("nan"): None, float("nan"): None}
+        live = {float("nan"): None, float("nan"): None}
+        for key in retained:
+            retained[key] = retained
+        for key in live:
+            live[key] = live
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_deep_plain_dictionary_key_equality_failure_is_a_safe_change(self):
+        class RaisingKey:
+            def __hash__(self):
+                return 1
+
+            def __eq__(self, _other):
+                raise RuntimeError("key equality unavailable")
+
+        retained: dict = {RaisingKey(): "leaf"}
+        live: dict = {RaisingKey(): "leaf"}
+        for _ in range(1100):
+            retained = {"nested": retained}
+            live = {"nested": live}
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_plain_iterative_fallback_rejects_structural_and_equality_failures(self):
+        class RaisingEquality:
+            def __hash__(self):
+                return 1
+
+            def __eq__(self, _other):
+                raise RuntimeError("equality unavailable")
+
+        assert GraphExecutor._plain_container_equal_iterative([], ()) is False
+        assert GraphExecutor._plain_container_equal_iterative([1], [1, 2]) is False
+        assert GraphExecutor._plain_container_equal_iterative({"left": 1}, {}) is False
+        assert GraphExecutor._plain_container_equal_iterative({"left": 1}, {"right": 1}) is False
+        assert GraphExecutor._plain_container_equal_iterative({RaisingEquality(): 1}, {RaisingEquality(): 1}) is False
+        assert GraphExecutor._plain_container_equal_iterative({1}, {1}) is True
+        assert GraphExecutor._plain_container_equal_iterative({1}, {2}) is False
+        assert GraphExecutor._plain_container_equal_iterative({RaisingEquality()}, {RaisingEquality()}) is False
+        assert GraphExecutor._plain_container_equal_iterative([1], [2]) is False
+        assert GraphExecutor._plain_container_equal_iterative([RaisingEquality()], [RaisingEquality()]) is False
+
+        left_cycle: list = []
+        right_cycle: list = []
+        left_cycle.append(left_cycle)
+        right_cycle.append(right_cycle)
+        assert GraphExecutor._nan_aware_equal(left_cycle, right_cycle) is True
+
+    def test_nonstandard_iterative_set_matching_branches(self):
+        assert GraphExecutor._nonstandard_container_equal_iterative(set(), set()) is True
+        assert GraphExecutor._nonstandard_container_equal_iterative({1}, {1}) is True
+        assert GraphExecutor._nonstandard_container_equal_iterative({1}, {2}) is False
+        assert GraphExecutor._nonstandard_container_equal_iterative({1}, {1, 2}) is False
+        assert (
+            GraphExecutor._nonstandard_container_equal_iterative(
+                {float("nan"), float("nan")},
+                {float("nan"), float("nan")},
+            )
+            is True
+        )
+
+    def test_ambiguous_nan_dictionary_mismatch_is_bounded(self):
+        retained = {float("nan"): float("nan") for _ in range(10)}
+        live = {float("nan"): float("nan") for _ in range(9)}
+        live[float("nan")] = 1
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_ambiguous_nan_set_mismatch_is_bounded(self):
+        retained = {float("nan") for _ in range(10)}
+        live = {float("nan") for _ in range(9)} | {1}
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_ambiguous_recovered_opaque_set_mismatch_is_bounded(self):
+        class SameRepresentation:
+            def __str__(self):
+                return "same"
+
+        type_name = f"{SameRepresentation.__module__}.{SameRepresentation.__qualname__}"
+        live = {SameRepresentation() for _ in range(10)}
+        recovered = _OpaqueRecoveredSet(
+            [_OpaqueRecoveredStr("same", type_name) for _ in range(9)] + [_OpaqueRecoveredStr("different", type_name)],
+            frozen=False,
+        )
+
+        assert GraphExecutor._opaque_aware_container_equal(live, recovered) is False
+
+    def test_ambiguous_recovered_opaque_dictionary_mismatch_is_bounded(self):
+        class SameRepresentation:
+            def __str__(self):
+                return "same"
+
+        live = {SameRepresentation(): "match" for _ in range(10)}
+        recovered = _OpaqueRecoveredDict([("same", "match") for _ in range(9)] + [("same", "different")])
+
+        assert GraphExecutor._opaque_aware_container_equal(live, recovered, allow_unmarked=True) is False
+
+    def test_absent_missing_node_output_stays_unresolved_through_not(self):
+        nodes = [node("missing", "missing_node"), node("invert", "not"), node("cf", "change_filter")]
+        edges = [edge("missing", "invert", "out", "in1"), edge("invert", "cf", "out", "in")]
+        state = {}
+        exc = make_executor(nodes, edges, hysteresis_state=state)
+
+        out = exc.execute()
+
+        assert out["cf"] == {"out": None, "changed": False}
+        assert "cf" not in state
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            node("source", "memory", {"initial_value": False, "data_type": "bool"}),
+            node("source", "missing_node", {"initial_value": False, "data_type": "bool"}),
+        ],
+    )
+    def test_absent_stale_retained_source_handle_stays_unresolved(self, source):
+        nodes = [source, node("invert", "not"), node("cf", "change_filter")]
+        edges = [edge("source", "invert", "removed_output", "in1"), edge("invert", "cf", "out", "in")]
+        state = {}
+        exc = make_executor(nodes, edges, hysteresis_state=state)
+
+        out = exc.execute()
+
+        assert out["cf"] == {"out": None, "changed": False}
+        assert "cf" not in state
+
+    def test_time_subclass_with_failing_fold_access_uses_safe_equality(self):
+        from datetime import time as datetime_time
+
+        class UnsafeFoldTime(datetime_time):
+            @property
+            def fold(self):
+                raise RuntimeError("fold unavailable")
+
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state={})
+
+        first = exc.execute({"cf": {"in": UnsafeFoldTime(10, 0)}})
+        second = exc.execute({"cf": {"in": UnsafeFoldTime(11, 0)}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is True
+        assert "__error__" not in second["cf"]
+
+    def test_deeply_nested_opaque_recovery_compares_iteratively(self):
+        retained: list = []
+        live: list = []
+        retained_cursor = retained
+        live_cursor = live
+        for _ in range(1100):
+            retained_child: list = []
+            live_child: list = []
+            retained_cursor.append(retained_child)
+            live_cursor.append(live_child)
+            retained_cursor = retained_child
+            live_cursor = live_child
+        retained_cursor.append(_OpaqueRecoveredStr("(3+4j)", "builtins.complex"))
+        live_cursor.append(3 + 4j)
+        state = {"cf": {"value": retained, "_opaque_recovered_str": True}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+        repeated = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+        assert repeated["cf"]["changed"] is False
+
+    def test_cyclic_dictionaries_compare_without_hanging(self):
+        retained = {}
+        retained["self"] = retained
+        live = {}
+        live["self"] = live
+        state = {"cf": {"value": retained}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_large_integers_compared_without_precision_loss(self):
+        """Regression: float round-trip must not equate distinct 64-bit values."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 9007199254740992}})
+        out = exc.execute({"cf": {"in": 9007199254740993}})
+        assert out["cf"] == {"out": 9007199254740993, "changed": True}
+
+    def test_dict_key_order_does_not_count_as_changed(self):
+        """Regression: structurally equal dicts must not differ by key insertion order."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": {"a": 1, "b": 2}}})
+        out = exc.execute({"cf": {"in": {"b": 2, "a": 1}}})
+        assert out["cf"] == {"out": {"a": 1, "b": 2}, "changed": False}
+
+    def test_differing_list_is_reported_as_changed(self):
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": [1, 2]}})
+        out = exc.execute({"cf": {"in": [1, 3]}})
+        assert out["cf"]["changed"] is True
+
+    def test_downstream_mutation_of_out_does_not_corrupt_stored_baseline(self):
+        """Regression: a downstream node (a "python_script" is explicitly
+        allowed to mutate its inputs in place) receiving a dict/list `out`
+        must not be able to corrupt the filter's own comparison baseline —
+        `out` on the first-value/changed-value path was previously the
+        exact same object stored as state["value"], so mutating one
+        mutated the other. A later, genuinely identical input must still
+        compare equal against the *original* stored value, not against
+        whatever a downstream node mutated it into."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        out1 = exc.execute({"cf": {"in": {"a": 1}}})
+        out1["cf"]["out"]["a"] = 999  # simulate a downstream node mutating its input
+
+        out2 = exc.execute({"cf": {"in": {"a": 1}}})
+
+        assert out2["cf"]["changed"] is False
+        assert out2["cf"]["out"] == {"a": 1}
+
+    def test_downstream_mutation_of_unchanged_out_does_not_corrupt_stored_baseline(self):
+        """Same isolation guarantee as above, for the "unchanged" path: when
+        equality holds via the dict/list normalizing path, `out` echoes the
+        persisted state["value"] — that must also be an independent copy,
+        not the object change_filter keeps comparing against on every
+        future tick."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": {"a": 1}}})
+        out2 = exc.execute({"cf": {"in": {"a": 1}}})  # equal via dict `==`, via_normalizing_path
+        assert out2["cf"]["changed"] is False
+        out2["cf"]["out"]["a"] = 999  # simulate a downstream node mutating its input
+
+        out3 = exc.execute({"cf": {"in": {"a": 1}}})
+
+        assert out3["cf"]["changed"] is False
+        assert out3["cf"]["out"] == {"a": 1}
+
+    def test_downstream_mutation_of_nested_list_inside_tuple_baseline_does_not_corrupt_state(self):
+        """Regression: the isolation copy only deep-copied when the OUTER
+        value was itself a dict/list/set — a tuple containing a mutable
+        list member, e.g. ([1],), was handed out (and stored) as the exact
+        same nested list object, since the outer tuple alone is otherwise
+        immutable. Mutating that nested list via the emitted "out" would
+        therefore also mutate the persisted baseline, and the next
+        genuinely identical ([1],) input would be reported as changed
+        against its own already-corrupted stored value."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        out1 = exc.execute({"cf": {"in": ([1],)}})
+        out1["cf"]["out"][0].append(999)  # simulate a downstream node mutating the nested list
+
+        out2 = exc.execute({"cf": {"in": ([1],)}})
+
+        assert out2["cf"]["changed"] is False
+        assert out2["cf"]["out"] == ([1],)
+
+    def test_numeric_and_boolean_string_aliases_stay_transitive(self):
+        """Regression: 1 == "1" and "1" == "true", so 1 must also equal
+        "true" — otherwise a source alternating between equivalent adapter
+        representations (numeric 1/0 vs boolean strings) emits a redundant
+        changed pulse."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 1}})
+        out = exc.execute({"cf": {"in": "true"}})
+        assert out["cf"] == {"out": 1, "changed": False}
+
+        exc.execute({"cf": {"in": 0}})
+        out = exc.execute({"cf": {"in": "false"}})
+        assert out["cf"]["changed"] is False
+
+    def test_decimal_numeric_string_and_boolean_aliases_stay_transitive(self):
+        state = {"cf": {"value": "1.0"}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        assert exc.execute({"cf": {"in": 1}})["cf"]["changed"] is False
+        assert exc.execute({"cf": {"in": "true"}})["cf"]["changed"] is False
+
+    def test_decimal_boolean_aliases_stay_transitive(self):
+        state = {}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+        exc.execute({"cf": {"in": Decimal(1)}})
+
+        assert exc.execute({"cf": {"in": "true"}})["cf"]["changed"] is False
+
+        exc.execute({"cf": {"in": Decimal(0)}})
+        assert exc.execute({"cf": {"in": "false"}})["cf"]["changed"] is False
+
+    def test_numeric_subclass_with_raising_equality_does_not_error(self):
+        class RaisingEqualityInt(int):
+            def __eq__(self, _other):
+                raise RuntimeError("unsafe equality")
+
+        state = {}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+        exc.execute({"cf": {"in": RaisingEqualityInt(1)}})
+
+        out = exc.execute({"cf": {"in": RaisingEqualityInt(1)}})
+
+        assert out["cf"]["changed"] is False
+        assert "__error__" not in out["cf"]
+
+    def test_numeric_subclass_with_nonscalar_equality_is_not_a_bool_literal(self):
+        class NonScalarEqualityFloat(float):
+            def __eq__(self, _other):
+                return [True, False]
+
+        assert GraphExecutor._try_bool_literal(NonScalarEqualityFloat(1.0)) is None
+
+    def test_large_integer_not_equated_to_rounded_float(self):
+        """Regression: 9007199254740993 (2**53 + 1) cannot be represented
+        exactly as a float — round-tripping it through float() rounds it
+        down to 9007199254740992.0, which must not falsely equal an actual
+        float carrying that rounded value (a real change in a 64-bit
+        counter/ID must not be suppressed just because one side is already
+        a float)."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 9007199254740993}})
+        out = exc.execute({"cf": {"in": 9007199254740992.0}})
+        assert out["cf"]["changed"] is True
+
+    def test_non_integral_float_falls_back_to_numeric_comparison(self):
+        """Regression: a float with a fractional part is not an "exact int"
+        candidate on either side — it must still compare via the ordinary
+        numeric path instead of being silently dropped by the exact-integer
+        branch just because it's a float."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 5.5}})
+        out = exc.execute({"cf": {"in": 5.5}})
+        assert out["cf"] == {"out": 5.5, "changed": False}
+
+    def test_infinity_string_does_not_crash_exact_int_comparison(self):
+        """Regression: "Infinity"/"-Infinity" are valid Decimal literals that
+        pass the to_integral_value() equality check (Infinity == Infinity),
+        so they reach int(Decimal(...)), which raises OverflowError. That
+        must be caught and treated as "not an exact int", not propagate as
+        an uncaught node execution error."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": "Infinity"}})
+        out = exc.execute({"cf": {"in": "-Infinity"}})
+        assert out["cf"]["changed"] is True
+        assert out["cf"]["out"] == "-Infinity"
+
+    def test_huge_scientific_exponent_does_not_materialize_giant_int(self):
+        """Regression: a compact literal like "1e10000000000" parses as a
+        Decimal instantly (stored as coefficient+exponent, not expanded),
+        but int() on it would try to materialize an actual multi-gigabyte
+        integer — a single adapter-supplied string could exhaust memory/CPU.
+        Must be rejected as "not an exact int" before ever calling int()
+        (the comparison then falls through to the exact-decimal path, which
+        also never materializes the giant integer — Decimal compares by
+        coefficient+exponent — so evaluation stays fast, but unlike the old
+        float()-based fallback it now also gets the *correct*, distinct
+        result instead of both operands coincidentally overflowing to the
+        same inf)."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        start = time.monotonic()
+        exc.execute({"cf": {"in": "1e10000000000"}})
+        out = exc.execute({"cf": {"in": "2e10000000000"}})
+        elapsed = time.monotonic() - start
+        assert elapsed < 2.0
+        assert out["cf"]["changed"] is True
+
+    def test_huge_scientific_exponent_compares_as_different_from_finite_value(self):
+        """A huge scientific-notation string must not be treated as an exact
+        int, but must still compare as genuinely different from an ordinary
+        finite value (via the numeric-overflow-to-inf fallback), not get
+        stuck or silently equated to it."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 42}})
+        out = exc.execute({"cf": {"in": "1e10000000000"}})
+        assert out["cf"]["changed"] is True
+
+    def test_scientific_notation_string_compared_as_exact_int(self):
+        """Regression: "1e2" isn't parseable by int() directly but is an
+        exact whole number via Decimal — it must compare equal to the
+        equivalent plain int, not fall back to a redundant str/float path."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": 100}})
+        out = exc.execute({"cf": {"in": "1e2"}})
+        assert out["cf"]["changed"] is False
+
+    def test_bool_treated_as_one_or_zero_against_a_non_integral_number(self):
+        """Regression: True/False must alias to 1/0 in the decimal-numeric
+        comparison path too (not just the earlier boolean-literal path,
+        which only applies when *both* sides parse as a boolean literal —
+        1.5 does not), so a change from True to a genuinely different
+        non-integral number (1.5) is still reported as changed, and from
+        True to the equivalent 1.0 is not."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": True}})
+        out = exc.execute({"cf": {"in": 1.5}})
+        assert out["cf"]["changed"] is True
+
+        exc.execute({"cf": {"in": True}})
+        out = exc.execute({"cf": {"in": 1.0}})
+        assert out["cf"]["changed"] is False
+
+    def test_high_precision_decimal_strings_compared_exactly(self):
+        """Regression: two distinct high-precision decimal strings must not
+        collapse onto the same rounded binary float — an adapter supplying
+        "0.123456789012345678901" and, later, the neighbouring
+        "0.123456789012345678902" must be reported as a real change."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": "0.123456789012345678901"}})
+        out = exc.execute({"cf": {"in": "0.123456789012345678902"}})
+        assert out["cf"]["changed"] is True
+
+    def test_decimal_value_compares_exactly_to_decimal_string(self):
+        state = {"cf": {"value": "0.123456789012345678901"}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": Decimal("0.123456789012345678901")}})
+
+        assert out["cf"]["changed"] is False
+
+    def test_non_integral_decimal_string_does_not_short_circuit_exact_int(self):
+        """Regression: "1.5" parses as a valid Decimal but isn't a whole
+        number — it must not be treated as an exact-int candidate, so a
+        genuinely different value ("1.6") is still reported as changed."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": "1.5"}})
+        out = exc.execute({"cf": {"in": "1.6"}})
+        assert out["cf"]["changed"] is True
+
+    def test_equal_via_str_fallback_emits_current_input_not_persisted_value(self):
+        """Regression: after a restart, a *legacy* persisted non-JSON-native
+        value (e.g. a KNX DPT10/11 datetime.time/date saved before tagged
+        persistence existed) is stored as a lossy string via the old
+        `default=str`. LogicManager._load_graphs marks such a restored
+        string with "_recovered_str" so the change_filter case can safely
+        recognize it. When the next real value round-trips to the same
+        string via that recovery path, the "unchanged" branch must emit the
+        current (typed) input, not the persisted string — otherwise `out`'s
+        type silently degrades after every restart even though nothing
+        about the underlying value changed."""
+        from datetime import time
+
+        state = {"cf": {"value": "10:30:00", "_recovered_str": True}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"cf": {"in": time(10, 30, 0)}})
+        assert out["cf"]["changed"] is False
+        assert out["cf"]["out"] == time(10, 30, 0)
+        assert isinstance(out["cf"]["out"], time)
+
+    def test_legacy_date_recovery_with_failing_string_conversion_is_a_safe_change(self):
+        from datetime import date
+
+        class UnsafeStringDate(date):
+            def __str__(self):
+                raise RuntimeError("string conversion unavailable")
+
+        state = {"cf": {"value": "2026-01-01", "_recovered_str": True}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": UnsafeStringDate(2026, 1, 2)}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_mapping_with_failing_items_traversal_is_a_safe_change(self):
+        class UnsafeItemsDict(dict):
+            def items(self):
+                raise RuntimeError("mapping traversal unavailable")
+
+        state = {"cf": {"value": {"value": 1}}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": UnsafeItemsDict(value=2)}})
+
+        assert out["cf"]["changed"] is True
+        assert "__error__" not in out["cf"]
+
+    def test_equal_via_str_fallback_migrates_persisted_state_to_typed_value(self):
+        """Regression: matching via the legacy str()-recovery path emitted
+        the correct typed "out" (test above) but left the persisted state
+        itself as the unmigrated legacy string with "_recovered_str" still
+        set. _execute_graph then persists that unchanged string inside the
+        new version-2 envelope; on the *next* restart the loader treats a
+        version-2-envelope string as already-native (no "_recovered_str"
+        added — see LogicManager._load_graphs), so the same live time would
+        compare unequal to it and report a spurious changed=True forever.
+        The state must be migrated to the typed value (marker cleared) as
+        soon as the recovery path is used, not left for a future tick."""
+        from datetime import time
+
+        state = {"cf": {"value": "10:30:00", "_recovered_str": True}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": time(10, 30, 0)}})
+
+        assert state["cf"] == {"value": time(10, 30, 0)}
+
+    def test_recovered_str_marker_is_cleared_after_a_live_string_match(self):
+        """Regression: when a LIVE value confirms the persisted, restart-
+        recovered string via ORDINARY equality (e.g. a source that
+        genuinely emits the literal string "10:30:00" itself, not a
+        datetime.time), the "unchanged" branch previously left
+        "_recovered_str" set on the persisted state. A later GENUINE type
+        transition to datetime.time(10, 30) would then still take the
+        str()-recovery fallback (since the marker survived) and incorrectly
+        report changed=False, instead of the real change it is. Confirming
+        the string live resolves the marker's ambiguity — this source
+        evidently emits plain strings — so it must be cleared then, not
+        left to swallow a later real transition forever."""
+        from datetime import time
+
+        state = {"cf": {"value": "10:30:00", "_recovered_str": True}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+
+        out1 = exc.execute({"cf": {"in": "10:30:00"}})
+        assert out1["cf"]["changed"] is False
+        assert state["cf"] == {"value": "10:30:00"}
+
+        out2 = exc.execute({"cf": {"in": time(10, 30, 0)}})
+        assert out2["cf"]["changed"] is True
+
+    def test_opaque_recovery_matches_nested_dict_baseline(self):
+        """The opaque-str recovery fallback must recurse into a dict-shaped
+        baseline too, not just a list — a python_script result like
+        {"a": 3 + 4j} persists with the complex number opaque-tagged at
+        that nested key."""
+        state = {"cf": {"value": {"a": "(3+4j)"}, "_opaque_recovered_str": True}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": {"a": 3 + 4j}}})
+        assert out["cf"]["changed"] is False
+
+    def test_opaque_recovery_matches_a_mix_of_recovered_and_ordinary_leaves(self):
+        """A container can hold both a genuinely opaque-recovered leaf
+        (needing the str() fallback) and an ordinary already-identical
+        leaf (matching via plain equality) side by side — both must be
+        recognized as unchanged together."""
+        state = {"cf": {"value": ["(3+4j)", "unchanged"], "_opaque_recovered_str": True}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [3 + 4j, "unchanged"]}})
+        assert out["cf"]["changed"] is False
+
+    @pytest.mark.parametrize(
+        ("persisted", "live"),
+        [
+            ((_OpaqueRecoveredStr("(3+4j)"), "unchanged"), (3 + 4j, "unchanged")),
+            ({_OpaqueRecoveredStr("(3+4j)"), "unchanged"}, {3 + 4j, "unchanged"}),
+            (frozenset({_OpaqueRecoveredStr("(3+4j)"), "unchanged"}), frozenset({3 + 4j, "unchanged"})),
+        ],
+    )
+    def test_opaque_recovery_recurses_through_tuple_and_set_containers(self, persisted, live):
+        state = {"cf": {"value": persisted, "_opaque_recovered_str": True}}
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+        repeated = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert repeated["cf"]["changed"] is False
+
+    def test_opaque_recovery_handles_a_live_value_with_raising_equality(self):
+        class RaisingEquality:
+            def __eq__(self, other):
+                raise RuntimeError("comparison unavailable")
+
+            def __str__(self):
+                return "opaque-value"
+
+        live = RaisingEquality()
+        state = {
+            "cf": {
+                "value": _OpaqueRecoveredStr("opaque-value"),
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert isinstance(out["cf"]["out"], RaisingEquality)
+
+    def test_opaque_recovery_fallback_is_limited_to_tagged_leaf_positions(self):
+        state = {
+            "cf": {
+                "value": [_OpaqueRecoveredStr("(3+4j)"), "2"],
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": [3 + 4j, 2]}})
+
+        assert out["cf"]["changed"] is True
+
+    def test_live_string_container_reports_transition_from_opaque_leaf(self):
+        state = {
+            "cf": {
+                "value": [_OpaqueRecoveredStr("(3+4j)")],
+                "_opaque_recovered_str": True,
+            }
+        }
+        exc = make_executor([node("cf", "change_filter")], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": ["(3+4j)"]}})
+
+        assert out["cf"] == {"out": ["(3+4j)"], "changed": True}
+        assert state == {"cf": {"value": ["(3+4j)"]}}
+        assert type(state["cf"]["value"][0]) is str
+
+    def test_opaque_recovery_matches_a_recovered_dict_key(self):
+        """Regression: a non-string dict KEY (e.g. 3+4j in {3+4j: "x"})
+        persists the same lossy opaque-str way a leaf VALUE does — decoded
+        back as the plain string key "(3+4j)". Plain `left.keys() ==
+        right.keys()` set equality never matches the live complex key
+        against that recovered string key, short-circuiting the whole dict
+        to "changed" before the per-value opaque comparison ever runs."""
+        state = {"cf": {"value": {"(3+4j)": "x"}, "_opaque_recovered_str": True}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": {3 + 4j: "x"}}})
+        assert out["cf"]["changed"] is False
+
+    def test_opaque_dict_key_recovery_rejects_different_length_dicts(self):
+        """Direct unit test for _opaque_aware_container_equal's dict branch:
+        a different key count can never match, regardless of any opaque
+        key/value recovery."""
+        assert GraphExecutor._opaque_aware_container_equal({3 + 4j: "x"}, {"(3+4j)": "x", "extra": "y"}) is False
+
+    def test_opaque_dict_key_recovery_rejects_an_unmatched_key(self):
+        """Direct unit test: same key count, but no right-side key —
+        neither an exact match nor an opaque str(left)-recovered match —
+        corresponds to a given left key."""
+        assert GraphExecutor._opaque_aware_container_equal({3 + 4j: "x"}, {"totally-unrelated": "x"}) is False
+
+    def test_opaque_dict_key_recovery_rejects_a_matched_key_with_different_value(self):
+        """Direct unit test: the key recovers/matches, but the associated
+        value differs — the dict as a whole must still report unequal."""
+        assert GraphExecutor._opaque_aware_container_equal({3 + 4j: "x"}, {"(3+4j)": "y"}) is False
+
+    def test_live_string_matching_a_temporal_repr_is_not_treated_as_recovered(self):
+        """Regression: a source that legitimately emits the literal string
+        "10:30:00" *live*, this session — never round-tripped through DB
+        persistence — must not have a later, genuinely different
+        datetime.time(10, 30) value swallowed by the persisted-string
+        recovery path. Only a value LogicManager._load_graphs actually
+        flagged as DB-recovered (via "_recovered_str") may use that
+        recovery; without the flag this is a real type transition."""
+        from datetime import time
+
+        state = {"cf": {"value": "10:30:00"}}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"cf": {"in": time(10, 30, 0)}})
+        assert out["cf"]["changed"] is True
+        assert out["cf"]["out"] == time(10, 30, 0)
+
+    def test_list_is_not_equal_to_its_own_string_representation(self):
+        """Regression: a transition from a list/dict to a string that happens
+        to match its str() repr (e.g. [1, 2] -> "[1, 2]") is a genuine type
+        change, not a persisted-value recovery — it must report changed=True,
+        not be swallowed by a blanket str(left) == str(right) fallback."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"cf": {"in": [1, 2]}})
+        out = exc.execute({"cf": {"in": "[1, 2]"}})
+        assert out["cf"]["changed"] is True
+
+        exc.execute({"cf": {"in": {"a": 1}}})
+        out = exc.execute({"cf": {"in": "{'a': 1}"}})
+        assert out["cf"]["changed"] is True
+
+    def test_non_deepcopyable_value_does_not_error_the_node(self):
+        """Regression: a permitted python_script legitimately returning a
+        generator (or any other value with a failing __deepcopy__/__reduce__
+        hook) previously raised out of copy.deepcopy() while snapshotting
+        the comparison baseline, turning the node's whole output into
+        {"__error__": ...} instead of emitting the value with changed=True."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+
+        out = exc.execute({"cf": {"in": (x for x in [1, 2, 3])}})
+
+        assert "__error__" not in out["cf"]
+        assert out["cf"]["changed"] is True
+
+    def test_non_deepcopyable_value_baseline_does_not_change_type(self):
+        """Regression: after the fix above stopped the crash, the fallback
+        used to snapshot the baseline as a lossy str() (_snapshot_debug_value,
+        meant for pure debug capture), permanently changing the comparison
+        baseline's type. If the same source (e.g. Memory) repeatedly emits
+        the same non-deep-copyable object — one generator instance — every
+        pass, the next pass compared that live generator against the
+        unmarked string stand-in, never equal, reporting changed=True again
+        on every unrelated execution. The baseline must instead fall back to
+        the ORIGINAL reference (_replay_known_output_value's behavior), so
+        the same object compared against itself is recognized as unchanged."""
+        state = {}
+        n1 = node("cf", "change_filter")
+        exc = make_executor([n1], hysteresis_state=state)
+        same_generator = (x for x in [1, 2, 3])
+
+        first = exc.execute({"cf": {"in": same_generator}})
+        second = exc.execute({"cf": {"in": same_generator}})
+
+        assert first["cf"]["changed"] is True
+        assert second["cf"]["changed"] is False
 
 
 # ===========================================================================

@@ -190,6 +190,8 @@ class AnwesenheitssimulationAdapter(AdapterBase):
     async def _handle_control_event(self, event: Any) -> None:
         if not self._cfg.control_dp_id:
             return
+        if getattr(event, "suppress_action_triggers", False) is True:
+            return
         if getattr(event, "initialization", False) is True:
             # Save-time seeding by the logic initialization pass (issue
             # #1031) is not a real presence change — never start/stop the

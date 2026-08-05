@@ -136,6 +136,9 @@ class WriteRouter:
         self._last_sent: dict[uuid.UUID, float] = {}
         # binding_id → last successfully sent value (for on-change / delta checks)
         self._last_value: dict[uuid.UUID, Any] = {}
+        from obs.adapters.base import ConfirmationOrderTracker
+
+        self._confirmation_order_tracker = ConfirmationOrderTracker()
 
     # ------------------------------------------------------------------
     # Path 1 — inbound MQTT dp/{uuid}/set
@@ -187,7 +190,12 @@ class WriteRouter:
         logger.info("WriteRouter: dp=%s value=%r (type=%s)", dp.name, value, dp.data_type)
 
         if has_writable_bindings:
-            await self._write_to_dest_bindings(dp_id, value, skip_binding_id=None)
+            await self._write_to_dest_bindings(
+                dp_id,
+                value,
+                skip_binding_id=None,
+                suppress_confirmation_actions=False,
+            )
             return
 
         logger.warning("Write request for bindingless internal DataPoint %s — ignored", dp_id)
@@ -240,7 +248,20 @@ class WriteRouter:
                 return
 
         await self._clear_type_mismatch(event.datapoint_id)
-        await self._write_to_dest_bindings(event.datapoint_id, value, skip_binding_id=event.binding_id)
+        if getattr(event, "suppress_write_propagation", False):
+            logger.debug(
+                "WriteRouter: state-only confirmation for dp=%s binding=%s — propagation skipped",
+                event.datapoint_id,
+                event.binding_id,
+            )
+            return
+
+        await self._write_to_dest_bindings(
+            event.datapoint_id,
+            value,
+            skip_binding_id=event.binding_id,
+            suppress_confirmation_actions=True,
+        )
 
     # ------------------------------------------------------------------
     # Shared helper
@@ -251,8 +272,10 @@ class WriteRouter:
         dp_id: uuid.UUID,
         value: Any,
         skip_binding_id: uuid.UUID | None,
+        suppress_confirmation_actions: bool = False,
     ) -> None:
         from obs.adapters import registry as adapter_registry
+        from obs.adapters.base import ConfirmationActionToken, ConfirmationOrderTracker
         from obs.adapters.registry import _row_to_binding
 
         rows = await self._db.fetchall(
@@ -265,6 +288,14 @@ class WriteRouter:
             return
 
         logger.info("WriteRouter: %d writable binding(s) for dp %s", len(rows), dp_id)
+        confirmation_action_token = None if suppress_confirmation_actions else ConfirmationActionToken()
+        confirmation_order_tracker = getattr(self, "_confirmation_order_tracker", None)
+        if confirmation_order_tracker is None:
+            confirmation_order_tracker = ConfirmationOrderTracker()
+            self._confirmation_order_tracker = confirmation_order_tracker
+        confirmation_write_order = confirmation_order_tracker.issue(dp_id)
+        if suppress_confirmation_actions:
+            confirmation_write_order.activate()
         for row in rows:
             try:
                 binding = _row_to_binding(row)
@@ -375,7 +406,19 @@ class WriteRouter:
                 )
 
             try:
-                await instance.write(binding, write_value)
+                context_writer = getattr(type(instance), "write_with_context", None)
+                if callable(context_writer):
+                    await context_writer(
+                        instance,
+                        binding,
+                        write_value,
+                        logical_value=value,
+                        suppress_confirmation_actions=suppress_confirmation_actions,
+                        confirmation_action_token=confirmation_action_token,
+                        confirmation_write_order=confirmation_write_order,
+                    )
+                else:
+                    await instance.write(binding, write_value)
                 self._last_sent[binding.id] = time.monotonic()
 
                 needs_value_cache = binding.send_on_change or binding.send_min_delta is not None or binding.send_min_delta_pct is not None

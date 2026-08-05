@@ -170,3 +170,24 @@ describe('Modal — softBackdrop=true', () => {
     expect(events[events.length - 1][0]).toBe(false)
   })
 })
+
+describe('Modal — dismissible=false', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('blocks backdrop, close-button, and ESC dismissal', async () => {
+    const wrapper = mountModal({ dismissible: false })
+    const outer = document.querySelector('.fixed.inset-0.z-50')
+    const closeBtn = document.querySelector('.btn-icon')
+
+    outer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    wrapper.vm.dismiss()
+    await nextTick()
+
+    expect(closeBtn.disabled).toBe(true)
+    expect(wrapper.emitted('update:modelValue') ?? []).toEqual([])
+  })
+})

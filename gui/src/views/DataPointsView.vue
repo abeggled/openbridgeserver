@@ -367,6 +367,17 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
                   </button>
+                  <button
+                    v-if="auth.isAdmin"
+                    @click="openDuplicate(dp)"
+                    class="btn-icon"
+                    :title="$t('datapoints.duplicate.action')"
+                    :data-testid="`btn-duplicate-${dp.id}`"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 8h11v11H8zM5 16H4a1 1 0 01-1-1V4a1 1 0 011-1h11a1 1 0 011 1v1"/>
+                    </svg>
+                  </button>
                   <button v-if="auth.isAdmin" @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -398,6 +409,43 @@
     <!-- Create / Edit Modal -->
     <Modal v-model="showForm" :title="editTarget ? $t('datapoints.form.editTitle') : $t('datapoints.createModal')">
       <DataPointForm :initial="editTarget" :datatypes="store.datatypes" :save-handler="onSave" @cancel="showForm = false" />
+    </Modal>
+
+    <!-- Duplicate modal -->
+    <Modal v-model="showDuplicate" :title="$t('datapoints.duplicate.title')" :dismissible="!duplicateSaving">
+      <form class="space-y-4" @submit.prevent="doDuplicate">
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+          {{ $t('datapoints.duplicate.hint') }}
+        </p>
+        <div>
+          <label for="duplicate-datapoint-name" class="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">
+            {{ $t('datapoints.form.name') }}
+          </label>
+          <input
+            id="duplicate-datapoint-name"
+            v-model="duplicateName"
+            class="input w-full"
+            maxlength="255"
+            required
+            autofocus
+            data-testid="input-duplicate-name"
+          />
+        </div>
+        <p v-if="duplicateError" class="text-sm text-red-500" data-testid="duplicate-error">{{ duplicateError }}</p>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn-secondary" :disabled="duplicateSaving" @click="showDuplicate = false">
+            {{ $t('common.cancel') }}
+          </button>
+          <button
+            type="submit"
+            class="btn-primary"
+            :disabled="duplicateSaving || !duplicateName.trim()"
+            data-testid="confirm-duplicate"
+          >
+            {{ duplicateSaving ? $t('datapoints.duplicate.saving') : $t('datapoints.duplicate.action') }}
+          </button>
+        </div>
+      </form>
     </Modal>
 
     <!-- Delete confirm -->
@@ -448,8 +496,13 @@ const ws    = useWebSocketStore()
 const filters      = ref({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
 const showForm     = ref(false)
 const showConfirm  = ref(false)
+const showDuplicate = ref(false)
 const editTarget   = ref(null)
 const deleteTarget = ref(null)
+const duplicateTarget = ref(null)
+const duplicateName = ref('')
+const duplicateSaving = ref(false)
+const duplicateError = ref('')
 const sentinelEl   = ref(null)
 const nodeFilterRef = ref(null)
 const tagFilterRef  = ref(null)
@@ -743,12 +796,33 @@ function openEdit(dp) {
   editTarget.value = dp
   showForm.value = true
 }
+function openDuplicate(dp) {
+  if (!auth.isAdmin) return
+  duplicateTarget.value = dp
+  duplicateName.value = Array.from(t('datapoints.duplicate.defaultName', { name: dp.name })).slice(0, 255).join('')
+  duplicateError.value = ''
+  showDuplicate.value = true
+}
 
 async function onSave(payload) {
   if (!auth.isAdmin) return
   if (editTarget.value) await store.update(editTarget.value.id, payload)
   else await store.create(payload)
   showForm.value = false
+}
+
+async function doDuplicate() {
+  if (!auth.isAdmin || !duplicateTarget.value || !duplicateName.value.trim()) return
+  duplicateSaving.value = true
+  duplicateError.value = ''
+  try {
+    await store.duplicate(duplicateTarget.value.id, duplicateName.value.trim())
+    showDuplicate.value = false
+  } catch (error) {
+    duplicateError.value = error.response?.data?.detail || t('datapoints.duplicate.error')
+  } finally {
+    duplicateSaving.value = false
+  }
 }
 
 function confirmDelete(dp) {

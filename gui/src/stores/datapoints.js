@@ -17,6 +17,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
   // Internal cursor — tracks the next page to load in infinite-scroll mode.
   const _nextPage    = ref(0)
   const _lastParams  = ref({})
+  let _searchGeneration = 0
 
   // --------------------------------------------------------------------------
   // Core search (replaces the old fetchPage + search pair)
@@ -28,6 +29,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
   async function search(params = {}, append = false) {
     if (loading.value && append) return   // debounce concurrent scroll triggers
 
+    const generation = ++_searchGeneration
     loading.value = true
 
     const page = append ? _nextPage.value : 0
@@ -45,6 +47,8 @@ export const useDatapointStore = defineStore('datapoints', () => {
         size:  50,
       })
 
+      if (generation !== _searchGeneration) return
+
       if (append) {
         items.value = [...items.value, ...data.items]
       } else {
@@ -55,7 +59,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
       _nextPage.value = page + 1
       hasMore.value   = _nextPage.value < data.pages
     } finally {
-      loading.value = false
+      if (generation === _searchGeneration) loading.value = false
     }
   }
 
@@ -83,6 +87,25 @@ export const useDatapointStore = defineStore('datapoints', () => {
     const { data } = await dpApi.create(payload)
     items.value.unshift(data)
     total.value++
+    return data
+  }
+
+  async function duplicate(id, name) {
+    const { data } = await dpApi.duplicate(id, name)
+    const refreshState = {
+      lastParams: { ..._lastParams.value },
+    }
+    const refreshGeneration = _searchGeneration + 1
+    try {
+      await search(_lastParams.value, false)
+    } catch {
+      if (_searchGeneration !== refreshGeneration) return data
+      // The mutation already succeeded. Keep the previous visible list, but
+      // invalidate its cursor because server-side page boundaries have shifted.
+      _nextPage.value = 0
+      _lastParams.value = refreshState.lastParams
+      hasMore.value = false
+    }
     return data
   }
 
@@ -149,7 +172,7 @@ export const useDatapointStore = defineStore('datapoints', () => {
   return {
     items, total, loading, datatypes, allTags, sortCol, sortDir, hasMore,
     search, loadMore, setSort,
-    create, update, remove, loadDatatypes, loadTags, patchValue, writeValue,
+    create, duplicate, update, remove, loadDatatypes, loadTags, patchValue, writeValue,
     saveScrollState, restoreScrollState, clearScrollState,
   }
 })

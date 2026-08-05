@@ -443,7 +443,9 @@
       "defaultTimeRange": "Standard-Zeitbereich",
       "selectTimeRange": "Zeitbereich wählen",
       "editorPlaceholder": "Verlaufs-Chart",
-      "seriesFallback": "Serie {n}"
+      "seriesFallback": "Serie {n}",
+      "primaryLabel": "Bezeichnung (optional)",
+      "labelPlaceholder": "z.B. Temperaturverlauf"
     },
     "energiefluss": {
       "title": "Energiefluss",

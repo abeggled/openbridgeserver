@@ -40,6 +40,7 @@ kontrolliert auf das v1-Schema.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -1215,18 +1216,33 @@ class SqliteSegmentStore(RingBufferStore):
     async def append(self, events: list[StoreEvent]) -> None:
         if not events or self._active_conn is None or self._active_segment is None:
             return
+        active_conn = self._active_conn
         # Zusammenhängenden Block globaler IDs reservieren → stabile Ordnung.
         start_id = await self.manifest.reserve_global_event_ids(len(events))
         try:
             for offset, event in enumerate(events):
-                await self._insert_event(self._active_conn, start_id + offset, event)
+                await self._insert_event(active_conn, start_id + offset, event)
             # commit() MIT im rollback-geschützten Block (#951, Codex :1013): meldet
             # SQLite einen Fehler WÄHREND des commit selbst (volle Disk / I/O-Fehler
             # nach eingereihten Inserts), bliebe die Transaktion sonst offen und ihre
             # Zeilen würden vom nächsten erfolgreichen append() auf derselben Connection
             # MIT-committet, obwohl der Aufrufer einen Fehler sah. Insert(s) UND commit
             # daher gemeinsam absichern.
-            await self._active_conn.commit()
+            finalize_task = asyncio.create_task(self._commit_and_advance_active_stats(active_conn, events))
+            try:
+                await asyncio.shield(finalize_task)
+            except asyncio.CancelledError:
+                # aiosqlite kann den Worker-Commit nach Task-Cancellation noch
+                # abschließen. Dann muss auch das Post-Commit-Bookkeeping fertig
+                # werden, bevor die Cancellation weiterpropagiert. Weitere
+                # cancel()-Aufrufe dürfen dieses Warten ebenfalls nicht abbrechen.
+                while not finalize_task.done():
+                    try:
+                        await asyncio.shield(finalize_task)
+                    except asyncio.CancelledError:
+                        pass
+                finalize_task.result()
+                raise
         except BaseException:
             # Scheitert ein Insert mitten im Batch (z.B. nicht serialisierbare Metadaten
             # oder ein fehlgeschlagener Metadaten-Index-Insert) ODER das commit selbst,
@@ -1234,11 +1250,14 @@ class SqliteSegmentStore(RingBufferStore):
             # nächsten erfolgreichen append() auf derselben Connection MIT-committet,
             # obwohl der Aufrufer einen Fehler sah (#951, Codex :584/:1013). Aktive
             # Transaktion daher zurückrollen – kein partieller Batch committet später.
-            await self._active_conn.rollback()
+            await active_conn.rollback()
             raise
-        await self._refresh_active_segment_stats()
         # TODO(#932/#936): hier greift später Rotation nach segment_max_* und
         # anschließend enforce_retention() auf geschlossene Segmente.
+
+    async def _commit_and_advance_active_stats(self, conn: aiosqlite.Connection, events: list[StoreEvent]) -> None:
+        await conn.commit()
+        await self._advance_active_segment_stats(events)
 
     async def _insert_event(self, conn: aiosqlite.Connection, global_event_id: int, event: StoreEvent) -> None:
         # JSON-Spalten bleiben (API-Kompat); typisierte Spalten für Pushdown (#933).
@@ -2734,12 +2753,41 @@ class SqliteSegmentStore(RingBufferStore):
             return
         async with self._active_conn.execute("SELECT COUNT(*) AS c, MIN(ts) AS mn, MAX(ts) AS mx FROM ringbuffer") as cur:
             row = await cur.fetchone()
-        await self.manifest.update_segment_stats(
-            self._active_segment.segment_id,
+        await self._persist_active_segment_stats(
             row_count=row["c"] if row else 0,
             size_bytes=self._segment_file_size(self._active_segment.filename),
             from_ts=row["mn"] if row else None,
             to_ts=row["mx"] if row else None,
+        )
+
+    async def _advance_active_segment_stats(self, events: list[StoreEvent]) -> None:
+        batch_from_ts = min(event.ts for event in events)
+        batch_to_ts = max(event.ts for event in events)
+        await self._persist_active_segment_stats(
+            row_count=self._active_segment.row_count + len(events),
+            size_bytes=self._segment_file_size(self._active_segment.filename),
+            from_ts=min(self._active_segment.from_ts, batch_from_ts) if self._active_segment.from_ts else batch_from_ts,
+            to_ts=max(self._active_segment.to_ts, batch_to_ts) if self._active_segment.to_ts else batch_to_ts,
+        )
+
+    async def _persist_active_segment_stats(
+        self,
+        *,
+        row_count: int,
+        size_bytes: int,
+        from_ts: str | None,
+        to_ts: str | None,
+    ) -> None:
+        self._active_segment.row_count = row_count
+        self._active_segment.size_bytes = size_bytes
+        self._active_segment.from_ts = from_ts
+        self._active_segment.to_ts = to_ts
+        await self.manifest.update_segment_stats(
+            self._active_segment.segment_id,
+            row_count=row_count,
+            size_bytes=size_bytes,
+            from_ts=from_ts,
+            to_ts=to_ts,
         )
 
     def _segment_file_size(self, filename: str) -> int:

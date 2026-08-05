@@ -20,7 +20,6 @@ Test direkt „v2-Pushdown liefert dasselbe wie der Legacy-Pfad".
 
 from __future__ import annotations
 
-from operator import eq
 from pathlib import Path
 from typing import Any
 
@@ -167,7 +166,7 @@ async def test_eq_bool_int_equivalence(store: SqliteSegmentStore, tmp_path: Path
     assert len(eq_zero) == 2
 
     # Legacy-Referenz-Parität (Anzahl, da Set 1/True kollabiert).
-    ref_true = [v for v in values if eq(v, True)]
+    ref_true = [v for v in values if v == 1]
     assert len(ref_true) == 2
 
 

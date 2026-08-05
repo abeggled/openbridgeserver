@@ -72,6 +72,58 @@ describe('NodeConfigPanel ical — URL field', () => {
     expect(w.emitted('update').at(-1)[0].refresh_interval_min).toBe(30)
     w.unmount()
   })
+
+  it('configures the maximum calendar payload size in MiB', async () => {
+    const w = await mountIcal()
+    await flushPromises()
+
+    const sizeInput = w.find('[data-testid="ical-max-payload-size"]')
+    expect(sizeInput.attributes()).toMatchObject({ min: '1', max: '50', step: '1' })
+    expect(sizeInput.element.value).toBe('2')
+
+    await sizeInput.setValue('8')
+    await sizeInput.trigger('change')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0].max_payload_size_mb).toBe(8)
+    w.unmount()
+  })
+
+  it.each([
+    ['100', 50],
+    ['0', 1],
+    ['1.9', 1],
+  ])('normalizes payload size %s to %s MiB before emitting', async (input, expected) => {
+    const w = await mountIcal()
+    await flushPromises()
+
+    const sizeInput = w.find('[data-testid="ical-max-payload-size"]')
+    await sizeInput.setValue(input)
+    await sizeInput.trigger('change')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0].max_payload_size_mb).toBe(expected)
+    expect(sizeInput.element.value).toBe(String(expected))
+    w.unmount()
+  })
+
+  it.each([
+    [100, '50'],
+    [0, '1'],
+    [1.9, '1'],
+    ['8', '8'],
+    ['invalid', '2'],
+    [{}, '2'],
+    [null, '2'],
+    [true, '2'],
+    [Number.POSITIVE_INFINITY, '2'],
+  ])('normalizes imported payload size %s when opening the panel', async (value, expected) => {
+    const w = await mountIcal({ max_payload_size_mb: value })
+    await flushPromises()
+
+    expect(w.find('[data-testid="ical-max-payload-size"]').element.value).toBe(expected)
+    w.unmount()
+  })
 })
 
 // ─── Empty filter state ───────────────────────────────────────────────────────

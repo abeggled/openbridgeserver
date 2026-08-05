@@ -115,10 +115,16 @@ async def test_handle_value_event_propagates_good_typed_value(monkeypatch):
     router = WriteRouter(db=None, registry=_Registry(data_type="BOOLEAN"))
     received = {}
 
-    async def _fake_write(dp_id, value, skip_binding_id):
+    async def _fake_write(
+        dp_id,
+        value,
+        skip_binding_id,
+        suppress_confirmation_actions=False,
+    ):
         received["dp_id"] = dp_id
         received["value"] = value
         received["skip_binding_id"] = skip_binding_id
+        received["suppress_confirmation_actions"] = suppress_confirmation_actions
 
     monkeypatch.setattr(router, "_write_to_dest_bindings", _fake_write)
 
@@ -135,3 +141,4 @@ async def test_handle_value_event_propagates_good_typed_value(monkeypatch):
     assert received["dp_id"] == event.datapoint_id
     assert received["value"] is True
     assert received["skip_binding_id"] == event.binding_id
+    assert received["suppress_confirmation_actions"] is True

@@ -174,6 +174,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("POST", "/api/v1/config/import/db"): "config_mutation",
     ("POST", "/api/v1/datapoints/"): "config_mutation",
     ("POST", "/api/v1/datapoints/{dp_id}/bindings"): "config_mutation",
+    ("POST", "/api/v1/datapoints/{dp_id}/duplicate"): "config_mutation",
     ("POST", "/api/v1/datapoints/{dp_id}/value"): "data_mutation",
     ("POST", "/api/v1/hierarchy/import-from-ets"): "config_mutation",
     ("POST", "/api/v1/hierarchy/links"): "config_mutation",

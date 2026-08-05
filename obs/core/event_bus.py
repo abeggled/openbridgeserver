@@ -40,6 +40,13 @@ class DataValueEvent:
     ts: datetime = field(default_factory=lambda: datetime.now(UTC))
     binding_id: uuid.UUID | None = None
     logic_depth: int = 0
+    # True for an adapter's outbound confirmation. State consumers still
+    # process the event, but WriteRouter must not fan it back out to bindings.
+    suppress_write_propagation: bool = False
+    # True when the originating command already produced an actionable event.
+    # State consumers still process the confirmation, but logic/notification
+    # subscribers must not run a second time for the same command.
+    suppress_action_triggers: bool = False
     # True when the value was published by the logic sheet initialization
     # pass (issue #1031) — save-time seeding, not a real value change.
     # Notification-style subscribers must not react to it.

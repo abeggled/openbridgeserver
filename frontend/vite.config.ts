@@ -7,7 +7,7 @@ export default defineConfig({
   base: '/visu/',
 
   resolve: {
-    alias: { '@': resolve(__dirname, 'src') },
+    alias: { '@': resolve(import.meta.dirname, 'src') },
   },
 
   server: {

@@ -12,7 +12,7 @@ export default defineConfig({
   plugins: [vue()],
 
   resolve: {
-    alias: { '@': resolve(__dirname, 'src') }
+    alias: { '@': resolve(import.meta.dirname, 'src') }
   },
 
   // Dev server: proxy /api to backend, /visu to the Visu frontend dev server (port 5174)

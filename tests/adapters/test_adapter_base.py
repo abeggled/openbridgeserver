@@ -108,6 +108,22 @@ class TestConcreteHelpers:
         a._last_detail = "reconnecting"
         assert a.last_detail == "reconnecting"
 
+    @pytest.mark.asyncio
+    async def test_write_with_context_delegates_wire_value_to_write(self, mock_bus):
+        a = _MinimalAdapter(event_bus=mock_bus)
+        a.write = AsyncMock()
+        binding = object()
+
+        queued = await a.write_with_context(
+            binding,
+            5.0,
+            logical_value=50.0,
+            suppress_confirmation_actions=True,
+        )
+
+        assert queued is True
+        a.write.assert_awaited_once_with(binding, 5.0)
+
 
 # ---------------------------------------------------------------------------
 # _publish_status

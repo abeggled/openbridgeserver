@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -84,6 +85,10 @@ class _DbStub:
 
     async def connect(self):
         pass
+
+    @asynccontextmanager
+    async def exclusive_lifecycle(self):
+        yield self
 
 
 class _SelectiveFailDb(_DbStub):

@@ -31,7 +31,7 @@
             <!-- Header -->
             <div v-if="title" class="card-header shrink-0">
               <h3 class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ title }}</h3>
-              <button @click="$emit('update:modelValue', false)" class="btn-icon">
+              <button :disabled="!dismissible" @click="dismiss" class="btn-icon">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                 </svg>
@@ -61,6 +61,7 @@ const props = defineProps({
   title:      String,
   maxWidth:   { type: String, default: 'lg' },
   resizable:  { type: Boolean, default: false },
+  dismissible: { type: Boolean, default: true },
   /**
    * Soft backdrop variant (issue #435): renders a very light, non-blocking
    * backdrop without blur. Click-outside does NOT close the modal — only
@@ -74,12 +75,16 @@ const maxWidths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-x
 const maxWidthClass = computed(() => maxWidths[props.maxWidth] ?? maxWidths.lg)
 
 function onBackdropClick() {
-  if (props.softBackdrop) return
-  emit('update:modelValue', false)
+  if (props.softBackdrop || !props.dismissible) return
+  dismiss()
+}
+
+function dismiss() {
+  if (props.dismissible) emit('update:modelValue', false)
 }
 
 function onKeyDown(event) {
-  if (event.key !== 'Escape' || !props.modelValue) return
+  if (event.key !== 'Escape' || !props.modelValue || !props.dismissible) return
   // Don't close the modal while the user is actively editing a field —
   // the field's own ESC handler (e.g. a combobox closing its dropdown)
   // should run, but the modal itself stays open. The user dismisses the
@@ -88,7 +93,7 @@ function onKeyDown(event) {
   const tag = target?.tagName?.toUpperCase?.() || ''
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
   if (target?.isContentEditable) return
-  emit('update:modelValue', false)
+  dismiss()
 }
 
 onMounted(() => {

@@ -15,6 +15,95 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class ConfirmationActionToken:
+    """Allow exactly one outbound confirmation to trigger actions."""
+
+    def __init__(self) -> None:
+        self._claimed = False
+
+    def claim(self) -> bool:
+        if self._claimed:
+            return False
+        self._claimed = True
+        return True
+
+
+class ConfirmationOrderTracker:
+    """Order logical writes across every adapter instance reached by one router."""
+
+    def __init__(self) -> None:
+        self._next_sequence = 0
+        self._latest_activated: dict[str, int] = {}
+
+    def issue(self, datapoint_id: Any) -> ConfirmationWriteOrder:
+        self._next_sequence += 1
+        datapoint_key = str(datapoint_id)
+        return ConfirmationWriteOrder(
+            tracker=self,
+            datapoint_id=datapoint_key,
+            sequence=self._next_sequence,
+        )
+
+    def activate(self, datapoint_id: str, sequence: int) -> None:
+        latest = self._latest_activated.get(datapoint_id)
+        if latest is None or sequence > latest:
+            self._latest_activated[datapoint_id] = sequence
+
+    def accept(self, datapoint_id: str, sequence: int) -> bool:
+        return sequence >= self._latest_activated.get(datapoint_id, sequence)
+
+
+class ConfirmationWriteOrder:
+    """A router-issued logical write sequence shared by destination bindings."""
+
+    def __init__(
+        self,
+        *,
+        tracker: ConfirmationOrderTracker,
+        datapoint_id: str,
+        sequence: int,
+    ) -> None:
+        self._tracker = tracker
+        self._datapoint_id = datapoint_id
+        self._sequence = sequence
+
+    def activate(self) -> None:
+        self._tracker.activate(self._datapoint_id, self._sequence)
+
+    def accept_confirmation(self) -> bool:
+        return self._tracker.accept(self._datapoint_id, self._sequence)
+
+    def is_newer_than(self, other: ConfirmationWriteOrder) -> bool:
+        """Return whether this order supersedes another order from the same router."""
+        return self._tracker is other._tracker and self._sequence > other._sequence
+
+
+class ConfirmationActionContext:
+    """Resolve action suppression when an adapter publishes a confirmation."""
+
+    def __init__(
+        self,
+        *,
+        suppress: bool,
+        token: ConfirmationActionToken | None,
+        write_order: ConfirmationWriteOrder | None,
+    ) -> None:
+        self._suppress = suppress
+        self._token = token
+        self.write_order = write_order
+
+    @property
+    def shares_action_token(self) -> bool:
+        return self._token is not None
+
+    def suppress_actions_at_confirmation(self) -> bool:
+        if self._suppress:
+            return True
+        if self._token is None:
+            return False
+        return not self._token.claim()
+
+
 class AdapterBase(ABC):
     """Abstract base class for all protocol adapters.
 
@@ -100,6 +189,20 @@ class AdapterBase(ABC):
     async def write(self, binding: Any, value: Any) -> None:
         """Write *value* to the protocol endpoint for *binding*."""
         ...
+
+    async def write_with_context(
+        self,
+        binding: Any,
+        value: Any,
+        *,
+        logical_value: Any,
+        suppress_confirmation_actions: bool = False,
+        confirmation_action_token: ConfirmationActionToken | None = None,
+        confirmation_write_order: ConfirmationWriteOrder | None = None,
+    ) -> bool:
+        """Write a transformed value while retaining its pre-transform logical value."""
+        await self.write(binding, value)
+        return True
 
     # ------------------------------------------------------------------
     # Status helpers

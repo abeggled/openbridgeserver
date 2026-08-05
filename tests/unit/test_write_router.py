@@ -31,6 +31,29 @@ class _FakeInstance:
         self.writes.append(value)
 
 
+class _ContextInstance:
+    def __init__(self, *, confirmation_queued: bool = True):
+        self.writes: list[tuple[object, object, bool]] = []
+        self.confirmation_action_tokens: list[object | None] = []
+        self.confirmation_write_orders: list[object | None] = []
+        self.confirmation_queued = confirmation_queued
+
+    async def write_with_context(
+        self,
+        _binding,
+        value,
+        *,
+        logical_value,
+        suppress_confirmation_actions=False,
+        confirmation_action_token=None,
+        confirmation_write_order=None,
+    ):
+        self.writes.append((value, logical_value, suppress_confirmation_actions))
+        self.confirmation_action_tokens.append(confirmation_action_token)
+        self.confirmation_write_orders.append(confirmation_write_order)
+        return self.confirmation_queued
+
+
 def _row(**overrides):
     now = datetime.datetime.now(datetime.UTC).isoformat()
     row = {
@@ -203,6 +226,200 @@ async def test_send_throttle_skips_second_write_within_interval(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_router_passes_pre_transform_logical_value_to_context_writer(monkeypatch):
+    binding = _binding(
+        adapter_type="KNX",
+        direction="BOTH",
+        value_formula="x * 0.1",
+    )
+    instance = _ContextInstance()
+    router = _make_router([{"id": str(binding.id)}])
+    _patch_registry(monkeypatch, binding, instance)
+
+    await router._write_to_dest_bindings(
+        uuid.uuid4(),
+        50.0,
+        skip_binding_id=None,
+        suppress_confirmation_actions=True,
+    )
+
+    assert instance.writes == [(pytest.approx(5.0), 50.0, True)]
+
+
+@pytest.mark.asyncio
+async def test_direct_write_shares_one_action_token_across_knx_confirmations(monkeypatch):
+    first = _binding(adapter_type="KNX", direction="BOTH")
+    second = _binding(adapter_type="KNX", direction="BOTH")
+    bindings = {
+        str(first.id): first,
+        str(second.id): second,
+    }
+    instance = _ContextInstance()
+    router = _make_router(
+        [
+            {"id": str(first.id)},
+            {"id": str(second.id)},
+        ]
+    )
+    monkeypatch.setattr(adapter_registry, "_row_to_binding", lambda row: bindings[row["id"]])
+    monkeypatch.setattr(adapter_registry, "get_instance_by_id", lambda _id: instance)
+    monkeypatch.setattr(adapter_registry, "get_instance", lambda _adapter_type: instance)
+
+    await router._write_to_dest_bindings(
+        uuid.uuid4(),
+        50.0,
+        skip_binding_id=None,
+        suppress_confirmation_actions=False,
+    )
+
+    assert instance.writes == [
+        (50.0, 50.0, False),
+        (50.0, 50.0, False),
+    ]
+    assert instance.confirmation_action_tokens[0] is not None
+    assert instance.confirmation_action_tokens[1] is instance.confirmation_action_tokens[0]
+    assert instance.confirmation_write_orders[0] is not None
+    assert instance.confirmation_write_orders[1] is instance.confirmation_write_orders[0]
+
+
+@pytest.mark.asyncio
+async def test_router_defers_confirmation_order_activation_to_adapter_transmission(monkeypatch):
+    binding = _binding(adapter_type="KNX", direction="BOTH")
+    instance = _ContextInstance()
+    router = _make_router([{"id": str(binding.id)}])
+    _patch_registry(monkeypatch, binding, instance)
+    dp_id = uuid.uuid4()
+
+    await router._write_to_dest_bindings(
+        dp_id,
+        50.0,
+        skip_binding_id=None,
+    )
+    await router._write_to_dest_bindings(
+        dp_id,
+        60.0,
+        skip_binding_id=None,
+    )
+
+    older_order, newer_order = instance.confirmation_write_orders
+    assert older_order is not None
+    assert newer_order is not None
+    assert older_order.accept_confirmation() is True
+    assert newer_order.accept_confirmation() is True
+
+
+@pytest.mark.asyncio
+async def test_source_event_activates_confirmation_order_immediately(monkeypatch):
+    binding = _binding(adapter_type="KNX", direction="BOTH")
+    instance = _ContextInstance()
+    router = _make_router([{"id": str(binding.id)}])
+    _patch_registry(monkeypatch, binding, instance)
+    dp_id = uuid.uuid4()
+
+    await router._write_to_dest_bindings(
+        dp_id,
+        50.0,
+        skip_binding_id=None,
+        suppress_confirmation_actions=False,
+    )
+    await router._write_to_dest_bindings(
+        dp_id,
+        60.0,
+        skip_binding_id=None,
+        suppress_confirmation_actions=True,
+    )
+
+    older_order, source_event_order = instance.confirmation_write_orders
+    assert older_order is not None
+    assert source_event_order is not None
+    assert older_order.accept_confirmation() is False
+    assert source_event_order.accept_confirmation() is True
+
+
+@pytest.mark.asyncio
+async def test_skipped_router_write_does_not_invalidate_queued_confirmation(monkeypatch):
+    binding = _binding(
+        adapter_type="KNX",
+        direction="BOTH",
+        send_on_change=True,
+    )
+    instance = _ContextInstance()
+    router = _make_router([{"id": str(binding.id)}])
+    _patch_registry(monkeypatch, binding, instance)
+    dp_id = uuid.uuid4()
+
+    await router._write_to_dest_bindings(
+        dp_id,
+        50.0,
+        skip_binding_id=None,
+    )
+    await router._write_to_dest_bindings(
+        dp_id,
+        50.0,
+        skip_binding_id=None,
+    )
+
+    assert len(instance.confirmation_write_orders) == 1
+    queued_order = instance.confirmation_write_orders[0]
+    assert queued_order is not None
+    assert queued_order.accept_confirmation() is True
+
+
+@pytest.mark.asyncio
+async def test_failed_confirmation_queue_does_not_invalidate_older_order(monkeypatch):
+    binding = _binding(adapter_type="KNX", direction="BOTH")
+    instance = _ContextInstance()
+    router = _make_router([{"id": str(binding.id)}])
+    _patch_registry(monkeypatch, binding, instance)
+    dp_id = uuid.uuid4()
+
+    await router._write_to_dest_bindings(dp_id, 50.0, skip_binding_id=None)
+    queued_order = instance.confirmation_write_orders[0]
+    instance.confirmation_queued = False
+    await router._write_to_dest_bindings(dp_id, 60.0, skip_binding_id=None)
+
+    assert queued_order is not None
+    assert queued_order.accept_confirmation() is True
+
+
+@pytest.mark.asyncio
+async def test_direct_write_does_not_reserve_action_slot_when_confirmation_is_queued(monkeypatch):
+    first_instance_id = uuid.uuid4()
+    second_instance_id = uuid.uuid4()
+    first = _binding(adapter_type="KNX", direction="BOTH", adapter_instance_id=first_instance_id)
+    second = _binding(adapter_type="KNX", direction="BOTH", adapter_instance_id=second_instance_id)
+    bindings = {
+        str(first.id): first,
+        str(second.id): second,
+    }
+    instances = {
+        first_instance_id: _ContextInstance(confirmation_queued=False),
+        second_instance_id: _ContextInstance(confirmation_queued=True),
+    }
+    router = _make_router(
+        [
+            {"id": str(first.id)},
+            {"id": str(second.id)},
+        ]
+    )
+    monkeypatch.setattr(adapter_registry, "_row_to_binding", lambda row: bindings[row["id"]])
+    monkeypatch.setattr(adapter_registry, "get_instance_by_id", lambda instance_id: instances[instance_id])
+    monkeypatch.setattr(adapter_registry, "get_instance", lambda _adapter_type: None)
+
+    await router._write_to_dest_bindings(
+        uuid.uuid4(),
+        50.0,
+        skip_binding_id=None,
+        suppress_confirmation_actions=False,
+    )
+
+    assert instances[first_instance_id].writes == [(50.0, 50.0, False)]
+    assert instances[second_instance_id].writes == [(50.0, 50.0, False)]
+    assert instances[first_instance_id].confirmation_action_tokens[0] is not None
+    assert instances[second_instance_id].confirmation_action_tokens[0] is instances[first_instance_id].confirmation_action_tokens[0]
+
+
+@pytest.mark.asyncio
 async def test_handle_value_event_forwards_skip_binding_id(monkeypatch):
     router = _make_router([])
     router._registry = SimpleNamespace(get=lambda _: SimpleNamespace(name="dp", data_type="UNKNOWN"))
@@ -220,7 +437,31 @@ async def test_handle_value_event_forwards_skip_binding_id(monkeypatch):
         event.datapoint_id,
         event.value,
         skip_binding_id=event.binding_id,
+        suppress_confirmation_actions=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_handle_value_event_does_not_propagate_state_only_confirmation():
+    router = _make_router([])
+    router._registry = SimpleNamespace(
+        get=lambda _dp_id: SimpleNamespace(name="Temperature", data_type="FLOAT"),
+        clear_diagnostic=AsyncMock(),
+    )
+    router._write_to_dest_bindings = AsyncMock()
+    event = DataValueEvent(
+        datapoint_id=uuid.uuid4(),
+        value=21.5,
+        quality="good",
+        source_adapter="KNX",
+        binding_id=uuid.uuid4(),
+        suppress_write_propagation=True,
+    )
+
+    await router.handle_value_event(event)
+
+    router._registry.clear_diagnostic.assert_awaited_once_with(event.datapoint_id, "type_mismatch")
+    router._write_to_dest_bindings.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -339,7 +580,12 @@ async def test_handle_with_writable_binding_writes_adapter_without_publishing_st
 
     await router.handle(dp_id, "21.5")
 
-    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, pytest.approx(21.5), skip_binding_id=None)
+    router._write_to_dest_bindings.assert_awaited_once_with(
+        dp_id,
+        pytest.approx(21.5),
+        skip_binding_id=None,
+        suppress_confirmation_actions=False,
+    )
     bus.publish.assert_not_awaited()
 
 
@@ -475,7 +721,12 @@ async def test_handle_preserves_raw_string_payload_for_writable_binding():
 
     await router.handle(dp_id, "hello")
 
-    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, "hello", skip_binding_id=None)
+    router._write_to_dest_bindings.assert_awaited_once_with(
+        dp_id,
+        "hello",
+        skip_binding_id=None,
+        suppress_confirmation_actions=False,
+    )
     bus.publish.assert_not_awaited()
 
 
@@ -511,7 +762,12 @@ async def test_handle_preserves_raw_temporal_payload_for_writable_binding():
 
     await router.handle(dp_id, "10:30:00")
 
-    router._write_to_dest_bindings.assert_awaited_once_with(dp_id, datetime.time(10, 30, 0), skip_binding_id=None)
+    router._write_to_dest_bindings.assert_awaited_once_with(
+        dp_id,
+        datetime.time(10, 30, 0),
+        skip_binding_id=None,
+        suppress_confirmation_actions=False,
+    )
     bus.publish.assert_not_awaited()
 
 

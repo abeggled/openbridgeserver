@@ -330,6 +330,7 @@ const nodeTypeComponents = {
   comment: _comment,
   // Logic
   and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic,
+  change_filter: _generic,
   compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,
   // Math
   math_formula: _generic, math_map: _generic,

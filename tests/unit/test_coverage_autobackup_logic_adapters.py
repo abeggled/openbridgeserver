@@ -904,18 +904,18 @@ class TestDeleteGraph:
         assert "DELETE" in db.execute_calls[0][0]
 
     @pytest.mark.asyncio
-    async def test_invalidates_cache_on_delete(self):
+    async def test_removes_runtime_graph_state_on_delete(self):
         from obs.api.v1.logic import delete_graph
 
         row = _make_graph_row()
         db = _DbStub(one=row)
         mock_manager = MagicMock()
-        mock_manager.invalidate_cache = MagicMock()
+        mock_manager.remove_graph = MagicMock()
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             await delete_graph(graph_id=row["id"], _user="user", db=db)
 
-        mock_manager.invalidate_cache.assert_called_once_with(row["id"])
+        mock_manager.remove_graph.assert_called_once_with(row["id"])
 
 
 class TestImportGraph:

@@ -2,6 +2,7 @@
 
 Covers:
   - POST   /api/v1/datapoints/          create
+  - POST   /api/v1/datapoints/{id}/duplicate  duplicate with bindings
   - GET    /api/v1/datapoints/{id}      read one
   - GET    /api/v1/datapoints/          list + pagination
   - PATCH  /api/v1/datapoints/{id}      update
@@ -102,6 +103,129 @@ async def test_create_datapoint_non_admin_forbidden(client, auth_headers):
             headers=user_headers,
         )
         assert resp.status_code == 403, resp.text
+    finally:
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
+# ---------------------------------------------------------------------------
+# Duplicate
+# ---------------------------------------------------------------------------
+
+
+async def test_duplicate_datapoint_copies_metadata_and_bindings(client, auth_headers):
+    source = await _create_dp(
+        client,
+        auth_headers,
+        {
+            **_DP_PAYLOAD,
+            "name": "RGB brightness template",
+            "mqtt_alias": "building/balcony/brightness",
+            "record_history": False,
+        },
+    )
+    instance_resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MQTT",
+            "name": f"Duplicate MQTT {uuid.uuid4().hex[:8]}",
+            "config": {},
+            "enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert instance_resp.status_code == 201, instance_resp.text
+    instance_id = instance_resp.json()["id"]
+    binding_resp = await client.post(
+        f"/api/v1/datapoints/{source['id']}/bindings",
+        json={
+            "adapter_instance_id": instance_id,
+            "direction": "BOTH",
+            "config": {"topic": "lights/balcony/brightness", "qos": 1},
+            "enabled": True,
+            "send_throttle_ms": 250,
+            "send_on_change": True,
+            "send_min_delta": 0.5,
+            "send_min_delta_pct": 2.0,
+            "value_formula": "x * 100",
+            "value_map": {"0": "off", "1": "on"},
+        },
+        headers=auth_headers,
+    )
+    assert binding_resp.status_code == 201, binding_resp.text
+    source_binding = binding_resp.json()
+
+    duplicate_resp = await client.post(
+        f"/api/v1/datapoints/{source['id']}/duplicate",
+        json={"name": "RGB brightness kitchen"},
+        headers=auth_headers,
+    )
+    assert duplicate_resp.status_code == 201, duplicate_resp.text
+    duplicate = duplicate_resp.json()
+    assert_datapoint_shape(duplicate)
+    assert duplicate["id"] != source["id"]
+    assert duplicate["name"] == "RGB brightness kitchen"
+    for field in ("data_type", "unit", "tags", "mqtt_alias", "persist_value", "record_history"):
+        assert duplicate[field] == source[field]
+    assert duplicate["mqtt_topic"] != source["mqtt_topic"]
+    assert duplicate["value"] is None
+
+    copied_bindings_resp = await client.get(
+        f"/api/v1/datapoints/{duplicate['id']}/bindings",
+        headers=auth_headers,
+    )
+    assert copied_bindings_resp.status_code == 200
+    copied_bindings = copied_bindings_resp.json()
+    assert len(copied_bindings) == 1
+    copied_binding = copied_bindings[0]
+    assert copied_binding["id"] != source_binding["id"]
+    assert copied_binding["datapoint_id"] == duplicate["id"]
+    for field in (
+        "adapter_type",
+        "adapter_instance_id",
+        "direction",
+        "config",
+        "enabled",
+        "send_throttle_ms",
+        "send_on_change",
+        "send_min_delta",
+        "send_min_delta_pct",
+        "value_formula",
+        "value_map",
+    ):
+        assert copied_binding[field] == source_binding[field]
+
+
+async def test_duplicate_datapoint_missing_source_returns_404(client, auth_headers):
+    resp = await client.post(
+        f"/api/v1/datapoints/{uuid.uuid4()}/duplicate",
+        json={"name": "Missing copy"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_duplicate_datapoint_without_bindings(client, auth_headers):
+    source = await _create_dp(client, auth_headers, {**_DP_PAYLOAD, "name": "No bindings"})
+    resp = await client.post(
+        f"/api/v1/datapoints/{source['id']}/duplicate",
+        json={"name": "  No bindings copy  "},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "No bindings copy"
+
+
+async def test_duplicate_datapoint_non_admin_forbidden(client, auth_headers):
+    source = await _create_dp(client, auth_headers, {**_DP_PAYLOAD, "name": "Duplicate forbidden"})
+    username = f"dp-dup-na-{uuid.uuid4().hex[:8]}"
+    user_headers = await _create_non_admin_user_and_headers(client, auth_headers, username=username, password="pw-12345678")
+    try:
+        resp = await client.post(
+            f"/api/v1/datapoints/{source['id']}/duplicate",
+            json={"name": "Forbidden copy"},
+            headers=user_headers,
+        )
+        assert resp.status_code == 403
     finally:
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 

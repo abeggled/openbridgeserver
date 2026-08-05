@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
-from obs.logic.manager import _normalise_api_client_variables
+from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -73,17 +73,21 @@ def _normalized_without_positions(raw: dict) -> dict:
     freshly parsed request body carries explicitly as null — comparing raw
     dicts would misclassify a move-only save as an execution change.
     """
-    return _without_positions(json.loads(FlowData.model_validate(raw).model_dump_json()))
+    flow_data = FlowData.model_validate(raw)
+    _migrate_legacy_api_client_field_names(flow_data)
+    return _without_positions(json.loads(flow_data.model_dump_json()))
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
+    flow_data = FlowData.model_validate(raw)
+    _migrate_legacy_api_client_field_names(flow_data)
     return LogicGraphOut(
         id=row["id"],
         name=row["name"],
         description=row["description"] or "",
         enabled=bool(row["enabled"]),
-        flow_data=FlowData.model_validate(raw),
+        flow_data=flow_data,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -303,7 +307,7 @@ async def delete_graph(
     try:
         from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().invalidate_cache(graph_id)
+        get_logic_manager().remove_graph(graph_id)
     except Exception:
         logger.exception("Failed to invalidate logic manager cache after deleting graph %s", graph_id)
 

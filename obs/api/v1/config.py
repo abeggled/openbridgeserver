@@ -551,27 +551,29 @@ async def import_db(
         except Exception:
             logger.exception("Logic engine stop before DB restore failed — continuing restore anyway")
 
-        # Aiosqlite-Verbindung trennen
-        await db.disconnect()
+        # Keep private transactions blocked until the replacement connection
+        # and its in-memory registry snapshot are consistent again.
+        async with db.exclusive_lifecycle() as lifecycle:
+            await lifecycle.disconnect()
 
-        # Restore via sqlite3.backup()
-        try:
-            src_conn = sqlite3.connect(tmp.name)
-            dst_conn = sqlite3.connect(dst_path)
-            src_conn.backup(dst_conn)
-            dst_conn.close()
-            src_conn.close()
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Datenbankwiederherstellung fehlgeschlagen: {exc}") from exc
+            # Restore via sqlite3.backup()
+            try:
+                src_conn = sqlite3.connect(tmp.name)
+                dst_conn = sqlite3.connect(dst_path)
+                src_conn.backup(dst_conn)
+                dst_conn.close()
+                src_conn.close()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Datenbankwiederherstellung fehlgeschlagen: {exc}") from exc
 
-        # Verbindung wieder aufbauen (inkl. Migrationen)
-        await db.connect()
+            # Verbindung wieder aufbauen (inkl. Migrationen)
+            await lifecycle.connect()
 
-        # Registry neu laden
-        reg = get_registry()
-        reg._points.clear()
-        reg._values.clear()
-        await reg.load_from_db()
+            # Registry neu laden
+            reg = get_registry()
+            reg._points.clear()
+            reg._values.clear()
+            await reg.load_from_db()
 
         # Logic Engine neu starten
         try:
