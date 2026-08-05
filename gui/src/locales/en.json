@@ -775,6 +775,10 @@
           "title": "Share bus with instances on the same IP:port",
           "description": "Serializes I/O across ALL instances polling the same host:port (e.g. several devices behind one RS485/Modbus-TCP gateway). Prevents concurrent requests from competing instances on the same bus."
         },
+        "inter_read_delay_ms": {
+          "title": "Delay between reads (ms)",
+          "description": "Pause after each Modbus transaction on the (shared) bus before the next one starts. Gives slow RS485/Modbus-TCP gateways the turnaround time they need and spaces out multiple devices on one bus. 0 = disabled."
+        },
         "startup_jitter_s": {
           "title": "Startup jitter (s)",
           "description": "Maximum random delay (seconds) before the first poll of each binding. Prevents a request burst when all tasks start simultaneously. 0 = disabled."
