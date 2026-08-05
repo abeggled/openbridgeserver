@@ -1,10 +1,10 @@
 # AGENTS/CLAUDE Alias Note
 
-`AGENTS.MD` is the canonical agent-instructions file in this repository.
+`AGENTS.md` is the canonical agent-instructions file in this repository.
 `CLAUDE.md` is a symlink to this same file for tool compatibility.
 You only need to read one of them; reading both is redundant.
 
-# AGENTS.MD
+# AGENTS.md
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
@@ -22,6 +22,90 @@ Two top-level directories have distinct, non-overlapping purposes — keep them 
 | `scripts/` | Running OBS host | Deployed runtime scripts — every file that gets installed onto a production or LXC host lives here. Currently: `obs-admin` and `obs-update`. |
 
 **Rule of thumb:** if a file is only needed to build, test, or check the project, it goes in `tools/`. If it ends up on the host after installation, it goes in `scripts/`. Never mix the two.
+
+## Code Review Rules
+
+### Consolidated review
+
+- Review the complete effective pull-request diff at one frozen public GitHub PR HEAD.
+- Limit reportable findings to defects introduced or materially worsened by that effective diff.
+  Inspect unchanged context only to understand the changed code's behavior; do not report unrelated
+  pre-existing defects from elsewhere in a touched or renamed file.
+- A case-only rename, file move, mode change, symlink-target update, formatting-only change, or line
+  movement does not make unchanged file contents part of the review scope.
+- Do not post findings incrementally. Run repeated internal review passes, combine and deduplicate
+  their results, and post one consolidated review.
+- Continue until two consecutive complete passes on that same HEAD produce no new findings. If
+  that cannot be completed, report review coverage as partial and list every deferred surface.
+
+### Reproduction evidence
+
+- The consolidated review has two reportable classes: `Confirmed findings` and `Blocked candidates`.
+  Put an item under confirmed findings only when it is `reproduced`, has a demonstrated reachable
+  execution or use path, and meets the bar for an actionable defect; only confirmed findings carry
+  a defect severity.
+- A meaningful reproducer must exercise an actual supported entry point, caller, request or API route,
+  event, command, configuration consumer, or documented workflow through the affected code to the
+  observed failure. A suspicious source pattern, isolated function invocation that production cannot
+  reach, or script that merely asserts a hypothetical condition is not evidence of a defect.
+- Use `not_reproduced` only when every required prerequisite was available, an adequate reproducer
+  ran to completion and the claimed behavior did not occur, or no reachable path from a supported
+  entry point to the claimed behavior could be demonstrated. Exclude such candidates from the
+  published review and retain them only in internal deduplication state for the reviewed HEAD.
+- Use `blocked` only when reproduction could not complete because a required prerequisite such as
+  credentials, hardware, a service, data, or permission was unavailable. Keep every blocked candidate
+  visible in the consolidated review, but do not present it as confirmed or count it as a finding.
+  Failure to identify a reachable path is `not_reproduced`, not `blocked`.
+- When the review transport supports a summary body, publish confirmed findings and blocked candidates
+  in separate sections. When it accepts only a `findings` array, use that array as a transport envelope
+  for blocked candidates: place `[BLOCKED]` immediately after the transport's required priority prefix
+  (for example, `[P3] [BLOCKED] ...`), use the lowest supported priority only as a schema placeholder,
+  and state explicitly that the entry is not a confirmed finding and the priority is not a severity.
+- Every published finding or blocked candidate must include executable reproduction code, the exact
+  command, expected and observed behavior, exit status, validation logs, and its status.
+- Every confirmed finding must also demonstrate the causal link to the effective diff. When practical,
+  run the same reproducer against the captured base and head and show that the failure is absent at the
+  base and present at the head; otherwise explain why that comparison cannot run and prove the causal
+  link another way.
+- A blocked candidate must include the attempted reproducer and exact blocker. Never present it as
+  confirmed without successful reproduction.
+- Every security item must additionally state the attacker capabilities, crossed trust boundary,
+  and affected asset. A `reproduced` security finding must include executable exploit or proof-of-
+  concept code that demonstrates the claimed impact. A blocked security candidate must instead
+  include the attempted proof of concept, missing prerequisite, and potential impact; label it
+  unconfirmed and do not claim demonstrated exploitability.
+
+### Re-review discipline
+
+- Bind every review to the publicly fetchable GitHub base and PR HEAD SHAs captured when the review
+  starts. If the local checkout uses a synthetic commit, report it separately; reproduction commands
+  must use the public SHAs or include the complete required patch.
+- Compute the effective-diff fingerprint from the exact NUL-delimited raw tree delta below, with no
+  further normalization. Set `BASE_SHA` to GitHub's captured base SHA and `HEAD_SHA` to the captured
+  `refs/pull/<number>/head` SHA. Always retain both inputs, `git --version`, and the SHA-256 output in
+  internal review state for the frozen HEAD:
+
+  ```bash
+  set -euo pipefail
+  git cat-file -e "${BASE_SHA}^{commit}"
+  git cat-file -e "${HEAD_SHA}^{commit}"
+  MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+  git diff-tree --no-commit-id --raw -r -z --no-abbrev --no-renames "$MERGE_BASE" "$HEAD_SHA" \
+    | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+  ```
+
+- Publish the fingerprint metadata in the consolidated summary when that surface exists. For a
+  `findings`-only transport, include it in every emitted confirmed finding or blocked-candidate body.
+  If the array is empty, emit no synthetic metadata finding; keep the metadata only in internal state.
+- Re-review the complete effective pull-request diff, but deduplicate against existing findings by path,
+  violated invariant, affected data or control flow, and observed behavior.
+- Carry earlier findings and their dispositions into a separate prior-finding state. Keep the
+  existing thread authoritative; do not post a duplicate or count it as a new current finding.
+- Honor `will not fix`, `later`, and `follow-up` dispositions. Reopen the existing thread, without
+  posting a duplicate, when a claimed fix is incomplete or ineffective and the defect still
+  reproduces, when a fix regressed, or when materially new evidence changes the invariant, affected
+  flow, or observed behavior.
+- A base-branch merge or line-number change does not make an existing finding new.
 
 ## Common Commands
 
