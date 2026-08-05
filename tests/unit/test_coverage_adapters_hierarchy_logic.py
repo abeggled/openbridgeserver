@@ -3817,173 +3817,6 @@ class TestLogicManagerBasics:
         assert "g1" in mgr._graphs
         assert "g1" not in mgr._hysteresis
 
-    @pytest.mark.asyncio
-    async def test_persist_then_load_restores_change_filter_temporal_type_exactly(self):
-        """Regression: a change_filter's persisted state may hold a
-        datetime.time (e.g. a KNX DPT10/11 value) that json.dumps cannot
-        encode natively. Before _persist_default/_decode_persisted_value
-        tagged it, the old default=str encoding flattened it to a lossy
-        string with no way to tell it apart from a live change_filter
-        value that happens to be that same string — restoring it as a
-        plain str meant a live value of the exact same time could never
-        compare equal to it again, firing a spurious pulse after every
-        restart despite persist_state being enabled."""
-        from datetime import time
-
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        mgr, db, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
-        mgr._hysteresis["g1"] = {"cf": {"value": time(10, 30)}}
-
-        await mgr._persist_node_state("g1")
-        saved_json = db.execute_and_commit.await_args.args[1][0]
-
-        mgr2, db2, _, _ = _make_logic_manager()
-        db2.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=saved_json)])
-        await mgr2._load_graphs()
-
-        restored = mgr2._hysteresis["g1"]["cf"]["value"]
-        assert restored == time(10, 30)
-        assert isinstance(restored, time)
-        assert "_recovered_str" not in mgr2._hysteresis["g1"]["cf"]
-
-    @pytest.mark.asyncio
-    async def test_load_graphs_marks_legacy_untagged_change_filter_string_as_recovered(self):
-        """Regression: node_state saved *before* tagged persistence existed
-        (plain default=str, no type tag) still holds a bare string for a
-        change_filter that persisted a datetime.date/time/datetime. Such a
-        legacy value has no tag for _decode_persisted_value to act on, so
-        it must fall through to the older "_recovered_str" marker instead —
-        otherwise GraphExecutor._compare_values could never again recognize
-        it as a persisted (not live) string."""
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        legacy_state = json.dumps({"cf": {"value": "10:30:00"}})
-        mgr, db, _, _ = _make_logic_manager()
-        db.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=legacy_state)])
-
-        await mgr._load_graphs()
-
-        assert mgr._hysteresis["g1"]["cf"] == {"value": "10:30:00", "_recovered_str": True}
-
-    @pytest.mark.asyncio
-    async def test_persist_then_load_escapes_application_dict_colliding_with_type_tag(self):
-        """Regression: a change_filter can hold an arbitrary JSON object
-        (e.g. an api_client/json_extractor result) that — by pure
-        coincidence or malicious input — already looks exactly like a
-        generated type-tag envelope, such as
-        {"__obs_persisted_type__": "date", "value": "2026-01-01"}. Without
-        escaping this at persist time, _decode_persisted_value would
-        misinterpret it as a real datetime.date on the next load and
-        silently replace the application's actual dict value, corrupting
-        it and causing every subsequent identical input to look like a
-        genuine change."""
-        colliding_value = {"__obs_persisted_type__": "date", "value": "2026-01-01"}
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        mgr, db, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
-        mgr._hysteresis["g1"] = {"cf": {"value": colliding_value}}
-
-        await mgr._persist_node_state("g1")
-        saved_json = db.execute_and_commit.await_args.args[1][0]
-
-        mgr2, db2, _, _ = _make_logic_manager()
-        db2.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=saved_json)])
-        await mgr2._load_graphs()
-
-        restored = mgr2._hysteresis["g1"]["cf"]["value"]
-        assert restored == colliding_value
-        assert isinstance(restored, dict)
-
-    @pytest.mark.asyncio
-    async def test_persist_then_load_restores_change_filter_tuple_value_exactly(self):
-        """Regression: a change_filter can hold a tuple (e.g. produced by a
-        Python Script node). json.dumps natively serializes a tuple as a
-        JSON array with no way to distinguish it from a genuine list
-        afterwards — its `default=` hook is never invoked for tuples, since
-        the encoder already knows how to handle them — so without explicit
-        tagging in _escape_persist_collision, the restored value would come
-        back as a list, and _compare_values would then report a spurious
-        changed=True on the very next identical live tuple after a restart."""
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        mgr, db, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
-        mgr._hysteresis["g1"] = {"cf": {"value": (1, 2, "three")}}
-
-        await mgr._persist_node_state("g1")
-        saved_json = db.execute_and_commit.await_args.args[1][0]
-
-        mgr2, db2, _, _ = _make_logic_manager()
-        db2.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=saved_json)])
-        await mgr2._load_graphs()
-
-        restored = mgr2._hysteresis["g1"]["cf"]["value"]
-        assert restored == (1, 2, "three")
-        assert isinstance(restored, tuple)
-
-    @pytest.mark.asyncio
-    async def test_persist_then_load_restores_change_filter_set_value_exactly(self):
-        """Regression: a change_filter can hold a set (e.g. produced by a
-        Python Script node). set/frozenset aren't natively JSON-encodable,
-        so the old default=str fallback flattened them to a repr() string
-        with no way back — _compare_values would then report a spurious
-        changed=True on the very next identical live set after a restart."""
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        mgr, db, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
-        mgr._hysteresis["g1"] = {"cf": {"value": {1, 2, "three"}}}
-
-        await mgr._persist_node_state("g1")
-        saved_json = db.execute_and_commit.await_args.args[1][0]
-
-        mgr2, db2, _, _ = _make_logic_manager()
-        db2.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=saved_json)])
-        await mgr2._load_graphs()
-
-        restored = mgr2._hysteresis["g1"]["cf"]["value"]
-        assert restored == {1, 2, "three"}
-        assert isinstance(restored, set)
-
-    @pytest.mark.asyncio
-    async def test_persist_then_load_restores_change_filter_nonstring_keyed_dict_exactly(self):
-        """Regression: a change_filter can hold a dict with a non-string key
-        (e.g. {1: "x"}, produced by a Python Script node or adapter).
-        json.dumps silently stringifies such keys with no default= call at
-        all, so the restored dict previously had the wrong key type
-        ({"1": "x"}), and _compare_values reported a spurious changed=True
-        on the next identical live dict after a restart."""
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        mgr, db, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
-        mgr._hysteresis["g1"] = {"cf": {"value": {1: "x", 2: "y"}}}
-
-        await mgr._persist_node_state("g1")
-        saved_json = db.execute_and_commit.await_args.args[1][0]
-
-        mgr2, db2, _, _ = _make_logic_manager()
-        db2.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=saved_json)])
-        await mgr2._load_graphs()
-
-        restored = mgr2._hysteresis["g1"]["cf"]["value"]
-        assert restored == {1: "x", 2: "y"}
-        assert all(isinstance(k, int) for k in restored)
-
-    @pytest.mark.asyncio
-    async def test_persist_then_load_restores_change_filter_bytes_value_exactly(self):
-        """Same round-trip as the temporal case above, for a change_filter
-        holding raw bytes (e.g. a DataPoint of the UNKNOWN/fallback type).
-        default=str previously flattened bytes to their repr() (e.g.
-        "b'\\x01\\x02'"), which is not even reversible via bytes.fromhex,
-        so the original value was unrecoverable after a restart."""
-        flow = _make_flow(nodes=[{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}])
-        mgr, db, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
-        mgr._hysteresis["g1"] = {"cf": {"value": b"\x01\x02\xff"}}
-
-        await mgr._persist_node_state("g1")
-        saved_json = db.execute_and_commit.await_args.args[1][0]
-
-        mgr2, db2, _, _ = _make_logic_manager()
-        db2.fetchall = AsyncMock(return_value=[_row(id="g1", name="G1", enabled=1, flow_data=flow.model_dump_json(), node_state=saved_json)])
-        await mgr2._load_graphs()
-
-        restored = mgr2._hysteresis["g1"]["cf"]["value"]
-        assert restored == b"\x01\x02\xff"
-        assert isinstance(restored, bytes)
-
 
 class TestLogicManagerValueEvent:
     @pytest.mark.asyncio
@@ -4263,15 +4096,15 @@ class TestLogicManagerHelpers:
         # 192.168.x.x is private
         assert evaluate_url_target("http://192.168.1.1", allow_loopback=True).allowed is False
 
-    def test_load_external_value_file_empty_path(self):
-        from obs.logic.manager import _load_external_value_file
+    def test_read_secret_file_empty_path(self):
+        from obs.logic.manager import _read_secret_file
 
-        assert _load_external_value_file("") == ""
+        assert _read_secret_file("") == ""
 
-    def test_load_external_value_file_nonexistent(self):
-        from obs.logic.manager import _load_external_value_file
+    def test_read_secret_file_nonexistent(self):
+        from obs.logic.manager import _read_secret_file
 
-        assert _load_external_value_file("/nonexistent/path/value.txt") == ""
+        assert _read_secret_file("/nonexistent/path/secret.txt") == ""
 
     def test_cookie_domain_matches(self):
         from obs.logic.manager import _cookie_domain_matches

@@ -1611,7 +1611,6 @@
       "xor": "XOR",
       "gate": "TOR",
       "memory": "Speicher",
-      "change_filter": "Änderungsfilter",
       "compare": "Vergleich",
       "hysteresis": "Hysterese",
       "decision": "Entscheidung",
@@ -2122,9 +2121,6 @@
         "data_type": "Datentyp",
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
-      "change_filter": {
-        "persist_state": "Zustand nach Neustart wiederherstellen"
-      },
       "hysteresis": {
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
@@ -2306,13 +2302,13 @@
         "response_type": "Response Content-Typ",
         "verify_ssl": "SSL-Zertifikat prüfen",
         "headers": "Header (JSON-Objekt, optional)",
-        "headers_value_file": "Header aus Datei (JSON-Objekt, optional)",
+        "headers_secret_file": "Header aus Secret-Datei (JSON-Objekt, optional)",
         "timeout_s": "Timeout (s)",
         "auth_type": "Authentifizierung",
         "auth_username": "Benutzername (Basic/Digest)",
         "auth_password": "Passwort (Basic/Digest)",
         "auth_token": "Bearer Token",
-        "auth_value_file": "Bearer Token aus Datei"
+        "auth_token_file": "Bearer Token aus Secret-Datei"
       },
       "math_formula": {
         "formula": "Formel",
@@ -2384,7 +2380,6 @@
       "xor": "Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "gate": "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben.",
       "memory": "Gibt den gespeicherten Wert aus dem vorherigen Logiklauf aus und speichert den aktuellen Eingangswert für den nächsten Lauf. Explizite Tick-Grenze für kontrollierte Rückkopplungen.",
-      "change_filter": "Gibt den Eingangswert aus und setzt den Geändert-Trigger nur dann, wenn er sich vom zuletzt empfangenen Wert unterscheidet. Wiederholt gleiche Werte werden unterdrückt.",
       "compare": "Vergleicht zwei Werte (>, <, =, >=, <=, !=)",
       "hysteresis": "Schaltet bei Überschreitung ON, erst bei Unterschreitung OFF",
       "decision": "Prüft einen Eingangswert gegen mehrere unabhängige Bedingungen. Jeder Ausgang liefert unabhängig TRUE oder FALSE; mehrere Ausgänge können gleichzeitig TRUE sein.",

@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from obs.api.auth import get_admin_user, get_current_user
 from obs.db.database import Database, get_db
 from obs.logic.graph_analysis import topology_warnings
-from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
+from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -73,21 +73,17 @@ def _normalized_without_positions(raw: dict) -> dict:
     freshly parsed request body carries explicitly as null — comparing raw
     dicts would misclassify a move-only save as an execution change.
     """
-    flow_data = FlowData.model_validate(raw)
-    _migrate_legacy_api_client_field_names(flow_data)
-    return _without_positions(json.loads(flow_data.model_dump_json()))
+    return _without_positions(json.loads(FlowData.model_validate(raw).model_dump_json()))
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
-    flow_data = FlowData.model_validate(raw)
-    _migrate_legacy_api_client_field_names(flow_data)
     return LogicGraphOut(
         id=row["id"],
         name=row["name"],
         description=row["description"] or "",
         enabled=bool(row["enabled"]),
-        flow_data=flow_data,
+        flow_data=FlowData.model_validate(raw),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

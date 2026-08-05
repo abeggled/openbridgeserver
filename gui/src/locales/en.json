@@ -1611,7 +1611,6 @@
       "xor": "XOR",
       "gate": "Gate",
       "memory": "Memory",
-      "change_filter": "Change filter",
       "compare": "Comparison",
       "hysteresis": "Hysteresis",
       "decision": "Decision",
@@ -2122,9 +2121,6 @@
         "data_type": "Data type",
         "persist_state": "Restore state on restart"
       },
-      "change_filter": {
-        "persist_state": "Restore state on restart"
-      },
       "hysteresis": {
         "persist_state": "Restore state on restart"
       },
@@ -2306,13 +2302,13 @@
         "response_type": "Response Content-Type",
         "verify_ssl": "Verify SSL certificate",
         "headers": "Headers (JSON object, optional)",
-        "headers_value_file": "Headers from file (optional)",
+        "headers_secret_file": "Headers from secret file (optional)",
         "timeout_s": "Timeout (s)",
         "auth_type": "Authentication",
         "auth_username": "Username (Basic/Digest)",
         "auth_password": "Password (Basic/Digest)",
         "auth_token": "Bearer token",
-        "auth_value_file": "Bearer token from file"
+        "auth_token_file": "Bearer token from secret file"
       },
       "math_formula": {
         "formula": "Formula",
@@ -2384,7 +2380,6 @@
       "xor": "Output is true when EXACTLY ONE input is true. Inputs (2–30) and output can be individually negated.",
       "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
       "memory": "Outputs the stored value from the previous logic run and stores the current input value for the next run. Explicit tick boundary for controlled feedback.",
-      "change_filter": "Outputs the input value and sets the changed trigger only when it differs from the last received value. Repeated identical values are suppressed.",
       "compare": "Compares two values (>, <, =, >=, <=, !=)",
       "hysteresis": "Switches ON when threshold is exceeded, OFF only when it falls below",
       "decision": "Checks one input value against multiple independent conditions. Each output returns TRUE or FALSE independently; multiple outputs can be TRUE at the same time.",

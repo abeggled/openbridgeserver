@@ -84,54 +84,6 @@ async def test_patch_move_only_on_legacy_flow_is_layout_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_patch_move_only_migrates_legacy_api_client_fields_before_comparison(monkeypatch):
-    manager = MagicMock()
-    manager.reload = AsyncMock()
-    manager.initialize_graph = AsyncMock()
-    monkeypatch.setattr("obs.logic.manager._manager", manager)
-
-    legacy_flow = {
-        "nodes": [
-            {
-                "id": "api",
-                "type": "api_client",
-                "position": {"x": 0, "y": 0},
-                "data": {
-                    "headers_secret_file": "/run/secrets/headers",
-                    "auth_token_file": "/run/secrets/token",
-                },
-            }
-        ],
-        "edges": [],
-    }
-    moved = FlowData.model_validate(
-        {
-            "nodes": [
-                {
-                    "id": "api",
-                    "type": "api_client",
-                    "position": {"x": 50, "y": 50},
-                    "data": {
-                        "headers_value_file": "/run/secrets/headers",
-                        "auth_value_file": "/run/secrets/token",
-                    },
-                }
-            ],
-            "edges": [],
-        }
-    )
-    db = MagicMock()
-    db.fetchone = AsyncMock(side_effect=[_row(json.dumps(legacy_flow)), _row(moved.model_dump_json())])
-    db.execute_and_commit = AsyncMock()
-
-    result = await update_graph_partial("g1", LogicGraphUpdate(flow_data=moved), _user="admin", db=db)
-
-    assert result.id == "g1"
-    manager.update_cached_graph.assert_called_once()
-    manager.reinitialize_graph.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_patch_repeating_stored_enabled_is_noop(monkeypatch):
     """PATCH {"enabled": true} on an already-enabled graph without flow_data
     must not cancel/reload the running sheet or re-run initialization."""

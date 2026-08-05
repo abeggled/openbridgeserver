@@ -78,16 +78,6 @@ describe('GenericNode — handles', () => {
     expect(targets.length).toBe(4)
   })
 
-  it('shows "Änderungsfilter" label and renders 1 target + 2 source handles for change_filter', async () => {
-    const w = await mountGN('change_filter')
-    await flushPromises()
-    expect(w.find('.gn-title').text()).toBe('Änderungsfilter')
-    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
-    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
-    expect(targets.length).toBe(1)
-    expect(sources.length).toBe(2)
-  })
-
   it('renders two default source handles for decision', async () => {
     const w = await mountGN('decision')
     await flushPromises()
