@@ -40,6 +40,7 @@ interface ZstCfg {
   minute:              number
   offset_minutes:      number
   solar_altitude_deg:  number
+  solar_azimuth_deg:   number
   sun_direction:       string
   every_hour:          boolean
   every_minute:        boolean
@@ -63,6 +64,7 @@ const DEFAULT_CFG: ZstCfg = {
   minute:              0,
   offset_minutes:      0,
   solar_altitude_deg:  0,
+  solar_azimuth_deg:   180,
   sun_direction:       'rising',
   every_hour:          false,
   every_minute:        false,
@@ -316,8 +318,9 @@ async function onTimerTypeChange() {
 
 const showTimeRef  = computed(() => cfg.timer_type !== 'meta')
 const showAbsolute = computed(() => showTimeRef.value && cfg.time_ref === 'absolute')
-const showOffset   = computed(() => showTimeRef.value && cfg.time_ref !== 'absolute' && cfg.time_ref !== 'solar_altitude')
+const showOffset   = computed(() => showTimeRef.value && cfg.time_ref !== 'absolute' && cfg.time_ref !== 'solar_altitude' && cfg.time_ref !== 'solar_azimuth')
 const showSolar    = computed(() => showTimeRef.value && cfg.time_ref === 'solar_altitude')
+const showAzimuth  = computed(() => showTimeRef.value && cfg.time_ref === 'solar_azimuth')
 
 const winFromExpr = computed(() => buildWinExpr(winFrom))
 const winToExpr   = computed(() => buildWinExpr(winTo))
@@ -453,6 +456,7 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                 <option value="sunset">{{ $t('zst.timeRefSunset') }}</option>
                 <option value="solar_noon">{{ $t('zst.timeRefSolarNoon') }}</option>
                 <option value="solar_altitude">{{ $t('zst.timeRefSolarAltitude') }}</option>
+                <option value="solar_azimuth">{{ $t('zst.timeRefSolarAzimuth') }}</option>
               </select>
             </div>
 
@@ -476,6 +480,20 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                 <select v-model="cfg.sun_direction" :class="iCls">
                   <option value="rising">{{ $t('zst.sunDirRising') }}</option>
                   <option value="setting">{{ $t('zst.sunDirSetting') }}</option>
+                </select>
+              </div>
+            </div>
+            <div v-if="showAzimuth" class="grid grid-cols-2 gap-3">
+              <div>
+                <label :class="lCls">{{ $t('zst.solarAzimuthDeg') }}</label>
+                <input v-model.number="cfg.solar_azimuth_deg" type="number" min="0" max="360" step="1" :class="iCls" />
+                <p :class="hCls">{{ $t('zst.solarAzimuthDegHint') }}</p>
+              </div>
+              <div>
+                <label :class="lCls">{{ $t('zst.solarAzimuthWindow') }}</label>
+                <select v-model="cfg.sun_direction" :class="iCls">
+                  <option value="rising">{{ $t('zst.solarAzimuthWindowRising') }}</option>
+                  <option value="setting">{{ $t('zst.solarAzimuthWindowSetting') }}</option>
                 </select>
               </div>
             </div>
