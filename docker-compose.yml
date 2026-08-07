@@ -127,9 +127,38 @@ services:
     #   - "/dev/bus/usb/002/007:/dev/bus/usb/002/007"                # plain USB busmaster
     #   - "/dev/serial/by-id/usb-FTDI_...:/dev/ttyUSB0"                # ElabNET PBM (stable path!)
 
+  # ── Matterbridge sidecar (optional, issue #56) ───────────────────────────
+  # Bridges DataPoints tagged "matter:<devicetype>" into Apple Home, Google
+  # Home, Alexa and SmartThings via the Matter protocol. Uses the official
+  # luligu/matterbridge image directly (see matter/README.md) — the matter/
+  # directory itself is bind-mounted in as a plugin source directory, no
+  # custom Dockerfile needed. Skipped by default via a Compose profile. To
+  # enable:
+  #   1. `npm run build` in matter/ (produces dist/, which gets mounted in)
+  #   2. Create an API key in the Admin GUI (Settings → API Keys) — entered
+  #      via the Matterbridge frontend's plugin config form, not .env
+  #   3. Run with: COMPOSE_PROFILES=matter docker compose up -d
+  #      (combine with other profiles comma-separated, e.g. onewire,matter)
+  #   4. One-time plugin registration — see matter/README.md
+  # network_mode: host is required for Matter's mDNS discovery, so this
+  # service is NOT on the same Docker network as mosquitto/obs — it reaches
+  # Mosquitto via localhost:<mapped port>, not the "mosquitto" service name.
+  matterbridge:
+    image: luligu/matterbridge:latest
+    container_name: obs-matterbridge
+    restart: unless-stopped
+    profiles: ["matter"]
+    network_mode: host
+    volumes:
+      - ./matter:/root/Matterbridge/matterbridge-obs
+      - matterbridge_storage:/root/.matterbridge
+      - matterbridge_cert:/root/.mattercert
+
 
 volumes:
   obs_data:
   mosquitto_passwd:    # shared between mosquitto + obs for passwd file management
   mosquitto_data:      # Mosquitto persistence (retained messages, QoS queues)
   mosquitto_log:
+  matterbridge_storage: # Matterbridge's own plugin/config storage
+  matterbridge_cert:    # Matterbridge's Matter fabric certificates

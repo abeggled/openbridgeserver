@@ -1,0 +1,12 @@
+{
+  "name": "matterbridge-obs",
+  "type": "DynamicPlatform",
+  "obsApiUrl": "http://localhost:8080",
+  "obsApiKey": "",
+  "mqttHost": "localhost",
+  "mqttPort": 1883,
+  "mqttUsername": "obs",
+  "mqttPassword": "",
+  "debug": false,
+  "unregisterOnShutdown": false
+}

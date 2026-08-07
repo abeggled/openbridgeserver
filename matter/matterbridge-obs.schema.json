@@ -1,0 +1,67 @@
+{
+  "title": "matterbridge-obs",
+  "description": "Bridges open bridge server DataPoints tagged matter:<devicetype> into Matter (Apple Home, Google Home, Alexa, SmartThings)",
+  "type": "object",
+  "properties": {
+    "name": {
+      "title": "Plugin Name",
+      "description": "Plugin name",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "type": {
+      "title": "Plugin Type",
+      "description": "Plugin type",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "obsApiUrl": {
+      "title": "OBS API URL",
+      "description": "Base URL of the open bridge server REST API, e.g. http://localhost:8080",
+      "type": "string",
+      "default": "http://localhost:8080"
+    },
+    "obsApiKey": {
+      "title": "OBS API Key",
+      "description": "API key created in the OBS Admin GUI (Settings → API Keys)",
+      "type": "string"
+    },
+    "mqttHost": {
+      "title": "MQTT Host",
+      "description": "Hostname/IP of the Mosquitto broker OBS uses",
+      "type": "string",
+      "default": "localhost"
+    },
+    "mqttPort": {
+      "title": "MQTT Port",
+      "description": "Port of the Mosquitto broker",
+      "type": "number",
+      "default": 1883
+    },
+    "mqttUsername": {
+      "title": "MQTT Username",
+      "description": "MQTT service account username (matches OBS's mqtt.username config)",
+      "type": "string"
+    },
+    "mqttPassword": {
+      "title": "MQTT Password",
+      "description": "MQTT service account password (matches OBS's mqtt.password config)",
+      "type": "string",
+      "ui:widget": "password"
+    },
+    "debug": {
+      "title": "Enable Debug",
+      "description": "Enable debug logging for the plugin (development only)",
+      "type": "boolean",
+      "default": false
+    },
+    "unregisterOnShutdown": {
+      "title": "Unregister On Shutdown",
+      "description": "Unregister all devices on shutdown (development only)",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
