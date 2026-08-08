@@ -96,7 +96,36 @@ real time (`TemperatureMeasurement.measuredValue: null → 2150` for 21.50°C,
 `dp/{uuid}/set`) is wired the same way but needs a real paired controller (Alexa/HomeKit) to
 trigger — not verified in this pass.
 
+## Standalone Matter LXC template
+
+For Proxmox/LXC-only installs (no Docker), the same plugin also ships as a **separate, standalone
+LXC template** — deliberately not embedded into the main `openbridgeserver-lxc` template, to
+avoid adding a permanent Node.js footprint to every OBS install (see the #56 discussion). It runs
+`matterbridge` as a systemd service instead of a container, otherwise identical: same plugin,
+same `/root/Matterbridge/matterbridge-obs` layout, same frontend-driven config, talking to an
+existing OBS instance purely over the network.
+
+Build locally:
+
+```bash
+./tools/build-local.sh matter-lxc
+```
+
+Produces `dist/matterbridge-obs-lxc_<version>_<arch>.tar.zst` (+ `.sha256`), built by
+`tools/_matter-lxc-inner.sh` (modeled on the main template's `tools/_lxc-inner.sh`, much
+smaller — no Python/venv, no GUI/Visu build, just Node.js 24 + `matterbridge` (global npm
+install) + this plugin, one `matterbridge.service` systemd unit). Plugin registration
+(`matterbridge --add`) runs for real at build time, inside the chroot — confirmed working by
+inspecting the packaged rootfs and running `matterbridge --version`/`node --version` inside it via
+a privileged Docker chroot. Actually booting it under systemd needs a real Proxmox host (`pct
+restore` the `.tar.zst`, or equivalent) — not verified in this pass, this sandbox has no Proxmox.
+
+Not yet built: a GitHub Actions release workflow for this template (its own versioning/trigger
+scheme — tracking `matterbridge` upstream releases vs. its own tags — is an open decision, see
+the #56 comment) and an `obs-update`-style updater script (`scripts/obs-update` is too
+OBS-specific to reuse as-is).
+
 ## Out of scope for this slice
 
 See issue #56 for the full roadmap: `matter_config` DB table + REST API + Visu integration,
-additional device types, a standalone Matter LXC template, CI linting/testing for this package.
+additional device types, CI/release automation for the LXC template.

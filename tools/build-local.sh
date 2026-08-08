@@ -23,11 +23,12 @@ Usage: tools/build-local.sh [OPTIONS] COMMAND
 Build open bridge server artifacts locally. Only requirement: Docker.
 
 Commands:
-  docker    Build Docker image via docker compose build obs
-  lxc       Build LXC .tar.zst template (runs inside Docker, needs --privileged)
-  bundle    Build app bundle only (no rootfs, much faster than lxc)
-  all       Build docker + lxc
-  clean     Remove dist/ artifacts, rootfs cache, and builder image
+  docker      Build Docker image via docker compose build obs
+  lxc         Build LXC .tar.zst template (runs inside Docker, needs --privileged)
+  bundle      Build app bundle only (no rootfs, much faster than lxc)
+  matter-lxc  Build the standalone Matter LXC template (matterbridge + matterbridge-obs)
+  all         Build docker + lxc
+  clean       Remove dist/ artifacts, rootfs cache, and builder image
 
 Options:
   --version VER    Override version (default: git describe --tags --always --dirty)
@@ -43,6 +44,7 @@ Options:
 Examples:
   tools/build-local.sh docker
   tools/build-local.sh --version 2026.6.0 lxc
+  tools/build-local.sh matter-lxc
   tools/build-local.sh --push --image ghcr.io/owner/openbridgeserver docker
 
 Notes:
@@ -52,6 +54,8 @@ Notes:
     built automatically on first run and cached via Docker layer cache.
   - The debootstrap base system is cached in ~/.cache/obs-lxc-builder/ to speed up
     repeated lxc builds. Remove that directory or pass --no-cache to rebuild from scratch.
+  - matter-lxc uses its own base-system cache in ~/.cache/matter-lxc-builder/ (same
+    Ubuntu Resolute content, kept separate so the two builders don't race on one cache file).
   - Cross-arch LXC builds are not supported locally; the output arch matches the host.
   - For multi-arch Docker builds, ensure QEMU binfmts are registered first:
       docker run --privileged --rm tonistiigi/binfmt --install all
@@ -209,6 +213,29 @@ build_bundle() {
     echo "==> Bundle artifacts written to $OUTPUT_DIR"
 }
 
+build_matter_lxc() {
+    local version="$1"
+    require_docker
+    ensure_builder_image
+    check_privileged
+
+    local cache_dir="$HOME/.cache/matter-lxc-builder"
+    mkdir -p "$OUTPUT_DIR" "$cache_dir"
+    echo "==> Building Matter LXC template version=${version}..."
+
+    docker run --rm --privileged \
+        --env VERSION="$version" \
+        --env NO_CACHE="$NO_CACHE" \
+        --volume "$PROJECT_ROOT:/workspace:ro" \
+        --volume "$OUTPUT_DIR:/output" \
+        --volume "$cache_dir:/cache" \
+        --volume "$SCRIPT_DIR/_matter-lxc-inner.sh:/build-lxc.sh:ro" \
+        "$BUILDER_IMAGE" \
+        /bin/bash /build-lxc.sh
+
+    echo "==> Matter LXC artifacts written to $OUTPUT_DIR"
+}
+
 build_clean() {
     echo "==> Cleaning build artifacts..."
 
@@ -233,6 +260,14 @@ build_clean() {
         removed=1
     fi
 
+    # Matter LXC rootfs cache
+    local matter_cache_dir="$HOME/.cache/matter-lxc-builder"
+    if compgen -G "$matter_cache_dir/*.tar.zst" &>/dev/null; then
+        rm -f "$matter_cache_dir"/*.tar.zst
+        echo "    Removed Matter LXC rootfs cache from $matter_cache_dir/"
+        removed=1
+    fi
+
     # Builder image
     if docker image inspect "$BUILDER_IMAGE" &>/dev/null 2>&1; then
         docker image rm "$BUILDER_IMAGE"
@@ -248,7 +283,7 @@ build_clean() {
 COMMAND=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        docker|lxc|bundle|all|clean)  COMMAND="$1"; shift ;;
+        docker|lxc|bundle|matter-lxc|all|clean)  COMMAND="$1"; shift ;;
         --version)                    VERSION="$2"; shift 2 ;;
         --image)                      IMAGE_NAME="$2"; shift 2 ;;
         --push)                       PUSH=true; shift ;;
@@ -279,7 +314,8 @@ fi
 # ── Resolve defaults ───────────────────────────────────────────────────────────
 [[ -z "$VERSION" ]] && VERSION=$(detect_version)
 
-if [[ -z "$REPO" ]]; then
+# matter-lxc has no obs-update stamping step, so REPO is irrelevant to it.
+if [[ -z "$REPO" ]] && [[ "$COMMAND" != "docker" ]] && [[ "$COMMAND" != "matter-lxc" ]]; then
     REPO=$(detect_repo)
     if [[ -z "$REPO" ]]; then
         echo "warning: could not auto-detect GitHub repo from git remote" >&2
@@ -289,7 +325,7 @@ if [[ -z "$REPO" ]]; then
 fi
 
 echo "Version : $VERSION"
-[[ "$COMMAND" != "docker" ]] && echo "Repo    : $REPO"
+[[ "$COMMAND" != "docker" ]] && [[ "$COMMAND" != "matter-lxc" ]] && echo "Repo    : $REPO"
 [[ "$COMMAND" != "docker" ]] && echo "Output  : $OUTPUT_DIR"
 echo ""
 
@@ -303,6 +339,9 @@ case "$COMMAND" in
         ;;
     bundle)
         build_bundle "$VERSION" "$REPO"
+        ;;
+    matter-lxc)
+        build_matter_lxc "$VERSION"
         ;;
     all)
         build_docker "$VERSION"
