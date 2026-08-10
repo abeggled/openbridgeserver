@@ -118,6 +118,13 @@ class ModbusTcpAdapter(AdapterBase):
         # None when serialize_reads=False (no-op via nullcontext).
         # Reconfigured in connect() based on serialize_reads option.
         self._io_sem: asyncio.Semaphore | None = asyncio.Semaphore(1)
+        # Serializes bus transactions purely to make inter_read_delay_ms
+        # meaningful when serialize_reads=False and shared_bus=False (_io_sem
+        # is None). Without this, concurrent poll tasks each sleep after their
+        # own transaction, but the sleeps overlap and never produce a minimum
+        # interval between transactions on the bus. Only ever acquired when a
+        # positive delay is configured, so the no-delay fast path is unaffected.
+        self._space_lock: asyncio.Lock = asyncio.Lock()
         # Prevents concurrent _on_bindings_reloaded() calls from interleaving.
         # Without this, two simultaneous REST binding changes can create orphan
         # poll tasks that use the same TCP client alongside the tracked tasks.
@@ -471,7 +478,10 @@ class ModbusTcpAdapter(AdapterBase):
     @contextlib.asynccontextmanager
     async def _modbus_io_context(self):
         if self._io_sem is None:
-            async with self._inflight_modbus_call():
+            # Only serialize via _space_lock when a delay is actually configured —
+            # otherwise concurrent poll tasks keep their full existing concurrency.
+            spacer = self._space_lock if self._adp_cfg.inter_read_delay_ms > 0 else contextlib.nullcontext()
+            async with spacer, self._inflight_modbus_call():
                 client = self._client if self._client_ready() else None
                 try:
                     yield client

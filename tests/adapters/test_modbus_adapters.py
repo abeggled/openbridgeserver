@@ -2073,3 +2073,124 @@ class TestModbusTcpSharedBus:
         from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
 
         assert ModbusTcpAdapterConfig().shared_bus is False
+
+
+# ---------------------------------------------------------------------------
+# Codex review follow-ups on PR#1105 (inter_read_delay_ms)
+# ---------------------------------------------------------------------------
+
+
+class TestSpaceOutBus:
+    """Coverage for _space_out_bus() (Codex P1, 2026-08-05 review: the delay
+    helper and its branches had no dedicated tests)."""
+
+    async def test_no_client_skips_delay(self):
+        adapter, _ = _make_tcp()
+        adapter._adp_cfg = ModbusTcpAdapterConfig(inter_read_delay_ms=50)
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await adapter._space_out_bus(None)
+        sleep_mock.assert_not_called()
+
+    async def test_zero_delay_is_a_noop(self):
+        adapter, _ = _make_tcp()
+        adapter._adp_cfg = ModbusTcpAdapterConfig(inter_read_delay_ms=0)
+        client = _make_client(connected=True)
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await adapter._space_out_bus(client)
+        sleep_mock.assert_not_called()
+
+    async def test_positive_delay_sleeps_for_configured_duration(self):
+        adapter, _ = _make_tcp()
+        adapter._adp_cfg = ModbusTcpAdapterConfig(inter_read_delay_ms=250)
+        client = _make_client(connected=True)
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await adapter._space_out_bus(client)
+        sleep_mock.assert_awaited_once_with(0.25)
+
+    async def test_delay_runs_in_cleanup_even_when_body_raises(self):
+        """_modbus_io_context must still invoke _space_out_bus after an exception
+        raised inside the `async with` block (e.g. a pymodbus timeout)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 10})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        with patch.object(adapter, "_space_out_bus", new=AsyncMock()) as spacer, pytest.raises(RuntimeError):
+            async with adapter._modbus_io_context():
+                raise RuntimeError("simulated transaction failure")
+        spacer.assert_awaited_once_with(client)
+
+
+class TestInterReadDelaySerialization:
+    """Codex P2 (2026-08-04 review): when serialize_reads=False and
+    shared_bus=False (_io_sem is None), inter_read_delay_ms must still
+    enforce a minimum gap between bus transactions — concurrent poll tasks
+    must not run their transactions back-to-back with overlapping sleeps.
+    """
+
+    async def test_delay_serializes_concurrent_calls_when_io_sem_is_none(self):
+        adapter, _ = _make_tcp(
+            {
+                "host": "127.0.0.1",
+                "port": 502,
+                "timeout": 1.0,
+                "serialize_reads": False,
+                "shared_bus": False,
+                "inter_read_delay_ms": 20,
+            }
+        )
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        assert adapter._io_sem is None  # sanity: this is the "no semaphore" path
+
+        active = 0
+        max_active = 0
+
+        async def run_transaction():
+            nonlocal active, max_active
+            async with adapter._modbus_io_context():
+                active += 1
+                max_active = max(max_active, active)
+                await asyncio.sleep(0.01)
+                active -= 1
+
+        await asyncio.gather(run_transaction(), run_transaction())
+
+        assert max_active == 1, "transactions overlapped even though inter_read_delay_ms > 0"
+
+    async def test_zero_delay_leaves_full_concurrency_when_io_sem_is_none(self):
+        """Regression guard: without a configured delay, the no-semaphore path
+        must keep its original unlimited concurrency (no serialization cost)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": False, "shared_bus": False})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        assert adapter._adp_cfg.inter_read_delay_ms == 0
+
+        active = 0
+        max_active = 0
+        both_entered = asyncio.Event()
+
+        async def run_transaction():
+            nonlocal active, max_active
+            async with adapter._modbus_io_context():
+                active += 1
+                max_active = max(max_active, active)
+                if active == 2:
+                    both_entered.set()
+                await asyncio.wait_for(both_entered.wait(), timeout=1.0)
+                active -= 1
+
+        await asyncio.gather(run_transaction(), run_transaction())
+
+        assert max_active == 2, "expected both transactions to run concurrently when no delay is configured"
