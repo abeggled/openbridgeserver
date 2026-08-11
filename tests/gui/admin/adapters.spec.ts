@@ -174,9 +174,18 @@ test('HA-Instanz via GUI löschen', async ({ page }) => {
     await deleteBtn.click()
 
     // ConfirmDialog (data-testid="btn-confirm" exists in ConfirmDialog.vue)
+    const deleteResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'DELETE'
+      && new URL(response.url()).pathname === `/api/v1/adapters/instances/${instanceId}`,
+    )
     await page.click('[data-testid="btn-confirm"]')
+    const deleteResponse = await deleteResponsePromise
+    expect(
+      deleteResponse.ok(),
+      `DELETE /api/v1/adapters/instances/${instanceId} returned ${deleteResponse.status()}`,
+    ).toBeTruthy()
 
-    // Row must disappear after deletion
+    // The mutation completed; only the local list refresh remains.
     await expect(row).not.toBeVisible({ timeout: 5_000 })
   } finally {
     // Best-effort cleanup (no-op if already deleted via GUI)

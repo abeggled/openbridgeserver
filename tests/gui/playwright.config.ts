@@ -33,7 +33,21 @@ export default defineConfig({
     {
       name: 'admin',
       testMatch: '**/admin/**/*.spec.ts',
+      testIgnore: [
+        '**/admin/ringbuffer.spec.ts',
+        '**/admin/ringbuffer-filterbuilder.spec.ts',
+      ],
       dependencies: ['admin-setup'],
+      use: { storageState: '.auth/admin.json' },
+    },
+    {
+      name: 'admin-ringbuffer',
+      testMatch: [
+        '**/admin/ringbuffer.spec.ts',
+        '**/admin/ringbuffer-filterbuilder.spec.ts',
+      ],
+      dependencies: ['admin-setup'],
+      workers: 1,
       use: { storageState: '.auth/admin.json' },
     },
     {

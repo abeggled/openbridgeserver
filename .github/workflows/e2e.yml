@@ -26,6 +26,8 @@ jobs:
       OBS_MQTT_PASSWORD: ci-mqtt-pass
       OBS_JWT_SECRET: ci-jwt-secret-min-32-chars-long-enough
       OBS_LOG_LEVEL: WARNING
+      E2E_USER: admin
+      E2E_PASS: admin
 
     steps:
       - uses: actions/checkout@v7
@@ -36,7 +38,14 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Bring up the stack
-        run: docker compose up -d --build
+        run: |
+          set -euo pipefail
+          docker compose build
+          docker compose up -d mosquitto
+          printf '%s\n' admin \
+            | docker compose run --rm --no-deps -T obs \
+                obs-admin --no-backup auth first-owner admin --password-stdin
+          docker compose up -d
 
       - name: Wait for /system/health
         run: |

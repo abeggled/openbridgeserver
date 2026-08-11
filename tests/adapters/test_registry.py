@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import obs.adapters.registry as reg
+from obs.adapters.base import AdapterDelegationCapability
 from obs.adapters.registry import (
     _row_to_binding,
     all_classes,
@@ -24,6 +26,7 @@ from obs.adapters.registry import (
     start_instance,
     stop_all,
     stop_instance,
+    supports_delegation,
 )
 
 # ---------------------------------------------------------------------------
@@ -195,6 +198,50 @@ class TestLookup:
         assert result["Z"] is cls
         result["NEW"] = object()
         assert "NEW" not in reg._adapters  # copy, not original
+
+    def test_delegation_requires_explicit_typed_declaration(self):
+        class Delegable:
+            adapter_type = "DELEGABLE"
+            delegation_capabilities = frozenset({AdapterDelegationCapability.LINK_BINDING})
+
+        class Legacy:
+            adapter_type = "LEGACY"
+
+        class Malformed:
+            adapter_type = "MALFORMED"
+            delegation_capabilities: ClassVar = {AdapterDelegationCapability.LINK_BINDING}
+
+        reg._adapters.update(DELEGABLE=Delegable, LEGACY=Legacy, MALFORMED=Malformed)
+
+        assert supports_delegation("DELEGABLE", AdapterDelegationCapability.LINK_BINDING)
+        assert not supports_delegation("DELEGABLE", AdapterDelegationCapability.CREATE_DEVICE)
+        assert not supports_delegation("LEGACY", AdapterDelegationCapability.LINK_BINDING)
+        assert not supports_delegation("MALFORMED", AdapterDelegationCapability.LINK_BINDING)
+        assert not supports_delegation("UNKNOWN", AdapterDelegationCapability.LINK_BINDING)
+        assert not supports_delegation("DELEGABLE", "link_binding")
+
+    def test_protocol_declarations_keep_knx_closed_and_mqtt_explicit(self):
+        from obs.adapters.anwesenheit.adapter import AnwesenheitssimulationAdapter
+        from obs.adapters.iobroker.adapter import IoBrokerAdapter
+        from obs.adapters.knx.adapter import KnxAdapter
+        from obs.adapters.mqtt.adapter import MqttAdapter
+
+        assert AnwesenheitssimulationAdapter.delegation_capabilities == frozenset({AdapterDelegationCapability.LINK_BINDING})
+        assert IoBrokerAdapter.delegation_capabilities == frozenset(
+            {
+                AdapterDelegationCapability.CREATE_DATAPOINT,
+                AdapterDelegationCapability.LINK_BINDING,
+            }
+        )
+        assert KnxAdapter.delegation_capabilities == frozenset()
+        assert MqttAdapter.delegation_capabilities == frozenset(
+            {
+                AdapterDelegationCapability.CREATE_DEVICE,
+                AdapterDelegationCapability.CREATE_DATAPOINT,
+                AdapterDelegationCapability.LINK_BINDING,
+                AdapterDelegationCapability.CONFIGURE_INSTANCE,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import ChartConfig from './Config.vue'
 // Werte als Variablen statt direkter `label: '...'`/`placeholder="..."`-Literale,
 // damit der i18n-Guard (tools/check_i18n_guard.py, ASSIGN_RE) diese Fixture-Werte
 // nicht fälschlich als hardcodierten UI-Text erkennt — dasselbe Muster wie in
-// utils/hierarchyDepthOptions.js (siehe AGENTS.MD) und seriesDefs.test.ts.
+// utils/hierarchyDepthOptions.js (siehe docs/AGENT_REFERENCE.md) und seriesDefs.test.ts.
 const primaryLabelPlaceholder = ['Primärlabel', 'Platzhalter'].join('-')
 const voltageChartTitle       = ['Netzspannung', 'Verlauf'].join(' ')
 

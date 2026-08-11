@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import type { DataPointValue } from '@/types'
 
 const props = defineProps<{
@@ -10,6 +11,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const label = computed(() => (props.config.label as string | undefined) ?? '—')
@@ -108,7 +110,8 @@ async function sendValue() {
   lastSentValue = localValue.value
   lastSentAt = now
   try {
-    await datapoints.write(props.datapointId, localValue.value)
+    if (props.writeContext) await datapoints.write(props.datapointId, localValue.value, props.writeContext)
+    else await datapoints.write(props.datapointId, localValue.value)
   } catch {
     clearPending()
   }

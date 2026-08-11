@@ -12,9 +12,10 @@ import uuid as uuid_mod
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 
+from obs.api.audit import contract_audit, set_contract_audit_resource_id
 from obs.api.auth import get_admin_user
 from obs.config import get_settings
 
@@ -144,11 +145,16 @@ async def scan_knx_gateways(
     ]
 
 
-@router.post("/keyfile", response_model=KeyfileParseResult)
+@router.post(
+    "/keyfile",
+    response_model=KeyfileParseResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/knx/keyfile"))],
+)
 async def upload_keyfile(
     file: UploadFile = File(...),
     password: str = Form(...),
     _admin: str = Depends(get_admin_user),
+    request: Request = None,
 ) -> KeyfileParseResult:
     """.knxkeys Datei hochladen, entschlüsseln und verfügbare Tunnel zurückgeben.
 
@@ -169,6 +175,8 @@ async def upload_keyfile(
 
     # Speichern
     file_id = str(uuid_mod.uuid4())
+    if request is not None:
+        set_contract_audit_resource_id(request, file_id)
     keyfile_path = _keyfiles_dir() / f"{file_id}.knxkeys"
     keyfile_path.write_bytes(content)
 
@@ -222,7 +230,11 @@ async def upload_keyfile(
     )
 
 
-@router.delete("/keyfile/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/keyfile/{file_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/knx/keyfile/{file_id}"))],
+)
 async def delete_keyfile(
     file_id: str,
     _admin: str = Depends(get_admin_user),

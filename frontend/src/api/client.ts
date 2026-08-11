@@ -8,14 +8,6 @@
 
 const BASE = '/api/v1'
 
-/** Wird von request() geworfen — trägt den HTTP-Status, damit Aufrufer z.B. auf 403 reagieren können */
-export class ApiRequestError extends Error {
-  constructor(message: string, public readonly status: number) {
-    super(message)
-    this.name = 'ApiRequestError'
-  }
-}
-
 /** FastAPI gibt detail manchmal als Array zurück — immer zu String normalisieren */
 function extractDetail(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object') return fallback
@@ -28,6 +20,18 @@ function extractDetail(body: unknown, fallback: string): string {
       .join(', ')
   }
   return String(detail)
+}
+
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly code?: string,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+    this.name = 'ApiRequestError'
+  }
 }
 
 // ── Token-Verwaltung ──────────────────────────────────────────────────────────
@@ -83,7 +87,7 @@ export function setSessionToken(nodeId: string, token: string, expiresIn = 3600)
 // ── Write-Kontext ─────────────────────────────────────────────────────────────
 // Wird von VisuViewer gesetzt bevor Widgets rendern; automatisch bei Write mitgeschickt.
 
-interface WriteContext {
+export interface WriteContext {
   pageId?: string
   sessionToken?: string
   /** Knoten, der das Access-Level definiert (für Session-Token-Verwaltung bei Ablauf) */
@@ -131,6 +135,14 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => null)
+    const detail = body && typeof body === 'object'
+      ? (body as Record<string, unknown>).detail
+      : null
+    if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+      const details = detail as Record<string, unknown>
+      const code = typeof details.code === 'string' ? details.code : undefined
+      throw new ApiRequestError(code ?? res.statusText, res.status, code, details)
+    }
     throw new ApiRequestError(extractDetail(body, res.statusText), res.status)
   }
 
@@ -164,7 +176,7 @@ export const auth = {
 
 // ── Visu-Nodes ────────────────────────────────────────────────────────────────
 
-import type { VisuNode, PageConfig, PinAuthResponse, UserResponse } from '@/types'
+import type { VisuNode, VisuNodeUpdate, PageConfig, PinAuthResponse, UserResponse } from '@/types'
 
 export const visu = {
   tree: () => request<VisuNode[]>('/visu/tree'),
@@ -174,7 +186,7 @@ export const visu = {
   createNode: (data: Partial<VisuNode>) =>
     request<VisuNode>('/visu/nodes', { method: 'POST', body: JSON.stringify(data) }),
 
-  updateNode: (id: string, data: Partial<VisuNode>) =>
+  updateNode: (id: string, data: VisuNodeUpdate) =>
     request<VisuNode>(`/visu/nodes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   deleteNode: (id: string) =>
@@ -209,8 +221,11 @@ export const visu = {
     request<PageConfig>(`/visu/pages/${id}`, { sessionToken }),
 
   /** Lädt alle Widget-Instanzen einer Seite ohne Zugriffsprüfung — für WidgetRef. */
-  getWidgetRef: (pageId: string) =>
-    request<import('@/types').WidgetRefInstance[]>(`/visu/widget-ref/${pageId}`, { silent401: true }),
+  getWidgetRef: (pageId: string, sessionNodeId = pageId) =>
+    request<import('@/types').WidgetRefInstance[]>(`/visu/widget-ref/${pageId}`, {
+      sessionToken: getSessionToken(sessionNodeId) ?? undefined,
+      silent401: true,
+    }),
 
   savePage: (id: string, config: PageConfig) =>
     request<void>(`/visu/pages/${id}`, {
@@ -268,10 +283,11 @@ export const datapoints = {
 
   get: (id: string) => request<DataPoint>(`/datapoints/${id}`),
 
-  getValue: (id: string, silent401 = false) => {
+  getValue: (id: string, silent401 = false, context?: WriteContext) => {
+    const effectiveContext = context ?? _writeContext
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)       headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (effectiveContext.pageId)       headers['X-Page-Id']       = effectiveContext.pageId
+    if (effectiveContext.sessionToken) headers['X-Session-Token'] = effectiveContext.sessionToken
     return request<{ value: unknown; unit: string | null; ts: string | null; quality: string }>(
       `/datapoints/${id}/value`, { silent401, headers }
     )
@@ -430,19 +446,21 @@ export const visuBackgrounds = {
 // ── History ───────────────────────────────────────────────────────────────────
 
 export const history = {
-  query: (id: string, from: string, to: string, limit = 10000) => {
+  query: (id: string, from: string, to: string, limit = 10000, context?: WriteContext) => {
+    const effectiveContext = context ?? _writeContext
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (effectiveContext.pageId)      headers['X-Page-Id']       = effectiveContext.pageId
+    if (effectiveContext.sessionToken) headers['X-Session-Token'] = effectiveContext.sessionToken
     return request<{ ts: string; v: unknown; u: string | null; q: string }[]>(
       `/history/${id}?from=${from}&to=${to}&limit=${limit}`,
       { headers, silent401: true },
     )
   },
-  aggregate: (id: string, from: string, to: string, interval: string, fn = 'avg') => {
+  aggregate: (id: string, from: string, to: string, interval: string, fn = 'avg', context?: WriteContext) => {
+    const effectiveContext = context ?? _writeContext
     const headers: Record<string, string> = {}
-    if (_writeContext.pageId)      headers['X-Page-Id']       = _writeContext.pageId
-    if (_writeContext.sessionToken) headers['X-Session-Token'] = _writeContext.sessionToken
+    if (effectiveContext.pageId)      headers['X-Page-Id']       = effectiveContext.pageId
+    if (effectiveContext.sessionToken) headers['X-Session-Token'] = effectiveContext.sessionToken
     return request<{ bucket: string; v: unknown; n?: number | null }[]>(
       `/history/${id}/aggregate?fn=${fn}&interval=${interval}&from=${from}&to=${to}`,
       { headers, silent401: true },

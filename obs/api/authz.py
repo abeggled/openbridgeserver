@@ -29,10 +29,16 @@ class GrantEffect(str, Enum):
     DENY = "deny"
 
 
+class ControlClass(str, Enum):
+    ROOM_LOCAL = "room_local"
+    CENTRAL_PLANT = "central_plant"
+
+
 RoleName = Literal["owner", "resident", "operator", "guest"]
 ActionName = Literal["read", "write", "generate", "activate"]
 EffectName = Literal["allow", "deny"]
 PrincipalType = Literal["user", "api_key"]
+ControlClassName = Literal["room_local", "central_plant"]
 
 
 _ROLE_RANK: dict[Role, int] = {
@@ -56,10 +62,12 @@ class AuthzTarget:
     node_id: str
     ancestors: tuple[str, ...] = ()
     min_role: Role | RoleName | None = None
+    control_class: ControlClass | ControlClassName = ControlClass.ROOM_LOCAL
 
     def __post_init__(self) -> None:
         if self.min_role is not None:
             object.__setattr__(self, "min_role", Role(self.min_role))
+        object.__setattr__(self, "control_class", ControlClass(self.control_class))
 
     @property
     def path(self) -> tuple[str, ...]:
@@ -74,6 +82,7 @@ class RoleGrant:
     node_id: str
     role: Role | RoleName
     effect: GrantEffect | EffectName = GrantEffect.ALLOW
+    central_control: bool = False
     ancestors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -124,6 +133,8 @@ def authorize(
 
     if all(decision.allowed for decision in target_decisions):
         return AuthzDecision(True, "allowed")
+    if any(decision.reason == "central_control_required" for decision in target_decisions):
+        return AuthzDecision(False, "central_control_required")
     return AuthzDecision(False, "missing_allow")
 
 
@@ -142,8 +153,14 @@ def _authorize_target(*, action: AuthzAction, target: AuthzTarget, grants: Itera
     if any(grant.effect == GrantEffect.DENY for grant in matching_grants):
         return AuthzDecision(False, "explicit_deny")
 
-    if any(_role_allows(role=grant.role, action=action, target=target) for grant in matching_grants):
+    if any(_grant_allows(grant=grant, action=action, target=target) for grant in matching_grants):
         return AuthzDecision(True, "allowed")
+    if (
+        action != AuthzAction.READ
+        and target.control_class == ControlClass.CENTRAL_PLANT
+        and any(_role_allows(role=grant.role, action=action, target=target) for grant in matching_grants)
+    ):
+        return AuthzDecision(False, "central_control_required")
     return AuthzDecision(False, "missing_allow")
 
 
@@ -151,6 +168,9 @@ def _grant_applies(*, action: AuthzAction, grant: RoleGrant, target: AuthzTarget
     if grant.node_type != target.node_type:
         return False
     if action == AuthzAction.READ:
+        if grant.effect == GrantEffect.DENY:
+            # Deny cascades downward only; must not remove access to ancestor nodes via siblings.
+            return grant.node_id in target.path
         return target.node_id in grant.path or grant.node_id in target.path
     return grant.node_id in target.path
 
@@ -161,3 +181,11 @@ def _role_allows(*, role: Role, action: AuthzAction, target: AuthzTarget) -> boo
     if target.min_role is None:
         return True
     return _ROLE_RANK[role] >= _ROLE_RANK[target.min_role]
+
+
+def _grant_allows(*, grant: RoleGrant, action: AuthzAction, target: AuthzTarget) -> bool:
+    if not _role_allows(role=grant.role, action=action, target=target):
+        return False
+    if action == AuthzAction.READ or target.control_class == ControlClass.ROOM_LOCAL:
+        return True
+    return grant.central_control

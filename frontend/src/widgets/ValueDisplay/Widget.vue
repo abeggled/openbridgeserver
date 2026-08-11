@@ -7,6 +7,7 @@ import { useIcons } from '@/composables/useIcons'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { useWebSocket } from '@/composables/useWebSocket'
 import type { DataPointValue } from '@/types'
+import type { WriteContext } from '@/api/client'
 import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE, resolveTimeRange } from '@/widgets/Chart/timeRangePresets'
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Filler, Tooltip)
@@ -32,6 +33,8 @@ const props = defineProps<{
   datapointId: string | null
   value: DataPointValue | null
   editorMode: boolean
+  pageId?: string | null
+  sessionToken?: string | null
   w?: number
   h?: number
 }>()
@@ -282,10 +285,19 @@ function makeDataset(color: string) {
   }
 }
 
+function readContext(): WriteContext | undefined {
+  if (!props.pageId && !props.sessionToken) return undefined
+  return {
+    ...(props.pageId ? { pageId: props.pageId } : {}),
+    ...(props.sessionToken ? { sessionToken: props.sessionToken } : {}),
+  }
+}
+
 async function fetchPoints(timeRange: string) {
   if (!props.datapointId || props.editorMode) return { pts: [], minMs: 0, maxMs: 0 }
   const { from: fromDate, to: toDate } = resolveTimeRange(timeRange)
-  const data = await history.query(props.datapointId, fromDate.toISOString(), toDate.toISOString())
+  const context = readContext()
+  const data = await history.query(props.datapointId, fromDate.toISOString(), toDate.toISOString(), 10000, context)
   histUnit = data[0]?.u ?? ''
   return {
     pts:   data.map(d => ({ x: new Date(d.ts).getTime(), y: Number(d.v) })),

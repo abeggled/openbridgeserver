@@ -11,9 +11,10 @@ import {
 // Filtersets are global state. Start every test from an empty, unfiltered
 // feed so a leftover topbar-active set cannot gate out live pushes.
 test.beforeEach(async () => {
-  // Monitor tests wait for a real WebSocket ("Live" badge) plus live pushes —
-  // the default 30s per-test budget is too tight under CI load.
-  test.setTimeout(60_000)
+  // Monitor tests wait for a real WebSocket ("Live" badge) plus live pushes.
+  // The auto-scroll case intentionally persists 46 values; serialized SQLite
+  // writes can push that end-to-end path just beyond 60 s under CI load.
+  test.setTimeout(90_000)
   await deleteAllFiltersets()
 })
 

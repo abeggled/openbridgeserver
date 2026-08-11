@@ -39,7 +39,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from obs.adapters.base import AdapterBase
+from obs.adapters.base import AdapterBase, AdapterDelegationCapability
 from obs.adapters.registry import register
 from obs.history.factory import get_history_plugin
 
@@ -123,6 +123,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
     adapter_type = "ANWESENHEITSSIMULATION"
     config_schema = AnwesenheitssimulationConfig
     binding_config_schema = AnwesenheitssimulationBindingConfig
+    delegation_capabilities = frozenset({AdapterDelegationCapability.LINK_BINDING})
 
     def __init__(
         self,

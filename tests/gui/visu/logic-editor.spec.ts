@@ -47,6 +47,8 @@ test('Logic-Editor Debug-Modus zeigt Wert nach Ausführen', async ({ page }) => 
 
     // 6. Run the graph
     await page.click('[data-testid="btn-run"]')
+    await expect(page.locator('[data-testid="action-preflight"]')).toBeVisible()
+    await page.click('[data-testid="preflight-confirm"]')
 
     // 7. Select the node and verify its output in the dedicated inspector.
     await page.locator('.vue-flow__node[data-id="node-1"]').click()
@@ -89,6 +91,8 @@ test('AND-Gate mit 3 Eingängen (input_count=3) zeigt true wenn alle Eingänge t
     await page.waitForTimeout(1_000)
     await page.click('[data-testid="btn-debug"]')
     await page.click('[data-testid="btn-run"]')
+    await expect(page.locator('[data-testid="action-preflight"]')).toBeVisible()
+    await page.click('[data-testid="preflight-confirm"]')
     await page.locator('.vue-flow__node[data-id="g"]').click()
     const inspector = page.locator('[data-testid="debug-inspector"]')
     await expect(inspector).toBeVisible({ timeout: 8_000 })

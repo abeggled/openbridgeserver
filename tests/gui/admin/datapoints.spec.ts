@@ -7,40 +7,44 @@ import { apiGet, apiPost, apiDelete } from '../helpers'
 
 test('DataPoint anlegen und in Liste sehen', async ({ page }) => {
   const name = `E2E-Temp-${Date.now()}`
+  let dpId: string | null = null
 
-  await page.goto('/gui/')
-  await page.click('[data-testid="nav-datapoints"]')
-  await expect(page).toHaveURL(/\/datapoints/)
+  try {
+    await page.goto('/gui/')
+    await page.click('[data-testid="nav-datapoints"]')
+    await expect(page).toHaveURL(/\/datapoints/)
 
-  await page.click('[data-testid="btn-new-datapoint"]')
+    await page.click('[data-testid="btn-new-datapoint"]')
 
-  // Fill the form
-  await page.fill('[data-testid="input-name"]', name)
-  await page.selectOption('[data-testid="select-datatype"]', 'FLOAT')
+    // Fill the form
+    await page.fill('[data-testid="input-name"]', name)
+    await page.selectOption('[data-testid="select-datatype"]', 'FLOAT')
 
-  await page.click('[data-testid="btn-save"]')
+    // Synchronize on the mutation itself. Under concurrent E2E load the API can
+    // legitimately take longer than the old fixed 5 s modal timeout, while the
+    // disabled save button correctly indicates that the request is still pending.
+    const createResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/v1/datapoints/',
+    )
+    await page.click('[data-testid="btn-save"]')
+    const createResponse = await createResponsePromise
+    expect(createResponse.ok(), `POST /api/v1/datapoints/ returned ${createResponse.status()}`).toBeTruthy()
+    dpId = ((await createResponse.json()) as { id: string }).id
 
-  // Wait for the modal to close
-  await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible({ timeout: 5_000 })
+    // The response has completed; only Vue's local state update remains.
+    await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible()
 
-  // Search for the new DP — the list is alphabetically paginated so it won't
-  // appear on page 1 without filtering
-  await page.fill('[data-testid="input-search"]', name)
-  await page.waitForTimeout(500)
+    // Search for the new DP — the list is alphabetically paginated so it won't
+    // appear on page 1 without filtering
+    await page.fill('[data-testid="input-search"]', name)
+    await page.waitForTimeout(500)
 
-  // The new row must appear in the filtered table
-  await expect(page.locator('[data-testid="datapoint-list"]')).toContainText(name, { timeout: 5_000 })
-
-  // Cleanup: find the row and delete via API
-  const rows = await page.locator('[data-testid^="dp-row-"]').all()
-  for (const row of rows) {
-    const text = await row.textContent()
-    if (text?.includes(name)) {
-      const testid = await row.getAttribute('data-testid') ?? ''
-      const id = testid.replace('dp-row-', '')
-      await apiDelete(`/api/v1/datapoints/${id}`)
-      break
-    }
+    // The new row must appear in the filtered table
+    await expect(page.locator('[data-testid="datapoint-list"]')).toContainText(name, { timeout: 5_000 })
+  } finally {
+    // Response-derived cleanup also covers failures after the mutation completed.
+    if (dpId) await apiDelete(`/api/v1/datapoints/${dpId}`)
   }
 })
 
@@ -224,24 +228,35 @@ test('Infinite Scroll lädt weitere Einträge nach', async ({ page }) => {
     await page.waitForSelector('[data-testid="input-search"]', { timeout: 15_000 })
 
     // Filter to just our fixtures
+    const initialSearchPromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/search/'
+        && url.searchParams.get('q') === prefix
+        && url.searchParams.get('page') === '0'
+        && response.ok()
+    })
     await page.fill('[data-testid="input-search"]', prefix)
-    await page.waitForTimeout(600)
+    await initialSearchPromise
 
     // Initial load: at most 50 rows
     const initialCount = await page.locator('[data-testid^="dp-row-"]').count()
     expect(initialCount).toBeLessThanOrEqual(50)
     expect(initialCount).toBeGreaterThan(0)
 
-    // The app layout scrolls <main>, not window. Scroll it to the bottom.
-    await page.evaluate(() => {
-      const main = document.querySelector('main')
-      if (main) main.scrollTop = main.scrollHeight
+    // Bring the observed sentinel into view and synchronize on page 1 instead
+    // of assuming a fixed delay is enough for IntersectionObserver + network.
+    const nextPagePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/search/'
+        && url.searchParams.get('q') === prefix
+        && url.searchParams.get('page') === '1'
+        && response.ok()
     })
-    await page.waitForTimeout(1_500)   // wait for IntersectionObserver + network
+    await page.locator('[data-testid="datapoint-list"] + div').scrollIntoViewIfNeeded()
+    await nextPagePromise
 
     // Now more rows should be visible
-    const afterScrollCount = await page.locator('[data-testid^="dp-row-"]').count()
-    expect(afterScrollCount).toBeGreaterThan(initialCount)
+    await expect.poll(() => page.locator('[data-testid^="dp-row-"]').count()).toBeGreaterThan(initialCount)
   } finally {
     for (const id of created) {
       await apiDelete(`/api/v1/datapoints/${id}`)
@@ -313,32 +328,40 @@ test('Neue Einheiten sind im Einheiten-Dropdown vorhanden', async ({ page }) => 
 
 test('DataPoint mit Einheit ° anlegen', async ({ page }) => {
   const name = `E2E-Winkel-${Date.now()}`
+  let dpId: string | null = null
 
-  await page.goto('/gui/')
-  await page.click('[data-testid="nav-datapoints"]')
-  await expect(page).toHaveURL(/\/datapoints/)
+  try {
+    await page.goto('/gui/')
+    await page.click('[data-testid="nav-datapoints"]')
+    await expect(page).toHaveURL(/\/datapoints/)
 
-  await page.click('[data-testid="btn-new-datapoint"]')
-  await page.fill('[data-testid="input-name"]', name)
-  await page.selectOption('[data-testid="select-unit"]', '°')
-  await page.click('[data-testid="btn-save"]')
+    await page.click('[data-testid="btn-new-datapoint"]')
+    await page.fill('[data-testid="input-name"]', name)
+    await page.selectOption('[data-testid="select-unit"]', '°')
 
-  // Wait for the modal to close, then search so the DP appears on page 1
-  await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible({ timeout: 5_000 })
-  await page.fill('[data-testid="input-search"]', name)
-  await page.waitForTimeout(500)
+    const createResponsePromise = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/v1/datapoints/',
+    )
+    await page.click('[data-testid="btn-save"]')
+    const createResponse = await createResponsePromise
+    expect(createResponse.ok(), `POST /api/v1/datapoints/ returned ${createResponse.status()}`).toBeTruthy()
+    dpId = ((await createResponse.json()) as { id: string }).id
 
-  await expect(page.locator('[data-testid="datapoint-list"]')).toContainText(name, { timeout: 5_000 })
+    await expect(page.locator('[data-testid="btn-save"]')).not.toBeVisible()
 
-  const rows = await page.locator('[data-testid^="dp-row-"]').all()
-  for (const row of rows) {
-    const text = await row.textContent()
-    if (text?.includes(name)) {
-      const testid = await row.getAttribute('data-testid') ?? ''
-      const id = testid.replace('dp-row-', '')
-      await apiDelete(`/api/v1/datapoints/${id}`)
-      break
-    }
+    const searchResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/search/'
+        && url.searchParams.get('q') === name
+        && response.ok()
+    })
+    await page.fill('[data-testid="input-search"]', name)
+    await searchResponsePromise
+
+    await expect(page.locator('[data-testid="datapoint-list"]')).toContainText(name, { timeout: 5_000 })
+  } finally {
+    if (dpId) await apiDelete(`/api/v1/datapoints/${dpId}`)
   }
 })
 

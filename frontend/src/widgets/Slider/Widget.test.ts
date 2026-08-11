@@ -25,7 +25,7 @@ function dataPointValue(value: unknown): DataPointValue {
   }
 }
 
-function mountSlider() {
+function mountSlider(writeContext?: { pageId?: string; sessionToken?: string }) {
   wrapper = mount(SliderWidget, {
     props: {
       config: { label: 'Brightness', min: 0, max: 100, step: 1 },
@@ -34,6 +34,7 @@ function mountSlider() {
       statusValue: null,
       editorMode: false,
       readonly: false,
+      writeContext,
     },
   })
 
@@ -85,5 +86,17 @@ describe('Slider widget commits', () => {
 
     expect(writeMock).toHaveBeenCalledTimes(1)
     expect(writeMock).toHaveBeenCalledWith('dp-1', 55)
+  })
+
+  it('uses an explicit referenced-widget source page context', async () => {
+    mountSlider({ pageId: 'source-page', sessionToken: 'source-session' })
+    const input = await inputValue('64')
+
+    await input.trigger('change')
+
+    expect(writeMock).toHaveBeenCalledWith('dp-1', 64, {
+      pageId: 'source-page',
+      sessionToken: 'source-session',
+    })
   })
 })

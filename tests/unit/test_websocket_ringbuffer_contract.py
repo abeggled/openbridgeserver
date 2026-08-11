@@ -12,7 +12,6 @@ from uuid import uuid4
 import pytest
 
 from obs.api.v1.websocket import (
-    MessageArchivePredicate,
     WebSocketManager,
     _extract_subprotocol_tokens,
     _page_allowed_datapoints,
@@ -58,32 +57,32 @@ async def test_logic_debug_payloads_only_reach_subscribed_editor_connections():
     await manager.connect(normal_ws)
     page_id = await manager.connect(page_ws, allowed_dp_ids=set())
 
-    manager.set_logic_debug(subscribed_id, "graph", True)
-    manager.set_logic_debug(page_id, "graph", True)
+    await manager.set_logic_debug(subscribed_id, "graph", True)
+    await manager.set_logic_debug(page_id, "graph", True)
     assert manager.has_logic_debug_subscribers("graph") is True
     await manager.broadcast_logic_debug("graph", {"action": "logic_run"})
 
     assert subscribed_ws.messages == [{"action": "logic_run"}]
     assert normal_ws.messages == []
     assert page_ws.messages == []
-    manager.set_logic_debug(subscribed_id, "graph", False)
+    await manager.set_logic_debug(subscribed_id, "graph", False)
     assert manager.has_logic_debug_subscribers("graph") is False
 
 
 @pytest.mark.asyncio
 async def test_logic_debug_access_is_revalidated_before_broadcast():
     ws = _FakeWebSocket()
-    access_check = AsyncMock(return_value=False)
+    access_check = AsyncMock(side_effect=[True, False])
     manager = WebSocketManager()
-    conn_id = await manager.connect(ws, logic_debug_access=True, logic_debug_access_check=access_check)
-    manager.set_logic_debug(conn_id, "graph", True)
+    conn_id = await manager.connect(ws, logic_debug_access_check=access_check)
+    await manager.set_logic_debug(conn_id, "graph", True)
 
     await manager.broadcast_logic_debug("graph", {"action": "logic_run"})
 
-    access_check.assert_awaited_once()
+    assert [awaited.args for awaited in access_check.await_args_list] == [("graph",), ("graph",)]
     assert ws.messages == []
-    assert ws.closed is True
-    assert conn_id not in manager._connections
+    assert ws.closed is False
+    assert conn_id in manager._connections
     assert manager.has_logic_debug_subscribers("graph") is False
 
 
@@ -91,7 +90,7 @@ async def test_logic_debug_access_is_revalidated_before_broadcast():
 async def test_ringbuffer_entry_payload_contains_documented_fields(monkeypatch):
     ws = _FakeWebSocket()
     manager = WebSocketManager()
-    await manager.connect(ws)
+    await manager.connect(ws, ringbuffer_metadata=True)
 
     dp_id = uuid4()
     fixed_ts = datetime(2026, 5, 6, 19, 44, 49, 123000, tzinfo=UTC)
@@ -266,142 +265,80 @@ async def test_log_broadcast_revalidates_existing_log_access_connections():
 
 
 @pytest.mark.asyncio
-async def test_message_archive_push_is_filtered_for_page_scoped_connections():
+async def test_broadcast_filters_top_level_datapoint_messages_for_scoped_connections():
     manager = WebSocketManager()
-    scoped_ws = _FakeWebSocket()
     unrestricted_ws = _FakeWebSocket()
-
-    await manager.connect(scoped_ws, allowed_dp_ids=set(), allowed_message_archive_ids={"system"})
-    await manager.connect(unrestricted_ws)
-
-    allowed = {"id": "entry-1", "archive_id": "system", "message": "allowed"}
-    blocked = {"id": "entry-2", "archive_id": "security", "message": "blocked"}
-
-    await manager.broadcast_message_archive_entry(allowed)
-    await manager.broadcast_message_archive_entry(blocked)
-
-    assert [msg["entry"]["id"] for msg in scoped_ws.messages] == ["entry-1"]
-    assert [msg["entry"]["id"] for msg in unrestricted_ws.messages] == ["entry-1", "entry-2"]
-
-
-@pytest.mark.asyncio
-async def test_message_archive_push_allows_page_widget_without_archive_filter():
-    manager = WebSocketManager()
-    ws = _FakeWebSocket()
-
-    await manager.connect(ws, allowed_dp_ids=set(), allowed_message_archive_ids=None)
-    await manager.broadcast_message_archive_entry({"id": "entry-1", "archive_id": "any"})
-
-    assert ws.messages[0]["action"] == "message_archive_entry"
-    assert ws.messages[0]["entry"]["archive_id"] == "any"
-
-
-@pytest.mark.asyncio
-async def test_message_archive_push_is_filtered_by_page_widget_predicates():
-    manager = WebSocketManager()
-    ws = _FakeWebSocket()
-
-    await manager.connect(
-        ws,
-        allowed_dp_ids=set(),
-        allowed_message_archive_access=[
-            MessageArchivePredicate(
-                archive_ids={"system"},
-                types={"system"},
-                severities={"warning"},
-                statuses={"new"},
-                sources={"core"},
-            )
-        ],
-    )
-
-    await manager.broadcast_message_archive_entry(
-        {"id": "entry-1", "archive_id": "system", "type": "system", "severity": "warning", "status": "new", "source": "core"}
-    )
-    await manager.broadcast_message_archive_entry(
-        {"id": "entry-2", "archive_id": "system", "type": "system", "severity": "info", "status": "new", "source": "core"}
-    )
-
-    assert [msg["entry"]["id"] for msg in ws.messages] == ["entry-1"]
-
-
-@pytest.mark.asyncio
-async def test_message_archive_push_uses_previous_entry_for_filter_transitions():
-    """A connection still in scope for the updated entry gets the live entry payload."""
-    manager = WebSocketManager()
-    ws = _FakeWebSocket()
-
-    await manager.connect(
-        ws,
-        allowed_dp_ids=set(),
-        allowed_message_archive_access=[
-            MessageArchivePredicate(
-                archive_ids={"system"},
-            )
-        ],
-    )
-
-    await manager.broadcast_message_archive_entry(
-        {"id": "entry-1", "archive_id": "system", "status": "acknowledged"},
-        previous_entry={"id": "entry-1", "archive_id": "system", "status": "new"},
-    )
-
-    assert [msg["entry"]["id"] for msg in ws.messages] == ["entry-1"]
-    assert ws.messages[0]["entry"]["status"] == "acknowledged"
-
-
-@pytest.mark.asyncio
-async def test_message_archive_push_sends_refresh_not_entry_when_moved_out_of_scope():
-    """A connection that could see the entry before the edit, but no longer matches the
-    updated one, must not receive the new (now out-of-scope) payload — only a refresh
-    nudge, so it re-fetches through the access-checked REST endpoint instead."""
-    manager = WebSocketManager()
-    ws = _FakeWebSocket()
-
-    await manager.connect(
-        ws,
-        allowed_dp_ids=set(),
-        allowed_message_archive_access=[
-            MessageArchivePredicate(
-                archive_ids={"system"},
-                statuses={"new"},
-            )
-        ],
-    )
-
-    await manager.broadcast_message_archive_entry(
-        {"id": "entry-1", "archive_id": "system", "status": "acknowledged", "message": "now hidden"},
-        previous_entry={"id": "entry-1", "archive_id": "system", "status": "new"},
-    )
-
-    assert ws.messages == [{"action": "message_archive_refresh", "archive_id": "system"}]
-
-
-@pytest.mark.asyncio
-async def test_message_archive_refresh_is_filtered_by_archive_access():
-    manager = WebSocketManager()
     scoped_ws = _FakeWebSocket()
-    unrestricted_ws = _FakeWebSocket()
-    all_archives_ws = _FakeWebSocket()
 
-    await manager.connect(
-        scoped_ws,
-        allowed_dp_ids=set(),
-        allowed_message_archive_access=[MessageArchivePredicate(archive_ids={"system"}, statuses={"new"})],
-    )
     await manager.connect(unrestricted_ws)
-    await manager.connect(
-        all_archives_ws,
-        allowed_dp_ids=set(),
-        allowed_message_archive_access=[MessageArchivePredicate(archive_ids=None, statuses={"new"})],
-    )
+    await manager.connect(scoped_ws, allowed_dp_ids={"allowed-dp"})
 
-    await manager.broadcast_message_archive_refresh("system")
-    await manager.broadcast_message_archive_refresh("security")
+    allowed_msg = {"id": "allowed-dp", "v": 1}
+    blocked_msg = {"id": "blocked-dp", "v": 2}
+    await manager.broadcast(allowed_msg)
+    await manager.broadcast(blocked_msg)
 
-    assert [msg["archive_id"] for msg in scoped_ws.messages] == ["system"]
-    assert [msg["archive_id"] for msg in unrestricted_ws.messages] == ["system", "security"]
-    assert [msg["archive_id"] for msg in all_archives_ws.messages] == ["system", "security"]
+    assert unrestricted_ws.messages == [allowed_msg, blocked_msg]
+    assert scoped_ws.messages == [allowed_msg]
+
+
+@pytest.mark.asyncio
+async def test_broadcast_filters_entry_datapoint_messages_for_scoped_connections():
+    manager = WebSocketManager()
+    unrestricted_ws = _FakeWebSocket()
+    scoped_ws = _FakeWebSocket()
+
+    await manager.connect(unrestricted_ws)
+    await manager.connect(scoped_ws, allowed_dp_ids={"allowed-dp"})
+
+    allowed_msg = {"action": "custom_event", "entry": {"datapoint_id": "allowed-dp", "value": 1}}
+    blocked_msg = {"action": "custom_event", "entry": {"datapoint_id": "blocked-dp", "value": 2}}
+    await manager.broadcast(allowed_msg)
+    await manager.broadcast(blocked_msg)
+
+    assert unrestricted_ws.messages == [allowed_msg, blocked_msg]
+    assert scoped_ws.messages == [allowed_msg]
+
+
+@pytest.mark.asyncio
+async def test_broadcast_blocks_unscoped_messages_for_scoped_connections():
+    manager = WebSocketManager()
+    unrestricted_ws = _FakeWebSocket()
+    scoped_ws = _FakeWebSocket()
+
+    await manager.connect(unrestricted_ws)
+    await manager.connect(scoped_ws, allowed_dp_ids={"allowed-dp"})
+
+    msg = {"action": "logic_run", "graph_id": "graph-1", "outputs": {"blocked-dp": 1}}
+    await manager.broadcast(msg)
+
+    assert unrestricted_ws.messages == [msg]
+    assert scoped_ws.messages == []
+
+
+@pytest.mark.asyncio
+async def test_broadcast_allows_action_messages_for_authenticated_scoped_connections():
+    """Non-admin authenticated (JWT/API-key) connections with a DP scope must
+    still receive non-DP action broadcasts such as logic_run.
+    Only anonymous page-scoped connections (action_access=False) are blocked."""
+    manager = WebSocketManager()
+    admin_ws = _FakeWebSocket()
+    authenticated_non_admin_ws = _FakeWebSocket()
+    anonymous_page_ws = _FakeWebSocket()
+
+    # Admin: unrestricted
+    await manager.connect(admin_ws)
+    # Non-admin JWT user: scoped DPs, but action_access=True
+    await manager.connect(authenticated_non_admin_ws, allowed_dp_ids={"some-dp"}, action_access=True)
+    # Anonymous Visu viewer: page-scoped, action_access=False (default)
+    await manager.connect(anonymous_page_ws, allowed_dp_ids={"some-dp"}, action_access=False)
+
+    msg = {"action": "logic_run", "graph_id": "graph-1", "outputs": {"node-1": {"value": 42}}}
+    await manager.broadcast(msg)
+
+    assert admin_ws.messages == [msg]
+    assert authenticated_non_admin_ws.messages == [msg]
+    assert anonymous_page_ws.messages == []
 
 
 @pytest.mark.asyncio
@@ -410,7 +347,7 @@ async def test_subscribe_filters_datapoints_for_page_scoped_connection():
     manager = WebSocketManager()
     conn_id = await manager.connect(ws, allowed_dp_ids={"allowed-id"})
 
-    manager.subscribe(conn_id, ["allowed-id", "blocked-id"])
+    await manager.subscribe(conn_id, ["allowed-id", "blocked-id"])
 
     assert manager.subscriptions(conn_id) == {"allowed-id"}
 
@@ -440,7 +377,7 @@ async def test_subscribe_initial_values_sends_current_registry_snapshot(monkeypa
 
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
 
-    manager.subscribe(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
+    await manager.subscribe(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
     await manager.send_initial_values(conn_id, [str(dp_id), str(other_dp_id), "not-a-uuid"])
 
     assert ws.messages == [
@@ -482,7 +419,7 @@ async def test_subscribe_initial_values_respects_page_scope(monkeypatch):
     monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
 
     before = manager.subscriptions(conn_id)
-    manager.subscribe(conn_id, [allowed_id, blocked_id])
+    await manager.subscribe(conn_id, [allowed_id, blocked_id])
     after = manager.subscriptions(conn_id)
     added = [dp_id for dp_id in [allowed_id, blocked_id] if dp_id in after and dp_id not in before]
     await manager.send_initial_values(conn_id, added)
@@ -500,7 +437,7 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
     unrestricted_ws = _FakeWebSocket()
     scoped_ws = _FakeWebSocket()
     manager = WebSocketManager()
-    await manager.connect(unrestricted_ws)
+    await manager.connect(unrestricted_ws, ringbuffer_metadata=True)
     await manager.connect(scoped_ws, allowed_dp_ids={allowed_id})
 
     class _RegistryStub:
@@ -540,16 +477,156 @@ async def test_ringbuffer_push_is_scoped_for_anonymous_page_connections(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_handle_value_event_accepts_six_field_connection_entries(monkeypatch):
+async def test_ringbuffer_push_revalidates_invalidated_scope_without_value_subscription(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    scope_check = AsyncMock(return_value=set())
+    manager = WebSocketManager()
+    await manager.connect(ws, allowed_dp_ids={dp_id}, datapoint_scope_check=scope_check)
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Revoked RingBuffer DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: True)
+
+    manager.invalidate_datapoint_scopes()
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_uuid,
+            value=2.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    scope_check.assert_awaited_once()
+    assert ws.messages == []
+
+
+@pytest.mark.asyncio
+async def test_value_push_revalidates_scope_and_prunes_revoked_subscription(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    scope_check = AsyncMock(side_effect=[{dp_id}, set()])
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws, allowed_dp_ids={dp_id}, datapoint_scope_check=scope_check)
+    await manager.subscribe(conn_id, [dp_id])
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Revoked DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: False)
+
+    manager.invalidate_datapoint_scopes()
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_uuid,
+            value=2.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    assert scope_check.await_count == 2
+    assert manager.subscriptions(conn_id) == set()
+    assert ws.messages == []
+
+
+@pytest.mark.asyncio
+async def test_high_rate_value_pushes_reuse_cached_scope_until_invalidated(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    scope_check = AsyncMock(return_value={dp_id})
+    manager = WebSocketManager()
+    conn_id = await manager.connect(ws, allowed_dp_ids={dp_id}, datapoint_scope_check=scope_check)
+    await manager.subscribe(conn_id, [dp_id])
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Cached DP", unit="W")
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr("obs.ringbuffer.ringbuffer.is_ringbuffer_enabled", lambda: False)
+    event = DataValueEvent(
+        datapoint_id=dp_uuid,
+        value=2.0,
+        quality="good",
+        source_adapter="api",
+        ts=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+    )
+
+    await manager.handle_value_event(event)
+    await manager.handle_value_event(event)
+
+    assert scope_check.await_count == 1
+    assert len(ws.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_value_event_includes_metadata_for_authenticated_scoped_connections(monkeypatch):
+    dp_uuid = uuid4()
+    dp_id = str(dp_uuid)
+    ws = _FakeWebSocket()
+    manager = WebSocketManager()
+    await manager.connect(ws, allowed_dp_ids={dp_id}, ringbuffer_metadata=True)
+
+    class _RegistryStub:
+        def get(self, _dp_id):
+            return SimpleNamespace(name="Contract DP", unit="W", data_type="FLOAT", tags=["heizung"])
+
+        def get_value(self, _dp_id):
+            return SimpleNamespace(old_value=1.0)
+
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: _RegistryStub())
+    monkeypatch.setattr(
+        "obs.ringbuffer.ringbuffer.build_ringbuffer_metadata_snapshot",
+        AsyncMock(return_value={"datapoint": {"id": dp_id}, "bindings": [], "hierarchy_nodes": []}),
+    )
+
+    await manager.handle_value_event(
+        DataValueEvent(
+            datapoint_id=dp_uuid,
+            value=1.0,
+            quality="good",
+            source_adapter="api",
+            ts=datetime(2026, 5, 6, 19, 44, 49, 123000, tzinfo=UTC),
+        )
+    )
+
+    ringbuffer = [m for m in ws.messages if m.get("action") == "ringbuffer_entry"]
+    assert ringbuffer[0]["entry"]["metadata_version"] == 1
+    assert ringbuffer[0]["entry"]["metadata"]["datapoint"]["id"] == dp_id
+
+
+@pytest.mark.asyncio
+async def test_handle_value_event_accepts_seven_field_connection_entries(monkeypatch):
     dp_uuid = uuid4()
     dp_id = str(dp_uuid)
     ws = _FakeWebSocket()
     manager = WebSocketManager()
     conn_id = await manager.connect(ws)
-    manager.subscribe(conn_id, [dp_id])
+    await manager.subscribe(conn_id, [dp_id])
 
     ws_entry = manager._connections[conn_id]
-    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None)
+    manager._connections[conn_id] = (ws_entry[0], ws_entry[1], asyncio.Lock(), ws_entry[3], False, None, False)
 
     class _RegistryStub:
         def get(self, _dp_id):

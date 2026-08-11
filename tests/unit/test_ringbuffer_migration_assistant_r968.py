@@ -1925,6 +1925,7 @@ async def test_config_finalize_failure_keeps_buffer_running(tmp_path: Path, monk
     try:
         await rb_api.configure_ringbuffer(
             rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -2024,7 +2025,7 @@ async def test_status_finalize_error_does_not_500(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setattr(rb_api, "finalize_committed_migration_decision", _boom)
     try:
-        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), request=None, _user="admin", db=db)
         # Darf NICHT werfen – der Status kommt trotz Finalisierungsfehler zurück.
         status = await rb_api._legacy_migration_status(db)
         assert status is not None
@@ -2281,7 +2282,9 @@ async def test_enable_rollback_keeps_preexisting_legacy(tmp_path: Path, monkeypa
     monkeypatch.setattr(rb_api, "persist_ringbuffer_config", _boom)
     try:
         try:
-            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(
+                rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), request=None, _user="admin", db=db
+            )
         except RuntimeError:
             pass  # der Save-Fehler propagiert erwartungsgemäß
         assert rb_path.exists(), "pre-existing Legacy-DB darf beim Rollback NICHT gelöscht werden"
@@ -2400,7 +2403,9 @@ async def test_enable_rollback_keeps_preexisting_legacy_mode_db(tmp_path: Path, 
     monkeypatch.setattr(rb_api, "persist_ringbuffer_config", _boom)
     try:
         try:
-            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=False), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(
+                rb_api.RingBufferConfig(enabled=True, storage="file", segmented=False), request=None, _user="admin", db=db
+            )
         except RuntimeError:
             pass
         assert rb_path.exists(), "pre-existing Legacy-Mode-DB darf beim Rollback NICHT gelöscht werden"
@@ -2528,7 +2533,7 @@ async def test_enable_rollback_keeps_preexisting_segment_root(tmp_path: Path, mo
     reset_ringbuffer()
 
     # Ersten Enable (segmented) durchführen, um einen echten Segment-Root anzulegen.
-    await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+    await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), request=None, _user="admin", db=db)
     seg_root = rb_path.with_name(f"{rb_path.stem}_segments")
     assert seg_root.exists(), "Segment-Root wurde angelegt"
     rb0 = get_optional_ringbuffer()
@@ -2543,7 +2548,9 @@ async def test_enable_rollback_keeps_preexisting_segment_root(tmp_path: Path, mo
     monkeypatch.setattr(rb_api, "persist_ringbuffer_config", _boom)
     try:
         try:
-            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(
+                rb_api.RingBufferConfig(enabled=True, storage="file", segmented=True), request=None, _user="admin", db=db
+            )
         except RuntimeError:
             pass
         assert seg_root.exists(), "pre-existing Segment-Root darf beim Rollback NICHT gelöscht werden"

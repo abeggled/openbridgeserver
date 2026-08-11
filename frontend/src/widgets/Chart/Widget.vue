@@ -11,6 +11,7 @@ import {
 import { history } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
 import type { DataPointValue } from '@/types'
+import type { WriteContext } from '@/api/client'
 import { aggregateBucketEndTimestamp, sortedUniqueTimestamps, weightedAverage, weightedValuesByTimestamp } from './aggregation'
 import {
   TIME_RANGE_PRESETS,
@@ -32,6 +33,8 @@ const props = defineProps<{
   datapointId: string | null
   value: DataPointValue | null
   editorMode: boolean
+  pageId?: string | null
+  sessionToken?: string | null
 }>()
 
 const { t } = useI18n()
@@ -77,6 +80,14 @@ function buildBuckets(fromMs: number, toMs: number, count: number) {
     mid:   fromMs + (i + 0.5) * size,
     end:   fromMs + (i + 1) * size,
   }))
+}
+
+function readContext(): WriteContext | undefined {
+  if (!props.pageId && !props.sessionToken) return undefined
+  return {
+    ...(props.pageId ? { pageId: props.pageId } : {}),
+    ...(props.sessionToken ? { sessionToken: props.sessionToken } : {}),
+  }
 }
 
 function initChart() {
@@ -165,15 +176,17 @@ async function loadData() {
   let units: string[]
 
   if (requestPlan.mode === 'aggregate') {
+    const context = readContext()
     const [aggregatedRows, unitRows] = await Promise.all([
-      Promise.all(defs.map(s => history.aggregate(s.id, fromIso, toIso, requestPlan.interval, requestPlan.fn))),
-      Promise.all(defs.map(s => history.query(s.id, fromIso, toIso, 1))),
+      Promise.all(defs.map(s => history.aggregate(s.id, fromIso, toIso, requestPlan.interval, requestPlan.fn, context))),
+      Promise.all(defs.map(s => history.query(s.id, fromIso, toIso, 1, context))),
     ])
     results = aggregatedRows.map(rows => rows.map(r => ({ ts: r.bucket, v: r.v, u: null, q: '', n: r.n ?? 1 })))
     units = unitRows.map(r => r[0]?.u ?? '')
   } else {
+    const context = readContext()
     results = await Promise.all(
-      defs.map(s => history.query(s.id, fromIso, toIso, requestPlan.limit)),
+      defs.map(s => history.query(s.id, fromIso, toIso, requestPlan.limit, context)),
     )
     units = results.map(r => r[0]?.u ?? '')
   }

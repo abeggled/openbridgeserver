@@ -9,7 +9,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { visu as visuApi, auth as authApi, getJwt, setJwt, clearJwt, getIsAdmin, setIsAdmin, clearIsAdmin, setSessionToken, getSessionToken } from '@/api/client'
-import type { VisuNode, PageConfig } from '@/types'
+import type { VisuNode, VisuNodeUpdate, PageConfig } from '@/types'
 
 export const useVisuStore = defineStore('visu', () => {
   // ── Baum ──────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ export const useVisuStore = defineStore('visu', () => {
     return node
   }
 
-  async function updateNode(id: string, data: Partial<VisuNode>): Promise<VisuNode> {
+  async function updateNode(id: string, data: VisuNodeUpdate): Promise<VisuNode> {
     const node = await visuApi.updateNode(id, data)
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx !== -1) nodes.value[idx] = node

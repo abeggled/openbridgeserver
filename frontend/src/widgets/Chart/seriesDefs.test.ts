@@ -4,7 +4,7 @@ import { buildSeriesDefs } from './seriesDefs'
 // Testdaten als Variablen statt direkter `label: '...'`-Objektliterale, damit
 // der i18n-Guard (tools/check_i18n_guard.py, ASSIGN_RE) diese Fixture-Werte
 // nicht fälschlich als hardcodierten UI-Text erkennt — dasselbe Muster wie
-// in utils/hierarchyDepthOptions.js (siehe AGENTS.MD).
+// in utils/hierarchyDepthOptions.js (siehe docs/AGENT_REFERENCE.md).
 const powerChartTitle   = ['Leistung', 'Verlauf'].join(' ')
 const voltageChartTitle = ['Netzspannung', 'Verlauf'].join(' ')
 const hasIdLabel = 'has id'
