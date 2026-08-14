@@ -2199,3 +2199,109 @@ class TestInterReadDelaySerialization:
         await asyncio.gather(run_transaction(), run_transaction())
 
         assert max_active == 2, "expected both transactions to run concurrently when no delay is configured"
+
+
+class TestSpaceOutBusCancellation:
+    """Codex P2 (2026-08-11 review): a disconnect / binding reload that cancels
+    a poller mid-transaction must not stall on the inter-read turnaround sleep."""
+
+    async def test_cancellation_skips_turnaround_sleep(self):
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 5000}
+        )
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        started = asyncio.Event()
+
+        async def blocked_transaction():
+            async with adapter._modbus_io_context():
+                started.set()
+                await asyncio.Event().wait()  # block until cancelled
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            task = asyncio.create_task(blocked_transaction())
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        # A cancelled poller must not wait out the 5 s turnaround delay.
+        sleep_mock.assert_not_awaited()
+
+    async def test_ordinary_failure_still_delays(self):
+        """The cancellation skip must not disable the delay for a normal
+        transaction failure (pymodbus timeout / socket error)."""
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 40}
+        )
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock, pytest.raises(RuntimeError):
+            async with adapter._modbus_io_context():
+                raise RuntimeError("simulated transaction failure")
+        sleep_mock.assert_awaited_once_with(0.04)
+
+
+class TestSharedEndpointDelayPolicy:
+    """Codex P2 (2026-08-11 review): one inter-read delay policy must hold across
+    all instances sharing a host:port, so a zero-delay sibling cannot release the
+    shared bus without the configured turnaround gap."""
+
+    async def _connect(self, adapter):
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        return client
+
+    async def test_shared_endpoint_adopts_largest_sibling_delay(self):
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS
+
+        host, port = "10.9.9.7", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True}
+        a_delayed, _ = _make_tcp({**base, "inter_read_delay_ms": 200})
+        a_zero, _ = _make_tcp({**base, "inter_read_delay_ms": 0})
+        await self._connect(a_delayed)
+        await self._connect(a_zero)
+
+        assert _SHARED_BUS_DELAYS[(host, port)] == 200
+        # both instances — including the zero-delay one — enforce 200 ms
+        assert a_delayed._effective_delay() == 200
+        assert a_zero._effective_delay() == 200
+
+    async def test_zero_delay_sibling_spaces_out_by_endpoint_delay(self):
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS
+
+        host, port = "10.9.9.8", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True}
+        a_delayed, _ = _make_tcp({**base, "inter_read_delay_ms": 200})
+        a_zero, _ = _make_tcp({**base, "inter_read_delay_ms": 0})
+        await self._connect(a_delayed)
+        client = await self._connect(a_zero)
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await a_zero._space_out_bus(client)
+        # the zero-delay sibling now honours the endpoint-wide 200 ms gap
+        sleep_mock.assert_awaited_once_with(0.2)
+
+    async def test_non_shared_instance_uses_own_delay(self):
+        adapter, _ = _make_tcp(
+            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "shared_bus": False, "inter_read_delay_ms": 30}
+        )
+        await self._connect(adapter)
+        assert adapter._shared_bus_key is None
+        assert adapter._effective_delay() == 30
