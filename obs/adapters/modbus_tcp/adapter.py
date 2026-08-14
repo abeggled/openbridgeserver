@@ -53,6 +53,10 @@ logger = logging.getLogger(__name__)
 # Modbus endpoint (several devices behind one RS485/Modbus-TCP gateway) share a
 # lock so their requests never overlap on the single serial bus.
 _SHARED_BUS_SEMS: dict[tuple[str, int], asyncio.Semaphore] = {}
+# Endpoint-wide inter-read delay (ms): the largest delay any instance sharing a
+# host:port configured, so the promised turnaround also holds when a zero-delay
+# sibling completes a transaction on the shared bus.
+_SHARED_BUS_DELAYS: dict[tuple[str, int], float] = {}
 
 
 def _shared_bus_sem(host: str, port: int) -> asyncio.Semaphore:
@@ -125,6 +129,9 @@ class ModbusTcpAdapter(AdapterBase):
         # interval between transactions on the bus. Only ever acquired when a
         # positive delay is configured, so the no-delay fast path is unaffected.
         self._space_lock: asyncio.Lock = asyncio.Lock()
+        # host:port of the shared bus this instance joins (set in connect()),
+        # or None when shared_bus is off.
+        self._shared_bus_key: tuple[str, int] | None = None
         # Prevents concurrent _on_bindings_reloaded() calls from interleaving.
         # Without this, two simultaneous REST binding changes can create orphan
         # poll tasks that use the same TCP client alongside the tracked tasks.
@@ -168,8 +175,16 @@ class ModbusTcpAdapter(AdapterBase):
         # for embedded devices); None = no-op via nullcontext (for capable PLCs).
         if cfg.shared_bus:
             self._io_sem = _shared_bus_sem(cfg.host, cfg.port)
+            self._shared_bus_key = (cfg.host, cfg.port)
+            # Enforce one delay policy per shared endpoint: keep the largest
+            # delay configured by any sibling so the interval holds bus-wide.
+            _SHARED_BUS_DELAYS[self._shared_bus_key] = max(
+                _SHARED_BUS_DELAYS.get(self._shared_bus_key, 0.0),
+                cfg.inter_read_delay_ms,
+            )
         else:
             self._io_sem = asyncio.Semaphore(1) if cfg.serialize_reads else None
+            self._shared_bus_key = None
         logger.debug(
             "Modbus TCP: serialize_reads=%s startup_jitter_s=%.1f",
             cfg.serialize_reads,
@@ -502,13 +517,30 @@ class ModbusTcpAdapter(AdapterBase):
 
         Runs whether the transaction succeeded or raised (timeout/socket error),
         is skipped when no transaction was performed (no ready client), and
-        applies regardless of whether an I/O semaphore is in use.
+        applies regardless of whether an I/O semaphore is in use. Skipped while
+        the poller task is being cancelled (disconnect / binding reload) so
+        lifecycle operations are not stalled by the turnaround sleep.
         """
         if client is None:
             return
-        _delay = self._adp_cfg.inter_read_delay_ms
+        # A cancellation (disconnect / reload) must not wait out the delay.
+        task = asyncio.current_task()
+        if task is not None and getattr(task, "cancelling", lambda: 0)():
+            return
+        _delay = self._effective_delay()
         if _delay > 0:
             await asyncio.sleep(_delay / 1000.0)
+
+    def _effective_delay(self) -> float:
+        """Inter-read delay to enforce (ms). For a shared endpoint this is the
+        largest delay configured by any sibling instance, so the minimum interval
+        holds bus-wide even right after a zero-delay sibling released the shared
+        semaphore."""
+        if self._shared_bus_key is not None:
+            return _SHARED_BUS_DELAYS.get(
+                self._shared_bus_key, self._adp_cfg.inter_read_delay_ms
+            )
+        return self._adp_cfg.inter_read_delay_ms
 
     def _client_ready(self) -> bool:
         return bool(not self._stopping and self._client and self._client.connected)
