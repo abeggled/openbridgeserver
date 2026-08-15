@@ -93,6 +93,13 @@ class ModbusTcpAdapterConfig(BaseModel):
         title="Wartefrist pro Read (ms)",
         description="Pause nach jeder Modbus-Transaktion auf dem (geteilten) Bus, bevor die naechste startet. Gibt langsamen RS485/Modbus-TCP-Gateways Umschaltzeit und entzerrt mehrere Geraete an einem Bus. 0 = deaktiviert.",
     )
+    shared_bus_acquire_timeout_s: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=300.0,
+        title="Shared-Bus Acquire-Timeout (s)",
+        description="Nur bei shared_bus: Obergrenze fuers Warten auf die geteilte Bus-Semaphore. Laeuft die Sperre laenger nicht frei (verklemmte Semaphore ueber Instanzen), wird die Transaktion mit WARNING uebersprungen statt unbegrenzt zu blockieren. 0 = kein Timeout.",
+    )
     startup_jitter_s: float = Field(
         default=30.0,
         ge=0.0,
@@ -502,6 +509,33 @@ class ModbusTcpAdapter(AdapterBase):
                     yield client
                 finally:
                     await self._space_out_bus(client)
+            return
+
+        # Shared bus: bound the acquire so a wedged cross-instance semaphore surfaces
+        # as a logged, skipped transaction instead of an unbounded silent hang. The
+        # per-instance serialize lock (not shared) keeps its plain blocking acquire.
+        _sbt = self._adp_cfg.shared_bus_acquire_timeout_s
+        if self._shared_bus_key is not None and _sbt > 0:
+            try:
+                await asyncio.wait_for(self._io_sem.acquire(), timeout=_sbt)
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.warning(
+                    "Modbus shared bus %s: I/O semaphore acquire timed out after %.0fs "
+                    "(possible cross-instance wedge) — skipping this transaction",
+                    self._shared_bus_key,
+                    _sbt,
+                )
+                yield None
+                return
+            try:
+                async with self._inflight_modbus_call():
+                    client = self._client if self._client_ready() else None
+                    try:
+                        yield client
+                    finally:
+                        await self._space_out_bus(client)
+            finally:
+                self._io_sem.release()
             return
 
         async with self._io_sem, self._inflight_modbus_call():
