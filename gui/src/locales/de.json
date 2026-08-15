@@ -779,6 +779,10 @@
           "title": "Wartezeit zwischen Reads (ms)",
           "description": "Pause nach jeder Modbus-Transaktion auf dem (geteilten) Bus, bevor die nächste startet. Gibt langsamen RS485/Modbus-TCP-Gateways die nötige Umschaltzeit und entzerrt mehrere Geräte an einem Bus. 0 = deaktiviert."
         },
+        "shared_bus_acquire_timeout_s": {
+          "title": "Shared-Bus Acquire-Timeout (s)",
+          "description": "Nur bei geteiltem Bus: Obergrenze für das Warten auf die gemeinsame Bus-Sperre. Bleibt die Sperre über Instanzen hinweg verklemmt, wird die Transaktion mit Warnung übersprungen statt unbegrenzt zu blockieren. 0 = kein Timeout (unbegrenzt warten)."
+        },
         "startup_jitter_s": {
           "title": "Startup-Jitter (s)",
           "description": "Maximale zufällige Verzögerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert."

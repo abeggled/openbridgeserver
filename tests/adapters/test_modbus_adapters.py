@@ -2305,3 +2305,50 @@ class TestSharedEndpointDelayPolicy:
         await self._connect(adapter)
         assert adapter._shared_bus_key is None
         assert adapter._effective_delay() == 30
+
+
+class TestSharedBusAcquireTimeout:
+    """A wedged cross-instance shared_bus semaphore must not block forever: the
+    acquire is bounded and a timeout skips the transaction (yield None) with a
+    warning, instead of hanging silently."""
+
+    def test_default_timeout_is_30s(self):
+        assert ModbusTcpAdapterConfig().shared_bus_acquire_timeout_s == 30.0
+
+    async def _connect_shared(self, host, timeout_s):
+        adapter, _ = _make_tcp(
+            {"host": host, "port": 502, "timeout": 1.0, "shared_bus": True,
+             "shared_bus_acquire_timeout_s": timeout_s}
+        )
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        return adapter, client
+
+    async def test_timeout_skips_transaction_when_semaphore_held(self):
+        adapter, _ = await self._connect_shared("10.9.9.20", 0.2)
+        assert adapter._shared_bus_key == ("10.9.9.20", 502)
+        # Simulate a sibling holding the shared bus and never releasing it.
+        await adapter._io_sem.acquire()
+        try:
+            async with adapter._modbus_io_context() as client:
+                assert client is None  # acquire timed out -> transaction skipped
+        finally:
+            adapter._io_sem.release()
+
+    async def test_acquires_and_yields_client_when_free(self):
+        adapter, client = await self._connect_shared("10.9.9.21", 0.2)
+        async with adapter._modbus_io_context() as c:
+            assert c is client  # free semaphore -> normal transaction
+        # semaphore released again after the context
+        assert adapter._io_sem.locked() is False
+
+    async def test_zero_timeout_disables_bounding(self):
+        """With shared_bus_acquire_timeout_s=0 the shared path uses the plain
+        blocking acquire (unbounded), same as before this feature."""
+        adapter, client = await self._connect_shared("10.9.9.22", 0.0)
+        async with adapter._modbus_io_context() as c:
+            assert c is client
