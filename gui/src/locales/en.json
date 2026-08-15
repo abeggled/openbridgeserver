@@ -779,6 +779,10 @@
           "title": "Delay between reads (ms)",
           "description": "Pause after each Modbus transaction on the (shared) bus before the next one starts. Gives slow RS485/Modbus-TCP gateways the turnaround time they need and spaces out multiple devices on one bus. 0 = disabled."
         },
+        "shared_bus_acquire_timeout_s": {
+          "title": "Shared bus acquire timeout (s)",
+          "description": "Shared bus only: upper bound on waiting for the shared bus lock. If the lock stays wedged across instances, the transaction is skipped with a warning instead of blocking indefinitely. 0 = no timeout (wait forever)."
+        },
         "startup_jitter_s": {
           "title": "Startup jitter (s)",
           "description": "Maximum random delay (seconds) before the first poll of each binding. Prevents a request burst when all tasks start simultaneously. 0 = disabled."
