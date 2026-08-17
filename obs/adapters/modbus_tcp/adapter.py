@@ -26,6 +26,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import socket
 import time
 from typing import Any
 
@@ -165,6 +166,7 @@ class ModbusTcpAdapter(AdapterBase):
         self._client = self._new_client()
         try:
             await self._client.connect()
+            self._apply_socket_keepalive()
             if self._client.connected:
                 await self._publish_status(
                     True,
@@ -234,6 +236,7 @@ class ModbusTcpAdapter(AdapterBase):
                     try:
                         self._client = self._new_client()
                         await self._client.connect()
+                        self._apply_socket_keepalive()
                         if self._client.connected:
                             self._reconnect_ok_after = 0.0
                             await self._publish_status(
@@ -309,6 +312,7 @@ class ModbusTcpAdapter(AdapterBase):
                             try:
                                 async with self._client_lifecycle():
                                     await self._client.connect()
+                                    self._apply_socket_keepalive()
                                 if self._client.connected:
                                     self._reconnect_ok_after = 0.0  # clear backoff on success
                                     host = self._adp_cfg.host
@@ -416,6 +420,58 @@ class ModbusTcpAdapter(AdapterBase):
     # ------------------------------------------------------------------
     # Low-level Modbus operations
     # ------------------------------------------------------------------
+
+    def _apply_socket_keepalive(self) -> None:
+        """Force fast dead-peer detection on the freshly connected TCP socket.
+
+        Modbus gateways behind an RS485 bridge can go half-open: a request stays
+        stuck unacknowledged in the socket Send-Q while TCP still reports
+        ESTABLISHED, so the read await hangs for minutes (default TCP retransmit)
+        and pymodbus' own timeout never fires (it waits for a response that never
+        comes). SO_KEEPALIVE + TCP_USER_TIMEOUT make the kernel drop such a socket
+        within ~15 s, turning the silent hang into a normal socket error that the
+        existing reconnect handling recovers from. Best-effort: never raises.
+        """
+        cl = self._client
+        if cl is None:
+            return
+        sock = None
+        for attr in ("transport", "ctx"):
+            obj = getattr(cl, attr, None)
+            tr = obj if attr == "transport" else getattr(obj, "transport", None)
+            if tr is not None:
+                try:
+                    sock = tr.get_extra_info("socket")
+                except Exception:
+                    sock = None
+                if sock is not None:
+                    break
+        if sock is None:
+            logger.debug(
+                "Modbus TCP: no socket to set keepalive on (%s:%s)",
+                self._adp_cfg.host, self._adp_cfg.port,
+            )
+            return
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            applied = ["SO_KEEPALIVE"]
+            for name, val in (
+                ("TCP_KEEPIDLE", 10), ("TCP_KEEPINTVL", 5),
+                ("TCP_KEEPCNT", 3), ("TCP_USER_TIMEOUT", 15000),
+            ):
+                opt = getattr(socket, name, None)
+                if opt is not None:
+                    sock.setsockopt(socket.IPPROTO_TCP, opt, val)
+                    applied.append("%s=%s" % (name, val))
+            logger.info(
+                "Modbus TCP keepalive set on %s:%s (%s)",
+                self._adp_cfg.host, self._adp_cfg.port, ",".join(applied),
+            )
+        except Exception:
+            logger.debug(
+                "Modbus TCP: keepalive setsockopt failed (%s:%s)",
+                self._adp_cfg.host, self._adp_cfg.port, exc_info=True,
+            )
 
     def _new_client(self) -> Any:
         if self._client_factory is None:
