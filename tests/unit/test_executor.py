@@ -944,6 +944,104 @@ class TestHysteresisNode:
         assert "h" in state
 
 
+class TestMergeNode:
+    def test_first_execution_outputs_the_only_wired_input(self):
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state={})
+        out = exc.execute({"m": {"in1": 5}})
+        assert out["m"]["out"] == 5
+
+    def test_first_execution_skips_a_wired_but_valueless_input(self):
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state={})
+        out = exc.execute({"m": {"in1": None, "in2": 7}})
+        assert out["m"]["out"] == 7
+
+    def test_switches_to_whichever_input_changed(self):
+        state: dict = {}
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"m": {"in1": 5}})
+
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"m": {"in1": 5, "in2": 10}})  # in1 unchanged, in2 new
+        assert out["m"]["out"] == 10
+
+    def test_keeps_previous_active_input_when_nothing_changed(self):
+        state: dict = {}
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"m": {"in1": 5}})
+
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"m": {"in1": 5}})  # unchanged
+        assert out["m"]["out"] == 5
+
+    def test_highest_port_wins_when_several_change_in_the_same_tick(self):
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state={})
+        out = exc.execute({"m": {"in1": 1, "in2": 2}})  # both new on the first tick
+        assert out["m"]["out"] == 2
+
+    def test_active_input_can_switch_back_after_a_later_tick(self):
+        state: dict = {}
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state=state)
+        exc.execute({"m": {"in1": 1, "in2": 2}})  # in2 becomes active
+
+        exc2 = make_executor([n1], hysteresis_state=state)
+        out = exc2.execute({"m": {"in1": 9, "in2": 2}})  # in1 changes, in2 unchanged
+        assert out["m"]["out"] == 9
+
+    def test_dynamic_input_count_beyond_two(self):
+        n1 = node("m", "merge", {"input_count": 3})
+        exc = make_executor([n1], hysteresis_state={})
+        out = exc.execute({"m": {"in3": 42}})
+        assert out["m"]["out"] == 42
+
+    def test_unwired_inputs_beyond_input_count_are_ignored(self):
+        state: dict = {}
+        n1 = node("m", "merge", {"input_count": 2})
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"m": {"in1": 1}})
+        assert out["m"]["out"] == 1
+        assert set(state["m"]["values"]) == {"in1"}
+
+    def test_shrinking_input_count_drops_a_stale_active_port(self):
+        # in1/in2 have no recorded history under this (now-shrunk) state, so
+        # both count as "changed" on this first tick — highest port wins,
+        # same as any other simultaneous-change tick.
+        state: dict = {"m": {"values": {"in3": 99}, "active": "in3"}}
+        n1 = node("m", "merge", {"input_count": 2})
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"m": {"in1": 1, "in2": 2}})  # in3 no longer exists
+        assert out["m"]["out"] == 2
+
+    def test_shrinking_input_count_falls_back_to_first_wired_when_only_one_input_is_present(self):
+        state: dict = {"m": {"values": {"in3": 99}, "active": "in3"}}
+        n1 = node("m", "merge", {"input_count": 2})
+        exc = make_executor([n1], hysteresis_state=state)
+        out = exc.execute({"m": {"in1": 1}})
+        assert out["m"]["out"] == 1
+
+    def test_state_persists_between_executions(self):
+        """Regression: hysteresis_state={} must not be treated as None."""
+        state: dict = {}
+        n1 = node("m", "merge", {})
+        exc = GraphExecutor(
+            flow=__import__("obs.logic.models", fromlist=["FlowData"]).FlowData.model_validate({"nodes": [n1], "edges": []}),
+            hysteresis_state=state,
+        )
+        exc.execute({"m": {"in1": 1}})
+        assert "m" in state
+
+    def test_no_wired_input_yields_none(self):
+        n1 = node("m", "merge", {})
+        exc = make_executor([n1], hysteresis_state={})
+        out = exc.execute({})
+        assert out["m"]["out"] is None
+
+
 # ===========================================================================
 # math_formula node
 # ===========================================================================

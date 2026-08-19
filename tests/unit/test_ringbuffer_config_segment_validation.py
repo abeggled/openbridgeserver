@@ -49,6 +49,7 @@ async def test_config_rejects_too_coarse_segmentation_with_422(db, field, segmen
         with pytest.raises(HTTPException) as exc:
             await rb_api.configure_ringbuffer(
                 _cfg(**segment_kwargs, **retention_kwargs),
+                request=None,
                 _user="admin",
                 db=db,
             )
@@ -73,6 +74,7 @@ async def test_config_normalizes_zero_max_age_to_none_in_segmented_path(db, monk
     try:
         stats = await rb_api.configure_ringbuffer(
             _cfg(segmented=True, max_age=0),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -95,6 +97,7 @@ async def test_config_segmented_opt_in_persists_and_exposes_store_stats(db, monk
     try:
         stats = await rb_api.configure_ringbuffer(
             _cfg(segmented=True, segment_max_rows=1000, max_entries=3000),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -118,7 +121,7 @@ async def test_config_default_is_segmented_and_store_stats_present(db, monkeypat
     rb_path = tmp_path / "obs_ringbuffer.db"
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
     try:
-        stats = await rb_api.configure_ringbuffer(_cfg(), _user="admin", db=db)
+        stats = await rb_api.configure_ringbuffer(_cfg(), request=None, _user="admin", db=db)
         assert stats.enabled is True
         assert stats.store is not None
         cfg = await rb_api.load_persisted_ringbuffer_config(db)
@@ -137,7 +140,7 @@ async def test_config_explicit_opt_out_keeps_legacy_path(db, monkeypatch, tmp_pa
     rb_path = tmp_path / "obs_ringbuffer.db"
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
     try:
-        stats = await rb_api.configure_ringbuffer(_cfg(segmented=False), _user="admin", db=db)
+        stats = await rb_api.configure_ringbuffer(_cfg(segmented=False), request=None, _user="admin", db=db)
         assert stats.enabled is True
         assert stats.store is None
         cfg = await rb_api.load_persisted_ringbuffer_config(db)
@@ -161,6 +164,7 @@ async def test_config_accepts_segments_at_valid_ratio(db, monkeypatch, tmp_path)
                 segment_max_rows=1000,
                 max_entries=3000,
             ),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -190,6 +194,7 @@ async def test_config_rejects_all_total_and_segment_limits_disabled(db, monkeypa
                     segment_max_rows=None,
                     segment_max_age=None,
                 ),
+                request=None,
                 _user="admin",
                 db=db,
             )
@@ -213,6 +218,7 @@ async def test_config_accepts_explicit_age_rotation_with_unbounded_total_retenti
                 segment_max_rows=None,
                 segment_max_age=24 * 60 * 60,
             ),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -244,6 +250,7 @@ async def test_config_reports_per_dimension_derived_effective_limits(db, monkeyp
                 segment_max_rows=None,
                 segment_max_age=None,
             ),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -291,6 +298,7 @@ async def test_config_segmented_false_with_short_max_age_is_accepted(db, monkeyp
     try:
         stats = await rb_api.configure_ringbuffer(
             _cfg(segmented=False, max_age=3600),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -322,7 +330,7 @@ async def test_config_rejects_out_of_bounds_explicit_values_with_422(db, field, 
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: ":memory:")
     try:
         with pytest.raises(HTTPException) as exc:
-            await rb_api.configure_ringbuffer(_cfg(**segment_kwargs), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(_cfg(**segment_kwargs), request=None, _user="admin", db=db)
         assert exc.value.status_code == 422
         assert field in str(exc.value.detail)
     finally:

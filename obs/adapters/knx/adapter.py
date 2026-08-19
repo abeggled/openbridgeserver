@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from obs.adapters.base import (
     AdapterBase,
+    AdapterDelegationCapability,
     ConfirmationActionContext,
     ConfirmationActionToken,
     ConfirmationWriteOrder,
@@ -139,6 +140,7 @@ class KnxBindingConfig(BaseModel):
 @register
 class KnxAdapter(AdapterBase):
     adapter_type = "KNX"
+    delegation_capabilities: frozenset[AdapterDelegationCapability] = frozenset()
     config_schema = KnxAdapterConfig
     binding_config_schema = KnxBindingConfig
 

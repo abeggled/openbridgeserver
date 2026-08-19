@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from obs.logic.executor import GraphExecutor
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
-from obs.logic.node_types import get_node_type
+from obs.logic.registry import get_node_type
 from tests.unit.conftest import edge, node
 
 

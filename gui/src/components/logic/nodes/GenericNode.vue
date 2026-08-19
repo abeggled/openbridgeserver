@@ -8,9 +8,12 @@
       :style="hStyle(i, def.inputs.length)"
     />
 
-    <!-- Card — height controlled so handles align with rows -->
-    <div class="gn-card"
-         :style="{ borderTopColor: def.color, background: def.color + '12', minHeight: cardH + 'px' }">
+    <!-- Card — height controlled so handles align with rows.
+         The category tint rides on top of the opaque theme surface via
+         `--node-tint` (see `.logic-node-surface` in style.css) so the canvas
+         raster cannot show through the block body. -->
+    <div class="gn-card logic-node-surface"
+         :style="{ borderTopColor: def.color, '--node-tint': cardTint, minHeight: cardH + 'px' }">
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
         <span class="gn-title" :title="def.label">{{ def.label }}</span>
@@ -67,6 +70,7 @@
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
+import { nodeTint } from '@/utils/logicNodeSurface'
 
 const { updateNodeData } = useVueFlow()
 const { t, te } = useI18n()
@@ -99,6 +103,7 @@ const NODE_DEFS = computed(() => ({
   or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})}],                                                      outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  merge:        { label: 'Klemme',      color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.portLabels.resultShort')}] },
@@ -161,12 +166,16 @@ const NODE_DEFS = computed(() => ({
 const isGateNode = computed(() =>
   props.type === 'and' || props.type === 'or' || props.type === 'xor'
 )
+// merge shares and/or/xor's dynamic in1..inN port generation, but its inputs
+// are plain values (not booleans) — kept separate from isGateNode so the
+// per-port negation toggles (boolean-only) never render for it.
+const isMergeNode = computed(() => props.type === 'merge')
 
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
   const base = NODE_DEFS.value[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
-  if (isGateNode.value) {
+  if (isGateNode.value || isMergeNode.value) {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
@@ -250,6 +259,9 @@ const def = computed(() => {
   }
   return { ...base, label }
 })
+
+// Category tint painted over the opaque card surface (issue #1074)
+const cardTint = computed(() => nodeTint(def.value.color))
 
 // ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
 function toggleNegate(portId) {
@@ -338,7 +350,7 @@ const summary = computed(() => {
     const behavior = d.closed_behavior === 'default_value' ? `→ ${d.default_value ?? 0}` : t('logic.summary.hold')
     return d.negate_enable ? `${t('logic.summary.negateEnable')}  ${behavior}` : behavior
   }
-  if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge') {
     const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     return count > 2 ? t('logic.summary.inputs', { n: count }) : null
   }
@@ -393,8 +405,9 @@ function remove() { removeNodes([props.id]) }
   border-top: 3px solid #475569;
   border-radius: 8px;
   box-shadow: 0 4px 14px rgba(0,0,0,.3);
-  background: var(--node-card-bg);
   overflow: visible;
+  /* background: intentionally not set here — `.logic-node-surface` provides
+     the opaque theme surface plus the inline `--node-tint` overlay. */
 }
 
 .gn-header {
@@ -455,7 +468,9 @@ function remove() { removeNodes([props.id]) }
   line-height: 1;
   transition: background .12s, color .12s;
 }
-.gn-port-negate:hover          { background: rgba(255,255,255,.10); color: #7dd3fc; }
+/* Neutral grey rather than white/10 %: the card body is an opaque light or dark
+   theme surface (#1074), and a white wash is invisible on the light one. */
+.gn-port-negate:hover          { background: rgba(148,163,184,.28); color: var(--node-accent-hover); }
 .gn-port-negate--active        { color: #f87171; font-weight: 700; }
 .gn-port-negate--right         { margin-left: auto; }
 

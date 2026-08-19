@@ -648,6 +648,45 @@ async def test_hysteresis_state_on_seeded_path_is_committed():
 
 
 @pytest.mark.asyncio
+async def test_merge_state_on_seeded_path_is_committed():
+    """A published merge output must match the persisted "active input" state,
+    or the next real event would resolve against the stale pre-save state."""
+    src1_id, src2_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src1_id}},
+            {"id": "r2", "type": "datapoint_read", "data": {"datapoint_id": src2_id}},
+            {"id": "m1", "type": "merge", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "m1", "targetHandle": "in1"},
+            {"source": "r2", "sourceHandle": "value", "target": "m1", "targetHandle": "in2"},
+            {"source": "m1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    # in2 (=2) is unchanged from its stored value; in1's DataPoint now holds 9
+    # where the stored state still has 1 — in1 must become the active input.
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src1_id: 9, src2_id: 2})
+    mgr._hysteresis["g1"] = {"m1": {"values": {"in1": 1, "in2": 2}, "active": "in2"}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 9
+    assert mgr._hysteresis["g1"]["m1"]["active"] == "in1"
+
+    # The committed state is also persisted so a restart cannot reload the
+    # stale pre-save state from the DB
+    persist_calls = [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+    assert len(persist_calls) == 1
+    import json
+
+    assert json.loads(persist_calls[0].args[1][0])["m1"]["active"] == "in1"
+    assert persist_calls[0].args[1][1] == "g1"
+
+
+@pytest.mark.asyncio
 async def test_unrelated_read_of_target_does_not_skip_write():
     """Read A → Write B plus an independent Read B (no path back to the
     write) is not a feedback loop — B must still be initialized."""

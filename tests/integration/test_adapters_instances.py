@@ -189,6 +189,49 @@ async def test_get_instance_404(client, auth_headers):
     assert resp.status_code == 404
 
 
+async def test_instance_grants_drive_visibility_and_delegable_configuration(client, auth_headers):
+    instance = await _create_instance(client, auth_headers, adapter_type="MQTT")
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        hidden = await client.get("/api/v1/adapters/instances", headers=user_headers)
+        assert hidden.status_code == 200
+        assert instance["id"] not in {row["id"] for row in hidden.json()}
+
+        state = await client.get(
+            f"/api/v1/authz/principals/user/{username}/grants",
+            headers=auth_headers,
+        )
+        assert state.status_code == 200
+        granted = await client.put(
+            f"/api/v1/authz/principals/user/{username}/grants",
+            json={
+                "grants": [
+                    {
+                        "node_type": "adapter_instance",
+                        "node_id": instance["id"],
+                        "role": "operator",
+                        "effect": "allow",
+                    }
+                ]
+            },
+            headers={**auth_headers, "If-Match": state.headers["etag"]},
+        )
+        assert granted.status_code == 200, granted.text
+
+        visible = await client.get("/api/v1/adapters/instances", headers=user_headers)
+        assert instance["id"] in {row["id"] for row in visible.json()}
+        renamed = await client.patch(
+            f"/api/v1/adapters/instances/{instance['id']}",
+            json={"name": "Delegated MQTT"},
+            headers=user_headers,
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["name"] == "Delegated MQTT"
+    finally:
+        await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # PATCH /instances/{id}
 # ---------------------------------------------------------------------------

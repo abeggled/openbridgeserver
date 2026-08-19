@@ -1235,6 +1235,7 @@ class TestPollLoopAutoReconnect:
         """
         adapter, bus = _make_tcp()
         call_count = 0
+        recovered_read = asyncio.Event()
 
         async def flaky_read(*args, **kwargs):
             nonlocal call_count
@@ -1242,6 +1243,8 @@ class TestPollLoopAutoReconnect:
             if call_count == 2:
                 adapter._client.connected = False
                 raise OSError("connection lost")
+            if call_count >= 3:
+                recovered_read.set()
             return _ok_response([77])
 
         async def mock_connect():
@@ -1254,12 +1257,14 @@ class TestPollLoopAutoReconnect:
 
         binding = make_binding(_HOLDING_CFG, direction="SOURCE")
         task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
-        await asyncio.sleep(0.25)
-        task.cancel()
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            await asyncio.wait_for(recovered_read.wait(), timeout=1.0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
         client.connect.assert_awaited()
         good_events = [c.args[0] for c in bus.publish.call_args_list if hasattr(c.args[0], "quality") and c.args[0].quality == "good"]

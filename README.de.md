@@ -51,15 +51,26 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 13. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
 14. [Logik-Editor](#logik-editor)
 15. [Adapter-Konfiguration](#adapter-konfiguration)
+    - [KNX-Adapter](#knx-adapter)
+    - [Modbus-TCP-Adapter](#modbus-tcp-adapter)
+    - [Modbus-RTU-Adapter](#modbus-rtu-adapter)
+    - [1-Wire-Adapter](#1-wire-adapter)
+    - [MQTT-Adapter (externer Broker)](#mqtt-adapter-externer-broker)
+    - [MESSAGE-Adapter](#message-adapter)
+    - [Home-Assistant-Adapter](#home-assistant-adapter)
+    - [ioBroker-Adapter](#iobroker-adapter)
+    - [SNMP-Adapter](#snmp-adapter)
+    - [Anwesenheitssimulation-Adapter](#anwesenheitssimulation-adapter)
+    - [Zeitschaltuhr-Adapter](#zeitschaltuhr-adapter)
 16. [MQTT-Topics](#mqtt-topics)
 17. [Datentypen](#datentypen)
 18. [Einstellungen](#einstellungen)
 19. [Hilfsskripte](#hilfsskripte)
 20. [Visualisierung (Visu)](#visualisierung-visu)
-   - [Grundriss- und Anlagenschema-Widget](#grundriss--und-anlagenschema-widget)
+    - [Grundriss- und Anlagenschema-Widget](#grundriss--und-anlagenschema-widget)
 21. [Entwicklung](#entwicklung)
-   - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
-   - [Lokale Git-Hooks (Pre-Push Gate)](#lokale-git-hooks-pre-push-gate)
+    - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
+    - [Lokale Git-Hooks (Pre-Push Gate)](#lokale-git-hooks-pre-push-gate)
 
 ---
 
@@ -104,8 +115,13 @@ Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open brid
 |---|---|
 | **open bridge server** Weboberfläche + API | `http://<container-ip>:8080` |
 
-**Standardzugang:** Benutzername `admin`, Passwort `admin`
-⚠️ Das Passwort sofort nach der ersten Anmeldung ändern (Einstellungen → Passwort).
+OBS liefert bewusst keine Standard-Zugangsdaten aus. Der erste Start initialisiert die
+Datenbank und stoppt dann mit einem Einrichtungshinweis. Lege genau einen Eigentümer
+lokal an, bevor der Dienst neu gestartet wird:
+
+```bash
+obs-admin auth first-owner <benutzername> --password-stdin
+```
 
 **Sicherheitskonfiguration** (erforderlich):
 
@@ -636,6 +652,7 @@ Ein oder mehrere Blöcke lassen sich markieren (Shift + Rahmen aufziehen, oder S
 | **Speicher** | Ein, Zurücksetzen | Aus | Gibt den gespeicherten Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf. Für kontrollierte Rückkopplungen verwenden. |
 | **Vergleich** | A, B | Ergebnis | Vergleicht zwei Werte. Auswahl: `>` `<` `=` `>=` `<=` `≠` |
 | **Hysterese** | Wert | Aus | Schaltet ein wenn der Wert über „Schwelle EIN" steigt, und erst wieder aus wenn er unter „Schwelle AUS" fällt. Verhindert schnelles Hin- und Herschalten. |
+| **Klemme** | IN 1, IN 2, … (2-30) | Aus | Bündelt mehrere unabhängige Wertquellen auf einen gemeinsamen Ausgang: wer zuletzt einen neuen Wert liefert, wird durchgereicht (Edomi-Klemme). Ersetzt das Verdrahten mehrerer Quellen auf denselben Eingang eines anderen Blocks — das wird nicht unterstützt und beim Verbinden/Speichern blockiert. |
 | **Entscheidung** | Wert | 2-n boolesche Ausgänge | Prüft mehrere unabhängige Bedingungen gegen einen Eingang. Jeder Ausgang hat eigenen Namen und eigene Bedingung; mehrere Ausgänge können gleichzeitig wahr sein. |
 | **Zuordnung** | Wert | Ergebnis | Prüft geordnete Regeln und gibt das Ergebnis der ersten passenden Regel aus. Ausgangstyp wählbar als Bool, Int, Float oder String; optionaler Sonst-Wert für nicht passende Eingänge. |
 
@@ -1201,39 +1218,15 @@ Gleiche Verknüpfungs-Konfiguration wie TCP. Zusätzliche Instanz-Felder: `port`
 
 Verbindet sich mit einem **externen** `owserver`-Prozess (dem [OWFS](https://owfs.org)-1-Wire-Bus-Server) über das `pyownet`-TCP-Protokoll — dieselbe "OBS ist Client eines externen Diensts"-Beziehung, die der MQTT-Adapter zu Mosquitto hat. `owserver` abstrahiert USB-Busmaster (einfache USB-Sticks wie den DS9490, die mehrfachen Kanäle des ElabNET PBM) und den nativen Kernel-1-Wire-Bus hinter einem einheitlichen Gerätebaum — der Adapter selbst muss nie wissen, welche Hardware tatsächlich dahintersteckt.
 
-`owserver` wird **nicht von OBS selbst gestartet** — in Docker-Setups kann er als optionaler Docker-Compose-Sidecar gestartet (`COMPOSE_PROFILES=onewire`, siehe `.env.example`) oder im Proxmox-LXC-Template als systemd-Dienst verwendet werden, wobei der `owserver`-Service über die Variablen `OBS_ONEWIRE__USB_ALL` / `OBS_ONEWIRE__PBM_DEVICES` in `/etc/obs.env` freigeschaltet wird.
+`owserver` wird **nicht von OBS selbst gestartet** — es läuft als optionaler Docker-Compose-Sidecar oder, im Proxmox-LXC-Template, als systemd-Dienst. Die komplette Einrichtung besteht aus fünf Schritten — die ersten drei finden auf dem Proxmox-/Docker-**Host** statt, die letzten beiden sind OBS-seitige Konfiguration:
 
-**Instanz-Konfiguration:**
+1. 1-Wire-Gerät(e) identifizieren — Busmaster und/oder PBM
+2. udev-Regeln für stabile Gerätepfade anlegen
+3. Gerät(e) an den Container durchreichen
+4. `/etc/owfs.conf` konfigurieren
+5. 1-Wire-Adapter in OBS konfigurieren
 
-| Feld | Standard | Beschreibung |
-|---|---|---|
-| `host` | `localhost` | Hostname oder IP-Adresse des owserver-Prozesses |
-| `port` | `4304` | owserver-TCP-Port |
-| `poll_interval` | `30.0` | Abfrageintervall in Sekunden |
-| `request_timeout` | `10.0` | Timeout in Sekunden pro owserver-Aufruf |
-| `aliases` | — | ROM-ID → Label-Zuordnung; wird nicht hier bearbeitet, sondern über den Sensor-Scan im Verknüpfungsformular gepflegt (siehe unten) |
-
-**Verknüpfungs-Konfiguration:**
-
-| Feld | Standard | Beschreibung |
-|---|---|---|
-| `sensor_id` | — | ROM-ID, z. B. `28.4B057F0A1C10` |
-| `property` | `temperature` | OWFS-Property ("Datei"), z. B. `temperature`, `humidity`, `PIO.0` |
-
-Der **Scan**-Button im Verknüpfungsformular durchsucht die verbundene owserver-Instanz nach angeschlossenen Sensoren und deren verfügbaren Properties und erlaubt das Vergeben eines dauerhaften Alias-Labels je ROM-ID.
-
-> **Hinweis:** Dies ersetzt den bisherigen sysfs-basierten Adapter (`w1_path`, `/sys/bus/w1/devices`), der voraussetzte, dass OBS auf demselben Host wie der Linux-Kernel-`w1`-Treiber läuft. Über `owserver` kann OBS mit jedem 1-Wire-Busmaster sprechen — auch auf einem anderen Host oder in einem eigenen Container — und unterstützt zusätzlich das ElabNET PBM (ProfessionalBusMaster), nicht nur den reinen Kerneltreiber.
-
-#### USB-/Serial-Passthrough: stabile Gerätepfade (udev-Regel)
-
-Der Gerätepfad eines 1-Wire-Busmasters ist über Reboots hinweg oder beim Anschließen weiterer USB-/Serial-Geräte nicht garantiert stabil:
-
-- Ein einfacher USB-Busmaster (z. B. DS9490) meldet sich als `/dev/bus/usb/<bus>/<device>` — Bus-/Device-Nummern können sich verschieben.
-- Das ElabNET PBM meldet sich als FTDI-Serial-Gerät (`/dev/ttyUSB0`, `/dev/ttyUSB1`, …) — die laufende Nummer hängt von der Anschlussreihenfolge ab.
-
-Für das PBM ist `/dev/serial/by-id/usb-FTDI_...` in der Regel bereits ein stabiler Pfad, den udev automatisch für jedes Serial-Gerät mit Seriennummer anlegt — ohne eigene Regel. Einfache USB-Busmaster bekommen kein vergleichbares automatisches Alias, hier ist eine eigene udev-Regel der zuverlässige Weg — sie funktioniert genauso für das PBM, falls ein kurzer, selbst gewählter Name statt des langen `by-id`-Pfads gewünscht ist.
-
-**1. Gerät identifizieren**
+#### 1. Gerät(e) identifizieren
 
 Zuerst mit `lsusb` prüfen, welche Hardware überhaupt angeschlossen ist — nicht jeder Host hat beide Typen gleichzeitig. Ein einfacher USB-Busmaster (DS9490R, DS1490F, …) meldet sich mit der festen VID:PID `04fa:2490`, das ElabNET PBM als FTDI-Chip mit Vendor `0403` (die genaue Produkt-ID hängt von der jeweiligen FTDI-Chip-Variante ab):
 
@@ -1286,9 +1279,14 @@ Zwei Dinge fallen dabei auf:
 
 `serial` bevorzugen, wenn das Gerät eine Seriennummer meldet — anders als `idVendor`/`idProduct` ist sie pro physischem Gerät eindeutig, sodass die Regel auch bei einem zweiten Gerät desselben Modells noch das richtige trifft.
 
-> **Hinweis:** Das ElabNET PBM legt bereits von Haus aus einen stabilen `/dev/serial/by-id/...`-Symlink an (siehe `ls /dev/serial/by-id/` oben) — für dieses Gerät ist meist gar keine eigene udev-Regel nötig, `OBS_ONEWIRE__PBM_DEVICES` direkt auf diesen Pfad zu setzen reicht aus. Eine eigene Regel lohnt sich hier nur für einen kürzeren, selbst gewählten Namen.
+#### 2. udev-Regeln für stabile Gerätepfade anlegen
 
-**2. Regel schreiben**
+Der Gerätepfad eines 1-Wire-Busmasters ist über Reboots hinweg oder beim Anschließen weiterer USB-/Serial-Geräte nicht garantiert stabil:
+
+- Ein einfacher USB-Busmaster (z. B. DS9490) meldet sich als `/dev/bus/usb/<bus>/<device>` — Bus-/Device-Nummern können sich verschieben.
+- Das ElabNET PBM meldet sich als FTDI-Serial-Gerät (`/dev/ttyUSB0`, `/dev/ttyUSB1`, …) — die laufende Nummer hängt von der Anschlussreihenfolge ab.
+
+Für das PBM ist `/dev/serial/by-id/usb-FTDI_...` in der Regel bereits ein stabiler Pfad, den udev automatisch für jedes Serial-Gerät mit Seriennummer anlegt — ohne eigene Regel (siehe die `ls /dev/serial/by-id/`-Ausgabe in Schritt 1) — `OBS_ONEWIRE__PBM_DEVICES` direkt auf diesen Pfad zu setzen reicht aus, dann kann direkt zu Schritt 3 übergegangen werden. Einfache USB-Busmaster bekommen kein vergleichbares automatisches Alias, hier ist eine eigene udev-Regel der zuverlässige Weg. Eine eigene Regel für das PBM lohnt sich nur, wenn ein kurzer, selbst gewählter Name statt des langen `by-id`-Pfads gewünscht ist.
 
 Die Regel auf dem **Proxmox-Host** anlegen (nicht im Container — Proxmox löst den LXC-Passthrough-Mount gegen den Gerätebaum des Hosts auf, bevor der Container startet, der Symlink muss dort also schon existieren), z. B. `/etc/udev/rules.d/99-onewire.rules`:
 
@@ -1299,7 +1297,7 @@ Die Regel auf dem **Proxmox-Host** anlegen (nicht im Container — Proxmox löst
 SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", SYMLINK+="onewire-busmaster"
 
 # ElabNET PBM (FTDI) — ATTRS{} statt ATTR{}, da idVendor/idProduct/serial auf dem
-# übergeordneten USB-Gerät sitzen, nicht auf dem tty-Gerät selbst (siehe Hinweis oben).
+# übergeordneten USB-Gerät sitzen, nicht auf dem tty-Gerät selbst (siehe Schritt 1).
 # idProduct ist je nach FTDI-Chip-Variante unterschiedlich (hier 6015) — mit lsusb/udevadm
 # die eigene Variante und Seriennummer prüfen.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", ATTRS{serial}=="BM_00000401", SYMLINK+="onewire-pbm"
@@ -1314,14 +1312,24 @@ udevadm control --reload-rules && udevadm trigger
 ls -l /dev/onewire-busmaster /dev/onewire-pbm
 ```
 
-**3. Passthrough auf den stabilen Pfad umstellen**
+Beispielhafte Ausgabe für die Geräte aus Schritt 1 (beide Regeln angewendet):
 
-- **Proxmox-LXC** (`/etc/pve/lxc/<CTID>.conf`) — beide Zeilen sind nötig, der Mount-Eintrag allein reicht nicht (siehe Abschnitt „owserver (1-Wire) in the LXC template" in AGENTS.MD):
-  ```
-  lxc.mount.entry: /dev/onewire-busmaster dev/onewire-busmaster none bind,optional,create=file
-  lxc.cgroup2.devices.allow: c 189:* rwm
-  ```
-  Die Major-Nummer (`189` für USB-Gerätedateien) kann abweichen — die tatsächliche mit `ls -l /dev/onewire-busmaster` prüfen. Anschließend in `/etc/obs.env` des LXC die `OBS_ONEWIRE__*`-Variablen auf den symlinkten Namen statt den rohen Gerätepfad setzen.
+```
+$ ls -l /dev/onewire-busmaster /dev/onewire-pbm
+lrwxrwxrwx 1 root root 15 Jul 26 14:02 /dev/onewire-busmaster -> bus/usb/001/004
+lrwxrwxrwx 1 root root  7 Jul 26 14:02 /dev/onewire-pbm -> ttyUSB0
+```
+
+Falls nur eine der beiden Regeln zur eigenen Hardware passt, meldet `ls` für den anderen Symlink `No such file or directory` — das ist erwartet, kein Fehler (siehe Hinweis oben). Das Symlink-**Ziel** (`ttyUSB0`, `bus/usb/001/004`, …) kann sich über Reboots oder Neuanstecken hinweg ebenfalls ändern — die Regel matcht auf feste Geräteattribute, nicht auf den vom Kernel vergebenen Namen, udev richtet den Symlink also bei jedem Mal neu auf den tatsächlichen Ort aus. Das ist unkritisch: Stabil bleiben muss nur der Symlink-Name selbst (`/dev/onewire-pbm`), denn genau darauf beziehen sich Schritt 3 und 4 — nie auf den rohen Gerätepfad.
+
+#### 3. Gerät(e) an den Container durchreichen
+
+- **Proxmox-LXC**: Container öffnen → **Resources** → **Add** → **Device Passthrough**, bei **Device Path** den stabilen Symlink aus Schritt 2 eintragen (z. B. `/dev/onewire-busmaster`), bestätigen. Pro zutreffendem Gerät wiederholen (Busmaster und/oder PBM):
+
+  ![Proxmox-Container-Resources-Tab mit zwei durchgereichten 1-Wire-Geräten](docs/device-passthrough1.jpeg)
+  ![Proxmox-Device-Passthrough-Bearbeitungsdialog](docs/device-passthrough2.jpeg)
+
+  Proxmox schreibt den passenden Mount-Eintrag und die cgroup-Geräteberechtigung selbst — kein manuelles Editieren von `lxc.mount.entry`/`lxc.cgroup2.devices.allow`, und kein Risiko, die cgroup-Zeile zu vergessen (der häufigste Fehler beim manuellen Weg). Anschließend den Container neu starten (`pct reboot <CTID>`), damit der Passthrough greift.
 
 - **Docker Compose** (`docker-compose.yml`):
   ```yaml
@@ -1329,6 +1337,75 @@ ls -l /dev/onewire-busmaster /dev/onewire-pbm
     - "/dev/onewire-busmaster:/dev/onewire-busmaster"
     - "/dev/onewire-pbm:/dev/ttyUSB0"
   ```
+
+#### 4. `/etc/owfs.conf` konfigurieren
+
+`/etc/owfs.conf` ist die eigene Konfigurationsdatei von `owserver` — sie legt fest, welche(n) Bus(se) `owserver` bedient. Bei OBS' eigenem `owserver`-Packaging (dem systemd-Dienst im Proxmox-LXC-Template und dem Docker-Compose-Sidecar) wird diese Datei nie von Hand bearbeitet: Beide erzeugen sie bei jedem Start komplett neu aus einer kleinen Menge `OBS_ONEWIRE__*`-Umgebungsvariablen, über dasselbe gemeinsame Skript (`scripts/obs-onewire-configure.sh`), das hinter beiden Deployment-Wegen steckt. „`/etc/owfs.conf` konfigurieren" bedeutet also, ein paar Umgebungsvariablen an der richtigen Stelle zu setzen, nicht die Datei selbst zu editieren — dabei die stabilen, symlinkten Pfade aus Schritt 2 verwenden (nicht das rohe `/dev/bus/usb/...` bzw. `/dev/ttyUSB0`).
+
+**Proxmox-LXC** — `/etc/obs.env` im Container bearbeiten (auskommentieren/ergänzen):
+
+```bash
+OBS_ONEWIRE__USB_ALL=true                    # falls ein einfacher Busmaster durchgereicht wurde
+OBS_ONEWIRE__PBM_DEVICES=/dev/onewire-pbm    # kommagetrennt für mehrere PBMs
+# OBS_ONEWIRE__PORT=4304                     # optional, nur falls der Standardport geändert wurde
+```
+
+Anschließend den Dienst neu starten — `ExecCondition=` wird bei jedem Startversuch neu ausgewertet, das regeneriert also sowohl `/etc/owfs.conf` als auch startet `owserver` jetzt, wo es tatsächlich etwas zu bedienen gibt:
+
+```bash
+systemctl restart owserver
+systemctl status owserver          # sollte "active (running)" zeigen, nicht "inactive (dead)"
+journalctl -u owserver -n 20 --no-pager
+```
+
+**Docker Compose** — `.env` bearbeiten (siehe den auskommentierten `OBS_ONEWIRE_*`-Block; hier mit *einfachem* Unterstrich im Gegensatz zu `OBS_ONEWIRE__*` oben — `docker-compose.yml` übernimmt das Mapping):
+
+```bash
+OBS_ONEWIRE_USB_ALL=true
+OBS_ONEWIRE_PBM_DEVICES=/dev/onewire-pbm
+COMPOSE_PROFILES=onewire
+```
+
+```bash
+docker compose up -d owserver
+docker compose logs owserver
+```
+
+In beiden Fällen sieht die erzeugte Datei so aus (Beispiel für einen Host mit Busmaster **und** PBM):
+
+```
+# Generated by obs-onewire-configure.sh — do not edit by hand.
+server: port = 4304
+server: usb = all
+server: pbm = /dev/onewire-pbm
+```
+
+> **Hinweis:** Diese beiden Umgebungsvariablen (plus der optionale Port) sind alles, was OBS' eigenes `owserver`-Packaging anbietet. Falls das eigene Setup eine `/etc/owfs.conf`-Direktive jenseits von `usb`/`pbm`/`port` braucht — siehe die [OWFS-Konfigurationsdokumentation](https://owfs.org) für die vollständige Syntax —, läuft `owserver` außerhalb von OBS' LXC-/Docker-Packaging, und die Datei wird eigenständig gepflegt; dann die beiden oben beschriebenen Deployment-Wege überspringen und die Datei direkt von Hand schreiben.
+
+#### 5. 1-Wire-Adapter in OBS konfigurieren
+
+Sobald `owserver` läuft und erreichbar ist, eine **1-Wire**-Adapterinstanz in OBS anlegen, die darauf zeigt:
+
+> **Hinweis:** Im Normalfall können die untenstehenden Standardwerte unverändert übernommen werden — beim Proxmox-LXC-Template laufen `owserver` und OBS im selben Container, `host: localhost` / `port: 4304` funktionieren daher ohne Anpassung. Bei Docker Compose läuft `owserver` in einem eigenen Sidecar-Container: hier `host` auf den Compose-Service-Namen `owserver` statt `localhost` setzen (alles andere bleibt beim Standard).
+
+**Instanz-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `host` | `localhost` | Hostname oder IP-Adresse des owserver-Prozesses |
+| `port` | `4304` | owserver-TCP-Port |
+| `poll_interval` | `30.0` | Abfrageintervall in Sekunden |
+| `request_timeout` | `10.0` | Timeout in Sekunden pro owserver-Aufruf |
+| `aliases` | — | ROM-ID → Label-Zuordnung; wird nicht hier bearbeitet, sondern über den Sensor-Scan im Verknüpfungsformular gepflegt (siehe unten) |
+
+**Verknüpfungs-Konfiguration:**
+
+| Feld | Standard | Beschreibung |
+|---|---|---|
+| `sensor_id` | — | ROM-ID, z. B. `28.4B057F0A1C10` |
+| `property` | `temperature` | OWFS-Property ("Datei"), z. B. `temperature`, `humidity`, `PIO.0` |
+
+Der **Scan**-Button im Verknüpfungsformular durchsucht die verbundene owserver-Instanz nach angeschlossenen Sensoren und deren verfügbaren Properties und erlaubt das Vergeben eines dauerhaften Alias-Labels je ROM-ID.
 
 ---
 
@@ -1823,7 +1900,12 @@ Die `.env`-Datei enthält das MQTT-Passwort, mit dem der Docker-Mosquitto initia
 | API (Swagger) | http://localhost:8080/docs |
 | MQTT | localhost:1883 |
 
-**Standardzugang:** `admin` / `admin`
+Lege nach dem ersten, die Datenbank initialisierenden Backend-Start einmalig den
+Eigentümer an, bevor du das Backend neu startest:
+
+```bash
+tools/with-venv python -m obs.admin_cli auth first-owner <benutzername> --password-stdin
+```
 
 #### Tests ausführen
 
@@ -1922,6 +2004,10 @@ cp config.example.yaml config.yaml
 # Server mit automatischem Neustart bei Codeänderungen
 uvicorn obs.main:create_app --factory --reload --host 0.0.0.0 --port 8080
 ```
+
+### Logik-Engine erweitern
+
+Jeder eingebaute Logikbaustein ist in einem eigenen Modul unterhalb von `obs/logic/nodes/<kategorie>/` definiert; `obs/logic/registry.py` setzt den öffentlichen Bausteinkatalog aus den Kategorie-Registries zusammen. Ein neuer Baustein berührt dadurch nur sein eigenes Modul, eine Kategorie-Registrierung, seine Capability-Einstufung und seine eigenen Tests. Der Kontrakt, die Abhängigkeitsregeln und das Schritt-für-Schritt-Vorgehen sind in [`docs/architecture/logic-nodes.md`](docs/architecture/logic-nodes.md) dokumentiert und werden durch Architekturtests abgesichert.
 
 ### Datenbankstruktur
 

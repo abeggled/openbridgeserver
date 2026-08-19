@@ -20,12 +20,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
 from obs import __version__
 from obs.adapters import registry as adapter_registry
+from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
 from obs.api.auth import get_admin_user
 from obs.config import get_settings
 from obs.db.database import Database, get_db
@@ -250,13 +251,17 @@ async def get_debug_log_status(
 @router.post("/debug-log", response_model=DebugLogStatusOut)
 async def enable_debug_log(
     body: DebugLogRequest,
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> DebugLogStatusOut:
     """Temporarily enable verbose logging for support diagnostics."""
     global _debug_restore_level, _debug_restore_task, _debug_temporary_level, _debug_until
 
     level = body.level.upper()
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
     if level not in _VALID_LOG_LEVELS:
+        await writer.write_contract("POST", "/api/v1/support/debug-log", outcome=AuditOutcome.FAILED)
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"level must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}",
@@ -275,15 +280,20 @@ async def enable_debug_log(
     _debug_temporary_level = level
     set_log_buffer_level(level)
     _debug_restore_task = asyncio.create_task(_restore_debug_later(body.duration_seconds))
+    await writer.write_contract("POST", "/api/v1/support/debug-log", resource_id="global")
     return _debug_status(level=level)
 
 
 @router.delete("/debug-log", response_model=DebugLogStatusOut)
 async def disable_debug_log(
+    request: Request = None,  # type: ignore[assignment]
     _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
 ) -> DebugLogStatusOut:
     """Disable a temporary support debug window immediately."""
     await _restore_debug_now()
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    await writer.write_contract("DELETE", "/api/v1/support/debug-log", resource_id="global")
     return _debug_status()
 
 

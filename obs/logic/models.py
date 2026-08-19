@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
+
+ControlClassName = Literal["room_local", "central_plant"]
 
 
 class NodePosition(BaseModel):
@@ -45,6 +47,7 @@ class LogicGraphCreate(BaseModel):
     description: str = ""
     enabled: bool = True
     flow_data: FlowData = FlowData()
+    control_class: ControlClassName = "room_local"
 
 
 class LogicGraphUpdate(BaseModel):
@@ -52,6 +55,7 @@ class LogicGraphUpdate(BaseModel):
     description: str | None = None
     enabled: bool | None = None
     flow_data: FlowData | None = None
+    control_class: ControlClassName | None = None
 
 
 class LogicGraphRun(BaseModel):
@@ -69,6 +73,7 @@ class LogicGraphOut(BaseModel):
     flow_data: FlowData
     created_at: str
     updated_at: str
+    control_class: ControlClassName = "room_local"
 
 
 class LogicGraphImport(BaseModel):
@@ -80,6 +85,7 @@ class LogicGraphImport(BaseModel):
     description: str = ""
     enabled: bool = True
     flow_data: FlowData
+    control_class: ControlClassName = "room_local"
 
 
 class NodeTypePort(BaseModel):
@@ -97,8 +103,24 @@ class NodeTypeDef(BaseModel):
     outputs: list[NodeTypePort] = []
     config_schema: dict[str, Any] = {}  # JSON schema for node data
     color: str = "#475569"  # default node color (tailwind slate-600)
+    has_external_side_effect: bool | None = None
+    required_capability: str | None = None
     hidden_from_palette: bool = False
     legacy: bool = False
+
+
+class LogicRunPreflightCheck(BaseModel):
+    target_type: str
+    target_id: str
+    node_ids: list[str] = []
+    allowed: bool
+    reason: str
+
+
+class LogicRunPreflight(BaseModel):
+    graph_id: str
+    allowed: bool
+    checks: list[LogicRunPreflightCheck]
 
 
 class LogicUsageOut(BaseModel):

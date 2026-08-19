@@ -229,6 +229,32 @@ describe('KnxDevicesView', () => {
     })
   })
 
+  it('applies the device quick filter shortly after typing', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = await mountView()
+
+      await wrapper.find('[data-testid="knx-devices-search"]').setValue('kitchen')
+      expect(knxprojApi.listDevices).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(249)
+      expect(knxprojApi.listDevices).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+
+      expect(knxprojApi.listDevices).toHaveBeenLastCalledWith({
+        q: 'kitchen',
+        manufacturer: '',
+        order_number: '',
+        hierarchy_node_id: '',
+        page: 0,
+        size: 25,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('applies hierarchy filters', async () => {
     const wrapper = await mountView()
 

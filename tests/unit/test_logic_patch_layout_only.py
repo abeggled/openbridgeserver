@@ -42,12 +42,12 @@ async def test_patch_with_corrupt_stored_flow_falls_back_to_reload(monkeypatch):
     valid_flow = FlowData.model_validate({"nodes": [], "edges": []})
     db = MagicMock()
     db.fetchone = AsyncMock(side_effect=[_row("not-json"), _row(json.dumps({"nodes": [], "edges": []}))])
-    db.execute_and_commit = AsyncMock()
+    db.execute = AsyncMock()
 
     result = await update_graph_partial("g1", LogicGraphUpdate(flow_data=valid_flow), _user="admin", db=db)
 
     assert result.id == "g1"
-    db.execute_and_commit.assert_awaited_once()
+    assert db.execute.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -73,7 +73,7 @@ async def test_patch_move_only_on_legacy_flow_is_layout_only(monkeypatch):
     )
     db = MagicMock()
     db.fetchone = AsyncMock(side_effect=[_row(json.dumps(legacy_flow)), _row(moved.model_dump_json())])
-    db.execute_and_commit = AsyncMock()
+    db.execute = AsyncMock()
 
     result = await update_graph_partial("g1", LogicGraphUpdate(flow_data=moved), _user="admin", db=db)
 
@@ -95,7 +95,7 @@ async def test_patch_repeating_stored_enabled_is_noop(monkeypatch):
     row = _row(json.dumps({"nodes": [], "edges": []}))
     db = MagicMock()
     db.fetchone = AsyncMock(side_effect=[row, row])
-    db.execute_and_commit = AsyncMock()
+    db.execute = AsyncMock()
 
     result = await update_graph_partial("g1", LogicGraphUpdate(enabled=True), _user="admin", db=db)
 
@@ -128,7 +128,7 @@ async def test_patch_comment_edit_is_layout_only(monkeypatch):
     edited = FlowData.model_validate(_graph("updated documentation"))
     db = MagicMock()
     db.fetchone = AsyncMock(side_effect=[_row(json.dumps(_graph("old text"))), _row(edited.model_dump_json())])
-    db.execute_and_commit = AsyncMock()
+    db.execute = AsyncMock()
 
     result = await update_graph_partial("g1", LogicGraphUpdate(flow_data=edited), _user="admin", db=db)
 

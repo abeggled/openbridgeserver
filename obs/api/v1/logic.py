@@ -22,11 +22,16 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.audit import AuditLogWriter, AuditOutcome, build_audit_context
+from obs.api.auth import Principal, get_current_principal, get_current_user
+from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
+from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
+from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
 from obs.db.database import Database, get_db
+from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.graph_analysis import topology_warnings
 from obs.logic.manager import _normalise_api_client_variables
 from obs.logic.models import (
@@ -38,10 +43,12 @@ from obs.logic.models import (
     LogicGraphRun,
     LogicGraphUpdate,
     LogicNode,
+    LogicRunPreflight,
+    LogicRunPreflightCheck,
     LogicUsageOut,
     NodeTypeDef,
 )
-from obs.logic.node_types import list_node_types
+from obs.logic.registry import get_node_type, list_node_types
 from obs.logic.validation import validate_timer_durations
 
 logger = logging.getLogger(__name__)
@@ -86,7 +93,456 @@ def _row_to_out(row: dict) -> LogicGraphOut:
         flow_data=FlowData.model_validate(raw),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        control_class=_row_control_class(row),
     )
+
+
+def _row_control_class(row: dict) -> str:
+    try:
+        return row["control_class"]
+    except (IndexError, KeyError):
+        return "room_local"
+
+
+def _principal_from_dependency(value: Principal | str) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _principal_from_mutation_dependency(value: Principal | str | object) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    if isinstance(value, str) and value.startswith("api_key:"):
+        return Principal(subject=value, type="api_key", is_admin=False)
+    # Direct callers historically pass admin dependency values as strings.
+    # Runtime requests now receive a Principal from get_current_principal.
+    subject = value if isinstance(value, str) else "admin"
+    return Principal(subject=subject, type="user", is_admin=True)
+
+
+async def _require_logic_graph_creation(
+    db: Database,
+    principal: Principal,
+    request: Request | None,
+    *,
+    operation: str,
+    control_class: str,
+    resource_id: str | None = None,
+) -> bool:
+    """Return whether creation is delegated after enforcing its closed capability."""
+    if principal.type == "user" and principal.is_admin:
+        return False
+
+    if principal.type != "user":
+        decision = AuthzDecision(False, "principal_type_not_allowed")
+    else:
+        grants = await load_role_grants(db, principal, node_type="logic_capability")
+        decision = authorize(
+            principal=principal,
+            action=AuthzAction.GENERATE,
+            targets=[
+                AuthzTarget(
+                    node_type="logic_capability",
+                    node_id=LOGIC_CREATE_CAPABILITY,
+                    control_class=control_class,
+                )
+            ],
+            grants=grants,
+        )
+
+    if not decision.allowed:
+        writer = AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=principal),
+        )
+        path = {
+            "create": "/api/v1/logic/graphs",
+            "import": "/api/v1/logic/graphs/import",
+            "duplicate": "/api/v1/logic/graphs/{graph_id}/duplicate",
+        }[operation]
+        await writer.write_contract(
+            "POST",
+            path,
+            resource_id=resource_id,
+            details={"control_class": control_class, "operation": operation, "reason": decision.reason},
+            outcome=AuditOutcome.DENIED,
+        )
+        raise mark_contract_audited(HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert"))
+
+    return True
+
+
+async def _persist_created_graph(
+    db: Database,
+    principal: Principal,
+    request: Request | None,
+    *,
+    name: str,
+    description: str,
+    enabled: bool,
+    flow: FlowData,
+    control_class: str,
+    delegated: bool,
+    audit_path: str,
+) -> dict:
+    now = datetime.now(UTC).isoformat()
+    graph_id = str(uuid.uuid4())
+    persisted_enabled = enabled if not delegated else False
+    async with db.transaction():
+        await db.execute(
+            """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, control_class, created_at, updated_at, created_by)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                graph_id,
+                name,
+                description,
+                int(persisted_enabled),
+                flow.model_dump_json(),
+                control_class,
+                now,
+                now,
+                principal.subject,
+            ),
+        )
+        if delegated:
+            await db.execute(
+                """INSERT INTO authz_node_roles
+                       (principal_type, principal_id, node_type, node_id, role, effect, central_control)
+                   VALUES ('user', ?, 'logic_graph', ?, 'operator', 'allow', ?)""",
+                (principal.subject, graph_id, int(control_class == "central_plant")),
+            )
+        details = {
+            "control_class": control_class,
+            "creator_grant_role": "operator" if delegated else None,
+            "delegated": delegated,
+            "enabled_persisted": persisted_enabled,
+            "enabled_requested": enabled,
+            "operation": audit_path.rsplit("/", 1)[-1] if audit_path.endswith(("/import", "/duplicate")) else "create",
+        }
+        if audit_path == "/api/v1/logic/graphs":
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/logic/graphs",
+                resource_id=graph_id,
+                details=details,
+                commit=False,
+            )
+        elif audit_path == "/api/v1/logic/graphs/import":
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/logic/graphs/import",
+                resource_id=graph_id,
+                details=details,
+                commit=False,
+            )
+        else:
+            await write_application_success(
+                db,
+                request,
+                principal,
+                "POST",
+                "/api/v1/logic/graphs/{graph_id}/duplicate",
+                resource_id=graph_id,
+                details=details,
+                commit=False,
+            )
+        row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
+        assert row is not None
+    return row
+
+
+def _flow_from_row(row: dict) -> FlowData:
+    raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
+    return FlowData.model_validate(raw)
+
+
+def _node_datapoint_ids(node: LogicNode) -> list[object]:
+    if node.type in {"datapoint_read", "datapoint_write"}:
+        return [node.data.get("datapoint_id")]
+    if node.type == "api_client":
+        return [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
+    if node.type == "value_sequence":
+        steps = node.data.get("steps") or []
+        if isinstance(steps, str):
+            try:
+                steps = json.loads(steps)
+            except json.JSONDecodeError:
+                return []
+        if isinstance(steps, list):
+            return [step.get("datapoint_id") for step in steps if isinstance(step, dict)]
+    return []
+
+
+def _logic_datapoint_ids(flow: FlowData) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for node in flow.nodes:
+        for dp_id in _node_datapoint_ids(node):
+            if not isinstance(dp_id, str) or not dp_id or dp_id in seen:
+                continue
+            seen.add(dp_id)
+            ids.append(dp_id)
+    return ids
+
+
+async def _authorized_logic_datapoint_ids(
+    db: Database,
+    principal: Principal,
+    row: dict,
+    *,
+    action: AuthzAction,
+) -> tuple[list[str], list[str]]:
+    all_ids = _logic_datapoint_ids(_flow_from_row(row))
+    if principal.type == "user" and principal.is_admin:
+        return all_ids, all_ids
+    if not all_ids:
+        return all_ids, []
+    allowed_ids = await filter_authorized_datapoints(db, principal, all_ids, action=action)
+    return all_ids, allowed_ids
+
+
+def _flow_requires_graph_grant(flow: FlowData) -> bool:
+    for node in flow.nodes:
+        node_type = get_node_type(node.type)
+        if node_type is None or node_type.has_external_side_effect is not False:
+            return True
+    return False
+
+
+async def _can_read_logic_graph(db: Database, principal: Principal, row: dict) -> bool:
+    if principal.type == "user" and principal.is_admin:
+        return True
+    graph_grants = await load_role_grants(db, principal, node_type="logic_graph")
+    graph_decision = authorize(
+        principal=principal,
+        action=AuthzAction.READ,
+        targets=[AuthzTarget(node_type="logic_graph", node_id=row["id"])],
+        grants=graph_grants,
+    )
+    if graph_decision.reason == "explicit_deny":
+        return False
+    if graph_decision.allowed:
+        return True
+    if _flow_requires_graph_grant(_flow_from_row(row)):
+        return False
+    all_ids, allowed_ids = await _authorized_logic_datapoint_ids(db, principal, row, action=AuthzAction.READ)
+    return bool(all_ids) and len(allowed_ids) == len(all_ids)
+
+
+async def _require_logic_graph_read(db: Database, principal: Principal, row: dict) -> None:
+    if not await _can_read_logic_graph(db, principal, row):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+
+
+async def _require_logic_graph_generate(
+    db: Database,
+    principal: Principal,
+    row: dict,
+    flow: FlowData,
+    *,
+    control_class: str,
+) -> None:
+    """Authorize an existing graph and every datapoint in the proposed flow."""
+    await _require_logic_graph_read(db, principal, row)
+    if principal.type == "user" and principal.is_admin:
+        return
+    grants = await load_role_grants(db, principal)
+    current_control_class = row["control_class"] if "control_class" in row.keys() else "room_local"  # noqa: SIM118 -- sqlite Row membership checks values
+    graph_targets = [
+        AuthzTarget(
+            node_type="logic_graph",
+            node_id=row["id"],
+            control_class=current_control_class,
+        )
+    ]
+    if control_class != current_control_class:
+        graph_targets.append(
+            AuthzTarget(
+                node_type="logic_graph",
+                node_id=row["id"],
+                control_class=control_class,
+            )
+        )
+    graph_decision = authorize(
+        principal=principal,
+        action=AuthzAction.GENERATE,
+        targets=graph_targets,
+        grants=grants,
+    )
+    datapoint_ids = list(dict.fromkeys([*_logic_datapoint_ids(_flow_from_row(row)), *_logic_datapoint_ids(flow)]))
+    allowed_ids = set(
+        await filter_authorized_datapoints(
+            db,
+            principal,
+            datapoint_ids,
+            action=AuthzAction.GENERATE,
+            grants=grants,
+        )
+    )
+    if not graph_decision.allowed or allowed_ids != set(datapoint_ids):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert")
+
+
+def _datapoint_node_ids(flow: FlowData) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for node in flow.nodes:
+        for candidate_id in _node_datapoint_ids(node):
+            if isinstance(candidate_id, str) and candidate_id:
+                result.setdefault(candidate_id, []).append(node.id)
+    return result
+
+
+def _adapter_instance_node_ids(flow: FlowData) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for node in flow.nodes:
+        if node.type != "notify_message":
+            continue
+        instance_id = node.data.get("adapter_instance_id")
+        if isinstance(instance_id, str) and instance_id:
+            result.setdefault(instance_id, []).append(node.id)
+    return result
+
+
+def _direct_datapoint_activation_decision(
+    principal: Principal,
+    datapoint_id: str,
+    targets: list[AuthzTarget],
+    grants: list[RoleGrant],
+) -> AuthzDecision:
+    decision = authorize(principal=principal, action=AuthzAction.ACTIVATE, targets=targets, grants=grants)
+    direct_grants = [grant for grant in grants if grant.node_type == "datapoint" and grant.node_id == datapoint_id]
+    if not direct_grants:
+        return decision
+    control_class = targets[0].control_class if targets else "room_local"
+    direct_decision = authorize(
+        principal=principal,
+        action=AuthzAction.ACTIVATE,
+        targets=[AuthzTarget(node_type="datapoint", node_id=datapoint_id, control_class=control_class)],
+        grants=grants,
+    )
+    if decision.reason == "explicit_deny" or direct_decision.reason == "explicit_deny":
+        return AuthzDecision(False, "explicit_deny")
+    if decision.allowed or direct_decision.allowed:
+        return AuthzDecision(True, "allowed")
+    return decision
+
+
+async def _logic_run_preflight(db: Database, principal: Principal, row: dict) -> LogicRunPreflight:
+    flow = _flow_from_row(row)
+    grants = [] if principal.type == "user" and principal.is_admin else await load_role_grants(db, principal)
+    checks: list[LogicRunPreflightCheck] = []
+
+    graph_decision = authorize(
+        principal=principal,
+        action=AuthzAction.ACTIVATE,
+        targets=[AuthzTarget(node_type="logic_graph", node_id=row["id"], control_class=_row_control_class(row))],
+        grants=grants,
+    )
+    checks.append(
+        LogicRunPreflightCheck(
+            target_type="logic_graph",
+            target_id=row["id"],
+            allowed=graph_decision.allowed,
+            reason=graph_decision.reason,
+        )
+    )
+    checks.append(
+        LogicRunPreflightCheck(
+            target_type="logic_graph_state",
+            target_id="enabled",
+            allowed=bool(row["enabled"]),
+            reason="enabled" if bool(row["enabled"]) else "graph_disabled",
+        )
+    )
+
+    node_ids_by_capability: dict[str, list[str]] = {}
+    for node in flow.nodes:
+        node_type = get_node_type(node.type)
+        if node_type is None or node_type.has_external_side_effect is None:
+            checks.append(
+                LogicRunPreflightCheck(
+                    target_type="logic_capability",
+                    target_id=node.type,
+                    node_ids=[node.id],
+                    allowed=principal.type == "user" and principal.is_admin,
+                    reason="admin" if principal.type == "user" and principal.is_admin else "undeclared_capability",
+                )
+            )
+        elif node_type.has_external_side_effect:
+            if not node_type.required_capability:
+                checks.append(
+                    LogicRunPreflightCheck(
+                        target_type="logic_capability",
+                        target_id=node.type,
+                        node_ids=[node.id],
+                        allowed=principal.type == "user" and principal.is_admin,
+                        reason="admin" if principal.type == "user" and principal.is_admin else "undeclared_capability",
+                    )
+                )
+            else:
+                node_ids_by_capability.setdefault(node_type.required_capability, []).append(node.id)
+
+    for capability, node_ids in sorted(node_ids_by_capability.items()):
+        decision = authorize(
+            principal=principal,
+            action=AuthzAction.ACTIVATE,
+            targets=[AuthzTarget(node_type="logic_capability", node_id=capability)],
+            grants=grants,
+        )
+        checks.append(
+            LogicRunPreflightCheck(
+                target_type="logic_capability",
+                target_id=capability,
+                node_ids=node_ids,
+                allowed=decision.allowed,
+                reason=decision.reason,
+            )
+        )
+
+    for instance_id, node_ids in _adapter_instance_node_ids(flow).items():
+        decision = authorize(
+            principal=principal,
+            action=AuthzAction.ACTIVATE,
+            targets=[AuthzTarget(node_type="adapter_instance", node_id=instance_id)],
+            grants=grants,
+        )
+        checks.append(
+            LogicRunPreflightCheck(
+                target_type="adapter_instance",
+                target_id=instance_id,
+                node_ids=node_ids,
+                allowed=decision.allowed,
+                reason=decision.reason,
+            )
+        )
+
+    datapoint_nodes = _datapoint_node_ids(flow)
+    targets_by_datapoint = await resolve_datapoint_targets(db, datapoint_nodes)
+    for datapoint_id, node_ids in datapoint_nodes.items():
+        targets = targets_by_datapoint.get(datapoint_id, [])
+        decision = _direct_datapoint_activation_decision(principal, datapoint_id, targets, grants)
+        checks.append(
+            LogicRunPreflightCheck(
+                target_type="datapoint",
+                target_id=datapoint_id,
+                node_ids=node_ids,
+                allowed=decision.allowed,
+                reason=decision.reason,
+            )
+        )
+
+    return LogicRunPreflight(graph_id=row["id"], allowed=all(check.allowed for check in checks), checks=checks)
 
 
 def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
@@ -122,86 +578,93 @@ async def validate_graph(
 
 @router.get("/graphs", response_model=list[LogicGraphOut])
 async def list_graphs(
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[LogicGraphOut]:
+    principal = _principal_from_dependency(_user)
     rows = await db.fetchall("SELECT * FROM logic_graphs ORDER BY name")
-    return [_row_to_out(r) for r in rows]
+    readable_rows = [row for row in rows if await _can_read_logic_graph(db, principal, row)]
+    return [_row_to_out(r) for r in readable_rows]
 
 
 @router.post("/graphs", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/logic/graphs", principal_param="_user")
 async def create_graph(
     body: LogicGraphCreate,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     _validate_timer_durations(body.flow_data)
-    now = datetime.now(UTC).isoformat()
-    gid = str(uuid.uuid4())
-    await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
-        (
-            gid,
-            body.name,
-            body.description,
-            int(body.enabled),
-            body.flow_data.model_dump_json(),
-            now,
-            now,
-        ),
+    principal = _principal_from_mutation_dependency(_user)
+    delegated = await _require_logic_graph_creation(
+        db,
+        principal,
+        request,
+        operation="create",
+        control_class=body.control_class,
     )
-    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
+    row = await _persist_created_graph(
+        db,
+        principal,
+        request,
+        name=body.name,
+        description=body.description,
+        enabled=body.enabled,
+        flow=body.flow_data,
+        control_class=body.control_class,
+        delegated=delegated,
+        audit_path="/api/v1/logic/graphs",
+    )
     # Load into executor cache so the graph is immediately runnable
     try:
         from obs.logic.manager import get_logic_manager
 
         manager = get_logic_manager()
         await manager.reload()
-        await manager.initialize_graph(gid)
+        await manager.initialize_graph(row["id"])
     except Exception:
-        logger.exception("Failed to reload logic manager after creating graph %s", gid)
+        logger.exception("Failed to reload logic manager after creating graph %s", row["id"])
     return _row_to_out(row)
 
 
 @router.get("/graphs/{graph_id}", response_model=LogicGraphOut)
 async def get_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    principal = _principal_from_dependency(_user)
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
     return _row_to_out(row)
 
 
 @router.put("/graphs/{graph_id}", response_model=LogicGraphOut)
+@audit_application_contract("PUT", "/api/v1/logic/graphs/{graph_id}", principal_param="_user", resource_param="graph_id")
 async def update_graph_full(
     graph_id: str,
     body: LogicGraphCreate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
-    _validate_timer_durations(body.flow_data)
-    await db.execute_and_commit(
-        """UPDATE logic_graphs
-           SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
-           WHERE id=?""",
-        (
-            body.name,
-            body.description,
-            int(body.enabled),
-            body.flow_data.model_dump_json(),
-            now,
-            graph_id,
-        ),
+    control_class = (
+        body.control_class if "control_class" in body.model_fields_set else (row["control_class"] if "control_class" in row.keys() else "room_local")  # noqa: SIM118 -- sqlite Row membership checks values
     )
-
+    await _require_logic_graph_generate(
+        db,
+        _principal_from_mutation_dependency(_user),
+        row,
+        body.flow_data,
+        control_class=control_class,
+    )
+    _validate_timer_durations(body.flow_data)
     try:
         layout_only = bool(row["enabled"]) == body.enabled and _normalized_without_positions(
             json.loads(row["flow_data"] or "{}")
@@ -209,6 +672,26 @@ async def update_graph_full(
     except (TypeError, ValueError):
         layout_only = False
 
+    principal = _principal_from_mutation_dependency(_user)
+    async with db.transaction():
+        await db.execute(
+            """UPDATE logic_graphs
+               SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
+               WHERE id=?""",
+            (
+                body.name,
+                body.description,
+                int(body.enabled),
+                body.flow_data.model_dump_json(),
+                control_class,
+                now,
+                graph_id,
+            ),
+        )
+        persisted_row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
+        if persisted_row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+        await write_application_success(db, None, principal, "PUT", "/api/v1/logic/graphs/{graph_id}", resource_id=graph_id, commit=False)
     # Invalidate executor cache only when execution semantics changed.
     try:
         from obs.logic.manager import get_logic_manager
@@ -220,24 +703,36 @@ async def update_graph_full(
             await manager.reinitialize_graph(graph_id)
     except Exception:
         logger.exception("Failed to refresh logic manager cache after updating graph %s", graph_id)
-    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
-    return _row_to_out(row)
+    return _row_to_out(persisted_row)
 
 
 @router.patch("/graphs/{graph_id}", response_model=LogicGraphOut)
+@audit_application_contract("PATCH", "/api/v1/logic/graphs/{graph_id}", principal_param="_user", resource_param="graph_id")
 async def update_graph_partial(
     graph_id: str,
     body: LogicGraphUpdate,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    proposed_flow = body.flow_data if body.flow_data is not None else _flow_from_row(row)
+    control_class = body.control_class or (
+        row["control_class"] if "control_class" in row.keys() else "room_local"  # noqa: SIM118 -- sqlite Row membership checks values
+    )
+    await _require_logic_graph_generate(
+        db,
+        _principal_from_mutation_dependency(_user),
+        row,
+        proposed_flow,
+        control_class=control_class,
+    )
     name = body.name if body.name is not None else row["name"]
     description = body.description if body.description is not None else row["description"]
     enabled = body.enabled if body.enabled is not None else bool(row["enabled"])
+    control_class = body.control_class if body.control_class is not None else _row_control_class(row)
     if body.flow_data is not None:
         _validate_timer_durations(body.flow_data)
         flow_json = body.flow_data.model_dump_json()
@@ -245,12 +740,20 @@ async def update_graph_partial(
         flow_json = row["flow_data"]
         if body.enabled is True:
             _validate_timer_durations(FlowData.model_validate(json.loads(flow_json) if flow_json else {}))
-    await db.execute_and_commit(
-        """UPDATE logic_graphs
-           SET name=?, description=?, enabled=?, flow_data=?, updated_at=?
-           WHERE id=?""",
-        (name, description, int(enabled), flow_json, now, graph_id),
-    )
+
+    principal = _principal_from_mutation_dependency(_user)
+    async with db.transaction():
+        await db.execute(
+            """UPDATE logic_graphs
+               SET name=?, description=?, enabled=?, flow_data=?, control_class=?, updated_at=?
+               WHERE id=?""",
+            (name, description, int(enabled), flow_json, control_class, now, graph_id),
+        )
+        persisted_row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
+        if persisted_row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+        await write_application_success(db, None, principal, "PATCH", "/api/v1/logic/graphs/{graph_id}", resource_id=graph_id, commit=False)
+
     # A title/description change does not alter execution.  Keeping the cache
     # intact preserves in-flight value sequences; flow or enabled changes need
     # the normal reload and cancellation semantics.
@@ -286,20 +789,34 @@ async def update_graph_partial(
             get_logic_manager().update_cached_graph_name(graph_id, name)
         except Exception:
             logger.exception("Failed to update cached graph name for graph %s", graph_id)
-    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
-    return _row_to_out(row)
+    return _row_to_out(persisted_row)
 
 
 @router.delete("/graphs/{graph_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit_application_contract("DELETE", "/api/v1/logic/graphs/{graph_id}", principal_param="_user", resource_param="graph_id")
 async def delete_graph(
     graph_id: str,
-    _user: str = Depends(get_admin_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> None:
-    row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (graph_id,))
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
-    await db.execute_and_commit("DELETE FROM logic_graphs WHERE id=?", (graph_id,))
+    principal = _principal_from_mutation_dependency(_user)
+    await _require_logic_graph_generate(
+        db,
+        principal,
+        row,
+        _flow_from_row(row),
+        control_class=row["control_class"] if "control_class" in row.keys() else "room_local",  # noqa: SIM118 -- sqlite Row membership checks values
+    )
+    async with db.transaction():
+        await db.execute(
+            "DELETE FROM authz_node_roles WHERE node_type='logic_graph' AND node_id=?",
+            (graph_id,),
+        )
+        await db.execute("DELETE FROM logic_graphs WHERE id=?", (graph_id,))
+        await write_application_success(db, None, principal, "DELETE", "/api/v1/logic/graphs/{graph_id}", resource_id=graph_id, commit=False)
     try:
         from obs.logic.manager import get_logic_manager
 
@@ -309,9 +826,11 @@ async def delete_graph(
 
 
 @router.post("/graphs/import", response_model=LogicGraphOut, status_code=status.HTTP_201_CREATED)
+@audit_application_contract("POST", "/api/v1/logic/graphs/import", principal_param="_user")
 async def import_graph(
     body: LogicGraphImport,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
     if body.obs_export != "logic_graph":
@@ -321,6 +840,14 @@ async def import_graph(
         )
 
     _validate_timer_durations(body.flow_data)
+    principal = _principal_from_mutation_dependency(_user)
+    delegated = await _require_logic_graph_creation(
+        db,
+        principal,
+        request,
+        operation="import",
+        control_class=body.control_class,
+    )
 
     known_types = {nt.type for nt in list_node_types()}
 
@@ -371,43 +898,72 @@ async def import_graph(
 
     processed_flow = FlowData(nodes=processed_nodes, edges=body.flow_data.edges)
 
-    now = datetime.now(UTC).isoformat()
-    gid = str(uuid.uuid4())
-    await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
-        (
-            gid,
-            body.name,
-            body.description,
-            int(body.enabled),
-            processed_flow.model_dump_json(),
-            now,
-            now,
-        ),
+    row = await _persist_created_graph(
+        db,
+        principal,
+        request,
+        name=body.name,
+        description=body.description,
+        enabled=body.enabled,
+        flow=processed_flow,
+        control_class=body.control_class,
+        delegated=delegated,
+        audit_path="/api/v1/logic/graphs/import",
     )
     try:
         from obs.logic.manager import get_logic_manager
 
         manager = get_logic_manager()
         await manager.reload()
-        await manager.initialize_graph(gid)
+        await manager.initialize_graph(row["id"])
     except Exception:
-        logger.exception("Failed to reload logic manager after importing graph %s", gid)
-    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (gid,))
+        logger.exception("Failed to reload logic manager after importing graph %s", row["id"])
     return _row_to_out(row)
 
 
+@router.get("/graphs/{graph_id}/run-preflight", response_model=LogicRunPreflight)
+async def preflight_graph_run(
+    graph_id: str,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> LogicRunPreflight:
+    principal = _principal_from_dependency(_user)
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
+    return await _logic_run_preflight(db, principal, row)
+
+
 @router.post("/graphs/{graph_id}/run", status_code=status.HTTP_200_OK)
+@audit_application_contract("POST", "/api/v1/logic/graphs/{graph_id}/run", principal_param="_user", resource_param="graph_id")
 async def run_graph(
     graph_id: str,
     body: LogicGraphRun | None = None,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> dict:
-    row = await db.fetchone("SELECT id, enabled, flow_data FROM logic_graphs WHERE id=?", (graph_id,))
+    principal = _principal_from_dependency(_user)
+    row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
+    preflight = await _logic_run_preflight(db, principal, row)
+    authorization_denied = any(not check.allowed and check.target_type != "logic_graph_state" for check in preflight.checks)
+    if authorization_denied:
+        denied_checks = [check.model_dump() for check in preflight.checks if not check.allowed]
+        await AuditLogWriter(
+            db=db,
+            context=build_audit_context(request=request, current_user=principal),
+        ).write_contract(
+            "POST",
+            "/api/v1/logic/graphs/{graph_id}/run",
+            resource_id=graph_id,
+            details={"denied_checks": denied_checks},
+            outcome=AuditOutcome.DENIED,
+        )
+        raise mark_contract_audited(HTTPException(status.HTTP_403_FORBIDDEN, "Zugriff verweigert"))
     if not bool(row["enabled"]):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Logikblatt ist deaktiviert")
     try:
@@ -421,10 +977,25 @@ async def run_graph(
         else:
             outputs = await get_logic_manager().execute_graph(graph_id)
             inputs = {}
+        warnings = _logic_run_warnings(outputs)
+        await write_application_success(
+            db,
+            request,
+            principal,
+            "POST",
+            "/api/v1/logic/graphs/{graph_id}/run",
+            resource_id=graph_id,
+            details={
+                "control_class": _row_control_class(row),
+                "output_count": len(outputs),
+                "warning_count": len(warnings),
+            },
+            commit=True,
+        )
         return {
             "status": "ok",
             "outputs": outputs,
-            "warnings": _logic_run_warnings(outputs),
+            "warnings": warnings,
             "debug": {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
@@ -442,14 +1013,31 @@ async def run_graph(
     response_model=LogicGraphOut,
     status_code=status.HTTP_201_CREATED,
 )
+@audit_application_contract(
+    "POST",
+    "/api/v1/logic/graphs/{graph_id}/duplicate",
+    principal_param="_user",
+    resource_param="graph_id",
+)
 async def duplicate_graph(
     graph_id: str,
-    _user: str = Depends(get_admin_user),
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    principal = _principal_from_mutation_dependency(_user)
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
+    delegated = await _require_logic_graph_creation(
+        db,
+        principal,
+        request,
+        operation="duplicate",
+        control_class=_row_control_class(row),
+        resource_id=graph_id,
+    )
 
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     flow = FlowData.model_validate(raw)
@@ -470,38 +1058,34 @@ async def duplicate_graph(
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
     _validate_timer_durations(new_flow)
 
-    now = datetime.now(UTC).isoformat()
-    new_id = str(uuid.uuid4())
     new_name = f"Kopie von {row['name']}"
-    await db.execute_and_commit(
-        """INSERT INTO logic_graphs (id, name, description, enabled, flow_data, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?)""",
-        (
-            new_id,
-            new_name,
-            row["description"] or "",
-            int(row["enabled"]),
-            new_flow.model_dump_json(),
-            now,
-            now,
-        ),
+    result = await _persist_created_graph(
+        db,
+        principal,
+        request,
+        name=new_name,
+        description=row["description"] or "",
+        enabled=bool(row["enabled"]),
+        flow=new_flow,
+        control_class=_row_control_class(row),
+        delegated=delegated,
+        audit_path="/api/v1/logic/graphs/{graph_id}/duplicate",
     )
     try:
         from obs.logic.manager import get_logic_manager
 
         manager = get_logic_manager()
         await manager.reload()
-        await manager.initialize_graph(new_id)
+        await manager.initialize_graph(result["id"])
     except Exception:
-        logger.exception("Failed to reload logic manager after duplicating graph %s", new_id)
-    result = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (new_id,))
+        logger.exception("Failed to reload logic manager after duplicating graph %s", result["id"])
     return _row_to_out(result)
 
 
 @router.get("/datapoint/{dp_id}/usages", response_model=list[LogicUsageOut])
 async def get_datapoint_logic_usages(
     dp_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> list[LogicUsageOut]:
     """Return all logic graphs that reference a given DataPoint, with direction from the DP's perspective.
@@ -509,9 +1093,17 @@ async def get_datapoint_logic_usages(
     - datapoint_read node  → logic reads the DP   → direction SOURCE
     - datapoint_write node → logic writes to the DP → direction DEST
     """
+    principal = _principal_from_dependency(_user)
+    if principal.type != "user" or not principal.is_admin:
+        allowed = await filter_authorized_datapoints(db, principal, [dp_id], action=AuthzAction.READ)
+        if not allowed:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "DataPoint nicht gefunden")
+
     rows = await db.fetchall("SELECT id, name, enabled, flow_data FROM logic_graphs")
     usages: list[LogicUsageOut] = []
     for row in rows:
+        if not await _can_read_logic_graph(db, principal, row):
+            continue
         raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
         flow = FlowData.model_validate(raw)
         for node in flow.nodes:
@@ -556,12 +1148,14 @@ async def get_datapoint_logic_usages(
 @router.get("/graphs/{graph_id}/export")
 async def export_graph(
     graph_id: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> JSONResponse:
+    principal = _principal_from_dependency(_user)
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Graph nicht gefunden")
+    await _require_logic_graph_read(db, principal, row)
 
     export_data = {
         "obs_export": "logic_graph",
@@ -570,6 +1164,7 @@ async def export_graph(
         "name": row["name"],
         "description": row["description"] or "",
         "enabled": bool(row["enabled"]),
+        "control_class": _row_control_class(row),
         "flow_data": json.loads(row["flow_data"]) if row["flow_data"] else {"nodes": [], "edges": []},
     }
     safe_name = row["name"].replace(" ", "_").replace("/", "_")

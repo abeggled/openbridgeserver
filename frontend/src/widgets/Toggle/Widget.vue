@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
 
@@ -19,6 +20,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
@@ -74,7 +76,8 @@ async function toggle() {
   optimisticValue.value = next
   pending.value = true
   try {
-    await datapoints.write(props.datapointId, next)
+    if (props.writeContext) await datapoints.write(props.datapointId, next, props.writeContext)
+    else await datapoints.write(props.datapointId, next)
   } catch {
     // Optimistischen Wert bei Fehler zurücksetzen
     optimisticValue.value = null

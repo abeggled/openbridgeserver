@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { WidgetRegistry } from '@/widgets/registry'
+import type { WriteContext } from '@/api/client'
 import type { DataPointValue } from '@/types'
 import { imageToScreen as _imageToScreen } from './coords'
 import type { Rotation } from './coords'
@@ -39,6 +40,9 @@ const props = defineProps<{
   value: DataPointValue | null
   statusValue: DataPointValue | null
   editorMode: boolean
+  pageId?: string | null
+  sessionToken?: string | null
+  writeContext?: WriteContext
   readonly?: boolean
 }>()
 
@@ -178,7 +182,7 @@ function handleAreaClick(area: GrundrissArea) {
       v-if="!image"
       class="absolute inset-0 flex items-center justify-center bg-gray-900/20"
     >
-      <span class="text-xs text-gray-500">Kein Bild konfiguriert</span>
+      <span class="text-xs text-gray-500">{{ $t('widgets.grundriss.noImageConfigured') }}</span>
     </div>
 
     <!-- Rotated layer: image + polygon SVG (no labels — they must not rotate) -->
@@ -245,6 +249,7 @@ function handleAreaClick(area: GrundrissArea) {
           :editor-mode="editorMode"
           :readonly="props.readonly"
           :h="Math.round(mw.hPx / 80)"
+          v-bind="{ pageId: props.pageId, sessionToken: props.sessionToken, writeContext: props.writeContext }"
         />
         <div v-else class="flex items-center justify-center h-full text-xs text-gray-500">
           {{ mw.widgetType }}?

@@ -21,13 +21,20 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 
-async def _create_graph(client, auth_headers, name: str = "Test Graph") -> dict:
+async def _create_graph(
+    client,
+    auth_headers,
+    name: str = "Test Graph",
+    *,
+    control_class: str = "room_local",
+) -> dict:
     resp = await client.post(
         "/api/v1/logic/graphs",
         json={
             "name": name,
             "description": "Test",
             "enabled": True,
+            "control_class": control_class,
             "flow_data": {
                 "nodes": [
                     {
@@ -113,6 +120,43 @@ async def test_duplicate_graph_creates_copy(client, auth_headers):
         await _delete_graph(client, auth_headers, g["id"])
         if "copy" in dir() and copy:
             await _delete_graph(client, auth_headers, copy["id"])
+
+
+async def test_central_graph_class_roundtrips_duplicate_export_and_import(client, auth_headers):
+    graph = await _create_graph(client, auth_headers, "Central Graph", control_class="central_plant")
+    duplicate = None
+    imported = None
+    try:
+        duplicate_response = await client.post(
+            f"/api/v1/logic/graphs/{graph['id']}/duplicate",
+            headers=auth_headers,
+        )
+        assert duplicate_response.status_code == 201
+        duplicate = duplicate_response.json()
+        assert duplicate["control_class"] == "central_plant"
+
+        export_response = await client.get(
+            f"/api/v1/logic/graphs/{graph['id']}/export",
+            headers=auth_headers,
+        )
+        assert export_response.status_code == 200
+        payload = export_response.json()
+        assert payload["control_class"] == "central_plant"
+
+        import_response = await client.post(
+            "/api/v1/logic/graphs/import",
+            json=payload,
+            headers=auth_headers,
+        )
+        assert import_response.status_code == 201
+        imported = import_response.json()
+        assert imported["control_class"] == "central_plant"
+    finally:
+        await _delete_graph(client, auth_headers, graph["id"])
+        if duplicate is not None:
+            await _delete_graph(client, auth_headers, duplicate["id"])
+        if imported is not None:
+            await _delete_graph(client, auth_headers, imported["id"])
 
 
 async def test_duplicate_graph_not_found(client, auth_headers):

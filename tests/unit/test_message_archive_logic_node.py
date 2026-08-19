@@ -9,7 +9,7 @@ import pytest
 from obs.adapters.message.providers.base import MessageSendResult
 from obs.logic.manager import LogicManager, _fresh_input_handles
 from obs.logic.models import FlowData
-from obs.logic.node_types import get_node_type
+from obs.logic.registry import get_node_type
 from tests.unit.conftest import edge, node
 
 

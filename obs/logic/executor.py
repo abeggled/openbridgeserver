@@ -507,6 +507,9 @@ class GraphExecutor:
                     out_val = str(raw) if raw is not None else None
                 return {"out": out_val}
 
+            case "merge":
+                return {"out": self._eval_merge(node, inputs)}
+
             case "memory":
                 return {"out": self._memory_value(node)}
 
@@ -1508,6 +1511,40 @@ class GraphExecutor:
             else:
                 raise TypeError(f"Cannot traverse {type(current).__name__} with key '{part}'")
         return current
+
+    def _eval_merge(self, node: LogicNode, inputs: dict[str, Any]) -> Any:
+        """Route whichever wired input last produced a new value to ``out``.
+
+        The graph is fully re-evaluated every tick, so every wired input has a
+        current value on every pass — "last changed wins" therefore needs
+        persisted per-input state (like ``hysteresis``) to detect which input
+        actually changed *this* tick, rather than always picking a fixed port.
+        If several inputs change in the same tick, the highest port number
+        wins. Before any input has ever changed, the first wired input that
+        currently has a value is used.
+        """
+        d = node.data
+        count = max(2, min(30, int(d.get("input_count", 2))))
+        port_ids = [f"in{i}" for i in range(1, count + 1)]
+        state = self.hysteresis_state.get(node.id, {})
+        prev_values: dict[str, Any] = state.get("values", {})
+        active = state.get("active")
+
+        wired = [p for p in port_ids if p in inputs]
+        changed = [p for p in wired if inputs[p] is not None and (p not in prev_values or not self._values_equal(prev_values[p], inputs[p]))]
+        if changed:
+            active = changed[-1]  # highest port number among those changed this tick
+        elif active not in wired or inputs.get(active) is None:
+            active = None
+
+        if active is None:
+            active = next((p for p in wired if inputs[p] is not None), None)
+
+        self.hysteresis_state[node.id] = {
+            "values": {p: inputs[p] for p in wired},
+            "active": active,
+        }
+        return inputs.get(active) if active is not None else None
 
     def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any]) -> list[bool]:
         """Collect all active gate inputs with per-input negation applied.

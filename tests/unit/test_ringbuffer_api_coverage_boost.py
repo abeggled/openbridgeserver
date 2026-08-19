@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -350,7 +351,7 @@ async def test_configure_disable_stops_ringbuffer_persists_flag_and_deletes_stor
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: str(rb_path))
 
     try:
-        stats = await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), _user="admin", db=db)
+        stats = await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), request=None, _user="admin", db=db)
         cfg = await rb_api.load_persisted_ringbuffer_config(db)
     finally:
         reset_ringbuffer()
@@ -390,7 +391,7 @@ async def test_configure_disable_restores_running_ringbuffer_when_disable_fails(
 
     try:
         with pytest.raises((PermissionError, RuntimeError)):
-            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), request=None, _user="admin", db=db)
 
         cfg = await rb_api.load_persisted_ringbuffer_config(db)
         assert rb_api.is_ringbuffer_enabled() is True
@@ -425,7 +426,7 @@ async def test_configure_disable_does_not_restart_after_partial_storage_delete(t
 
     try:
         with pytest.raises(RingBufferStorageDeleteIncompleteError, match="locked db"):
-            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=False), request=None, _user="admin", db=db)
 
         cfg = await rb_api.load_persisted_ringbuffer_config(db)
         assert rb_api.is_ringbuffer_enabled() is False
@@ -464,6 +465,7 @@ async def test_configure_enable_initializes_ringbuffer_when_missing(tmp_path, mo
                 # an explicit compatible value for this default-flip world (#919).
                 segment_max_age=1200,
             ),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -503,7 +505,7 @@ async def test_configure_enable_rolls_back_runtime_when_persist_fails(tmp_path, 
 
     try:
         with pytest.raises(RuntimeError, match="db locked"):
-            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True), _user="admin", db=db)
+            await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True), request=None, _user="admin", db=db)
 
         assert subscribed
         assert unsubscribed == subscribed
@@ -542,10 +544,11 @@ async def test_configure_ringbuffer_serializes_concurrent_requests(monkeypatch):
         )
 
     monkeypatch.setattr(rb_api, "_configure_ringbuffer_locked", _fake_locked_config)
+    monkeypatch.setattr(rb_api, "write_application_success", AsyncMock())
 
     await asyncio.gather(
-        rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True), _user="admin", db=object()),
-        rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True), _user="admin", db=object()),
+        rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True), request=None, _user="admin", db=object()),
+        rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True), request=None, _user="admin", db=object()),
     )
 
     assert max_active == 1
@@ -640,7 +643,7 @@ async def test_multi_query_rejects_too_many_set_ids():
 async def test_multi_query_empty_set_ids_invokes_underlying_query(monkeypatch):
     captured: list[rb_api.RingBufferQueryV2] = []
 
-    async def _fake_query(query, *, limit_override=None, offset_override=None):
+    async def _fake_query(query, *, limit_override=None, offset_override=None, db=None, principal=None):
         captured.append(query)
         return []
 
@@ -694,6 +697,7 @@ async def test_runtime_enable_with_legacy_sets_pending_protection(tmp_path, monk
                 max_age=3600,
                 segment_max_age=1200,
             ),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -760,6 +764,7 @@ async def test_runtime_enable_keeps_buffer_when_stale_marker_repair_fails(tmp_pa
                 max_age=3600,
                 segment_max_age=1200,
             ),
+            request=None,
             _user="admin",
             db=db,
         )
@@ -861,6 +866,7 @@ async def test_modeswitch_rollback_preserves_legacy_protection(tmp_path, monkeyp
         with pytest.raises(RuntimeError, match="rebuild boom"):
             await rb_api.configure_ringbuffer(
                 rb_api.RingBufferConfig(enabled=True, segmented=False, max_entries=100, max_file_size_bytes=1024 * 1024, max_age=3600),
+                request=None,
                 _user="admin",
                 db=db,
             )
@@ -1004,7 +1010,7 @@ async def test_enable_normalizes_segmented_off_for_memory_db(tmp_path, monkeypat
     # Persistierten segmented=true-Default hinterlegen, den die Normalisierung kippen muss.
     await rb_api.persist_ringbuffer_config(db, enabled=False, max_entries=50, max_file_size_bytes=None, max_age=None, segmented=True)
     try:
-        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, max_entries=50), _user="admin", db=db)
+        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, max_entries=50), request=None, _user="admin", db=db)
         rb = rb_api.get_optional_ringbuffer()
         assert rb is not None
         assert rb.segmented is False, "in-memory-DB darf nicht segmentiert werden"
@@ -1028,7 +1034,7 @@ async def test_enable_explicit_segmented_normalized_off_for_memory_db(tmp_path, 
     monkeypatch.setattr(rb_api, "_ringbuffer_disk_path", lambda: ":memory:")
     monkeypatch.setattr(rb_api, "_subscribe_ringbuffer", lambda _rb: None)
     try:
-        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, segmented=True, max_entries=50), _user="admin", db=db)
+        await rb_api.configure_ringbuffer(rb_api.RingBufferConfig(enabled=True, segmented=True, max_entries=50), request=None, _user="admin", db=db)
         rb = rb_api.get_optional_ringbuffer()
         assert rb is not None
         assert rb.segmented is False, "explizit segmented=true muss bei :memory: normalisiert werden"

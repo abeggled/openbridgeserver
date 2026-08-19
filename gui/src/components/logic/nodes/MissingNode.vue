@@ -1,5 +1,5 @@
 <template>
-  <div class="missing-node">
+  <div class="missing-node logic-node-surface" :style="{ '--node-tint': cardTint }">
     <Handle v-for="h in inputs" :key="h.id" type="target" :id="h.id" :position="Position.Left" />
     <div class="missing-node__body">
       <span class="missing-node__badge" :aria-label="$t('logic.missingNode.ariaLabel')">!</span>
@@ -15,8 +15,14 @@
 <script setup>
 import { computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
+import { nodeTint } from '@/utils/logicNodeSurface'
 
 const props = defineProps({ data: { type: Object, default: () => ({}) } })
+
+// Error category colour — also the dashed border and badge below.
+// Tinted over the opaque card surface (issue #1074).
+const MISSING_COLOR = '#ef4444'
+const cardTint = nodeTint(MISSING_COLOR)
 
 const inputs  = computed(() => [{ id: 'in' }])
 const outputs = computed(() => [{ id: 'out' }])
@@ -28,8 +34,8 @@ const outputs = computed(() => [{ id: 'out' }])
   min-width: 180px;
   border: 2px dashed #ef4444;
   border-radius: 8px;
-  background: rgba(239, 68, 68, 0.07);
   padding: 10px 14px;
+  /* background: provided by `.logic-node-surface` (opaque surface + tint). */
 }
 .missing-node__body {
   display: flex;
@@ -58,7 +64,7 @@ const outputs = computed(() => [{ id: 'out' }])
 }
 .missing-node__type {
   font-size: 0.75rem;
-  color: #94a3b8;
+  color: var(--node-summary-color);
   margin-top: 1px;
   word-break: break-all;
 }

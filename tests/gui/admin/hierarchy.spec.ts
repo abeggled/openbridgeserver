@@ -36,6 +36,10 @@ test('Edit-Modal zeigt konkrete Beispiele aus dem aktuellen Baum', async ({ page
     // 4) Select-Optionen enthalten echte Namen
     const select = page.locator('[data-testid="select-display-depth"]')
     await expect(select).toBeVisible()
+    // Opening the modal starts loading the tree nodes asynchronously. Wait for
+    // the concrete first-level example instead of sampling the initial generic
+    // placeholder while that request is still in flight.
+    await expect(select.locator('option').nth(1)).toContainText(rootName, { timeout: 10_000 })
     const optionTexts = await select.locator('option').allTextContents()
 
     expect(optionTexts[0]).toContain(treeName)            // "0 — <treeName> (Hierarchiename)"

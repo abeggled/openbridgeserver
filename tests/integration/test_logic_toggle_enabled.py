@@ -185,7 +185,7 @@ async def test_list_graphs_includes_enabled_field(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_patch_enabled_non_admin_forbidden(client, auth_headers):
+async def test_patch_enabled_non_admin_concealed(client, auth_headers):
     ts = time.time()
     graph = await _create_graph(client, auth_headers, f"IT-Toggle-NonAdmin-{ts}")
     graph_id = graph["id"]
@@ -197,7 +197,7 @@ async def test_patch_enabled_non_admin_forbidden(client, auth_headers):
             json={"enabled": False},
             headers=user_headers,
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
     finally:
         await _cleanup(client, auth_headers, graph_id)
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)

@@ -1,4 +1,26 @@
 # Changes
+## 2026.9.0
+### Breaking changes 🚨
+* none
+
+### New features ✨
+* Logic Engine: The built-in function blocks are now defined in one module per block below `obs/logic/nodes/<category>/` instead of a single central catalogue file, and a dedicated registry (`obs/logic/registry.py`) assembles the public catalogue from the per-category registries. Node type identifiers, the `GET /api/v1/logic/node-types` catalogue, saved logic sheets and the block palette are unchanged; `obs/logic/node_types.py` remains as a compatibility facade. Adding or changing a function block now touches only that block, one category registration and its own tests, and new architectural guardrail tests plus `docs/architecture/logic-nodes.md` document and enforce the structure. https://github.com/abeggled/openbridgeserver/issues/1109
+* Logic Engine/Admin GUI: Added a Merge node ("Klemme") that bundles 2-30 independent value sources onto one shared output — whichever wired input last delivered a new value is passed through, matching Edomi's terminal/junction block. Replaces wiring several sources into the same input handle of a downstream block, which the executor cannot support (only the last-wired edge would ever be live). https://github.com/abeggled/openbridgeserver/issues/1117
+* Logic Engine/Admin GUI: All function blocks in the logic editor now render their category colour as a tint on top of an opaque light/dark theme surface instead of using the tint alone as their card background, so the canvas raster no longer shows through the block body. Generic, object, Python, comment and unknown blocks share one card surface, and type colours, header accents, selection and debug bands are unchanged. Block text, handles and the inline input-negation toggles that still used hardcoded dark colours now follow the light/dark theme tokens and stay legible on the light surface. https://github.com/abeggled/openbridgeserver/issues/1074
+* Logic Engine/Admin GUI: The canvas raster in the logic editor can now be shown or hidden independently of snap-to-grid, via a new `Grid` toolbar button. Raster visibility is a local presentation preference: it is remembered per browser, available without edit permissions, and never changes graph data or block coordinates. The grid size remains adjustable whenever the raster is visible or snapping is enabled, and the snap button is now labelled `Snap` to keep the two controls apart. https://github.com/abeggled/openbridgeserver/issues/1075
+* Logic Engine/Admin GUI: The logic editor now blocks wiring more than one connection into the same input handle, at both connect and save time, and flags any already-saved graph that has one — previously this silently dropped every connection but the last, with no warning anywhere. Use a Merge node to combine several sources into one input instead. https://github.com/abeggled/openbridgeserver/issues/1116
+* Logic Engine/Admin GUI: While a function block is being dragged in the logic editor, a semi-transparent crosshair overlay — a horizontal and a vertical bar, each exactly as thick as the dragged block's own height/width — now spans the full visible canvas, so the block's edges can be visually aligned against any other block in view. This is a pure alignment aid and works independently of grid snapping. https://github.com/abeggled/openbridgeserver/issues/1118
+* Security: Introduces a comprehensive role- and scope-based permissions concept for users and API keys across open bridge server. Administrators can centrally assign access according to responsibilities, with consistent enforcement throughout the server, Admin GUI, and Visu; existing installations are migrated conservatively without broadening access. https://github.com/abeggled/openbridgeserver/issues/583 https://github.com/abeggled/openbridgeserver/issues/629
+
+### Fixes 🐞
+* Admin GUI/KNX: KNX project imports without trade data now use the localized German label “Gewerke” throughout the hierarchy result instead of exposing the internal `trades` mode name. https://github.com/abeggled/openbridgeserver/issues/1138
+
+### Known Issues 🔔
+* none
+
+### Contributors ❤️
+* none
+
 ## 2026.8.0
 ### Breaking changes 🚨
 * Monitor/RingBuffer: Storage is now automatically **segmented** instead of a single ever-growing SQLite file. On upgrade the existing ring-buffer database is attached **read-only** and new events are written to time-based segments (~6 h each). Retention is now **segment-granular** and enforced against the hard `max_file_size_bytes` budget: to protect disk space, whole old segments — including the pre-upgrade data — may be dropped **earlier than the configured age target** once the size budget is exceeded, so monitor history can be lost sooner than before. Operators who need to keep more history should raise the size/retention limits in the Monitor configuration promptly after upgrading, at the cost of higher disk usage. The fresh-install default for `max_file_size_bytes` has been raised from 10 MiB to **100 MiB** (existing installations are unchanged — only new-install defaults are affected). https://github.com/abeggled/openbridgeserver/issues/919

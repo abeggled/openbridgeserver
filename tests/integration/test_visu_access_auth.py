@@ -59,6 +59,19 @@ async def _create_page(client, auth_headers, name: str, access: str, *, access_p
     return resp.json()["id"]
 
 
+async def _grant_datapoint_read(username: str, dp_id: str) -> None:
+    from obs.db.database import get_db
+
+    db = get_db()
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('user', ?, 'datapoint', ?, 'guest', 'allow')
+        """,
+        (username, dp_id),
+    )
+
+
 async def _save_page_with_single_dp_widget(client, auth_headers, page_id: str, dp_id: str) -> None:
     resp = await client.put(
         f"/api/v1/visu/pages/{page_id}",
@@ -217,6 +230,7 @@ async def test_user_visu_allows_assigned_non_admin_user(client, auth_headers):
         )
         assert set_users.status_code == 204, set_users.text
 
+        await _grant_datapoint_read(username, dp_id)
         await _save_page_with_single_dp_widget(client, auth_headers, page_id, dp_id)
         await _write_value(client, auth_headers, dp_id, 23.0)
 
@@ -226,13 +240,22 @@ async def test_user_visu_allows_assigned_non_admin_user(client, auth_headers):
         )
         assert page_resp.status_code == 200, page_resp.text
 
+        # Page assignment keeps room-local controls interactive without a
+        # separate datapoint WRITE grant.
+        write_resp = await client.post(
+            f"/api/v1/datapoints/{dp_id}/value",
+            json={"value": 24.0},
+            headers={**user_headers, "X-Page-Id": page_id},
+        )
+        assert write_resp.status_code == 204, write_resp.text
+
         # Authenticated non-admin user can bootstrap values for visible widgets.
         value_resp = await client.get(
             f"/api/v1/datapoints/{dp_id}/value",
             headers=user_headers,
         )
         assert value_resp.status_code == 200, value_resp.text
-        assert value_resp.json()["value"] == pytest.approx(23.0)
+        assert value_resp.json()["value"] == pytest.approx(24.0)
     finally:
         await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
         await client.delete(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)

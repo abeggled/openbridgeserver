@@ -114,7 +114,6 @@
         >
           <!-- pinned "+ Neu" as the first option (#36 UX) -->
           <button
-            v-if="auth.isAdmin"
             type="button"
             data-testid="topbar-add-filter-new"
             class="block w-full text-left px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-700"
@@ -124,13 +123,13 @@
           </button>
 
           <!-- Search input -->
-          <input
+          <QuickFilterInput
             ref="searchInputRef"
             v-model="addMenuQuery"
-            type="search"
-            data-testid="topbar-add-filter-search"
+            testid="topbar-add-filter-search"
             :placeholder="$t('ringbuffer.topbar.searchPlaceholder')"
-            class="block w-full px-3 py-2 text-sm bg-transparent border-b border-slate-200 dark:border-slate-700 outline-none focus:border-blue-500"
+            :clear-label="$t('common.clear')"
+            input-class="block w-full border-b border-slate-200 bg-transparent py-2 pl-9 pr-9 text-sm outline-none focus:border-blue-500 dark:border-slate-700"
           />
 
           <!-- Filtered list -->
@@ -168,7 +167,9 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
 import { ringbufferApi } from '@/api/client'
+import QuickFilterInput from '@/components/ui/QuickFilterInput.vue'
 import { isEmptyFilter } from '@/composables/useClientSideMatch'
+import { useQuickFilter } from '@/composables/useQuickFilter'
 import { useAuthStore } from '@/stores/auth'
 
 const emit = defineEmits(['edit-set', 'new-set', 'changed', 'export'])
@@ -182,16 +183,12 @@ const searchInputRef = ref(null)
 const addMenuBtnRef = ref(null)
 const addMenuStyle = ref({})
 
-// Admin can edit every set; non-admin users only the sets they created
-// themselves (#478). All per-user state (is_active toggle, topbar pinning,
-// drag-reorder, +Add, ×Remove) stays open for everyone — only the chip body
-// (which jumps into the FilterEditor for editing/deleting) signals the lock
-// via the 🔒 marker.
+// The backend projects the central WRITE decision onto each visible set.
+// Keep the admin fallback for old cached responses during a rolling upgrade.
 function canEdit(set) {
   if (!set) return false
   if (auth.isAdmin) return true
-  const owner = set.created_by
-  return owner != null && owner === auth.username
+  return set.can_write === true
 }
 
 function isMine(set) {
@@ -226,13 +223,7 @@ const availableSets = computed(() =>
   filtersets.value.filter((s) => !s.topbar_active),
 )
 
-const filteredAvailableSets = computed(() => {
-  const q = addMenuQuery.value.trim().toLowerCase()
-  if (!q) return availableSets.value
-  return availableSets.value.filter((s) =>
-    (s.name || '').toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q),
-  )
-})
+const filteredAvailableSets = useQuickFilter(availableSets, addMenuQuery, (set) => [set.name, set.description])
 
 async function load() {
   try {

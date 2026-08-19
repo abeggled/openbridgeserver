@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,6 +48,11 @@ class _DbStub:
         self.last_query: str = ""
         self.last_params: tuple = ()
         self.execute_calls: list[tuple] = []
+        self._transaction_depth = 0
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._transaction_depth > 0
 
     async def fetchone(self, query, params=()):
         return self._one
@@ -58,6 +64,19 @@ class _DbStub:
         self.last_query = query
         self.last_params = params
         self.execute_calls.append((query, params))
+
+    async def execute(self, query, params=()):
+        self.last_query = query
+        self.last_params = params
+        self.execute_calls.append((query, params))
+
+    @asynccontextmanager
+    async def transaction(self):
+        self._transaction_depth += 1
+        try:
+            yield
+        finally:
+            self._transaction_depth -= 1
 
     async def fetchone_or_raise(self, query, params=(), detail="Not found"):
         row = self._one
@@ -443,7 +462,7 @@ class TestDeleteAutobackupEndpoint:
         from obs.api.v1.autobackup import delete_autobackup
 
         with pytest.raises(HTTPException) as exc_info:
-            await delete_autobackup(name="../../etc/passwd", _admin="admin")
+            await delete_autobackup(name="../../etc/passwd", _admin="admin", db=_DbStub())
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -453,7 +472,7 @@ class TestDeleteAutobackupEndpoint:
         from obs.api.v1.autobackup import delete_autobackup
 
         with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path), pytest.raises(HTTPException) as exc_info:
-            await delete_autobackup(name="20260101-0300", _admin="admin")
+            await delete_autobackup(name="20260101-0300", _admin="admin", db=_DbStub())
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -462,7 +481,7 @@ class TestDeleteAutobackupEndpoint:
 
         (tmp_path / "20260101-0300.json").write_text("{}")
         with patch("obs.api.v1.autobackup._autobackup_dir", return_value=tmp_path):
-            result = await delete_autobackup(name="20260101-0300", _admin="admin")
+            result = await delete_autobackup(name="20260101-0300", _admin="admin", db=_DbStub())
         assert result["ok"] is True
         assert not (tmp_path / "20260101-0300.json").exists()
 
@@ -666,7 +685,7 @@ class TestListGraphs:
         from obs.api.v1.logic import list_graphs
 
         db = _DbStub(rows=[])
-        result = await list_graphs(_user="user", db=db)
+        result = await list_graphs(_user="admin", db=db)
         assert result == []
 
     @pytest.mark.asyncio
@@ -675,7 +694,7 @@ class TestListGraphs:
 
         rows = [_make_graph_row(name="G1"), _make_graph_row(name="G2")]
         db = _DbStub(rows=rows)
-        result = await list_graphs(_user="user", db=db)
+        result = await list_graphs(_user="admin", db=db)
         assert len(result) == 2
 
 
@@ -686,7 +705,7 @@ class TestGetGraph:
 
         row = _make_graph_row(name="My Graph")
         db = _DbStub(one=row)
-        result = await get_graph(graph_id=row["id"], _user="user", db=db)
+        result = await get_graph(graph_id=row["id"], _user="admin", db=db)
         assert result.name == "My Graph"
 
     @pytest.mark.asyncio
@@ -715,7 +734,8 @@ class TestCreateGraph:
             result = await create_graph(body=body, _user="user", db=db)
 
         assert result.name == "New Graph"
-        assert len(db.execute_calls) == 1
+        assert len(db.execute_calls) == 2
+        assert "INSERT INTO audit_log_entries" in db.execute_calls[1][0]
 
     @pytest.mark.asyncio
     async def test_reloads_logic_manager_on_create(self):
@@ -900,8 +920,10 @@ class TestDeleteGraph:
         db = _DbStub(one=row)
         with patch("obs.logic.manager.get_logic_manager", side_effect=RuntimeError("no manager")):
             await delete_graph(graph_id=row["id"], _user="user", db=db)
-        assert len(db.execute_calls) == 1
-        assert "DELETE" in db.execute_calls[0][0]
+        assert len(db.execute_calls) == 3
+        assert "DELETE FROM authz_node_roles" in db.execute_calls[0][0]
+        assert "DELETE FROM logic_graphs" in db.execute_calls[1][0]
+        assert "INSERT INTO audit_log_entries" in db.execute_calls[2][0]
 
     @pytest.mark.asyncio
     async def test_removes_runtime_graph_state_on_delete(self):
@@ -992,7 +1014,7 @@ class TestRunGraph:
         row = _make_graph_row(enabled=0)
         db = _DbStub(one=row)
         with pytest.raises(HTTPException) as exc_info:
-            await run_graph(graph_id=row["id"], _user="user", db=db)
+            await run_graph(graph_id=row["id"], _user="admin", db=db)
         assert exc_info.value.status_code == 422
 
     @pytest.mark.asyncio
@@ -1005,7 +1027,7 @@ class TestRunGraph:
         mock_manager.execute_graph = AsyncMock(return_value={"output": 1})
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
-            result = await run_graph(graph_id=row["id"], _user="user", db=db)
+            result = await run_graph(graph_id=row["id"], _user="admin", db=db)
 
         assert result["status"] == "ok"
         assert result["outputs"] == {"output": 1}
@@ -1023,7 +1045,7 @@ class TestRunGraph:
         body = LogicGraphRun(input_overrides={"node": {"in": 7}})
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
-            result = await run_graph(graph_id=row["id"], body=body, _user="user", db=db)
+            result = await run_graph(graph_id=row["id"], body=body, _user="admin", db=db)
 
         mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}})
         assert result["debug"]["inputs"] == captured
@@ -1041,7 +1063,7 @@ class TestRunGraph:
         mock_manager.execute_graph_debug = AsyncMock(return_value=({"output": 1}, {"node": {}}))
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
-            result = await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="user", db=db)
+            result = await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="admin", db=db)
 
         mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {})
         assert result["debug"]["inputs"] == {"node": {}}
@@ -1058,7 +1080,7 @@ class TestRunGraph:
         mock_manager.execute_graph = AsyncMock(side_effect=RuntimeError("execution failed"))
 
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager), pytest.raises(HTTPException) as exc_info:
-            await run_graph(graph_id=row["id"], _user="user", db=db)
+            await run_graph(graph_id=row["id"], _user="admin", db=db)
         assert exc_info.value.status_code == 500
 
 
@@ -1102,7 +1124,8 @@ class TestDuplicateGraph:
             result = await duplicate_graph(graph_id=original_row["id"], _user="user", db=db)
 
         assert result.name == "Kopie von Original"
-        assert len(db.execute_calls) == 1
+        assert len(db.execute_calls) == 2
+        assert "INSERT INTO audit_log_entries" in db.execute_calls[1][0]
 
     @pytest.mark.asyncio
     async def test_rejects_copy_of_graph_with_negative_timer_duration(self):
@@ -1140,7 +1163,7 @@ class TestExportGraph:
 
         row = _make_graph_row(name="My Graph")
         db = _DbStub(one=row)
-        response = await export_graph(graph_id=row["id"], _user="user", db=db)
+        response = await export_graph(graph_id=row["id"], _user="admin", db=db)
         content = json.loads(response.body)
         assert content["obs_export"] == "logic_graph"
         assert content["name"] == "My Graph"
@@ -1153,7 +1176,7 @@ class TestGetDatapointLogicUsages:
         from obs.api.v1.logic import get_datapoint_logic_usages
 
         db = _DbStub(rows=[])
-        result = await get_datapoint_logic_usages(dp_id="dp-123", _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id="dp-123", _user="admin", db=db)
         assert result == []
 
     @pytest.mark.asyncio
@@ -1166,7 +1189,7 @@ class TestGetDatapointLogicUsages:
         flow = FlowData(nodes=[node])
         row = _make_graph_row(name="G", flow_data=flow.model_dump_json())
         db = _DbStub(rows=[row])
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=db)
         assert len(result) == 1
         assert result[0].direction == "SOURCE"
 
@@ -1180,7 +1203,7 @@ class TestGetDatapointLogicUsages:
         flow = FlowData(nodes=[node])
         row = _make_graph_row(name="G", flow_data=flow.model_dump_json())
         db = _DbStub(rows=[row])
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=db)
         assert len(result) == 1
         assert result[0].direction == "DEST"
 
@@ -1197,7 +1220,7 @@ class TestGetDatapointLogicUsages:
             data={"steps": [{"datapoint_id": dp_id, "value": "on"}]},
         )
         row = _make_graph_row(name="G", flow_data=FlowData(nodes=[node]).model_dump_json())
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=_DbStub(rows=[row]))
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=_DbStub(rows=[row]))
 
         assert len(result) == 1
         assert result[0].node_type == "value_sequence"
@@ -1212,7 +1235,7 @@ class TestGetDatapointLogicUsages:
         node = LogicNode(id="n1", type="value_sequence", position=NodePosition(x=0, y=0), data={"steps": "not json"})
         row = _make_graph_row(name="G", flow_data=FlowData(nodes=[node]).model_dump_json())
 
-        assert await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=_DbStub(rows=[row])) == []
+        assert await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=_DbStub(rows=[row])) == []
 
     @pytest.mark.asyncio
     async def test_ignores_other_node_types(self):
@@ -1224,7 +1247,7 @@ class TestGetDatapointLogicUsages:
         flow = FlowData(nodes=[node])
         row = _make_graph_row(name="G", flow_data=flow.model_dump_json())
         db = _DbStub(rows=[row])
-        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="user", db=db)
+        result = await get_datapoint_logic_usages(dp_id=dp_id, _user="admin", db=db)
         assert result == []
 
 

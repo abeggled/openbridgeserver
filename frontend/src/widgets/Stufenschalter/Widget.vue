@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints } from '@/api/client'
+import type { WriteContext } from '@/api/client'
 import VisuIcon from '@/components/VisuIcon.vue'
 import { useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
@@ -22,6 +23,7 @@ const props = defineProps<{
   statusValue: DataPointValue | null
   editorMode: boolean
   readonly?: boolean
+  writeContext?: WriteContext
 }>()
 
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
@@ -41,6 +43,7 @@ const error = ref('')
 const selectedValue = ref<string | null>(null)
 const optimisticValue = ref<string | null>(null)
 const displayRevision = ref(0)
+const sequenceWriteQueue: Array<{ value: string; rollbackValue: string | null }> = []
 
 function sanitizeColor(value: unknown, fallback = '#6b7280'): string {
   if (typeof value !== 'string') return fallback
@@ -138,6 +141,7 @@ watch(
     const shouldResetSelection = current.mode !== 'select-save' || valueChanged || selectionShapeChanged
 
     optimisticValue.value = null
+    if (selectionShapeChanged) sequenceWriteQueue.length = 0
     if (shouldResetSelection) {
       selectedValue.value = committedValue.value
     }
@@ -162,22 +166,29 @@ const hasChanges = computed(() =>
 )
 const canSave = computed(() => mode.value === 'select-save' && !isLocked.value && !pending.value && hasChanges.value)
 
-async function writeValue(value: string) {
+async function writeValue(value: string, rollbackOverride?: string | null) {
   if (isLocked.value || pending.value || !props.datapointId) return
-  const rollbackValue = committedValue.value
+  const rollbackValue = rollbackOverride === undefined ? committedValue.value : rollbackOverride
   const writeDisplayRevision = displayRevision.value
   if (mode.value === 'sequence') optimisticValue.value = value
   pending.value = true
   error.value = ''
   try {
-    await datapoints.write(props.datapointId, parseValue(value))
-    if (displayRevision.value === writeDisplayRevision) {
+    if (props.writeContext) await datapoints.write(props.datapointId, parseValue(value), props.writeContext)
+    else await datapoints.write(props.datapointId, parseValue(value))
+    const isCurrentSequenceWrite = mode.value !== 'sequence' || optimisticValue.value === value
+    if (displayRevision.value === writeDisplayRevision && isCurrentSequenceWrite) {
       optimisticValue.value = value
       selectedValue.value = value
     }
   } catch (e) {
     const displayChangedDuringWrite = displayRevision.value !== writeDisplayRevision
-    optimisticValue.value = displayChangedDuringWrite ? null : rollbackValue
+    if (mode.value === 'sequence') {
+      sequenceWriteQueue.length = 0
+      optimisticValue.value = displayChangedDuringWrite ? null : rollbackValue
+    } else {
+      optimisticValue.value = displayChangedDuringWrite ? null : rollbackValue
+    }
     if (mode.value === 'select-direct') {
       selectedValue.value = displayChangedDuringWrite ? committedValue.value : rollbackValue
     }
@@ -188,12 +199,21 @@ async function writeValue(value: string) {
 }
 
 async function advance() {
-  if (mode.value !== 'sequence' || isLocked.value || pending.value) return
+  if (mode.value !== 'sequence' || isLocked.value) return
   if (options.value.length === 0) return
   const nextIndex = committedIndex.value < 0
     ? 0
     : (committedIndex.value + 1) % options.value.length
-  await writeValue(options.value[nextIndex].value)
+  const nextValue = options.value[nextIndex].value
+  const rollbackValue = committedValue.value
+  optimisticValue.value = nextValue
+  sequenceWriteQueue.push({ value: nextValue, rollbackValue })
+  if (pending.value) return
+
+  while (sequenceWriteQueue.length > 0 && mode.value === 'sequence') {
+    const queuedWrite = sequenceWriteQueue.shift()!
+    await writeValue(queuedWrite.value, queuedWrite.rollbackValue)
+  }
 }
 
 async function selectOption(value: string) {

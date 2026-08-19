@@ -1,176 +1,7 @@
-# AGENTS/CLAUDE Alias Note
+## Detailed agent reference
 
-`AGENTS.MD` is the canonical agent-instructions file in this repository.
-`CLAUDE.md` is a symlink to this same file for tool compatibility.
-You only need to read one of them; reading both is redundant.
-
-# AGENTS.MD
-
-This file provides guidance to AI coding agents when working with code in this repository.
-
-## Project Overview
-
-**open bridge server** is an open-source multiprotocol building automation server (MIT-licensed replacement for the proprietary Timberwolf Server). It bridges KNX, Modbus RTU/TCP, 1-Wire, MQTT, SNMP, Home Assistant, ioBroker, Anwesenheitssimulation (presence simulation), and Zeitschaltuhr into a unified system with a FastAPI REST/WebSocket API and a Vue-based admin GUI.
-
-## Repository Layout
-
-Two top-level directories have distinct, non-overlapping purposes — keep them that way (see issue #877):
-
-| Directory | Audience | What belongs here |
-|---|---|---|
-| `tools/` | Developers, CI, release pipeline | Dev tooling only — linting, test helpers, LXC builder, worktree helpers, venv resolver, i18n guards, coverage summary, `build-local.sh`. Nothing in `tools/` is installed on a running OBS host. |
-| `scripts/` | Running OBS host | Deployed runtime scripts — every file that gets installed onto a production or LXC host lives here. Currently: `obs-admin` and `obs-update`. |
-
-**Rule of thumb:** if a file is only needed to build, test, or check the project, it goes in `tools/`. If it ends up on the host after installation, it goes in `scripts/`. Never mix the two.
-
-## Common Commands
-
-```bash
-# Run the server
-tools/with-venv python -m obs
-
-# Run all tests
-tools/with-venv pytest tests/
-
-# Run a single test file
-tools/with-venv pytest tests/unit/test_converter.py
-
-# Run a specific test
-tools/with-venv pytest tests/unit/test_converter.py::test_float_to_int
-
-# Run only adapter + unit tests (no Docker needed)
-tools/with-venv pytest tests/adapters/ tests/unit/
-
-# Run contract tests — verify external library API surfaces (no Docker needed)
-tools/with-venv pytest tests/contracts/
-
-# Run integration tests (requires Docker for Mosquitto)
-tools/with-venv pytest tests/integration/
-
-# Run with coverage report
-tools/with-venv pytest tests/ --cov=obs --cov-report=term-missing
-
-# Lint (same checks as CI)
-tools/with-venv ./tools/lint.sh --check
-
-# Format + autofix
-tools/with-venv ./tools/lint.sh --fix
-
-# Docker Compose (full stack)
-docker compose up -d
-
-# Docker Compose (Mosquitto only — for local dev outside Docker)
-docker compose up -d mosquitto
-
-# Build release artifacts locally (only requires Docker)
-./tools/build-local.sh docker    # Docker image (via docker compose build obs + version stamp)
-./tools/build-local.sh lxc       # Proxmox LXC template (.tar.zst); rootfs cached in ~/.cache/obs-lxc-builder/
-./tools/build-local.sh bundle    # app bundle only, no rootfs (fast)
-./tools/build-local.sh all       # docker + lxc
-
-# Admin GUI dev server (proxies /api to localhost:8080)
-cd gui && npm run dev
-```
-
-## Pre-Push Gate (verbindlich)
-
-CI im PR-Workflow baut das Frontend **nicht** — `npm run build` läuft erst beim Release-Tag.
-Ein Production-Build validiert die Frontend-Abhängigkeiten (Module-Resolution, Import-Pfade,
-Typen) Ende-zu-Ende — Schwächen, die Vitest-Mocks verdecken können, fallen erst hier auf. Vor
-**jedem** Push, der Frontend-Code berührt, alle Stufen lokal grün laufen lassen:
-
-```bash
-tools/with-venv ./tools/lint.sh --check
-cd gui && npm run build     # validiert reale Abhängigkeiten/Imports, was Vitest nicht tut
-cd gui && npm run test
-cd gui && npm run test:coverage
-# bei Backend-Änderungen zusätzlich:
-tools/with-venv pytest tests/unit tests/adapters tests/contracts  # ohne Docker
-tools/with-venv pytest tests/integration                          # mit Docker
-```
-
-Wenn rot: nicht pushen, sondern fixen. Gilt für Haupt-Sessions **und** für Subagents — bitte
-explizit in den Subagent-Prompt schreiben, weil deren Kontext leer startet.
-
-Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
-
-```bash
-# Diff-basierter i18n Hard-Gate (Hardcoded user-facing strings + locale parity)
-./tools/check-i18n-hardcoded-strings.sh
-```
-
-Für GUI-Änderungen gilt zusätzlich ein weicher Coverage-Nachzieh-Hinweis:
-
-```bash
-node tools/gui-coverage-summary.mjs --changed-only --threshold=70
-```
-
-Wenn geänderte Dateien unter dem Schwellwert liegen, im Abschlussbericht konkret nennen
-und möglichst passende Vitests ergänzen. Der Hinweis ist bewusst kein lokaler Hard-Fail;
-`npm run test` und `npm run test:coverage` bleiben dagegen verpflichtende Gates und
-brechen bei Fehlern ab.
-
-Optional als lokaler Push-Hook aktivieren:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-Danach läuft der i18n-Gate automatisch vor jedem `git push`.
-
-## Test Coverage Gate (verbindlich)
-
-**Jede neue Zeile Code muss durch Tests abgedeckt sein — und jeder neue Zweig einer Bedingung
-ebenfalls.** Codecov prüft die *Patch Coverage* auf zwei Ebenen, die beide grün sein müssen:
-
-1. **Line Coverage** — wurde jede im Diff hinzugefügte Zeile mindestens einmal ausgeführt?
-2. **Branch Coverage** — wurde bei jeder Bedingung *auf* einer geänderten Zeile jeder mögliche
-   Ausgang mindestens einmal durchlaufen?
-
-Das ist strenger als nur die Gesamtabdeckung zu halten: eine neue Funktion, die bestehende Zeilen
-nicht senkt, aber selbst ungetestet bleibt, fällt durch dieses Gate — und genauso eine Zeile, die
-zwar *ausgeführt* wurde, deren `if`/`else`, `try`/`finally`, `||`/`??`/Ternary oder Mehrfach-Guard
-(`a || b || c`) aber nur auf einer Seite getestet wurde. **Codecov markiert diesen zweiten Fall
-als „partial" und lässt das Gate genauso fehlschlagen wie eine komplett fehlende Zeile — obwohl
-lokale Line-Coverage-Reports (`--cov-report=term-missing`, Vitest-Tabellenausgabe) das oft nicht
-zeigen, weil sie primär Line- statt Branch-Daten hervorheben.** Ein lokal grüner Lauf ist daher
-keine Garantie für einen grünen `codecov/patch`-Check — insbesondere wenn bestehender Code neu in
-`try`/`if` eingepackt wird (das re-indentiert die Zeilen, wodurch sie im Diff als „neu" zählen und
-ihre ggf. schon vorher unvollständige Branch-Abdeckung erstmals gegen das Gate zählt).
-
-- **Neuer Code → neue Tests im selben Commit.** Jede neue API-Route, jeder neue Adapter, jede
-  neue Hilfsfunktion braucht zugehörige Tests (Unit oder Integration), die genau die neuen Zeilen
-  ausführen — und bei jeder neuen/geänderten Bedingung Tests für **beide Seiten** (true/false,
-  vorhanden/fehlend, Guard greift/greift nicht).
-- **Refactorings** dürfen weder die Gesamtabdeckung noch die Patch Coverage (Line **und** Branch)
-  senken. Das Einpacken von bestehendem Code in ein neues `try`/`if`/`??` zählt als Refactoring in
-  diesem Sinne — vorher prüfen, ob die betroffenen Zeilen schon alle Zweige abgedeckt hatten.
-- **Vor jedem Push mit Backend-Änderungen** Coverage prüfen:
-
-```bash
-# Gesamtabdeckung (muss ≥ Baseline bleiben):
-tools/with-venv pytest tests/unit tests/adapters tests/contracts --cov=obs --cov-report=term-missing
-# mit Docker auch:
-tools/with-venv pytest tests/integration --cov=obs --cov-append --cov-report=term-missing
-```
-
-Wenn neue Zeilen im Report unter „Missing" auftauchen: Tests ergänzen, nicht pushen.
-
-- **Vor jedem Push mit GUI-Änderungen** ebenso `cd gui && npm run test:coverage` laufen lassen.
-  Für Branch-Detail auf einzelne Zeilen (nicht nur die aggregierte %-Spalte) die generierte
-  `gui/coverage/lcov.info` auswerten — `BRDA:<line>,<block>,<branch>,<hits>`-Zeilen mit `hits == 0`
-  markieren einen ungetesteten Zweig genau dieser Zeile:
-
-```bash
-awk '/SF:.*<Dateipfad>$/{f=1} f && /^BRDA:/{print} f && /end_of_record/{f=0}' gui/coverage/lcov.info \
-  | awk -F, '$4 == 0'
-```
-
-- **Bei einem bereits offenen PR**, wenn unklar ist, ob eine Änderung das Gate reißt: den
-  tatsächlichen `codecov/patch`-Check auf dem PR prüfen (`gh pr checks <nr>`), nicht nur lokale
-  Reports vertrauen — siehe oben, lokal und Codecov können bei Branch-Partials auseinanderlaufen.
-
-Gilt für Haupt-Sessions **und** für Subagents — bitte explizit in den Subagent-Prompt schreiben.
+This file contains task-specific instructions routed from the root `AGENTS.md`. Read the
+applicable named sections before acting. The root file remains authoritative on conflicts.
 
 ## Local Development Setup
 
@@ -281,6 +112,24 @@ Default login: `admin` / `admin`
 - `frontend/` — Visu SPA (Vue 3 + TypeScript), built to `frontend_dist/` (served by FastAPI at `/visu`)
 - Both proxy `/api` to `localhost:8080` during dev via `vite.config`
 
+#### Logic editor node cards
+
+Every node component under `gui/src/components/logic/nodes/` must render its card on the shared
+opaque surface (issue #1074) so the configurable canvas raster (issue #1072) cannot show through
+the block body:
+
+- add the global `logic-node-surface` class (defined unlayered at the end of `gui/src/style.css`)
+  to the card element, and
+- pass the block's category colour as the inline `--node-tint` custom property, built with
+  `nodeTint()` from `gui/src/utils/logicNodeSurface.js` so all blocks share one tint alpha.
+
+The card element's own scoped styles must **not** declare `background`/`background-color` — scoped
+selectors (`.gn-card[data-v-…]`) outrank the shared class and would mask the opaque surface again.
+Card text, borders and handles use the `--node-*` / `--handle-*` theme tokens; hardcoded dark
+colours become unreadable on the light-mode surface. The spec
+`gui/tests/components/logic/nodes/nodeCardSurface.spec.js` asserts this for every node component —
+extend its `CARDS` table when adding one.
+
 ### Internationalisation (i18n)
 
 Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
@@ -288,8 +137,8 @@ Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
 | File | Purpose |
 |---|---|
 | `gui/src/i18n.js` | i18n instance; locale auto-detected from `localStorage` → browser language; `fallbackLocale: 'en'` |
-| `gui/src/locales/en.json` | English source strings (authoritative — Weblate source language; must be complete) |
-| `gui/src/locales/de.json` | German translation |
+| `gui/src/locales/de.json` | German source strings (authoritative Weblate source language; must be complete) |
+| `gui/src/locales/en.json` | English translation and runtime fallback; must be complete |
 | `gui/src/components/ui/LocaleSwitcher.vue` | Dropdown wired into Settings → Appearance |
 | `frontend/src/i18n.ts` | Same setup for the Visu SPA (TypeScript) |
 | `frontend/src/locales/{de,en}.json` | Visu locale files |
@@ -299,7 +148,11 @@ Both frontends use **vue-i18n v9** (Composition API mode, `legacy: false`).
 
 **No hardcoded user-facing strings.** Any text visible to the user — labels, button text, placeholders, tooltips, error messages, badge text, empty-state messages — must go through `$t()` / `t()`. This includes strings returned from utility functions (`utils/`, composables) that end up rendered in a template.
 
-**`en.json` is the source of truth.** English is the Weblate source language (volunteers translate *from* English) and is the i18n `fallbackLocale`, so it must be complete. Always add new keys to both `en.json` (English, authoritative) and `de.json` (German) in the same commit. Use Python (`json.dumps(..., ensure_ascii=False)`) when writing locale files programmatically — never shell heredocs, which strip non-ASCII characters.
+**`de.json` is the source of truth.** German is the configured Weblate source language; English is
+the runtime `fallbackLocale`. Both files must remain complete. Always add the German source string
+to `de.json` and its English translation to `en.json` in the same commit. Use Python
+(`json.dumps(..., ensure_ascii=False)`) when writing locale files programmatically — never shell
+heredocs, which strip non-ASCII characters.
 
 #### Key namespace conventions
 
@@ -479,6 +332,25 @@ Adapters self-register at import time via `@register` (from `obs/adapters/regist
 3. Implement `connect`, `disconnect`, `read`, `write`
 4. Decorate the class with `@register`
 5. Add the import to the adapter block in `obs/main.py`
+
+### Logic Function Blocks
+
+Built-in Logic function blocks live in one module per block under `obs/logic/nodes/<category>/`,
+each exporting a single `NODE_TYPE`. The category package name always equals the node's `category`
+field, and each category `__init__.py` exports its own `NODE_TYPES` tuple. `obs/logic/registry.py`
+combines those tuples into the public catalogue (`BUILTIN_NODE_TYPES`, `NODE_TYPE_REGISTRY`,
+`get_node_type`, `list_node_types`); `obs/logic/node_types.py` is a deprecated compatibility facade
+that only re-exports them.
+
+Node behaviour stays in the two documented shared handlers — `GraphExecutor._eval_node`
+(`obs/logic/executor.py`, per-tick evaluation) and `LogicManager` (`obs/logic/manager.py`,
+scheduling and side-effect orchestration). Node-specific branches elsewhere are not allowed.
+
+**Adding a new block** touches its own module, one category `__init__.py`, `obs/logic/capabilities.py`,
+the dispatcher and its focused tests under `tests/unit/logic/nodes/<category>/`. The complete
+contract, dependency rules and step-by-step procedure are in
+[`docs/architecture/logic-nodes.md`](architecture/logic-nodes.md); the guardrails are enforced by
+`tests/unit/logic/test_node_architecture.py` and `tests/unit/logic/test_node_registry.py`.
 
 ### Configuration
 

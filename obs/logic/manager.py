@@ -153,8 +153,13 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
 # Deterministic two-state nodes whose init-pass state IS committed when they
 # sit on a clean seeded path: their output is published, so the persisted
 # state must switch with it or the next real value inside the dead band would
-# flip the output back to the stale pre-save state.
-_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis"})
+# flip the output back to the stale pre-save state. merge belongs here for
+# the same reason: its "active" input is state (self.hysteresis_state), and
+# without committing it here, a save/activate leaves the graph attributing
+# out to whichever input was active before the save — potentially not the
+# one whose current, just-seeded value actually got published — until the
+# next real datapoint event resolves it.
+_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge"})
 
 # Input handles that control WHEN a node's output fires/passes but do not
 # deliver the value itself. Seeded eligibility must not propagate through

@@ -1,12 +1,13 @@
-import { test as setup, expect } from '@playwright/test'
+import { test as setup } from '@playwright/test'
 import * as fs from 'fs'
 import * as path from 'path'
 
 const authFile = '.auth/admin.json'
 
 setup('authenticate as admin', async ({ page }) => {
-  const user = process.env.E2E_USER ?? 'admin'
-  const pass = process.env.E2E_PASS ?? 'admin'
+  const user = process.env.E2E_USER
+  const pass = process.env.E2E_PASS
+  if (!user || !pass) throw new Error('Set E2E_USER and E2E_PASS to an explicitly bootstrapped test owner')
 
   // Navigate to root — Vue Router auth guard redirects unauthenticated users to /login
   await page.goto('/', { waitUntil: 'domcontentloaded' })

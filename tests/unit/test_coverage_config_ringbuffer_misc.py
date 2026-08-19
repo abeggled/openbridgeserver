@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from obs.api.v1 import config as config_api
 from obs.api.v1 import history as history_api
@@ -55,6 +56,9 @@ class _DbStub:
         self._fetchone = fetchone_result
         self._fetchall = fetchall_results or []
         self.committed: list[tuple] = []
+        self.executed: list[tuple] = []
+        self.commit_count = 0
+        self._in_transaction = False
         # Support multiple fetchall calls per test via iterator or list-of-lists
         self._fetchall_iter = (
             iter(fetchall_results) if isinstance(fetchall_results, list) and fetchall_results and isinstance(fetchall_results[0], list) else None
@@ -79,6 +83,31 @@ class _DbStub:
 
     async def execute_and_commit(self, query, params=()):
         self.committed.append((query, params))
+
+    async def execute(self, query, params=()):
+        self.executed.append((query, params))
+
+    async def commit(self):
+        self.commit_count += 1
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._in_transaction
+
+    @asynccontextmanager
+    async def transaction(self):
+        assert not self._in_transaction
+        committed_snapshot = len(self.committed)
+        executed_snapshot = len(self.executed)
+        self._in_transaction = True
+        try:
+            yield
+        except Exception:
+            del self.committed[committed_snapshot:]
+            del self.executed[executed_snapshot:]
+            raise
+        finally:
+            self._in_transaction = False
 
     async def disconnect(self):
         pass
@@ -110,6 +139,20 @@ class _SelectiveFailDb(_DbStub):
         if any(needle in query for needle in self._fail_on_fetchone):
             raise RuntimeError(f"forced fetchone failure: {query.strip()[:60]}")
         return await super().fetchone(query, params)
+
+
+def _request(method: str, path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 1),
+            "route": SimpleNamespace(path=path),
+        }
+    )
 
 
 class _RegistryStub:
@@ -184,6 +227,8 @@ async def test_export_config_empty_db(monkeypatch):
     assert result.hierarchy_trees == []
     assert result.hierarchy_nodes == []
     assert result.hierarchy_dp_links == []
+    assert result.authz_grants == []
+    assert result.api_key_capability_sets == []
     assert result.fa_api_key is None
 
 
@@ -299,13 +344,27 @@ async def test_export_config_with_visu_nodes(monkeypatch):
             "page_config": None,
         }
     )
-    user_row = _row({"node_id": "node-1", "username": "alice"})
+    policy_row = _row({"node_id": "node-1", "access_mode": "public"})
+    user_row = _row(
+        {
+            "principal_type": "user",
+            "principal_id": "alice",
+            "node_type": "visu_page",
+            "node_id": "node-1",
+            "role": "guest",
+            "effect": "allow",
+        }
+    )
 
     async def _fetchall(query, params=()):
-        if "visu_nodes" in query and "visu_node_users" not in query:
-            return [node_row]
-        if "visu_node_users" in query:
+        if "authz_node_roles" in query:
             return [user_row]
+        if "SELECT username FROM users" in query:
+            return [_row({"username": "alice"})]
+        if "FROM visu_nodes" in query:
+            return [node_row]
+        if "authz_visu_page_policies" in query:
+            return [policy_row]
         return []
 
     db = _DbStub()
@@ -1165,7 +1224,6 @@ async def test_import_config_visu_nodes_topological(monkeypatch):
                 node_order=1,
                 icon=None,
                 access=None,
-                access_pin=None,
                 page_config=None,
                 users=[],
             ),
@@ -1177,7 +1235,6 @@ async def test_import_config_visu_nodes_topological(monkeypatch):
                 node_order=0,
                 icon=None,
                 access="public",
-                access_pin=None,
                 page_config=None,
                 users=["alice"],
             ),
@@ -1213,7 +1270,6 @@ async def test_import_config_visu_node_orphan_gets_error(monkeypatch):
                 node_order=0,
                 icon=None,
                 access=None,
-                access_pin=None,
                 page_config=None,
                 users=[],
             )
@@ -1528,6 +1584,9 @@ async def test_factory_reset_counts_rows(monkeypatch):
     assert result.bindings_deleted == 5
     assert result.logic_graphs_deleted == 3
     committed_sql = [query for query, _params in db.committed]
+    executed_sql = [query for query, _params in db.executed]
+    assert "DELETE FROM authz_node_roles WHERE node_type='logic_graph'" in executed_sql
+    assert "DELETE FROM logic_graphs" in executed_sql
     assert "DELETE FROM knx_space_device_links" in committed_sql
     assert "DELETE FROM knx_co_ga_links" in committed_sql
     assert "DELETE FROM knx_comm_objects" in committed_sql
@@ -1562,10 +1621,11 @@ async def test_factory_reset_counts_icons(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_factory_reset_all_independent_steps_record_errors(monkeypatch):
-    """factory_reset's steps (adapter stop, logic graphs, bindings, datapoints,
-    adapter instances, KNX GAs, visu nodes, nav links, hierarchy, app settings,
-    icons) are each wrapped in their own try/except — a failure in one must not
-    stop the others from running, and each records its own error."""
+    """factory_reset's independent stages record errors without blocking later stages.
+
+    Bindings, datapoints, and adapter instances intentionally share one
+    transaction and therefore one error boundary.
+    """
     reg = _RegistryStub()
     monkeypatch.setattr(config_api, "get_registry", lambda: reg)
 
@@ -1574,6 +1634,8 @@ async def test_factory_reset_all_independent_steps_record_errors(monkeypatch):
             raise RuntimeError(f"forced fetchone failure: {query.strip()[:40]}")
 
         async def execute_and_commit(self, query, params=()):
+            if "INSERT INTO audit_log_entries" in query:
+                return await super().execute_and_commit(query, params)
             raise RuntimeError(f"forced execute_and_commit failure: {query.strip()[:40]}")
 
     db = _AlwaysFailDb()
@@ -1588,20 +1650,18 @@ async def test_factory_reset_all_independent_steps_record_errors(monkeypatch):
 
         result = await config_api.factory_reset(_admin="admin", db=db)
 
-    # One error entry per independent stage — all eleven must be present.
+    # One error entry per independent stage — all nine must be present.
     joined_errors = " | ".join(result.errors)
     assert "Adapter stop failed" in joined_errors
     assert "Logic graphs reset failed" in joined_errors
-    assert "Bindings reset failed" in joined_errors
-    assert "DataPoints reset failed" in joined_errors
-    assert "Adapter instances reset failed" in joined_errors
+    assert "DataPoints and adapters reset failed" in joined_errors
     assert "KNX group addresses reset failed" in joined_errors
     assert "Visu nodes reset failed" in joined_errors
     assert "NavLinks reset failed" in joined_errors
     assert "Hierarchy reset failed" in joined_errors
     assert "App settings reset failed" in joined_errors
     assert "Icons reset failed" in joined_errors
-    assert len(result.errors) == 11
+    assert len(result.errors) == 9
 
 
 # ===========================================================================
@@ -1691,6 +1751,10 @@ async def test_clear_logic(monkeypatch):
 
     assert result.deleted == 4
     assert result.errors == []
+    assert [query for query, _params in db.executed] == [
+        "DELETE FROM authz_node_roles WHERE node_type='logic_graph'",
+        "DELETE FROM logic_graphs",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1840,7 +1904,7 @@ async def test_check_history_access_public_page_allowed():
     request.headers.get = MagicMock(return_value="page-1")
     db = _DbStub()
 
-    with patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="public")):
+    with patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("public", None))):
         # Should not raise
         await history_api._check_history_access(request, user=None, db=db)
 
@@ -1852,7 +1916,7 @@ async def test_check_history_access_readonly_page_allowed():
     request.headers.get = MagicMock(return_value="page-1")
     db = _DbStub()
 
-    with patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="readonly")):
+    with patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("readonly", None))):
         await history_api._check_history_access(request, user=None, db=db)
 
 
@@ -1865,7 +1929,7 @@ async def test_check_history_access_protected_page_with_valid_token():
     db = _DbStub()
 
     with (
-        patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="protected")),
+        patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("protected", "page-1"))),
         patch("obs.api.v1.history.validate_session", return_value=True),
     ):
         await history_api._check_history_access(request, user=None, db=db)
@@ -1879,7 +1943,7 @@ async def test_check_history_access_protected_page_no_token_raises():
     db = _DbStub()
 
     with (
-        patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="protected")),
+        patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("protected", "page-1"))),
         patch("obs.api.v1.history.validate_session", return_value=False),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -1894,7 +1958,7 @@ async def test_check_history_access_private_page_raises():
     request.headers.get = MagicMock(side_effect=["page-1"])
     db = _DbStub()
 
-    with patch.object(history_api, "_resolve_page_access", AsyncMock(return_value="private")):
+    with patch.object(history_api, "_resolve_page_access_with_node", AsyncMock(return_value=("private", "page-1"))):
         with pytest.raises(HTTPException) as exc_info:
             await history_api._check_history_access(request, user=None, db=db)
         assert exc_info.value.status_code == 401
@@ -1917,7 +1981,7 @@ async def test_query_history_dp_not_found(monkeypatch):
             to_ts=None,
             limit=100,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
     assert exc_info.value.status_code == 404
@@ -1938,6 +2002,7 @@ async def test_query_history_success(monkeypatch):
 
     with (
         patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
         patch("obs.api.v1.history.get_history_plugin", return_value=mock_plugin),
     ):
         result = await history_api.query_history(
@@ -1946,7 +2011,7 @@ async def test_query_history_success(monkeypatch):
             to_ts=None,
             limit=100,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
 
@@ -1964,7 +2029,11 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
     db = _DbStub(fetchone_result=None)
     request = MagicMock()
 
-    with patch.object(history_api, "_check_history_access", AsyncMock()), pytest.raises(HTTPException) as exc_info:
+    with (
+        patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
+        pytest.raises(HTTPException) as exc_info,
+    ):
         await history_api.aggregate_history(
             dp_id=dp.id,
             fn="median",
@@ -1972,7 +2041,7 @@ async def test_aggregate_history_invalid_fn(monkeypatch):
             from_ts=None,
             to_ts=None,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
     assert exc_info.value.status_code == 422
@@ -1993,6 +2062,7 @@ async def test_aggregate_history_success(monkeypatch):
 
     with (
         patch.object(history_api, "_check_history_access", AsyncMock()),
+        patch.object(history_api, "_check_datapoint_read_access", AsyncMock()),
         patch("obs.api.v1.history.get_history_plugin", return_value=mock_plugin),
     ):
         result = await history_api.aggregate_history(
@@ -2002,7 +2072,7 @@ async def test_aggregate_history_success(monkeypatch):
             from_ts=None,
             to_ts=None,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
 
@@ -2027,7 +2097,7 @@ async def test_aggregate_history_dp_not_found(monkeypatch):
             from_ts=None,
             to_ts=None,
             request=request,
-            user="admin",
+            principal=None,
             db=db,
         )
     assert exc_info.value.status_code == 404
@@ -2125,7 +2195,7 @@ async def test_set_autobackup_config_valid():
     body = ab_api.AutobackupConfig(enabled=True, hour=2, retention_days=5)
 
     with patch.object(ab_api, "_notify_config_change"):
-        result = await ab_api.set_autobackup_config(body=body, _admin="admin", db=db)
+        result = await ab_api.set_autobackup_config(body=body, request=_request("PUT", "/api/v1/config/autobackup/config"), _admin="admin", db=db)
 
     assert result.hour == 2
     assert result.retention_days == 5
@@ -2166,18 +2236,27 @@ async def test_list_autobackups_endpoint(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_delete_autobackup_invalid_name():
     """delete_autobackup raises 400 for invalid name format."""
+    db = _DbStub()
     with pytest.raises(HTTPException) as exc_info:
-        await ab_api.delete_autobackup(name="../evil", _admin="admin")
+        await ab_api.delete_autobackup(name="../evil", request=_request("DELETE", "/api/v1/config/autobackup/evil"), _admin="admin", db=db)
     assert exc_info.value.status_code == 400
+    assert db.committed[-1][1][10] == "failed"
 
 
 @pytest.mark.asyncio
 async def test_delete_autobackup_not_found(tmp_path, monkeypatch):
     """delete_autobackup raises 404 when backup file doesn't exist."""
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
+    db = _DbStub()
     with pytest.raises(HTTPException) as exc_info:
-        await ab_api.delete_autobackup(name="20250601-0300", _admin="admin")
+        await ab_api.delete_autobackup(
+            name="20250601-0300",
+            request=_request("DELETE", "/api/v1/config/autobackup/20250601-0300"),
+            _admin="admin",
+            db=db,
+        )
     assert exc_info.value.status_code == 404
+    assert db.committed[-1][1][10] == "failed"
 
 
 @pytest.mark.asyncio
@@ -2186,10 +2265,17 @@ async def test_delete_autobackup_success(tmp_path, monkeypatch):
     backup_file = tmp_path / "20250601-0300.json"
     backup_file.write_text("{}")
     monkeypatch.setattr(ab_api, "_autobackup_dir", lambda: tmp_path)
+    db = _DbStub()
 
-    result = await ab_api.delete_autobackup(name="20250601-0300", _admin="admin")
+    result = await ab_api.delete_autobackup(
+        name="20250601-0300",
+        request=_request("DELETE", "/api/v1/config/autobackup/20250601-0300"),
+        _admin="admin",
+        db=db,
+    )
     assert result["ok"] is True
     assert not backup_file.exists()
+    assert db.committed[-1][1][10] == "success"
 
 
 @pytest.mark.asyncio
@@ -2335,17 +2421,21 @@ async def test_update_history_settings_reload_failure():
 async def test_test_history_connection_sqlite():
     """test_history_connection returns ok=True for sqlite."""
     body = system_api.HistorySettingsIn(plugin="sqlite")
-    result = await system_api.test_history_connection(body=body, _admin="admin")
+    db = _DbStub()
+    result = await system_api.test_history_connection(body=body, request=_request("POST", "/api/v1/system/history/test"), _admin="admin", db=db)
     assert result.ok is True
     assert "sqlite" in result.message.lower()
+    assert db.committed[-1][1][10] == "success"
 
 
 @pytest.mark.asyncio
 async def test_test_history_connection_unknown_plugin():
     """test_history_connection returns ok=False for unknown plugin."""
     body = system_api.HistorySettingsIn(plugin="unknown_db")
-    result = await system_api.test_history_connection(body=body, _admin="admin")
+    db = _DbStub()
+    result = await system_api.test_history_connection(body=body, request=_request("POST", "/api/v1/system/history/test"), _admin="admin", db=db)
     assert result.ok is False
+    assert db.committed[-1][1][10] == "failed"
 
 
 @pytest.mark.asyncio
@@ -2372,9 +2462,11 @@ async def test_update_app_settings_valid():
 
     with patch("obs.logic.manager.get_logic_manager") as mock_lm:
         mock_lm.return_value.update_app_config = MagicMock()
-        result = await system_api.update_app_settings(body=body, db=db, _user="admin")
+        result = await system_api.update_app_settings(body=body, request=_request("PUT", "/api/v1/system/settings"), db=db, _user="admin")
 
     assert result.timezone == "Europe/Berlin"
+    assert [query.strip().split(maxsplit=1)[0] for query, _params in db.executed] == ["INSERT", "INSERT"]
+    assert db.commit_count == 1
 
 
 @pytest.mark.asyncio
@@ -2404,7 +2496,7 @@ async def test_create_nav_link():
     """create_nav_link inserts row and returns NavLinkOut."""
     db = _DbStub()
     body = system_api.NavLinkIn(label="OBS", url="https://obs.example.com", icon="home")
-    result = await system_api.create_nav_link(body=body, db=db, _admin="admin")
+    result = await system_api.create_nav_link(body=body, request=_request("POST", "/api/v1/system/nav-links"), db=db, _admin="admin")
     assert result.label == "OBS"
     assert result.url == "https://obs.example.com"
     assert len(db.committed) == 1
@@ -2426,7 +2518,13 @@ async def test_update_nav_link_partial_patch():
     existing = _row({"id": "nl-1", "label": "Old", "url": "http://old.com", "icon": "", "sort_order": 0, "open_new_tab": 1})
     db = _DbStub(fetchone_result=existing)
     body = system_api.NavLinkPatch(label="New Label")
-    result = await system_api.update_nav_link(link_id="nl-1", body=body, db=db, _admin="admin")
+    result = await system_api.update_nav_link(
+        link_id="nl-1",
+        body=body,
+        request=_request("PATCH", "/api/v1/system/nav-links/nl-1"),
+        db=db,
+        _admin="admin",
+    )
     assert result.label == "New Label"
     assert result.url == "http://old.com"  # unchanged
 
@@ -2444,7 +2542,7 @@ async def test_delete_nav_link_not_found():
 async def test_delete_nav_link_success():
     """delete_nav_link deletes existing link."""
     db = _DbStub(fetchone_result=_row({"id": "nl-1"}))
-    await system_api.delete_nav_link(link_id="nl-1", db=db, _admin="admin")
+    await system_api.delete_nav_link(link_id="nl-1", request=_request("DELETE", "/api/v1/system/nav-links/nl-1"), db=db, _admin="admin")
     assert len(db.committed) == 1
 
 
@@ -2474,12 +2572,16 @@ async def test_get_log_level():
 @pytest.mark.asyncio
 async def test_set_log_level_valid():
     """set_log_level calls set_log_buffer_level for valid level."""
+    db = _DbStub()
     with patch("obs.log_buffer.set_log_buffer_level") as mock_set:
         await system_api.set_log_level(
             body=system_api.LogLevelIn(level="DEBUG"),
+            request=_request("PUT", "/api/v1/system/log-level"),
             _admin="admin",
+            db=db,
         )
     mock_set.assert_called_once_with("DEBUG")
+    assert db.committed[-1][1][10] == "success"
 
 
 @pytest.mark.asyncio
@@ -2670,7 +2772,7 @@ async def test_update_datapoint_not_found(monkeypatch):
     from obs.models.datapoint import DataPointUpdate
 
     with pytest.raises(HTTPException) as exc_info:
-        await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=DataPointUpdate(), _user="admin")
+        await dp_api.update_datapoint(dp_id=uuid.uuid4(), body=DataPointUpdate(), request=None, _user="admin")
     assert exc_info.value.status_code == 404
 
 
@@ -2688,6 +2790,7 @@ async def test_update_datapoint_unknown_data_type(monkeypatch):
         await dp_api.update_datapoint(
             dp_id=dp.id,
             body=DataPointUpdate(data_type="UNKNOWN_TYPE"),
+            request=None,
             _user="admin",
         )
     assert exc_info.value.status_code == 422

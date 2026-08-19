@@ -99,6 +99,7 @@ function makeSampleSet(overrides = {}) {
     color: '#10b981',
     topbar_active: false,
     topbar_order: 0,
+    can_write: true,
     filter: {
       hierarchy_nodes: [],
       datapoints: ['dp-1', 'dp-2'],
@@ -328,7 +329,7 @@ describe('FilterEditor (#436)', () => {
     expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(false)
   })
 
-  it('keeps new filtersets read-only for non-admin users', async () => {
+  it('allows non-admin user principals to create an owned filterset', async () => {
     const ringbufferApi = makeRingbufferApi()
     const { wrapper } = await mountEditor({
       props: { setId: null },
@@ -340,10 +341,24 @@ describe('FilterEditor (#436)', () => {
     await populateMinimalFilter(wrapper)
 
     const save = wrapper.find('[data-testid="filter-editor-save-topbar"]')
-    expect(save.element.disabled).toBe(true)
+    expect(save.element.disabled).toBe(false)
     await save.trigger('click')
     await flushPromises()
-    expect(ringbufferApi.createFilterset).not.toHaveBeenCalled()
+    expect(ringbufferApi.createFilterset).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a centrally read-only existing filterset immutable', async () => {
+    const ringbufferApi = makeRingbufferApi({
+      getFilterset: vi.fn().mockResolvedValue({ data: makeSampleSet({ can_write: false }) }),
+    })
+    const { wrapper } = await mountEditor({
+      props: { setId: 'fs-1' },
+      ringbufferApi,
+      authStore: { isAdmin: false, username: 'viewer' },
+    })
+
+    expect(wrapper.find('[data-testid="filter-editor-save-topbar"]').element.disabled).toBe(true)
+    expect(wrapper.find('[data-testid="filter-editor-delete"]').element.disabled).toBe(true)
   })
 
   it('Enter outside a text field triggers Save & in Topleiste', async () => {

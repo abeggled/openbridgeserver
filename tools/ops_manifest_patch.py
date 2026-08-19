@@ -4,7 +4,7 @@
 Used by .github/actions/update-ops-manifest to write the Docker digest (from
 release.yml) and the LXC bundle info (from lxc-template.yml) into the same
 channels/<channel>.json file without either workflow clobbering the other's
-block — see AGENTS.MD "Adding a New Adapter"-style docs for the composite
+block — see docs/AGENT_REFERENCE.md "Adding a New Adapter"-style docs for the composite
 action that drives this from CI.
 """
 

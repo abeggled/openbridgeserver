@@ -22,6 +22,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
@@ -29,7 +30,10 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.audit import AuditOutcome, contract_audit, set_contract_audit_outcome, set_contract_audit_summary
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.authz import AuthzAction
+from obs.api.authz_service import filter_authorized_datapoints, filter_authorized_hierarchy_nodes
 from obs.api.v1.services.hierarchy_import import EtsImportRequest, create_ets_hierarchy
 from obs.api.v1.services.knx_traceability import (
     KnxDeviceDatapointsContextOut,
@@ -335,6 +339,97 @@ def _device_out_from_row(row: Any) -> KnxDeviceOut:
     )
 
 
+def _principal_from_dependency(value: Principal | str) -> Principal:
+    if isinstance(value, Principal):
+        return value
+    return Principal(
+        subject=value,
+        type="api_key" if value.startswith("api_key:") else "user",
+        is_admin=value == "admin",
+    )
+
+
+def _is_admin_principal(principal: Principal) -> bool:
+    return principal.type == "user" and principal.is_admin
+
+
+def _parse_binding_group_addresses(config: str | None) -> list[str]:
+    if not config:
+        return []
+    try:
+        parsed = json.loads(config)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    addresses: list[str] = []
+    for key in ("group_address", "state_group_address"):
+        value = parsed.get(key)
+        if isinstance(value, str) and value:
+            addresses.append(value)
+    return addresses
+
+
+async def _authorized_knx_group_addresses(
+    db: Database,
+    principal: Principal,
+    group_addresses: list[str],
+) -> set[str]:
+    ordered_addresses = list(dict.fromkeys(group_addresses))
+    if not ordered_addresses:
+        return set()
+    if _is_admin_principal(principal):
+        return set(ordered_addresses)
+
+    rows = await db.fetchall(
+        """SELECT ab.datapoint_id, ab.config
+           FROM adapter_bindings ab
+           LEFT JOIN adapter_instances ai ON ai.id = ab.adapter_instance_id
+           WHERE UPPER(ab.adapter_type) = 'KNX'
+             AND ab.enabled = 1
+             AND (ab.adapter_instance_id IS NULL OR ai.enabled = 1)""",
+    )
+    datapoints_by_ga: dict[str, list[str]] = {ga: [] for ga in ordered_addresses}
+    wanted = set(ordered_addresses)
+    for row in rows:
+        for ga in _parse_binding_group_addresses(row["config"]):
+            if ga in wanted:
+                datapoints_by_ga.setdefault(ga, []).append(row["datapoint_id"])
+
+    candidate_dp_ids = list(dict.fromkeys(dp_id for dp_ids in datapoints_by_ga.values() for dp_id in dp_ids))
+    allowed_dp_ids = set(
+        await filter_authorized_datapoints(
+            db,
+            principal,
+            candidate_dp_ids,
+            action=AuthzAction.READ,
+        )
+    )
+    return {ga for ga, dp_ids in datapoints_by_ga.items() if any(dp_id in allowed_dp_ids for dp_id in dp_ids)}
+
+
+async def _authorized_knx_device_scope(
+    db: Database,
+    principal: Principal,
+) -> tuple[set[str], set[str]]:
+    rows = await db.fetchall(
+        """SELECT DISTINCT co.device_id, l.ga_address
+           FROM knx_comm_objects co
+           JOIN knx_co_ga_links l ON l.comm_object_id = co.id
+           WHERE l.ga_address IS NOT NULL""",
+    )
+    if not rows:
+        return set(), set()
+
+    allowed_ga_addresses = await _authorized_knx_group_addresses(
+        db,
+        principal,
+        [row["ga_address"] for row in rows],
+    )
+    allowed_device_ids = {row["device_id"] for row in rows if row["ga_address"] in allowed_ga_addresses}
+    return allowed_device_ids, allowed_ga_addresses
+
+
 def _parse_hierarchy_node_filter(value: str) -> list[str]:
     if not isinstance(value, str):
         return []
@@ -351,7 +446,9 @@ def _parse_hierarchy_node_filter(value: str) -> list[str]:
     return node_ids
 
 
-async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> dict[str, list[KnxHierarchyLinkOut]]:
+async def _load_device_hierarchy_links(
+    db: Database, device_ids: list[str], principal: Principal | None = None
+) -> dict[str, list[KnxHierarchyLinkOut]]:
     if not device_ids:
         return {}
     placeholders = ",".join("?" * len(device_ids))
@@ -370,6 +467,10 @@ async def _load_device_hierarchy_links(db: Database, device_ids: list[str]) -> d
            ORDER BY ht.name, hn.name""",
         device_ids,
     )
+    if principal is not None and not _is_admin_principal(principal):
+        link_node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
+        allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, link_node_ids, action=AuthzAction.READ))
+        rows = [row for row in rows if row["node_id"] in allowed_node_ids]
     node_ids = list(dict.fromkeys(row["node_id"] for row in rows))
     node_paths: dict[str, list[str]] = {}
     if node_ids:
@@ -410,6 +511,18 @@ def _with_hierarchy_links(device: KnxDeviceOut, links: list[KnxHierarchyLinkOut]
     payload = device.model_dump()
     payload["hierarchy_links"] = links or []
     return KnxDeviceOut(**payload)
+
+
+async def _filter_device_hierarchy_links(
+    db: Database,
+    principal: Principal,
+    links_by_device_id: dict[str, list[KnxHierarchyLinkOut]],
+) -> dict[str, list[KnxHierarchyLinkOut]]:
+    if _is_admin_principal(principal):
+        return links_by_device_id
+    node_ids = list(dict.fromkeys(link.node_id for links in links_by_device_id.values() for link in links))
+    allowed_node_ids = set(await filter_authorized_hierarchy_nodes(db, principal, node_ids, action=AuthzAction.READ))
+    return {device_id: [link for link in links if link.node_id in allowed_node_ids] for device_id, links in links_by_device_id.items()}
 
 
 async def _import_knx_devices_and_comm_objects(
@@ -652,9 +765,14 @@ async def _create_requested_hierarchies(
     return results
 
 
-@router.post("/import", response_model=ImportResult)
+@router.post(
+    "/import",
+    response_model=ImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/knxproj/import"))],
+)
 async def import_knxproj_file(
     file: UploadFile = File(...),
+    request: Request = None,
     password: str | None = Form(None),
     adapter_name: str | None = Query(
         None,
@@ -721,15 +839,21 @@ async def import_knxproj_file(
             if code == "INVALID_PASSWORD"
             else "Die .knxproj-Datei konnte nicht verarbeitet werden."
         )
+        if request is not None:
+            set_contract_audit_outcome(request, AuditOutcome.FAILED)
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": detail, "error_code": code})
     except Exception:
         logger.exception("Unerwarteter Fehler beim Parsen der .knxproj-Datei")
+        if request is not None:
+            set_contract_audit_outcome(request, AuditOutcome.FAILED)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Unerwarteter Fehler beim Parsen.", "error_code": "PARSE_ERROR"},
         )
 
     if not records:
+        if request is not None:
+            set_contract_audit_outcome(request, AuditOutcome.FAILED)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
@@ -871,7 +995,7 @@ async def import_knxproj_file(
                 else {}
             ),
             **(
-                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der trades-Hierarchieimport wurde übersprungen.")}
+                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der Gewerke-Hierarchieimport wurde übersprungen.")}
                 if trades_count == 0
                 else {}
             ),
@@ -896,7 +1020,7 @@ async def import_knxproj_file(
     if extra:
         msg += ", " + ", ".join(extra)
 
-    return ImportResult(
+    result = ImportResult(
         imported=len(records),
         created=created,
         updated=updated,
@@ -906,11 +1030,26 @@ async def import_knxproj_file(
         hierarchies=hierarchy_results,
         message=msg,
     )
+    if request is not None:
+        set_contract_audit_summary(
+            request,
+            resource_count=result.imported + result.created + result.updated,
+            payload={
+                "group_addresses": sorted(record.address for record in records),
+                "hierarchy_modes": sorted(requested_hierarchy_modes),
+            },
+        )
+    return result
 
 
-@router.post("/import-csv", response_model=ImportResult)
+@router.post(
+    "/import-csv",
+    response_model=ImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/knxproj/import-csv"))],
+)
 async def import_ga_csv_file(
     file: UploadFile = File(...),
+    request: Request = None,
     adapter_name: str | None = Query(
         None,
         description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
@@ -974,20 +1113,34 @@ async def import_ga_csv_file(
 
     # Ohne Adapter: nur GA-Tabelle → fertig
     if not adapter_name:
-        return ImportResult(
+        result = ImportResult(
             imported=len(records),
             message=f"{len(records)} Gruppenadressen importiert (ohne DataPoints — adapter_name fehlt)",
         )
+        if request is not None:
+            set_contract_audit_summary(
+                request,
+                resource_count=result.imported,
+                payload={"group_addresses": sorted(record.address for record in records)},
+            )
+        return result
 
     # Mit Adapter: DataPoints + Bindings bulk anlegen
     created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
 
-    return ImportResult(
+    result = ImportResult(
         imported=created + updated,
         created=created,
         updated=updated,
         message=f"{created} DataPoints neu erstellt, {updated} aktualisiert",
     )
+    if request is not None:
+        set_contract_audit_summary(
+            request,
+            resource_count=result.imported,
+            payload={"group_addresses": sorted(record.address for record in records)},
+        )
+    return result
 
 
 @router.get("/devices", response_model=KnxDevicePage)
@@ -1000,7 +1153,7 @@ async def list_knx_devices(
     trade: str = Query("", description="Optionaler Gewerkefilter (noch ohne Wirkung)"),
     page: int = Query(0, ge=0),
     size: int = Query(50, ge=1, le=500),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> KnxDevicePage:
     # room/trade are intentionally accepted already so the API surface stays
@@ -1010,8 +1163,15 @@ async def list_knx_devices(
     if not await _knx_device_schema_ready(db):
         return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
 
+    principal = _principal_from_dependency(_user)
     where: list[str] = []
     params: list[Any] = []
+    if not _is_admin_principal(principal):
+        allowed_device_ids, _ = await _authorized_knx_device_scope(db, principal)
+        if not allowed_device_ids:
+            return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
+        where.append(f"id IN ({','.join('?' for _ in allowed_device_ids)})")
+        params.extend(sorted(allowed_device_ids))
 
     if q:
         like = f"%{q.lower()}%"
@@ -1033,6 +1193,10 @@ async def list_knx_devices(
         params.append(f"%{order_number.lower()}%")
 
     hierarchy_node_ids = _parse_hierarchy_node_filter(hierarchy_node_id)
+    if hierarchy_node_ids and not _is_admin_principal(principal):
+        hierarchy_node_ids = await filter_authorized_hierarchy_nodes(db, principal, hierarchy_node_ids, action=AuthzAction.READ)
+        if not hierarchy_node_ids:
+            return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
     if hierarchy_node_ids:
         placeholders = ",".join("?" * len(hierarchy_node_ids))
         where.append(
@@ -1078,6 +1242,7 @@ async def list_knx_devices(
     pages = max(1, (total + size - 1) // size)
     device_ids = [row["id"] for row in rows]
     links_by_device_id = await _load_device_hierarchy_links(db, device_ids)
+    links_by_device_id = await _filter_device_hierarchy_links(db, principal, links_by_device_id)
     return KnxDevicePage(
         items=[_with_hierarchy_links(_device_out_from_row(row), links_by_device_id.get(row["id"])) for row in rows],
         total=total,
@@ -1090,11 +1255,17 @@ async def list_knx_devices(
 @router.get("/devices/{pa}", response_model=KnxDeviceDetailOut)
 async def get_knx_device(
     pa: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> KnxDeviceDetailOut:
     if not await _knx_device_schema_ready(db):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+
+    principal = _principal_from_dependency(_user)
+    allowed_ga_addresses: set[str] | None = None
+    allowed_device_ids: set[str] | None = None
+    if not _is_admin_principal(principal):
+        allowed_device_ids, allowed_ga_addresses = await _authorized_knx_device_scope(db, principal)
 
     device_row = await db.fetchone(
         """SELECT
@@ -1110,6 +1281,8 @@ async def get_knx_device(
         (pa,),
     )
     if not device_row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+    if allowed_device_ids is not None and device_row["id"] not in allowed_device_ids:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
 
     co_rows = await db.fetchall(
@@ -1128,6 +1301,9 @@ async def get_knx_device(
 
     by_id: dict[str, KnxCommObjectOut] = {}
     for row in co_rows:
+        ga = row["ga_address"]
+        if allowed_ga_addresses is not None and ga not in allowed_ga_addresses:
+            continue
         co_id = row["id"]
         if co_id not in by_id:
             by_id[co_id] = KnxCommObjectOut(
@@ -1137,7 +1313,6 @@ async def get_knx_device(
                 datapoint_type=row["datapoint_type"] or "",
                 ga_addresses=[],
             )
-        ga = row["ga_address"]
         if ga:
             by_id[co_id].ga_addresses.append(ga)
 
@@ -1151,6 +1326,7 @@ async def get_knx_device(
 
     device = _device_out_from_row(device_row)
     links_by_device_id = await _load_device_hierarchy_links(db, [device_row["id"]])
+    links_by_device_id = await _filter_device_hierarchy_links(db, principal, links_by_device_id)
     return KnxDeviceDetailOut(
         **_with_hierarchy_links(device, links_by_device_id.get(device_row["id"])).model_dump(),
         comm_objects=list(by_id.values()),
@@ -1160,18 +1336,37 @@ async def get_knx_device(
 @router.get("/devices/{pa}/datapoints", response_model=KnxDeviceDatapointsContextOut)
 async def get_knx_device_datapoints(
     pa: str,
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> KnxDeviceDatapointsContextOut:
     if not await _knx_device_schema_ready(db):
         return KnxDeviceDatapointsContextOut(pa=pa)
-    return await build_device_datapoints_context(pa, db)
+
+    principal = _principal_from_dependency(_user)
+    context = await build_device_datapoints_context(pa, db)
+    if _is_admin_principal(principal):
+        return context
+
+    device_row = await db.fetchone("SELECT id FROM knx_devices WHERE individual_address = ?", (pa,))
+    allowed_device_ids, allowed_ga_addresses = await _authorized_knx_device_scope(db, principal)
+    if device_row is None or device_row["id"] not in allowed_device_ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
+
+    context.datapoints = [datapoint for datapoint in context.datapoints if datapoint.ga_address in allowed_ga_addresses]
+    for comm_object in context.comm_objects:
+        comm_object.group_addresses = [ga for ga in comm_object.group_addresses if ga.address in allowed_ga_addresses]
+    return context
 
 
-@router.put("/devices/{pa}/hierarchy-links", response_model=KnxDeviceDetailOut)
+@router.put(
+    "/devices/{pa}/hierarchy-links",
+    response_model=KnxDeviceDetailOut,
+    dependencies=[Depends(contract_audit("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"))],
+)
 async def set_knx_device_hierarchy_links(
     pa: str,
     body: KnxDeviceHierarchyLinksIn,
+    request: Request = None,
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> KnxDeviceDetailOut:
@@ -1198,8 +1393,14 @@ async def set_knx_device_hierarchy_links(
             "INSERT INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
             [(str(uuid_mod.uuid4()), node_id, device_row["id"], now) for node_id in node_ids],
         )
-    await db.commit()
-    return await get_knx_device(pa=pa, _user=_user, db=db)
+    if not getattr(db, "in_transaction", False):
+        await db.commit()
+    if request is not None:
+        set_contract_audit_summary(request, resource_count=len(node_ids), payload=sorted(node_ids))
+    # get_admin_user already verified admin status; reconstruct as admin Principal so
+    # get_knx_device skips the non-admin GA-scope filter regardless of the username.
+    admin_principal = Principal(subject=_user, type="user", is_admin=True) if isinstance(_user, str) else _user
+    return await get_knx_device(pa=pa, _user=admin_principal, db=db)
 
 
 @router.get("/group-addresses/{ga:path}/devices", response_model=KnxDevicePage)
@@ -1207,11 +1408,17 @@ async def list_knx_devices_for_group_address(
     ga: str,
     page: int = Query(0, ge=0),
     size: int = Query(50, ge=1, le=500),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> KnxDevicePage:
     if not await _knx_device_schema_ready(db):
         return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
+
+    principal = _principal_from_dependency(_user)
+    if not _is_admin_principal(principal):
+        allowed_addresses = await _authorized_knx_group_addresses(db, principal, [ga])
+        if ga not in allowed_addresses:
+            return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
 
     count_row = await db.fetchone(
         """SELECT COUNT(DISTINCT d.id) AS n
@@ -1254,10 +1461,39 @@ async def list_group_addresses(
     q: str = Query("", description="Suche in Adresse, Name oder Beschreibung"),
     page: int = Query(0, ge=0),
     size: int = Query(100, ge=1, le=500),
-    _user: str = Depends(get_current_user),
+    _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> GroupAddressPage:
     """Importierte KNX Gruppenadressen abfragen. Unterstützt Volltextsuche."""
+    principal = _principal_from_dependency(_user)
+    if not _is_admin_principal(principal):
+        if q:
+            like = f"%{q}%"
+            candidate_rows = await db.fetchall(
+                """SELECT address, name, description, dpt, imported_at
+                   FROM knx_group_addresses
+                   WHERE address LIKE ? OR name LIKE ? OR description LIKE ?
+                   ORDER BY address""",
+                (like, like, like),
+            )
+        else:
+            candidate_rows = await db.fetchall(
+                """SELECT address, name, description, dpt, imported_at
+                   FROM knx_group_addresses
+                   ORDER BY address""",
+            )
+        allowed_addresses = await _authorized_knx_group_addresses(
+            db,
+            principal,
+            [row["address"] for row in candidate_rows],
+        )
+        authorized_rows = [row for row in candidate_rows if row["address"] in allowed_addresses]
+        offset = page * size
+        return GroupAddressPage(
+            total=len(authorized_rows),
+            items=[GroupAddressOut(**dict(row)) for row in authorized_rows[offset : offset + size]],
+        )
+
     if q:
         like = f"%{q}%"
         rows = await db.fetchall(
@@ -1292,10 +1528,18 @@ async def list_group_addresses(
     )
 
 
-@router.delete("/group-addresses", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/group-addresses",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/knxproj/group-addresses"))],
+)
 async def clear_group_addresses(
+    request: Request = None,
     _user: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> None:
     """Alle importierten KNX Gruppenadressen löschen."""
+    addresses = [row["address"] for row in await db.fetchall("SELECT address FROM knx_group_addresses ORDER BY address")]
     await db.execute_and_commit("DELETE FROM knx_group_addresses")
+    if request is not None:
+        set_contract_audit_summary(request, resource_count=len(addresses), payload=addresses)

@@ -21,7 +21,7 @@
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="runGraph"
+        <button v-if="activeGraphId" @click="requestGraphRun"
           :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
           :disabled="!activeGraph?.enabled"
           :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
@@ -50,30 +50,46 @@
           </svg>
           {{ $t('logic.debugBtn') }}
         </button>
-        <div v-if="auth.isAdmin && activeGraphId" class="flex items-center gap-1">
+        <!-- Raster visibility is a purely local presentation preference and is
+             therefore available without edit permissions (#1075); snapping and
+             the grid size stay admin-only because they move blocks. -->
+        <div v-if="activeGraphId" class="flex items-center gap-1">
           <button
             type="button"
-            :class="['btn-secondary btn-sm', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
-            :title="$t('logic.snapToGridTitle')"
-            data-testid="btn-snap-to-grid"
-            @click="snapToGrid = !snapToGrid"
+            :class="['btn-secondary btn-sm', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+            :title="gridVisible ? $t('logic.gridHideTitle') : $t('logic.gridShowTitle')"
+            :aria-pressed="gridVisible ? 'true' : 'false'"
+            data-testid="btn-grid-visible"
+            @click="gridVisible = !gridVisible"
           >
-            # {{ $t('logic.snapToGrid') }}
+            ⊞ {{ $t('logic.gridVisible') }}
           </button>
-          <label v-if="snapToGrid" class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-            <span class="sr-only">{{ $t('logic.gridSize') }}</span>
-            <input
-              :value="snapGridSize"
-              type="number"
-              min="5"
-              max="100"
-              step="5"
-              class="input w-16 px-2 py-1 text-xs"
-              data-testid="input-snap-grid-size"
-              @change="updateSnapGridSize"
-            />
-            px
-          </label>
+          <template v-if="auth.isAdmin">
+            <button
+              type="button"
+              :class="['btn-secondary btn-sm', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+              :title="$t('logic.snapToGridTitle')"
+              :aria-pressed="snapToGrid ? 'true' : 'false'"
+              data-testid="btn-snap-to-grid"
+              @click="snapToGrid = !snapToGrid"
+            >
+              # {{ $t('logic.snapToGrid') }}
+            </button>
+            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+              <span class="sr-only">{{ $t('logic.gridSize') }}</span>
+              <input
+                :value="snapGridSize"
+                type="number"
+                min="5"
+                max="100"
+                step="5"
+                class="input w-16 px-2 py-1 text-xs"
+                data-testid="input-snap-grid-size"
+                @change="updateSnapGridSize"
+              />
+              px
+            </label>
+          </template>
         </div>
         <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
           :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
@@ -111,14 +127,6 @@
       </div>
     </div>
 
-    <!-- Status bar -->
-    <div v-if="statusMsg" :class="['px-4 py-1.5 text-xs flex-shrink-0', statusMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']" data-testid="status-msg">
-      {{ statusMsg.text }}
-    </div>
-    <div v-else-if="validationWarnings.length" class="px-4 py-1.5 text-xs flex-shrink-0 bg-amber-500/10 text-amber-500">
-      {{ $t('logic.graphValidationCycle', { count: validationWarnings.length }) }}
-    </div>
-
     <!-- Main area -->
     <div class="flex flex-1 overflow-hidden">
       <!-- Node Palette -->
@@ -132,6 +140,17 @@
       <!-- Canvas -->
       <div class="flex-1 relative" ref="canvasWrapper"
            @dragover.prevent @drop="onDrop">
+        <!-- Status bar — an overlay confined to the canvas, not a row in the
+             flex column: a normal-flow bar here would grow/shrink the whole
+             toolbar-below area on every message, shoving the palette, canvas
+             and properties panel up and down while editing. -->
+        <div v-if="statusMsg" :class="['absolute top-0 inset-x-0 z-20 px-4 py-1.5 text-xs pointer-events-none', statusMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']" data-testid="status-msg">
+          {{ statusMsg.text }}
+        </div>
+        <div v-else-if="validationWarnings.length" class="absolute top-0 inset-x-0 z-20 px-4 py-1.5 text-xs pointer-events-none bg-amber-500/10 text-amber-500">
+          {{ $t(hasDuplicateHandleWarning(validationWarnings) ? 'logic.graphValidationDuplicateHandle' : 'logic.graphValidationCycle', { count: warningCountForDisplay(validationWarnings) }) }}
+        </div>
+
         <VueFlow
           v-if="activeGraphId"
           id="logic-canvas"
@@ -149,8 +168,11 @@
           class="logic-canvas"
           @connect="onConnect"
           @node-click="onNodeClick"
+          @node-drag-start="onNodeDragStart"
+          @node-drag="onNodeDrag"
+          @node-drag-stop="onNodeDragStop"
         >
-          <Background :pattern-color="bgPatternColor" :gap="snapGridSize" :offset="0.5" />
+          <Background v-if="gridVisible" :pattern-color="bgPatternColor" :gap="snapGridSize" :offset="0.5" />
           <Controls class="logic-controls" />
           <MiniMap
             ref="minimapRef"
@@ -166,6 +188,12 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13 10V3L4 14h7v7l9-11h-7z"/>
           </svg>
           <p class="text-sm">{{ $t('logic.emptyHint') }}</p>
+        </div>
+
+        <!-- Block-sized crosshair overlay while dragging (issue #1118) -->
+        <div v-if="dragCrosshair" class="logic-crosshair pointer-events-none absolute inset-0" data-testid="logic-crosshair-overlay">
+          <div class="logic-crosshair__bar logic-crosshair__bar--h" :style="{ height: dragCrosshair.height + 'px', transform: `translateY(${dragCrosshair.top}px)` }" />
+          <div class="logic-crosshair__bar logic-crosshair__bar--v" :style="{ width: dragCrosshair.width + 'px', transform: `translateX(${dragCrosshair.left}px)` }" />
         </div>
       </div>
 
@@ -233,6 +261,17 @@
       :message="$t('logic.deleteGraphConfirm')"
       :confirm-label="$t('common.delete')"
       @confirm="doDeleteGraph" />
+
+    <ActionPreflightDialog
+      v-model="showRunPreflight"
+      :title="$t('logic.preflightTitle')"
+      :description="$t('logic.preflightDescription')"
+      :confirm-label="$t('logic.run')"
+      :items="runPreflightItems"
+      :loading="runPreflightLoading"
+      :error="runPreflightError"
+      @confirm="confirmGraphRun"
+    />
   </div>
 </template>
 
@@ -254,11 +293,13 @@ import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore }     from '@/stores/auth'
 import { logicApi }        from '@/api/client'
+import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import DebugInspector      from '@/components/logic/DebugInspector.vue'
+import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
@@ -289,6 +330,9 @@ const edges = ref([])
 // ── Grid snapping ─────────────────────────────────────────────────────────
 const SNAP_ENABLED_KEY = 'obs-logic-snap-to-grid'
 const SNAP_SIZE_KEY = 'obs-logic-snap-grid-size'
+// Raster visibility is independent of snapping (#1075) — it is a per-browser
+// presentation preference and never touches graph data or node coordinates.
+const GRID_VISIBLE_KEY = 'obs-logic-grid-visible'
 const DEFAULT_SNAP_GRID_SIZE = 20
 const MIN_SNAP_GRID_SIZE = 5
 const MAX_SNAP_GRID_SIZE = 100
@@ -300,9 +344,16 @@ const snapGridSize = ref(
     : DEFAULT_SNAP_GRID_SIZE
 )
 const snapGrid = computed(() => [snapGridSize.value, snapGridSize.value])
+// Shown unless it was explicitly hidden, so existing installations keep the
+// raster they know until a user turns it off.
+const gridVisible = ref(localStorage.getItem(GRID_VISIBLE_KEY) !== '0')
 
 watch(snapToGrid, enabled => {
   localStorage.setItem(SNAP_ENABLED_KEY, enabled ? '1' : '0')
+})
+
+watch(gridVisible, visible => {
+  localStorage.setItem(GRID_VISIBLE_KEY, visible ? '1' : '0')
 })
 
 function updateSnapGridSize(event) {
@@ -314,6 +365,40 @@ function updateSnapGridSize(event) {
   event.target.value = String(snapGridSize.value)
   localStorage.setItem(SNAP_SIZE_KEY, String(snapGridSize.value))
 }
+
+// ── Crosshair alignment overlay while dragging (issue #1118) ───────────────
+// Block-sized cross (h-bar as tall as the dragged block, v-bar as wide as
+// it) spanning the full canvas, so edges can be visually lined up against
+// any other block currently in view — independent of grid snapping.
+const dragCrosshair = ref(null)
+
+function updateDragCrosshair(node) {
+  if (!node?.dimensions?.width || !node?.dimensions?.height) {
+    dragCrosshair.value = null
+    return
+  }
+  const { getViewport } = useVueFlow('logic-canvas')
+  const { x, y, zoom } = getViewport()
+  // `node.computedPosition` is recalculated by vue-flow via a `watch()` on
+  // `node.position.x/y` — a deferred effect that hasn't run yet when this
+  // drag-event handler fires synchronously, so it can still hold the
+  // *previous* step's coordinates on whichever axis just changed (the
+  // rendered node itself doesn't show this because Vue's render flush runs
+  // after that watcher). `node.position` is written synchronously in the
+  // same tick as this event and is already absolute here — none of this
+  // editor's blocks nest under a parent node.
+  const pos = node.position
+  dragCrosshair.value = {
+    left:   pos.x * zoom + x,
+    top:    pos.y * zoom + y,
+    width:  node.dimensions.width * zoom,
+    height: node.dimensions.height * zoom,
+  }
+}
+
+function onNodeDragStart({ node }) { updateDragCrosshair(node) }
+function onNodeDrag({ node })      { updateDragCrosshair(node) }
+function onNodeDragStop()          { dragCrosshair.value = null }
 
 // ── Node type → component mapping ─────────────────────────────────────────
 const _generic      = markRaw(GenericNode)
@@ -329,7 +414,7 @@ const nodeTypeComponents = {
   // Comment (issue #1043)
   comment: _comment,
   // Logic
-  and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic,
+  and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic, merge: _generic,
   compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,
   // Math
   math_formula: _generic, math_map: _generic,
@@ -459,13 +544,55 @@ function analyzeFlowWarnings(flowNodes, flowEdges) {
   const unresolved = new Set(flowNodes.map(n => n.id).filter(id => !ordered.has(id)))
   const cyclic = findCyclicNodeIds(adj, unresolved)
   const cycleList = flowNodes.filter(n => cyclic.has(n.id)).map(n => n.id)
-  return flowNodes
+  const cycleWarnings = flowNodes
     .filter(n => unresolved.has(n.id))
     .map(n => ({
       node_id: n.id,
       code: cyclic.has(n.id) ? 'graph_cycle' : 'graph_cycle_blocked',
       message: `${n.id}: ${cycleList.slice(0, 5).join(', ')}`,
     }))
+  return [...cycleWarnings, ...findDuplicateTargetHandleWarnings(flowEdges)]
+}
+
+// Multiple edges wired to the same (target node, target handle) pair are a
+// dead wire, not a merge: the executor's edge_map is a plain dict keyed by
+// (target, handle), so only the last edge in array order ever actually
+// reaches that input — the rest silently carry no value, permanently (#1116).
+// Every source targeting one handle needs its own handle; use a `merge` node
+// to combine several independent sources into one downstream path instead.
+function findDuplicateTargetHandleWarnings(flowEdges) {
+  const edgesByHandle = new Map()
+  for (const edge of flowEdges) {
+    const handle = edge.targetHandle || 'in'
+    const key = `${edge.target}#${handle}`
+    const list = edgesByHandle.get(key)
+    if (list) list.push(edge)
+    else edgesByHandle.set(key, [edge])
+  }
+  return [...edgesByHandle.values()]
+    .filter(edgesForHandle => edgesForHandle.length > 1)
+    .map(edgesForHandle => {
+      const handle = edgesForHandle[0].targetHandle || 'in'
+      return {
+        node_id: edgesForHandle[0].target,
+        code: 'duplicate_target_handle',
+        message: `${edgesForHandle[0].target}.${handle} (${edgesForHandle.length})`,
+      }
+    })
+}
+
+function hasDuplicateHandleWarning(warnings) {
+  return warnings.some(w => w.code === 'duplicate_target_handle')
+}
+
+// The two warning kinds are reported together but counted separately: mixing
+// cycle counts into a duplicate-handle message (or vice versa) would show a
+// number that doesn't match either sentence (#1116 review).
+function warningCountForDisplay(warnings) {
+  const isDuplicate = w => w.code === 'duplicate_target_handle'
+  return hasDuplicateHandleWarning(warnings)
+    ? warnings.filter(isDuplicate).length
+    : warnings.filter(w => !isDuplicate(w)).length
 }
 
 function findCyclicNodeIds(adj, candidates) {
@@ -552,9 +679,13 @@ async function saveGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
-    showStatus(false, t('logic.graphValidationSaveBlocked', { count: graphWarnings.length }), 6000)
+    const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
+    showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000)
     applyDebugValues(Object.fromEntries(
-      graphWarnings.map(w => [w.node_id, { __error__: t('logic.graphValidationNodeError'), __diagnostic__: w.code }])
+      graphWarnings.map(w => [w.node_id, {
+        __error__: t(w.code === 'duplicate_target_handle' ? 'logic.graphValidationNodeErrorDuplicateHandle' : 'logic.graphValidationNodeError'),
+        __diagnostic__: w.code,
+      }])
     ))
     return
   }
@@ -624,6 +755,13 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
 // Last run outputs — always kept (not just in debug mode) so that
 // json_extractor / xml_extractor config panels can read _preview data.
 const lastRunOutputs = ref({})
+const showRunPreflight = ref(false)
+const runPreflightLoading = ref(false)
+const runPreflightError = ref('')
+const runPreflightItems = ref([])
+const preflightApproved = ref(false)
+const preflightGraphId = ref('')
+let preflightRequestId = 0
 
 function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
   lastRunOutputs.value = outputs
@@ -671,6 +809,65 @@ function toggleDebug() {
     lastRunMetadata.value = null
     lastRunInputs.value = {}
     lastRunDebugOutputs.value = {}
+  }
+}
+
+function preflightLabel(check) {
+  if (check.target_type === 'logic_graph') return t('logic.preflightGraph', { id: check.target_id })
+  if (check.target_type === 'logic_graph_state') return t('logic.preflightGraphState')
+  if (check.target_type === 'logic_capability') return t('logic.preflightCapability', { capability: check.target_id })
+  if (check.target_type === 'datapoint') return t('logic.preflightDatapoint', { id: check.target_id })
+  return `${check.target_type}: ${check.target_id}`
+}
+
+function preflightReason(check) {
+  const key = `logic.preflightReasons.${check.reason}`
+  const translated = t(key)
+  return translated === key ? check.reason : translated
+}
+
+function normalizeRunPreflight(data) {
+  return (data.checks || []).map((check, index) => ({
+    id: `${check.target_type}:${check.target_id}:${index}`,
+    label: preflightLabel(check),
+    detail: check.node_ids?.length ? t('logic.preflightNodes', { nodes: check.node_ids.join(', ') }) : '',
+    allowed: check.allowed,
+    reason: check.allowed ? '' : preflightReason(check),
+  }))
+}
+
+async function requestGraphRun() {
+  if (!activeGraphId.value || !activeGraph.value?.enabled) return
+  const graphId = activeGraphId.value
+  const requestId = ++preflightRequestId
+  showRunPreflight.value = true
+  runPreflightLoading.value = true
+  runPreflightError.value = ''
+  runPreflightItems.value = []
+  preflightGraphId.value = ''
+  try {
+    const { data } = await logicRunAuthzApi.preflight(graphId)
+    if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
+    preflightGraphId.value = graphId
+    runPreflightItems.value = normalizeRunPreflight(data)
+  } catch (err) {
+    if (requestId !== preflightRequestId) return
+    runPreflightError.value = err.response?.data?.detail ?? t('logic.preflightError')
+  } finally {
+    if (requestId === preflightRequestId) runPreflightLoading.value = false
+  }
+}
+
+async function confirmGraphRun() {
+  const graphId = preflightGraphId.value
+  if (!graphId || activeGraphId.value !== graphId || runPreflightItems.value.some(item => !item.allowed)) return
+  preflightApproved.value = true
+  showRunPreflight.value = false
+  try {
+    await runGraph(graphId)
+  } finally {
+    preflightApproved.value = false
+    preflightGraphId.value = ''
   }
 }
 
@@ -741,9 +938,9 @@ const debugInputs = computed(() => {
   })
 })
 
-async function runGraph() {
-  if (!auth.isAdmin || !activeGraphId.value) return
-  const requestGraphId = activeGraphId.value
+async function runGraph(graphId = activeGraphId.value) {
+  if ((!auth.isAdmin && !preflightApproved.value) || !graphId) return
+  const requestGraphId = graphId
   const requestDebugGeneration = debugStateGeneration
   const requestedDebugState = debugMode.value
   try {
@@ -784,6 +981,14 @@ async function runGraph() {
     showStatus(false, err.response?.data?.detail ?? t('common.error'))
   }
 }
+
+watch(activeGraphId, () => {
+  preflightRequestId += 1
+  showRunPreflight.value = false
+  runPreflightLoading.value = false
+  runPreflightItems.value = []
+  preflightGraphId.value = ''
+})
 
 // ── New graph ──────────────────────────────────────────────────────────────
 const showNewGraph  = ref(false)
@@ -923,7 +1128,8 @@ function onConnect(params) {
   }, edges.value)
   const graphWarnings = analyzeFlowWarnings(nodes.value, nextEdges)
   if (graphWarnings.length) {
-    showStatus(false, t('logic.graphValidationConnectBlocked', { count: graphWarnings.length }), 6000)
+    const connectBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationConnectBlockedDuplicateHandle' : 'logic.graphValidationConnectBlocked'
+    showStatus(false, t(connectBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000)
     return
   }
   edges.value = nextEdges
@@ -1253,6 +1459,17 @@ function _onMinimapMouseUp(e) {
 .logic-controls { bottom: 1rem; left: 1rem; }
 .logic-minimap { bottom: 1rem; right: 1rem; background: var(--logic-minimap-bg); border: 1px solid var(--node-card-border); border-radius: 6px; cursor: grab; user-select: none; }
 .logic-minimap--dragging { cursor: grabbing; }
+
+/* Crosshair alignment overlay while dragging a block (issue #1118). Position
+   via `transform` (set inline, updated every drag event) rather than
+   top/left: vue-flow itself moves the dragged node with a transform, which
+   the compositor can repaint on its own thread; a top/left-animated overlay
+   forces a synchronous layout on every mousemove and visibly falls a step
+   behind the node once grid-snapping raises the update rate. */
+.logic-crosshair { z-index: 5; }
+.logic-crosshair__bar { position: absolute; background: rgba(59, 130, 246, 0.18); will-change: transform; }
+.logic-crosshair__bar--h { top: 0; left: 0; right: 0; }
+.logic-crosshair__bar--v { top: 0; left: 0; bottom: 0; }
 
 /* Edge interaction — breite unsichtbare Klickfläche */
 .logic-canvas .vue-flow__edge .vue-flow__edge-interaction {

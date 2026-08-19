@@ -1,3 +1,10 @@
+"""Timer/duration validation on the persistence and API boundary.
+
+Assertions about a single node definition live next to that node under
+``tests/unit/logic/nodes/<category>/``; this file covers the shared validation
+that spans several node types.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,64 +12,6 @@ import json
 import pytest
 
 from obs.logic.models import FlowData, LogicGraphCreate, LogicGraphImport, LogicGraphUpdate, LogicNode
-from obs.logic.node_types import BUILTIN_NODE_TYPES
-
-
-def _node_type(type_name: str):
-    return next(node_type for node_type in BUILTIN_NODE_TYPES if node_type.type == type_name)
-
-
-def test_decision_default_conditions_do_not_persist_localized_names():
-    decision = _node_type("decision")
-    conditions = json.loads(decision.config_schema["conditions"]["default"])
-
-    assert conditions == [
-        {"handle": "out_1", "operator": "eq"},
-        {"handle": "out_2", "operator": "eq"},
-    ]
-
-
-def test_value_mapping_default_rules_do_not_persist_localized_names():
-    mapping = _node_type("value_mapping")
-    rules = json.loads(mapping.config_schema["rules"]["default"])
-
-    assert rules == [
-        {"operator": "eq", "result": ""},
-        {"operator": "eq", "result": ""},
-    ]
-
-
-def test_comment_node_has_no_ports():
-    comment = _node_type("comment")
-
-    assert comment.inputs == []
-    assert comment.outputs == []
-    assert comment.config_schema["text"]["default"] == ""
-    assert comment.config_schema["width"]["default"] == 220
-    assert comment.config_schema["height"]["default"] == 140
-
-
-def test_generic_notification_replaces_legacy_nodes_in_palette_metadata():
-    notification = _node_type("notify_message")
-    assert notification.category == "notification"
-    assert [port.id for port in notification.inputs] == ["trigger", "message"]
-    assert [port.id for port in notification.outputs] == ["sent"]
-    assert "app_token" not in notification.config_schema
-    assert "api_key" not in notification.config_schema
-
-    for legacy_type in ("notify_pushover", "notify_sms"):
-        legacy = _node_type(legacy_type)
-        assert legacy.hidden_from_palette is True
-        assert legacy.legacy is True
-
-
-def test_timer_durations_are_non_negative():
-    assert _node_type("timer_delay").config_schema["delay_s"]["min"] == 0
-    assert _node_type("timer_pulse").config_schema["duration_s"]["min"] == 0
-    assert _node_type("api_client").config_schema["timeout_s"]["min"] == 1
-    assert _node_type("and").config_schema["input_count"]["type"] == "integer"
-    assert _node_type("or").config_schema["input_count"]["type"] == "integer"
-    assert _node_type("xor").config_schema["input_count"]["type"] == "integer"
 
 
 @pytest.mark.parametrize(

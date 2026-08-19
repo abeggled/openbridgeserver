@@ -27,7 +27,7 @@ pytestmark = pytest.mark.integration
 async def test_login_returns_token(client):
     resp = await client.post(
         "/api/v1/auth/login",
-        json={"username": "admin", "password": "admin"},
+        json={"username": "admin", "password": "integration-test-password"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -86,7 +86,7 @@ async def test_refresh_token(client):
     """POST /auth/login → refresh → new access_token."""
     login = await client.post(
         "/api/v1/auth/login",
-        json={"username": "admin", "password": "admin"},
+        json={"username": "admin", "password": "integration-test-password"},
     )
     assert login.status_code == 200
     refresh_token = login.json()["refresh_token"]

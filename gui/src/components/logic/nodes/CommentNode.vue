@@ -9,7 +9,7 @@
       @resize="onResize"
     />
 
-    <div class="cn-card" :style="{ width: width + 'px', height: height + 'px' }">
+    <div class="cn-card logic-node-surface" :style="{ width: width + 'px', height: height + 'px', '--node-tint': cardTint }">
       <div class="cn-header">
         <span class="cn-title">{{ label }}</span>
         <button class="cn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
@@ -27,6 +27,7 @@ import { ref, computed } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import { useI18n } from 'vue-i18n'
+import { nodeTint } from '@/utils/logicNodeSurface'
 
 const { updateNodeData, removeNodes } = useVueFlow()
 const { t, te } = useI18n()
@@ -39,6 +40,11 @@ const props = defineProps({
 })
 
 const hovered = ref(false)
+
+// Comment category colour — also the card border and header accent below.
+// Tinted over the opaque card surface (issue #1074).
+const COMMENT_COLOR = '#ca8a04'
+const cardTint = nodeTint(COMMENT_COLOR)
 
 const label = computed(() => (te('logic.nodeTypes.' + props.type) ? t('logic.nodeTypes.' + props.type) : props.type))
 const width  = computed(() => Number(props.data?.width)  || 220)
@@ -62,8 +68,8 @@ function remove() {
   border: 1px solid #ca8a04;
   border-radius: 8px;
   box-shadow: 0 4px 14px rgba(0,0,0,.3);
-  background: #ca8a0412;
   overflow: hidden;
+  /* background: provided by `.logic-node-surface` (opaque surface + tint). */
 }
 
 .cn-header {
