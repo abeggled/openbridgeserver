@@ -186,16 +186,45 @@ class ModbusTcpAdapter(AdapterBase):
             await self._publish_status(False, str(exc))
             logger.exception("Modbus TCP connect failed")
 
+    async def _drain_poll_tasks(self) -> None:
+        """Cancel poll tasks and wait for them — but bounded.
+
+        A task may be stuck in a read that ignores cancellation (only closing the
+        socket frees it). A plain ``await gather()`` then deadlocks disconnect()/reload,
+        which holds ``_reload_lock`` forever and pins the adapter at enabled=False. So:
+        bound the drain with ``asyncio.wait`` (NOT ``wait_for`` — that would try to
+        cancel the un-cancellable gather and hang itself), and if the tasks do not
+        finish, force-close the client to break the stuck read. Force-close happens
+        only in that stuck case, so normal teardown (tasks cancel promptly) is unchanged.
+        """
+        if not self._poll_tasks:
+            return
+        for t in self._poll_tasks:
+            t.cancel()
+        gt = asyncio.ensure_future(asyncio.gather(*self._poll_tasks, return_exceptions=True))
+        done, _ = await asyncio.wait({gt}, timeout=5.0)
+        if gt not in done:
+            logger.warning(
+                "Modbus TCP: poll tasks did not cancel within 5s — force-closing client "
+                "to break a stuck read (%s:%s)",
+                self._adp_cfg.host, self._adp_cfg.port,
+            )
+            try:
+                if self._client:
+                    self._client.close()
+            except Exception:
+                logger.debug("Modbus TCP: force-close during drain failed", exc_info=True)
+            await asyncio.wait({gt}, timeout=3.0)
+            if not gt.done():
+                gt.cancel()
+                with contextlib.suppress(Exception):
+                    await gt
+        self._poll_tasks.clear()
+
     async def disconnect(self) -> None:
         async with self._reload_lock:
             self._stopping = True
-            for t in self._poll_tasks:
-                t.cancel()
-            # Wait for tasks to finish — same as _on_bindings_reloaded to avoid the
-            # race condition where a cancelled task is still mid-read when close() runs.
-            if self._poll_tasks:
-                await asyncio.gather(*self._poll_tasks, return_exceptions=True)
-            self._poll_tasks.clear()
+            await self._drain_poll_tasks()
             # Reset initial-load flag so jitter applies again on next connect().
             self._initial_load_done = False
             if self._client:
@@ -216,14 +245,9 @@ class ModbusTcpAdapter(AdapterBase):
 
             needs_clean_session = self._initial_load_done or bool(self._poll_tasks) or self._inflight_io > 0
 
-            # Cancel existing pollers and wait for them to actually finish.
-            # Without awaiting gather(), old tasks may still be executing a Modbus read
-            # concurrently with the new tasks, which corrupts the shared TCP connection.
-            for t in self._poll_tasks:
-                t.cancel()
-            if self._poll_tasks:
-                await asyncio.gather(*self._poll_tasks, return_exceptions=True)
-            self._poll_tasks.clear()
+            # Cancel existing pollers and wait for them to actually finish (bounded —
+            # force-closes a wedged client so a stuck read cannot deadlock the reload).
+            await self._drain_poll_tasks()
 
             # Close and reconnect only for real reloads; the initial binding load
             # follows connect() and should not create a second TCP session.
