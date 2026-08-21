@@ -266,6 +266,32 @@ def _validate_adapter_binding(
             ) from exc
 
 
+def _validate_timer_output_value(adapter_type: str, config: dict[str, Any], dp_id: uuid.UUID) -> None:
+    """Reject a Zeitschaltuhr switching value that the target DataPoint type cannot hold.
+
+    Issue #1008: the switching value used to be parsed type-blind at fire time, so an
+    incompatible value was only discovered (and silently dropped) hours later. Validating
+    it on save surfaces the problem immediately as a 422.
+    """
+    if adapter_type != "ZEITSCHALTUHR" or "value" not in config:
+        return
+    if str(config.get("timer_type", "daily")) == "meta":
+        return
+    dp = get_registry().get(dp_id)
+    if dp is None:
+        return
+
+    from obs.models.types import coerce_text_value_for_type
+
+    try:
+        coerce_text_value_for_type(str(config["value"]), dp.data_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Ungültiger Schaltwert für Objekttyp {dp.data_type}: {exc}",
+        ) from exc
+
+
 def _json_config(raw: Any) -> dict[str, Any]:
     if raw is None or raw == "":
         return {}
@@ -380,6 +406,7 @@ async def create_binding(
         enabled=body.enabled,
         instance_config=_json_config(instance_row["config"]) if adapter_type == "MESSAGE" else None,
     )
+    _validate_timer_output_value(adapter_type, body.config, dp_id)
 
     # Formel validieren
     if body.value_formula:
@@ -489,6 +516,8 @@ async def update_binding(
         enabled=bool(enabled),
         instance_config=instance_config,
     )
+    if "config" in updates:
+        _validate_timer_output_value(row["adapter_type"], config, dp_id)
 
     # Formel validieren
     if formula:

@@ -566,3 +566,181 @@ async def test_update_binding_enabling_clears_stale_external_write_enabled(clien
 
     get_resp = await client.get(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
     assert get_resp.json()["external_write_enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# Zeitschaltuhr switching value validation (issue #1008)
+# ---------------------------------------------------------------------------
+
+
+async def _create_typed_dp(client, auth_headers, data_type: str) -> dict:
+    resp = await client.post(
+        "/api/v1/datapoints/",
+        json={"name": f"ZsuValue-{data_type}-{uuid.uuid4().hex[:8]}", "data_type": data_type},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def _create_zsu_instance(client, auth_headers) -> dict:
+    resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "ZEITSCHALTUHR",
+            "name": f"ZsuBindTest-{uuid.uuid4().hex[:6]}",
+            "config": {},
+            "enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+@pytest.mark.parametrize(
+    ("data_type", "value"),
+    [
+        ("FLOAT", "50"),
+        ("FLOAT", "0"),
+        ("INTEGER", "1"),
+        ("STRING", "on"),
+        ("BOOLEAN", "ein"),
+        ("DATE", "2026-12-24"),
+        ("TIME", "08:00:00"),
+        ("DATETIME", "2026-12-24T08:00:00"),
+    ],
+)
+async def test_create_timer_binding_accepts_typed_value(client, auth_headers, data_type, value):
+    dp = await _create_typed_dp(client, auth_headers, data_type)
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily", "hour": 8, "minute": 0, "value": value},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["config"]["value"] == value
+
+
+@pytest.mark.parametrize(
+    ("data_type", "value"),
+    [("BOOLEAN", "50"), ("INTEGER", "abc"), ("FLOAT", "abc"), ("DATE", "1"), ("TIME", "morgens")],
+)
+async def test_create_timer_binding_rejects_incompatible_value(client, auth_headers, data_type, value):
+    dp = await _create_typed_dp(client, auth_headers, data_type)
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily", "value": value},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert data_type in resp.json()["detail"]
+
+
+async def test_create_timer_binding_without_value_is_accepted(client, auth_headers):
+    """The Visu 'add schedule point' flow creates an empty config first."""
+    dp = await _create_typed_dp(client, auth_headers, "DATE")
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={"adapter_instance_id": inst["id"], "direction": "SOURCE", "config": {}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def test_create_timer_meta_binding_skips_value_validation(client, auth_headers):
+    dp = await _create_typed_dp(client, auth_headers, "BOOLEAN")
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "meta", "meta_type": "holiday_today", "value": "50"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def test_update_timer_binding_rejects_incompatible_value(client, auth_headers):
+    dp = await _create_typed_dp(client, auth_headers, "FLOAT")
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily", "value": "50"},
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    binding_id = create_resp.json()["id"]
+
+    bad = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}/bindings/{binding_id}",
+        json={"config": {"timer_type": "daily", "value": "abc"}},
+        headers=auth_headers,
+    )
+    assert bad.status_code == 422, bad.text
+
+    ok = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}/bindings/{binding_id}",
+        json={"config": {"timer_type": "daily", "value": "0"}},
+        headers=auth_headers,
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["config"]["value"] == "0"
+
+
+async def test_update_timer_binding_without_config_skips_value_validation(client, auth_headers):
+    dp = await _create_typed_dp(client, auth_headers, "FLOAT")
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily", "value": "50"},
+        },
+        headers=auth_headers,
+    )
+    binding_id = create_resp.json()["id"]
+
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}/bindings/{binding_id}",
+        json={"enabled": False},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def test_non_timer_binding_value_is_not_validated(client, auth_headers):
+    """The value key on a non-ZEITSCHALTUHR adapter must not be type-checked."""
+    dp = await _create_typed_dp(client, auth_headers, "BOOLEAN")
+    inst = await _create_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={"adapter_instance_id": inst["id"], "direction": "SOURCE", "config": {"value": "50"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
