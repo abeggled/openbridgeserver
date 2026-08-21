@@ -206,6 +206,39 @@ describe('BindingForm — ZEITSCHALTUHR create submit', () => {
     expect(createBinding.mock.calls[0][1].direction).toBe('SOURCE')
     w.unmount()
   })
+
+  // ── Issue #1008: Schaltwert muss zum Objekttyp passen ──────────────────────
+
+  it('submits a numeric switching value on a FLOAT object', async () => {
+    const w = await mountForm({ dpDataType: 'FLOAT' })
+    await selectInstance(w, 'zt-1')
+    await w.find('[data-testid="zt-value-number"]').setValue('50')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toBe('50')
+    w.unmount()
+  })
+
+  it('blocks the submit when the switching value does not fit the object type', async () => {
+    const w = await mountForm({ dpDataType: 'BOOLEAN' })
+    await selectInstance(w, 'zt-1')
+    // The BOOLEAN select cannot produce an invalid value — simulate a config
+    // that was stored before the object type changed.
+    w.vm.cfg.value = '50'
+    await submit(w)
+    expect(createBinding).not.toHaveBeenCalled()
+    expect(w.text()).toContain('1/0')
+    w.unmount()
+  })
+
+  it('does not validate the switching value for meta bindings', async () => {
+    const w = await mountForm({ dpDataType: 'BOOLEAN' })
+    await selectInstance(w, 'zt-1')
+    w.vm.cfg.timer_type = 'meta'
+    w.vm.cfg.value = '50'
+    await submit(w)
+    expect(createBinding).toHaveBeenCalled()
+    w.unmount()
+  })
 })
 
 // ─── ANWESENHEITSSIMULATION submit ────────────────────────────────────────────

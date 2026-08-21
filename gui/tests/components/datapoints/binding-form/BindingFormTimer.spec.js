@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTimer.vue'
 
 const WIN_EP = () => ({ type: 'fixed', month: 1, day: 1, sign: '+', offset: 0, name: '' })
@@ -213,5 +214,193 @@ describe('BindingFormTimer — meta type hides non-meta controls', () => {
     const w = mk({ timer_type: 'meta', meta_type: 'holiday_today' })
     const valueInput = w.findAll('input').find(i => i.attributes('placeholder') === '1')
     expect(valueInput).toBeFalsy()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ausgabewert — typgerechtes Eingabefeld (Issue #1008)
+// ---------------------------------------------------------------------------
+
+describe('BindingFormTimer — typed output value input', () => {
+  it('renders a plain text field for STRING and UNKNOWN', () => {
+    for (const dataType of ['STRING', 'UNKNOWN']) {
+      const w = mk({ value: 'on' }, { dpDataType: dataType })
+      expect(w.find('[data-testid="zt-value-text"]').exists()).toBe(true)
+      expect(w.find('[data-testid="zt-value-number"]').exists()).toBe(false)
+      expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    }
+  })
+
+  it('renders an Ein/Aus select for BOOLEAN', () => {
+    const w = mk({ value: '1' }, { dpDataType: 'BOOLEAN' })
+    const select = w.find('[data-testid="zt-value-boolean"]')
+    expect(select.exists()).toBe(true)
+    expect(select.findAll('option')).toHaveLength(2)
+  })
+
+  it('maps stored boolean literals onto the select and writes back true/false', async () => {
+    const cfg = {
+      timer_type: 'daily', meta_type: '', weekdays: [0], months: [], day_of_month: 0,
+      time_ref: 'absolute', hour: 7, minute: 0, offset_minutes: 0, solar_altitude_deg: 0,
+      sun_direction: 'rising', every_minute: false, every_hour: false,
+      holiday_mode: 'ignore', vacation_mode: 'ignore', date_window_enabled: false,
+      selected_holidays: [], value: 'ein',
+    }
+    const w = mount(BindingFormTimer, {
+      props: {
+        cfg,
+        ztHolidays: [], ztHolidaysLoading: false, ztHolidaysError: null,
+        weekdayShorts: ['Mo'], monthShorts: ['Jan'], winMonths: [{ v: 1, l: 'Januar' }],
+        winFrom: WIN_EP(), winTo: WIN_EP(), buildWinExpr: () => '', describeWinEp: () => '',
+        dpDataType: 'BOOLEAN',
+      },
+    })
+    const select = w.find('[data-testid="zt-value-boolean"]')
+    expect(select.element.value).toBe('true')
+
+    await select.setValue('false')
+    expect(cfg.value).toBe('false')
+  })
+
+  it('renders a number field with step=1 for INTEGER', () => {
+    const w = mk({ value: '50' }, { dpDataType: 'INTEGER' })
+    const input = w.find('[data-testid="zt-value-number"]')
+    expect(input.exists()).toBe(true)
+    expect(input.attributes('step')).toBe('1')
+  })
+
+  it('renders a number field with step=any for FLOAT', () => {
+    const input = mk({ value: '21.5' }, { dpDataType: 'FLOAT' }).find('[data-testid="zt-value-number"]')
+    expect(input.attributes('step')).toBe('any')
+  })
+
+  it.each([
+    ['DATE', 'zt-value-date'],
+    ['TIME', 'zt-value-time'],
+    ['DATETIME', 'zt-value-datetime'],
+  ])('renders a picker for %s', (dataType, testid) => {
+    const w = mk({ value: '' }, { dpDataType: dataType })
+    expect(w.find(`[data-testid="${testid}"]`).exists()).toBe(true)
+  })
+
+  it('shows the data type next to the label, with the unit when present', () => {
+    expect(mk({}, { dpDataType: 'FLOAT' }).find('[data-testid="zt-value-type"]').text()).toBe('FLOAT')
+    expect(mk({}, { dpDataType: 'FLOAT', dpUnit: '%' }).find('[data-testid="zt-value-type"]').text()).toBe('FLOAT · %')
+  })
+
+  it('defaults to UNKNOWN when no data type is passed', () => {
+    expect(mk().find('[data-testid="zt-value-type"]').text()).toBe('UNKNOWN')
+  })
+
+  it('shows an inline error when the value does not fit the type', () => {
+    // DATE keeps the stored value — only BOOLEAN is auto-repaired, because its
+    // select cannot represent an arbitrary literal.
+    const w = mk({ value: '1' }, { dpDataType: 'DATE' })
+    const err = w.find('[data-testid="zt-value-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text().length).toBeGreaterThan(0)
+    expect(err.text()).not.toContain('adapters.bindingForm')
+  })
+
+  it('shows no error for a valid value', () => {
+    expect(mk({ value: '50' }, { dpDataType: 'FLOAT' }).find('[data-testid="zt-value-error"]').exists()).toBe(false)
+  })
+
+  it('renders a type-specific hint', () => {
+    const w = mk({ value: '50' }, { dpDataType: 'FLOAT' })
+    const hints = w.findAll('.hint').map(h => h.text())
+    expect(hints.some(h => h.includes('21.5'))).toBe(true)
+  })
+
+  it('hides the output value section for meta bindings', () => {
+    const w = mk({ timer_type: 'meta' }, { dpDataType: 'FLOAT' })
+    expect(w.find('[data-testid="zt-value-number"]').exists()).toBe(false)
+    expect(w.find('[data-testid="zt-value-text"]').exists()).toBe(false)
+  })
+})
+
+describe('BindingFormTimer — switching value stays a string', () => {
+  function mkCfg(overrides = {}) {
+    return {
+      timer_type: 'daily', meta_type: '', weekdays: [0], months: [], day_of_month: 0,
+      time_ref: 'absolute', hour: 7, minute: 0, offset_minutes: 0, solar_altitude_deg: 0,
+      sun_direction: 'rising', every_minute: false, every_hour: false,
+      holiday_mode: 'ignore', vacation_mode: 'ignore', date_window_enabled: false,
+      selected_holidays: [], value: '1', ...overrides,
+    }
+  }
+
+  function mkWith(cfg, dpDataType) {
+    return mount(BindingFormTimer, {
+      props: {
+        cfg,
+        ztHolidays: [], ztHolidaysLoading: false, ztHolidaysError: null,
+        weekdayShorts: ['Mo'], monthShorts: ['Jan'], winMonths: [{ v: 1, l: 'Januar' }],
+        winFrom: WIN_EP(), winTo: WIN_EP(), buildWinExpr: () => '', describeWinEp: () => '',
+        dpDataType,
+      },
+    })
+  }
+
+  it('writes true when the boolean select is switched on', async () => {
+    const cfg = mkCfg({ value: 'aus' })
+    const w = mkWith(cfg, 'BOOLEAN')
+    expect(w.find('[data-testid="zt-value-boolean"]').element.value).toBe('false')
+    await w.find('[data-testid="zt-value-boolean"]').setValue('true')
+    expect(cfg.value).toBe('true')
+  })
+
+  it('renders an empty field when the stored value is missing', () => {
+    const w = mkWith(mkCfg({ value: undefined }), 'FLOAT')
+    expect(w.find('[data-testid="zt-value-number"]').element.value).toBe('')
+  })
+
+  it('stores a typed number as a string, never as a Number', async () => {
+    const cfg = mkCfg({ value: '1' })
+    const w = mkWith(cfg, 'FLOAT')
+    await w.find('[data-testid="zt-value-number"]').setValue('0')
+    expect(cfg.value).toBe('0')
+    expect(typeof cfg.value).toBe('string')
+  })
+
+  it('normalises a nullish assignment to an empty string', () => {
+    const cfg = mkCfg({ value: '1' })
+    const w = mkWith(cfg, 'FLOAT')
+    w.vm.textValue = null
+    expect(cfg.value).toBe('')
+  })
+
+  it('repairs a legacy non-boolean value on a BOOLEAN object', async () => {
+    // The select only offers Ein/Aus, so "50" could never be cleared by the
+    // user — it must be normalised to what the select already displays.
+    const cfg = mkCfg({ value: '50' })
+    const w = mkWith(cfg, 'BOOLEAN')
+    await nextTick()
+    expect(cfg.value).toBe('false')
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+  })
+
+  it('leaves a valid boolean literal untouched', async () => {
+    const cfg = mkCfg({ value: 'ein' })
+    mkWith(cfg, 'BOOLEAN')
+    await nextTick()
+    expect(cfg.value).toBe('ein')
+  })
+
+  it('does not repair values for non-boolean objects', async () => {
+    const cfg = mkCfg({ value: '1' })
+    const w = mkWith(cfg, 'DATE')
+    await nextTick()
+    expect(cfg.value).toBe('1')
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(true)
+  })
+
+  it('repairs the value when the object type is loaded after mount', async () => {
+    const cfg = mkCfg({ value: '50' })
+    const w = mkWith(cfg, 'UNKNOWN')
+    expect(cfg.value).toBe('50')
+    await w.setProps({ dpDataType: 'BOOLEAN' })
+    await nextTick()
+    expect(cfg.value).toBe('false')
   })
 })

@@ -130,6 +130,8 @@
       <BindingFormTimer
         v-if="selectedAdapterType === 'ZEITSCHALTUHR'"
           :cfg="cfg"
+          :dp-data-type="props.dpDataType"
+          :dp-unit="props.dpUnit"
           :zt-holidays="ztHolidays"
           :zt-holidays-loading="ztHolidaysLoading"
           :zt-holidays-error="ztHolidaysError"
@@ -322,12 +324,14 @@ import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTi
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
 import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnmp.vue'
 import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
+import { validateTimerValue } from '@/utils/timerValue'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
   initial:        { type: Object,  default: null },
   dpPersistValue: { type: Boolean, default: false },
   dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
+  dpUnit:         { type: String,  default: '' },         // DataPoint.unit, shown next to typed value inputs
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
@@ -1337,6 +1341,14 @@ async function submit() {
   saving.value = true
   try {
     const config     = buildConfig()
+    // Zeitschaltuhr: Schaltwert muss zum Objekttyp passen (Issue #1008) —
+    // sonst antwortet die API mit 422.
+    if (selectedAdapterType.value === 'ZEITSCHALTUHR' && config.timer_type !== 'meta') {
+      const valueErrorKey = validateTimerValue(config.value, props.dpDataType)
+      if (valueErrorKey) {
+        error.value = t(valueErrorKey); saving.value = false; return
+      }
+    }
     const effectiveDirection = ['ANWESENHEITSSIMULATION', 'MESSAGE'].includes(selectedAdapterType.value) ? 'SOURCE' : form.direction
     const throttleMs = form.throttle_value > 0
       ? Math.round(form.throttle_value * THROTTLE_FACTORS[form.throttle_unit]) : null
