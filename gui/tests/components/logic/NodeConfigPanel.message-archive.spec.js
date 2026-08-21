@@ -63,8 +63,8 @@ describe('NodeConfigPanel message_archive', () => {
     await selects[0].setValue('system')
     await selects[1].setValue('security')
     await selects[2].setValue('critical')
-    await wrapper.find('input').setValue('Alarm')
-    await wrapper.find('input').trigger('change')
+    await wrapper.get('[data-testid="message-archive-title"]').setValue('Alarm')
+    await wrapper.get('[data-testid="message-archive-title"]').trigger('change')
     await wrapper.find('textarea').setValue('Meldung')
     await wrapper.find('textarea').trigger('change')
 

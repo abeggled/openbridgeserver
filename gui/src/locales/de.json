@@ -1605,6 +1605,12 @@
     "deleteBlock": "Block löschen",
     "deleteNode": "Ast löschen",
     "init": "Init",
+    "blockName": {
+      "label": "Blockname",
+      "editTitle": "{name} — Doppelklick zum Umbenennen",
+      "panelHint": "Eigener Name für diesen Block. Leer lassen für den Standardtitel des Blocktyps.",
+      "typeAndId": "{type} · {id}"
+    },
     "nodeTypes": {
       "divide": "Dividieren",
       "const_value": "Festwert",

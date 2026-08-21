@@ -1605,6 +1605,12 @@
     "deleteBlock": "Delete block",
     "deleteNode": "Delete branch",
     "init": "Init",
+    "blockName": {
+      "label": "Block name",
+      "editTitle": "{name} — double-click to rename",
+      "panelHint": "Custom name for this block. Leave empty for the block type's default title.",
+      "typeAndId": "{type} · {id}"
+    },
     "nodeTypes": {
       "divide": "Divide",
       "const_value": "Constant",

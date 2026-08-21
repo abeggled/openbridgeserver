@@ -629,6 +629,8 @@ Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden
 
 Direkte Rückkopplungen werden im Editor validiert und beim Verbinden oder Speichern blockiert. Für kontrollierte Rückkopplungen wird ein **Speicher**-Block als explizite Tick-Grenze verwendet: Er gibt den Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf.
 
+Jeder Block — Funktionsblöcke wie Kommentarblöcke — lässt sich **umbenennen**: Ein Doppelklick auf den Blocktitel auf dem Logikblatt macht ihn zu einem Eingabefeld — Enter oder ein Klick daneben übernimmt den Namen, Escape bricht ab. Alternativ steht das Feld oben in den Blockeigenschaften zur Verfügung, also auch während einer Debug-Sitzung. Der eigene Name ersetzt den Standardtitel des Blocktyps auf der Karte und in den Blockeigenschaften; darunter bleiben Blocktyp und die generierte Block-ID als sekundäre Zeile sichtbar. Ein leerer Name stellt den Standardtitel wieder her. Verbindungen und Referenzen laufen weiterhin über die Block-ID, und das Umbenennen allein setzt gespeicherte Blockzustände (Speicher, Zähler, Statistik) nicht zurück. Umbenennen ist eine Bearbeitung des Logikblatts und steht daher nur Benutzern mit Schreibrechten zur Verfügung; ohne diese bleibt der Titel reine Anzeige.
+
 Ein oder mehrere Blöcke lassen sich markieren (Shift + Rahmen aufziehen, oder Strg/Cmd-Klick für einzelne Blöcke) und per **Kopieren** / **Einfügen** (bzw. Strg/Cmd+C / Strg/Cmd+V) inklusive ihrer Einstellungen vervielfältigen — auch seitenübergreifend, indem man vor dem Einfügen auf ein anderes Logikblatt wechselt. Eingefügte Blöcke erscheinen leicht versetzt und bereits markiert, sodass sie sich sofort an die gewünschte Stelle verschieben lassen.
 
 ---

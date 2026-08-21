@@ -7,10 +7,28 @@
       :title="$t('logic.nodeConfig.resizeHandle')"
     />
 
-    <!-- Header -->
-    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ $te('logic.nodeTypes.' + node?.type) ? $t('logic.nodeTypes.' + node?.type) : (nodeDef?.label ?? node?.type) }}</h3>
-      <button @click="$emit('close')" class="btn-icon text-slate-500">
+    <!-- Header — the user-defined block name is the heading and stays editable
+         here (and therefore in the debug values tab, issue #1157); the block
+         type and the generated node id follow as secondary information. -->
+    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-start justify-between gap-2">
+      <div class="min-w-0 flex-1">
+        <input
+          v-model="localData.label"
+          type="text"
+          maxlength="80"
+          class="w-full bg-transparent border-0 border-b border-transparent hover:border-slate-300 dark:hover:border-slate-600 focus:border-teal-500 focus:outline-none px-0 py-0.5 text-sm font-semibold text-slate-700 dark:text-slate-200 placeholder:font-normal placeholder:text-slate-400"
+          :placeholder="defaultNodeTitle"
+          :aria-label="$t('logic.blockName.label')"
+          :title="$t('logic.blockName.panelHint')"
+          data-testid="node-label-input"
+          @change="onNodeLabelChange"
+          @keydown.enter.prevent="onNodeLabelChange"
+        />
+        <p class="mt-0.5 text-[10px] text-slate-500 truncate" :title="node.id" data-testid="node-identity">
+          {{ $t('logic.blockName.typeAndId', { type: defaultNodeTitle, id: node.id }) }}
+        </p>
+      </div>
+      <button @click="$emit('close')" class="btn-icon text-slate-500 shrink-0">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
         </svg>
@@ -46,7 +64,7 @@
           <p class="text-xs text-slate-500 mb-3 shrink-0">{{ nodeDescription(nodeDef) }}</p>
           <div class="flex flex-col flex-1 min-h-0 gap-1">
             <label class="label shrink-0">{{ $t('logic.ports.object') }}</label>
-            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" @input="searchDps" />
+            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" data-testid="dp-search" @input="searchDps" />
             <div v-if="dpResults.length"
               class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden flex-1 min-h-0 overflow-y-auto">
               <button v-for="dp in dpResults" :key="dp.id"
@@ -1221,6 +1239,7 @@
             v-model="localData.title"
             class="input text-sm"
             :placeholder="$t('logic.nodeConfig.messageArchive.titlePlaceholder')"
+            data-testid="message-archive-title"
             @change="emitUpdate"
           />
         </div>
@@ -2526,6 +2545,23 @@ function toggleNotificationTarget(target, selected) {
   localData.value.providers = selected
     ? [...refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target), { provider: target.provider, target: target.target }]
     : refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target)
+  emitUpdate()
+}
+
+// ── Block name (issue #1157) ───────────────────────────────────────────────
+// Default title of the block type — the placeholder of the rename field and
+// the secondary type line, shown when no custom name is set.
+const defaultNodeTitle = computed(() => {
+  const key = `logic.nodeTypes.${props.node?.type}`
+  return te(key) ? t(key) : (nodeDef.value?.label ?? props.node?.type)
+})
+
+function onNodeLabelChange() {
+  const next = String(localData.value.label ?? '').trim()
+  localData.value.label = next
+  // Committing an untouched field (Enter on a block that was never renamed)
+  // must not write an empty `label` into the block and trigger a save.
+  if (next === String(props.node.data.label ?? '').trim()) return
   emitUpdate()
 }
 

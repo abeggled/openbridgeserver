@@ -743,3 +743,66 @@ def test_datapoint_rename_updates_sequence_step_labels() -> None:
         manager._db.execute_and_commit.assert_awaited_once()
 
     asyncio.run(exercise())
+
+
+def test_layout_only_rename_keeps_a_running_sequence_alive() -> None:
+    """Issue #1157: renaming a block is a layout-only save, which reaches the
+    manager through `update_cached_graph()` instead of a re-initialisation. The
+    per-node config cached when the sequence started must follow, otherwise the
+    next `reload()` sees `node.data != _sequence_configs[...]` and cancels a
+    sequence that is still supposed to be running.
+    """
+
+    async def exercise() -> None:
+        manager = _manager()
+        before = FlowData.model_validate(
+            {"nodes": [{"id": "seq", "type": "value_sequence", "position": {"x": 0, "y": 0}, "data": {"steps": []}}], "edges": []}
+        )
+        renamed = FlowData.model_validate(
+            {
+                "nodes": [{"id": "seq", "type": "value_sequence", "position": {"x": 0, "y": 0}, "data": {"steps": [], "label": "Morgenszene"}}],
+                "edges": [],
+            }
+        )
+        manager._db.fetchall = AsyncMock(
+            return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": renamed.model_dump_json(), "node_state": "{}"}]
+        )
+        manager._graphs["g1"] = ("G", True, before)
+        task = asyncio.create_task(asyncio.sleep(3600))
+        manager._sequence_tasks[("g1", "seq")] = task
+        manager._sequence_configs[("g1", "seq")] = dict(before.nodes[0].data)
+        manager._sequence_graph_signatures["g1"] = before.model_dump_json()
+
+        manager.update_cached_graph("g1", "G", True, renamed)
+        assert manager._sequence_configs[("g1", "seq")]["label"] == "Morgenszene"
+
+        await manager.reload()
+        await asyncio.sleep(0)
+        assert task.cancelled() is False
+        assert ("g1", "seq") in manager._sequence_tasks
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_update_cached_graph_leaves_untracked_sequence_nodes_alone() -> None:
+    """Only nodes whose sequence is actually running carry a cached config;
+    a layout-only save must not invent entries for the others."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [{"id": "seq", "type": "value_sequence", "position": {"x": 0, "y": 0}, "data": {"steps": [], "label": "Morgenszene"}}],
+                "edges": [],
+            }
+        )
+        manager._graphs["g1"] = ("G", True, flow)
+
+        manager.update_cached_graph("g1", "G", True, flow)
+
+        assert manager._sequence_configs == {}
+
+    asyncio.run(exercise())

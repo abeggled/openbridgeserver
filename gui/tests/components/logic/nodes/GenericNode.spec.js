@@ -49,9 +49,11 @@ describe('GenericNode — label from NODE_DEFS', () => {
   })
 
   it('exposes the full heading when its fixed-width display is truncated', async () => {
+    // The tooltip carries the heading plus the rename hint (#1157), so a
+    // truncated title is still readable and the gesture is discoverable.
     const w = await mountGN('substring_extractor')
     await flushPromises()
-    expect(w.find('.gn-title').attributes('title')).toBe(w.find('.gn-title').text())
+    expect(w.find('.gn-title').attributes('title')).toContain(w.find('.gn-title').text())
   })
 })
 

@@ -1181,6 +1181,25 @@ function onNodeClick({ node }) {
   selectedNode.value = { ...node }
 }
 
+// The properties panel holds its own copy of the selected block, so a rename
+// typed directly on the card (issue #1157) would otherwise leave the panel
+// heading showing the previous name until the block is reselected.
+watch(
+  () => {
+    const node = nodes.value.find(n => n.id === selectedNode.value?.id)
+    // `null` marks "no such block on the canvas" — distinct from a block
+    // that simply carries no name, so removing the selected block does not
+    // push a bogus update into the panel and make it re-read the block.
+    return node ? String(node.data?.label ?? '') : null
+  },
+  (label) => {
+    const current = selectedNode.value
+    if (label === null || !current) return
+    if (String(current.data?.label ?? '') === label) return
+    selectedNode.value = { ...current, data: { ...current.data, label } }
+  },
+)
+
 // ── Copy/Paste selected nodes (issue #1084) ────────────────────────────────
 const clipboard  = ref(null)
 const hasSelection = computed(() => nodes.value.some(n => n.selected))

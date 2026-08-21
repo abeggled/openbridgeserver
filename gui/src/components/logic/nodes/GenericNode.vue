@@ -16,7 +16,13 @@
          :style="{ borderTopColor: def.color, '--node-tint': cardTint, minHeight: cardH + 'px' }">
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
-        <span class="gn-title" :title="def.label">{{ def.label }}</span>
+        <NodeTitleEditor
+          :value="customLabel"
+          :fallback="def.label"
+          :editable="auth.isAdmin"
+          :title-class="['gn-title', customLabel && 'gn-title--custom']"
+          @rename="renameNode"
+        />
         <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
@@ -71,6 +77,8 @@ import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
+import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const { updateNodeData } = useVueFlow()
 const { t, te } = useI18n()
@@ -264,6 +272,15 @@ const def = computed(() => {
 // Category tint painted over the opaque card surface (issue #1074)
 const cardTint = computed(() => nodeTint(def.value.color))
 
+// ── User-defined block name (issue #1157) ──────────────────────────────────
+// Kept in `data.label`, separate from the generated node id, so edges and
+// references keep addressing the block by id.
+const customLabel = computed(() => String(props.data?.label ?? '').trim())
+function renameNode(label) { updateNodeData(props.id, { label }) }
+// Only admins can save a sheet, so offering the inline field to a read-only
+// viewer would silently discard whatever they typed.
+const auth = useAuthStore()
+
 // ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
 function toggleNegate(portId) {
   const key = `negate_${portId}`
@@ -429,6 +446,9 @@ function remove() { removeNodes([props.id]) }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A user-chosen name keeps its own casing — the uppercase treatment is for
+   the generated type titles. */
+.gn-title--custom { text-transform: none; letter-spacing: .02em; }
 .gn-del   { flex-shrink:0; font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
 .gn-del:hover { color:#f87171; }
 
