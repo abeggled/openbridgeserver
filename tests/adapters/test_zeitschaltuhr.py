@@ -6,8 +6,10 @@ are all pure / near-pure methods that can be tested without asyncio.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock, MagicMock
+import uuid
+from datetime import UTC, date, datetime, time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,6 +25,7 @@ from obs.adapters.zeitschaltuhr.adapter import (
     _last_weekday_of_month,
     _nth_weekday_of_month,
 )
+from tests.adapters.conftest import make_binding
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -923,3 +926,177 @@ class TestGetHolidaysForYear:
         for h in result:
             assert "date" in h
             assert "name" in h
+
+
+# ---------------------------------------------------------------------------
+# _fire_binding — type-aware switching value (issue #1008)
+# ---------------------------------------------------------------------------
+
+
+def _fire_adapter(data_type: str | None):
+    """Adapter + binding whose target DataPoint reports *data_type*.
+
+    ``data_type=None`` simulates a DataPoint that is not in the registry.
+    """
+    adapter = _make_adapter()
+    adapter._bus.publish = AsyncMock()
+    adapter._instance_name = "ZSU"
+    binding = make_binding({})
+
+    registry = MagicMock()
+    registry.get.return_value = None if data_type is None else SimpleNamespace(data_type=data_type)
+    registry.report_type_mismatch = AsyncMock()
+    return adapter, binding, registry
+
+
+async def _fire(adapter, binding, registry, value: str):
+    with patch("obs.core.registry.get_registry", return_value=registry):
+        await adapter._fire_binding(binding, _cfg(value=value))
+
+
+def _published(adapter):
+    assert adapter._bus.publish.await_count == 1
+    return adapter._bus.publish.await_args.args[0]
+
+
+class TestFireBindingTypeAware:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("raw", "expected"), [("50", 50.0), ("0", 0.0), ("1", 1.0), ("21.5", 21.5)])
+    async def test_float_target_receives_float(self, raw, expected):
+        """Fehlerbild #1: 0/1 auf FLOAT wurden zu False/True und verworfen."""
+        adapter, binding, registry = _fire_adapter("FLOAT")
+        await _fire(adapter, binding, registry, raw)
+        event = _published(adapter)
+        assert event.value == expected
+        assert isinstance(event.value, float)
+        assert event.datapoint_id == binding.datapoint_id
+        assert event.binding_id == binding.id
+        assert event.quality == "good"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("raw", "expected"), [("50", 50), ("0", 0), ("1", 1)])
+    async def test_integer_target_receives_int_not_bool(self, raw, expected):
+        """Fehlerbild #2: 1/0 kamen als True/False beim Ziel-Adapter an."""
+        adapter, binding, registry = _fire_adapter("INTEGER")
+        await _fire(adapter, binding, registry, raw)
+        event = _published(adapter)
+        assert event.value == expected
+        assert isinstance(event.value, int)
+        assert not isinstance(event.value, bool)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["on", "off", "1", "0", "true", "ein", "Guten Morgen"])
+    async def test_string_target_receives_literal_text(self, raw):
+        """Fehlerbild #3: on/off/1/0/true/ein waren als String unmöglich zu senden."""
+        adapter, binding, registry = _fire_adapter("STRING")
+        await _fire(adapter, binding, registry, raw)
+        event = _published(adapter)
+        assert event.value == raw
+        assert isinstance(event.value, str)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("data_type", "raw", "expected"),
+        [
+            ("DATE", "2026-12-24", date(2026, 12, 24)),
+            ("TIME", "08:00:00", time(8, 0)),
+            ("DATETIME", "2026-12-24T08:00:00", datetime.fromisoformat("2026-12-24T08:00:00")),
+        ],
+    )
+    async def test_temporal_targets_receive_parsed_values(self, data_type, raw, expected):
+        """Fehlerbild #4: DATE/TIME/DATETIME wurden nie konvertiert."""
+        adapter, binding, registry = _fire_adapter(data_type)
+        await _fire(adapter, binding, registry, raw)
+        assert _published(adapter).value == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("raw", "expected"), [("1", True), ("true", True), ("on", True), ("ein", True), ("0", False), ("aus", False)])
+    async def test_boolean_target_behaves_as_before(self, raw, expected):
+        adapter, binding, registry = _fire_adapter("BOOLEAN")
+        await _fire(adapter, binding, registry, raw)
+        event = _published(adapter)
+        assert event.value is expected
+
+    @pytest.mark.asyncio
+    async def test_unknown_target_uses_heuristic(self):
+        adapter, binding, registry = _fire_adapter("UNKNOWN")
+        await _fire(adapter, binding, registry, "on")
+        assert _published(adapter).value is True
+
+    @pytest.mark.asyncio
+    async def test_missing_datapoint_falls_back_to_heuristic(self):
+        adapter, binding, registry = _fire_adapter(None)
+        await _fire(adapter, binding, registry, "50")
+        assert _published(adapter).value == 50
+
+    @pytest.mark.asyncio
+    async def test_uninitialised_registry_falls_back_to_heuristic(self):
+        adapter = _make_adapter()
+        adapter._bus.publish = AsyncMock()
+        binding = make_binding({})
+        with patch("obs.core.registry.get_registry", side_effect=RuntimeError("not initialised")):
+            await adapter._fire_binding(binding, _cfg(value="1"))
+        assert _published(adapter).value is True
+
+
+class TestFireBindingIncompatibleValue:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("data_type", "raw"), [("BOOLEAN", "50"), ("INTEGER", "abc"), ("FLOAT", "abc"), ("DATE", "1"), ("TIME", "x")])
+    async def test_incompatible_value_is_not_published(self, data_type, raw):
+        adapter, binding, registry = _fire_adapter(data_type)
+        await _fire(adapter, binding, registry, raw)
+        adapter._bus.publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_incompatible_value_reports_type_mismatch_diagnostic(self):
+        adapter, binding, registry = _fire_adapter("BOOLEAN")
+        await _fire(adapter, binding, registry, "50")
+        registry.report_type_mismatch.assert_awaited_once()
+        kwargs = registry.report_type_mismatch.await_args.kwargs
+        assert kwargs["expected"] == "BOOLEAN"
+        assert kwargs["got"] == "str"
+        assert kwargs["value"] == "50"
+        assert kwargs["source_adapter"] == adapter.adapter_type
+
+    @pytest.mark.asyncio
+    async def test_missing_reporter_is_tolerated(self):
+        adapter, binding, registry = _fire_adapter("BOOLEAN")
+        del registry.report_type_mismatch
+        registry.mock_add_spec(["get"])
+        registry.get.return_value = SimpleNamespace(data_type="BOOLEAN")
+        await _fire(adapter, binding, registry, "50")
+        adapter._bus.publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_uninitialised_registry_skips_diagnostic(self):
+        adapter = _make_adapter()
+        adapter._bus.publish = AsyncMock()
+        binding = make_binding({})
+        # First call resolves the type (RuntimeError → UNKNOWN), so nothing is
+        # ever rejected — assert the reporting path degrades without raising.
+        with patch("obs.core.registry.get_registry", side_effect=RuntimeError("not initialised")):
+            await adapter._report_value_mismatch(binding, "BOOLEAN", "50")
+
+
+class TestResolveDataType:
+    def test_returns_declared_type(self):
+        registry = MagicMock()
+        registry.get.return_value = SimpleNamespace(data_type="FLOAT")
+        with patch("obs.core.registry.get_registry", return_value=registry):
+            assert ZeitschaltuhrAdapter._resolve_data_type(uuid.uuid4()) == "FLOAT"
+
+    def test_returns_unknown_for_missing_datapoint(self):
+        registry = MagicMock()
+        registry.get.return_value = None
+        with patch("obs.core.registry.get_registry", return_value=registry):
+            assert ZeitschaltuhrAdapter._resolve_data_type(uuid.uuid4()) == "UNKNOWN"
+
+    def test_returns_unknown_for_empty_data_type(self):
+        registry = MagicMock()
+        registry.get.return_value = SimpleNamespace(data_type="")
+        with patch("obs.core.registry.get_registry", return_value=registry):
+            assert ZeitschaltuhrAdapter._resolve_data_type(uuid.uuid4()) == "UNKNOWN"
+
+    def test_returns_unknown_when_registry_uninitialised(self):
+        with patch("obs.core.registry.get_registry", side_effect=RuntimeError("not initialised")):
+            assert ZeitschaltuhrAdapter._resolve_data_type(uuid.uuid4()) == "UNKNOWN"
