@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -143,3 +144,162 @@ def _is_hex(s: str) -> bool:
 
 # Register at import time
 _register_builtin_types()
+
+
+# ---------------------------------------------------------------------------
+# Value coercion helpers (shared by API and adapters — issue #1008)
+# ---------------------------------------------------------------------------
+
+#: Text literals accepted as boolean ``True`` in free-text value fields.
+TRUE_LITERALS: frozenset[str] = frozenset({"true", "1", "on", "ein", "yes", "ja"})
+#: Text literals accepted as boolean ``False`` in free-text value fields.
+FALSE_LITERALS: frozenset[str] = frozenset({"false", "0", "off", "aus", "no", "nein"})
+
+
+def coerce_value_for_type(value: Any, data_type: str) -> Any:
+    """Coerce an already-typed *value* to the Python type declared for *data_type*.
+
+    Raises ValueError when the value is incompatible so callers can return 422.
+    UNKNOWN datapoints accept any value unchanged.
+    """
+    defn = DataTypeRegistry.get(data_type)
+    if defn.name == "UNKNOWN":
+        return value
+
+    py_type = defn.python_type
+
+    if isinstance(value, py_type) and not (py_type is int and isinstance(value, bool)):
+        return value
+    if py_type is int and isinstance(value, bool):
+        return int(value)
+    if py_type is float and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if py_type is int and isinstance(value, float) and not isinstance(value, bool) and value == int(value):
+        return int(value)
+    if py_type is bool and isinstance(value, int) and not isinstance(value, bool):
+        return bool(value)
+    if py_type is datetime.date and isinstance(value, str):
+        try:
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            pass
+    if py_type is datetime.time and isinstance(value, str):
+        try:
+            return datetime.time.fromisoformat(value)
+        except ValueError:
+            pass
+    if py_type is datetime.datetime and isinstance(value, str):
+        try:
+            return datetime.datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    raise ValueError(f"Value {value!r} ({type(value).__name__}) is not compatible with data_type '{data_type}'")
+
+
+def parse_text_value_heuristic(raw: str) -> Any:
+    """Best-effort parse of a free-text value without a known target type.
+
+    Order: boolean literals → int → float → the stripped string itself.
+    Used for UNKNOWN datapoints, which accept any Python type.
+    """
+    stripped = raw.strip()
+    lowered = stripped.lower()
+    if lowered in TRUE_LITERALS:
+        return True
+    if lowered in FALSE_LITERALS:
+        return False
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        pass
+    return stripped
+
+
+def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
+    """Parse a free-text value *raw* into the Python type declared for *data_type*.
+
+    Unlike :func:`coerce_value_for_type` the input is always a string (e.g. the
+    Zeitschaltuhr switching value), so numeric/boolean/ISO literals have to be
+    parsed rather than merely converted.
+
+    * ``UNKNOWN``  → :func:`parse_text_value_heuristic`
+    * ``BOOLEAN``  → ``1/true/on/ein/yes/ja`` → ``True``; ``0/false/off/aus/no/nein`` → ``False``
+    * ``INTEGER``  → ``int``; integral floats and boolean literals (→ ``1``/``0``) are accepted
+    * ``FLOAT``    → ``float``; boolean literals map to ``1.0``/``0.0``
+    * ``STRING``   → the value verbatim, never interpreted as boolean or number
+    * ``DATE`` / ``TIME`` / ``DATETIME`` → ISO 8601 via ``fromisoformat``
+
+    Raises ValueError when *raw* cannot be represented in *data_type*.
+    """
+    defn = DataTypeRegistry.get(data_type)
+    name = defn.name
+
+    if name == "UNKNOWN":
+        return parse_text_value_heuristic(raw)
+    if name == "STRING":
+        return raw
+
+    stripped = raw.strip()
+    lowered = stripped.lower()
+
+    if name == "BOOLEAN":
+        if lowered in TRUE_LITERALS:
+            return True
+        if lowered in FALSE_LITERALS:
+            return False
+        raise ValueError(f"Value {raw!r} is not a valid BOOLEAN literal (expected one of 1/0, true/false, on/off, ein/aus)")
+
+    if name in ("INTEGER", "FLOAT"):
+        numeric = _parse_number(stripped, lowered)
+        if numeric is None:
+            raise ValueError(f"Value {raw!r} is not a valid {name} literal")
+        if name == "FLOAT":
+            return float(numeric)
+        if isinstance(numeric, float) and numeric != int(numeric):
+            raise ValueError(f"Value {raw!r} is not a valid INTEGER literal (fractional part would be lost)")
+        return int(numeric)
+
+    parser = _ISO_PARSERS.get(name)
+    if parser is not None:
+        try:
+            return parser(stripped)
+        except ValueError as exc:
+            raise ValueError(f"Value {raw!r} is not a valid ISO 8601 {name} literal") from exc
+
+    # Custom types registered by adapters: fall back to the generic coercion.
+    return coerce_value_for_type(stripped, data_type)
+
+
+_ISO_PARSERS: dict[str, Callable[[str], Any]] = {
+    "DATE": datetime.date.fromisoformat,
+    "TIME": datetime.time.fromisoformat,
+    "DATETIME": datetime.datetime.fromisoformat,
+}
+
+
+def _parse_number(stripped: str, lowered: str) -> int | float | None:
+    """Parse *stripped* as int/float, mapping boolean literals to 1/0.
+
+    ``nan`` / ``inf`` are rejected: they cannot be converted to INTEGER
+    (``int(inf)`` raises OverflowError) and serialize to the invalid JSON
+    literals ``NaN`` / ``Infinity`` on the MQTT value topic.
+    """
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        parsed = float(stripped)
+    except ValueError:
+        pass
+    else:
+        return parsed if math.isfinite(parsed) else None
+    if lowered in TRUE_LITERALS:
+        return 1
+    if lowered in FALSE_LITERALS:
+        return 0
+    return None
