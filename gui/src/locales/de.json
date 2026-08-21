@@ -1630,6 +1630,7 @@
       "statistics": "Statistik",
       "avg_multi": "Mittelwert",
       "string_concat": "String Verketten",
+      "string_replace": "String Suchen/Ersetzen",
       "heating_circuit": "Sommer/Winter (DIN)",
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Verbrauchszähler",
@@ -1773,6 +1774,7 @@
       "out": "Out",
       "in_n": "IN {n}",
       "data": "Daten",
+      "text": "Text",
       "body": "Body",
       "done": "Fertig",
       "running": "Läuft",
@@ -1800,6 +1802,10 @@
       "inputs": "{n} Eingänge",
       "parts": "{n} Teile",
       "rules": "{n} Regeln",
+      "replaceModes": {
+        "plain": "Plain",
+        "regex": "RegEx"
+      },
       "sequence": "{n} Schritte · {mode}",
       "hold": "→ halten",
       "filters": "{n} Filter",
@@ -1996,6 +2002,24 @@
         "staticSection": "Statischer Text pro Eingang",
         "staticHint": "Verbundene Eingänge überschreiben den statischen Text. Leere Felder ergeben einen leeren Teilstring.",
         "inputPlaceholder": "Eingang {n} …"
+      },
+      "stringReplace": {
+        "rules": "Regeln",
+        "moveUp": "Regel nach oben",
+        "moveDown": "Regel nach unten",
+        "orderHint": "Die Regeln werden von oben nach unten nacheinander angewendet — jede Regel arbeitet auf dem Ergebnis der vorherigen.",
+        "modes": {
+          "plain": "Suchtext (Plain)",
+          "regex": "Regulärer Ausdruck (RegEx)"
+        },
+        "searchLabel": "Suchen nach",
+        "searchPlaceholder": "z.B. alt",
+        "patternLabel": "RegEx-Muster",
+        "patternPlaceholder": "z.B. (\\d+)",
+        "replaceLabel": "Ersetzen durch",
+        "replacePlaceholder": "leer = Treffer entfernen",
+        "groupHint": "Gruppenverweise wie \\1 oder \\g<name> sind möglich.",
+        "replaceAll": "Alle Vorkommen ersetzen"
       },
       "rules": {
         "add": "+ Regel",
@@ -2428,6 +2452,7 @@
       "statistics": "Berechnet Min/Max/Mittelwert laufend über alle empfangenen Werte. Reset-Eingang setzt zurück.",
       "avg_multi": "Berechnet den Mittelwert von 2–20 Eingängen (aktuell) und gleitende Mittelwerte über Zeitfenster: 1 min, 1 h, 1 Tag, 7/14/30/180/365 Tage. Jeder neue Wert wird mit Zeitstempel gespeichert. Die Zeitfensterwerte bleiben nach einem Neustart erhalten (konfigurierbar).",
       "string_concat": "Verkettet 2–20 Texte zu einem Ergebnis. Jeder Eingang kann dynamisch verbunden oder statisch vorbelegt sein. Ist ein Eingang verbunden, hat er Vorrang vor dem statischen Text.",
+      "string_replace": "Ersetzt Treffer in einem Text. Mehrere Regeln werden in der angegebenen Reihenfolge nacheinander auf das Zwischenergebnis angewendet. Je Regel wählbar: Suchtext (Plain) oder regulärer Ausdruck (RegEx, Gruppenverweise wie \\1 im Ersetzen-Feld), Gross-/Kleinschreibung und alle oder nur das erste Vorkommen.",
       "heating_circuit": "Sommer/Winter-Umschaltung nach DIN (Mannheimer Methode). Eingang: Aussentemperatur. Messzeitpunkte (Erste-Kreuzung): T1 = anliegender Wert ab 07:00, T2 = ab 14:00, T3 = ab 21:00. Funktioniert auch wenn der Sensor die Messstunden nicht exakt trifft. Jeder Slot wird pro Tag nur einmal erfasst. Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. Monatsmittel: gleitender Mittelwert der letzten 31 Tagesmittel. Heizmodus EIN wenn T_avg < Grenztemperatur, AUS wenn T_avg ≥ Grenztemperatur + Hysterese. Fehlende Slots werden beim Start aus der Historie ergänzt. Zustand bleibt über Neustarts erhalten.",
       "min_max_tracker": "Verfolgt Minimum und Maximum über Zeitperioden (täglich, wöchentlich, monatlich, jährlich, absolut). Periodenwerte werden automatisch am Tages-/Wochen-/Monats-/Jahreswechsel zurückgesetzt.",
       "consumption_counter": "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) aus einem fortlaufenden Zählerwert. Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche.",

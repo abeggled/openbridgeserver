@@ -686,6 +686,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | Block | Inputs | Outputs | Description |
 |---|---|---|---|
 | **Concatenate** | 2–20 inputs (configurable) | Result | Joins multiple texts into one. Optional separator (e.g. `,` or ` `). |
+| **Search/Replace** | Text | Result | Replaces matches in a text using an ordered list of rules — add, reorder and delete them in the block. Each rule searches for a plain text or a regular expression (RegEx, group references such as `\1` in the replacement), optionally ignoring case and optionally only replacing the first occurrence. Rules run top to bottom, each on the result of the previous one. |
 
 #### Timer
 

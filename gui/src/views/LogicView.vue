@@ -430,7 +430,7 @@ const nodeTypeComponents = {
   // Timer extended
   operating_hours: _generic,
   // String
-  string_concat: _generic,
+  string_concat: _generic, string_replace: _generic,
   // Notification
   notify_message: _generic, notify_pushover: _generic, notify_sms: _generic, message_archive: _generic, wake_on_lan: _generic, host_check: _generic,
   // Integration

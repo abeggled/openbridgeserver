@@ -155,6 +155,7 @@ const NODE_DEFS = computed(() => ({
   },
   // String
   string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:t('logic.ports.result')}] },
+  string_replace:     { label: 'String Suchen/Ersetzen', color: '#0891b2', inputs: [{id:'text',label:t('logic.ports.text')}], outputs: [{id:'result',label:t('logic.ports.result')}] },
   // Integration
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'body',label:t('logic.ports.body')}],     outputs: [{id:'response',   label:t('logic.ports.response')},{id:'status',label:t('logic.ports.status')},{id:'success',label:t('logic.ports.success')}] },
   json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:t('logic.ports.data')}], outputs: [{id:'value',label:t('logic.ports.value')}] },
@@ -310,6 +311,13 @@ const summary = computed(() => {
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
     return t('logic.summary.inputs', { n: count })
+  }
+  if (props.type === 'string_replace') {
+    const rules = parseRowList(d.rules)
+    const modes = new Set(rules.map(rule => (String(rule.mode ?? '').trim().toLowerCase() === 'regex' ? 'regex' : 'plain')))
+    const mode = modes.size === 1 ? t(`logic.summary.replaceModes.${[...modes][0]}`) : null
+    const label = t('logic.summary.rules', { n: rules.length })
+    return mode ? `${label} · ${mode}` : label
   }
   if (props.type === 'string_concat') {
     const count = Math.max(2, Math.min(20, Number(d.count) || 2))

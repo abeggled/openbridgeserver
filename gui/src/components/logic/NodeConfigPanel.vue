@@ -549,6 +549,108 @@
       </div>
     </template>
 
+    <!-- ── string_replace: ordered search/replace rules (issue #871) ────── -->
+    <template v-else-if="isStringReplaceNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="flex items-center justify-between">
+          <span class="section-label">{{ $t('logic.nodeConfig.stringReplace.rules') }}</span>
+          <button
+            @click="addReplaceRule()"
+            class="btn-secondary btn-sm text-teal-400"
+            data-testid="replace-rule-add"
+          >{{ $t('logic.nodeConfig.rules.add') }}</button>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.stringReplace.orderHint') }}</p>
+
+        <div
+          v-for="(rule, i) in stringReplaceRules" :key="i"
+          class="rule-row"
+          :data-testid="`replace-rule-${i}`"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400 w-5 shrink-0">{{ i + 1 }}</span>
+            <select
+              :value="replaceRuleIsRegex(rule) ? 'regex' : 'plain'"
+              @change="updateReplaceRule(i, 'mode', $event.target.value)"
+              class="input text-xs flex-1"
+              :data-testid="`replace-rule-mode-${i}`"
+            >
+              <option value="plain">{{ $t('logic.nodeConfig.stringReplace.modes.plain') }}</option>
+              <option value="regex">{{ $t('logic.nodeConfig.stringReplace.modes.regex') }}</option>
+            </select>
+            <button
+              @click="moveReplaceRule(i, -1)"
+              class="text-xs text-slate-500 hover:text-slate-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="i === 0"
+              :title="$t('logic.nodeConfig.stringReplace.moveUp')"
+              :data-testid="`replace-rule-up-${i}`"
+            >↑</button>
+            <button
+              @click="moveReplaceRule(i, 1)"
+              class="text-xs text-slate-500 hover:text-slate-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="i === stringReplaceRules.length - 1"
+              :title="$t('logic.nodeConfig.stringReplace.moveDown')"
+              :data-testid="`replace-rule-down-${i}`"
+            >↓</button>
+            <button
+              @click="removeReplaceRule(i)"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="stringReplaceRules.length <= 1"
+              :title="$t('logic.nodeConfig.rules.remove')"
+              :data-testid="`replace-rule-remove-${i}`"
+            >×</button>
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ replaceRuleIsRegex(rule) ? $t('logic.nodeConfig.stringReplace.patternLabel') : $t('logic.nodeConfig.stringReplace.searchLabel') }}</label>
+            <input
+              :value="rule.search ?? ''"
+              @input="updateReplaceRule(i, 'search', $event.target.value)"
+              class="input text-xs font-mono"
+              :placeholder="replaceRuleIsRegex(rule) ? $t('logic.nodeConfig.stringReplace.patternPlaceholder') : $t('logic.nodeConfig.stringReplace.searchPlaceholder')"
+              :data-testid="`replace-rule-search-${i}`"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.stringReplace.replaceLabel') }}</label>
+            <input
+              :value="rule.replace ?? ''"
+              @input="updateReplaceRule(i, 'replace', $event.target.value)"
+              class="input text-xs font-mono"
+              :placeholder="$t('logic.nodeConfig.stringReplace.replacePlaceholder')"
+              :data-testid="`replace-rule-replacement-${i}`"
+            />
+            <p v-if="replaceRuleIsRegex(rule)" class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.stringReplace.groupHint') }}</p>
+          </div>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="replaceRuleFlag(rule, 'case_sensitive')"
+              @change="updateReplaceRule(i, 'case_sensitive', $event.target.checked)"
+              class="accent-teal-500"
+              :data-testid="`replace-rule-case-${i}`"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.rules.caseSensitive') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="replaceRuleFlag(rule, 'replace_all')"
+              @change="updateReplaceRule(i, 'replace_all', $event.target.checked)"
+              class="accent-teal-500"
+              :data-testid="`replace-rule-all-${i}`"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.stringReplace.replaceAll') }}</span>
+          </label>
+        </div>
+      </div>
+    </template>
+
     <!-- ── decision / value_mapping ─────────────────────────────────────── -->
     <template v-else-if="isDecisionNode || isValueMappingNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1574,6 +1676,7 @@ const isExtractorNode  = computed(() =>
 )
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
+const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
@@ -1786,6 +1889,73 @@ function removeConditionRow(i) {
 
 function isTextCondition(operator) {
   return ['text_eq', 'contains', 'starts_with', 'ends_with', 'regex'].includes(operator)
+}
+
+// ── string_replace: ordered search/replace rules (issue #871) ─────────────
+// Rules are persisted as a JSON string (like decision/value_mapping) so the
+// list stays one config field; order is meaningful — each rule works on the
+// result of its predecessor.
+function _defaultReplaceRule() {
+  return { search: '', replace: '', mode: 'plain', case_sensitive: true, replace_all: true }
+}
+
+const stringReplaceRules = computed(() => {
+  const rows = _parseRows(localData.value.rules)
+  return rows.length ? rows : [_defaultReplaceRule()]
+})
+
+// Same normalisation as the executor: anything that is not "regex" (after
+// trimming and lowercasing) is a plain search, so a rule imported as "REGEX"
+// is not shown as a plain one while being executed as a regular expression.
+function replaceRuleIsRegex(rule) {
+  return String(rule.mode ?? '').trim().toLowerCase() === 'regex'
+}
+
+// Mirrors GraphExecutor._to_bool for the two rule flags that default to true.
+// A checkbox bound to `value !== false` would show "on" for an imported rule
+// carrying null, 0, "false" or "off" — all of which the executor reads as off.
+const FALSY_RULE_FLAGS = ['0', 'false', 'no', 'off', '']
+
+function replaceRuleFlag(rule, key) {
+  const value = rule[key]
+  if (value === undefined) return true
+  if (typeof value === 'string') return !FALSY_RULE_FLAGS.includes(value.trim().toLowerCase())
+  return Boolean(value)
+}
+
+function _cloneReplaceRules() {
+  return stringReplaceRules.value.map(rule => ({ ...rule }))
+}
+
+function _saveReplaceRules(rows) {
+  localData.value.rules = JSON.stringify(rows)
+  emitUpdate()
+}
+
+function addReplaceRule() {
+  _saveReplaceRules([..._cloneReplaceRules(), _defaultReplaceRule()])
+}
+
+function updateReplaceRule(i, key, value) {
+  const rows = _cloneReplaceRules()
+  if (!rows[i]) return
+  rows[i][key] = value
+  _saveReplaceRules(rows)
+}
+
+function removeReplaceRule(i) {
+  const rows = _cloneReplaceRules()
+  if (rows.length <= 1 || !rows[i]) return
+  rows.splice(i, 1)
+  _saveReplaceRules(rows)
+}
+
+function moveReplaceRule(i, delta) {
+  const rows = _cloneReplaceRules()
+  const target = i + delta
+  if (target < 0 || target >= rows.length) return
+  ;[rows[i], rows[target]] = [rows[target], rows[i]]
+  _saveReplaceRules(rows)
 }
 
 // ── Extractor: preview + path helpers ─────────────────────────────────────

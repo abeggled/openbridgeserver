@@ -682,6 +682,7 @@ Entscheidung und Zuordnung teilen dieselben Bedingungsoperatoren: gleich, unglei
 | Block | Eingänge | Ausgänge | Beschreibung |
 |---|---|---|---|
 | **Text verbinden** | 2–20 Eingänge (konfigurierbar) | Ergebnis | Verbindet mehrere Texte zu einem. Optionales Trennzeichen (z. B. `,` oder ` `). |
+| **Suchen/Ersetzen** | Text | Ergebnis | Ersetzt Treffer in einem Text anhand einer geordneten Regelliste — Regeln lassen sich im Block hinzufügen, verschieben und löschen. Je Regel wird nach einem Suchtext (Plain) oder einem regulären Ausdruck (RegEx, Gruppenverweise wie `\1` im Ersetzen-Feld) gesucht, wahlweise ohne Beachtung der Gross-/Kleinschreibung und wahlweise nur für das erste Vorkommen. Die Regeln werden von oben nach unten nacheinander angewendet, jede auf dem Ergebnis der vorherigen. |
 
 #### Timer
 

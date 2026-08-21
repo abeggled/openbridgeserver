@@ -1630,6 +1630,7 @@
       "statistics": "Statistics",
       "avg_multi": "Average",
       "string_concat": "Concatenate",
+      "string_replace": "Search/Replace",
       "heating_circuit": "Summer/Winter (DIN)",
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Energy counter",
@@ -1773,6 +1774,7 @@
       "out": "Out",
       "in_n": "IN {n}",
       "data": "Data",
+      "text": "Text",
       "body": "Body",
       "done": "Done",
       "running": "Running",
@@ -1800,6 +1802,10 @@
       "inputs": "{n} Inputs",
       "parts": "{n} Parts",
       "rules": "{n} Rules",
+      "replaceModes": {
+        "plain": "Plain",
+        "regex": "RegEx"
+      },
       "sequence": "{n} steps · {mode}",
       "hold": "→ hold",
       "filters": "{n} Filters",
@@ -1996,6 +2002,24 @@
         "staticSection": "Static text per input",
         "staticHint": "Connected inputs override static text. Empty fields produce an empty substring.",
         "inputPlaceholder": "Input {n} …"
+      },
+      "stringReplace": {
+        "rules": "Rules",
+        "moveUp": "Move rule up",
+        "moveDown": "Move rule down",
+        "orderHint": "Rules are applied one after another from top to bottom — each rule works on the result of the previous one.",
+        "modes": {
+          "plain": "Search text (plain)",
+          "regex": "Regular expression (RegEx)"
+        },
+        "searchLabel": "Search for",
+        "searchPlaceholder": "e.g. old",
+        "patternLabel": "RegEx pattern",
+        "patternPlaceholder": "e.g. (\\d+)",
+        "replaceLabel": "Replace with",
+        "replacePlaceholder": "empty = remove match",
+        "groupHint": "Group references such as \\1 or \\g<name> are supported.",
+        "replaceAll": "Replace all occurrences"
       },
       "rules": {
         "add": "+ Rule",
@@ -2428,6 +2452,7 @@
       "statistics": "Continuously calculates Min/Max/Average over all received values. Reset input resets the statistics.",
       "avg_multi": "Calculates the average of 2–20 inputs (current) and moving averages over time windows: 1 min, 1 h, 1 day, 7/14/30/180/365 days. Each new value is stored with a timestamp. Time window values are retained after restart (configurable).",
       "string_concat": "Concatenates 2–20 texts into one result. Each input can be dynamically connected or statically preset. A connected input takes precedence over the static text.",
+      "string_replace": "Replaces matches in a text. Several rules are applied one after another, in the given order, to the intermediate result. Per rule: plain search text or regular expression (RegEx, group references such as \\1 in the replace field), case sensitivity, and all or only the first occurrence.",
       "heating_circuit": "Summer/winter switching according to DIN (Mannheim method). Input: outdoor temperature. Measurement times (first crossing): T1 = value from 07:00, T2 = from 14:00, T3 = from 21:00. Works even if the sensor does not hit the measurement hours exactly. Each slot is recorded only once per day. Daily average: T_avg = (T1 + T2 + 2×T3) / 4. Monthly average: moving average of the last 31 daily averages. Heating mode ON when T_avg < threshold, OFF when T_avg ≥ threshold + hysteresis. Missing slots are filled from history on startup. State is retained across restarts.",
       "min_max_tracker": "Tracks minimum and maximum over time periods (daily, weekly, monthly, yearly, absolute). Period values are automatically reset at day/week/month/year boundaries.",
       "consumption_counter": "Calculates consumption values (daily, weekly, monthly, yearly) from a continuously incrementing counter value. Also stores the previous period's consumption for comparisons.",

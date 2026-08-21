@@ -3879,6 +3879,7 @@ class LogicManager:
                 "math_map",
                 "clamp",
                 "string_concat",
+                "string_replace",
                 "json_extractor",
                 "xml_extractor",
                 "substring_extractor",
