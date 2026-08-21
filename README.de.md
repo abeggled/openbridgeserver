@@ -1616,7 +1616,27 @@ Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder
 | `every_minute` | `true`/`false` | Jede Minute auslösen |
 | `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten an Feiertagen |
 | `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten in Ferienperioden |
-| `value` | Text | Wert der beim Auslösen geschrieben wird (Standard: `"1"`) |
+| `value` | Text | Wert der beim Auslösen geschrieben wird (Standard: `"1"`). Wird gegen den `data_type` des Ziel-Objekts geparst — siehe unten. |
+
+**Schaltwert und Objekttyp:**
+
+Der Schaltwert wird als Text gespeichert und beim Auslösen in den `data_type` des Ziel-Objekts
+umgewandelt. Beide Frontends zeigen ein passendes Eingabefeld für das verknüpfte Objekt und
+lehnen einen unpassenden Wert bereits beim Speichern der Verknüpfung ab (HTTP 422).
+
+| Objekttyp | Erlaubte Schaltwerte | Ergebnis |
+|---|---|---|
+| `BOOLEAN` | `1`/`0`, `true`/`false`, `on`/`off`, `ein`/`aus`, `yes`/`no`, `ja`/`nein` | `True` / `False` |
+| `INTEGER` | Ganzzahl (`50`, `-3`, `0`); boolesche Literale werden zu `1`/`0` | `int` |
+| `FLOAT` | Zahl (`21.5`, `0`, `50`); boolesche Literale werden zu `1.0`/`0.0` | `float` |
+| `STRING` | Beliebiger Text, wörtlich übernommen — auch `on`, `1` oder `ein` | `str` |
+| `DATE` | ISO-8601-Datum, z. B. `2026-12-24` | `date` |
+| `TIME` | ISO-8601-Uhrzeit, z. B. `08:00:00` | `time` |
+| `DATETIME` | ISO-8601-Zeitstempel, z. B. `2026-12-24T08:00:00` | `datetime` |
+| `UNKNOWN` | Beliebiger Text | Heuristik: boolesches Literal → `int` → `float` → `str` |
+
+Ein nicht konvertierbarer Wert wird nicht publiziert; es wird eine Warnung geloggt und ein
+`type_mismatch`-Diagnostic am Datenpunkt hinterlegt.
 
 **Feiertagsmodi:**
 

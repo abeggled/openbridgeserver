@@ -1619,7 +1619,27 @@ Generates time-controlled events without external hardware — for time-of-day o
 | `every_minute` | `true`/`false` | Trigger every minute |
 | `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Behavior on holidays |
 | `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Behavior during vacation periods |
-| `value` | Text | Value written when triggered (default: `"1"`) |
+| `value` | Text | Value written when triggered (default: `"1"`). Parsed against the target object's `data_type` — see below. |
+
+**Switching value and object type:**
+
+The switching value is stored as text and converted to the target object's `data_type` when the
+schedule point fires. Both frontends render a matching input control for the bound object and
+reject an incompatible value when the binding is saved (HTTP 422).
+
+| Object type | Accepted switching values | Result |
+|---|---|---|
+| `BOOLEAN` | `1`/`0`, `true`/`false`, `on`/`off`, `ein`/`aus`, `yes`/`no`, `ja`/`nein` | `True` / `False` |
+| `INTEGER` | Whole number (`50`, `-3`, `0`); boolean literals map to `1`/`0` | `int` |
+| `FLOAT` | Number (`21.5`, `0`, `50`); boolean literals map to `1.0`/`0.0` | `float` |
+| `STRING` | Any text, taken literally — including `on`, `1` or `ein` | `str` |
+| `DATE` | ISO 8601 date, e.g. `2026-12-24` | `date` |
+| `TIME` | ISO 8601 time, e.g. `08:00:00` | `time` |
+| `DATETIME` | ISO 8601 timestamp, e.g. `2026-12-24T08:00:00` | `datetime` |
+| `UNKNOWN` | Any text | Heuristic: boolean literal → `int` → `float` → `str` |
+
+A value that cannot be converted is not published; a warning is logged and a `type_mismatch`
+diagnostic is recorded on the data point.
 
 **Holiday modes:**
 

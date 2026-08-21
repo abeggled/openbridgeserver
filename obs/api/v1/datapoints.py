@@ -156,45 +156,10 @@ class DataPointDuplicateIn(BaseModel):
 
 
 def _coerce_value_for_type(value: Any, data_type: str) -> Any:
-    """Coerce *value* to the Python type declared for *data_type*.
+    """Thin alias for the shared coercion helper (see ``obs.models.types``)."""
+    from obs.models.types import coerce_value_for_type
 
-    Raises ValueError when the value is incompatible so callers can return 422.
-    UNKNOWN datapoints accept any value unchanged.
-    """
-    from obs.models.types import DataTypeRegistry
-
-    defn = DataTypeRegistry.get(data_type)
-    if defn.name == "UNKNOWN":
-        return value
-
-    py_type = defn.python_type
-
-    if isinstance(value, py_type) and not (py_type is int and isinstance(value, bool)):
-        return value
-    if py_type is int and isinstance(value, bool):
-        return int(value)
-    if py_type is float and isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    if py_type is int and isinstance(value, float) and not isinstance(value, bool) and value == int(value):
-        return int(value)
-    if py_type is bool and isinstance(value, int) and not isinstance(value, bool):
-        return bool(value)
-    if py_type is datetime.date and isinstance(value, str):
-        try:
-            return datetime.date.fromisoformat(value)
-        except ValueError:
-            pass
-    if py_type is datetime.time and isinstance(value, str):
-        try:
-            return datetime.time.fromisoformat(value)
-        except ValueError:
-            pass
-    if py_type is datetime.datetime and isinstance(value, str):
-        try:
-            return datetime.datetime.fromisoformat(value)
-        except ValueError:
-            pass
-    raise ValueError(f"Value {value!r} ({type(value).__name__}) is not compatible with data_type '{data_type}'")
+    return coerce_value_for_type(value, data_type)
 
 
 def _enrich(dp: Any) -> DataPointOut:

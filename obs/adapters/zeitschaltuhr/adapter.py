@@ -51,8 +51,12 @@ Binding-Konfiguration (1 Binding = 1 Schaltpunkt):
 
   ─── Ausgabe ─────────────────────────────────────────────────────────────────
   value:  Ausgabewert beim Schalten (default: "1")
-          Gültige Werte: "0"/"1", "true"/"false", "on"/"off", "ein"/"aus",
-          Ganzzahl, Dezimalzahl oder beliebiger String
+          Wird gegen den ``data_type`` des Ziel-Datenpunkts geparst (Issue #1008):
+            BOOLEAN            — "0"/"1", "true"/"false", "on"/"off", "ein"/"aus"
+            INTEGER / FLOAT    — Zahl (boolesche Literale werden zu 1/0)
+            STRING             — Wert wörtlich, keine Bool-/Zahl-Interpretation
+            DATE/TIME/DATETIME — ISO 8601 (z.B. "2026-12-24", "08:00:00")
+            UNKNOWN            — Heuristik: bool → int → float → str
 """
 
 from __future__ import annotations
@@ -336,7 +340,11 @@ class ZeitschaltuhrBindingConfig(BaseModel):
     # ── Ausgabe ───────────────────────────────────────────────────────────────
     value: str = Field(
         "1",
-        description=("Ausgabewert beim Schalten. Erlaubt: 0/1, true/false, on/off, ein/aus, Ganzzahl, Dezimalzahl oder String"),
+        description=(
+            "Ausgabewert beim Schalten — wird gegen den Objekttyp des Ziel-Datenpunkts geparst: "
+            "BOOLEAN 0/1, true/false, on/off, ein/aus · INTEGER/FLOAT Zahl · STRING wörtlich · "
+            "DATE/TIME/DATETIME ISO 8601"
+        ),
     )
 
 
@@ -648,28 +656,63 @@ class ZeitschaltuhrAdapter(AdapterBase):
     # Publish helper
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_data_type(datapoint_id: Any) -> str:
+        """Liefert den ``data_type`` des Ziel-Datenpunkts (``UNKNOWN``, wenn nicht auflösbar)."""
+        try:
+            from obs.core.registry import get_registry
+
+            dp = get_registry().get(datapoint_id)
+        except RuntimeError:
+            return "UNKNOWN"
+        if dp is None:
+            return "UNKNOWN"
+        return getattr(dp, "data_type", None) or "UNKNOWN"
+
+    async def _report_value_mismatch(self, binding: Any, data_type: str, raw: str) -> None:
+        """Hinterlegt ein ``type_mismatch``-Diagnostic für einen nicht koerzierbaren Schaltwert."""
+        try:
+            from obs.core.registry import get_registry
+
+            registry = get_registry()
+        except RuntimeError:
+            return
+        reporter = getattr(registry, "report_type_mismatch", None)
+        if reporter is None:
+            return
+        await reporter(
+            binding.datapoint_id,
+            expected=data_type,
+            got="str",
+            source_adapter=self.adapter_type,
+            value=raw,
+        )
+
     async def _fire_binding(self, binding: Any, cfg: ZeitschaltuhrBindingConfig) -> None:
         from obs.core.event_bus import DataValueEvent
+        from obs.models.types import coerce_text_value_for_type
 
-        raw = cfg.value.strip()
-        if raw.lower() in ("true", "1", "on", "ein"):
-            value: Any = True
-        elif raw.lower() in ("false", "0", "off", "aus"):
-            value = False
-        else:
-            try:
-                value = int(raw)
-            except ValueError:
-                try:
-                    value = float(raw)
-                except ValueError:
-                    value = raw
+        data_type = self._resolve_data_type(binding.datapoint_id)
+        try:
+            value: Any = coerce_text_value_for_type(cfg.value, data_type)
+        except ValueError as exc:
+            logger.warning(
+                "Zeitschaltuhr '%s': Binding %s — Schaltwert %r passt nicht zum Objekttyp %s: %s",
+                self._instance_name,
+                binding.id,
+                cfg.value,
+                data_type,
+                exc,
+            )
+            await self._report_value_mismatch(binding, data_type, cfg.value)
+            return
 
         logger.debug(
-            "Zeitschaltuhr '%s': Binding %s → %r",
+            "Zeitschaltuhr '%s': Binding %s → %r (%s)",
             self._instance_name,
             binding.id,
             value,
+            data_type,
         )
         await self._bus.publish(
             DataValueEvent(
