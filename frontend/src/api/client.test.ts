@@ -411,6 +411,35 @@ describe('access token refresh', () => {
     expect(refreshCalls(fetchMock)).toHaveLength(1)
   })
 
+  it('does not clear a replacement session when the retried import returns 401', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const alice = fakeJwt({ sub: 'alice', exp: now + 3600 })
+    const aliceRenewed = fakeJwt({ sub: 'alice', exp: now + 7200 })
+    const bob = fakeJwt({ sub: 'bob', exp: now + 7200 })
+    localStorage.setItem('visu_jwt', alice)
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+
+    let attempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: aliceRenewed, refresh_token: 'refresh-alice-2' })
+      }
+      attempts += 1
+      if (attempts > 1) {
+        localStorage.setItem('visu_jwt', bob)
+        localStorage.setItem('visu_refresh_token', 'refresh-bob')
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(
+      visuBackgrounds.import([new File(['x'], 'a.png', { type: 'image/png' })]),
+    ).rejects.toThrow('Unauthorized')
+
+    expect(localStorage.getItem('visu_jwt')).toBe(bob)
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-bob')
+  })
+
   it('logs out when a multipart background import cannot be renewed', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
     const unauthorized = vi.fn()

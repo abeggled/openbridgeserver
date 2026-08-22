@@ -406,12 +406,18 @@ function mayClearSession(usedJwt: string | null): boolean {
   return sameAccount(usedJwt, current)
 }
 
-async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const send = (jwtOverride?: string) => fetch(`${BASE}${path}`, {
-    ...opts,
-    headers: buildHeaders(opts, jwtOverride),
-  })
+type RenewalOptions = { silent401?: boolean; noAuthRefresh?: boolean }
 
+/**
+ * Request absetzen und bei 401 einmal mit erneuertem Token wiederholen.
+ *
+ * Einziger Ort für die Sitzungsregeln — JSON- und Multipart-Requests teilen
+ * ihn sich, damit nicht wieder eine Kopie hinterherhinkt.
+ */
+async function sendWithRenewal(
+  send: (jwtOverride?: string) => Promise<Response>,
+  opts: RenewalOptions = {},
+): Promise<Response> {
   const jwtBefore = getJwt()
   let usedJwt = jwtBefore
   let res = await send()
@@ -429,15 +435,26 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     }
   }
 
+  if (res.status === 401 && !opts.silent401) {
+    // Nur aufräumen, wenn die Sitzung wirklich hin ist — ein 5xx oder ein
+    // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen —
+    // und nur, wenn sie noch uns gehört.
+    if (sessionIsOver && mayClearSession(usedJwt)) clearAuthTokens()
+    // Redirect zur Login-Seite — der Router fängt das auf
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+  }
+  return res
+}
+
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const send = (jwtOverride?: string) => fetch(`${BASE}${path}`, {
+    ...opts,
+    headers: buildHeaders(opts, jwtOverride),
+  })
+
+  const res = await sendWithRenewal(send, opts)
+
   if (res.status === 401) {
-    if (!opts.silent401) {
-      // Nur aufräumen, wenn die Sitzung wirklich hin ist — ein 5xx oder ein
-      // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen —
-      // und nur, wenn sie noch uns gehört.
-      if (sessionIsOver && mayClearSession(usedJwt)) clearAuthTokens()
-      // Redirect zur Login-Seite — der Router fängt das auf
-      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
-    }
     throw new ApiRequestError('Unauthorized', 401)
   }
 
@@ -741,18 +758,9 @@ export const visuBackgrounds = {
       })
     }
 
-    const jwtBefore = getJwt()
-    let res = await send()
-    let sessionIsOver = true
+    const res = await sendWithRenewal(send)
     if (res.status === 401) {
-      const renewal = await renewedTokenFor(jwtBefore)
-      if (renewal.token) res = await send(renewal.token)
-      else sessionIsOver = renewal.sessionIsOver
-    }
-    if (res.status === 401) {
-      if (sessionIsOver) clearAuthTokens()
-      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
-      throw new Error('Unauthorized')
+      throw new ApiRequestError('Unauthorized', 401)
     }
     if (!res.ok) {
       const body = await res.json().catch(() => null)

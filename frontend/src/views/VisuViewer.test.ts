@@ -126,6 +126,23 @@ describe('VisuViewer session end', () => {
     wrapper.unmount()
   })
 
+  it('redirects when the node is missing from the anonymously filtered tree', async () => {
+    // Kaltstart mit abgelaufenem Token: der private Knoten fehlt im Baum, also
+    // liefe resolveAccessNode() auf den Default 'public' hinaus.
+    mocks.store.nodes = []
+    mocks.loadBreadcrumb.mockRejectedValue(new Error('common.loadError'))
+    const wrapper = mountViewer()
+    await flushPromises()
+    mocks.push.mockClear()
+
+    mocks.getJwt.mockReturnValue(null)
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    await flushPromises()
+
+    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    wrapper.unmount()
+  })
+
   it('leaves a public page alone when an unrelated request is rejected', async () => {
     mocks.node.access = 'public'
     const wrapper = mountViewer()
