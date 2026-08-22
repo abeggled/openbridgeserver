@@ -214,13 +214,51 @@ describe('access token refresh', () => {
     expect(localStorage.getItem('visu_jwt')).toBe('jwt-old')
   })
 
-  it('gives up on the request when the refresh cannot reach the server', async () => {
+  it('keeps the session when the refresh cannot reach the server', async () => {
     const fetchMock = stubAuthFetch(() => Promise.reject(new TypeError('offline')))
 
     await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
 
+    // Ein Netzwerkfehler sagt nichts über die Gültigkeit des Refresh-Tokens —
+    // ihn zu löschen würde einen vollen Login erzwingen (Codex-Review).
     expect(refreshCalls(fetchMock)).toHaveLength(1)
-    expect(localStorage.getItem('visu_jwt')).toBeNull()
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-old')
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
+  })
+
+  it('keeps the session when the refresh answers with an unusable body', async () => {
+    stubAuthFetch(() => jsonResponse({ token_type: 'bearer' }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    // Eine kaputte Antwort macht den Refresh-Token nicht ungültig
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-old')
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
+  })
+
+  it('leaves a newly started session alone when a stale refresh returns', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        // Anderer Tab meldet sich neu an, während dieser Refresh unterwegs ist
+        localStorage.setItem('visu_jwt', 'jwt-new-session')
+        localStorage.setItem('visu_refresh_token', 'refresh-new-session')
+        return jsonResponse({ access_token: 'jwt-stale', refresh_token: 'refresh-stale' })
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-new-session')
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-new-session')
+  })
+
+  it('keeps the session when the refresh hits a server error', async () => {
+    stubAuthFetch(() => new Response(null, { status: 503 }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
   })
 
   it('ignores a refresh response without an access token', async () => {
@@ -352,6 +390,49 @@ describe('refresh across session boundaries (Codex review)', () => {
     expect(deletes).toHaveLength(2)
   })
 })
+
+  it('does not replay a multipart import under a different account', async () => {
+    const alice = fakeJwt({ sub: 'alice', exp: Math.floor(Date.now() / 1000) + 3600 })
+    const bob = fakeJwt({ sub: 'bob', exp: Math.floor(Date.now() / 1000) + 3600 })
+    localStorage.setItem('visu_jwt', alice)
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: bob, refresh_token: 'refresh-bob' })
+      }
+      localStorage.setItem('visu_jwt', bob)
+      return new Response(null, { status: 401 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      visuBackgrounds.import([new File(['x'], 'a.png', { type: 'image/png' })]),
+    ).rejects.toThrow('Unauthorized')
+
+    const imports = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/backgrounds/import'))
+    expect(imports).toHaveLength(1)
+    // Bobs Anmeldung darf durch Alices veralteten Request nicht abgeräumt werden
+    expect(localStorage.getItem('visu_jwt')).toBe(bob)
+  })
+
+  it('leaves the other account signed in when a stale request is rejected', async () => {
+    const alice = fakeJwt({ sub: 'alice', exp: Math.floor(Date.now() / 1000) + 3600 })
+    const bob = fakeJwt({ sub: 'bob', exp: Math.floor(Date.now() / 1000) + 3600 })
+    localStorage.setItem('visu_jwt', alice)
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      localStorage.setItem('visu_jwt', bob)
+      localStorage.setItem('visu_refresh_token', 'refresh-bob')
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_jwt')).toBe(bob)
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-bob')
+  })
 
 describe('setTokens', () => {
   beforeEach(() => localStorage.clear())

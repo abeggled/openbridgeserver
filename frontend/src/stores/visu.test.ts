@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { useVisuStore } from './visu'
 import { cancelTokenRefresh } from '@/api/client'
@@ -80,8 +81,69 @@ describe('visu store auth state', () => {
 
     localStorage.setItem('visu_jwt', 'jwt-2')
     notifyAuthTokenRefreshed()
+    await flushPromises()
 
     expect(store.isLoggedIn).toBe(true)
     expect(store.isAdmin).toBe(true)
+  })
+
+  it('picks up revoked admin rights on the next token rotation', async () => {
+    let isAdmin = true
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: 'u1', username: 'admin', is_admin: isAdmin })))
+    const store = useVisuStore()
+    await store.login('jwt-1', 'refresh-1')
+    expect(store.isAdmin).toBe(true)
+
+    // Rechte werden entzogen, während die Sitzung offen bleibt
+    isAdmin = false
+    localStorage.setItem('visu_jwt', 'jwt-2')
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(false)
+    expect(localStorage.getItem('visu_is_admin')).toBe('0')
+  })
+
+  it('picks up granted admin rights on the next token rotation', async () => {
+    let isAdmin = false
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: 'u1', username: 'user', is_admin: isAdmin })))
+    const store = useVisuStore()
+    await store.login('jwt-1', 'refresh-1')
+    expect(store.isAdmin).toBe(false)
+
+    isAdmin = true
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(true)
+  })
+
+  it('keeps the cached role when the identity lookup is unreachable', async () => {
+    let reachable = true
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (!reachable) throw new TypeError('offline')
+      return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+    }))
+    const store = useVisuStore()
+    await store.login('jwt-1', 'refresh-1')
+
+    reachable = false
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(true)
+  })
+
+  it('drops the role when the tokens are gone at rotation time', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: 'u1', username: 'admin', is_admin: true })))
+    const store = useVisuStore()
+    await store.login('jwt-1', 'refresh-1')
+
+    localStorage.clear()
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    expect(store.isLoggedIn).toBe(false)
+    expect(store.isAdmin).toBe(false)
   })
 })

@@ -61,16 +61,42 @@ export const useVisuStore = defineStore('visu', () => {
   const isLoggedIn = computed(() => !!_jwt.value)
   const isAdmin = computed(() => _isAdmin.value)
 
-  /** Spiegel wieder an den localStorage angleichen (nach Refresh bzw. erzwungenem Logout) */
+  /** Spiegel wieder an den localStorage angleichen (nach erzwungenem Logout) */
   function syncAuthState() {
     _jwt.value = getJwt()
     _isAdmin.value = getIsAdmin()
   }
 
+  /**
+   * Nach einer Token-Erneuerung den Admin-Status neu erfragen.
+   *
+   * Die Sitzung läuft jetzt bis zu 30 Tage durch, statt täglich über einen
+   * neuen Login zu gehen. Ein aus dem localStorage kopiertes Flag bliebe
+   * dadurch beliebig lange stehen: einem entzogenen Admin blieben die
+   * Bedienelemente erhalten (deren Requests dann mit 403 scheitern), einem neu
+   * ernannten fehlten sie bis zum nächsten manuellen Login.
+   */
+  async function refreshAuthState() {
+    _jwt.value = getJwt()
+    if (!_jwt.value) {
+      _isAdmin.value = false
+      return
+    }
+    try {
+      const me = await authApi.me()
+      setIsAdmin(me.is_admin)
+      _isAdmin.value = me.is_admin
+    } catch {
+      // Abfrage nicht möglich — zwischengespeicherten Stand behalten; eine
+      // wirklich beendete Sitzung räumt visu:unauthorized ab.
+      _isAdmin.value = getIsAdmin()
+    }
+  }
+
   // Ein fehlgeschlagener Refresh räumt beide Tokens und das Admin-Flag ab; ein
   // erfolgreicher rotiert den JWT. Beides muss im reaktiven Spiegel ankommen.
   window.addEventListener('visu:unauthorized', syncAuthState)
-  window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, syncAuthState)
+  window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, () => { void refreshAuthState() })
 
   async function login(accessToken: string, refreshToken?: string | null) {
     setTokens(accessToken, refreshToken)

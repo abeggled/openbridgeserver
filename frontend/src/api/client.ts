@@ -100,20 +100,27 @@ function clearIsAdmin(): void {
 // deshalb genau einen In-Flight-Refresh.
 
 /**
- * - `renewed`     — neuer Access-Token liegt vor
- * - `rejected`    — Refresh-Token endgültig ungültig; die Sitzung ist vorbei
- * - `transient`   — Server nicht erreichbar, 5xx oder Rate-Limit; erneut versuchen
- * - `unavailable` — kein Refresh-Token, unbrauchbare Antwort, oder die Anmeldung
- *                   hat sich während des Requests geändert
+ * - `renewed`    — neuer Access-Token liegt vor
+ * - `rejected`   — Refresh-Token abgelehnt; die Sitzung ist endgültig vorbei
+ * - `missing`    — gar kein Refresh-Token gespeichert; nichts zu erneuern
+ * - `transient`  — Server nicht erreichbar, 5xx, Rate-Limit oder unbrauchbare
+ *                  Antwort; Tokens behalten und später erneut versuchen
+ * - `superseded` — eine andere Anmeldung hat die Tokens übernommen; sie gehören
+ *                  nicht mehr zu diesem Request und dürfen nicht angefasst werden
  */
-type RefreshOutcome = 'renewed' | 'rejected' | 'transient' | 'unavailable'
+type RefreshOutcome = 'renewed' | 'rejected' | 'missing' | 'transient' | 'superseded'
 type RefreshResult = { token: string | null; outcome: RefreshOutcome }
+
+/** Nur diese Ausgänge bedeuten, dass die gespeicherte Sitzung wertlos ist */
+function endsSession(outcome: RefreshOutcome): boolean {
+  return outcome === 'rejected' || outcome === 'missing'
+}
 
 let _refreshInFlight: Promise<RefreshResult> | null = null
 
 async function performRefresh(): Promise<RefreshResult> {
   const refreshToken = getRefreshToken()
-  if (!refreshToken) return { token: null, outcome: 'unavailable' }
+  if (!refreshToken) return { token: null, outcome: 'missing' }
   let res: Response
   try {
     res = await fetch(`${BASE}/auth/refresh`, {
@@ -130,10 +137,12 @@ async function performRefresh(): Promise<RefreshResult> {
     return { token: null, outcome: transient ? 'transient' : 'rejected' }
   }
   const data = await res.json().catch(() => null) as { access_token?: string; refresh_token?: string } | null
-  if (!data?.access_token) return { token: null, outcome: 'unavailable' }
+  // Unbrauchbare Antwort wie ein Serverfehler behandeln — der Refresh-Token ist
+  // deswegen nicht ungültig und darf nicht verworfen werden.
+  if (!data?.access_token) return { token: null, outcome: 'transient' }
   // Wurde zwischenzeitlich abgemeldet (oder ein anderer Benutzer angemeldet),
   // darf die späte Antwort die Sitzung nicht wiederbeleben.
-  if (getRefreshToken() !== refreshToken) return { token: null, outcome: 'unavailable' }
+  if (getRefreshToken() !== refreshToken) return { token: null, outcome: 'superseded' }
   setTokens(data.access_token, data.refresh_token)
   notifyAuthTokenRefreshed()
   return { token: data.access_token, outcome: 'renewed' }
@@ -321,14 +330,25 @@ function buildHeaders(opts: RequestOptions, jwtOverride?: string): Record<string
  * Rechten wiederholt. Nicht dekodierbare Tokens können keinen Wechsel belegen
  * und blockieren den Retry deshalb nicht.
  */
-async function renewedTokenFor(previous: string | null): Promise<string | null> {
+type Renewal = { token: string | null; sessionIsOver: boolean }
+
+async function renewedTokenFor(previous: string | null): Promise<Renewal> {
   const current = getJwt()
-  const token = current && current !== previous ? current : await refreshAccessToken()
-  if (!token) return null
+  if (current && current !== previous) {
+    // Ein paralleler Request war schneller — kein weiterer Refresh nötig.
+    return { token: sameAccount(previous, current) ? current : null, sessionIsOver: false }
+  }
+  const { token, outcome } = await refreshSession()
+  if (!token) return { token: null, sessionIsOver: endsSession(outcome) }
+  // Ein Kontowechsel darf die Tokens des neuen Kontos nicht abräumen.
+  return { token: sameAccount(previous, token) ? token : null, sessionIsOver: false }
+}
+
+/** `false` nur wenn beide Tokens lesbar sind und zu verschiedenen Benutzern gehören */
+function sameAccount(previous: string | null, next: string): boolean {
   const before = previous === null ? null : jwtSubject(previous)
-  const after = jwtSubject(token)
-  if (before !== null && after !== null && before !== after) return null
-  return token
+  const after = jwtSubject(next)
+  return before === null || after === null || before === after
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
@@ -342,14 +362,18 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   // Abgelaufener Access-Token: genau einen Refresh anstossen (geteilt über alle
   // parallelen Requests) und den ursprünglichen Request einmal wiederholen.
+  let sessionIsOver = true
   if (res.status === 401 && !opts.noAuthRefresh) {
-    const renewed = await renewedTokenFor(jwtBefore)
-    if (renewed) res = await send(renewed)
+    const renewal = await renewedTokenFor(jwtBefore)
+    if (renewal.token) res = await send(renewal.token)
+    else sessionIsOver = renewal.sessionIsOver
   }
 
   if (res.status === 401) {
     if (!opts.silent401) {
-      clearAuthTokens()
+      // Nur aufräumen, wenn die Sitzung wirklich hin ist — ein 5xx oder ein
+      // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen.
+      if (sessionIsOver) clearAuthTokens()
       // Redirect zur Login-Seite — der Router fängt das auf
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     }
@@ -392,8 +416,16 @@ export const auth = {
     })
   },
 
+  /**
+   * Wird direkt nach Login und Refresh aufgerufen — der Token ist also frisch.
+   * `noAuthRefresh` verhindert, dass ein 401 hier eine weitere Erneuerung und
+   * damit erneut diesen Aufruf anstösst.
+   */
   me() {
-    return request<{ id: string; username: string; is_admin: boolean }>('/auth/me', { silent401: true })
+    return request<{ id: string; username: string; is_admin: boolean }>('/auth/me', {
+      silent401: true,
+      noAuthRefresh: true,
+    })
   },
 }
 
@@ -648,13 +680,16 @@ export const visuBackgrounds = {
       })
     }
 
+    const jwtBefore = getJwt()
     let res = await send()
+    let sessionIsOver = true
     if (res.status === 401) {
-      const refreshed = await refreshAccessToken()
-      if (refreshed) res = await send(refreshed)
+      const renewal = await renewedTokenFor(jwtBefore)
+      if (renewal.token) res = await send(renewal.token)
+      else sessionIsOver = renewal.sessionIsOver
     }
     if (res.status === 401) {
-      clearAuthTokens()
+      if (sessionIsOver) clearAuthTokens()
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
       throw new Error('Unauthorized')
     }

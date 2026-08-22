@@ -167,12 +167,22 @@ async function load() {
 // Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
 function onSessionExpired() { load() }
 
+// Anmeldung endgültig weg. Die Viewer-Route trägt kein `requiresAuth`, der
+// globale Handler im Router leitet hier also nicht um — eine Seite mit
+// access='user' bliebe sonst ohne Sitzung stehen und würde stillschweigend
+// keine Werte mehr nachführen. load() schickt sie zur Login-Route.
+function onUnauthorized() {
+  if (resolveAccessNode(props.id).access === 'user' && !getJwt()) load()
+}
+
 onMounted(() => {
   load()
   window.addEventListener('visu:session-expired', onSessionExpired)
+  window.addEventListener('visu:unauthorized', onUnauthorized)
 })
 onUnmounted(() => {
   window.removeEventListener('visu:session-expired', onSessionExpired)
+  window.removeEventListener('visu:unauthorized', onUnauthorized)
   clearWriteContext()
 })
 watch(() => props.id, load)
