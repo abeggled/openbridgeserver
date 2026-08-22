@@ -8,7 +8,8 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { visu as visuApi, auth as authApi, getJwt, setJwt, clearJwt, getIsAdmin, setIsAdmin, clearIsAdmin, setSessionToken, getSessionToken } from '@/api/client'
+import { visu as visuApi, auth as authApi, getJwt, setTokens, clearAuthTokens, getIsAdmin, setIsAdmin, setSessionToken, getSessionToken } from '@/api/client'
+import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 import type { VisuNode, VisuNodeUpdate, PageConfig } from '@/types'
 
 export const useVisuStore = defineStore('visu', () => {
@@ -60,9 +61,20 @@ export const useVisuStore = defineStore('visu', () => {
   const isLoggedIn = computed(() => !!_jwt.value)
   const isAdmin = computed(() => _isAdmin.value)
 
-  async function login(token: string) {
-    setJwt(token)
-    _jwt.value = token
+  /** Spiegel wieder an den localStorage angleichen (nach Refresh bzw. erzwungenem Logout) */
+  function syncAuthState() {
+    _jwt.value = getJwt()
+    _isAdmin.value = getIsAdmin()
+  }
+
+  // Ein fehlgeschlagener Refresh räumt beide Tokens und das Admin-Flag ab; ein
+  // erfolgreicher rotiert den JWT. Beides muss im reaktiven Spiegel ankommen.
+  window.addEventListener('visu:unauthorized', syncAuthState)
+  window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, syncAuthState)
+
+  async function login(accessToken: string, refreshToken?: string | null) {
+    setTokens(accessToken, refreshToken)
+    _jwt.value = accessToken
     // Admin-Status direkt nach Login ermitteln
     try {
       const me = await authApi.me()
@@ -75,8 +87,7 @@ export const useVisuStore = defineStore('visu', () => {
   }
 
   function logout() {
-    clearJwt()
-    clearIsAdmin()
+    clearAuthTokens()
     _jwt.value = null
     _isAdmin.value = false
   }

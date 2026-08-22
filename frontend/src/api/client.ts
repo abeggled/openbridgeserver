@@ -2,9 +2,12 @@
  * API-Client für open bridge server Visu
  *
  * - JWT aus localStorage (admin-Login)
+ * - Refresh-Token aus localStorage — erneuert den JWT transparent (Issue #1160)
  * - Session-Tokens aus sessionStorage (PIN-Auth pro Knoten)
- * - 401 → automatischer Redirect zur Login-Route
+ * - 401 → einmaliger Refresh-Versuch, sonst Redirect zur Login-Route
  */
+
+import { notifyAuthTokenRefreshed } from '@/utils/authEvents'
 
 const BASE = '/api/v1'
 
@@ -36,28 +39,173 @@ export class ApiRequestError extends Error {
 
 // ── Token-Verwaltung ──────────────────────────────────────────────────────────
 
+const JWT_KEY = 'visu_jwt'
+const REFRESH_KEY = 'visu_refresh_token'
+const IS_ADMIN_KEY = 'visu_is_admin'
+
 export function getJwt(): string | null {
-  return localStorage.getItem('visu_jwt')
+  return localStorage.getItem(JWT_KEY)
 }
 
-export function setJwt(token: string): void {
-  localStorage.setItem('visu_jwt', token)
+function setJwt(token: string): void {
+  localStorage.setItem(JWT_KEY, token)
 }
 
-export function clearJwt(): void {
-  localStorage.removeItem('visu_jwt')
+function clearJwt(): void {
+  localStorage.removeItem(JWT_KEY)
+}
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY)
+}
+
+function setRefreshToken(token: string): void {
+  localStorage.setItem(REFRESH_KEY, token)
+}
+
+function clearRefreshToken(): void {
+  localStorage.removeItem(REFRESH_KEY)
+}
+
+/** Beide Tokens nach Login/Refresh ablegen und den proaktiven Refresh neu planen */
+export function setTokens(accessToken: string, refreshToken?: string | null): void {
+  setJwt(accessToken)
+  if (refreshToken) setRefreshToken(refreshToken)
+  scheduleTokenRefresh()
+}
+
+/** Access-Token, Refresh-Token und Admin-Flag verwerfen (Logout / endgültiges 401) */
+export function clearAuthTokens(): void {
+  cancelTokenRefresh()
+  clearJwt()
+  clearRefreshToken()
+  clearIsAdmin()
 }
 
 export function getIsAdmin(): boolean {
-  return localStorage.getItem('visu_is_admin') === '1'
+  return localStorage.getItem(IS_ADMIN_KEY) === '1'
 }
 
 export function setIsAdmin(value: boolean): void {
-  localStorage.setItem('visu_is_admin', value ? '1' : '0')
+  localStorage.setItem(IS_ADMIN_KEY, value ? '1' : '0')
 }
 
-export function clearIsAdmin(): void {
-  localStorage.removeItem('visu_is_admin')
+function clearIsAdmin(): void {
+  localStorage.removeItem(IS_ADMIN_KEY)
+}
+
+// ── Token-Refresh ─────────────────────────────────────────────────────────────
+// /auth/refresh ist auf 10 Requests/Minute limitiert, die Visu feuert beim
+// Seitenaufbau aber viele Requests parallel. Alle 401-Antworten teilen sich
+// deshalb genau einen In-Flight-Refresh.
+
+/**
+ * `retryable` unterscheidet einen vorübergehenden Fehlschlag (Server nicht
+ * erreichbar, 5xx, Rate-Limit) von einem endgültigen (Refresh-Token ungültig
+ * oder abgelaufen). Nur der erste rechtfertigt einen weiteren Versuch.
+ */
+type RefreshResult = { token: string | null; retryable: boolean }
+
+let _refreshInFlight: Promise<RefreshResult> | null = null
+
+async function performRefresh(): Promise<RefreshResult> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) return { token: null, retryable: false }
+  let res: Response
+  try {
+    res = await fetch(`${BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+  } catch {
+    // Netzwerkfehler — Tokens behalten, der nächste Versuch kann klappen
+    return { token: null, retryable: true }
+  }
+  if (!res.ok) return { token: null, retryable: res.status === 429 || res.status >= 500 }
+  const data = await res.json().catch(() => null) as { access_token?: string; refresh_token?: string } | null
+  if (!data?.access_token) return { token: null, retryable: false }
+  setTokens(data.access_token, data.refresh_token)
+  notifyAuthTokenRefreshed()
+  return { token: data.access_token, retryable: false }
+}
+
+/** Genau ein Refresh gleichzeitig — parallele Aufrufer teilen sich den Promise */
+function refreshSession(): Promise<RefreshResult> {
+  if (_refreshInFlight) return _refreshInFlight
+  const pending = performRefresh().finally(() => { _refreshInFlight = null })
+  _refreshInFlight = pending
+  return pending
+}
+
+/**
+ * Access-Token erneuern. Parallele Aufrufe teilen sich denselben Promise.
+ * Liefert den neuen Token oder `null`, wenn kein Refresh möglich war.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  return (await refreshSession()).token
+}
+
+// ── Proaktiver Refresh ────────────────────────────────────────────────────────
+// Eine offene Viewer-Seite (Wandpanel) feuert keine HTTP-Requests mehr, sobald
+// sie geladen ist. Ohne 401 gäbe es also keinen Auslöser für den Refresh und die
+// WebSocket-Verbindung verlöre nach Token-Ablauf still ihren Datapoint-Scope.
+// Deshalb wird der Refresh zusätzlich kurz vor Ablauf des JWT eingeplant.
+
+const REFRESH_LEEWAY_MS = 60_000
+const MIN_REFRESH_DELAY_MS = 1_000
+const RETRY_BASE_MS = 30_000
+const RETRY_MAX_MS = 600_000
+
+let _refreshTimer: ReturnType<typeof setTimeout> | null = null
+let _retryDelay = RETRY_BASE_MS
+
+/** `exp` (ms seit Epoch) aus dem JWT-Payload lesen; `null` wenn nicht lesbar */
+function jwtExpiresAt(token: string): number | null {
+  const payload = token.split('.')[1]
+  if (!payload) return null
+  const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+  try {
+    const claims = JSON.parse(atob(padded)) as { exp?: unknown }
+    return typeof claims.exp === 'number' ? claims.exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+export function cancelTokenRefresh(): void {
+  if (_refreshTimer !== null) {
+    clearTimeout(_refreshTimer)
+    _refreshTimer = null
+  }
+}
+
+function armRefreshTimer(delay: number): void {
+  cancelTokenRefresh()
+  _refreshTimer = setTimeout(() => {
+    _refreshTimer = null
+    void refreshSession().then(({ token, retryable }) => {
+      // Erfolg plant sich über setTokens() → scheduleTokenRefresh() selbst neu.
+      if (token || !retryable || !getRefreshToken()) return
+      // Vorübergehender Fehlschlag: ohne erneuten Versuch bliebe eine dauerhaft
+      // geöffnete Viewer-Seite bis zum nächsten HTTP-401 ohne Erneuerung — und
+      // ein Wandpanel feuert keinen mehr.
+      armRefreshTimer(_retryDelay)
+      _retryDelay = Math.min(_retryDelay * 2, RETRY_MAX_MS)
+    })
+  }, delay)
+}
+
+/** Refresh kurz vor Ablauf des aktuellen JWT einplanen (idempotent) */
+export function scheduleTokenRefresh(): void {
+  cancelTokenRefresh()
+  _retryDelay = RETRY_BASE_MS
+  const jwt = getJwt()
+  if (!jwt || !getRefreshToken()) return
+  const expiresAt = jwtExpiresAt(jwt)
+  if (expiresAt === null) return
+  armRefreshTimer(Math.max(expiresAt - Date.now() - REFRESH_LEEWAY_MS, MIN_REFRESH_DELAY_MS))
 }
 
 /** Session-Token für einen bestimmten Knoten (PIN-Auth), nur für diese Browser-Session */
@@ -107,10 +255,15 @@ type RequestOptions = Omit<RequestInit, 'headers'> & {
   sessionToken?: string
   /** 401 still throws but does NOT dispatch visu:unauthorized (no global redirect) */
   silent401?: boolean
+  /**
+   * 401 bedeutet auf dieser Route eine fehlgeschlagene Anmeldung (z. B. falscher
+   * PIN), nicht einen abgelaufenen JWT — kein Refresh-Versuch, kein Retry.
+   */
+  noAuthRefresh?: boolean
 }
 
-async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const jwt = getJwt()
+function buildHeaders(opts: RequestOptions, jwtOverride?: string): Record<string, string> {
+  const jwt = jwtOverride ?? getJwt()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...opts.headers,
@@ -118,15 +271,32 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (jwt) headers['Authorization'] = `Bearer ${jwt}`
   if (opts.sessionToken) headers['X-Session-Token'] = opts.sessionToken
+  return headers
+}
 
-  const res = await fetch(`${BASE}${path}`, {
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const send = (jwtOverride?: string) => fetch(`${BASE}${path}`, {
     ...opts,
-    headers,
+    headers: buildHeaders(opts, jwtOverride),
   })
+
+  const jwtBefore = getJwt()
+  let res = await send()
+
+  // Abgelaufener Access-Token: genau einen Refresh anstossen (geteilt über alle
+  // parallelen Requests) und den ursprünglichen Request einmal wiederholen.
+  if (res.status === 401 && !opts.noAuthRefresh) {
+    // Hat ein anderer Request den Token zwischenzeitlich schon erneuert, direkt
+    // damit wiederholen — sonst würde jeder Nachzügler einen weiteren Refresh
+    // gegen das Rate-Limit von /auth/refresh feuern.
+    const current = getJwt()
+    const renewed = current && current !== jwtBefore ? current : await refreshAccessToken()
+    if (renewed) res = await send(renewed)
+  }
 
   if (res.status === 401) {
     if (!opts.silent401) {
-      clearJwt()
+      clearAuthTokens()
       // Redirect zur Login-Seite — der Router fängt das auf
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     }
@@ -165,7 +335,7 @@ export const auth = {
         const body = await res.json().catch(() => null)
         throw new Error(extractDetail(body, 'Login fehlgeschlagen'))
       }
-      return res.json() as Promise<{ access_token: string; token_type: string }>
+      return res.json() as Promise<{ access_token: string; refresh_token: string; token_type: string }>
     })
   },
 
@@ -215,6 +385,7 @@ export const visu = {
       method: 'POST',
       body: JSON.stringify({ pin }),
       silent401: true,
+      noAuthRefresh: true,
     }),
 
   getPage: (id: string, sessionToken?: string) =>
@@ -413,17 +584,24 @@ export const visuBackgrounds = {
     const formData = new FormData()
     for (const file of files) formData.append('files', file, file.name)
 
-    const jwt = getJwt()
-    const headers: Record<string, string> = {}
-    if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+    const send = (jwtOverride?: string) => {
+      const jwt = jwtOverride ?? getJwt()
+      const headers: Record<string, string> = {}
+      if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+      return fetch(`${BASE}/visu/backgrounds/import`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      })
+    }
 
-    const res = await fetch(`${BASE}/visu/backgrounds/import`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    })
+    let res = await send()
     if (res.status === 401) {
-      clearJwt()
+      const refreshed = await refreshAccessToken()
+      if (refreshed) res = await send(refreshed)
+    }
+    if (res.status === 401) {
+      clearAuthTokens()
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
       throw new Error('Unauthorized')
     }
