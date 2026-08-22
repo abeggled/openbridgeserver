@@ -661,6 +661,24 @@ describe('proactive token refresh', () => {
     expect(refreshCalls(fetchMock)).toHaveLength(1)
   })
 
+  it('renews before the refresh token expires, not only the access token', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const thirtyDaysMs = 30 * 24 * 3600 * 1000
+    const fetchMock = stubAuthFetch(() => jsonResponse({ access_token: 'jwt-new', refresh_token: 'refresh-new' }))
+    // security.jwt_expire_minutes über 30 Tage: der Access-Token überlebt den
+    // Refresh-Token, mit dem die Sitzung überhaupt verlängert werden könnte.
+    localStorage.setItem('visu_jwt', fakeJwt({ exp: now + 60 * 24 * 3600 }))
+    localStorage.setItem('visu_refresh_token', fakeJwt({ exp: now + 30 * 24 * 3600 }))
+
+    scheduleTokenRefresh()
+
+    await vi.advanceTimersByTimeAsync(thirtyDaysMs - 120_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(0)
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(1)
+  })
+
   it('does not overflow the timer for a very long token lifetime', async () => {
     const thirtyDaysMs = 30 * 24 * 3600 * 1000
     const fetchMock = stubAuthFetch(() => jsonResponse({ access_token: 'jwt-new', refresh_token: 'refresh-new' }))

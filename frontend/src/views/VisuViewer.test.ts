@@ -98,6 +98,22 @@ describe('VisuViewer session end', () => {
     wrapper.unmount()
   })
 
+  it('redirects a concealed private page whose breadcrumb is already hidden', async () => {
+    const wrapper = mountViewer()
+    await flushPromises()
+    mocks.push.mockClear()
+
+    // Ohne Anmeldung verbirgt das Backend den privaten Knoten mit 404 — ein
+    // erneutes load() liefe in den Fehlerpfad, bevor es umleiten könnte.
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValue(new Error('common.loadError'))
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    await flushPromises()
+
+    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    wrapper.unmount()
+  })
+
   it('stays put while the session is still valid', async () => {
     const wrapper = mountViewer()
     await flushPromises()

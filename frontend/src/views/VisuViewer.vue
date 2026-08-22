@@ -172,7 +172,11 @@ function onSessionExpired() { load() }
 // access='user' bliebe sonst ohne Sitzung stehen und würde stillschweigend
 // keine Werte mehr nachführen. load() schickt sie zur Login-Route.
 function onUnauthorized() {
-  if (resolveAccessNode(props.id).access === 'user' && !getJwt()) load()
+  if (resolveAccessNode(props.id).access !== 'user' || getJwt()) return
+  // Direkt umleiten statt über load(): das wartet zuerst auf den Breadcrumb,
+  // den das Backend für einen verborgenen privaten Knoten ohne Anmeldung mit
+  // 404 beantwortet — der Zugriffs-Check dahinter würde nie erreicht.
+  router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
 }
 
 onMounted(() => {

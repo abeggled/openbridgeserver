@@ -210,6 +210,12 @@ function jwtExpiresAt(token: string): number | null {
   return typeof exp === 'number' ? exp * 1000 : null
 }
 
+/** Frühester der beiden Ablaufzeitpunkte; `null` wenn keiner lesbar ist */
+function earliestExpiry(...expiries: Array<number | null>): number | null {
+  const known = expiries.filter((value): value is number => value !== null)
+  return known.length === 0 ? null : Math.min(...known)
+}
+
 /** Angemeldeter Benutzer laut JWT; `null` wenn nicht lesbar */
 function jwtSubject(token: string): string | null {
   const sub = jwtClaims(token)?.sub
@@ -262,8 +268,13 @@ export function scheduleTokenRefresh(): void {
   cancelTokenRefresh()
   _retryDelay = RETRY_BASE_MS
   const jwt = getJwt()
-  if (!jwt || !getRefreshToken()) return
-  const expiresAt = jwtExpiresAt(jwt)
+  const refreshToken = getRefreshToken()
+  if (!jwt || !refreshToken) return
+  // Der Refresh-Token läuft fest nach 30 Tagen ab (`_REFRESH_DAYS`), der
+  // Access-Token nach `security.jwt_expire_minutes` — das kann länger sein.
+  // Massgeblich ist, was zuerst abläuft: nach dem Refresh-Token gibt es nichts
+  // mehr zu erneuern, die Sitzung liesse sich nie über Tag 30 hinaus verlängern.
+  const expiresAt = earliestExpiry(jwtExpiresAt(jwt), jwtExpiresAt(refreshToken))
   if (expiresAt === null) return
   const remaining = expiresAt - Date.now()
   // Bei kurzer Token-Laufzeit (security.jwt_expire_minutes: 1) würde ein fester
