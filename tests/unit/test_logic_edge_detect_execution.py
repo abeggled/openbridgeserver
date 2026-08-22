@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -188,3 +188,84 @@ async def test_level_survives_an_unrelated_run_without_a_downstream_write_object
     await manager._execute_graph("g", "G", flow, {"rB": {"value": 9, "changed": True}})
 
     assert manager._hysteresis["g"]["ed"] == {"value": True}
+
+
+@pytest.mark.asyncio
+async def test_consecutive_edges_each_retrigger_an_async_action():
+    """Both trigger outputs combined through OR to run one action on either
+    edge: each edge is a discrete event, so the second must not be swallowed by
+    the async node's rising-edge deduplication as a sustained trigger."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("ed", "edge_detect"),
+                node("o", "or", {"input_count": 2}),
+                node("hc", "host_check", {"host": "127.0.0.1"}),
+            ],
+            "edges": [
+                edge("ed", "o", "rising", "in1"),
+                edge("ed", "o", "falling", "in2"),
+                edge("o", "hc", "out", "trigger"),
+            ],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", return_value=ws),
+        patch("obs.logic.manager._ping_host", new=AsyncMock(return_value=(True, 1.0))) as ping,
+    ):
+        rising = await manager._execute_graph("g", "G", flow, {"ed": {"in": True}})
+        falling = await manager._execute_graph("g", "G", flow, {"ed": {"in": False}})
+
+    # The OR reports a sustained True across both runs — only the pulse
+    # provenance can tell the two edges apart.
+    assert rising["o"]["out"] is True
+    assert falling["o"]["out"] is True
+    assert ping.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_tick_without_an_edge_does_not_bypass_the_async_dedup():
+    """The mirror of the case above: a cron tick reaching Edge Detection must
+    not count as a pulse having propagated through it when no edge occurred.
+    Here host_check's trigger is held true by a constant, so only the pulse
+    provenance decides whether the second run is deduplicated."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("cron", "timer_cron", {"cron": "* * * * *"}),
+                node("ed", "edge_detect"),
+                node("const", "const_value", {"value": "1", "data_type": "bool"}),
+                node("o", "or", {"input_count": 2}),
+                node("hc", "host_check", {"host": "127.0.0.1"}),
+            ],
+            "edges": [
+                # Into "reset", a trigger port — a cron pulse propagates
+                # through it, so the traversal goes on to look at whether the
+                # edge outputs carry a pulse of their own.
+                edge("cron", "ed", "trigger", "reset"),
+                edge("ed", "o", "rising", "in1"),
+                edge("const", "o", "value", "in2"),
+                edge("o", "hc", "out", "trigger"),
+            ],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", return_value=ws),
+        patch("obs.logic.manager._ping_host", new=AsyncMock(return_value=(True, 1.0))) as ping,
+    ):
+        first = await manager._execute_graph("g", "G", flow, {"cron": {"trigger": True}})
+        await manager._execute_graph("g", "G", flow, {"cron": {"trigger": True}})
+
+    assert first["ed"] == {"rising": False, "falling": False}
+    # Sustained trigger, no pulse behind it: the second run is deduplicated.
+    assert ping.await_count == 1

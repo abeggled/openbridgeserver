@@ -2237,7 +2237,12 @@ function normaliseTypedValue(value, kind, schema) {
   // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
   // "Infinity", which the backend's float() rejects — it would coerce them to
   // 0.0 while the editor kept displaying the original spelling.
-  if (kind === 'number') return BACKEND_NUMBER_RE.test(text.trim()) ? text : '0'
+  // Both checks are needed: the regex rejects spellings float() cannot parse
+  // (0x10, Infinity), isFinite rejects ones it parses into infinity (1e309).
+  if (kind === 'number') {
+    const trimmed = text.trim()
+    return BACKEND_NUMBER_RE.test(trimmed) && Number.isFinite(Number(trimmed)) ? text : '0'
+  }
   return text
 }
 

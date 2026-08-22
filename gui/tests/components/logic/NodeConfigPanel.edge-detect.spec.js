@@ -399,6 +399,18 @@ describe('NodeConfigPanel typed value backend agreement', () => {
     w.unmount()
   })
 
+  it('rejects a number that the backend would parse into infinity', async () => {
+    // float('1e309') is inf in Python; the actuator must not receive that.
+    const w = await mountBare({ data_type: 'string', value_rising: '1e309', value_falling: '-1e309' })
+
+    const dataTypeSelect = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'number'))
+    await dataTypeSelect.setValue('number')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0', value_falling: '0' })
+    w.unmount()
+  })
+
   it('keeps decimal and scientific notation, which the backend does parse', async () => {
     const w = await mountBare({ data_type: 'string', value_rising: '-1.5e3', value_falling: '.25' })
 

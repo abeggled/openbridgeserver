@@ -3771,6 +3771,33 @@ class LogicManager:
         # cron are not suppressed by the rising-edge deduplication below.
         _node_type_by_id = {n.id: n.type for n in flow.nodes}
 
+        def _discrete_pulse_handles(node_ids: set[str] | None = None) -> set[tuple[str, str]]:
+            """(node id, handle) pairs carrying a discrete event pulse this pass.
+
+            A change_filter pulses on "changed". An Edge Detection node pulses
+            on whichever of "rising"/"falling" fired and on "out" — that handle
+            exists ONLY on an edge, so its mere presence is the event, unlike
+            change_filter's "out", which carries the sustained held value.
+            Without this, two consecutive real edges combined through e.g. an
+            OR into host_check/wake_on_lan look like one sustained trigger and
+            the second is silently deduplicated.
+            """
+            pulses: set[tuple[str, str]] = set()
+            for _pn in flow.nodes:
+                if node_ids is not None and _pn.id not in node_ids:
+                    continue
+                _pout = outputs.get(_pn.id, {})
+                if _pn.type == "change_filter":
+                    if GraphExecutor._to_bool(_pout.get("changed")):
+                        pulses.add((_pn.id, "changed"))
+                elif _pn.type == "edge_detect":
+                    for _ph in ("rising", "falling"):
+                        if GraphExecutor._to_bool(_pout.get(_ph)):
+                            pulses.add((_pn.id, _ph))
+                    if "out" in _pout:
+                        pulses.add((_pn.id, "out"))
+            return pulses
+
         def _edge_carries_pulse(edge: Any, *, require_fired_change_filter: bool = True) -> bool:
             # A pulse only continues through an edge if its target either has
             # no dedicated trigger-typed input at all (a pure logic/relay
@@ -3797,6 +3824,15 @@ class LogicManager:
             # itself becomes cron_reachable through cf1's real "changed"
             # pulse — bypassing rising-edge dedup on every execution even
             # though cf2 itself did not change.
+            # Every Edge Detection handle is discrete, but only the one that
+            # actually fired this pass carries a pulse — the same restriction
+            # the change_filter branch below applies.
+            if (
+                _node_type_by_id.get(edge.source) == "edge_detect"
+                and require_fired_change_filter
+                and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
+            ):
+                return False
             if _node_type_by_id.get(edge.source) == "change_filter":
                 if (edge.sourceHandle or "out") != "changed":
                     return False
@@ -4261,12 +4297,11 @@ class LogicManager:
                     hyst.pop(node_id, None)
 
         cron_node_ids = {n.id for n in flow.nodes if n.type == "timer_cron"}
-        # A change_filter's "changed" pulse is a discrete edge just like a
-        # cron tick: consecutive real changes must each retrigger host_check /
-        # wake_on_lan instead of being deduplicated as a "sustained" trigger.
-        change_filter_pulse_ids = {
-            n.id for n in flow.nodes if n.type == "change_filter" and GraphExecutor._to_bool(outputs.get(n.id, {}).get("changed"))
-        }
+        # A change_filter's "changed" pulse — and an Edge Detection edge — is a
+        # discrete event just like a cron tick: consecutive real pulses must
+        # each retrigger host_check / wake_on_lan instead of being deduplicated
+        # as one "sustained" trigger.
+        _initial_pulse_handles = _discrete_pulse_handles()
         # Forward-reachability from the cron nodes that actually fired this
         # execution, plus any change_filter pulses — scopes the retrigger
         # exception to only those async nodes driven by the firing pulse
@@ -4277,7 +4312,7 @@ class LogicManager:
         # "changed" handle — its "out" handle carries the held/passthrough
         # value, not a discrete pulse, and must not bypass rising-edge dedup.
         for _cfe in _effective_edges:
-            if _cfe.source in change_filter_pulse_ids and (_cfe.sourceHandle or "out") == "changed" and _edge_carries_pulse(_cfe):
+            if (_cfe.source, _cfe.sourceHandle or "out") in _initial_pulse_handles and _edge_carries_pulse(_cfe):
                 cron_reachable.add(_cfe.target)
         if cron_reachable:
             _cq: list[str] = list(cron_reachable)
@@ -4314,21 +4349,12 @@ class LogicManager:
             # `node_ids`, before anything downstream reads cron_reachable.
             _suppress_missing_cf_trigger_pulses(node_ids)
             _refresh_missing_cf_override_values()
-            _new_pulses = {
-                n.id
-                for n in flow.nodes
-                if n.type == "change_filter" and n.id in node_ids and GraphExecutor._to_bool(outputs.get(n.id, {}).get("changed"))
-            }
+            _new_pulses = _discrete_pulse_handles(node_ids)
             if not _new_pulses:
                 return
             _pq: list[str] = []
             for _pe in _effective_edges:
-                if (
-                    _pe.source in _new_pulses
-                    and (_pe.sourceHandle or "out") == "changed"
-                    and _pe.target not in cron_reachable
-                    and _edge_carries_pulse(_pe)
-                ):
+                if (_pe.source, _pe.sourceHandle or "out") in _new_pulses and _pe.target not in cron_reachable and _edge_carries_pulse(_pe):
                     cron_reachable.add(_pe.target)
                     _pq.append(_pe.target)
             while _pq:

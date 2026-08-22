@@ -210,10 +210,17 @@ today, so it is deliberately left as an explicit table.
      (`LogicManager.initialize_graph`) so the deliberate absence is not reported as a failed
      upstream producer on every run.
    - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
-     state copy. A block whose output depends on persisted state must be listed in
-     `_INIT_EXCLUDED_NODE_TYPES` (as `memory`, `statistics` and `edge_detect` are), or saving a
-     sheet publishes a write derived from state that is then discarded — and the same write fires
-     again on the next real execution.
+     state copy, so a block whose output depends on persisted state needs a decision. Listing it in
+     `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass
+     entirely — but then it also gets no baseline, and for an edge-triggered block that means the
+     first real transition is swallowed. The alternative, which `change_filter` and `edge_detect`
+     use, is to take part in the pass, commit the seeded state via `_INIT_STATE_ALWAYS_COMMIT`, and
+     add the block's outputs to `changed_targets` so no write descends from it — a save is not an
+     event. Choosing neither publishes a write derived from state that is then discarded, and the
+     same write fires again on the next real execution.
+   - *Discrete pulses.* A trigger output that fires per event, not per level, must be listed in
+     `_discrete_pulse_handles` in `LogicManager`, or two consecutive pulses reaching a host_check /
+     wake_on_lan look like one sustained trigger and the second is deduplicated away.
    - *`None` is "nothing arrived".* An unseeded Read Object emits `None`, and on an event-driven
      run `LogicManager` neutralizes a Change Filter's no-pulse placeholder to `None` on unrelated
      branches (issue #1090). A block that accumulates state must treat that as "did not happen"
