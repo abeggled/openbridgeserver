@@ -19,9 +19,9 @@ const EDGE_ACTIONS = ['value', 'trigger', 'off']
 
 const CONFIG_SCHEMA = {
   on_rising: { type: 'string', enum: EDGE_ACTIONS, default: 'value', label: 'Steigende Flanke' },
-  value_rising: { type: 'string', default: 'true', label: 'Wert bei steigender Flanke', value_type_field: 'data_type' },
+  value_rising: { type: 'string', default: 'true', label: 'Wert bei steigender Flanke', value_type_field: 'data_type', visible_when: { field: 'on_rising', equals: 'value' } },
   on_falling: { type: 'string', enum: EDGE_ACTIONS, default: 'value', label: 'Fallende Flanke' },
-  value_falling: { type: 'string', default: 'false', label: 'Wert bei fallender Flanke', value_type_field: 'data_type' },
+  value_falling: { type: 'string', default: 'false', label: 'Wert bei fallender Flanke', value_type_field: 'data_type', visible_when: { field: 'on_falling', equals: 'value' } },
   data_type: { type: 'string', enum: ['bool', 'number', 'string'], default: 'bool', label: 'Datentyp' },
   persist_state: { type: 'boolean', default: true, label: 'Zustand nach Neustart wiederherstellen' },
 }
@@ -285,6 +285,73 @@ describe('NodeConfigPanel typed value fallbacks', () => {
     await flushPromises()
 
     expect(w.emitted('update').at(-1)[0]).toMatchObject({ kind: 'bool', val: 'false' })
+    w.unmount()
+  })
+})
+
+describe('NodeConfigPanel edge_detect value visibility', () => {
+  it('shows both value fields while both directions send a value', async () => {
+    const w = await mountPanel()
+    await flushPromises()
+
+    const labels = w.findAll('.label').map(l => l.text())
+    expect(labels).toContain('Wert bei steigender Flanke')
+    expect(labels).toContain('Wert bei fallender Flanke')
+    w.unmount()
+  })
+
+  it('hides the value field of a direction that only pulses its trigger', async () => {
+    const w = await mountPanel({ on_rising: 'trigger' })
+    await flushPromises()
+
+    const labels = w.findAll('.label').map(l => l.text())
+    expect(labels).not.toContain('Wert bei steigender Flanke')
+    expect(labels).toContain('Wert bei fallender Flanke')
+    w.unmount()
+  })
+
+  it('hides the value field of a direction that is switched off', async () => {
+    const w = await mountPanel({ on_falling: 'off' })
+    await flushPromises()
+
+    const labels = w.findAll('.label').map(l => l.text())
+    expect(labels).toContain('Wert bei steigender Flanke')
+    expect(labels).not.toContain('Wert bei fallender Flanke')
+    w.unmount()
+  })
+
+  it('shows a value field whose direction is absent from the data, via the schema default', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    // A node saved before on_rising existed carries no value for it at all.
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'ed2', type: 'edge_detect', data: { data_type: 'bool', value_rising: 'true' } },
+        nodeTypes: [{ type: 'edge_detect', label: 'Flankenerkennung', config_schema: CONFIG_SCHEMA }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(w.findAll('.label').map(l => l.text())).toContain('Wert bei steigender Flanke')
+    w.unmount()
+  })
+
+  it('still normalizes a hidden value when the data type changes', async () => {
+    // Regression: the hidden field is not rendered, but it must not keep the
+    // old notation and resurface as "true" in a Number field later.
+    const w = await mountPanel({ on_rising: 'trigger' })
+    await flushPromises()
+
+    const dataTypeSelect = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'number'))
+    await dataTypeSelect.setValue('number')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0', value_falling: '0' })
     w.unmount()
   })
 })

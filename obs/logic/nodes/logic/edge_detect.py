@@ -18,8 +18,10 @@ NODE_TYPE = NodeTypeDef(
     inputs=[port("in", "Eingang"), port("reset", "Reset", "trigger")],
     outputs=[
         port("out", "Ausgang"),
-        port("rising", "Steigende Flanke", "trigger"),
-        port("falling", "Fallende Flanke", "trigger"),
+        # "Trigger-" prefixed so the ports are not confused with the
+        # like-named on_rising/on_falling configuration fields.
+        port("rising", "Trigger-Steigend", "trigger"),
+        port("falling", "Trigger-Fallend", "trigger"),
     ],
     config_schema={
         # One setting per edge direction, each answering the whole question for
@@ -43,6 +45,8 @@ NODE_TYPE = NodeTypeDef(
             "default": "true",
             "label": "Wert bei steigender Flanke",
             "value_type_field": "data_type",
+            # Meaningless unless this direction actually sends a value.
+            "visible_when": {"field": "on_rising", "equals": "value"},
         },
         "on_falling": {
             "type": "string",
@@ -55,6 +59,8 @@ NODE_TYPE = NodeTypeDef(
             "default": "false",
             "label": "Wert bei fallender Flanke",
             "value_type_field": "data_type",
+            # Meaningless unless this direction actually sends a value.
+            "visible_when": {"field": "on_falling", "equals": "value"},
         },
         "data_type": {
             "type": "string",

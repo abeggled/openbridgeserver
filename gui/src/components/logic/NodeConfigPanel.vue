@@ -2099,12 +2099,30 @@ const substringRegex101Url = computed(() => {
   return `https://regex101.com/?${params.toString()}`
 })
 
-const configFields = computed(() => {
+// Every schema field the generic form owns. Keeps carrying fields that are
+// currently hidden, so they are still maintained when a sibling changes.
+const schemaFields = computed(() => {
   const schema = nodeDef.value?.config_schema ?? {}
   return Object.fromEntries(
     Object.entries(schema).filter(([k]) => !k.startsWith('datapoint_'))
   )
 })
+
+// The subset actually rendered right now.
+const configFields = computed(() =>
+  Object.fromEntries(Object.entries(schemaFields.value).filter(([, schema]) => isFieldVisible(schema)))
+)
+
+// A field may declare `visible_when: { field, equals }` to hide itself while
+// another field makes it meaningless — e.g. an edge value while that direction
+// only pulses its trigger. Falls back to the referenced field's own schema
+// default so a node saved before that field existed still renders correctly.
+function isFieldVisible(schema) {
+  const rule = schema?.visible_when
+  if (!rule) return true
+  const current = localData.value[rule.field] ?? schemaFields.value[rule.field]?.default
+  return current === rule.equals
+}
 
 const formulaPreset = computed({
   get() {
@@ -2196,9 +2214,10 @@ function typedValueKind(schema) {
 // ("true" once Number is selected). Re-normalize them so the widget always has
 // something valid to show and the backend never receives a stale notation.
 function onSchemaEnumChange(key) {
-  // configFields is the same schema map the form is rendered from, so this
-  // cannot see a field the user has no widget for.
-  for (const [fieldKey, fieldSchema] of Object.entries(configFields.value)) {
+  // Deliberately schemaFields, not configFields: a dependent value that is
+  // hidden right now must still be normalized, or it would resurface in the
+  // previous notation once its direction is switched back on.
+  for (const [fieldKey, fieldSchema] of Object.entries(schemaFields.value)) {
     if (fieldSchema?.value_type_field !== key) continue
     localData.value[fieldKey] = normaliseTypedValue(localData.value[fieldKey], localData.value[key], fieldSchema)
   }

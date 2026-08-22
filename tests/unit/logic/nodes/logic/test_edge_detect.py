@@ -21,6 +21,15 @@ def test_edge_outputs_are_one_value_and_two_triggers():
     ]
 
 
+def test_trigger_outputs_are_prefixed_to_separate_them_from_the_config_fields():
+    # The on_rising/on_falling settings are labelled "Steigende/Fallende
+    # Flanke"; without the prefix the ports read as the same thing.
+    labels = {p.id: p.label for p in NODE_TYPE.outputs}
+
+    assert labels["rising"] == "Trigger-Steigend"
+    assert labels["falling"] == "Trigger-Fallend"
+
+
 def test_each_edge_direction_has_one_setting_defaulting_to_trigger_and_value():
     schema = NODE_TYPE.config_schema
 
@@ -60,6 +69,13 @@ def test_edge_values_declare_the_field_that_types_them():
 
     assert schema["value_rising"]["value_type_field"] == "data_type"
     assert schema["value_falling"]["value_type_field"] == "data_type"
+
+
+def test_each_edge_value_is_hidden_unless_its_direction_sends_one():
+    schema = NODE_TYPE.config_schema
+
+    assert schema["value_rising"]["visible_when"] == {"field": "on_rising", "equals": "value"}
+    assert schema["value_falling"]["visible_when"] == {"field": "on_falling", "equals": "value"}
 
 
 def test_persist_state_defaults_to_true():

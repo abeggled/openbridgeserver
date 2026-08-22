@@ -118,6 +118,13 @@ describe('GenericNode — handles', () => {
     expect(sources.map(h => h.attributes('data-id'))).toEqual(['out', 'rising', 'falling'])
   })
 
+  it('prefixes the edge_detect trigger ports so they differ from the settings', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    const labels = w.findAll('.gn-port-right').map(p => p.text())
+    expect(labels).toEqual(['Ausgang', 'Trigger-Steigend', 'Trigger-Fallend'])
+  })
+
   it('renders all three edge_detect outputs by default', async () => {
     const w = await mountGN('edge_detect')
     await flushPromises()
