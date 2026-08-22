@@ -306,6 +306,60 @@ describe('access token refresh', () => {
     expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-new-session')
   })
 
+  it('keeps the session when the refresh times out at the gateway', async () => {
+    stubAuthFetch(() => new Response(null, { status: 408 }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
+  })
+
+  it('ends the session when a renewal from a leftover refresh token still fails', async () => {
+    // Access-Token weg, Refresh-Token noch da (manuell gelöscht, Storage-Eviction):
+    // die erneuerte Sitzung gehört uns, ein weiteres 401 beendet sie endgültig.
+    localStorage.removeItem('visu_jwt')
+    const renewed = fakeJwt({ sub: 'alice', exp: Math.floor(Date.now() / 1000) + 3600 })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: renewed, refresh_token: 'refresh-2' })
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_jwt')).toBeNull()
+    expect(localStorage.getItem('visu_refresh_token')).toBeNull()
+  })
+
+  it('does not clear a replacement session when the retry comes back 401', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const alice = fakeJwt({ sub: 'alice', exp: now + 3600 })
+    const aliceRenewed = fakeJwt({ sub: 'alice', exp: now + 7200 })
+    const bob = fakeJwt({ sub: 'bob', exp: now + 7200 })
+    localStorage.setItem('visu_jwt', alice)
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+
+    let deleteAttempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: aliceRenewed, refresh_token: 'refresh-alice-2' })
+      }
+      deleteAttempts += 1
+      if (deleteAttempts > 1) {
+        // Beim Retry hat sich in einem anderen Tab Bob angemeldet
+        localStorage.setItem('visu_jwt', bob)
+        localStorage.setItem('visu_refresh_token', 'refresh-bob')
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.deleteNode('alice-node')).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_jwt')).toBe(bob)
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-bob')
+  })
+
   it('keeps the session when the refresh hits a server error', async () => {
     stubAuthFetch(() => new Response(null, { status: 503 }))
 
@@ -659,6 +713,42 @@ describe('proactive token refresh', () => {
 
     await vi.advanceTimersByTimeAsync(RETRY_WINDOW_MS)
     expect(refreshCalls(fetchMock)).toHaveLength(1)
+  })
+
+  it('keeps renewing after another tab has taken over the session', async () => {
+    const thirtyDays = 30 * 24 * 3600
+    let releaseRefresh: (value: Response) => void = () => {}
+    let deferFirstRefresh = true
+    const fetchMock = vi.fn((url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        if (deferFirstRefresh) {
+          deferFirstRefresh = false
+          return new Promise<Response>(resolve => { releaseRefresh = resolve })
+        }
+        // Nur der erste Refresh hängt; ein dauerhaft offener würde den
+        // geteilten In-Flight-Promise für alle folgenden Tests blockieren.
+        return Promise.resolve(jsonResponse({ access_token: 'jwt-final', refresh_token: 'refresh-final' }))
+      }
+      return Promise.resolve(new Response(null, { status: 401 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    localStorage.setItem('visu_jwt', fakeJwt({ exp: Math.floor(Date.now() / 1000) + 120 }))
+    localStorage.setItem('visu_refresh_token', fakeJwt({ exp: Math.floor(Date.now() / 1000) + thirtyDays }))
+    scheduleTokenRefresh()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(1)
+
+    // Der Nachbar-Tab war schneller und hat die Tokens bereits rotiert
+    localStorage.setItem('visu_jwt', fakeJwt({ exp: Math.floor(Date.now() / 1000) + 120 }))
+    localStorage.setItem('visu_refresh_token', fakeJwt({ exp: Math.floor(Date.now() / 1000) + thirtyDays }))
+    releaseRefresh(jsonResponse({ access_token: 'stale-access', refresh_token: 'stale-refresh' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Dieser Tab muss trotzdem weiter erneuern, sonst stirbt sein WebSocket
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(2)
   })
 
   it('renews before the refresh token expires, not only the access token', async () => {

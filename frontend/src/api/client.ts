@@ -143,7 +143,9 @@ async function performRefresh(): Promise<RefreshResult> {
   if (superseded()) return { token: null, outcome: 'superseded' }
   if (res === null) return { token: null, outcome: 'transient' }
   if (!res.ok) {
-    const transient = res.status === 429 || res.status >= 500
+    // 408 (Gateway-Timeout) und 429 sagen nichts über die Gültigkeit des
+    // Refresh-Tokens aus — genauso wenig wie ein 5xx.
+    const transient = res.status === 408 || res.status === 429 || res.status >= 500
     return { token: null, outcome: transient ? 'transient' : 'rejected' }
   }
   const data = await res.json().catch(() => null) as { access_token?: string; refresh_token?: string } | null
@@ -250,6 +252,13 @@ function armRefreshTimer(delay: number): void {
         // zum nächsten HTTP-401 ohne Erneuerung — und ein Wandpanel feuert keinen.
         armRefreshTimer(_retryDelay)
         _retryDelay = Math.min(_retryDelay * 2, RETRY_MAX_MS)
+        return
+      }
+      if (outcome === 'superseded') {
+        // Ein anderer Tab hat die Sitzung im gemeinsamen localStorage erneuert.
+        // Ohne neuen Timer bliebe dieser Tab ohne Erneuerung zurück und seine
+        // WebSocket-Verbindung verlöre später still den Datapoint-Scope.
+        scheduleTokenRefresh()
         return
       }
       if (outcome === 'rejected') {
@@ -382,6 +391,21 @@ function sameAccount(previous: string | null, next: string): boolean {
   return before === null || after === null || before === after
 }
 
+/**
+ * Darf ein endgültiges 401 die gespeicherte Sitzung abräumen?
+ *
+ * Nur wenn im Speicher noch die Anmeldung steht, mit der dieser Request
+ * unterwegs war. Hat sich währenddessen jemand anderes angemeldet, gehört sie
+ * ihm — sein Token wegen unseres veralteten Requests zu löschen würde ihn aus
+ * einer gültigen Sitzung werfen.
+ */
+function mayClearSession(usedJwt: string | null): boolean {
+  const current = getJwt()
+  if (current === null) return true
+  if (usedJwt === null) return false
+  return sameAccount(usedJwt, current)
+}
+
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const send = (jwtOverride?: string) => fetch(`${BASE}${path}`, {
     ...opts,
@@ -389,6 +413,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   })
 
   const jwtBefore = getJwt()
+  let usedJwt = jwtBefore
   let res = await send()
 
   // Abgelaufener Access-Token: genau einen Refresh anstossen (geteilt über alle
@@ -396,15 +421,20 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   let sessionIsOver = true
   if (res.status === 401 && !opts.noAuthRefresh) {
     const renewal = await renewedTokenFor(jwtBefore)
-    if (renewal.token) res = await send(renewal.token)
-    else sessionIsOver = renewal.sessionIsOver
+    if (renewal.token) {
+      usedJwt = renewal.token
+      res = await send(renewal.token)
+    } else {
+      sessionIsOver = renewal.sessionIsOver
+    }
   }
 
   if (res.status === 401) {
     if (!opts.silent401) {
       // Nur aufräumen, wenn die Sitzung wirklich hin ist — ein 5xx oder ein
-      // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen.
-      if (sessionIsOver) clearAuthTokens()
+      // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen —
+      // und nur, wenn sie noch uns gehört.
+      if (sessionIsOver && mayClearSession(usedJwt)) clearAuthTokens()
       // Redirect zur Login-Seite — der Router fängt das auf
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     }
