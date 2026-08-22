@@ -76,20 +76,47 @@ export const useVisuStore = defineStore('visu', () => {
    * Bedienelemente erhalten (deren Requests dann mit 403 scheitern), einem neu
    * ernannten fehlten sie bis zum nächsten manuellen Login.
    */
+  // Jede Anmeldung und jede Erneuerung startet eine neue Identitätsabfrage. Nur
+  // die jeweils letzte darf das Ergebnis übernehmen — sonst überschreibt die
+  // verspätete Antwort der alten Anmeldung die Rolle der neuen.
+  let identityLookupId = 0
+
+  async function applyIdentity(onFailure: 'deny' | 'keep') {
+    const lookupId = ++identityLookupId
+    try {
+      const me = await authApi.me()
+      if (lookupId !== identityLookupId) return
+      setIsAdmin(me.is_admin)
+      _isAdmin.value = me.is_admin
+    } catch {
+      if (lookupId !== identityLookupId) return
+      if (onFailure === 'deny') {
+        setIsAdmin(false)
+        _isAdmin.value = false
+      } else {
+        // Abfrage nicht möglich — zwischengespeicherten Stand behalten; eine
+        // wirklich beendete Sitzung räumt visu:unauthorized ab.
+        _isAdmin.value = getIsAdmin()
+      }
+    }
+  }
+
   async function refreshAuthState() {
     _jwt.value = getJwt()
     if (!_jwt.value) {
       _isAdmin.value = false
       return
     }
+    await applyIdentity('keep')
+    // Beim Kaltstart mit abgelaufenem Access-Token liefert das Backend keine
+    // 401, sondern eine anonym gefilterte Sicht (`_optional_visu_principal`
+    // verwirft den abgelaufenen Bearer). Der Baum im Store stammt dann aus
+    // dieser Sicht und muss nach der Erneuerung neu geholt werden, sonst
+    // bleiben private Knoten unsichtbar.
     try {
-      const me = await authApi.me()
-      setIsAdmin(me.is_admin)
-      _isAdmin.value = me.is_admin
+      await loadTree()
     } catch {
-      // Abfrage nicht möglich — zwischengespeicherten Stand behalten; eine
-      // wirklich beendete Sitzung räumt visu:unauthorized ab.
-      _isAdmin.value = getIsAdmin()
+      // Nächste Erneuerung oder Navigation versucht es erneut
     }
   }
 
@@ -102,14 +129,7 @@ export const useVisuStore = defineStore('visu', () => {
     setTokens(accessToken, refreshToken)
     _jwt.value = accessToken
     // Admin-Status direkt nach Login ermitteln
-    try {
-      const me = await authApi.me()
-      setIsAdmin(me.is_admin)
-      _isAdmin.value = me.is_admin
-    } catch {
-      setIsAdmin(false)
-      _isAdmin.value = false
-    }
+    await applyIdentity('deny')
   }
 
   function logout() {

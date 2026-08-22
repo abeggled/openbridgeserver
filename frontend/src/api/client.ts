@@ -121,7 +121,16 @@ let _refreshInFlight: Promise<RefreshResult> | null = null
 async function performRefresh(): Promise<RefreshResult> {
   const refreshToken = getRefreshToken()
   if (!refreshToken) return { token: null, outcome: 'missing' }
-  let res: Response
+
+  /**
+   * Hat zwischenzeitlich eine Abmeldung oder eine andere Anmeldung die Tokens
+   * übernommen, geht uns dieses Ergebnis nichts mehr an — weder ein Erfolg, der
+   * die alte Sitzung wiederbeleben würde, noch eine Ablehnung, die die neue
+   * abräumen würde. Nach jedem `await` erneut prüfen.
+   */
+  const superseded = () => getRefreshToken() !== refreshToken
+
+  let res: Response | null = null
   try {
     res = await fetch(`${BASE}/auth/refresh`, {
       method: 'POST',
@@ -130,19 +139,18 @@ async function performRefresh(): Promise<RefreshResult> {
     })
   } catch {
     // Netzwerkfehler — Tokens behalten, der nächste Versuch kann klappen
-    return { token: null, outcome: 'transient' }
   }
+  if (superseded()) return { token: null, outcome: 'superseded' }
+  if (res === null) return { token: null, outcome: 'transient' }
   if (!res.ok) {
     const transient = res.status === 429 || res.status >= 500
     return { token: null, outcome: transient ? 'transient' : 'rejected' }
   }
   const data = await res.json().catch(() => null) as { access_token?: string; refresh_token?: string } | null
+  if (superseded()) return { token: null, outcome: 'superseded' }
   // Unbrauchbare Antwort wie ein Serverfehler behandeln — der Refresh-Token ist
   // deswegen nicht ungültig und darf nicht verworfen werden.
   if (!data?.access_token) return { token: null, outcome: 'transient' }
-  // Wurde zwischenzeitlich abgemeldet (oder ein anderer Benutzer angemeldet),
-  // darf die späte Antwort die Sitzung nicht wiederbeleben.
-  if (getRefreshToken() !== refreshToken) return { token: null, outcome: 'superseded' }
   setTokens(data.access_token, data.refresh_token)
   notifyAuthTokenRefreshed()
   return { token: data.access_token, outcome: 'renewed' }

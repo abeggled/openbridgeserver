@@ -236,6 +236,59 @@ describe('access token refresh', () => {
     expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
   })
 
+  it('leaves a newly started session alone when the takeover happens mid-body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => {
+            // Übernahme erst zwischen Header und Body — nach der ersten Prüfung
+            localStorage.setItem('visu_jwt', 'jwt-new-session')
+            localStorage.setItem('visu_refresh_token', 'refresh-new-session')
+            return { access_token: 'jwt-stale', refresh_token: 'refresh-stale' }
+          },
+        } as unknown as Response
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-new-session')
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-new-session')
+  })
+
+  it('leaves a newly started session alone when a stale refresh is rejected', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        // Anderer Tab meldet sich neu an, bevor die Ablehnung eintrifft
+        localStorage.setItem('visu_jwt', 'jwt-new-session')
+        localStorage.setItem('visu_refresh_token', 'refresh-new-session')
+        return new Response(null, { status: 401 })
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-new-session')
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-new-session')
+  })
+
+  it('does not end a new session when a stale refresh fails after logout', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        clearAuthTokens()
+        return new Response(null, { status: 401 })
+      }
+      return new Response(null, { status: 401 })
+    }))
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+    expect(localStorage.getItem('visu_jwt')).toBeNull()
+  })
+
   it('leaves a newly started session alone when a stale refresh returns', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).endsWith('/auth/refresh')) {

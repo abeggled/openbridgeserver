@@ -187,6 +187,14 @@ onUnmounted(() => {
 })
 watch(() => props.id, load)
 
+// Kaltstart mit abgelaufenem Access-Token: das Backend liefert dafür keine 401,
+// sondern eine anonym gefilterte Sicht, in der ein privater Knoten fehlt — die
+// Seite landet im Fehlerzustand. Sobald die Token-Erneuerung den Baum neu geholt
+// hat und der Knoten auftaucht, den Ladevorgang wiederholen.
+watch(node, (found, previous) => {
+  if (found && !previous && error.value) load()
+})
+
 // Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)
 const COLS   = computed(() => visuStore.pageConfig?.grid_cols       ?? 12)
 const ROW_H  = computed(() => visuStore.pageConfig?.grid_row_height ?? 80)

@@ -16,12 +16,21 @@ const mocks = vi.hoisted(() => {
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   }
-  return {
-    node,
-    push: vi.fn(),
-    getJwt: vi.fn(),
+  const { reactive } = require('vue') as typeof import('vue')
+  const loadBreadcrumb = vi.fn().mockResolvedValue(undefined)
+  const store = reactive({
+    treeLoaded: true,
+    pageConfig: null,
+    isAdmin: false,
+    nodes: [node] as Array<typeof node>,
+    breadcrumb: [] as Array<typeof node>,
+    getNode(id: string) { return this.nodes.find(n => n.id === id) },
+    loadTree: vi.fn().mockResolvedValue(undefined),
+    loadBreadcrumb,
     loadPage: vi.fn().mockResolvedValue(undefined),
-  }
+    hasSessionToken: () => false,
+  })
+  return { node, store, loadBreadcrumb, push: vi.fn(), getJwt: vi.fn() }
 })
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
@@ -31,18 +40,7 @@ vi.mock('vue-router', () => ({
 }))
 
 vi.mock('@/stores/visu', () => ({
-  useVisuStore: () => ({
-    treeLoaded: true,
-    pageConfig: null,
-    isAdmin: false,
-    nodes: [mocks.node],
-    breadcrumb: [],
-    getNode: (id: string) => (id === mocks.node.id ? mocks.node : undefined),
-    loadTree: vi.fn().mockResolvedValue(undefined),
-    loadBreadcrumb: vi.fn().mockResolvedValue(undefined),
-    loadPage: mocks.loadPage,
-    hasSessionToken: () => false,
-  }),
+  useVisuStore: () => mocks.store,
 }))
 
 vi.mock('@/stores/datapoints', () => ({
@@ -77,7 +75,13 @@ function mountViewer() {
 describe('VisuViewer session end', () => {
   beforeEach(() => {
     mocks.push.mockClear()
+    mocks.store.loadPage.mockClear()
+    mocks.store.loadTree.mockClear()
+    mocks.loadBreadcrumb.mockReset()
+    mocks.loadBreadcrumb.mockResolvedValue(undefined)
     mocks.getJwt.mockReturnValue('jwt-1')
+    mocks.node.access = 'user'
+    mocks.store.nodes = [mocks.node]
   })
 
   it('leaves a private page for the login route when the session ends', async () => {
@@ -118,6 +122,23 @@ describe('VisuViewer session end', () => {
 
     expect(mocks.push).not.toHaveBeenCalled()
     mocks.node.access = 'user'
+    wrapper.unmount()
+  })
+
+  it('retries the load once a renewal makes the node visible', async () => {
+    // Kaltstart mit abgelaufenem Token: der Baum kam anonym gefiltert, der
+    // private Knoten fehlt und die Seite landet im Fehlerzustand.
+    mocks.store.nodes = []
+    mocks.loadBreadcrumb.mockRejectedValueOnce(new Error('common.loadError'))
+    const wrapper = mountViewer()
+    await flushPromises()
+    expect(wrapper.text()).toContain('common.loadError')
+
+    // Nach der Erneuerung holt der Store den Baum neu
+    mocks.store.nodes = [mocks.node]
+    await flushPromises()
+
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
     wrapper.unmount()
   })
 

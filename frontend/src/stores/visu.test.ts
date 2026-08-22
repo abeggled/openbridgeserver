@@ -14,12 +14,25 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('visu store auth state', () => {
+  // Der Store registriert seine Auth-Listener im Setup und entfernt sie nie.
+  // Ohne Aufräumen hörte der Store jedes vorherigen Tests weiter mit und
+  // verdeckte, ob der aktuelle Store richtig reagiert.
+  let registeredListeners: Array<[string, EventListener]> = []
+
   beforeEach(() => {
+    registeredListeners = []
+    const addEventListener = window.addEventListener.bind(window)
+    vi.spyOn(window, 'addEventListener').mockImplementation((type, handler, options) => {
+      registeredListeners.push([type as string, handler as EventListener])
+      addEventListener(type as string, handler as EventListener, options)
+    })
     setActivePinia(createPinia())
     localStorage.clear()
   })
 
   afterEach(() => {
+    for (const [type, handler] of registeredListeners) window.removeEventListener(type, handler)
+    vi.restoreAllMocks()
     cancelTokenRefresh()
     vi.unstubAllGlobals()
     localStorage.clear()
@@ -128,6 +141,100 @@ describe('visu store auth state', () => {
     await store.login('jwt-1', 'refresh-1')
 
     reachable = false
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(true)
+  })
+
+  it('discards a role lookup that a newer login has overtaken', async () => {
+    let releaseAlice: (value: Response) => void = () => {}
+    const alicePending = new Promise<Response>(resolve => { releaseAlice = resolve })
+    let pendingForAlice = true
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (pendingForAlice) return alicePending
+      return jsonResponse({ id: 'u2', username: 'bob', is_admin: false })
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-alice')
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+    notifyAuthTokenRefreshed()          // startet Alices /auth/me
+
+    pendingForAlice = false
+    await store.login('jwt-bob', 'refresh-bob')   // Bob meldet sich an, kein Admin
+    expect(store.isAdmin).toBe(false)
+
+    // Alices verspätete Antwort darf Bobs Rolle nicht überschreiben
+    releaseAlice(jsonResponse({ id: 'u1', username: 'alice', is_admin: true }))
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(false)
+  })
+
+  it('discards a failed role lookup that a newer login has overtaken', async () => {
+    let rejectAlice: (reason: unknown) => void = () => {}
+    const alicePending = new Promise<Response>((_resolve, reject) => { rejectAlice = reject })
+    let pendingForAlice = true
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (pendingForAlice) return alicePending
+      return jsonResponse({ id: 'u2', username: 'bob', is_admin: true })
+    }))
+
+    const store = useVisuStore()
+    const aliceLogin = store.login('jwt-alice', 'refresh-alice')  // bleibt in /auth/me hängen
+
+    pendingForAlice = false
+    await store.login('jwt-bob', 'refresh-bob')
+    expect(store.isAdmin).toBe(true)
+
+    // Alices Abfrage scheitert erst jetzt — sie darf Bob nicht degradieren
+    rejectAlice(new TypeError('offline'))
+    await aliceLogin
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(true)
+  })
+
+  it('reloads the tree after a renewal, so private nodes appear', async () => {
+    let authorized = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      // Vor der Erneuerung sieht das Backend einen abgelaufenen Bearer als anonym
+      return jsonResponse(authorized
+        ? [{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' },
+           { id: 'private', parent_id: null, name: 'Q', type: 'PAGE', order: 1, access: 'user' }]
+        : [{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+    }))
+
+    const store = useVisuStore()
+    await store.loadTree()
+    expect(store.nodes.map(n => n.id)).toEqual(['public'])
+
+    authorized = true
+    localStorage.setItem('visu_jwt', 'jwt-renewed')
+    localStorage.setItem('visu_refresh_token', 'refresh-renewed')
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    expect(store.nodes.map(n => n.id)).toEqual(['public', 'private'])
+  })
+
+  it('survives a tree reload that fails after a renewal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      return new Response(null, { status: 500 })
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-renewed')
+    localStorage.setItem('visu_refresh_token', 'refresh-renewed')
     notifyAuthTokenRefreshed()
     await flushPromises()
 
