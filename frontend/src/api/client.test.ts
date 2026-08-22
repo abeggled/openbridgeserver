@@ -282,6 +282,77 @@ describe('access token refresh', () => {
   })
 })
 
+describe('refresh across session boundaries (Codex review)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cancelTokenRefresh()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('does not revive a session that was logged out while the refresh was in flight', async () => {
+    let releaseRefresh: (res: Response) => void = () => {}
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { releaseRefresh = resolve })))
+    localStorage.setItem('visu_jwt', 'jwt-old')
+    localStorage.setItem('visu_refresh_token', 'refresh-old')
+
+    const pending = refreshAccessToken()
+    clearAuthTokens()
+    releaseRefresh(jsonResponse({ access_token: 'jwt-new', refresh_token: 'refresh-new' }))
+
+    expect(await pending).toBeNull()
+    expect(localStorage.getItem('visu_jwt')).toBeNull()
+    expect(localStorage.getItem('visu_refresh_token')).toBeNull()
+  })
+
+  it('does not replay a request under a different account', async () => {
+    const alice = fakeJwt({ sub: 'alice', exp: Math.floor(Date.now() / 1000) + 3600 })
+    const bob = fakeJwt({ sub: 'bob', exp: Math.floor(Date.now() / 1000) + 3600 })
+    localStorage.setItem('visu_jwt', alice)
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: bob, refresh_token: 'refresh-bob' })
+      }
+      // Anderer Tab meldet sich als bob an, während der Request unterwegs ist
+      localStorage.setItem('visu_jwt', bob)
+      return new Response(null, { status: 401 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(visu.deleteNode('node-of-alice')).rejects.toMatchObject({ status: 401 })
+
+    const deletes = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/nodes/node-of-alice'))
+    expect(deletes).toHaveLength(1)
+  })
+
+  it('still retries when the renewed token belongs to the same account', async () => {
+    const before = fakeJwt({ sub: 'alice', exp: Math.floor(Date.now() / 1000) + 3600 })
+    const after = fakeJwt({ sub: 'alice', exp: Math.floor(Date.now() / 1000) + 7200 })
+    localStorage.setItem('visu_jwt', before)
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+
+    const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: after, refresh_token: 'refresh-alice-2' })
+      }
+      const headers = (init.headers ?? {}) as Record<string, string>
+      if (headers['Authorization'] === `Bearer ${after}`) return new Response(null, { status: 204 })
+      return new Response(null, { status: 401 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(visu.deleteNode('node-of-alice')).resolves.toBeUndefined()
+
+    const deletes = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/nodes/node-of-alice'))
+    expect(deletes).toHaveLength(2)
+  })
+})
+
 describe('setTokens', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => {
@@ -347,14 +418,18 @@ describe('proactive token refresh', () => {
     expect(localStorage.getItem('visu_jwt')).toBe('jwt-new')
   })
 
-  it('refreshes almost immediately when the access token is already expired', async () => {
+  it('waits out the minimum delay when the access token is already expired', async () => {
     const fetchMock = stubAuthFetch(() => jsonResponse({ access_token: 'jwt-new', refresh_token: 'refresh-new' }))
     localStorage.setItem('visu_jwt', fakeJwt({ exp: Math.floor(Date.now() / 1000) - 10 }))
     localStorage.setItem('visu_refresh_token', 'refresh-old')
 
     scheduleTokenRefresh()
-    await vi.advanceTimersByTimeAsync(1_000)
 
+    // Der Mindestabstand hält /auth/refresh unter dem 10/min-Limit
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(0)
+
+    await vi.advanceTimersByTimeAsync(1_000)
     expect(refreshCalls(fetchMock)).toHaveLength(1)
   })
 
@@ -450,6 +525,40 @@ describe('proactive token refresh', () => {
 
     await vi.advanceTimersByTimeAsync(RETRY_WINDOW_MS)
     expect(refreshCalls(fetchMock)).toHaveLength(1)
+  })
+
+  it('keeps a sane cadence for a one-minute token lifetime', async () => {
+    const oneMinuteToken = () => fakeJwt({ exp: Math.floor(Date.now() / 1000) + 60 })
+    const fetchMock = stubAuthFetch(() => jsonResponse({
+      access_token: oneMinuteToken(),
+      refresh_token: 'refresh-new',
+    }))
+    localStorage.setItem('visu_jwt', oneMinuteToken())
+    localStorage.setItem('visu_refresh_token', 'refresh-old')
+
+    scheduleTokenRefresh()
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    // Halbe Restlaufzeit Vorlauf → alle 30 s, weit unter dem 10/min-Limit
+    expect(refreshCalls(fetchMock)).toHaveLength(2)
+  })
+
+  it('ends the session when the scheduled refresh is rejected for good', async () => {
+    stubAuthFetch(() => new Response(null, { status: 401 }))
+    localStorage.setItem('visu_jwt', fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }))
+    localStorage.setItem('visu_refresh_token', 'refresh-old')
+    localStorage.setItem('visu_is_admin', '1')
+    const unauthorized = vi.fn()
+    window.addEventListener('visu:unauthorized', unauthorized)
+
+    scheduleTokenRefresh()
+    await vi.advanceTimersByTimeAsync(3600_000 - 60_000)
+
+    expect(localStorage.getItem('visu_jwt')).toBeNull()
+    expect(localStorage.getItem('visu_refresh_token')).toBeNull()
+    expect(localStorage.getItem('visu_is_admin')).toBeNull()
+    expect(unauthorized).toHaveBeenCalledTimes(1)
+    window.removeEventListener('visu:unauthorized', unauthorized)
   })
 
   it('replaces a previously scheduled refresh instead of stacking timers', () => {

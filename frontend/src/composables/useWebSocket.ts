@@ -67,6 +67,7 @@ export function createWebSocketClient() {
 
     connectContext = nextContext
     shouldReconnect = true
+    attachRefreshListener()
     const jwt = getJwt()
     let url = WS_URL()
     if (jwt && !connectContext.preferPageScope) {
@@ -125,6 +126,22 @@ export function createWebSocketClient() {
     }, reconnectDelay)
   }
 
+  // Jeder Client hört selbst auf den Refresh — WidgetRef betreibt eine eigene
+  // Instanz neben dem Singleton und muss genauso neu verbinden.
+  let refreshListenerAttached = false
+
+  function attachRefreshListener() {
+    if (refreshListenerAttached) return
+    window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, reconnectWithFreshToken)
+    refreshListenerAttached = true
+  }
+
+  function detachRefreshListener() {
+    if (!refreshListenerAttached) return
+    window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, reconnectWithFreshToken)
+    refreshListenerAttached = false
+  }
+
   /**
    * Nach einem Token-Refresh neu verbinden.
    *
@@ -162,6 +179,7 @@ export function createWebSocketClient() {
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
       shouldReconnect = false
+      detachRefreshListener()
       subscribedIds.clear()
       connectContext = {}
       if (reconnectTimer) {
@@ -200,9 +218,6 @@ export function createWebSocketClient() {
 }
 
 const defaultClient = createWebSocketClient()
-
-// Der Singleton verbindet sich nach jedem Token-Refresh mit dem neuen JWT neu.
-window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, () => defaultClient.reconnectWithFreshToken())
 
 // ── Composable ────────────────────────────────────────────────────────────────
 

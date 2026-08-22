@@ -100,17 +100,20 @@ function clearIsAdmin(): void {
 // deshalb genau einen In-Flight-Refresh.
 
 /**
- * `retryable` unterscheidet einen vorübergehenden Fehlschlag (Server nicht
- * erreichbar, 5xx, Rate-Limit) von einem endgültigen (Refresh-Token ungültig
- * oder abgelaufen). Nur der erste rechtfertigt einen weiteren Versuch.
+ * - `renewed`     — neuer Access-Token liegt vor
+ * - `rejected`    — Refresh-Token endgültig ungültig; die Sitzung ist vorbei
+ * - `transient`   — Server nicht erreichbar, 5xx oder Rate-Limit; erneut versuchen
+ * - `unavailable` — kein Refresh-Token, unbrauchbare Antwort, oder die Anmeldung
+ *                   hat sich während des Requests geändert
  */
-type RefreshResult = { token: string | null; retryable: boolean }
+type RefreshOutcome = 'renewed' | 'rejected' | 'transient' | 'unavailable'
+type RefreshResult = { token: string | null; outcome: RefreshOutcome }
 
 let _refreshInFlight: Promise<RefreshResult> | null = null
 
 async function performRefresh(): Promise<RefreshResult> {
   const refreshToken = getRefreshToken()
-  if (!refreshToken) return { token: null, retryable: false }
+  if (!refreshToken) return { token: null, outcome: 'unavailable' }
   let res: Response
   try {
     res = await fetch(`${BASE}/auth/refresh`, {
@@ -120,14 +123,20 @@ async function performRefresh(): Promise<RefreshResult> {
     })
   } catch {
     // Netzwerkfehler — Tokens behalten, der nächste Versuch kann klappen
-    return { token: null, retryable: true }
+    return { token: null, outcome: 'transient' }
   }
-  if (!res.ok) return { token: null, retryable: res.status === 429 || res.status >= 500 }
+  if (!res.ok) {
+    const transient = res.status === 429 || res.status >= 500
+    return { token: null, outcome: transient ? 'transient' : 'rejected' }
+  }
   const data = await res.json().catch(() => null) as { access_token?: string; refresh_token?: string } | null
-  if (!data?.access_token) return { token: null, retryable: false }
+  if (!data?.access_token) return { token: null, outcome: 'unavailable' }
+  // Wurde zwischenzeitlich abgemeldet (oder ein anderer Benutzer angemeldet),
+  // darf die späte Antwort die Sitzung nicht wiederbeleben.
+  if (getRefreshToken() !== refreshToken) return { token: null, outcome: 'unavailable' }
   setTokens(data.access_token, data.refresh_token)
   notifyAuthTokenRefreshed()
-  return { token: data.access_token, retryable: false }
+  return { token: data.access_token, outcome: 'renewed' }
 }
 
 /** Genau ein Refresh gleichzeitig — parallele Aufrufer teilen sich den Promise */
@@ -153,25 +162,38 @@ export async function refreshAccessToken(): Promise<string | null> {
 // Deshalb wird der Refresh zusätzlich kurz vor Ablauf des JWT eingeplant.
 
 const REFRESH_LEEWAY_MS = 60_000
-const MIN_REFRESH_DELAY_MS = 1_000
+// /auth/refresh erlaubt 10 Requests/Minute — nie öfter als alle 10 s erneuern.
+const MIN_REFRESH_DELAY_MS = 10_000
 const RETRY_BASE_MS = 30_000
 const RETRY_MAX_MS = 600_000
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null
 let _retryDelay = RETRY_BASE_MS
 
-/** `exp` (ms seit Epoch) aus dem JWT-Payload lesen; `null` wenn nicht lesbar */
-function jwtExpiresAt(token: string): number | null {
+/** JWT-Payload lesen; `null` wenn er nicht dekodierbar ist */
+function jwtClaims(token: string): Record<string, unknown> | null {
   const payload = token.split('.')[1]
   if (!payload) return null
   const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
   const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
   try {
-    const claims = JSON.parse(atob(padded)) as { exp?: unknown }
-    return typeof claims.exp === 'number' ? claims.exp * 1000 : null
+    const parsed: unknown = JSON.parse(atob(padded))
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : null
   } catch {
     return null
   }
+}
+
+/** `exp` (ms seit Epoch) aus dem JWT-Payload lesen; `null` wenn nicht lesbar */
+function jwtExpiresAt(token: string): number | null {
+  const exp = jwtClaims(token)?.exp
+  return typeof exp === 'number' ? exp * 1000 : null
+}
+
+/** Angemeldeter Benutzer laut JWT; `null` wenn nicht lesbar */
+function jwtSubject(token: string): string | null {
+  const sub = jwtClaims(token)?.sub
+  return typeof sub === 'string' ? sub : null
 }
 
 export function cancelTokenRefresh(): void {
@@ -185,14 +207,23 @@ function armRefreshTimer(delay: number): void {
   cancelTokenRefresh()
   _refreshTimer = setTimeout(() => {
     _refreshTimer = null
-    void refreshSession().then(({ token, retryable }) => {
+    void refreshSession().then(({ outcome }) => {
       // Erfolg plant sich über setTokens() → scheduleTokenRefresh() selbst neu.
-      if (token || !retryable || !getRefreshToken()) return
-      // Vorübergehender Fehlschlag: ohne erneuten Versuch bliebe eine dauerhaft
-      // geöffnete Viewer-Seite bis zum nächsten HTTP-401 ohne Erneuerung — und
-      // ein Wandpanel feuert keinen mehr.
-      armRefreshTimer(_retryDelay)
-      _retryDelay = Math.min(_retryDelay * 2, RETRY_MAX_MS)
+      if (outcome === 'renewed') return
+      if (outcome === 'transient' && getRefreshToken()) {
+        // Ohne erneuten Versuch bliebe eine dauerhaft geöffnete Viewer-Seite bis
+        // zum nächsten HTTP-401 ohne Erneuerung — und ein Wandpanel feuert keinen.
+        armRefreshTimer(_retryDelay)
+        _retryDelay = Math.min(_retryDelay * 2, RETRY_MAX_MS)
+        return
+      }
+      if (outcome === 'rejected') {
+        // Refresh-Token endgültig ungültig. Ohne Aufräumen liefe die Seite bis
+        // zum Ablauf des Access-Tokens weiter und verlöre danach still die
+        // WebSocket-Werte, statt die Sitzung sichtbar zu beenden.
+        clearAuthTokens()
+        window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+      }
     })
   }, delay)
 }
@@ -205,7 +236,12 @@ export function scheduleTokenRefresh(): void {
   if (!jwt || !getRefreshToken()) return
   const expiresAt = jwtExpiresAt(jwt)
   if (expiresAt === null) return
-  armRefreshTimer(Math.max(expiresAt - Date.now() - REFRESH_LEEWAY_MS, MIN_REFRESH_DELAY_MS))
+  const remaining = expiresAt - Date.now()
+  // Bei kurzer Token-Laufzeit (security.jwt_expire_minutes: 1) würde ein fester
+  // Vorlauf von 60 s jeden neuen Token sofort wieder fällig machen — höchstens
+  // die halbe Restlaufzeit vorziehen.
+  const leeway = Math.min(REFRESH_LEEWAY_MS, Math.max(remaining, 0) / 2)
+  armRefreshTimer(Math.max(remaining - leeway, MIN_REFRESH_DELAY_MS))
 }
 
 /** Session-Token für einen bestimmten Knoten (PIN-Auth), nur für diese Browser-Session */
@@ -274,6 +310,27 @@ function buildHeaders(opts: RequestOptions, jwtOverride?: string): Record<string
   return headers
 }
 
+/**
+ * Erneuerten Access-Token für einen mit 401 abgewiesenen Request besorgen.
+ *
+ * Hat ein paralleler Request den Token schon erneuert, wird dieser genutzt statt
+ * ein weiterer Refresh gegen das Rate-Limit von /auth/refresh gefeuert. Der
+ * Retry darf dabei nie die Anmeldung wechseln: meldet sich in einem anderen Tab
+ * ein anderer Benutzer an, gehört der gespeicherte Token diesem — der
+ * ursprüngliche, womöglich schreibende Request würde sonst unter fremden
+ * Rechten wiederholt. Nicht dekodierbare Tokens können keinen Wechsel belegen
+ * und blockieren den Retry deshalb nicht.
+ */
+async function renewedTokenFor(previous: string | null): Promise<string | null> {
+  const current = getJwt()
+  const token = current && current !== previous ? current : await refreshAccessToken()
+  if (!token) return null
+  const before = previous === null ? null : jwtSubject(previous)
+  const after = jwtSubject(token)
+  if (before !== null && after !== null && before !== after) return null
+  return token
+}
+
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const send = (jwtOverride?: string) => fetch(`${BASE}${path}`, {
     ...opts,
@@ -286,11 +343,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   // Abgelaufener Access-Token: genau einen Refresh anstossen (geteilt über alle
   // parallelen Requests) und den ursprünglichen Request einmal wiederholen.
   if (res.status === 401 && !opts.noAuthRefresh) {
-    // Hat ein anderer Request den Token zwischenzeitlich schon erneuert, direkt
-    // damit wiederholen — sonst würde jeder Nachzügler einen weiteren Refresh
-    // gegen das Rate-Limit von /auth/refresh feuern.
-    const current = getJwt()
-    const renewed = current && current !== jwtBefore ? current : await refreshAccessToken()
+    const renewed = await renewedTokenFor(jwtBefore)
     if (renewed) res = await send(renewed)
   }
 

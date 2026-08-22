@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createWebSocketClient, useWebSocket } from './useWebSocket'
-import { notifyAuthTokenRefreshed } from '@/utils/authEvents'
+import { AUTH_TOKEN_REFRESHED_EVENT, notifyAuthTokenRefreshed } from '@/utils/authEvents'
 
 const mocks = vi.hoisted(() => ({
   getJwt: vi.fn(),
@@ -48,6 +48,15 @@ class MockWebSocket {
 }
 
 describe('createWebSocketClient', () => {
+  const clients: Array<ReturnType<typeof createWebSocketClient>> = []
+
+  /** Client, der nach dem Test wieder abgemeldet wird (er hört auf Refresh-Events) */
+  function newClient() {
+    const client = createWebSocketClient()
+    clients.push(client)
+    return client
+  }
+
   beforeEach(() => {
     vi.useFakeTimers()
     vi.stubGlobal('WebSocket', MockWebSocket)
@@ -56,6 +65,7 @@ describe('createWebSocketClient', () => {
   })
 
   afterEach(() => {
+    for (const client of clients.splice(0)) client.disconnect()
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -63,7 +73,7 @@ describe('createWebSocketClient', () => {
   it('uses page scope when requested even if a JWT exists', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect({ pageId: 'source-page', sessionToken: 'session-1', preferPageScope: true })
 
     expect(mocks.sockets).toHaveLength(1)
@@ -74,7 +84,7 @@ describe('createWebSocketClient', () => {
   it('keeps JWT auth when a page context is provided', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect({ pageId: 'viewer-page', sessionToken: 'session-1' })
 
     expect(mocks.sockets).toHaveLength(1)
@@ -86,7 +96,7 @@ describe('createWebSocketClient', () => {
   it('does not send session_token in URL when JWT auth is used', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect({ pageId: 'page-x', sessionToken: 'pin-secret' })
 
     expect(mocks.sockets[0].protocols).toEqual(['obs.jwt.jwt-token'])
@@ -97,7 +107,7 @@ describe('createWebSocketClient', () => {
   it('keeps JWT transport as the default authenticated path', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect()
 
     expect(mocks.sockets).toHaveLength(1)
@@ -107,7 +117,7 @@ describe('createWebSocketClient', () => {
   it('reconnects when a JWT socket gains page context', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect()
     const initialSocket = mocks.sockets[0]
 
@@ -124,7 +134,7 @@ describe('createWebSocketClient', () => {
   it('reconnects with the renewed token after a refresh', () => {
     mocks.getJwt.mockReturnValue('jwt-old')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect({ pageId: 'viewer-page' })
     const initialSocket = mocks.sockets[0]
 
@@ -141,7 +151,7 @@ describe('createWebSocketClient', () => {
   it('cancels a pending backoff reconnect when the token is refreshed', () => {
     mocks.getJwt.mockReturnValue('jwt-old')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect()
     mocks.sockets[0].onclose?.({ code: 1006 })
     expect(vi.getTimerCount()).toBe(1)
@@ -159,7 +169,7 @@ describe('createWebSocketClient', () => {
   it('does not reconnect a page-scoped connection, which carries no JWT', () => {
     mocks.getJwt.mockReturnValue('jwt-old')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect({ pageId: 'anon-page', sessionToken: 'session-1', preferPageScope: true })
     client.reconnectWithFreshToken()
 
@@ -169,7 +179,7 @@ describe('createWebSocketClient', () => {
   it('does not reconnect once the JWT is gone', () => {
     mocks.getJwt.mockReturnValue('jwt-old')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect()
 
     mocks.getJwt.mockReturnValue(null)
@@ -181,7 +191,7 @@ describe('createWebSocketClient', () => {
   it('does not reconnect before the first connect or after a disconnect', () => {
     mocks.getJwt.mockReturnValue('jwt-old')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.reconnectWithFreshToken()
     expect(mocks.sockets).toHaveLength(0)
 
@@ -206,10 +216,47 @@ describe('createWebSocketClient', () => {
     client.disconnect()
   })
 
+  it('reconnects a second client, as WidgetRef runs its own', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const shared = useWebSocket()
+    const widgetRef = newClient()
+    shared.connect({ pageId: 'viewer-page' })
+    widgetRef.connect({ pageId: 'source-page' })
+    expect(mocks.sockets).toHaveLength(2)
+
+    mocks.getJwt.mockReturnValue('jwt-new')
+    notifyAuthTokenRefreshed()
+
+    expect(mocks.sockets).toHaveLength(4)
+    expect(mocks.sockets.slice(2).map(s => s.protocols)).toEqual([
+      ['obs.jwt.jwt-new'],
+      ['obs.jwt.jwt-new'],
+    ])
+    shared.disconnect()
+  })
+
+  it('releases its refresh listener on disconnect', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+    const removeListener = vi.spyOn(window, 'removeEventListener')
+
+    const client = newClient()
+    client.connect()
+    client.disconnect()
+
+    // Sonst sammelt jede WidgetRef-Instanz über die Seitenwechsel hinweg Listener an
+    expect(removeListener).toHaveBeenCalledWith(AUTH_TOKEN_REFRESHED_EVENT, expect.any(Function))
+    removeListener.mockRestore()
+
+    mocks.getJwt.mockReturnValue('jwt-new')
+    notifyAuthTokenRefreshed()
+    expect(mocks.sockets).toHaveLength(1)
+  })
+
   it('does not reconnect after an explicit disconnect', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 
-    const client = createWebSocketClient()
+    const client = newClient()
     client.connect()
     const initialSocket = mocks.sockets[0]
     client.disconnect()
