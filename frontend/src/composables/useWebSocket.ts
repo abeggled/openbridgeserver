@@ -9,6 +9,7 @@
 
 import { ref, readonly } from 'vue'
 import { getJwt } from '@/api/client'
+import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 
 type MessageHandler = (data: Record<string, unknown>) => void
 type ConnectContext = {
@@ -66,6 +67,7 @@ export function createWebSocketClient() {
 
     connectContext = nextContext
     shouldReconnect = true
+    attachRefreshListener()
     const jwt = getJwt()
     let url = WS_URL()
     if (jwt && !connectContext.preferPageScope) {
@@ -124,15 +126,60 @@ export function createWebSocketClient() {
     }, reconnectDelay)
   }
 
+  // Jeder Client hört selbst auf den Refresh — WidgetRef betreibt eine eigene
+  // Instanz neben dem Singleton und muss genauso neu verbinden.
+  let refreshListenerAttached = false
+
+  function attachRefreshListener() {
+    if (refreshListenerAttached) return
+    window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, reconnectWithFreshToken)
+    refreshListenerAttached = true
+  }
+
+  function detachRefreshListener() {
+    if (!refreshListenerAttached) return
+    window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, reconnectWithFreshToken)
+    refreshListenerAttached = false
+  }
+
+  /**
+   * Nach einem Token-Refresh neu verbinden.
+   *
+   * Der JWT steckt im Subprotokoll (`obs.jwt.<token>`) und wird beim Handshake
+   * gebunden — ein erneuerter Token erreicht eine bestehende Verbindung nicht.
+   * Ohne Reconnect verliert das Backend beim nächsten Datapoint-Scope-Refresh
+   * den Scope und die Seite friert still ein (Issue #1160).
+   */
+  function reconnectWithFreshToken() {
+    if (!shouldReconnect) return
+    if (connectContext.preferPageScope || !getJwt()) return
+    const context = connectContext
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (socket) {
+      detachSocketHandlers(socket)
+      socket.close()
+      socket = null
+      connected.value = false
+    }
+    reconnectDelay = 1000
+    connect(context)
+  }
+
   return {
     connected: readonly(connected),
 
     /** Verbindung starten (idempotent) */
     connect,
 
+    reconnectWithFreshToken,
+
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
       shouldReconnect = false
+      detachRefreshListener()
       subscribedIds.clear()
       connectContext = {}
       if (reconnectTimer) {

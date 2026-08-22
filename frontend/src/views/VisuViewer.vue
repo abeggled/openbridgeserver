@@ -167,15 +167,42 @@ async function load() {
 // Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
 function onSessionExpired() { load() }
 
+// Anmeldung endgültig weg. Die Viewer-Route trägt kein `requiresAuth`, der
+// globale Handler im Router leitet hier also nicht um — eine Seite mit
+// access='user' bliebe sonst ohne Sitzung stehen und würde stillschweigend
+// keine Werte mehr nachführen. load() schickt sie zur Login-Route.
+function onUnauthorized() {
+  if (getJwt()) return
+  // Fehlt der Knoten im Baum, stammt dieser aus der anonym gefilterten Sicht —
+  // dann lässt sich gerade nicht belegen, dass die Seite öffentlich ist, und
+  // der Viewer bliebe sonst auf seiner Fehlerseite stehen.
+  const known = visuStore.getNode(props.id)
+  if (known && resolveAccessNode(props.id).access !== 'user') return
+  // Direkt umleiten statt über load(): das wartet zuerst auf den Breadcrumb,
+  // den das Backend für einen verborgenen privaten Knoten ohne Anmeldung mit
+  // 404 beantwortet — der Zugriffs-Check dahinter würde nie erreicht.
+  router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+}
+
 onMounted(() => {
   load()
   window.addEventListener('visu:session-expired', onSessionExpired)
+  window.addEventListener('visu:unauthorized', onUnauthorized)
 })
 onUnmounted(() => {
   window.removeEventListener('visu:session-expired', onSessionExpired)
+  window.removeEventListener('visu:unauthorized', onUnauthorized)
   clearWriteContext()
 })
 watch(() => props.id, load)
+
+// Kaltstart mit abgelaufenem Access-Token: das Backend liefert dafür keine 401,
+// sondern eine anonym gefilterte Sicht, in der ein privater Knoten fehlt — die
+// Seite landet im Fehlerzustand. Sobald die Token-Erneuerung den Baum neu geholt
+// hat und der Knoten auftaucht, den Ladevorgang wiederholen.
+watch(node, (found, previous) => {
+  if (found && !previous && error.value) load()
+})
 
 // Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)
 const COLS   = computed(() => visuStore.pageConfig?.grid_cols       ?? 12)
