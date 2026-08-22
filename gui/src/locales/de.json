@@ -2173,7 +2173,7 @@
           "falling": "Fallend"
         },
         "data_typeOptions": {
-          "bool": "Wahrheitswert",
+          "bool": "Boolean",
           "number": "Zahl",
           "string": "Text"
         }

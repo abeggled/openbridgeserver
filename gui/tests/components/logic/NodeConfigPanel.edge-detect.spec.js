@@ -53,7 +53,7 @@ describe('NodeConfigPanel edge_detect enum labels', () => {
 
     const optionTexts = w.findAll('option').map(o => o.text())
     expect(optionTexts).toEqual(expect.arrayContaining(['Beide', 'Steigend', 'Fallend']))
-    expect(optionTexts).toEqual(expect.arrayContaining(['Wahrheitswert', 'Zahl', 'Text']))
+    expect(optionTexts).toEqual(expect.arrayContaining(['Boolean', 'Zahl', 'Text']))
     expect(optionTexts).not.toContain('both')
     expect(optionTexts).not.toContain('rising')
     expect(optionTexts).not.toContain('bool')
