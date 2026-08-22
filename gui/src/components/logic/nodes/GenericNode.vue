@@ -235,6 +235,18 @@ const def = computed(() => {
     }))
     return { ...base, label, outputs }
   }
+  if (props.type === 'edge_detect') {
+    // Only render the handles this configuration can actually drive, so the
+    // block states what it emits. "out" is shared by both directions, so it
+    // survives as long as *either* direction still sends a value.
+    const rising  = props.data?.on_rising  ?? 'value'
+    const falling = props.data?.on_falling ?? 'value'
+    const outputs = []
+    if (rising === 'value' || falling === 'value') outputs.push({ id: 'out', label: t('logic.ports.output') })
+    if (rising  !== 'off') outputs.push({ id: 'rising',  label: t('logic.ports.rising') })
+    if (falling !== 'off') outputs.push({ id: 'falling', label: t('logic.ports.falling') })
+    return { ...base, label, outputs }
+  }
   if (props.type === 'json_extractor') {
     let pathList = []
     try { pathList = JSON.parse(props.data?.json_paths || '[]') } catch (_) { pathList = [] }

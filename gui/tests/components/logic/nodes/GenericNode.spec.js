@@ -118,6 +118,53 @@ describe('GenericNode — handles', () => {
     expect(sources.map(h => h.attributes('data-id'))).toEqual(['out', 'rising', 'falling'])
   })
 
+  it('renders all three edge_detect outputs by default', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['out', 'rising', 'falling'])
+  })
+
+  it('drops the edge_detect value output when neither direction sends one', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'trigger', on_falling: 'trigger' })
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['rising', 'falling'])
+  })
+
+  it('keeps the edge_detect value output while one direction still sends', async () => {
+    const rising = await mountGN('edge_detect', { on_rising: 'value', on_falling: 'trigger' })
+    await flushPromises()
+    expect(rising.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'rising', 'falling'])
+
+    const falling = await mountGN('edge_detect', { on_rising: 'trigger', on_falling: 'value' })
+    await flushPromises()
+    expect(falling.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'rising', 'falling'])
+  })
+
+  it('drops an edge_detect trigger output for a direction that is off', async () => {
+    const noRising = await mountGN('edge_detect', { on_rising: 'off' })
+    await flushPromises()
+    expect(noRising.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'falling'])
+
+    const noFalling = await mountGN('edge_detect', { on_falling: 'off' })
+    await flushPromises()
+    expect(noFalling.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'rising'])
+  })
+
+  it('leaves an edge_detect with both directions off without any output', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'off', on_falling: 'off' })
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources).toHaveLength(0)
+    // The two inputs stay — the block still tracks its level.
+    expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')).toHaveLength(2)
+  })
+
   it('renders two default source handles for decision', async () => {
     const w = await mountGN('decision')
     await flushPromises()
