@@ -107,6 +107,7 @@ const NODE_DEFS = computed(() => ({
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   change_filter:{ label: t('logic.nodeTypes.change_filter'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')}],                                        outputs: [{id:'out',label:t('logic.ports.output')},{id:'changed',label:t('logic.ports.changed')}] },
+  edge_detect:  { label: t('logic.nodeTypes.edge_detect'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}], outputs: [{id:'out',label:t('logic.ports.output')},{id:'rising',label:t('logic.ports.rising')},{id:'falling',label:t('logic.ports.falling')}] },
   compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.portLabels.resultShort')}] },
   hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   decision:     { label: 'Entscheidung', color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out_1',label:t('logic.nodeConfig.decision.defaultOutput', { n: 1 })},{id:'out_2',label:t('logic.nodeConfig.decision.defaultOutput', { n: 2 })}] },
@@ -285,6 +286,15 @@ const summary = computed(() => {
     const rules = parseRowList(d.rules)
     const type = d.output_type || 'string'
     return `${type} · ${t('logic.summary.rules', { n: rules.length || 2 })}`
+  }
+  if (props.type === 'edge_detect') {
+    // "↑ <rising>  ↓ <falling>", limited to the edges `mode` reports and with
+    // an em dash for an edge whose value is configured not to be sent.
+    const mode = d.mode || 'both'
+    const parts = []
+    if (mode !== 'falling') parts.push(`\u2191 ${d.send_on_rising === false ? '\u2014' : (d.value_rising ?? 'true')}`)
+    if (mode !== 'rising')  parts.push(`\u2193 ${d.send_on_falling === false ? '\u2014' : (d.value_falling ?? 'false')}`)
+    return parts.join('  ')
   }
   if (props.type === 'math_formula') return d.formula || 'a + b'
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`

@@ -173,6 +173,12 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "heating_circuit",
         "random_value",
         "memory",
+        # An Edge Detect run on the throwaway init state copy would report a
+        # synthetic edge whenever its restored level differs from the freshly
+        # seeded registry value — a save is not a transition. Worse, that copy
+        # is discarded, so the very same edge fires again on the next real
+        # execution and the write would be published twice.
+        "edge_detect",
     }
 )
 
@@ -2271,7 +2277,12 @@ class LogicManager:
             # subgraphs are tainted) — replace them with inert placeholders
             # for the dry run so e.g. a python_script cannot burn CPU inside
             # the save request.
-            init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type == "memory"}
+            # Built from `flow`, not `init_flow`: both types are replaced by an
+            # inert missing_node below, so their "out" is absent for the dry run.
+            # That absence is a boundary, not a failed producer — without this a
+            # synchronous node between one of them and a Change Filter would log
+            # "Missing upstream output" on every single save.
+            init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
@@ -3282,7 +3293,8 @@ class LogicManager:
         _stateful_relay_correction_ids = {
             node.id
             for node in flow.nodes
-            if node.type in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write"}
+            if node.type
+            in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write", "edge_detect"}
         }
         _needs_cf_pulse_correction_snapshot = any(
             bool(
@@ -3982,6 +3994,7 @@ class LogicManager:
                     stateful_data_handle = (target_type_name, target_handle) in {
                         ("statistics", "value"),
                         ("memory", "in"),
+                        ("edge_detect", "in"),
                         ("min_max_tracker", "value"),
                         ("consumption_counter", "value"),
                         ("heating_circuit", "value"),

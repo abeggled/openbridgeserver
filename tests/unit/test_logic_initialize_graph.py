@@ -14,6 +14,7 @@ Verifies that the post-save initialization pass:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -554,6 +555,67 @@ async def test_write_downstream_of_memory_is_suppressed():
 
     mgr._event_bus.publish.assert_not_awaited()
     assert mgr._hysteresis["g1"]["m1"] == {"value": "stale"}
+
+
+@pytest.mark.asyncio
+async def test_write_downstream_of_edge_detect_is_suppressed():
+    """A save is not a transition. Edge Detect runs on the throwaway init
+    state copy, so a restored level differing from the freshly seeded value
+    would look like an edge — and because that copy is discarded, the same
+    edge would fire again on the next real execution and write twice."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+            {"source": "ed", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: True})
+    mgr._hysteresis["g1"] = {"ed": {"value": False}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+    # The remembered level is untouched, so the next real execution still
+    # reports the edge exactly once.
+    assert mgr._hysteresis["g1"]["ed"] == {"value": False}
+
+
+@pytest.mark.asyncio
+async def test_edge_detect_absence_does_not_error_intermediate_nodes_on_save(caplog):
+    """Edge Detect is replaced by an inert missing_node for the dry run, so its
+    "out" is absent. A Change Filter downstream normally makes the executor
+    report an absent output as a failed producer — that must not turn into an
+    error on every save for a node that is merely excluded from the pass."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "n1", "type": "not", "data": {}},
+            {"id": "cf", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+            {"source": "ed", "sourceHandle": "out", "target": "n1", "targetHandle": "in1"},
+            {"source": "n1", "sourceHandle": "out", "target": "cf", "targetHandle": "in"},
+            {"source": "cf", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: True})
+    mgr._hysteresis["g1"] = {"ed": {"value": False}}
+
+    with caplog.at_level(logging.ERROR):
+        await mgr.initialize_graph("g1")
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    mgr._event_bus.publish.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -199,7 +199,13 @@ class GraphExecutor:
         # Build adjacency: edge target_node.handle ← source_node.handle value
         # edge_map[target_node_id][target_handle] = (source_node_id, source_handle)
         edge_map = self._build_edge_map()
-        retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type == "memory"}
+        # memory: "out" is last tick's committed value, so its absence is a
+        # defined boundary rather than a failed producer. edge_detect: "out"
+        # is deliberately withheld on every tick without an edge ("send
+        # nothing", not "send the same value again"), so a downstream node
+        # must treat it as a normal missing input instead of reporting the
+        # producer as broken on every single run.
+        retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
         # Only failed-output paths that can influence a Change Filter need to
@@ -283,6 +289,17 @@ class GraphExecutor:
                     # like Memory. Do not turn that defined fallback into an
                     # error merely because a downstream Change Filter exists.
                     unresolved = [item for item in unresolved if item[0] != "value"]
+                if node.type == "edge_detect":
+                    # Same reasoning as Hysteresis above, for "in": an absent
+                    # input is a *defined* outcome for Edge Detect — it
+                    # deliberately neither seeds nor advances its level and
+                    # emits no edge, so nothing synthetic can reach a
+                    # downstream Change Filter. Without this the node would
+                    # become an error block on every run, and its own "reset"
+                    # would stop being handled at all. Other handles still
+                    # propagate: an unresolved "reset" would be read as
+                    # "do not reset", which is a synthesized value.
+                    unresolved = [item for item in unresolved if item[0] != "in"]
                 absorbed = False
                 if unresolved and node.type == "gate" and all(item[0] == "in" for item in unresolved):
                     enable = self._to_bool(inputs.get("enable"))
@@ -428,7 +445,7 @@ class GraphExecutor:
                 (False, None) if (node.id, "in") in blocked_inputs else self._memory_input_value(node, "in", outputs, node_overrides, edge_map)
             )
             if has_input:
-                self._set_memory_value(node, self._coerce_memory_value(node, input_value))
+                self._set_memory_value(node, self._coerce_typed_value(node, input_value))
                 continue
 
     def _memory_input_value(
@@ -1330,7 +1347,7 @@ class GraphExecutor:
         return bool(v)
 
     def _memory_initial_value(self, node: LogicNode) -> Any:
-        return self._coerce_memory_value(node, node.data.get("initial_value"))
+        return self._coerce_typed_value(node, node.data.get("initial_value"))
 
     def _memory_value(self, node: LogicNode) -> Any:
         state = self.hysteresis_state.get(node.id)
@@ -1343,8 +1360,15 @@ class GraphExecutor:
     def _set_memory_value(self, node: LogicNode, value: Any) -> None:
         self.hysteresis_state[node.id] = {"value": value}
 
-    def _coerce_memory_value(self, node: LogicNode, value: Any) -> Any:
-        dtype = node.data.get("data_type", "auto")
+    def _coerce_typed_value(self, node: LogicNode, value: Any, default_type: str = "auto") -> Any:
+        """Apply a node's ``data_type`` config to a raw configured/stored value.
+
+        Shared by Memory and Edge Detect, which declare the same ``data_type``
+        field with the same meaning. ``default_type`` is the node's own schema
+        default, used when a graph carries no explicit ``data_type`` (an
+        imported or hand-written flow, or one saved before the field existed).
+        """
+        dtype = node.data.get("data_type", default_type)
         if dtype == "bool":
             return self._to_bool(value)
         if dtype == "number":
@@ -1624,6 +1648,55 @@ class GraphExecutor:
                     out_value = value
                     self.hysteresis_state[node.id] = {"value": baseline}
                 return {"out": out_value, "changed": False}
+
+            case "edge_detect":
+                # Remembered previous *level* (already boolean) — Edge Detect
+                # compares levels, not values, so unlike change_filter there is
+                # nothing to deep-copy or type-recover across a restart.
+                state = self.hysteresis_state.get(node.id)
+                has_prev = isinstance(state, dict) and "value" in state
+                idle: dict[str, Any] = {"rising": False, "falling": False}
+                if self._to_bool(inputs.get("reset")):
+                    # Reset wins over a value arriving on the same tick (same
+                    # precedence as memory's deferred commit): the remembered
+                    # level is dropped entirely, so the next value re-seeds the
+                    # baseline and produces no edge — and nothing is persisted
+                    # for this node until then.
+                    self.hysteresis_state.pop(node.id, None)
+                    return idle
+                if "in" not in inputs or inputs["in"] is None:
+                    # Unwired/absent input, or an explicit "nothing arrived":
+                    # this run was driven by some other source, so it must
+                    # neither seed nor advance the level. None is treated as
+                    # absent — not coerced to False — exactly like the other
+                    # stateful blocks (hysteresis' `if val is None`,
+                    # statistics' `if val is not None`). Otherwise an unseeded
+                    # Read Object would seed a bogus False level and the first
+                    # REAL value would fire a rising edge, contradicting "the
+                    # first value after a start produces no edge". It is also
+                    # how LogicManager neutralizes a Change Filter's no-pulse
+                    # placeholder on an unrelated branch (issue #1090).
+                    return idle
+                current = self._to_bool(inputs["in"])
+                # The level is tracked unconditionally — `mode` filters only
+                # the outputs, so an ignored counter-edge still moves the
+                # baseline and the next relevant edge is recognised correctly.
+                self.hysteresis_state[node.id] = {"value": current}
+                if not has_prev or current == bool(state["value"]):
+                    # First value after start/reset, or a repeated level: no
+                    # edge, and "out" stays absent so nothing downstream sees a
+                    # (repeated) value at all.
+                    return idle
+                rising = current
+                mode = str(d.get("mode", "both"))
+                if (rising and mode == "falling") or (not rising and mode == "rising"):
+                    return idle
+                send = d.get("send_on_rising", True) if rising else d.get("send_on_falling", True)
+                edge_result: dict[str, Any] = {"rising": rising, "falling": not rising}
+                if self._to_bool(send):
+                    configured = d.get("value_rising", "true") if rising else d.get("value_falling", "false")
+                    edge_result["out"] = self._coerce_typed_value(node, configured, "bool")
+                return edge_result
 
             case "compare":
                 operator_key = str(d.get("operator", ">")).strip().lower()

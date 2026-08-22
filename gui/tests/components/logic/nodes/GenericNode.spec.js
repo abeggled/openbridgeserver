@@ -108,6 +108,16 @@ describe('GenericNode — handles', () => {
     expect(sources.length).toBe(2)
   })
 
+  it('shows "Flankenerkennung" label and renders 2 target + 3 source handles for edge_detect', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    expect(w.find('.gn-title').text()).toBe('Flankenerkennung')
+    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(targets.map(h => h.attributes('data-id'))).toEqual(['in', 'reset'])
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['out', 'rising', 'falling'])
+  })
+
   it('renders two default source handles for decision', async () => {
     const w = await mountGN('decision')
     await flushPromises()
@@ -150,6 +160,28 @@ describe('GenericNode — summary', () => {
     const w = await mountGN('const_value', { data_type: 'number', value: '42' })
     await flushPromises()
     expect(w.find('.gn-summary').text()).toContain('42')
+  })
+
+  it('shows both edge values for edge_detect by default', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 true  \u2193 false')
+  })
+
+  it('shows only the configured edge direction for edge_detect', async () => {
+    const rising = await mountGN('edge_detect', { mode: 'rising', value_rising: '1' })
+    await flushPromises()
+    expect(rising.find('.gn-summary').text()).toBe('\u2191 1')
+
+    const falling = await mountGN('edge_detect', { mode: 'falling', value_falling: '0' })
+    await flushPromises()
+    expect(falling.find('.gn-summary').text()).toBe('\u2193 0')
+  })
+
+  it('marks an edge_detect edge that does not send with an em dash', async () => {
+    const w = await mountGN('edge_detect', { send_on_rising: false, send_on_falling: false })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 \u2014  \u2193 \u2014')
   })
 
   it('shows formula for math_formula', async () => {
