@@ -17,30 +17,36 @@ export const useVisuStore = defineStore('visu', () => {
   const nodes = ref<VisuNode[]>([])
   const treeLoaded = ref(false)
 
-  // Zählt jede Änderung am Baum. Eine Antwort, die vor einer Änderung angefordert
-  // und danach zugestellt wurde, ist veraltet und darf sie nicht überschreiben.
-  let treeRevision = 0
+  // Jede Anmeldung, Erneuerung und Abmeldung eröffnet eine Generation. Alles,
+  // was danach asynchron zurückkommt, darf nur übernommen werden, solange keine
+  // neuere Generation begonnen hat.
+  let authGeneration = 0
 
-  function setTree(fresh: VisuNode[]) {
-    nodes.value = fresh
-    treeLoaded.value = true
-    treeRevision += 1
-  }
+  // Lokale Änderungen am Baum (Anlegen, Verschieben, Löschen). Eine Antwort, die
+  // vor einer Änderung angefordert und danach zugestellt wurde, ist veraltet.
+  let treeMutations = 0
 
   /**
-   * Baum laden und nur übernehmen, wenn er nicht schon überholt ist.
+   * Baum laden und nur übernehmen, wenn die Antwort noch die maßgebliche ist.
    *
-   * Jede Antwort, die den ganzen Baum ersetzt, muss das prüfen: neben lokalen
-   * Änderungen kann inzwischen auch die Token-Erneuerung eine autorisierte
-   * Sicht geholt haben. Ein beim Kaltstart mit abgelaufenem Token gestarteter
-   * Request bringt die anonym gefilterte Sicht mit und würde sie sonst wieder
-   * zurücksetzen.
+   * Zwei Dinge machen sie ungültig: eine lokale Änderung, die nach der Anfrage
+   * passiert ist, und ein Sitzungswechsel. Letzteres deckt beide Reihenfolgen
+   * ab — die anonym gefilterte Sicht vom Kaltstart gehört zur Generation davor
+   * und wird verworfen, egal ob sie vor oder nach der autorisierten eintrifft.
+   * Ein reiner „hat sich was geändert"-Zähler konnte das nicht unterscheiden
+   * und verwarf je nach Reihenfolge die falsche Antwort.
    */
-  async function loadTree() {
-    const revisionBefore = treeRevision
+  async function loadTreeFor(generation: number) {
+    const mutationsBefore = treeMutations
     const fresh = await visuApi.tree()
-    if (revisionBefore !== treeRevision) return
-    setTree(fresh)
+    if (mutationsBefore !== treeMutations) return
+    if (generation !== authGeneration) return
+    nodes.value = fresh
+    treeLoaded.value = true
+  }
+
+  async function loadTree() {
+    await loadTreeFor(authGeneration)
   }
 
   function getNode(id: string): VisuNode | undefined {
@@ -81,11 +87,6 @@ export const useVisuStore = defineStore('visu', () => {
   const _isAdmin = ref<boolean>(getIsAdmin())
   const isLoggedIn = computed(() => !!_jwt.value)
   const isAdmin = computed(() => _isAdmin.value)
-
-  // Jede Anmeldung, Erneuerung und Abmeldung eröffnet eine Generation. Alles,
-  // was danach asynchron zurückkommt, darf nur übernommen werden, solange keine
-  // neuere Generation begonnen hat.
-  let authGeneration = 0
 
   /** Spiegel wieder an den localStorage angleichen (nach erzwungenem Logout) */
   function syncAuthState() {
@@ -143,14 +144,7 @@ export const useVisuStore = defineStore('visu', () => {
     // dieser Sicht und muss nach der Erneuerung neu geholt werden, sonst
     // bleiben private Knoten unsichtbar.
     try {
-      const revisionBefore = treeRevision
-      const fresh = await visuApi.tree()
-      // Neben einem Sitzungswechsel kann in derselben Sitzung auch eine
-      // Änderung dazwischengekommen sein (angelegter, verschobener oder
-      // gelöschter Knoten) — dieser Schnappschuss ist dann älter als der
-      // lokale Stand und würde sie zurücknehmen.
-      if (generation !== authGeneration || revisionBefore !== treeRevision) return
-      setTree(fresh)
+      await loadTreeFor(generation)
     } catch {
       // Nächste Erneuerung oder Navigation versucht es erneut
     }
@@ -192,7 +186,7 @@ export const useVisuStore = defineStore('visu', () => {
   async function createNode(data: Partial<VisuNode>): Promise<VisuNode> {
     const node = await visuApi.createNode(data)
     nodes.value.push(node)
-    treeRevision += 1
+    treeMutations += 1
     return node
   }
 
@@ -200,20 +194,20 @@ export const useVisuStore = defineStore('visu', () => {
     const node = await visuApi.updateNode(id, data)
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx !== -1) nodes.value[idx] = node
-    treeRevision += 1
+    treeMutations += 1
     return node
   }
 
   async function deleteNode(id: string): Promise<void> {
     await visuApi.deleteNode(id)
     nodes.value = nodes.value.filter((n) => n.id !== id)
-    treeRevision += 1
+    treeMutations += 1
   }
 
   async function copyNode(id: string, targetParentId: string | null, newName: string): Promise<VisuNode> {
     const node = await visuApi.copyNode(id, targetParentId, newName)
     nodes.value.push(node)
-    treeRevision += 1
+    treeMutations += 1
     return node
   }
 
@@ -221,7 +215,7 @@ export const useVisuStore = defineStore('visu', () => {
     const node = await visuApi.moveNode(id, newParentId, order)
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx !== -1) nodes.value[idx] = node
-    treeRevision += 1
+    treeMutations += 1
   }
 
   return {

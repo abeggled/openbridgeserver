@@ -256,9 +256,12 @@ function armRefreshTimer(delay: number): void {
       }
       if (outcome === 'superseded') {
         // Ein anderer Tab hat die Sitzung im gemeinsamen localStorage erneuert.
-        // Ohne neuen Timer bliebe dieser Tab ohne Erneuerung zurück und seine
-        // WebSocket-Verbindung verlöre später still den Datapoint-Scope.
+        // Ohne neuen Timer bliebe dieser Tab ohne Erneuerung zurück; ohne das
+        // Event behielte sein WebSocket den alten JWT im Subprotokoll und
+        // verlöre nach dessen Ablauf still den Datapoint-Scope. Der gespeicherte
+        // Token ist bereits der neue — die Verbraucher müssen ihn nur abholen.
         scheduleTokenRefresh()
+        notifyAuthTokenRefreshed()
         return
       }
       if (outcome === 'rejected') {

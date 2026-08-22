@@ -297,6 +297,45 @@ describe('visu store auth state', () => {
     expect(store.isAdmin).toBe(false)
   })
 
+  it('prefers the authorized tree when the anonymous load finishes first', async () => {
+    const publicNode = {
+      id: 'public', parent_id: null, name: 'P', type: 'PAGE' as const, order: 0, access: 'public' as const,
+    }
+    const privateNode = {
+      id: 'private', parent_id: null, name: 'Q', type: 'PAGE' as const, order: 1, access: 'user' as const,
+    }
+    let releaseAnonymous: (value: Response) => void = () => {}
+    let releaseAuthorized: (value: Response) => void = () => {}
+    let treeCall = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      treeCall += 1
+      if (treeCall === 1) return new Promise<Response>(resolve => { releaseAnonymous = resolve })
+      return new Promise<Response>(resolve => { releaseAuthorized = resolve })
+    }))
+
+    const store = useVisuStore()
+    const coldStart = store.loadTree()
+
+    localStorage.setItem('visu_jwt', 'jwt-renewed')
+    localStorage.setItem('visu_refresh_token', 'refresh-renewed')
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    // Diesmal ist die anonyme Antwort die schnellere
+    releaseAnonymous(jsonResponse([publicNode]))
+    await coldStart
+    await flushPromises()
+
+    releaseAuthorized(jsonResponse([publicNode, privateNode]))
+    await flushPromises()
+
+    expect(store.nodes.map(n => n.id)).toContain('private')
+  })
+
   it('keeps the renewed tree when a slower anonymous load finishes later', async () => {
     const publicNode = {
       id: 'public', parent_id: null, name: 'P', type: 'PAGE' as const, order: 0, access: 'public' as const,

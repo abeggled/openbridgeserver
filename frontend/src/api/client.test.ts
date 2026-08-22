@@ -744,6 +744,39 @@ describe('proactive token refresh', () => {
     expect(refreshCalls(fetchMock)).toHaveLength(1)
   })
 
+  it('tells the websocket and widgets when another tab rotated the session', async () => {
+    const thirtyDays = 30 * 24 * 3600
+    let releaseRefresh: (value: Response) => void = () => {}
+    let deferFirst = true
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        if (deferFirst) {
+          deferFirst = false
+          return new Promise<Response>(resolve => { releaseRefresh = resolve })
+        }
+        return Promise.resolve(jsonResponse({ access_token: 'jwt-final', refresh_token: 'refresh-final' }))
+      }
+      return Promise.resolve(new Response(null, { status: 401 }))
+    }))
+    const refreshed = vi.fn()
+    window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, refreshed)
+
+    localStorage.setItem('visu_jwt', fakeJwt({ exp: Math.floor(Date.now() / 1000) + 120 }))
+    localStorage.setItem('visu_refresh_token', fakeJwt({ exp: Math.floor(Date.now() / 1000) + thirtyDays }))
+    scheduleTokenRefresh()
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    // Nachbar-Tab war schneller
+    localStorage.setItem('visu_jwt', 'jwt-from-sibling')
+    localStorage.setItem('visu_refresh_token', 'refresh-from-sibling')
+    releaseRefresh(jsonResponse({ access_token: 'stale-access', refresh_token: 'stale-refresh' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Der gespeicherte Token ist neu — WebSocket und Kamera-URLs müssen ihn holen
+    expect(refreshed).toHaveBeenCalledTimes(1)
+    window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, refreshed)
+  })
+
   it('keeps renewing after another tab has taken over the session', async () => {
     const thirtyDays = 30 * 24 * 3600
     let releaseRefresh: (value: Response) => void = () => {}
