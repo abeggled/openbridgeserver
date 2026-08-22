@@ -33,6 +33,7 @@ PURE_LOGIC_NODE_TYPES = frozenset(
         "datapoint_write",
         "datetime",
         "decision",
+        "edge_detect",
         "gate",
         "heating_circuit",
         "hysteresis",

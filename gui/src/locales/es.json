@@ -12,8 +12,9 @@
     "submitting": "Iniciando sesión…"
   },
   "logic": {
-    "nodeConfig": { "datetime": { "custom_format": "Formato personalizado", "tokens": "Tokens: H/HH hora, m/mm minuto, s/ss segundo, d/dd día, EE/EEE/EEEE día de la semana, M/MM/MMM/MMMM mes, yy/yyyy año." } },
-    "nodeDescriptions": { "datetime": "Muestra la fecha y hora actuales en la zona horaria y el formato configurados." }
+    "nodeConfig": { "datetime": { "custom_format": "Formato personalizado", "tokens": "Tokens: H/HH hora, m/mm minuto, s/ss segundo, d/dd día, EE/EEE/EEEE día de la semana, M/MM/MMM/MMMM mes, yy/yyyy año." }, "edge_detect": {"on_rising": "Flanco ascendente", "on_risingOptions": {"value": "Disparador + valor", "trigger": "Solo disparador", "off": "Desactivado"}, "value_rising": "Valor en flanco ascendente", "on_falling": "Flanco descendente", "on_fallingOptions": {"value": "Disparador + valor", "trigger": "Solo disparador", "off": "Desactivado"}, "value_falling": "Valor en flanco descendente", "data_type": "Tipo de dato", "data_typeOptions": {"bool": "Booleano", "number": "Número", "string": "Texto"}, "persist_state": "Restaurar el estado tras reiniciar"}, "common": {"boolTrue": "Verdadero", "boolFalse": "Falso"} },
+    "nodeDescriptions": { "datetime": "Muestra la fecha y hora actuales en la zona horaria y el formato configurados.", "edge_detect": "Evalúa la entrada como booleano y reacciona al cambio: un flanco ascendente (falso → verdadero) emite el valor de flanco ascendente y activa el disparador ascendente; un flanco descendente (verdadero → falso) emite el valor de flanco descendente y activa el disparador descendente. Sin flanco no se envía nada a la salida." },
+    "nodeTypes": { "edge_detect": "Detección de flanco" }
   },
   "common": {
     "save": "Ahorrar"

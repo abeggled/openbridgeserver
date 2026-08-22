@@ -6,8 +6,9 @@
     "monthsShort": "gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic"
   },
   "logic": {
-    "nodeConfig": { "datetime": { "custom_format": "Formato personalizzato", "tokens": "Token: H/HH ora, m/mm minuto, s/ss secondo, d/dd giorno, EE/EEE/EEEE giorno della settimana, M/MM/MMM/MMMM mese, yy/yyyy anno." } },
-    "nodeDescriptions": { "datetime": "Mostra la data e l’ora correnti nel fuso orario e nel formato configurati." }
+    "nodeConfig": { "datetime": { "custom_format": "Formato personalizzato", "tokens": "Token: H/HH ora, m/mm minuto, s/ss secondo, d/dd giorno, EE/EEE/EEEE giorno della settimana, M/MM/MMM/MMMM mese, yy/yyyy anno." }, "edge_detect": {"on_rising": "Fronte di salita", "on_risingOptions": {"value": "Trigger + valore", "trigger": "Solo trigger", "off": "Spento"}, "value_rising": "Valore sul fronte di salita", "on_falling": "Fronte di discesa", "on_fallingOptions": {"value": "Trigger + valore", "trigger": "Solo trigger", "off": "Spento"}, "value_falling": "Valore sul fronte di discesa", "data_type": "Tipo di dato", "data_typeOptions": {"bool": "Booleano", "number": "Numero", "string": "Testo"}, "persist_state": "Ripristina lo stato dopo il riavvio"}, "common": {"boolTrue": "Vero", "boolFalse": "Falso"} },
+    "nodeDescriptions": { "datetime": "Mostra la data e l’ora correnti nel fuso orario e nel formato configurati.", "edge_detect": "Valuta l'ingresso come booleano e reagisce al cambiamento: un fronte di salita (falso → vero) emette il valore di salita e attiva il trigger di salita; un fronte di discesa (vero → falso) emette il valore di discesa e attiva il trigger di discesa. Senza fronte non viene inviato nulla sull'uscita." },
+    "nodeTypes": { "edge_detect": "Rilevamento fronte" }
   },
   "login": {
     "submitting": "Accesso in corso…",

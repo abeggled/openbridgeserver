@@ -13,8 +13,9 @@
     "logoAlt": "open bridge server"
   },
   "logic": {
-    "nodeConfig": { "datetime": { "custom_format": "Benutzerdefinierts Format", "tokens": "Token: H/HH Stund, m/mm Minute, s/ss Sekunde, d/dd Tag, EE/EEE/EEEE Wuchetag, M/MM/MMM/MMMM Monet, yy/yyyy Johr." } },
-    "nodeDescriptions": { "datetime": "Git s aktuelle Datum und d Uhrziit i de konfigurierte Ziitzone und im gwählte Format us." }
+    "nodeConfig": { "datetime": { "custom_format": "Benutzerdefinierts Format", "tokens": "Token: H/HH Stund, m/mm Minute, s/ss Sekunde, d/dd Tag, EE/EEE/EEEE Wuchetag, M/MM/MMM/MMMM Monet, yy/yyyy Johr." }, "edge_detect": {"on_rising": "Stiigendi Flanke", "on_risingOptions": {"value": "Trigger + Wärt", "trigger": "Nur Trigger", "off": "Us"}, "value_rising": "Wert bi stiigender Flanke", "on_falling": "Fallendi Flanke", "on_fallingOptions": {"value": "Trigger + Wärt", "trigger": "Nur Trigger", "off": "Us"}, "value_falling": "Wert bi fallender Flanke", "data_type": "Datetyp", "data_typeOptions": {"bool": "Boolean", "number": "Zahl", "string": "Täxt"}, "persist_state": "Zuestand nach Neustart wiederherstelle"}, "common": {"boolTrue": "Wahr", "boolFalse": "Falsch"} },
+    "nodeDescriptions": { "datetime": "Git s aktuelle Datum und d Uhrziit i de konfigurierte Ziitzone und im gwählte Format us.", "edge_detect": "Wertet de Iigang boolesch us und reagiert uf de Wächsel: Bi ere stiigende Flanke (falsch → wahr) chunnt de Wert für stiigendi Flanke use und de Stiigend-Trigger wird gsetzt, bi ere fallende Flanke (wahr → falsch) entsprächend de Wert für fallendi Flanke und de Fallend-Trigger. Ohni Flanke wird nüt uf de Usgang gschickt." },
+    "nodeTypes": { "edge_detect": "Flankeerkennig" }
   },
   "common": {
     "save": "Sichere",

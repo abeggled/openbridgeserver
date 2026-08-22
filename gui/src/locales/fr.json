@@ -12,8 +12,9 @@
     "submitting": "Connexion en cours…"
   },
   "logic": {
-    "nodeConfig": { "datetime": { "custom_format": "Format personnalisé", "tokens": "Jetons : H/HH heure, m/mm minute, s/ss seconde, d/dd jour, EE/EEE/EEEE jour de la semaine, M/MM/MMM/MMMM mois, yy/yyyy année." } },
-    "nodeDescriptions": { "datetime": "Affiche la date et l’heure actuelles dans le fuseau horaire et le format configurés." }
+    "nodeConfig": { "datetime": { "custom_format": "Format personnalisé", "tokens": "Jetons : H/HH heure, m/mm minute, s/ss seconde, d/dd jour, EE/EEE/EEEE jour de la semaine, M/MM/MMM/MMMM mois, yy/yyyy année." }, "edge_detect": {"on_rising": "Front montant", "on_risingOptions": {"value": "Déclencheur + valeur", "trigger": "Déclencheur seul", "off": "Désactivé"}, "value_rising": "Valeur au front montant", "on_falling": "Front descendant", "on_fallingOptions": {"value": "Déclencheur + valeur", "trigger": "Déclencheur seul", "off": "Désactivé"}, "value_falling": "Valeur au front descendant", "data_type": "Type de données", "data_typeOptions": {"bool": "Booléen", "number": "Nombre", "string": "Texte"}, "persist_state": "Restaurer l'état après un redémarrage"}, "common": {"boolTrue": "Vrai", "boolFalse": "Faux"} },
+    "nodeDescriptions": { "datetime": "Affiche la date et l’heure actuelles dans le fuseau horaire et le format configurés.", "edge_detect": "Évalue l'entrée comme booléen et réagit au changement : un front montant (faux → vrai) émet la valeur de front montant et active le déclencheur montant ; un front descendant (vrai → faux) émet la valeur de front descendant et active le déclencheur descendant. Sans front, rien n'est envoyé sur la sortie." },
+    "nodeTypes": { "edge_detect": "Détection de front" }
   },
   "common": {
     "save": "Sauvegarder"

@@ -108,6 +108,79 @@ describe('GenericNode — handles', () => {
     expect(sources.length).toBe(2)
   })
 
+  it('shows "Flankenerkennung" label and renders 2 target + 3 source handles for edge_detect', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    expect(w.find('.gn-title').text()).toBe('Flankenerkennung')
+    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(targets.map(h => h.attributes('data-id'))).toEqual(['in', 'reset'])
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['out', 'rising', 'falling'])
+  })
+
+  it('prefixes the edge_detect trigger ports so they differ from the settings', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    const labels = w.findAll('.gn-port-right').map(p => p.text())
+    expect(labels).toEqual(['Ausgang', 'Trigger-Steigend', 'Trigger-Fallend'])
+  })
+
+  it('renders all three edge_detect outputs by default', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['out', 'rising', 'falling'])
+  })
+
+  it('drops the edge_detect value output when neither direction sends one', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'trigger', on_falling: 'trigger' })
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['rising', 'falling'])
+  })
+
+  it('keeps the edge_detect value output while one direction still sends', async () => {
+    const rising = await mountGN('edge_detect', { on_rising: 'value', on_falling: 'trigger' })
+    await flushPromises()
+    expect(rising.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'rising', 'falling'])
+
+    const falling = await mountGN('edge_detect', { on_rising: 'trigger', on_falling: 'value' })
+    await flushPromises()
+    expect(falling.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'rising', 'falling'])
+  })
+
+  it('keeps the edge_detect value output for a setting the runtime still sends on', async () => {
+    // The executor treats anything other than off/trigger as value-sending, so
+    // an imported or future setting must not hide a handle it actually drives.
+    const w = await mountGN('edge_detect', { on_rising: 'both', on_falling: 'trigger' })
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources.map(h => h.attributes('data-id'))).toContain('out')
+  })
+
+  it('drops an edge_detect trigger output for a direction that is off', async () => {
+    const noRising = await mountGN('edge_detect', { on_rising: 'off' })
+    await flushPromises()
+    expect(noRising.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'falling'])
+
+    const noFalling = await mountGN('edge_detect', { on_falling: 'off' })
+    await flushPromises()
+    expect(noFalling.findAll('.handle').filter(h => h.attributes('data-type') === 'source').map(h => h.attributes('data-id')))
+      .toEqual(['out', 'rising'])
+  })
+
+  it('leaves an edge_detect with both directions off without any output', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'off', on_falling: 'off' })
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources).toHaveLength(0)
+    // The two inputs stay — the block still tracks its level.
+    expect(w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')).toHaveLength(2)
+  })
+
   it('renders two default source handles for decision', async () => {
     const w = await mountGN('decision')
     await flushPromises()
@@ -150,6 +223,52 @@ describe('GenericNode — summary', () => {
     const w = await mountGN('const_value', { data_type: 'number', value: '42' })
     await flushPromises()
     expect(w.find('.gn-summary').text()).toContain('42')
+  })
+
+  it('shows both edge values for edge_detect, localized, by default', async () => {
+    const w = await mountGN('edge_detect')
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
+  })
+
+  it('shows a non-boolean edge_detect value verbatim', async () => {
+    const w = await mountGN('edge_detect', { data_type: 'number', value_rising: '1', value_falling: '0' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 1  \u2193 0')
+  })
+
+  it('shows an unrecognized boolean edge_detect value verbatim', async () => {
+    const w = await mountGN('edge_detect', { value_rising: 'JA', value_falling: 'NEIN' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 JA  \u2193 NEIN')
+  })
+
+  it('omits an edge_detect direction that is switched off', async () => {
+    const rising = await mountGN('edge_detect', { on_falling: 'off', data_type: 'number', value_rising: '1' })
+    await flushPromises()
+    expect(rising.find('.gn-summary').text()).toBe('\u2191 1')
+
+    const falling = await mountGN('edge_detect', { on_rising: 'off', data_type: 'number', value_falling: '0' })
+    await flushPromises()
+    expect(falling.find('.gn-summary').text()).toBe('\u2193 0')
+  })
+
+  it('shows an em dash for an edge_detect direction that only pulses', async () => {
+    const w = await mountGN('edge_detect', { on_falling: 'trigger' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 \u2014')
+  })
+
+  it('marks both edge_detect directions with an em dash when neither sends', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'trigger', on_falling: 'trigger' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 \u2014  \u2193 \u2014')
+  })
+
+  it('shows an empty edge_detect summary when both directions are off', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'off', on_falling: 'off' })
+    await flushPromises()
+    expect(w.find('.gn-summary').exists()).toBe(false)
   })
 
   it('shows formula for math_formula', async () => {

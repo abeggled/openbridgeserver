@@ -1287,9 +1287,17 @@
               v-model="localData[key]" rows="6"
               class="input text-xs font-mono resize-y" @change="emitUpdate" />
             <select v-else-if="schema.enum"
-              v-model="localData[key]" class="input text-sm" @change="emitUpdate">
-              <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ opt }}</option>
+              v-model="localData[key]" class="input text-sm" @change="onSchemaEnumChange(key)">
+              <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ enumOptionLabel(nodeDef?.type, key, opt) }}</option>
             </select>
+            <select v-else-if="typedValueKind(schema) === 'bool'"
+              v-model="localData[key]" class="input text-sm" @change="emitUpdate">
+              <option value="true">{{ $t('logic.nodeConfig.common.boolTrue') }}</option>
+              <option value="false">{{ $t('logic.nodeConfig.common.boolFalse') }}</option>
+            </select>
+            <input v-else-if="typedValueKind(schema) === 'number'"
+              type="number" step="any" v-model="localData[key]"
+              class="input text-sm" @change="emitUpdate" />
             <input v-else-if="schema.type === 'boolean'"
               type="checkbox" v-model="localData[key]"
               class="text-sm" @change="emitUpdate" />
@@ -2091,12 +2099,30 @@ const substringRegex101Url = computed(() => {
   return `https://regex101.com/?${params.toString()}`
 })
 
-const configFields = computed(() => {
+// Every schema field the generic form owns. Keeps carrying fields that are
+// currently hidden, so they are still maintained when a sibling changes.
+const schemaFields = computed(() => {
   const schema = nodeDef.value?.config_schema ?? {}
   return Object.fromEntries(
     Object.entries(schema).filter(([k]) => !k.startsWith('datapoint_'))
   )
 })
+
+// The subset actually rendered right now.
+const configFields = computed(() =>
+  Object.fromEntries(Object.entries(schemaFields.value).filter(([, schema]) => isFieldVisible(schema)))
+)
+
+// A field may declare `visible_when: { field, equals }` to hide itself while
+// another field makes it meaningless — e.g. an edge value while that direction
+// only pulses its trigger. Falls back to the referenced field's own schema
+// default so a node saved before that field existed still renders correctly.
+function isFieldVisible(schema) {
+  const rule = schema?.visible_when
+  if (!rule) return true
+  const current = localData.value[rule.field] ?? schemaFields.value[rule.field]?.default
+  return current === rule.equals
+}
 
 const formulaPreset = computed({
   get() {
@@ -2165,6 +2191,54 @@ function nodeDescription(def) {
   if (!def?.type) return def?.description ?? ''
   const key = `logic.nodeDescriptions.${def.type}`
   return te(key) ? t(key) : (def.description ?? '')
+}
+
+// Enum options are stored as stable identifiers ("both", "bool", ...). Render
+// them through logic.nodeConfig.<type>.<field>Options.<value> so the editor
+// does not show raw English in a localized UI; the identifier itself remains
+// the fallback for schemas that declare no translations.
+function enumOptionLabel(nodeType, fieldKey, option) {
+  const key = `logic.nodeConfig.${nodeType}.${fieldKey}Options.${option}`
+  return te(key) ? t(key) : option
+}
+
+// A schema field may declare `value_type_field`, naming the sibling field that
+// decides how it is entered — a true/false dropdown, a number input, or plain
+// text. Returns '' when the field has no such dependency.
+function typedValueKind(schema) {
+  if (!schema?.value_type_field) return ''
+  // Same schema-default fallback as isFieldVisible: an imported node may omit
+  // the referenced field entirely, and the backend then applies its default —
+  // rendering an unrestricted text box here would misstate what runs.
+  return localData.value[schema.value_type_field] ?? schemaFields.value[schema.value_type_field]?.default ?? ''
+}
+
+// Switching that sibling leaves the dependent values in the previous notation
+// ("true" once Number is selected). Re-normalize them so the widget always has
+// something valid to show and the backend never receives a stale notation.
+function onSchemaEnumChange(key) {
+  // Deliberately schemaFields, not configFields: a dependent value that is
+  // hidden right now must still be normalized, or it would resurface in the
+  // previous notation once its direction is switched back on.
+  for (const [fieldKey, fieldSchema] of Object.entries(schemaFields.value)) {
+    if (fieldSchema?.value_type_field !== key) continue
+    localData.value[fieldKey] = normaliseTypedValue(localData.value[fieldKey], localData.value[key], fieldSchema)
+  }
+  emitUpdate()
+}
+
+// The decimal/scientific syntax Python's float() accepts, minus the special
+// inf/nan spellings that make no sense as a configured edge value.
+const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+
+function normaliseTypedValue(value, kind, schema) {
+  const text = value === null || value === undefined ? '' : String(value)
+  if (kind === 'bool') return text === 'true' || text === 'false' ? text : String(schema.default ?? 'false')
+  // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
+  // "Infinity", which the backend's float() rejects — it would coerce them to
+  // 0.0 while the editor kept displaying the original spelling.
+  if (kind === 'number') return BACKEND_NUMBER_RE.test(text.trim()) ? text : '0'
+  return text
 }
 
 function fieldLabel(nodeType, fieldKey, fallback) {

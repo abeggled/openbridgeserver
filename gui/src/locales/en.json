@@ -1616,6 +1616,7 @@
       "gate": "Gate",
       "memory": "Memory",
       "change_filter": "Change filter",
+      "edge_detect": "Edge detection",
       "compare": "Comparison",
       "hysteresis": "Hysteresis",
       "merge": "Merge",
@@ -1765,6 +1766,8 @@
       "value": "Value",
       "trigger": "Trigger",
       "changed": "Changed",
+      "rising": "Trigger rising",
+      "falling": "Trigger falling",
       "object": "Object",
       "result": "Result",
       "enable": "Enable",
@@ -2121,7 +2124,9 @@
       },
       "invalidJson": "Invalid JSON: {msg}",
       "common": {
-        "optional": "(optional)"
+        "optional": "(optional)",
+        "boolTrue": "True",
+        "boolFalse": "False"
       },
       "const_value": {
         "value": "Value",
@@ -2152,6 +2157,29 @@
         "persist_state": "Restore state on restart"
       },
       "change_filter": {
+        "persist_state": "Restore state on restart"
+      },
+      "edge_detect": {
+        "on_rising": "Rising edge",
+        "on_risingOptions": {
+          "value": "Trigger + value",
+          "trigger": "Trigger only",
+          "off": "Off"
+        },
+        "value_rising": "Value on rising edge",
+        "on_falling": "Falling edge",
+        "on_fallingOptions": {
+          "value": "Trigger + value",
+          "trigger": "Trigger only",
+          "off": "Off"
+        },
+        "value_falling": "Value on falling edge",
+        "data_type": "Data type",
+        "data_typeOptions": {
+          "bool": "Boolean",
+          "number": "Number",
+          "string": "Text"
+        },
         "persist_state": "Restore state on restart"
       },
       "hysteresis": {
@@ -2414,6 +2442,7 @@
       "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
       "memory": "Outputs the stored value from the previous logic run and stores the current input value for the next run. Explicit tick boundary for controlled feedback.",
       "change_filter": "Outputs the input value and sets the changed trigger only when it differs from the last received value. Repeated identical values are suppressed.",
+      "edge_detect": "Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the rising value and sets the rising trigger, a falling edge (true → false) outputs the falling value and sets the falling trigger. Without an edge nothing is sent on the output.",
       "compare": "Compares two values (>, <, =, >=, <=, !=)",
       "hysteresis": "Switches ON when threshold is exceeded, OFF only when it falls below",
       "merge": "Bundles several independent value sources into one shared output: whichever source last delivered a new value is passed through (Edomi-style terminal/junction).",
