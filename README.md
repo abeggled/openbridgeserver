@@ -170,7 +170,7 @@ ringbuffer:
 
 security:
   jwt_secret: changeme        # Session key — must be changed!
-  jwt_expire_minutes: 1440    # Session duration (default: 24 hours)
+  jwt_expire_minutes: 1440    # Access token lifetime (default: 24 hours)
   # Optional override for the private/internal URL target allowlist.
   # Default: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml when OBS_SECRET_FILE_DIR is set,
   # otherwise secrets/url-target-allowlist.yaml next to the configured database.
@@ -178,6 +178,12 @@ security:
 ```
 
 > **Note:** The `mqtt` section refers to the **internal** Mosquitto broker. External MQTT brokers are set up as separate adapter instances (see [MQTT adapter](#mqtt-adapter-external-broker)).
+
+> **Note:** `jwt_expire_minutes` limits the lifetime of a single **access token**, not how long you
+> stay signed in. `POST /api/v1/auth/login` also issues a refresh token that is valid for 30 days,
+> and both the Admin GUI and the Visu use it to renew the access token automatically. A browser that
+> is used at least once every 30 days therefore never has to sign in again; lowering
+> `jwt_expire_minutes` only shortens the window in which a stolen access token is usable.
 
 ### Offline administration with `obs-admin`
 
