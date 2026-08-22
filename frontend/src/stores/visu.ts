@@ -76,20 +76,20 @@ export const useVisuStore = defineStore('visu', () => {
    * Bedienelemente erhalten (deren Requests dann mit 403 scheitern), einem neu
    * ernannten fehlten sie bis zum nächsten manuellen Login.
    */
-  // Jede Anmeldung und jede Erneuerung startet eine neue Identitätsabfrage. Nur
-  // die jeweils letzte darf das Ergebnis übernehmen — sonst überschreibt die
-  // verspätete Antwort der alten Anmeldung die Rolle der neuen.
-  let identityLookupId = 0
+  // Jede Anmeldung und jede Erneuerung eröffnet eine Generation. Alles, was
+  // danach asynchron zurückkommt — Rolle wie Baum — darf nur übernommen werden,
+  // solange keine neuere Generation begonnen hat. Sonst schreibt die verspätete
+  // Antwort der alten Anmeldung in die Sitzung der neuen.
+  let authGeneration = 0
 
-  async function applyIdentity(onFailure: 'deny' | 'keep') {
-    const lookupId = ++identityLookupId
+  async function applyIdentity(generation: number, onFailure: 'deny' | 'keep') {
     try {
       const me = await authApi.me()
-      if (lookupId !== identityLookupId) return
+      if (generation !== authGeneration) return
       setIsAdmin(me.is_admin)
       _isAdmin.value = me.is_admin
     } catch {
-      if (lookupId !== identityLookupId) return
+      if (generation !== authGeneration) return
       if (onFailure === 'deny') {
         setIsAdmin(false)
         _isAdmin.value = false
@@ -102,19 +102,24 @@ export const useVisuStore = defineStore('visu', () => {
   }
 
   async function refreshAuthState() {
+    const generation = ++authGeneration
     _jwt.value = getJwt()
     if (!_jwt.value) {
       _isAdmin.value = false
       return
     }
-    await applyIdentity('keep')
+    await applyIdentity(generation, 'keep')
+    if (generation !== authGeneration) return
     // Beim Kaltstart mit abgelaufenem Access-Token liefert das Backend keine
     // 401, sondern eine anonym gefilterte Sicht (`_optional_visu_principal`
     // verwirft den abgelaufenen Bearer). Der Baum im Store stammt dann aus
     // dieser Sicht und muss nach der Erneuerung neu geholt werden, sonst
     // bleiben private Knoten unsichtbar.
     try {
-      await loadTree()
+      const fresh = await visuApi.tree()
+      if (generation !== authGeneration) return
+      nodes.value = fresh
+      treeLoaded.value = true
     } catch {
       // Nächste Erneuerung oder Navigation versucht es erneut
     }
@@ -126,10 +131,11 @@ export const useVisuStore = defineStore('visu', () => {
   window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, () => { void refreshAuthState() })
 
   async function login(accessToken: string, refreshToken?: string | null) {
+    const generation = ++authGeneration
     setTokens(accessToken, refreshToken)
     _jwt.value = accessToken
     // Admin-Status direkt nach Login ermitteln
-    await applyIdentity('deny')
+    await applyIdentity(generation, 'deny')
   }
 
   function logout() {

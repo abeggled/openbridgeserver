@@ -224,6 +224,66 @@ describe('visu store auth state', () => {
     expect(store.nodes.map(n => n.id)).toEqual(['public', 'private'])
   })
 
+  it('does not even start a tree reload for a superseded renewal', async () => {
+    let releaseAliceMe: (value: Response) => void = () => {}
+    const alicePendingMe = new Promise<Response>(resolve => { releaseAliceMe = resolve })
+    let mePending = true
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        return mePending ? alicePendingMe : jsonResponse({ id: 'u2', username: 'bob', is_admin: false })
+      }
+      return jsonResponse([])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-alice')
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+    notifyAuthTokenRefreshed()
+
+    mePending = false
+    await store.login('jwt-bob', 'refresh-bob')
+
+    releaseAliceMe(jsonResponse({ id: 'u1', username: 'alice', is_admin: true }))
+    await flushPromises()
+
+    // Die überholte Erneuerung darf den Server gar nicht erst behelligen
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
+  })
+
+  it('discards a tree reload that a newer login has overtaken', async () => {
+    let releaseAliceTree: (value: Response) => void = () => {}
+    const alicePendingTree = new Promise<Response>(resolve => { releaseAliceTree = resolve })
+    let aliceTreePending = true
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'someone', is_admin: false })
+      }
+      if (aliceTreePending) return alicePendingTree
+      return jsonResponse([{ id: 'bob-page', parent_id: null, name: 'B', type: 'PAGE', order: 0, access: 'user' }])
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-alice')
+    localStorage.setItem('visu_refresh_token', 'refresh-alice')
+    notifyAuthTokenRefreshed()          // startet Alices /auth/me und danach ihren Baum
+    await flushPromises()
+
+    aliceTreePending = false
+    await store.login('jwt-bob', 'refresh-bob')
+    await flushPromises()
+
+    // Alices Baum trifft verspätet ein und darf Bobs Sicht nicht überschreiben
+    releaseAliceTree(jsonResponse([
+      { id: 'alice-private', parent_id: null, name: 'A', type: 'PAGE', order: 0, access: 'user' },
+    ]))
+    await flushPromises()
+
+    expect(store.nodes.map(n => n.id)).not.toContain('alice-private')
+  })
+
   it('survives a tree reload that fails after a renewal', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).endsWith('/auth/me')) {

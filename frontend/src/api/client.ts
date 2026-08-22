@@ -183,6 +183,9 @@ const REFRESH_LEEWAY_MS = 60_000
 const MIN_REFRESH_DELAY_MS = 10_000
 const RETRY_BASE_MS = 30_000
 const RETRY_MAX_MS = 600_000
+// setTimeout rechnet mit 32-Bit-Vorzeichen: alles darüber wird auf 1 ms gekürzt.
+// security.jwt_expire_minutes ist unbegrenzt, 43200 (30 Tage) läuft darüber.
+const MAX_TIMER_MS = 2_147_483_647
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null
 let _retryDelay = RETRY_BASE_MS
@@ -222,6 +225,15 @@ export function cancelTokenRefresh(): void {
 
 function armRefreshTimer(delay: number): void {
   cancelTokenRefresh()
+  if (delay > MAX_TIMER_MS) {
+    // Lange Laufzeiten in Etappen abwarten, sonst kürzt setTimeout auf 1 ms und
+    // jeder Durchlauf würde sofort erneut /auth/refresh aufrufen.
+    _refreshTimer = setTimeout(() => {
+      _refreshTimer = null
+      scheduleTokenRefresh()
+    }, MAX_TIMER_MS)
+    return
+  }
   _refreshTimer = setTimeout(() => {
     _refreshTimer = null
     void refreshSession().then(({ outcome }) => {

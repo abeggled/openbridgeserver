@@ -661,6 +661,22 @@ describe('proactive token refresh', () => {
     expect(refreshCalls(fetchMock)).toHaveLength(1)
   })
 
+  it('does not overflow the timer for a very long token lifetime', async () => {
+    const thirtyDaysMs = 30 * 24 * 3600 * 1000
+    const fetchMock = stubAuthFetch(() => jsonResponse({ access_token: 'jwt-new', refresh_token: 'refresh-new' }))
+    localStorage.setItem('visu_jwt', fakeJwt({ exp: Math.floor((Date.now() + thirtyDaysMs) / 1000) }))
+    localStorage.setItem('visu_refresh_token', 'refresh-old')
+
+    scheduleTokenRefresh()
+
+    // Ohne Etappen kürzt setTimeout auf 1 ms und feuert sofort in Dauerschleife
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(0)
+
+    await vi.advanceTimersByTimeAsync(thirtyDaysMs - 60_000 - 1_000)
+    expect(refreshCalls(fetchMock)).toHaveLength(1)
+  })
+
   it('keeps a sane cadence for a one-minute token lifetime', async () => {
     const oneMinuteToken = () => fakeJwt({ exp: Math.floor(Date.now() / 1000) + 60 })
     const fetchMock = stubAuthFetch(() => jsonResponse({
