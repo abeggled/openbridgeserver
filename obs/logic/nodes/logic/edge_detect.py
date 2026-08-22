@@ -28,11 +28,24 @@ NODE_TYPE = NodeTypeDef(
             "default": "both",
             "label": "Flanke",
         },
-        "value_rising": {"type": "string", "default": "true", "label": "Wert bei steigender Flanke"},
-        "value_falling": {"type": "string", "default": "false", "label": "Wert bei fallender Flanke"},
+        # ``value_type_field`` points the editor at the field that decides how
+        # these two are entered: a true/false dropdown, a number input or free
+        # text. Keeping it in the schema means NodeConfigPanel stays generic.
+        "value_rising": {
+            "type": "string",
+            "default": "true",
+            "label": "Wert bei steigender Flanke",
+            "value_type_field": "data_type",
+        },
+        "value_falling": {
+            "type": "string",
+            "default": "false",
+            "label": "Wert bei fallender Flanke",
+            "value_type_field": "data_type",
+        },
         "data_type": {
             "type": "string",
-            "enum": ["auto", "number", "bool", "string"],
+            "enum": ["bool", "number", "string"],
             "default": "bool",
             "label": "Datentyp",
         },

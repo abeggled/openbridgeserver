@@ -2124,7 +2124,9 @@
       },
       "invalidJson": "Invalid JSON: {msg}",
       "common": {
-        "optional": "(optional)"
+        "optional": "(optional)",
+        "boolTrue": "True",
+        "boolFalse": "False"
       },
       "const_value": {
         "value": "Value",
@@ -2164,7 +2166,17 @@
         "data_type": "Data type",
         "send_on_rising": "Send on rising edge",
         "send_on_falling": "Send on falling edge",
-        "persist_state": "Restore state on restart"
+        "persist_state": "Restore state on restart",
+        "modeOptions": {
+          "both": "Both",
+          "rising": "Rising",
+          "falling": "Falling"
+        },
+        "data_typeOptions": {
+          "bool": "Boolean",
+          "number": "Number",
+          "string": "Text"
+        }
       },
       "hysteresis": {
         "persist_state": "Restore state on restart"

@@ -162,18 +162,30 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toContain('42')
   })
 
-  it('shows both edge values for edge_detect by default', async () => {
+  it('shows both edge values for edge_detect, localized, by default', async () => {
     const w = await mountGN('edge_detect')
     await flushPromises()
-    expect(w.find('.gn-summary').text()).toBe('\u2191 true  \u2193 false')
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
+  })
+
+  it('shows a non-boolean edge_detect value verbatim', async () => {
+    const w = await mountGN('edge_detect', { data_type: 'number', value_rising: '1', value_falling: '0' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 1  \u2193 0')
+  })
+
+  it('shows an unrecognized boolean edge_detect value verbatim', async () => {
+    const w = await mountGN('edge_detect', { value_rising: 'JA', value_falling: 'NEIN' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 JA  \u2193 NEIN')
   })
 
   it('shows only the configured edge direction for edge_detect', async () => {
-    const rising = await mountGN('edge_detect', { mode: 'rising', value_rising: '1' })
+    const rising = await mountGN('edge_detect', { mode: 'rising', data_type: 'number', value_rising: '1' })
     await flushPromises()
     expect(rising.find('.gn-summary').text()).toBe('\u2191 1')
 
-    const falling = await mountGN('edge_detect', { mode: 'falling', value_falling: '0' })
+    const falling = await mountGN('edge_detect', { mode: 'falling', data_type: 'number', value_falling: '0' })
     await flushPromises()
     expect(falling.find('.gn-summary').text()).toBe('\u2193 0')
   })

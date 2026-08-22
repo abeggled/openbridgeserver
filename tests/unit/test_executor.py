@@ -2868,7 +2868,6 @@ class TestEdgeDetectNode:
             ("bool", True, False),
             ("number", 1.0, 0.0),
             ("string", "1", "0"),
-            ("auto", "1", "0"),
         ],
     )
     def test_data_type_types_the_configured_edge_values(self, data_type, expected_rising, expected_falling):
@@ -2878,6 +2877,18 @@ class TestEdgeDetectNode:
 
         assert exc.execute({"ed": {"in": True}})["ed"]["out"] == expected_rising
         assert exc.execute({"ed": {"in": False}})["ed"]["out"] == expected_falling
+
+    def test_unknown_data_type_hands_out_the_configured_value_unchanged(self):
+        # "auto" is not offered for this block, but a hand-written or imported
+        # flow can still carry it (or any other value) — fall back to the raw
+        # configured value rather than erroring.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "auto", "value_rising": "1"})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"]["out"] == "1"
 
     def test_string_data_type_maps_a_missing_configured_value_to_empty_text(self):
         state = {"ed": {"value": False}}

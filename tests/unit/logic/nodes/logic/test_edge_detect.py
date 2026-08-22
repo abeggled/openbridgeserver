@@ -34,10 +34,20 @@ def test_edge_values_default_to_true_and_false_typed_as_bool():
 
     assert schema["value_rising"]["default"] == "true"
     assert schema["value_falling"]["default"] == "false"
-    # Unlike memory (default "auto"), the factory values are the strings
-    # "true"/"false" and must reach a Write Object as real booleans.
+    # The factory values are the strings "true"/"false" and must reach a Write
+    # Object as real booleans, so bool is the default. Memory's "auto" is
+    # deliberately not offered: every edge value has one definite type here.
     assert schema["data_type"]["default"] == "bool"
-    assert schema["data_type"]["enum"] == ["auto", "number", "bool", "string"]
+    assert schema["data_type"]["enum"] == ["bool", "number", "string"]
+
+
+def test_edge_values_declare_the_field_that_types_them():
+    # Lets the editor pick the right widget (true/false dropdown, number input,
+    # free text) without NodeConfigPanel knowing about this block.
+    schema = NODE_TYPE.config_schema
+
+    assert schema["value_rising"]["value_type_field"] == "data_type"
+    assert schema["value_falling"]["value_type_field"] == "data_type"
 
 
 def test_sending_on_either_edge_is_enabled_by_default():

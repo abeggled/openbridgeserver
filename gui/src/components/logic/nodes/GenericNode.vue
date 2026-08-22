@@ -291,9 +291,18 @@ const summary = computed(() => {
     // "↑ <rising>  ↓ <falling>", limited to the edges `mode` reports and with
     // an em dash for an edge whose value is configured not to be sent.
     const mode = d.mode || 'both'
+    // A boolean edge value is stored as the literal "true"/"false"; show it in
+    // the viewer's language instead of raw English on the block card.
+    const edgeValue = (raw, fallback) => {
+      const text = raw ?? fallback
+      if ((d.data_type ?? 'bool') !== 'bool') return text
+      if (text === 'true')  return t('logic.nodeConfig.common.boolTrue')
+      if (text === 'false') return t('logic.nodeConfig.common.boolFalse')
+      return text
+    }
     const parts = []
-    if (mode !== 'falling') parts.push(`\u2191 ${d.send_on_rising === false ? '\u2014' : (d.value_rising ?? 'true')}`)
-    if (mode !== 'rising')  parts.push(`\u2193 ${d.send_on_falling === false ? '\u2014' : (d.value_falling ?? 'false')}`)
+    if (mode !== 'falling') parts.push(`\u2191 ${d.send_on_rising === false ? '\u2014' : edgeValue(d.value_rising, 'true')}`)
+    if (mode !== 'rising')  parts.push(`\u2193 ${d.send_on_falling === false ? '\u2014' : edgeValue(d.value_falling, 'false')}`)
     return parts.join('  ')
   }
   if (props.type === 'math_formula') return d.formula || 'a + b'

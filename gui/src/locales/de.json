@@ -2124,7 +2124,9 @@
       },
       "invalidJson": "Ungültiges JSON: {msg}",
       "common": {
-        "optional": "(optional)"
+        "optional": "(optional)",
+        "boolTrue": "Wahr",
+        "boolFalse": "Falsch"
       },
       "const_value": {
         "value": "Wert",
@@ -2164,7 +2166,17 @@
         "data_type": "Datentyp",
         "send_on_rising": "Bei steigender Flanke senden",
         "send_on_falling": "Bei fallender Flanke senden",
-        "persist_state": "Zustand nach Neustart wiederherstellen"
+        "persist_state": "Zustand nach Neustart wiederherstellen",
+        "modeOptions": {
+          "both": "Beide",
+          "rising": "Steigend",
+          "falling": "Fallend"
+        },
+        "data_typeOptions": {
+          "bool": "Wahrheitswert",
+          "number": "Zahl",
+          "string": "Text"
+        }
       },
       "hysteresis": {
         "persist_state": "Zustand nach Neustart wiederherstellen"
