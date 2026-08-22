@@ -1688,12 +1688,15 @@ class GraphExecutor:
                     # (repeated) value at all.
                     return idle
                 rising = current
-                mode = str(d.get("mode", "both"))
-                if (rising and mode == "falling") or (not rising and mode == "rising"):
+                # Per-direction action: "off" stays silent (the level above is
+                # still tracked, so the next edge in the other direction is
+                # recognised), "trigger" pulses only, anything else — "value"
+                # or an unknown/legacy setting — pulses and sends.
+                action = str(d.get("on_rising", "value") if rising else d.get("on_falling", "value"))
+                if action == "off":
                     return idle
-                send = d.get("send_on_rising", True) if rising else d.get("send_on_falling", True)
                 edge_result: dict[str, Any] = {"rising": rising, "falling": not rising}
-                if self._to_bool(send):
+                if action != "trigger":
                     configured = d.get("value_rising", "true") if rising else d.get("value_falling", "false")
                     edge_result["out"] = self._coerce_typed_value(node, configured, "bool")
                 return edge_result

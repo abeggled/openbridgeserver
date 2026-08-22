@@ -2160,23 +2160,27 @@
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
       "edge_detect": {
-        "mode": "Flanke",
+        "on_rising": "Steigende Flanke",
+        "on_risingOptions": {
+          "value": "Trigger + Wert",
+          "trigger": "Nur Trigger",
+          "off": "Aus"
+        },
         "value_rising": "Wert bei steigender Flanke",
+        "on_falling": "Fallende Flanke",
+        "on_fallingOptions": {
+          "value": "Trigger + Wert",
+          "trigger": "Nur Trigger",
+          "off": "Aus"
+        },
         "value_falling": "Wert bei fallender Flanke",
         "data_type": "Datentyp",
-        "send_on_rising": "Bei steigender Flanke senden",
-        "send_on_falling": "Bei fallender Flanke senden",
-        "persist_state": "Zustand nach Neustart wiederherstellen",
-        "modeOptions": {
-          "both": "Beide",
-          "rising": "Steigend",
-          "falling": "Fallend"
-        },
         "data_typeOptions": {
           "bool": "Boolean",
           "number": "Zahl",
           "string": "Text"
-        }
+        },
+        "persist_state": "Zustand nach Neustart wiederherstellen"
       },
       "hysteresis": {
         "persist_state": "Zustand nach Neustart wiederherstellen"

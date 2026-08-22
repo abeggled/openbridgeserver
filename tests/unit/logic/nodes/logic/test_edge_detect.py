@@ -21,12 +21,24 @@ def test_edge_outputs_are_one_value_and_two_triggers():
     ]
 
 
-def test_mode_selects_which_edge_is_reported_and_defaults_to_both():
-    mode = NODE_TYPE.config_schema["mode"]
+def test_each_edge_direction_has_one_setting_defaulting_to_trigger_and_value():
+    schema = NODE_TYPE.config_schema
 
-    assert mode["type"] == "string"
-    assert mode["enum"] == ["both", "rising", "falling"]
-    assert mode["default"] == "both"
+    for field in ("on_rising", "on_falling"):
+        assert schema[field]["type"] == "string"
+        # "value" pulses the trigger AND sends, "trigger" pulses only, "off"
+        # stays silent — one setting answers the whole question per direction.
+        assert schema[field]["enum"] == ["value", "trigger", "off"]
+        assert schema[field]["default"] == "value"
+
+
+def test_no_separate_edge_selector_or_send_switches_remain():
+    # A "which edge" enum next to per-edge send switches overlapped: "only
+    # rising" and "do not send on falling" differed solely on the falling
+    # trigger, which reads as a contradiction in the editor.
+    assert "mode" not in NODE_TYPE.config_schema
+    assert "send_on_rising" not in NODE_TYPE.config_schema
+    assert "send_on_falling" not in NODE_TYPE.config_schema
 
 
 def test_edge_values_default_to_true_and_false_typed_as_bool():
@@ -48,15 +60,6 @@ def test_edge_values_declare_the_field_that_types_them():
 
     assert schema["value_rising"]["value_type_field"] == "data_type"
     assert schema["value_falling"]["value_type_field"] == "data_type"
-
-
-def test_sending_on_either_edge_is_enabled_by_default():
-    schema = NODE_TYPE.config_schema
-
-    assert schema["send_on_rising"]["type"] == "boolean"
-    assert schema["send_on_rising"]["default"] is True
-    assert schema["send_on_falling"]["type"] == "boolean"
-    assert schema["send_on_falling"]["default"] is True
 
 
 def test_persist_state_defaults_to_true():

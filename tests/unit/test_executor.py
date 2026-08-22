@@ -2823,9 +2823,9 @@ class TestEdgeDetectNode:
         assert out["ed"] == {"rising": False, "falling": False}
         assert state == {}
 
-    def test_mode_rising_suppresses_the_falling_edge_on_every_output(self):
+    def test_falling_off_stays_silent_on_every_output(self):
         state = {"ed": {"value": True}}
-        exc = make_executor([node("ed", "edge_detect", {"mode": "rising"})], hysteresis_state=state)
+        exc = make_executor([node("ed", "edge_detect", {"on_falling": "off"})], hysteresis_state=state)
 
         out = exc.execute({"ed": {"in": False}})
 
@@ -2834,9 +2834,9 @@ class TestEdgeDetectNode:
         assert state == {"ed": {"value": False}}
         assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": True, "falling": False, "out": True}
 
-    def test_mode_falling_suppresses_the_rising_edge_on_every_output(self):
+    def test_rising_off_stays_silent_on_every_output(self):
         state = {"ed": {"value": False}}
-        exc = make_executor([node("ed", "edge_detect", {"mode": "falling"})], hysteresis_state=state)
+        exc = make_executor([node("ed", "edge_detect", {"on_rising": "off"})], hysteresis_state=state)
 
         out = exc.execute({"ed": {"in": True}})
 
@@ -2844,23 +2844,43 @@ class TestEdgeDetectNode:
         assert state == {"ed": {"value": True}}
         assert exc.execute({"ed": {"in": False}})["ed"] == {"rising": False, "falling": True, "out": False}
 
-    def test_send_on_rising_false_keeps_the_trigger_but_sends_nothing(self):
+    def test_rising_trigger_only_pulses_without_sending_a_value(self):
         state = {"ed": {"value": False}}
-        exc = make_executor([node("ed", "edge_detect", {"send_on_rising": False})], hysteresis_state=state)
+        exc = make_executor([node("ed", "edge_detect", {"on_rising": "trigger"})], hysteresis_state=state)
 
         out = exc.execute({"ed": {"in": True}})
 
         assert out["ed"] == {"rising": True, "falling": False}
         assert "out" not in out["ed"]
 
-    def test_send_on_falling_false_keeps_the_trigger_but_sends_nothing(self):
+    def test_falling_trigger_only_pulses_without_sending_a_value(self):
         state = {"ed": {"value": True}}
-        exc = make_executor([node("ed", "edge_detect", {"send_on_falling": False})], hysteresis_state=state)
+        exc = make_executor([node("ed", "edge_detect", {"on_falling": "trigger"})], hysteresis_state=state)
 
         out = exc.execute({"ed": {"in": False}})
 
         assert out["ed"] == {"rising": False, "falling": True}
         assert "out" not in out["ed"]
+
+    def test_the_two_directions_are_configured_independently(self):
+        # The pairing the old "which edge" enum could not express: pulse the
+        # falling trigger for an alarm, but only ever send a value on rising.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"on_rising": "value", "on_falling": "trigger"})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": True, "falling": False, "out": True}
+        assert exc.execute({"ed": {"in": False}})["ed"] == {"rising": False, "falling": True}
+
+    def test_an_unknown_direction_setting_still_pulses_and_sends(self):
+        # A hand-written or imported flow must not silently go dead; anything
+        # that is not "off"/"trigger" behaves like the default "value".
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect", {"on_rising": "both"})], hysteresis_state=state)
+
+        assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": True, "falling": False, "out": True}
 
     @pytest.mark.parametrize(
         ("data_type", "expected_rising", "expected_falling"),

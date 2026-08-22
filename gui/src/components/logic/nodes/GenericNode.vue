@@ -288,9 +288,7 @@ const summary = computed(() => {
     return `${type} · ${t('logic.summary.rules', { n: rules.length || 2 })}`
   }
   if (props.type === 'edge_detect') {
-    // "↑ <rising>  ↓ <falling>", limited to the edges `mode` reports and with
-    // an em dash for an edge whose value is configured not to be sent.
-    const mode = d.mode || 'both'
+    // "↑ <rising>  ↓ <falling>", one part per edge direction.
     // A boolean edge value is stored as the literal "true"/"false"; show it in
     // the viewer's language instead of raw English on the block card.
     const edgeValue = (raw, fallback) => {
@@ -300,9 +298,16 @@ const summary = computed(() => {
       if (text === 'false') return t('logic.nodeConfig.common.boolFalse')
       return text
     }
-    const parts = []
-    if (mode !== 'falling') parts.push(`\u2191 ${d.send_on_rising === false ? '\u2014' : edgeValue(d.value_rising, 'true')}`)
-    if (mode !== 'rising')  parts.push(`\u2193 ${d.send_on_falling === false ? '\u2014' : edgeValue(d.value_falling, 'false')}`)
+    // A direction set to trigger-only shows an em dash instead of a value;
+    // one set to off is left out of the summary entirely.
+    const edgePart = (arrow, action, raw, fallback) => {
+      if (action === 'off') return null
+      return `${arrow} ${action === 'trigger' ? '\u2014' : edgeValue(raw, fallback)}`
+    }
+    const parts = [
+      edgePart('\u2191', d.on_rising  ?? 'value', d.value_rising,  'true'),
+      edgePart('\u2193', d.on_falling ?? 'value', d.value_falling, 'false'),
+    ].filter(Boolean)
     return parts.join('  ')
   }
   if (props.type === 'math_formula') return d.formula || 'a + b'

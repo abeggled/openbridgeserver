@@ -180,20 +180,32 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 JA  \u2193 NEIN')
   })
 
-  it('shows only the configured edge direction for edge_detect', async () => {
-    const rising = await mountGN('edge_detect', { mode: 'rising', data_type: 'number', value_rising: '1' })
+  it('omits an edge_detect direction that is switched off', async () => {
+    const rising = await mountGN('edge_detect', { on_falling: 'off', data_type: 'number', value_rising: '1' })
     await flushPromises()
     expect(rising.find('.gn-summary').text()).toBe('\u2191 1')
 
-    const falling = await mountGN('edge_detect', { mode: 'falling', data_type: 'number', value_falling: '0' })
+    const falling = await mountGN('edge_detect', { on_rising: 'off', data_type: 'number', value_falling: '0' })
     await flushPromises()
     expect(falling.find('.gn-summary').text()).toBe('\u2193 0')
   })
 
-  it('marks an edge_detect edge that does not send with an em dash', async () => {
-    const w = await mountGN('edge_detect', { send_on_rising: false, send_on_falling: false })
+  it('shows an em dash for an edge_detect direction that only pulses', async () => {
+    const w = await mountGN('edge_detect', { on_falling: 'trigger' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 \u2014')
+  })
+
+  it('marks both edge_detect directions with an em dash when neither sends', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'trigger', on_falling: 'trigger' })
     await flushPromises()
     expect(w.find('.gn-summary').text()).toBe('\u2191 \u2014  \u2193 \u2014')
+  })
+
+  it('shows an empty edge_detect summary when both directions are off', async () => {
+    const w = await mountGN('edge_detect', { on_rising: 'off', on_falling: 'off' })
+    await flushPromises()
+    expect(w.find('.gn-summary').exists()).toBe(false)
   })
 
   it('shows formula for math_formula', async () => {

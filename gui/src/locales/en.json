@@ -2160,23 +2160,27 @@
         "persist_state": "Restore state on restart"
       },
       "edge_detect": {
-        "mode": "Edge",
+        "on_rising": "Rising edge",
+        "on_risingOptions": {
+          "value": "Trigger + value",
+          "trigger": "Trigger only",
+          "off": "Off"
+        },
         "value_rising": "Value on rising edge",
+        "on_falling": "Falling edge",
+        "on_fallingOptions": {
+          "value": "Trigger + value",
+          "trigger": "Trigger only",
+          "off": "Off"
+        },
         "value_falling": "Value on falling edge",
         "data_type": "Data type",
-        "send_on_rising": "Send on rising edge",
-        "send_on_falling": "Send on falling edge",
-        "persist_state": "Restore state on restart",
-        "modeOptions": {
-          "both": "Both",
-          "rising": "Rising",
-          "falling": "Falling"
-        },
         "data_typeOptions": {
           "bool": "Boolean",
           "number": "Number",
           "string": "Text"
-        }
+        },
+        "persist_state": "Restore state on restart"
       },
       "hysteresis": {
         "persist_state": "Restore state on restart"

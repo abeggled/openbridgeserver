@@ -22,20 +22,33 @@ NODE_TYPE = NodeTypeDef(
         port("falling", "Fallende Flanke", "trigger"),
     ],
     config_schema={
-        "mode": {
+        # One setting per edge direction, each answering the whole question for
+        # that direction: stay silent, pulse the trigger only, or pulse it and
+        # send a value. A separate "which edge" enum next to per-edge send
+        # switches would overlap — "only rising" and "do not send on falling"
+        # differ solely on the falling trigger, which reads as a contradiction
+        # in the editor.
+        "on_rising": {
             "type": "string",
-            "enum": ["both", "rising", "falling"],
-            "default": "both",
-            "label": "Flanke",
+            "enum": ["value", "trigger", "off"],
+            "default": "value",
+            "label": "Steigende Flanke",
         },
         # ``value_type_field`` points the editor at the field that decides how
-        # these two are entered: a true/false dropdown, a number input or free
-        # text. Keeping it in the schema means NodeConfigPanel stays generic.
+        # the two edge values are entered: a true/false dropdown, a number
+        # input or free text. Keeping it in the schema means NodeConfigPanel
+        # stays generic.
         "value_rising": {
             "type": "string",
             "default": "true",
             "label": "Wert bei steigender Flanke",
             "value_type_field": "data_type",
+        },
+        "on_falling": {
+            "type": "string",
+            "enum": ["value", "trigger", "off"],
+            "default": "value",
+            "label": "Fallende Flanke",
         },
         "value_falling": {
             "type": "string",
@@ -49,8 +62,6 @@ NODE_TYPE = NodeTypeDef(
             "default": "bool",
             "label": "Datentyp",
         },
-        "send_on_rising": {"type": "boolean", "default": True, "label": "Bei steigender Flanke senden"},
-        "send_on_falling": {"type": "boolean", "default": True, "label": "Bei fallender Flanke senden"},
         "persist_state": {
             "type": "boolean",
             "default": True,

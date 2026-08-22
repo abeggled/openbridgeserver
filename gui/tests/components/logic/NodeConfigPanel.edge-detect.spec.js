@@ -15,13 +15,14 @@ afterEach(() => {
   vi.doUnmock('@/api/client')
 })
 
+const EDGE_ACTIONS = ['value', 'trigger', 'off']
+
 const CONFIG_SCHEMA = {
-  mode: { type: 'string', enum: ['both', 'rising', 'falling'], default: 'both', label: 'Flanke' },
+  on_rising: { type: 'string', enum: EDGE_ACTIONS, default: 'value', label: 'Steigende Flanke' },
   value_rising: { type: 'string', default: 'true', label: 'Wert bei steigender Flanke', value_type_field: 'data_type' },
+  on_falling: { type: 'string', enum: EDGE_ACTIONS, default: 'value', label: 'Fallende Flanke' },
   value_falling: { type: 'string', default: 'false', label: 'Wert bei fallender Flanke', value_type_field: 'data_type' },
   data_type: { type: 'string', enum: ['bool', 'number', 'string'], default: 'bool', label: 'Datentyp' },
-  send_on_rising: { type: 'boolean', default: true, label: 'Bei steigender Flanke senden' },
-  send_on_falling: { type: 'boolean', default: true, label: 'Bei fallender Flanke senden' },
   persist_state: { type: 'boolean', default: true, label: 'Zustand nach Neustart wiederherstellen' },
 }
 
@@ -34,7 +35,7 @@ async function mountPanel(data = {}) {
   const mod = await import('@/components/logic/NodeConfigPanel.vue')
   return mount(mod.default, {
     props: {
-      node: { id: 'ed1', type: 'edge_detect', data: { mode: 'both', data_type: 'bool', value_rising: 'true', value_falling: 'false', ...data } },
+      node: { id: 'ed1', type: 'edge_detect', data: { on_rising: 'value', on_falling: 'value', data_type: 'bool', value_rising: 'true', value_falling: 'false', ...data } },
       nodeTypes: [{ type: 'edge_detect', label: 'Flankenerkennung', config_schema: CONFIG_SCHEMA }],
       nodeOutputs: {},
     },
@@ -52,10 +53,11 @@ describe('NodeConfigPanel edge_detect enum labels', () => {
     await flushPromises()
 
     const optionTexts = w.findAll('option').map(o => o.text())
-    expect(optionTexts).toEqual(expect.arrayContaining(['Beide', 'Steigend', 'Fallend']))
+    expect(optionTexts).toEqual(expect.arrayContaining(['Trigger + Wert', 'Nur Trigger', 'Aus']))
     expect(optionTexts).toEqual(expect.arrayContaining(['Boolean', 'Zahl', 'Text']))
-    expect(optionTexts).not.toContain('both')
-    expect(optionTexts).not.toContain('rising')
+    expect(optionTexts).not.toContain('value')
+    expect(optionTexts).not.toContain('trigger')
+    expect(optionTexts).not.toContain('off')
     expect(optionTexts).not.toContain('bool')
     w.unmount()
   })
@@ -64,8 +66,8 @@ describe('NodeConfigPanel edge_detect enum labels', () => {
     const w = await mountPanel()
     await flushPromises()
 
-    const modeSelect = selects(w)[0]
-    expect(modeSelect.findAll('option').map(o => o.attributes('value'))).toEqual(['both', 'rising', 'falling'])
+    const risingSelect = selects(w)[0]
+    expect(risingSelect.findAll('option').map(o => o.attributes('value'))).toEqual(['value', 'trigger', 'off'])
     w.unmount()
   })
 
@@ -214,11 +216,24 @@ describe('NodeConfigPanel edge_detect typed edge values', () => {
     const w = await mountPanel()
     await flushPromises()
 
-    const modeSelect = selects(w)[0]
-    await modeSelect.setValue('rising')
+    const risingSelect = selects(w)[0]
+    await risingSelect.setValue('trigger')
     await flushPromises()
 
-    expect(w.emitted('update').at(-1)[0]).toMatchObject({ mode: 'rising', value_rising: 'true', value_falling: 'false' })
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ on_rising: 'trigger', value_rising: 'true', value_falling: 'false' })
+    w.unmount()
+  })
+
+  it('offers one independent action select per edge direction', async () => {
+    const w = await mountPanel()
+    await flushPromises()
+
+    const labels = w.findAll('.label').map(l => l.text())
+    expect(labels).toContain('Steigende Flanke')
+    expect(labels).toContain('Fallende Flanke')
+    // No leftover "which edge" enum and no separate send checkboxes.
+    expect(labels).not.toContain('Flanke')
+    expect(labels.filter(l => l.includes('senden'))).toEqual([])
     w.unmount()
   })
 })

@@ -69,9 +69,9 @@ async def test_write_object_is_driven_only_by_edges_not_by_every_run():
 
 
 @pytest.mark.asyncio
-async def test_send_on_falling_disabled_writes_only_on_the_rising_edge():
+async def test_falling_set_to_trigger_only_writes_on_the_rising_edge():
     manager = _manager()
-    flow = _write_flow(uuid.uuid4(), {"send_on_falling": False})
+    flow = _write_flow(uuid.uuid4(), {"on_falling": "trigger"})
     manager._graphs["g"] = ("G", True, flow)
 
     assert await _run(manager, flow, False) is None
