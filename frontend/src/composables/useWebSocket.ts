@@ -9,6 +9,7 @@
 
 import { ref, readonly } from 'vue'
 import { getJwt } from '@/api/client'
+import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 
 type MessageHandler = (data: Record<string, unknown>) => void
 type ConnectContext = {
@@ -124,11 +125,39 @@ export function createWebSocketClient() {
     }, reconnectDelay)
   }
 
+  /**
+   * Nach einem Token-Refresh neu verbinden.
+   *
+   * Der JWT steckt im Subprotokoll (`obs.jwt.<token>`) und wird beim Handshake
+   * gebunden — ein erneuerter Token erreicht eine bestehende Verbindung nicht.
+   * Ohne Reconnect verliert das Backend beim nächsten Datapoint-Scope-Refresh
+   * den Scope und die Seite friert still ein (Issue #1160).
+   */
+  function reconnectWithFreshToken() {
+    if (!shouldReconnect) return
+    if (connectContext.preferPageScope || !getJwt()) return
+    const context = connectContext
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (socket) {
+      detachSocketHandlers(socket)
+      socket.close()
+      socket = null
+      connected.value = false
+    }
+    reconnectDelay = 1000
+    connect(context)
+  }
+
   return {
     connected: readonly(connected),
 
     /** Verbindung starten (idempotent) */
     connect,
+
+    reconnectWithFreshToken,
 
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
@@ -171,6 +200,9 @@ export function createWebSocketClient() {
 }
 
 const defaultClient = createWebSocketClient()
+
+// Der Singleton verbindet sich nach jedem Token-Refresh mit dem neuen JWT neu.
+window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, () => defaultClient.reconnectWithFreshToken())
 
 // ── Composable ────────────────────────────────────────────────────────────────
 
