@@ -173,12 +173,6 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "heating_circuit",
         "random_value",
         "memory",
-        # An Edge Detect run on the throwaway init state copy would report a
-        # synthetic edge whenever its restored level differs from the freshly
-        # seeded registry value — a save is not a transition. Worse, that copy
-        # is discarded, so the very same edge fires again on the next real
-        # execution and the write would be published twice.
-        "edge_detect",
     }
 )
 
@@ -199,7 +193,15 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
 # that same value looks like a fresh first value and fires the action again.
 # So change_filter always commits once seeded/untainted, independent of
 # published_writes.
-_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge", "change_filter"})
+_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge", "change_filter", "edge_detect"})
+
+# …and edge_detect for the same reason: its remembered level is meaningful on
+# its own. Excluding it from initialization instead would leave a newly placed
+# block with no baseline at all, so the first real transition would merely seed
+# the level and the edge would be lost. Its outputs are kept out of the
+# published writes separately (see changed_targets), because a save is not a
+# transition.
+_INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
 
 # Input handles that control WHEN a node's output fires/passes but do not
 # deliver the value itself. Seeded eligibility must not propagate through
@@ -2200,6 +2202,14 @@ class LogicManager:
             for e in _effective_edges_init
             if e.sourceHandle == "changed" and (e.source in read_node_ids or node_type_by_id.get(e.source) == "change_filter")
         }
+        # Every Edge Detection output is edge-gated: "out" exists only on an
+        # edge and the triggers are only true on one. On a save/startup
+        # pseudo-execution any edge it reports is synthetic — derived from the
+        # restored level versus the freshly seeded value, never from an
+        # observed transition — so a Write descending from it must not be
+        # published, exactly like the change_filter case above. Its own level
+        # is still committed below (_INIT_STATE_ALWAYS_COMMIT).
+        changed_targets |= {e.target for e in _effective_edges_init if node_type_by_id.get(e.source) == "edge_detect"}
         excluded_ids = {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}
         value_edges = [
             e
@@ -2563,9 +2573,10 @@ class LogicManager:
             for node in flow.nodes:
                 if node.type not in _INIT_COMMIT_STATE_NODE_TYPES or node.id not in seeded_paths or node.id not in hyst_copy:
                     continue
-                if node.id in (cf_tainted if node.type == "change_filter" else tainted):
+                always_commit = node.type in _INIT_STATE_ALWAYS_COMMIT
+                if node.id in (cf_tainted if always_commit else tainted):
                     continue
-                if node.type != "change_filter" and not (_downstream_closure({node.id}, flow.edges) & published_writes):
+                if not always_commit and not (_downstream_closure({node.id}, flow.edges) & published_writes):
                     continue
                 self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
                 state_committed = True

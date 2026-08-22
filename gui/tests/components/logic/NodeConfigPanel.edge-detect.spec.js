@@ -355,3 +355,58 @@ describe('NodeConfigPanel edge_detect value visibility', () => {
     w.unmount()
   })
 })
+
+describe('NodeConfigPanel typed value backend agreement', () => {
+  async function mountBare(data) {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'ed3', type: 'edge_detect', data },
+        nodeTypes: [{ type: 'edge_detect', label: 'Flankenerkennung', config_schema: CONFIG_SCHEMA }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+    return w
+  }
+
+  it('applies the schema default when an imported node omits the type field', async () => {
+    // LogicGraphImport accepts {} node data; the backend then defaults
+    // data_type to bool, so the panel must not fall back to free text.
+    const w = await mountBare({})
+
+    const boolSelects = selects(w).filter(s => s.findAll('option').some(o => o.attributes('value') === 'true'))
+    expect(boolSelects).toHaveLength(2)
+    expect(w.findAll('input[type="text"]')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('rejects numeric notation the backend cannot parse', async () => {
+    // Number("0x10") is finite in JavaScript, but Python's float() raises and
+    // the executor would silently emit 0.0 while the editor showed "0x10".
+    const w = await mountBare({ data_type: 'string', value_rising: '0x10', value_falling: 'Infinity' })
+
+    const dataTypeSelect = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'number'))
+    await dataTypeSelect.setValue('number')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0', value_falling: '0' })
+    w.unmount()
+  })
+
+  it('keeps decimal and scientific notation, which the backend does parse', async () => {
+    const w = await mountBare({ data_type: 'string', value_rising: '-1.5e3', value_falling: '.25' })
+
+    const dataTypeSelect = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'number'))
+    await dataTypeSelect.setValue('number')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '-1.5e3', value_falling: '.25' })
+    w.unmount()
+  })
+})

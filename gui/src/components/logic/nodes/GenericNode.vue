@@ -241,8 +241,12 @@ const def = computed(() => {
     // survives as long as *either* direction still sends a value.
     const rising  = props.data?.on_rising  ?? 'value'
     const falling = props.data?.on_falling ?? 'value'
+    // Mirror the executor: only 'off' and 'trigger' withhold the value; every
+    // other setting — including an imported or future one — sends. Testing for
+    // the literal 'value' would hide a handle the runtime actually drives.
+    const sends = action => action !== 'off' && action !== 'trigger'
     const outputs = []
-    if (rising === 'value' || falling === 'value') outputs.push({ id: 'out', label: t('logic.ports.output') })
+    if (sends(rising) || sends(falling)) outputs.push({ id: 'out', label: t('logic.ports.output') })
     if (rising  !== 'off') outputs.push({ id: 'rising',  label: t('logic.ports.rising') })
     if (falling !== 'off') outputs.push({ id: 'falling', label: t('logic.ports.falling') })
     return { ...base, label, outputs }

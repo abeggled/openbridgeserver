@@ -1659,10 +1659,15 @@ class GraphExecutor:
                 if self._to_bool(inputs.get("reset")):
                     # Reset wins over a value arriving on the same tick (same
                     # precedence as memory's deferred commit): the remembered
-                    # level is dropped entirely, so the next value re-seeds the
-                    # baseline and produces no edge — and nothing is persisted
-                    # for this node until then.
-                    self.hysteresis_state.pop(node.id, None)
+                    # level is dropped, so the next value re-seeds the baseline
+                    # and produces no edge.
+                    #
+                    # Left as an empty marker rather than popped the node id:
+                    # LogicManager._persist_node_state returns early when the
+                    # whole map is empty, so popping the only stateful node's
+                    # entry would leave the PRE-reset level in the database and
+                    # a restart would resurrect it.
+                    self.hysteresis_state[node.id] = {}
                     return idle
                 if "in" not in inputs or inputs["in"] is None:
                     # Unwired/absent input, or an explicit "nothing arrived":

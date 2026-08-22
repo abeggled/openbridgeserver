@@ -151,6 +151,15 @@ describe('GenericNode — handles', () => {
       .toEqual(['out', 'rising', 'falling'])
   })
 
+  it('keeps the edge_detect value output for a setting the runtime still sends on', async () => {
+    // The executor treats anything other than off/trigger as value-sending, so
+    // an imported or future setting must not hide a handle it actually drives.
+    const w = await mountGN('edge_detect', { on_rising: 'both', on_falling: 'trigger' })
+    await flushPromises()
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(sources.map(h => h.attributes('data-id'))).toContain('out')
+  })
+
   it('drops an edge_detect trigger output for a direction that is off', async () => {
     const noRising = await mountGN('edge_detect', { on_rising: 'off' })
     await flushPromises()

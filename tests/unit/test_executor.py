@@ -2799,7 +2799,10 @@ class TestEdgeDetectNode:
 
         reset_out = exc.execute({"ed": {"reset": True}})
         assert reset_out["ed"] == {"rising": False, "falling": False}
-        assert state == {}
+        # An empty marker, not a removed key: a popped entry could leave the
+        # whole map empty, which makes _persist_node_state skip the write and
+        # keeps the pre-reset level in the database.
+        assert state == {"ed": {}}
 
         after = exc.execute({"ed": {"in": False}})
         assert after["ed"] == {"rising": False, "falling": False}
@@ -2812,7 +2815,7 @@ class TestEdgeDetectNode:
         out = exc.execute({"ed": {"in": True, "reset": True}})
 
         assert out["ed"] == {"rising": False, "falling": False}
-        assert state == {}
+        assert state == {"ed": {}}
 
     def test_reset_on_an_unseeded_node_stays_a_no_op(self):
         state = {}
@@ -2821,7 +2824,7 @@ class TestEdgeDetectNode:
         out = exc.execute({"ed": {"reset": True}})
 
         assert out["ed"] == {"rising": False, "falling": False}
-        assert state == {}
+        assert state == {"ed": {}}
 
     def test_falling_off_stays_silent_on_every_output(self):
         state = {"ed": {"value": True}}

@@ -2207,7 +2207,10 @@ function enumOptionLabel(nodeType, fieldKey, option) {
 // text. Returns '' when the field has no such dependency.
 function typedValueKind(schema) {
   if (!schema?.value_type_field) return ''
-  return localData.value[schema.value_type_field] ?? ''
+  // Same schema-default fallback as isFieldVisible: an imported node may omit
+  // the referenced field entirely, and the backend then applies its default —
+  // rendering an unrestricted text box here would misstate what runs.
+  return localData.value[schema.value_type_field] ?? schemaFields.value[schema.value_type_field]?.default ?? ''
 }
 
 // Switching that sibling leaves the dependent values in the previous notation
@@ -2224,10 +2227,17 @@ function onSchemaEnumChange(key) {
   emitUpdate()
 }
 
+// The decimal/scientific syntax Python's float() accepts, minus the special
+// inf/nan spellings that make no sense as a configured edge value.
+const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+
 function normaliseTypedValue(value, kind, schema) {
   const text = value === null || value === undefined ? '' : String(value)
   if (kind === 'bool') return text === 'true' || text === 'false' ? text : String(schema.default ?? 'false')
-  if (kind === 'number') return text.trim() !== '' && Number.isFinite(Number(text)) ? text : '0'
+  // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
+  // "Infinity", which the backend's float() rejects — it would coerce them to
+  // 0.0 while the editor kept displaying the original spelling.
+  if (kind === 'number') return BACKEND_NUMBER_RE.test(text.trim()) ? text : '0'
   return text
 }
 
