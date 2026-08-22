@@ -17,9 +17,18 @@ export const useVisuStore = defineStore('visu', () => {
   const nodes = ref<VisuNode[]>([])
   const treeLoaded = ref(false)
 
-  async function loadTree() {
-    nodes.value = await visuApi.tree()
+  // Zählt jede Änderung am Baum. Eine Antwort, die vor einer Änderung angefordert
+  // und danach zugestellt wurde, ist veraltet und darf sie nicht überschreiben.
+  let treeRevision = 0
+
+  function setTree(fresh: VisuNode[]) {
+    nodes.value = fresh
     treeLoaded.value = true
+    treeRevision += 1
+  }
+
+  async function loadTree() {
+    setTree(await visuApi.tree())
   }
 
   function getNode(id: string): VisuNode | undefined {
@@ -61,8 +70,15 @@ export const useVisuStore = defineStore('visu', () => {
   const isLoggedIn = computed(() => !!_jwt.value)
   const isAdmin = computed(() => _isAdmin.value)
 
+  // Jede Anmeldung, Erneuerung und Abmeldung eröffnet eine Generation. Alles,
+  // was danach asynchron zurückkommt, darf nur übernommen werden, solange keine
+  // neuere Generation begonnen hat.
+  let authGeneration = 0
+
   /** Spiegel wieder an den localStorage angleichen (nach erzwungenem Logout) */
   function syncAuthState() {
+    // Wie beim Logout: laufende Abfragen der alten Generation verwerfen.
+    authGeneration += 1
     _jwt.value = getJwt()
     _isAdmin.value = getIsAdmin()
   }
@@ -80,7 +96,6 @@ export const useVisuStore = defineStore('visu', () => {
   // danach asynchron zurückkommt — Rolle wie Baum — darf nur übernommen werden,
   // solange keine neuere Generation begonnen hat. Sonst schreibt die verspätete
   // Antwort der alten Anmeldung in die Sitzung der neuen.
-  let authGeneration = 0
 
   async function applyIdentity(generation: number, onFailure: 'deny' | 'keep') {
     try {
@@ -116,10 +131,14 @@ export const useVisuStore = defineStore('visu', () => {
     // dieser Sicht und muss nach der Erneuerung neu geholt werden, sonst
     // bleiben private Knoten unsichtbar.
     try {
+      const revisionBefore = treeRevision
       const fresh = await visuApi.tree()
-      if (generation !== authGeneration) return
-      nodes.value = fresh
-      treeLoaded.value = true
+      // Neben einem Sitzungswechsel kann in derselben Sitzung auch eine
+      // Änderung dazwischengekommen sein (angelegter, verschobener oder
+      // gelöschter Knoten) — dieser Schnappschuss ist dann älter als der
+      // lokale Stand und würde sie zurücknehmen.
+      if (generation !== authGeneration || revisionBefore !== treeRevision) return
+      setTree(fresh)
     } catch {
       // Nächste Erneuerung oder Navigation versucht es erneut
     }
@@ -139,6 +158,9 @@ export const useVisuStore = defineStore('visu', () => {
   }
 
   function logout() {
+    // Generation weiterzählen, sonst übernimmt eine noch laufende
+    // /auth/me-Abfrage danach wieder ihr Ergebnis und stellt das Admin-Flag her.
+    authGeneration += 1
     clearAuthTokens()
     _jwt.value = null
     _isAdmin.value = false
@@ -158,6 +180,7 @@ export const useVisuStore = defineStore('visu', () => {
   async function createNode(data: Partial<VisuNode>): Promise<VisuNode> {
     const node = await visuApi.createNode(data)
     nodes.value.push(node)
+    treeRevision += 1
     return node
   }
 
@@ -165,17 +188,20 @@ export const useVisuStore = defineStore('visu', () => {
     const node = await visuApi.updateNode(id, data)
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx !== -1) nodes.value[idx] = node
+    treeRevision += 1
     return node
   }
 
   async function deleteNode(id: string): Promise<void> {
     await visuApi.deleteNode(id)
     nodes.value = nodes.value.filter((n) => n.id !== id)
+    treeRevision += 1
   }
 
   async function copyNode(id: string, targetParentId: string | null, newName: string): Promise<VisuNode> {
     const node = await visuApi.copyNode(id, targetParentId, newName)
     nodes.value.push(node)
+    treeRevision += 1
     return node
   }
 
@@ -183,6 +209,7 @@ export const useVisuStore = defineStore('visu', () => {
     const node = await visuApi.moveNode(id, newParentId, order)
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx !== -1) nodes.value[idx] = node
+    treeRevision += 1
   }
 
   return {

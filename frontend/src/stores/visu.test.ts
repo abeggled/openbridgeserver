@@ -252,6 +252,86 @@ describe('visu store auth state', () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
   })
 
+  it('does not restore the admin flag from a lookup still running at logout', async () => {
+    let releaseMe: (value: Response) => void = () => {}
+    const pendingMe = new Promise<Response>(resolve => { releaseMe = resolve })
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) return pendingMe
+      return jsonResponse([])
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-1')
+    localStorage.setItem('visu_refresh_token', 'refresh-1')
+    notifyAuthTokenRefreshed()          // startet /auth/me
+
+    store.logout()
+    releaseMe(jsonResponse({ id: 'u1', username: 'admin', is_admin: true }))
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(false)
+    expect(store.isLoggedIn).toBe(false)
+    expect(localStorage.getItem('visu_is_admin')).toBeNull()
+  })
+
+  it('does not restore the admin flag after a forced logout', async () => {
+    let releaseMe: (value: Response) => void = () => {}
+    const pendingMe = new Promise<Response>(resolve => { releaseMe = resolve })
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) return pendingMe
+      return jsonResponse([])
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-1')
+    localStorage.setItem('visu_refresh_token', 'refresh-1')
+    notifyAuthTokenRefreshed()
+
+    localStorage.clear()
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    releaseMe(jsonResponse({ id: 'u1', username: 'admin', is_admin: true }))
+    await flushPromises()
+
+    expect(store.isAdmin).toBe(false)
+  })
+
+  it('keeps a node created while the renewal tree reload was in flight', async () => {
+    const created = {
+      id: 'new-node', parent_id: null, name: 'Neu', type: 'PAGE' as const, order: 1, access: 'public' as const,
+    }
+    let releaseTree: (value: Response) => void = () => {}
+    const pendingTree = new Promise<Response>(resolve => { releaseTree = resolve })
+    let treePending = false
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      if (init.method === 'POST') return jsonResponse(created)
+      if (treePending) return pendingTree
+      return jsonResponse([])
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-1')
+    localStorage.setItem('visu_refresh_token', 'refresh-1')
+    treePending = true
+    notifyAuthTokenRefreshed()
+    await flushPromises()               // /auth/me durch, Baum-Request unterwegs
+
+    treePending = false
+    await store.createNode(created)
+    expect(store.nodes.map(n => n.id)).toContain('new-node')
+
+    // Der ältere Schnappschuss darf die Neuanlage nicht zurücknehmen
+    releaseTree(jsonResponse([]))
+    await flushPromises()
+
+    expect(store.nodes.map(n => n.id)).toContain('new-node')
+  })
+
   it('discards a tree reload that a newer login has overtaken', async () => {
     let releaseAliceTree: (value: Response) => void = () => {}
     const alicePendingTree = new Promise<Response>(resolve => { releaseAliceTree = resolve })
