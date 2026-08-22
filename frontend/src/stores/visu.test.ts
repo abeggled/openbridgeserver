@@ -297,6 +297,45 @@ describe('visu store auth state', () => {
     expect(store.isAdmin).toBe(false)
   })
 
+  it('keeps the renewed tree when a slower anonymous load finishes later', async () => {
+    const publicNode = {
+      id: 'public', parent_id: null, name: 'P', type: 'PAGE' as const, order: 0, access: 'public' as const,
+    }
+    const privateNode = {
+      id: 'private', parent_id: null, name: 'Q', type: 'PAGE' as const, order: 1, access: 'user' as const,
+    }
+    let releaseInitial: (value: Response) => void = () => {}
+    const pendingInitial = new Promise<Response>(resolve => { releaseInitial = resolve })
+    let initialPending = true
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      if (initialPending) {
+        initialPending = false
+        return pendingInitial          // Kaltstart-Anfrage bleibt hängen
+      }
+      return jsonResponse([publicNode, privateNode])
+    }))
+
+    const store = useVisuStore()
+    const slowInitialLoad = store.loadTree()
+
+    localStorage.setItem('visu_jwt', 'jwt-renewed')
+    localStorage.setItem('visu_refresh_token', 'refresh-renewed')
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+    expect(store.nodes.map(n => n.id)).toContain('private')
+
+    // Die alte, anonym gefilterte Antwort trifft erst jetzt ein
+    releaseInitial(jsonResponse([publicNode]))
+    await slowInitialLoad
+    await flushPromises()
+
+    expect(store.nodes.map(n => n.id)).toContain('private')
+  })
+
   it('keeps a node created while the renewal tree reload was in flight', async () => {
     const created = {
       id: 'new-node', parent_id: null, name: 'Neu', type: 'PAGE' as const, order: 1, access: 'public' as const,

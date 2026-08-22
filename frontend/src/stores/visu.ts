@@ -27,8 +27,20 @@ export const useVisuStore = defineStore('visu', () => {
     treeRevision += 1
   }
 
+  /**
+   * Baum laden und nur übernehmen, wenn er nicht schon überholt ist.
+   *
+   * Jede Antwort, die den ganzen Baum ersetzt, muss das prüfen: neben lokalen
+   * Änderungen kann inzwischen auch die Token-Erneuerung eine autorisierte
+   * Sicht geholt haben. Ein beim Kaltstart mit abgelaufenem Token gestarteter
+   * Request bringt die anonym gefilterte Sicht mit und würde sie sonst wieder
+   * zurücksetzen.
+   */
   async function loadTree() {
-    setTree(await visuApi.tree())
+    const revisionBefore = treeRevision
+    const fresh = await visuApi.tree()
+    if (revisionBefore !== treeRevision) return
+    setTree(fresh)
   }
 
   function getNode(id: string): VisuNode | undefined {
