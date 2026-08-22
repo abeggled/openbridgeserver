@@ -126,6 +126,7 @@
           <option value="sunset">{{ $t('adapters.bindingForm.ztTimeRefSunset') }}</option>
           <option value="solar_noon">{{ $t('adapters.bindingForm.ztTimeRefSolarNoon') }}</option>
           <option value="solar_altitude">{{ $t('adapters.bindingForm.ztTimeRefSolarAltitude') }}</option>
+          <option value="solar_azimuth">{{ $t('adapters.bindingForm.ztTimeRefSolarAzimuth') }}</option>
         </select>
       </div>
     </div>
@@ -161,6 +162,22 @@
         <select v-model="cfg.sun_direction" class="input">
           <option value="rising">{{ $t('adapters.bindingForm.ztSunDirectionRising') }}</option>
           <option value="setting">{{ $t('adapters.bindingForm.ztSunDirectionSetting') }}</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Sonnenazimut -->
+    <div v-if="cfg.time_ref === 'solar_azimuth'" class="grid grid-cols-2 gap-4">
+      <div class="form-group">
+        <label class="label">{{ $t('adapters.bindingForm.ztSolarAzimuthLabel') }}</label>
+        <input v-model.number="cfg.solar_azimuth_deg" type="number" min="0" max="360" step="1" class="input" />
+        <p class="hint">{{ $t('adapters.bindingForm.ztSolarAzimuthHint') }}</p>
+      </div>
+      <div class="form-group">
+        <label class="label">{{ $t('adapters.bindingForm.ztSolarAzimuthWindowLabel') }}</label>
+        <select v-model="cfg.sun_direction" class="input">
+          <option value="rising">{{ $t('adapters.bindingForm.ztSolarAzimuthWindowRising') }}</option>
+          <option value="setting">{{ $t('adapters.bindingForm.ztSolarAzimuthWindowSetting') }}</option>
         </select>
       </div>
     </div>
