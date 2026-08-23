@@ -74,8 +74,11 @@ def test_edge_values_declare_the_field_that_types_them():
 def test_each_edge_value_is_hidden_unless_its_direction_sends_one():
     schema = NODE_TYPE.config_schema
 
-    assert schema["value_rising"]["visible_when"] == {"field": "on_rising", "equals": "value"}
-    assert schema["value_falling"]["visible_when"] == {"field": "on_falling", "equals": "value"}
+    # Stated as an exclusion, matching how the executor decides it: anything
+    # that is not off/trigger sends, so a legacy or future setting keeps its
+    # value field rather than having it silently hidden.
+    assert schema["value_rising"]["visible_when"] == {"field": "on_rising", "not_in": ["off", "trigger"]}
+    assert schema["value_falling"]["visible_when"] == {"field": "on_falling", "not_in": ["off", "trigger"]}
 
 
 def test_persist_state_defaults_to_true():

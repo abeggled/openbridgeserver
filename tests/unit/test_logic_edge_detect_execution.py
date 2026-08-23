@@ -513,3 +513,30 @@ async def test_a_missing_pulse_inverted_into_reset_does_not_clear_the_level():
         await manager._execute_graph("g", "G", flow, {"a": {"in": True}})
 
     assert manager._hysteresis["g"]["b"] == {"value": True}
+
+
+@pytest.mark.asyncio
+async def test_a_pulse_on_one_handle_does_not_release_an_action_on_the_other():
+    """The action-trigger provenance must be per handle too: a falling edge
+    says nothing about "rising", whose False a NOT downstream turns into a
+    truthy trigger."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("ed", "edge_detect"), node("n", "not", {}), node("hc", "host_check", {"host": "downstream"})],
+            "edges": [edge("ed", "n", "rising", "in1"), edge("n", "hc", "out", "trigger")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", return_value=ws),
+        patch("obs.logic.manager._ping_host", new=AsyncMock(return_value=(True, 1.0))) as ping,
+    ):
+        outputs = await manager._execute_graph("g", "G", flow, {"ed": {"in": False}})
+
+    assert outputs["ed"]["falling"] is True
+    assert outputs["ed"]["rising"] is False
+    assert ping.await_count == 0

@@ -19,9 +19,9 @@ const EDGE_ACTIONS = ['value', 'trigger', 'off']
 
 const CONFIG_SCHEMA = {
   on_rising: { type: 'string', enum: EDGE_ACTIONS, default: 'value', label: 'Steigende Flanke' },
-  value_rising: { type: 'string', default: 'true', label: 'Wert bei steigender Flanke', value_type_field: 'data_type', visible_when: { field: 'on_rising', equals: 'value' } },
+  value_rising: { type: 'string', default: 'true', label: 'Wert bei steigender Flanke', value_type_field: 'data_type', visible_when: { field: 'on_rising', not_in: ['off', 'trigger'] } },
   on_falling: { type: 'string', enum: EDGE_ACTIONS, default: 'value', label: 'Fallende Flanke' },
-  value_falling: { type: 'string', default: 'false', label: 'Wert bei fallender Flanke', value_type_field: 'data_type', visible_when: { field: 'on_falling', equals: 'value' } },
+  value_falling: { type: 'string', default: 'false', label: 'Wert bei fallender Flanke', value_type_field: 'data_type', visible_when: { field: 'on_falling', not_in: ['off', 'trigger'] } },
   data_type: { type: 'string', enum: ['bool', 'number', 'string'], default: 'bool', label: 'Datentyp' },
   persist_state: { type: 'boolean', default: true, label: 'Zustand nach Neustart wiederherstellen' },
 }
@@ -297,6 +297,16 @@ describe('NodeConfigPanel edge_detect value visibility', () => {
     const labels = w.findAll('.label').map(l => l.text())
     expect(labels).toContain('Wert bei steigender Flanke')
     expect(labels).toContain('Wert bei fallender Flanke')
+    w.unmount()
+  })
+
+  it('keeps the value field for a setting the runtime still sends on', async () => {
+    // The executor treats anything other than off/trigger as value-sending, so
+    // an imported or future setting must not have its value field hidden.
+    const w = await mountPanel({ on_rising: 'both' })
+    await flushPromises()
+
+    expect(w.findAll('.label').map(l => l.text())).toContain('Wert bei steigender Flanke')
     w.unmount()
   })
 

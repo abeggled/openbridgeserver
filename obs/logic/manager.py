@@ -4072,24 +4072,28 @@ class LogicManager:
                     # No source-handle restriction for edge_detect: unlike a
                     # change_filter, whose "out" carries a sustained value, all
                     # three of its handles are discrete.
-                    if (pulse_edge.targetHandle or "in") == "message":
-                        message_origins.setdefault(pulse_edge.target, set()).update(source_origins)
-                        continue
-                    target_type = get_node_type(_node_type_by_id.get(pulse_edge.target))
-                    if target_type and target_type.type == "change_filter":
-                        downstream_filter_origins.setdefault(pulse_edge.target, set()).update(source_origins)
-                    trigger_ports = {port.id for port in target_type.inputs if port.type == "trigger"} if target_type else set()
-                    # Handle-keyed maps remember WHICH handle of the origin fed
-                    # this consumer. Leaving a pulse origin, that is this edge's
-                    # own source handle; further downstream the pair travels
-                    # unchanged, so the root handle survives every hop.
+                    # Every origin map remembers WHICH handle of the origin fed
+                    # this consumer: a pulse on "falling" says nothing about
+                    # "rising", whose False is still a placeholder. Leaving a
+                    # pulse origin, that is this edge's own source handle;
+                    # further downstream the pair travels unchanged, so the root
+                    # handle survives every hop. Only relay_origins stays
+                    # node-keyed — _has_independent_fresh_trigger subtracts it
+                    # against the node-keyed fresh_origins.
                     if _node_type_by_id.get(source_id) in _PULSE_ORIGIN_NODE_TYPES:
                         handle_origins_out = {(source_id, pulse_edge.sourceHandle or "out")}
                     else:
                         handle_origins_out = _handle_origins.get(source_id, set())
                     _handle_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
+                    if (pulse_edge.targetHandle or "in") == "message":
+                        message_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
+                        continue
+                    target_type = get_node_type(_node_type_by_id.get(pulse_edge.target))
+                    if target_type and target_type.type == "change_filter":
+                        downstream_filter_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
+                    trigger_ports = {port.id for port in target_type.inputs if port.type == "trigger"} if target_type else set()
                     if (pulse_edge.targetHandle or "in") in trigger_ports:
-                        trigger_origins.setdefault(pulse_edge.target, set()).update(source_origins)
+                        trigger_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
                         trigger_handle_origins.setdefault(pulse_edge.target, {}).setdefault(pulse_edge.targetHandle or "in", set()).update(
                             handle_origins_out
                         )

@@ -2114,15 +2114,17 @@ const configFields = computed(() =>
   Object.fromEntries(Object.entries(schemaFields.value).filter(([, schema]) => isFieldVisible(schema)))
 )
 
-// A field may declare `visible_when: { field, equals }` to hide itself while
+// A field may declare `visible_when: { field, not_in }` to hide itself while
 // another field makes it meaningless — e.g. an edge value while that direction
-// only pulses its trigger. Falls back to the referenced field's own schema
+// only pulses its trigger. An exclusion rather than an exact match, so a
+// setting the runtime still treats as value-sending (imported, or added later)
+// keeps its field visible. Falls back to the referenced field's own schema
 // default so a node saved before that field existed still renders correctly.
 function isFieldVisible(schema) {
   const rule = schema?.visible_when
   if (!rule) return true
   const current = localData.value[rule.field] ?? schemaFields.value[rule.field]?.default
-  return current === rule.equals
+  return !rule.not_in.includes(current)
 }
 
 const formulaPreset = computed({

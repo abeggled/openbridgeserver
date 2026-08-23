@@ -45,8 +45,10 @@ NODE_TYPE = NodeTypeDef(
             "default": "true",
             "label": "Wert bei steigender Flanke",
             "value_type_field": "data_type",
-            # Meaningless unless this direction actually sends a value.
-            "visible_when": {"field": "on_rising", "equals": "value"},
+            # Meaningless unless this direction sends a value. Stated the way
+            # the executor decides it — anything that is not off/trigger sends
+            # — so an imported or future setting keeps its field visible.
+            "visible_when": {"field": "on_rising", "not_in": ["off", "trigger"]},
         },
         "on_falling": {
             "type": "string",
@@ -59,8 +61,10 @@ NODE_TYPE = NodeTypeDef(
             "default": "false",
             "label": "Wert bei fallender Flanke",
             "value_type_field": "data_type",
-            # Meaningless unless this direction actually sends a value.
-            "visible_when": {"field": "on_falling", "equals": "value"},
+            # Meaningless unless this direction sends a value. Stated the way
+            # the executor decides it — anything that is not off/trigger sends
+            # — so an imported or future setting keeps its field visible.
+            "visible_when": {"field": "on_falling", "not_in": ["off", "trigger"]},
         },
         "data_type": {
             "type": "string",
