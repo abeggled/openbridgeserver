@@ -304,7 +304,7 @@ describe('SettingsView security tab', () => {
     await wrapper.vm.restoreAutobackup()
     expect(autobackupApi.restore).toHaveBeenCalledWith('20240506-0300')
     expect(wrapper.vm.formatAutobackupName('20240506-0300')).toBe('06.05.2024 03:00 Uhr')
-    expect(wrapper.vm.formatBytes(2048)).toBe('2.0 KB')
+    expect(wrapper.vm.formatBytes(2048)).toBe('2,0 KB')  // German regional default (#1073)
   })
 
   it('requires explicit confirmation before replacing a key capability set', async () => {

@@ -8,6 +8,12 @@ export const useSettingsStore = defineStore('settings', () => {
   const dateFormat = ref('dd.MM.yyyy')
   const timeFormat = ref('HH:mm:ss')
   const language = ref(localStorage.getItem('obs-locale') ?? 'de')
+  // Regional format for numbers/currency/date — an explicit setting, deliberately
+  // independent of the UI language (issue #1073). 'auto' derives it from the language.
+  const regionFormat = ref('auto')
+  const currency = ref('auto')
+  const supportedRegionFormats = ref([])
+  const supportedCurrencies = ref([])
   const theme    = ref(localStorage.getItem('theme') ?? 'system')
   const loaded   = ref(false)
 
@@ -27,17 +33,40 @@ export const useSettingsStore = defineStore('settings', () => {
         language.value = data.language
         setLocale(data.language)
       }
+      if (data.region_format) regionFormat.value = data.region_format
+      if (data.currency) currency.value = data.currency
+    } catch {}
+    try {
+      const { data } = await settingsApi.displaySettings()
+      supportedRegionFormats.value = data.supported_region_formats ?? []
+      supportedCurrencies.value = data.supported_currencies ?? []
     } catch {}
     loaded.value = true
     applyTheme()
   }
 
-  async function save(tz, dateFmt = dateFormat.value, timeFmt = timeFormat.value, languageCode = language.value) {
-    await settingsApi.update({ timezone: tz, date_format: dateFmt, time_format: timeFmt, language: languageCode })
+  async function save(
+    tz,
+    dateFmt = dateFormat.value,
+    timeFmt = timeFormat.value,
+    languageCode = language.value,
+    region = regionFormat.value,
+    currencyCode = currency.value,
+  ) {
+    await settingsApi.update({
+      timezone: tz,
+      date_format: dateFmt,
+      time_format: timeFmt,
+      language: languageCode,
+      region_format: region,
+      currency: currencyCode,
+    })
     timezone.value = tz
     dateFormat.value = dateFmt
     timeFormat.value = timeFmt
     language.value = languageCode
+    regionFormat.value = region
+    currency.value = currencyCode
   }
 
   async function saveLanguage(languageCode) {
@@ -51,5 +80,9 @@ export const useSettingsStore = defineStore('settings', () => {
     applyTheme()
   }
 
-  return { timezone, dateFormat, timeFormat, language, theme, loaded, load, save, saveLanguage, setTheme, applyTheme }
+  return {
+    timezone, dateFormat, timeFormat, language, regionFormat, currency,
+    supportedRegionFormats, supportedCurrencies,
+    theme, loaded, load, save, saveLanguage, setTheme, applyTheme,
+  }
 })

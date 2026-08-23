@@ -199,6 +199,7 @@ export const systemApi = {
 export const settingsApi = {
   get:    ()     => api.get('/system/settings'),
   update: (data) => api.put('/system/settings', data),
+  displaySettings: () => api.get('/system/display-settings'),
 }
 
 // ── History Settings ───────────────────────────────────────────────────────

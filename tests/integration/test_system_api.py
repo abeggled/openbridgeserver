@@ -171,6 +171,86 @@ async def test_put_settings_valid_timezone(client, auth_headers):
     )
 
 
+async def test_get_settings_returns_regional_defaults(client, auth_headers):
+    body = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    assert body["region_format"] == "auto"
+    assert body["currency"] == "auto"
+
+
+async def test_display_settings_is_public_and_resolves_region_format(client):
+    """The Visu is reachable without an admin login and still needs the format."""
+    resp = await client.get("/api/v1/system/display-settings")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["region_format"] == "auto"
+    assert body["resolved_region_format"] == "de-DE"
+    assert body["resolved_currency"] == "EUR"
+    assert "de-CH" in body["supported_region_formats"]
+    assert "CHF" in body["supported_currencies"]
+
+
+async def test_display_settings_follows_explicit_regional_format(client, auth_headers):
+    await client.put(
+        "/api/v1/system/settings",
+        json={"region_format": "de-CH", "currency": "auto"},
+        headers=auth_headers,
+    )
+    try:
+        body = (await client.get("/api/v1/system/display-settings")).json()
+        assert body["resolved_region_format"] == "de-CH"
+        assert body["resolved_currency"] == "CHF"  # derived from the region, not the language
+    finally:
+        await client.put(
+            "/api/v1/system/settings",
+            json={"region_format": "auto", "currency": "auto"},
+            headers=auth_headers,
+        )
+
+
+async def test_put_settings_regional_format_is_independent_of_language(client, auth_headers):
+    resp = await client.put(
+        "/api/v1/system/settings",
+        json={"language": "de", "region_format": "de-CH", "currency": "CHF"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["language"] == "de"
+    assert resp.json()["region_format"] == "de-CH"
+    assert resp.json()["currency"] == "CHF"
+
+    persisted = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    assert persisted["region_format"] == "de-CH"
+    assert persisted["currency"] == "CHF"
+
+    await client.put(
+        "/api/v1/system/settings",
+        json={"language": "de", "region_format": "auto", "currency": "auto"},
+        headers=auth_headers,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"region_format": "nl-NL"}, {"currency": "BTC"}],
+)
+async def test_put_settings_rejects_unsupported_regional_values(client, auth_headers, payload):
+    resp = await client.put("/api/v1/system/settings", json=payload, headers=auth_headers)
+    assert resp.status_code == 422
+
+
+async def test_changing_language_does_not_overwrite_region_format(client, auth_headers):
+    await client.put("/api/v1/system/settings", json={"region_format": "de-CH"}, headers=auth_headers)
+    try:
+        resp = await client.put("/api/v1/system/settings", json={"language": "en"}, headers=auth_headers)
+        assert resp.json()["region_format"] == "de-CH"
+    finally:
+        await client.put(
+            "/api/v1/system/settings",
+            json={"language": "de", "region_format": "auto"},
+            headers=auth_headers,
+        )
+
+
 async def test_put_settings_invalid_timezone_returns_422(client, auth_headers):
     resp = await client.put(
         "/api/v1/system/settings",

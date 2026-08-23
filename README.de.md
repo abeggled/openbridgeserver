@@ -629,6 +629,8 @@ Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden
 
 Direkte Rückkopplungen werden im Editor validiert und beim Verbinden oder Speichern blockiert. Für kontrollierte Rückkopplungen wird ein **Speicher**-Block als explizite Tick-Grenze verwendet: Er gibt den Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf.
 
+Jeder Block — Funktionsblöcke wie Kommentarblöcke — lässt sich **umbenennen**: Ein Doppelklick auf den Blocktitel auf dem Logikblatt macht ihn zu einem Eingabefeld — Enter oder ein Klick daneben übernimmt den Namen, Escape bricht ab. Alternativ steht das Feld oben in den Blockeigenschaften zur Verfügung, also auch während einer Debug-Sitzung. Der eigene Name ersetzt den Standardtitel des Blocktyps auf der Karte und in den Blockeigenschaften; darunter bleiben Blocktyp und die generierte Block-ID als sekundäre Zeile sichtbar. Ein leerer Name stellt den Standardtitel wieder her. Verbindungen und Referenzen laufen weiterhin über die Block-ID, und das Umbenennen allein setzt gespeicherte Blockzustände (Speicher, Zähler, Statistik) nicht zurück. Umbenennen ist eine Bearbeitung des Logikblatts und steht daher nur Benutzern mit Schreibrechten zur Verfügung; ohne diese bleibt der Titel reine Anzeige.
+
 Ein oder mehrere Blöcke lassen sich markieren (Shift + Rahmen aufziehen, oder Strg/Cmd-Klick für einzelne Blöcke) und per **Kopieren** / **Einfügen** (bzw. Strg/Cmd+C / Strg/Cmd+V) inklusive ihrer Einstellungen vervielfältigen — auch seitenübergreifend, indem man vor dem Einfügen auf ein anderes Logikblatt wechselt. Eingefügte Blöcke erscheinen leicht versetzt und bereits markiert, sodass sie sich sofort an die gewünschte Stelle verschieben lassen.
 
 ---
@@ -682,6 +684,7 @@ Entscheidung und Zuordnung teilen dieselben Bedingungsoperatoren: gleich, unglei
 | Block | Eingänge | Ausgänge | Beschreibung |
 |---|---|---|---|
 | **Text verbinden** | 2–20 Eingänge (konfigurierbar) | Ergebnis | Verbindet mehrere Texte zu einem. Optionales Trennzeichen (z. B. `,` oder ` `). |
+| **Suchen/Ersetzen** | Text | Ergebnis | Ersetzt Treffer in einem Text anhand einer geordneten Regelliste — Regeln lassen sich im Block hinzufügen, verschieben und löschen. Je Regel wird nach einem Suchtext (Plain) oder einem regulären Ausdruck (RegEx, Gruppenverweise wie `\1` im Ersetzen-Feld) gesucht, wahlweise ohne Beachtung der Gross-/Kleinschreibung und wahlweise nur für das erste Vorkommen. Die Regeln werden von oben nach unten nacheinander angewendet, jede auf dem Ergebnis der vorherigen. |
 
 #### Timer
 
@@ -861,6 +864,11 @@ Zeigt berechnete Zwischenwerte direkt auf den Blöcken an — live und automatis
 2. **🔍 Debug**-Button in der Werkzeugleiste klicken
 3. Jeder Block zeigt ein gelbes Band mit seinen aktuellen Ausgangswerten
 4. Die Anzeige aktualisiert sich automatisch nach jeder Ausführung (Wertänderung, Zeitplan, manueller Start)
+5. Ein Klick auf einen Block öffnet dessen Konfigurationspanel — im Debug-Modus mit einem Tab
+   **Debug-Werte** (bei Objekt-Lesen/-Schreiben an die vorhandene Tab-Leiste angehängt, bei allen
+   anderen Blöcken neben einem Tab **Einstellungen**), der Block bleibt also während einer
+   Debug-Sitzung konfigurierbar. Der Tab **Debug-Werte** zeigt die vollständigen Ein- und Ausgänge
+   sowie Ausführungs-Metadaten und erlaubt temporäre Eingangs-Überschreibungen für einen Testlauf
 
 | Typ | Darstellung |
 |---|---|
@@ -1450,7 +1458,9 @@ Sendet Benachrichtigungen, wenn sich ein verknüpfter Datenpunkt ändert und die
 | `cooldown_seconds` | Mindestabstand zwischen zwei gesendeten Nachrichten |
 | `enabled` | Aktiviert/deaktiviert die Verknüpfung |
 
-Platzhalter in der Nachricht: `###DP###` = Wert, `###DPU###` = Einheit, `###DPN###` = Datenpunktname, `###DPI###` = Datenpunkt-ID, `###TS###` = Zeitstempel.
+Platzhalter in der Nachricht: `###DP###` = Wert, `###DPU###` = Einheit, `###DPN###` = Datenpunktname, `###DPI###` = Datenpunkt-ID, `###TS###` = ISO-Zeitstempel, `###DATE###` / `###TIME###` = Datum und Uhrzeit in den konfigurierten Anzeigeformaten.
+
+Zahlenwerte in `###DP###` werden im konfigurierten **Regionalformat** ausgegeben (siehe [Einstellungen](#einstellungen)) — mit der deutschen Voreinstellung wird aus `1.05` also `1,05`. Nicht-numerische Werte (Zeichenketten, Wahrheitswerte, Objekte) behalten ihre locale-neutrale Darstellung, und `###TS###` bleibt immer ein locale-neutraler ISO-Zeitstempel.
 
 > **Hinweis:** Signal wird im MESSAGE-Adapter vorerst nicht angeboten, weil dafür ein separater Signal-Gateway-Dienst betrieben werden müsste.
 
@@ -1676,7 +1686,14 @@ Die Einstellungen sind über die Weboberfläche erreichbar (⚙ in der Seitenlei
 
 **Allgemein:**
 - **Zeitzone** — alle Zeitangaben in der Oberfläche werden in dieser Zeitzone dargestellt (Verlauf, RingBuffer, History-Suche, Astro-Block)
+- **Standard-Datumsformat / Standard-Zeitformat** — Token-Muster (`dd.MM.yyyy`, `HH:mm:ss`, …) für jede Datums- und Zeitanzeige
+- **Regionalformat** — Dezimaltrennzeichen, Tausendergruppierung sowie Datums- und Währungskonventionen für **alle** Zahlenausgaben in der Admin-GUI, der Visu und in servergenerierten Benachrichtigungstexten. Das ist eine **eigene Einstellung neben der Sprache**, weil beide unabhängig voneinander sind: Deutsch in der Schweiz formatiert `1'234.50`, Deutsch in Deutschland `1.234,50`. `Automatisch` leitet das Format aus der gewählten Sprache ab (`de` → `de-DE`, `gsw` → `de-CH`, `en` → `en-US`, …); jeder explizite Eintrag (`de-DE`, `de-AT`, `de-CH`, `en-US`, `en-GB`, `fr-FR`, `fr-CH`, `it-IT`, `it-CH`, `es-ES`) überschreibt sie. Datenpunktwerte, Berechnungen, API-Payloads, Exporte und gespeicherte History bleiben locale-neutrale Zahlen.
+- **Währung** — ISO-Währung (`EUR`, `CHF`, `USD`, `GBP`) für Geldbeträge. `Automatisch` leitet sie aus dem Regionalformat ab (`de-CH`/`fr-CH`/`it-CH` → `CHF`, `en-US` → `USD`, `en-GB` → `GBP`, sonst `EUR`).
 - **KNX-Projektdatei importieren** — ETS-Projektdatei (`.knxproj`) hochladen, um Gruppenadressen als Suchvorschläge im Verknüpfungs-Formular zu nutzen
+
+Das Regionalformat wird zusätzlich schreibgeschützt und ohne Anmeldung unter `GET /api/v1/system/display-settings` bereitgestellt, damit die Visu es auch für anonyme und PIN-Nutzer anwendet.
+
+Formatkonventionen und übersetzte Namen sind bewusst getrennt: **Trennzeichen, Datums-/Zeitmuster und Währung stammen aus diesen Server-Einstellungen und sind für jeden Betrachter identisch** — eine Anlage hat eine Zahlenkonvention —, während **Wochentags- und Monatsnamen der UI-Sprache des jeweiligen Betrachters folgen**. Eine in einem englischen Browser geöffnete Visu zeigt daher englische Monatsnamen mit dem konfigurierten deutschen Zahlen- und Datumsformat.
 
 **Verlauf:** Übersicht aller Datenpunkte mit History-Aufzeichnung. Datenpunkte mit deaktivierter Aufzeichnung (`record_history: false`) werden zuerst angezeigt. Aufzeichnung per Datenpunkt ein- und ausschalten.
 

@@ -10,7 +10,7 @@ NODE_TYPE = NodeTypeDef(
     label="SMS (seven.io)",
     category="notification",
     description="Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
-    inputs=[port("trigger", "Trigger"), port("message", "Nachricht")],
+    inputs=[port("trigger", "Trigger", "trigger"), port("message", "Nachricht", "trigger")],
     outputs=[port("sent", "Gesendet", "trigger")],
     config_schema={
         "api_key": {"type": "string", "default": "", "label": "API-Key"},

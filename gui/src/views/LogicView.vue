@@ -23,10 +23,12 @@
         </button>
         <button v-if="activeGraphId" @click="requestGraphRun"
           :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
-          :disabled="!activeGraph?.enabled"
+          :disabled="!activeGraph?.enabled || runPreflightLoading"
           :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
           data-testid="btn-run">
-          &#9654; {{ $t('logic.run') }}
+          <Spinner v-if="runPreflightLoading" size="sm" />
+          <template v-else>&#9654;</template>
+          {{ $t('logic.run') }}
         </button>
         <button v-if="auth.isAdmin && activeGraphId" @click="toggleDebug"
           :class="['btn-secondary btn-sm', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
@@ -197,23 +199,20 @@
         </div>
       </div>
 
-      <!-- Config Panel -->
+      <!-- Config Panel — settings and, in debug mode, the debug values of the
+           selected block as a second tab (issue #1128) -->
       <NodeConfigPanel
-        v-if="selectedNode && auth.isAdmin && !debugNode"
+        v-if="selectedNode && auth.isAdmin"
         :node="selectedNode"
         :node-types="store.nodeTypes"
         :node-outputs="lastRunOutputs"
+        :debug-mode="debugMode"
+        :debug-inputs="debugInputs"
+        :debug-outputs="lastRunDebugOutputs[selectedNode.id] || {}"
+        :debug-metadata="lastRunMetadata"
+        :has-debug-overrides="hasDebugOverrides"
         @update="onNodeDataUpdate"
         @close="selectedNode = null"
-      />
-      <DebugInspector
-        v-if="auth.isAdmin && debugNode"
-        :node="debugNode"
-        :inputs="debugInputs"
-        :outputs="lastRunDebugOutputs[debugNode.id] || {}"
-        :metadata="lastRunMetadata"
-        :has-overrides="hasDebugOverrides"
-        @close="debugNode = null"
         @set-override="setDebugOverride"
         @clear-override="clearDebugOverride"
         @clear-all="clearAllDebugOverrides"
@@ -298,7 +297,6 @@ import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logi
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
-import DebugInspector      from '@/components/logic/DebugInspector.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
@@ -415,6 +413,7 @@ const nodeTypeComponents = {
   comment: _comment,
   // Logic
   and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic, merge: _generic,
+  change_filter: _generic,
   compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,
   // Math
   math_formula: _generic, math_map: _generic,
@@ -431,7 +430,7 @@ const nodeTypeComponents = {
   // Timer extended
   operating_hours: _generic,
   // String
-  string_concat: _generic,
+  string_concat: _generic, string_replace: _generic,
   // Notification
   notify_message: _generic, notify_pushover: _generic, notify_sms: _generic, message_archive: _generic, wake_on_lan: _generic, host_check: _generic,
   // Integration
@@ -701,9 +700,13 @@ async function saveGraph() {
   }
 }
 
+// ── Node selection & config ────────────────────────────────────────────────
+// One selected block feeds both the settings and the debug values of the
+// config panel, so switching tabs never targets a different block.
+const selectedNode = ref(null)
+
 // ── Debug mode ─────────────────────────────────────────────────────────────
 const debugMode = ref(false)
-const debugNode = ref(null)
 const debugOverrides = ref({})
 const lastRunMetadata = ref(null)
 const lastRunInputs = ref({})
@@ -766,10 +769,6 @@ let preflightRequestId = 0
 function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
   lastRunOutputs.value = outputs
   if (captureDebugOutputs) lastRunDebugOutputs.value = outputs
-  if (debugMode.value) {
-    clearDebugValues()
-    return
-  }
   nodes.value = nodes.value.map(node => ({
     ...node,
     data: {
@@ -805,7 +804,6 @@ function toggleDebug() {
   clearDebugValues()
   if (!debugMode.value) {
     clearAllDebugOverrides()
-    debugNode.value = null
     lastRunMetadata.value = null
     lastRunInputs.value = {}
     lastRunDebugOutputs.value = {}
@@ -836,33 +834,8 @@ function normalizeRunPreflight(data) {
   }))
 }
 
-async function requestGraphRun() {
-  if (!activeGraphId.value || !activeGraph.value?.enabled) return
-  const graphId = activeGraphId.value
-  const requestId = ++preflightRequestId
-  showRunPreflight.value = true
-  runPreflightLoading.value = true
-  runPreflightError.value = ''
-  runPreflightItems.value = []
-  preflightGraphId.value = ''
-  try {
-    const { data } = await logicRunAuthzApi.preflight(graphId)
-    if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
-    preflightGraphId.value = graphId
-    runPreflightItems.value = normalizeRunPreflight(data)
-  } catch (err) {
-    if (requestId !== preflightRequestId) return
-    runPreflightError.value = err.response?.data?.detail ?? t('logic.preflightError')
-  } finally {
-    if (requestId === preflightRequestId) runPreflightLoading.value = false
-  }
-}
-
-async function confirmGraphRun() {
-  const graphId = preflightGraphId.value
-  if (!graphId || activeGraphId.value !== graphId || runPreflightItems.value.some(item => !item.allowed)) return
+async function runApprovedGraph(graphId) {
   preflightApproved.value = true
-  showRunPreflight.value = false
   try {
     await runGraph(graphId)
   } finally {
@@ -871,17 +844,56 @@ async function confirmGraphRun() {
   }
 }
 
+async function requestGraphRun() {
+  if (!activeGraphId.value || !activeGraph.value?.enabled) return
+  const graphId = activeGraphId.value
+  const requestId = ++preflightRequestId
+  runPreflightLoading.value = true
+  runPreflightError.value = ''
+  runPreflightItems.value = []
+  preflightGraphId.value = ''
+  try {
+    const { data } = await logicRunAuthzApi.preflight(graphId)
+    if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
+    preflightGraphId.value = graphId
+    const items = normalizeRunPreflight(data)
+    runPreflightItems.value = items
+    // Only interrupt with the confirmation dialog when a check is actually
+    // denied — a fully-allowed run (the common case for admins, who have no
+    // grant restrictions) proceeds immediately without the popup.
+    if (items.every(item => item.allowed !== false)) {
+      runPreflightLoading.value = false
+      await runApprovedGraph(graphId)
+      return
+    }
+    showRunPreflight.value = true
+  } catch (err) {
+    if (requestId !== preflightRequestId) return
+    runPreflightError.value = err.response?.data?.detail ?? t('logic.preflightError')
+    showRunPreflight.value = true
+  } finally {
+    if (requestId === preflightRequestId) runPreflightLoading.value = false
+  }
+}
+
+async function confirmGraphRun() {
+  const graphId = preflightGraphId.value
+  if (!graphId || activeGraphId.value !== graphId || runPreflightItems.value.some(item => !item.allowed)) return
+  showRunPreflight.value = false
+  await runApprovedGraph(graphId)
+}
+
 function parseOverride(text) {
   if (!text.trim()) return undefined
   try { return JSON.parse(text) } catch { return text }
 }
 
 function setDebugOverride(inputId, text) {
-  if (!auth.isAdmin || !debugNode.value) return
-  const nodeValues = { ...(debugOverrides.value[debugNode.value.id] || {}) }
+  if (!auth.isAdmin || !selectedNode.value) return
+  const nodeValues = { ...(debugOverrides.value[selectedNode.value.id] || {}) }
   if (!text.trim()) delete nodeValues[inputId]
   else nodeValues[inputId] = text
-  debugOverrides.value = { ...debugOverrides.value, [debugNode.value.id]: nodeValues }
+  debugOverrides.value = { ...debugOverrides.value, [selectedNode.value.id]: nodeValues }
 }
 
 function clearDebugOverride(inputId) { setDebugOverride(inputId, '') }
@@ -889,40 +901,40 @@ function clearAllDebugOverrides() { debugOverrides.value = {} }
 const hasDebugOverrides = computed(() => Object.values(debugOverrides.value).some(values => Object.keys(values).length > 0))
 
 const debugInputs = computed(() => {
-  if (!debugNode.value) return []
-  const definition = store.nodeTypes.find(type => type.type === debugNode.value.type)
+  if (!selectedNode.value) return []
+  const definition = store.nodeTypes.find(type => type.type === selectedNode.value.type)
   let ports = definition?.inputs || []
-  const count = Number(debugNode.value.data?.input_count) || 2
-  if (['and', 'or', 'xor'].includes(debugNode.value.type)) {
+  const count = Number(selectedNode.value.data?.input_count) || 2
+  if (['and', 'or', 'xor'].includes(selectedNode.value.type)) {
     ports = Array.from({ length: Math.max(2, Math.min(30, count)) }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
-  } else if (debugNode.value.type === 'avg_multi') {
+  } else if (selectedNode.value.type === 'avg_multi') {
     ports = Array.from({ length: Math.max(2, Math.min(20, count)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
-  } else if (debugNode.value.type === 'string_concat') {
-    const stringCount = Number(debugNode.value.data?.count) || 2
+  } else if (selectedNode.value.type === 'string_concat') {
+    const stringCount = Number(selectedNode.value.data?.count) || 2
     ports = Array.from({ length: Math.max(2, Math.min(20, stringCount)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
-  } else if (debugNode.value.type === 'python_script') {
+  } else if (selectedNode.value.type === 'python_script') {
     ports = ['a', 'b', 'c'].map(id => ({ id, label: id }))
   }
   const known = new Set(ports.map(port => port.id))
-  for (const edge of edges.value.filter(item => item.target === debugNode.value.id)) {
+  for (const edge of edges.value.filter(item => item.target === selectedNode.value.id)) {
     const id = edge.targetHandle || 'in'
     if (!known.has(id)) {
       ports = [...ports, { id, label: id }]
       known.add(id)
     }
   }
-  for (const id of Object.keys(lastRunInputs.value[debugNode.value.id] || {})) {
+  for (const id of Object.keys(lastRunInputs.value[selectedNode.value.id] || {})) {
     if (!known.has(id)) {
       ports = [...ports, { id, label: id }]
       known.add(id)
     }
   }
   return ports.map(port => {
-    const edge = edges.value.find(item => item.target === debugNode.value.id && (item.targetHandle || 'in') === port.id)
-    const captured = lastRunInputs.value[debugNode.value.id]?.[port.id]
+    const edge = edges.value.find(item => item.target === selectedNode.value.id && (item.targetHandle || 'in') === port.id)
+    const captured = lastRunInputs.value[selectedNode.value.id]?.[port.id]
     const hasCapturedInput = captured && Object.prototype.hasOwnProperty.call(captured, 'incoming')
     const incoming = hasCapturedInput ? captured.incoming : (edge ? lastRunDebugOutputs.value[edge.source]?.[edge.sourceHandle || 'out'] : undefined)
-    const overrideText = debugOverrides.value[debugNode.value.id]?.[port.id]
+    const overrideText = debugOverrides.value[selectedNode.value.id]?.[port.id]
     const locallyOverridden = overrideText !== undefined
     const capturedOverridden = captured?.overridden === true
     return {
@@ -968,10 +980,10 @@ async function runGraph(graphId = activeGraphId.value) {
       diagnosticCount > 0 ? 6000 : 3000
     )
     // Always update lastRunOutputs (needed for extractor config panels)
-    if (acceptsDebugResponse || diagnosticCount > 0) applyDebugValues(outputs, acceptsDebugResponse)
+    if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs, acceptsDebugResponse)
     else {
       lastRunOutputs.value = outputs
-      if (!debugMode.value) clearDebugValues()
+      clearDebugValues()
     }
     if (acceptsDebugResponse) {
       lastRunMetadata.value = data.debug || { timestamp: new Date().toISOString(), used_overrides: false }
@@ -1163,18 +1175,30 @@ function onDrop(event) {
   nodes.value = [...nodes.value, newNode]
 }
 
-// ── Node selection & config ────────────────────────────────────────────────
-const selectedNode = ref(null)
-
+// ── Node selection ─────────────────────────────────────────────────────────
 function onNodeClick({ node }) {
-  if (auth.isAdmin && debugMode.value) {
-    debugNode.value = { ...node }
-    selectedNode.value = null
-    return
-  }
   if (!auth.isAdmin) return
   selectedNode.value = { ...node }
 }
+
+// The properties panel holds its own copy of the selected block, so a rename
+// typed directly on the card (issue #1157) would otherwise leave the panel
+// heading showing the previous name until the block is reselected.
+watch(
+  () => {
+    const node = nodes.value.find(n => n.id === selectedNode.value?.id)
+    // `null` marks "no such block on the canvas" — distinct from a block
+    // that simply carries no name, so removing the selected block does not
+    // push a bogus update into the panel and make it re-read the block.
+    return node ? String(node.data?.label ?? '') : null
+  },
+  (label) => {
+    const current = selectedNode.value
+    if (label === null || !current) return
+    if (String(current.data?.label ?? '') === label) return
+    selectedNode.value = { ...current, data: { ...current.data, label } }
+  },
+)
 
 // ── Copy/Paste selected nodes (issue #1084) ────────────────────────────────
 const clipboard  = ref(null)
@@ -1343,7 +1367,6 @@ watch(activeGraphId, (id, previousId) => {
     debugStateGeneration += 1
     sendDebugSubscription(previousId, false)
     debugMode.value = false
-    debugNode.value = null
     debugOverrides.value = {}
     lastRunOutputs.value = {}
     lastRunInputs.value = {}

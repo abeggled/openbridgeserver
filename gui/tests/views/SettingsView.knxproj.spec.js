@@ -521,7 +521,7 @@ describe('SettingsView account and admin coverage', () => {
     const saveTimezone = wrapper.findAll('button').find(button => button.text() === 'Speichern')
     await saveTimezone.trigger('click')
     await flushPromises()
-    expect(saveSettings).toHaveBeenCalledWith('Europe/Berlin', 'yyyy/MM/dd', 'H:mm')
+    expect(saveSettings).toHaveBeenCalledWith('Europe/Berlin', 'yyyy/MM/dd', 'H:mm', 'de', 'auto', 'auto')
 
     const darkTheme = wrapper.findAll('input[type="radio"]').find(input => input.element.value === 'dark')
     await darkTheme.setValue()

@@ -11,8 +11,8 @@ NODE_TYPE = NodeTypeDef(
     category="notification",
     description="Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
     inputs=[
-        port("trigger", "Trigger"),
-        port("message", "Nachricht"),
+        port("trigger", "Trigger", "trigger"),
+        port("message", "Nachricht", "trigger"),
         port("title", "Titel"),
     ],
     outputs=[port("stored", "Gespeichert", "trigger")],

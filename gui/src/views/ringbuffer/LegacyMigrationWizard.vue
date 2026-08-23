@@ -171,6 +171,13 @@ import { useI18n } from 'vue-i18n'
 import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { useTz } from '@/composables/useTz'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
+
+// Byte sizes follow the configured regional format (issue #1073).
+const { regionFormat } = useRegionalFormat()
+const fmtBytes = (bytes) => formatBytesBinary(bytes, regionFormat.value)
+
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -234,14 +241,11 @@ const finishedText = computed(() => {
 function fmtInt(n) {
   const value = Number(n)
   if (!Number.isFinite(value)) return '0'
-  try {
-    return new Intl.NumberFormat('de-DE').format(value)
-  } catch {
-    return String(value)
-  }
+  // Counts follow the configured regional format (issue #1073).
+  return formatNumber(value, regionFormat.value, { decimals: 0 })
 }
 
-const legacySizeText = computed(() => formatBytesBinary(legacy.value?.size_bytes ?? 0))
+const legacySizeText = computed(() => fmtBytes(legacy.value?.size_bytes ?? 0))
 const rowEstimateText = computed(() => {
   const raw = legacy.value?.row_estimate
   if (raw === null || raw === undefined) return '–'
@@ -258,7 +262,7 @@ const budgetBytes = computed(() => {
   const n = Number(status.value?.budget_bytes)
   return Number.isFinite(n) && n > 0 ? n : null
 })
-const budgetText = computed(() => (budgetBytes.value !== null ? formatBytesBinary(budgetBytes.value) : t('ringbuffer.migration.noBudget')))
+const budgetText = computed(() => (budgetBytes.value !== null ? fmtBytes(budgetBytes.value) : t('ringbuffer.migration.noBudget')))
 const diskFreeBytes = computed(() => {
   // Nullish VOR der Number-Coercion behandeln (#968, Codex :252): der Backend liefert
   // ``null``, wenn der freie Platz unbekannt ist. ``Number(null)`` wäre 0 und würde
@@ -269,7 +273,7 @@ const diskFreeBytes = computed(() => {
   const n = Number(raw)
   return Number.isFinite(n) && n >= 0 ? n : null
 })
-const diskFreeText = computed(() => (diskFreeBytes.value !== null ? formatBytesBinary(diskFreeBytes.value) : '–'))
+const diskFreeText = computed(() => (diskFreeBytes.value !== null ? fmtBytes(diskFreeBytes.value) : '–'))
 // Tatsächlicher Copy-Bedarf des Jobs (budget-gekapptes v2-Äquivalent der Legacy-
 // Daten), nicht das volle Budget – Fallback Budget nur, wenn das Backend KEINE
 // Schätzung liefert (#968). Ein finiter Wert von 0 (Codex :266) ist legitim –
@@ -292,7 +296,7 @@ const recommendedBudgetBytes = computed(() => {
   const size = Number(legacy.value?.size_bytes)
   return Number.isFinite(size) && size > 0 ? 2 * size : null
 })
-const recommendedBudgetText = computed(() => (recommendedBudgetBytes.value !== null ? formatBytesBinary(recommendedBudgetBytes.value) : '–'))
+const recommendedBudgetText = computed(() => (recommendedBudgetBytes.value !== null ? fmtBytes(recommendedBudgetBytes.value) : '–'))
 const showBudgetHint = computed(() => {
   if (isLegacyDefaultBudget.value) return true
   if (budgetBytes.value === null || recommendedBudgetBytes.value === null) return false
@@ -315,7 +319,7 @@ const diskVerdict = computed(() => {
   // ``disk_free < estimate * 1.2`` ab, erlaubt also GENAU den Schwellwert. Ein strikteres
   // ``>`` blockierte den Start am exakten Grenzwert, den die API akzeptiert.
   const ok = diskFreeBytes.value >= required
-  const params = { free: formatBytesBinary(diskFreeBytes.value), budget: formatBytesBinary(required) }
+  const params = { free: fmtBytes(diskFreeBytes.value), budget: fmtBytes(required) }
   return { ok, text: ok ? t('ringbuffer.migration.diskOk', params) : t('ringbuffer.migration.diskLow', params) }
 })
 

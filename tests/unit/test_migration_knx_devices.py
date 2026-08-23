@@ -5,7 +5,7 @@ from __future__ import annotations
 import aiosqlite
 import pytest
 
-from obs.db.database import _MIGRATION_V34, _MIGRATION_V35, Database, _migration_v36
+from obs.db.database import _MIGRATION_V34, _MIGRATION_V35, MIGRATIONS, Database, _migration_v36
 
 
 async def _table_names(db: Database) -> set[str]:
@@ -113,7 +113,7 @@ async def test_v39_repairs_existing_v38_without_device_hierarchy_links(tmp_path)
         # V40 (adapter_bindings index, #935) wurde beim Merge von issue-919 auf main
         # als naechste freie Migration ergaenzt; V41 adds date/time settings.
         version = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 50
+        assert version["version"] == MIGRATIONS[-1][0]
     finally:
         await db.disconnect()
 

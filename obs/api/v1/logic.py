@@ -21,6 +21,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -33,7 +34,7 @@ from obs.api.v1.application_audit import audit_application_contract, mark_contra
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.graph_analysis import topology_warnings
-from obs.logic.manager import _normalise_api_client_variables
+from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -65,11 +66,24 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
 
 
 def _without_positions(raw: dict) -> dict:
-    """Strip node positions and purely visual comment nodes for layout-only
-    save detection — neither affects execution semantics.
+    """Strip node positions, user-defined block names and purely visual comment
+    nodes for layout-only save detection — none of them affects execution
+    semantics.
+
+    ``data.label`` is the block name a user typed on the sheet (issue #1157).
+    Treating a rename as an execution change would re-initialize the graph and
+    reset persisted block state (memory, counters, statistics) over a purely
+    cosmetic edit. The renamed flow still reaches the runtime: the layout-only
+    path hands it to ``LogicManager.update_cached_graph``, so the one place
+    that does read the name — the ``node_label`` of an archived message — sees
+    the new one on the next tick.
     """
     raw = dict(raw)
-    raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", []) if node.get("type") != "comment"]
+    raw["nodes"] = [
+        {k: v for k, v in node.items() if k != "position"} | {"data": {k: v for k, v in (node.get("data") or {}).items() if k != "label"}}
+        for node in raw.get("nodes", [])
+        if node.get("type") != "comment"
+    ]
     return raw
 
 
@@ -80,17 +94,56 @@ def _normalized_without_positions(raw: dict) -> dict:
     freshly parsed request body carries explicitly as null — comparing raw
     dicts would misclassify a move-only save as an execution change.
     """
-    return _without_positions(json.loads(FlowData.model_validate(raw).model_dump_json()))
+    flow_data = FlowData.model_validate(raw)
+    _migrate_legacy_api_client_field_names(flow_data)
+    return _without_positions(json.loads(flow_data.model_dump_json()))
+
+
+def _normalize_missing_node_placeholders(flow_data: FlowData) -> None:
+    """Canonicalize ``missing_node`` placeholders before they reach a client.
+
+    ``data.label`` now means "user-defined block name" (issue #1157), so the two
+    older uses of that key on a placeholder have to be resolved here — the
+    properties panel offers ``label`` as an editable name for every block type
+    and cannot know a placeholder ever meant something else by it:
+
+    * Imports before #1157 wrote a generated German type marker
+      (``[Fehlend: <type>]``). That is not a name the user typed, so it is
+      dropped.
+    * A placeholder carrying its missing type in ``label`` alone has that type
+      promoted to ``original_type``, where renaming the block cannot overwrite
+      it. The built-in importer has always written both keys, but a hand-edited
+      or third-party export can still reach this route.
+
+    Doing it at the read boundary keeps the block card, the properties panel and
+    re-imported old exports consistent, and the canonical shape is written back
+    the next time the sheet is saved.
+    """
+    for node in flow_data.nodes:
+        if node.type != "missing_node":
+            continue
+        original_type = node.data.get("original_type")
+        label = node.data.get("label")
+        if not original_type:
+            if isinstance(label, str) and label.strip():
+                node.data["original_type"] = label.strip()
+                node.data.pop("label", None)
+            continue
+        if label == f"[Fehlend: {original_type}]":
+            node.data.pop("label", None)
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
+    flow_data = FlowData.model_validate(raw)
+    _migrate_legacy_api_client_field_names(flow_data)
+    _normalize_missing_node_placeholders(flow_data)
     return LogicGraphOut(
         id=row["id"],
         name=row["name"],
         description=row["description"] or "",
         enabled=bool(row["enabled"]),
-        flow_data=FlowData.model_validate(raw),
+        flow_data=flow_data,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         control_class=_row_control_class(row),
@@ -863,15 +916,19 @@ async def import_graph(
     processed_nodes: list[LogicNode] = []
     for node in body.flow_data.nodes:
         if node.type not in known_types and node.type != "missing_node":
+            placeholder_data: dict[str, Any] = {"original_type": node.type}
+            # Keep the user-defined block name (issue #1157) so a renamed block
+            # stays identifiable after its type disappeared; the frontend
+            # renders the missing type from `original_type` and localizes the
+            # placeholder heading itself.
+            if custom_label := str(node.data.get("label") or "").strip():
+                placeholder_data["label"] = custom_label
             processed_nodes.append(
                 LogicNode(
                     id=node.id,
                     type="missing_node",
                     position=node.position,
-                    data={
-                        "original_type": node.type,
-                        "label": f"[Fehlend: {node.type}]",
-                    },
+                    data=placeholder_data,
                 ),
             )
         else:

@@ -10,7 +10,7 @@ NODE_TYPE = NodeTypeDef(
     label="Benachrichtigung",
     category="notification",
     description="Sendet eine Nachricht über konfigurierte Ziele eines Message-/Benachrichtigungsadapters.",
-    inputs=[port("trigger", "Trigger", "trigger"), port("message", "Nachricht")],
+    inputs=[port("trigger", "Trigger", "trigger"), port("message", "Nachricht", "trigger")],
     outputs=[port("sent", "Gesendet", "trigger")],
     config_schema={
         "adapter_instance_id": {"type": "string", "default": "", "label": "MESSAGE-Adapter"},

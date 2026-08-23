@@ -179,8 +179,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { messageArchivesApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { useTz } from '@/composables/useTz'
 
 const { t, te } = useI18n()
+const { fmtDateTime } = useTz()
 const auth = useAuthStore()
 const MESSAGE_TYPES = ['system', 'security', 'notification', 'automation', 'adapter', 'diagnostic']
 const MESSAGE_SEVERITIES = ['info', 'success', 'warning', 'error', 'critical']
@@ -218,8 +220,9 @@ const filters = reactive({
 const currentArchiveId = computed(() => selectedArchive.value?.id ?? '')
 
 function fmt(value) {
+  // Timestamps follow the configured timezone and date/time format (issue #1073).
   if (!value) return '-'
-  return new Date(value).toLocaleString()
+  return fmtDateTime(value)
 }
 
 function typeLabel(value) {

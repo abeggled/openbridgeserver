@@ -1296,7 +1296,8 @@
       "export": "Exportieren",
       "failed": "Export fehlgeschlagen",
       "title": "Export",
-      "fileExtHint": "Dateiendung: {ext}."
+      "fileExtHint": "Dateiendung: {ext}.",
+      "escapeCharPlaceholder": "(leer)"
     },
     "topbar": {
       "activeTitle": "Aktiv — klicken zum Deaktivieren (nur für mich)",
@@ -1604,6 +1605,12 @@
     "deleteBlock": "Block löschen",
     "deleteNode": "Ast löschen",
     "init": "Init",
+    "blockName": {
+      "label": "Blockname",
+      "editTitle": "{name} — Doppelklick zum Umbenennen",
+      "panelHint": "Eigener Name für diesen Block. Leer lassen für den Standardtitel des Blocktyps.",
+      "typeAndId": "{type} · {id}"
+    },
     "nodeTypes": {
       "divide": "Dividieren",
       "const_value": "Festwert",
@@ -1614,6 +1621,7 @@
       "xor": "XOR",
       "gate": "TOR",
       "memory": "Speicher",
+      "change_filter": "Änderungsfilter",
       "compare": "Vergleich",
       "hysteresis": "Hysterese",
       "merge": "Klemme",
@@ -1628,6 +1636,7 @@
       "statistics": "Statistik",
       "avg_multi": "Mittelwert",
       "string_concat": "String Verketten",
+      "string_replace": "String Suchen/Ersetzen",
       "heating_circuit": "Sommer/Winter (DIN)",
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Verbrauchszähler",
@@ -1668,7 +1677,6 @@
     "errorToggle": "Fehler beim Ändern des Status",
     "debugBtn": "Debug",
     "debugInspector": {
-      "title": "Debug-Inspektor",
       "inputs": "Eingänge",
       "outputs": "Ausgänge",
       "incoming": "Eingehender Wert",
@@ -1680,7 +1688,6 @@
       "copyAll": "Nutzdaten kopieren",
       "copy": "Kopieren",
       "copied": "Kopiert!",
-      "close": "Schließen",
       "noValues": "Keine Eingänge",
       "noExecution": "Logikblatt ausführen, um Ausgänge zu prüfen.",
       "timestamp": "Ausgeführt",
@@ -1773,6 +1780,7 @@
       "out": "Out",
       "in_n": "IN {n}",
       "data": "Daten",
+      "text": "Text",
       "body": "Body",
       "done": "Fertig",
       "running": "Läuft",
@@ -1800,6 +1808,10 @@
       "inputs": "{n} Eingänge",
       "parts": "{n} Teile",
       "rules": "{n} Regeln",
+      "replaceModes": {
+        "plain": "Plain",
+        "regex": "RegEx"
+      },
       "sequence": "{n} Schritte · {mode}",
       "hold": "→ halten",
       "filters": "{n} Filter",
@@ -1825,6 +1837,10 @@
         "text": "Text",
         "textPlaceholder": "Notiztext…",
         "empty": "Leerer Kommentar — im Panel bearbeiten"
+      },
+      "panelTabs": {
+        "settings": "Einstellungen",
+        "debug": "Debug-Werte"
       },
       "tabs": {
         "connection": "Verbindung",
@@ -1993,6 +2009,24 @@
         "staticHint": "Verbundene Eingänge überschreiben den statischen Text. Leere Felder ergeben einen leeren Teilstring.",
         "inputPlaceholder": "Eingang {n} …"
       },
+      "stringReplace": {
+        "rules": "Regeln",
+        "moveUp": "Regel nach oben",
+        "moveDown": "Regel nach unten",
+        "orderHint": "Die Regeln werden von oben nach unten nacheinander angewendet — jede Regel arbeitet auf dem Ergebnis der vorherigen.",
+        "modes": {
+          "plain": "Suchtext (Plain)",
+          "regex": "Regulärer Ausdruck (RegEx)"
+        },
+        "searchLabel": "Suchen nach",
+        "searchPlaceholder": "z.B. alt",
+        "patternLabel": "RegEx-Muster",
+        "patternPlaceholder": "z.B. (\\d+)",
+        "replaceLabel": "Ersetzen durch",
+        "replacePlaceholder": "leer = Treffer entfernen",
+        "groupHint": "Gruppenverweise wie \\1 oder \\g<name> sind möglich.",
+        "replaceAll": "Alle Vorkommen ersetzen"
+      },
       "rules": {
         "add": "+ Regel",
         "remove": "Regel entfernen",
@@ -2145,6 +2179,9 @@
       },
       "merge": {
         "input_count": "Anzahl Eingänge",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "change_filter": {
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
       "hysteresis": {
@@ -2328,13 +2365,13 @@
         "response_type": "Response Content-Typ",
         "verify_ssl": "SSL-Zertifikat prüfen",
         "headers": "Header (JSON-Objekt, optional)",
-        "headers_secret_file": "Header aus Secret-Datei (JSON-Objekt, optional)",
+        "headers_value_file": "Header aus Datei (JSON-Objekt, optional)",
         "timeout_s": "Timeout (s)",
         "auth_type": "Authentifizierung",
         "auth_username": "Benutzername (Basic/Digest)",
         "auth_password": "Passwort (Basic/Digest)",
         "auth_token": "Bearer Token",
-        "auth_token_file": "Bearer Token aus Secret-Datei"
+        "auth_value_file": "Bearer Token aus Datei"
       },
       "math_formula": {
         "formula": "Formel",
@@ -2406,6 +2443,7 @@
       "xor": "Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "gate": "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben.",
       "memory": "Gibt den gespeicherten Wert aus dem vorherigen Logiklauf aus und speichert den aktuellen Eingangswert für den nächsten Lauf. Explizite Tick-Grenze für kontrollierte Rückkopplungen.",
+      "change_filter": "Gibt den Eingangswert aus und setzt den Geändert-Trigger nur dann, wenn er sich vom zuletzt empfangenen Wert unterscheidet. Wiederholt gleiche Werte werden unterdrückt.",
       "compare": "Vergleicht zwei Werte (>, <, =, >=, <=, !=)",
       "hysteresis": "Schaltet bei Überschreitung ON, erst bei Unterschreitung OFF",
       "merge": "Bündelt mehrere unabhängige Wertquellen auf einen gemeinsamen Ausgang: wer zuletzt einen neuen Wert liefert, wird durchgereicht (Edomi-Klemme).",
@@ -2420,6 +2458,7 @@
       "statistics": "Berechnet Min/Max/Mittelwert laufend über alle empfangenen Werte. Reset-Eingang setzt zurück.",
       "avg_multi": "Berechnet den Mittelwert von 2–20 Eingängen (aktuell) und gleitende Mittelwerte über Zeitfenster: 1 min, 1 h, 1 Tag, 7/14/30/180/365 Tage. Jeder neue Wert wird mit Zeitstempel gespeichert. Die Zeitfensterwerte bleiben nach einem Neustart erhalten (konfigurierbar).",
       "string_concat": "Verkettet 2–20 Texte zu einem Ergebnis. Jeder Eingang kann dynamisch verbunden oder statisch vorbelegt sein. Ist ein Eingang verbunden, hat er Vorrang vor dem statischen Text.",
+      "string_replace": "Ersetzt Treffer in einem Text. Mehrere Regeln werden in der angegebenen Reihenfolge nacheinander auf das Zwischenergebnis angewendet. Je Regel wählbar: Suchtext (Plain) oder regulärer Ausdruck (RegEx, Gruppenverweise wie \\1 im Ersetzen-Feld), Gross-/Kleinschreibung und alle oder nur das erste Vorkommen.",
       "heating_circuit": "Sommer/Winter-Umschaltung nach DIN (Mannheimer Methode). Eingang: Aussentemperatur. Messzeitpunkte (Erste-Kreuzung): T1 = anliegender Wert ab 07:00, T2 = ab 14:00, T3 = ab 21:00. Funktioniert auch wenn der Sensor die Messstunden nicht exakt trifft. Jeder Slot wird pro Tag nur einmal erfasst. Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. Monatsmittel: gleitender Mittelwert der letzten 31 Tagesmittel. Heizmodus EIN wenn T_avg < Grenztemperatur, AUS wenn T_avg ≥ Grenztemperatur + Hysterese. Fehlende Slots werden beim Start aus der Historie ergänzt. Zustand bleibt über Neustarts erhalten.",
       "min_max_tracker": "Verfolgt Minimum und Maximum über Zeitperioden (täglich, wöchentlich, monatlich, jährlich, absolut). Periodenwerte werden automatisch am Tages-/Wochen-/Monats-/Jahreswechsel zurückgesetzt.",
       "consumption_counter": "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) aus einem fortlaufenden Zählerwert. Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche.",
@@ -2488,7 +2527,13 @@
       "themeLightDesc": "Helles Erscheinungsbild",
       "themeDark": "Dunkel",
       "themeDarkDesc": "Dunkles Erscheinungsbild",
-      "tzSaved": "Zeitzone auf «{tz}» gesetzt"
+      "tzSaved": "Zeitzone auf «{tz}» gesetzt",
+      "regionFormat": "Regionalformat",
+      "regionFormatHint": "Bestimmt Zahlen-, Währungs- und Datumsformate. Unabhängig von der Sprache — Deutsch in der Schweiz formatiert anders als Deutsch in Deutschland.",
+      "regionFormatAuto": "Automatisch (aus Sprache: {format} · {sample})",
+      "currency": "Währung",
+      "currencyAuto": "Automatisch (aus Regionalformat: {currency})",
+      "formatPreview": "Vorschau"
     },
     "security": {
       "title": "URL-Ziel-Allowlist",

@@ -26,6 +26,13 @@ from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 from obs.db.database import get_db
+from obs.regional_format import (
+    DEFAULT_CURRENCY,
+    DEFAULT_REGION_FORMAT,
+    format_number,
+    is_finite_number,
+    resolve_region_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +216,20 @@ def evaluate_condition(value: Any, operator: str, compare_value: Any) -> bool:
     return False
 
 
-def _format_value(value: Any) -> str:
+def _format_value(value: Any, region_format: str = "de-DE") -> str:
+    """Render a datapoint value for a human-readable message.
+
+    Numbers use the configured regional format so a German reader sees
+    ``1,05`` rather than the ambiguous ``1.05``; every other type — including
+    infinities and NaN, which have no regional form — keeps its locale-neutral
+    JSON representation.
+    """
     if isinstance(value, str):
         return value
+    if isinstance(value, bool):
+        return json_dumps(value)
+    if isinstance(value, (int, float)) and is_finite_number(value):
+        return format_number(value, region_format)
     return json_dumps(value)
 
 
@@ -226,11 +244,12 @@ def render_message(
     date_format: str = DEFAULT_DATE_FORMAT,
     time_format: str = DEFAULT_TIME_FORMAT,
     language: str = "de",
+    region_format: str = DEFAULT_REGION_FORMAT,
     display_ts: datetime | None = None,
 ) -> str:
     display_ts = display_ts or ts
     replacements = {
-        "###DP###": _format_value(value),
+        "###DP###": _format_value(value, resolve_region_format(region_format, language)),
         "###DPU###": unit or "",
         "###DPN###": name,
         "###DPI###": str(datapoint_id),
@@ -242,9 +261,18 @@ def render_message(
 
 
 async def _datetime_settings() -> dict[str, str]:
-    values = {"timezone": "Europe/Zurich", "date_format": DEFAULT_DATE_FORMAT, "time_format": DEFAULT_TIME_FORMAT, "language": "de"}
+    values = {
+        "timezone": "Europe/Zurich",
+        "date_format": DEFAULT_DATE_FORMAT,
+        "time_format": DEFAULT_TIME_FORMAT,
+        "language": "de",
+        "region_format": DEFAULT_REGION_FORMAT,
+        "currency": DEFAULT_CURRENCY,
+    }
     try:
-        rows = await get_db().fetchall("SELECT key, value FROM app_settings WHERE key IN ('timezone', 'date_format', 'time_format', 'language')")
+        rows = await get_db().fetchall(
+            "SELECT key, value FROM app_settings WHERE key IN ('timezone', 'date_format', 'time_format', 'language', 'region_format', 'currency')"
+        )
         values.update({row["key"]: row["value"] for row in rows})
     except RuntimeError:
         pass
@@ -389,6 +417,7 @@ class MessageAdapter(AdapterBase):
             date_format=app_settings["date_format"],
             time_format=app_settings["time_format"],
             language=app_settings["language"],
+            region_format=app_settings.get("region_format", DEFAULT_REGION_FORMAT),
             display_ts=display_ts,
         )
         reset_version = state.reset_version

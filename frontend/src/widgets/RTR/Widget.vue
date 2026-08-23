@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDatapointsStore } from '@/stores/datapoints'
+import { useFormatStore } from '@/stores/format'
 import { datapoints } from '@/api/client'
 import type { WriteContext } from '@/api/client'
 import type { DataPointValue } from '@/types'
@@ -17,6 +18,9 @@ const props = defineProps<{
 }>()
 
 const dpStore = useDatapointsStore()
+// Nur die Anzeige folgt dem Regionalformat (Issue #1073) — geschriebene
+// Sollwerte bleiben locale-neutrale Zahlen.
+const format = useFormatStore()
 const { t }   = useI18n()
 
 // ── Konfiguration ─────────────────────────────────────────────────────────────
@@ -59,7 +63,7 @@ const shownSetpoint   = computed(() =>
   pendingSetpoint.value !== null ? pendingSetpoint.value : baseSetpoint.value,
 )
 const displaySetpoint = computed(() =>
-  (shownSetpoint.value + setpointOffset.value).toFixed(decimals.value),
+  format.fmtNumber(shownSetpoint.value + setpointOffset.value, { decimals: decimals.value }),
 )
 
 async function adjustSetpoint(delta: number) {
@@ -89,7 +93,7 @@ const actualNumVal = computed(() =>
 const displayActual = computed(() => {
   if (!hasActual.value) return null
   if (actualDp.value === null) return '…'
-  return actualNumVal.value!.toFixed(decimals.value)
+  return format.fmtNumber(actualNumVal.value!, { decimals: decimals.value })
 })
 
 // ── Betriebsart (extra DP) ────────────────────────────────────────────────────

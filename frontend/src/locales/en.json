@@ -411,7 +411,9 @@
       "nodeTypePage": "Page",
       "searchPage": "Search page name …",
       "selectPage": "Select page …",
-      "type": "Type"
+      "type": "Type",
+      "qualityBad": "Quality: bad",
+      "qualityUncertain": "Quality: uncertain"
     },
     "chart": {
       "title": "History",
@@ -1056,5 +1058,12 @@
       "title": "Unknown",
       "ariaLabel": "Unknown widget type"
     }
+  },
+  "datetimeNames": {
+    "weekdays": "Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday",
+    "weekdaysShort": "Mon|Tue|Wed|Thu|Fri|Sat|Sun",
+    "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
+    "months": "January|February|March|April|May|June|July|August|September|October|November|December",
+    "monthsShort": "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
   }
 }

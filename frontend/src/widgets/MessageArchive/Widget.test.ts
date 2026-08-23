@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { ApiRequestError, messageArchives, type MessageArchiveEntry } from '@/api/client'
 import MessageArchiveWidget from './Widget.vue'
+
+// Widgets read the regional format and timezone from a Pinia store (issue #1073).
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
 
 const wsHandlers = vi.hoisted(() => ({
   current: [] as Array<(data: Record<string, unknown>) => void>,

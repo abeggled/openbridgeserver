@@ -16,15 +16,27 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from obs.logic.manager import LogicManager
+from obs.logic.manager import LogicManager, _safe_deepcopy_state
 from obs.logic.models import FlowData
 
 _SEED_TS = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+def test_safe_state_snapshot_preserves_noncopyable_runtime_value():
+    runtime_value = (item for item in (1, 2, 3))
+    state = {"memory": {"value": runtime_value}, "other": {"value": [1]}}
+
+    snapshot = _safe_deepcopy_state(state)
+
+    assert snapshot["memory"]["value"] is runtime_value
+    assert snapshot["other"] == {"value": [1]}
+    assert snapshot["other"] is not state["other"]
 
 
 def _make_manager(graphs: dict, values: dict | None = None) -> LogicManager:
@@ -81,6 +93,27 @@ async def test_seeded_read_publishes_write_and_primes_filter_state():
     read_state = mgr._node_state["g1"]["r1"]
     assert read_state["last_value"] == 42
     assert read_state["last_ts"] == _SEED_TS
+
+
+@pytest.mark.asyncio
+async def test_seeded_initialization_tolerates_unrelated_noncopyable_filter_baseline():
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+            {"id": "cf", "type": "change_filter", "data": {}},
+        ],
+        [{"source": "r1", "sourceHandle": "value", "target": "w1", "targetHandle": "value"}],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 42})
+    runtime_value = (item for item in (1, 2, 3))
+    mgr._hysteresis["g1"] = {"cf": {"value": runtime_value}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._hysteresis["g1"]["cf"]["value"] is runtime_value
 
 
 @pytest.mark.asyncio
@@ -643,7 +676,7 @@ async def test_hysteresis_state_on_seeded_path_is_committed():
     assert len(persist_calls) == 1
     import json
 
-    assert json.loads(persist_calls[0].args[1][0])["h1"] is True
+    assert json.loads(persist_calls[0].args[1][0])["state"]["h1"] is True
     assert persist_calls[0].args[1][1] == "g1"
 
 
@@ -682,8 +715,411 @@ async def test_merge_state_on_seeded_path_is_committed():
     assert len(persist_calls) == 1
     import json
 
-    assert json.loads(persist_calls[0].args[1][0])["m1"]["active"] == "in1"
+    assert json.loads(persist_calls[0].args[1][0])["state"]["m1"]["active"] == "in1"
     assert persist_calls[0].args[1][1] == "g1"
+
+
+@pytest.mark.asyncio
+async def test_change_filter_state_on_seeded_path_is_committed():
+    """A published change_filter output must match the persisted state, or the
+    next real event carrying the same seeded value would report changed=True
+    again and re-fire the write it just caused."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 50})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    assert mgr._event_bus.publish.await_args.args[0].value == 50
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 50}
+
+    # The committed state is also persisted so a restart cannot reload the
+    # stale pre-save state from the DB
+    persist_calls = [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+    assert len(persist_calls) == 1
+    import json
+
+    assert json.loads(persist_calls[0].args[1][0])["state"]["cf1"] == {"value": 50}
+    assert persist_calls[0].args[1][1] == "g1"
+
+
+@pytest.mark.asyncio
+async def test_change_filter_state_is_committed_with_no_write_descendant():
+    """Regression: a seeded Change Filter feeding only a non-write branch
+    (here: wake_on_lan) was previously never committed, because the commit
+    loop only acted when the filter's descendants intersected
+    published_writes — which is empty when there is no datapoint_write in
+    the graph at all. After a save/restart, the seed would then be
+    discarded, and a later event from another Read node in the same graph
+    would replay the cached seed as the filter's "first" value, reporting
+    changed=True and firing the action even though the seed itself never
+    changed."""
+    src_id = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "wol", "type": "wake_on_lan", "data": {"mac_address": "AA:BB:CC:DD:EE:FF"}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "changed", "target": "wol", "targetHandle": "trigger"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 50})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 50}
+
+    import json
+
+    persist_calls = [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+    assert len(persist_calls) == 1
+    assert json.loads(persist_calls[0].args[1][0])["state"]["cf1"] == {"value": 50}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_state_committed_when_or_gate_absorbed_by_seeded_input():
+    """Regression: the blanket `tainted` closure used to discard a Change
+    Filter's initialization baseline whenever ANY upstream Read Object was
+    unseeded, even if an OR gate in between is already decisively True from
+    its OTHER, seeded input. E.g. seeded True + unseeded Read -> OR ->
+    change_filter: the OR's output is fully deterministic, so the filter's
+    committed state must not be discarded — otherwise the next unrelated
+    event would replay the unchanged True as the filter's "first" value and
+    re-fire the downstream action."""
+    seeded_id, unseeded_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "or1", "type": "or", "data": {}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r_seeded", "sourceHandle": "value", "target": "or1", "targetHandle": "in1"},
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "or1", "targetHandle": "in2"},
+            {"source": "or1", "sourceHandle": "out", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: True})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": True}
+
+
+@pytest.mark.asyncio
+async def test_initial_changed_target_gate_can_absorb_taint_with_decisive_seed():
+    seeded_id = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "source_cf", "type": "change_filter", "data": {}},
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "or1", "type": "or", "data": {}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+        ],
+        [
+            {"source": "source_cf", "sourceHandle": "changed", "target": "or1", "targetHandle": "in1"},
+            {"source": "r_seeded", "sourceHandle": "value", "target": "or1", "targetHandle": "in2"},
+            {"source": "or1", "sourceHandle": "out", "target": "cf1", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: True})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": True}
+
+
+@pytest.mark.asyncio
+async def test_initial_changed_target_closed_gate_absorbs_taint():
+    seeded_id = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "read", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "source_cf", "type": "change_filter", "data": {}},
+            {"id": "disabled", "type": "const_value", "data": {"value": "false", "data_type": "bool"}},
+            {"id": "gate", "type": "gate", "data": {"closed_behavior": "default_value", "default_value": "9"}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+        ],
+        [
+            {"source": "read", "sourceHandle": "value", "target": "source_cf", "targetHandle": "in"},
+            {"source": "source_cf", "sourceHandle": "changed", "target": "gate", "targetHandle": "in"},
+            {"source": "disabled", "sourceHandle": "value", "target": "gate", "targetHandle": "enable"},
+            {"source": "gate", "sourceHandle": "out", "target": "cf1", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 1})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 9.0}
+
+
+@pytest.mark.asyncio
+async def test_initialization_taint_stops_at_memory_tick_boundary():
+    seeded_id = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "unseeded", "type": "datapoint_read", "data": {}},
+            {"id": "memory", "type": "memory", "data": {"initial_value": 2, "data_type": "number"}},
+            {"id": "seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "add", "type": "math_formula", "data": {"formula": "a + b"}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+        ],
+        [
+            {"source": "unseeded", "sourceHandle": "value", "target": "memory", "targetHandle": "in"},
+            {"source": "memory", "sourceHandle": "out", "target": "add", "targetHandle": "in1"},
+            {"source": "seeded", "sourceHandle": "value", "target": "add", "targetHandle": "in2"},
+            {"source": "add", "sourceHandle": "result", "target": "cf1", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 10})
+    mgr._hysteresis["g1"] = {"memory": {"value": 2}, "cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    # Memory's initialization output is its prior/default tick value (zero
+    # in this dry-run), so the downstream result is deterministic despite
+    # the unresolved value waiting to be committed for the next tick.
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 10.0}
+
+
+@pytest.mark.asyncio
+async def test_initialization_taint_uses_only_last_edge_for_target_handle():
+    seeded_id = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "unseeded", "type": "datapoint_read", "data": {}},
+            {"id": "seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+        ],
+        [
+            {"source": "unseeded", "sourceHandle": "value", "target": "cf1", "targetHandle": "in"},
+            {"source": "seeded", "sourceHandle": "value", "target": "cf1", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 7})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 7}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_state_committed_when_and_gate_absorbed_by_negated_seeded_input():
+    """Same absorption as the OR case above, but for an AND gate (decisive
+    value False) whose seeded input is negated to reach that decisive
+    value — also exercises the negate_in{handle} branch of the taint
+    analysis's gate-absorption check."""
+    seeded_id, unseeded_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "and1", "type": "and", "data": {"negate_in1": True}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r_seeded", "sourceHandle": "value", "target": "and1", "targetHandle": "in1"},
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "and1", "targetHandle": "in2"},
+            {"source": "and1", "sourceHandle": "out", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: True})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": False}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_taint_survives_malformed_gate_input_count_during_initialization():
+    """Regression: a malformed input_count (e.g. an imported/legacy node
+    left with "invalid" or null) must not crash the whole initialization
+    pass — the gate is instead treated as not-absorbed (still tainted), so
+    a downstream Change Filter's baseline is correctly held rather than
+    committed from a still-undetermined gate output."""
+    seeded_id, unseeded_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "and1", "type": "and", "data": {"input_count": "invalid"}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r_seeded", "sourceHandle": "value", "target": "and1", "targetHandle": "in1"},
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "and1", "targetHandle": "in2"},
+            {"source": "and1", "sourceHandle": "out", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: True})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": "stale"}
+    persist_calls = [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+    assert len(persist_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_change_filter_state_committed_through_a_closed_gate_during_initialization():
+    """Regression: a "gate" (Freigabe/relay) node closed by a RESOLVED
+    enable input (here: left unwired, resolving to closed) is a boundary
+    just like a decisive AND/OR gate — while closed, its output is either
+    the retained last-enabled value or a fixed default_value, entirely
+    independent of "in". An unseeded Read Object feeding only the gate's
+    "in" port must not discard a downstream Change Filter's deterministic,
+    fully computed baseline just because it's structurally reachable from
+    that unrelated, never-resolving read."""
+    seeded_id, unseeded_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "relay_gate", "type": "gate", "data": {}},
+            {"id": "add1", "type": "math_formula", "data": {"formula": "a + b"}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "relay_gate", "targetHandle": "in"},
+            # enable is intentionally left unwired -> resolves to closed
+            {"source": "r_seeded", "sourceHandle": "value", "target": "add1", "targetHandle": "in1"},
+            {"source": "relay_gate", "sourceHandle": "out", "target": "add1", "targetHandle": "in2"},
+            {"source": "add1", "sourceHandle": "result", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 10})
+    mgr._hysteresis["g1"] = {"relay_gate": 5, "cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 15}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_state_commits_past_resolved_hysteresis_during_initialization():
+    seeded_id, unseeded_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "hyst", "type": "hysteresis", "data": {"threshold_on": 40, "threshold_off": 20}},
+            {"id": "add", "type": "math_formula", "data": {"formula": "a + b"}},
+            {"id": "cf", "type": "change_filter", "data": {}},
+        ],
+        [
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "hyst", "targetHandle": "value"},
+            {"source": "r_seeded", "sourceHandle": "value", "target": "add", "targetHandle": "in1"},
+            {"source": "hyst", "sourceHandle": "out", "target": "add", "targetHandle": "in2"},
+            {"source": "add", "sourceHandle": "result", "target": "cf", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 10})
+    mgr._hysteresis["g1"] = {"hyst": True, "cf": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf"] == {"value": 11}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_stays_tainted_when_gate_enable_itself_is_unresolved_during_initialization():
+    """The closed-gate boundary exception only applies when the gate's OWN
+    enable state is itself resolved — if "enable" is fed by the same
+    unresolved Read Object, the gate's closed/open state can't be trusted
+    yet either, so taint must still propagate through it normally."""
+    seeded_id, unseeded_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "relay_gate", "type": "gate", "data": {}},
+            {"id": "add1", "type": "math_formula", "data": {"formula": "a + b"}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "relay_gate", "targetHandle": "in"},
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "relay_gate", "targetHandle": "enable"},
+            {"source": "r_seeded", "sourceHandle": "value", "target": "add1", "targetHandle": "in1"},
+            {"source": "relay_gate", "sourceHandle": "out", "target": "add1", "targetHandle": "in2"},
+            {"source": "add1", "sourceHandle": "result", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 10})
+    mgr._hysteresis["g1"] = {"relay_gate": 5, "cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": "stale"}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_stays_tainted_when_gate_is_open_via_a_resolved_enable_during_initialization():
+    """The closed-gate boundary exception must not apply when the gate is
+    OPEN (enable resolves to True): an open gate genuinely passes its
+    unresolved "in" value straight through as "out", so a downstream
+    change_filter must still be tainted — same as if the gate weren't
+    there. Also exercises negate_enable (flipping a resolved False into
+    True) alongside the open-gate check."""
+    seeded_id, unseeded_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r_seeded", "type": "datapoint_read", "data": {"datapoint_id": seeded_id}},
+            {"id": "r_unseeded", "type": "datapoint_read", "data": {"datapoint_id": unseeded_id}},
+            {"id": "enable_src", "type": "const_value", "data": {"value": "false", "data_type": "bool"}},
+            {"id": "relay_gate", "type": "gate", "data": {"negate_enable": True}},
+            {"id": "add1", "type": "math_formula", "data": {"formula": "a + b"}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r_unseeded", "sourceHandle": "value", "target": "relay_gate", "targetHandle": "in"},
+            {"source": "enable_src", "sourceHandle": "value", "target": "relay_gate", "targetHandle": "enable"},
+            {"source": "r_seeded", "sourceHandle": "value", "target": "add1", "targetHandle": "in1"},
+            {"source": "relay_gate", "sourceHandle": "out", "target": "add1", "targetHandle": "in2"},
+            {"source": "add1", "sourceHandle": "result", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={seeded_id: 10})
+    mgr._hysteresis["g1"] = {"relay_gate": 5, "cf1": {"value": "stale"}}
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": "stale"}
 
 
 @pytest.mark.asyncio
@@ -743,7 +1179,7 @@ async def test_persist_node_state_excludes_persist_state_false_nodes():
 
     mgr._db.execute_and_commit.assert_awaited_once()
     saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
-    assert saved == {"h1": True}
+    assert saved["state"] == {"h1": True}
 
 
 @pytest.mark.asyncio
@@ -771,7 +1207,7 @@ async def test_persist_node_state_excludes_runtime_ical_body_and_result_cache():
     await mgr._persist_node_state("g1")
 
     saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
-    assert saved == {
+    assert saved["state"] == {
         "i1": {
             "fetched_url": "https://example.com/calendar.ics",
             "last_fetch_ts": 123.0,
@@ -796,7 +1232,7 @@ async def test_persist_node_state_without_graph_entry_strips_ical_runtime_data()
     await mgr._persist_node_state("g1")
 
     saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
-    assert saved == {"h1": False, "i1": {"fetched_url": "https://example.com/calendar.ics"}}
+    assert saved["state"] == {"h1": False, "i1": {"fetched_url": "https://example.com/calendar.ics"}}
 
 
 @pytest.mark.asyncio
@@ -816,7 +1252,889 @@ async def test_persist_node_state_without_state_is_noop():
 
     await mgr._persist_node_state("g1")
 
-    mgr._db.execute_and_commit.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_persist_node_state_serializes_non_json_native_values():
+    """Regression: a change_filter holding a datetime.time/date value (e.g.
+    from a KNX DPT10/11 decode) must not raise inside json.dumps and poison
+    persistence for the whole graph — this is a single dumps() call for
+    every node's state, so one unserializable value would otherwise stop
+    all of it from being saved. The value is tagged (not just str()-ed) so
+    _load_graphs can restore the exact original type/value on restart."""
+    import datetime as dt_module
+    import json
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"cf": {"value": dt_module.time(14, 30)}, "other": {"value": 1}}
+
+    await mgr._persist_node_state("g1")
+
+    saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
+    assert saved["__obs_node_state_version__"] == 2
+    assert saved["state"] == {"cf": {"value": {"__obs_persisted_type__": "time", "value": "14:30:00"}}, "other": {"value": 1}}
+
+
+@pytest.mark.asyncio
+async def test_persist_node_state_skips_cyclic_node_but_saves_unrelated_state():
+    import json
+
+    cyclic = []
+    cyclic.append(cyclic)
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"cf": {"value": cyclic}, "stats": {"count": 7}}
+
+    await mgr._persist_node_state("g1")
+
+    saved = json.loads(mgr._db.execute_and_commit.await_args.args[1][0])
+    assert saved["state"] == {"stats": {"count": 7}}
+
+
+@pytest.mark.asyncio
+async def test_change_filter_replaces_lossy_opaque_baseline_on_first_live_value():
+    """Regression (issue #1087 Codex finding): a change_filter's comparison
+    baseline is not always JSON-native or one of _persist_default's
+    specifically recognized types — e.g. a permitted python_script result
+    like a complex number. Persisting it used to fall back to a bare,
+    untagged str(v), indistinguishable from a genuine string after restart;
+    _load_graphs would restore that as a plain string, and a live value of
+    the original type compared against it would report a spurious
+    changed=True forever. The catch-all is tagged "opaque_str" so the first
+    live value is conservatively emitted once and replaces the lossy stand-in;
+    subsequent comparisons use the real in-memory value."""
+    import json
+
+    flow = _flow([{"id": "cf1", "type": "change_filter"}])
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"cf1": {"value": 3 + 4j}}
+    await mgr._persist_node_state("g1")
+    saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+    saved = json.loads(saved_json)
+    assert saved["state"]["cf1"]["value"] == {
+        "__obs_persisted_type__": "opaque_str",
+        "value": "(3+4j)",
+        "type": "builtins.complex",
+    }
+
+    mgr2 = _make_manager({})
+    mgr2._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+    )
+    await mgr2._load_graphs()
+
+    assert mgr2._hysteresis["g1"] == {"cf1": {"value": "(3+4j)", "_opaque_recovered_str": True}}
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        outputs = await mgr2._execute_graph("g1", "G", flow, {"cf1": {"in": 3 + 4j}})
+        repeated = await mgr2._execute_graph("g1", "G", flow, {"cf1": {"in": 3 + 4j}})
+
+    assert outputs["cf1"]["changed"] is True
+    assert repeated["cf1"]["changed"] is False
+
+
+@pytest.mark.asyncio
+async def test_change_filter_replaces_nested_lossy_opaque_baseline_on_first_live_value():
+    """Regression: the opaque-recovery detection only recognized an
+    "opaque_str" tag placed directly at state["value"] itself — a baseline
+    like [3 + 4j] persists as a LIST holding one opaque-tagged item,
+    decoded to ['(3+4j)'] (a list, not a dict), so the direct check never
+    noticed it and never set "_opaque_recovered_str". The live [3 + 4j]
+    then compared unequal against that lossy stand-in. The precise marker
+    ensures that this uncertainty emits once and is replaced by the real
+    nested value rather than trusting a non-injective string form."""
+    import json
+
+    flow = _flow([{"id": "cf1", "type": "change_filter"}])
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"cf1": {"value": [3 + 4j]}}
+    await mgr._persist_node_state("g1")
+    saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+    saved = json.loads(saved_json)
+    assert saved["state"]["cf1"]["value"] == [{"__obs_persisted_type__": "opaque_str", "value": "(3+4j)", "type": "builtins.complex"}]
+
+    mgr2 = _make_manager({})
+    mgr2._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+    )
+    await mgr2._load_graphs()
+
+    assert mgr2._hysteresis["g1"] == {"cf1": {"value": ["(3+4j)"], "_opaque_recovered_str": True}}
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        outputs = await mgr2._execute_graph("g1", "G", flow, {"cf1": {"in": [3 + 4j]}})
+        repeated = await mgr2._execute_graph("g1", "G", flow, {"cf1": {"in": [3 + 4j]}})
+
+    assert outputs["cf1"]["changed"] is True
+    assert repeated["cf1"]["changed"] is False
+
+
+@pytest.mark.asyncio
+async def test_change_filter_restores_a_named_zoneinfo_datetime_baseline():
+    """Regression (Codex finding): a Change Filter holding an aware
+    datetime whose tzinfo is a named ZoneInfo (e.g. "Europe/Zurich")
+    persists via isoformat(), which only records the CURRENT numeric UTC
+    offset. _load_graphs used to restore that as a fixed-offset datetime
+    via datetime.fromisoformat() alone — comparing == True against a live
+    matching instant either way, so change_filter's own comparison stayed
+    correct, but the RESTORED value handed to downstream nodes carried the
+    wrong tzinfo type, silently breaking any DST-aware date arithmetic
+    performed on it after a restart."""
+    import json
+    from zoneinfo import ZoneInfo
+
+    flow = _flow([{"id": "cf1", "type": "change_filter"}])
+    aware = datetime(2026, 7, 1, 12, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"cf1": {"value": aware}}
+    await mgr._persist_node_state("g1")
+    saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+    saved = json.loads(saved_json)
+    assert saved["state"]["cf1"]["value"]["tz"] == "Europe/Zurich"
+
+    mgr2 = _make_manager({})
+    mgr2._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+    )
+    await mgr2._load_graphs()
+
+    restored = mgr2._hysteresis["g1"]["cf1"]["value"]
+    assert restored == aware
+    assert isinstance(restored.tzinfo, ZoneInfo)
+    assert restored.tzinfo.key == "Europe/Zurich"
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        outputs = await mgr2._execute_graph("g1", "G", flow, {"cf1": {"in": aware}})
+
+    assert outputs["cf1"]["changed"] is False
+    assert isinstance(outputs["cf1"]["out"].tzinfo, ZoneInfo)
+    assert outputs["cf1"]["out"].tzinfo.key == "Europe/Zurich"
+
+
+@pytest.mark.asyncio
+async def test_change_filter_preserves_colliding_opaque_and_string_keys():
+    """Opaque and genuine string keys with the same representation remain
+    distinct until the live baseline can replace the recovery wrapper."""
+    from obs.logic.executor import _OpaqueRecoveredDict
+
+    flow = _flow([{"id": "cf1", "type": "change_filter"}])
+    live_value = {3 + 4j: "complex", "(3+4j)": "string"}
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {"cf1": {"value": live_value}}
+    await mgr._persist_node_state("g1")
+    saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+
+    mgr2 = _make_manager({})
+    mgr2._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+    )
+    await mgr2._load_graphs()
+
+    recovered = mgr2._hysteresis["g1"]["cf1"]["value"]
+    assert isinstance(recovered, _OpaqueRecoveredDict)
+    assert len(recovered.items) == 2
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        outputs = await mgr2._execute_graph("g1", "G", flow, {"cf1": {"in": live_value}})
+
+    assert outputs["cf1"]["changed"] is True
+    assert outputs["cf1"]["out"] == live_value
+    assert mgr2._hysteresis["g1"]["cf1"] == {"value": live_value}
+
+
+@pytest.mark.asyncio
+async def test_load_graphs_restores_state_when_a_node_id_collides_with_the_persist_tag():
+    """Regression: a stateful node whose own (unrestricted) string id is
+    exactly "__obs_persisted_type__" makes _escape_persist_collision wrap
+    the ENTIRE top-level state mapping in its escape envelope — that
+    mapping is itself just a dict that "contains the reserved tag key",
+    same as any other. _load_graphs used to decode each *value* of
+    saved_raw["state"] without first decoding the container itself, so it
+    iterated the envelope's own "__obs_persisted_type__"/"value" keys as
+    though they were node ids, losing every real node's state after a
+    restart instead of restoring it."""
+    import json
+
+    from obs.logic.manager import _PERSIST_TYPE_TAG
+
+    flow = _flow([{"id": _PERSIST_TYPE_TAG, "type": "change_filter"}, {"id": "other", "type": "change_filter"}])
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {_PERSIST_TYPE_TAG: {"value": 1}, "other": {"value": 2}}
+    await mgr._persist_node_state("g1")
+    saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+    saved = json.loads(saved_json)
+    # The whole state mapping got escape-wrapped, not just the one node.
+    assert saved["state"][_PERSIST_TYPE_TAG] == "escaped"
+    assert saved["state"]["value"] == {_PERSIST_TYPE_TAG: {"value": 1}, "other": {"value": 2}}
+
+    mgr2 = _make_manager({})
+    mgr2._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+    )
+    await mgr2._load_graphs()
+
+    assert mgr2._hysteresis["g1"] == {_PERSIST_TYPE_TAG: {"value": 1}, "other": {"value": 2}}
+
+
+@pytest.mark.asyncio
+async def test_load_graphs_marks_opaque_recovery_even_when_a_node_id_collides_with_the_persist_tag():
+    """Regression: the opaque-tag detection above used the same raw
+    saved_raw["state"] container as before the collision-unwrap fix — when
+    a node id collides with _PERSIST_TYPE_TAG, that container is still the
+    escape wrapper, so looking up ANY node's raw state by id (including
+    well-behaved ones in the same graph) found nothing, and no
+    change_filter in that graph ever got its _opaque_recovered_str marker
+    restored. An unchanged opaque baseline (e.g. a python_script
+    complex-number result) would then report a spurious changed=True on
+    every restart."""
+    import json
+
+    from obs.logic.manager import _PERSIST_TYPE_TAG
+
+    flow = _flow([{"id": _PERSIST_TYPE_TAG, "type": "change_filter"}, {"id": "cf2", "type": "change_filter"}])
+
+    mgr = _make_manager({})
+    mgr._hysteresis["g1"] = {_PERSIST_TYPE_TAG: {"value": 3 + 4j}, "cf2": {"value": 5 + 6j}}
+    await mgr._persist_node_state("g1")
+    saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+    saved = json.loads(saved_json)
+    assert saved["state"][_PERSIST_TYPE_TAG] == "escaped"
+
+    mgr2 = _make_manager({})
+    mgr2._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+    )
+    await mgr2._load_graphs()
+
+    assert mgr2._hysteresis["g1"] == {
+        _PERSIST_TYPE_TAG: {"value": "(3+4j)", "_opaque_recovered_str": True},
+        "cf2": {"value": "(5+6j)", "_opaque_recovered_str": True},
+    }
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        outputs = await mgr2._execute_graph("g1", "G", flow, {_PERSIST_TYPE_TAG: {"in": 3 + 4j}, "cf2": {"in": 5 + 6j}})
+
+    assert outputs[_PERSIST_TYPE_TAG]["changed"] is True
+    assert outputs["cf2"]["changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_load_graphs_survives_a_malformed_escape_envelope_in_raw_state():
+    """An "escaped"-tagged state container whose "value" isn't a dict can
+    only come from a corrupted/hand-edited row — _escape_persist_collision
+    itself never produces that shape (mirrors
+    test_decode_persisted_value_keeps_malformed_tagged_escape_as_is below,
+    but for the raw-container unwrap used for opaque-tag detection).
+    Must not crash; the opaque-tag lookup simply finds nothing to restore."""
+    import json
+
+    from obs.logic.manager import _PERSIST_STATE_VERSION, _PERSIST_STATE_VERSION_KEY, _PERSIST_TYPE_TAG
+
+    flow = _flow([{"id": "cf1", "type": "change_filter"}])
+    node_state = json.dumps({_PERSIST_STATE_VERSION_KEY: _PERSIST_STATE_VERSION, "state": {_PERSIST_TYPE_TAG: "escaped", "value": "not-a-dict"}})
+
+    mgr = _make_manager({})
+    mgr._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": node_state}]
+    )
+
+    await mgr._load_graphs()
+
+    # _decode_persisted_value's own malformed-escape recovery (see
+    # test_decode_persisted_value_keeps_malformed_tagged_escape_as_is)
+    # returns the tagged dict unchanged rather than crashing — nothing here
+    # actually restores per-node state from it, but nothing raises either.
+    assert mgr._hysteresis["g1"] == {_PERSIST_TYPE_TAG: "escaped", "value": "not-a-dict"}
+
+
+@pytest.mark.asyncio
+async def test_load_graphs_recognizes_a_genuine_envelope_for_a_graph_with_reserved_node_ids():
+    """Regression: a graph containing a node whose id happens to be
+    "state" or "__obs_node_state_version__" (reachable by importing a
+    hand-crafted flow_data, unlike node_state itself, which the app never
+    lets a client set directly) must still have its GENUINE, correctly
+    written version-2 envelope recognized as such. _persist_node_state
+    always writes exactly {_PERSIST_STATE_VERSION_KEY: 2, "state": {...}}
+    at the top level regardless of what any real node's id is — real
+    per-node entries live one level deeper, inside "state", never at this
+    level — so this must not be misread as an ambiguous legacy row just
+    because a real node happens to share one of these reserved ids."""
+    import json
+
+    from obs.logic.manager import _PERSIST_STATE_VERSION, _PERSIST_STATE_VERSION_KEY, _persist_default
+
+    flow = _flow(
+        [
+            {"id": _PERSIST_STATE_VERSION_KEY, "type": "change_filter"},
+            {"id": "state", "type": "change_filter"},
+            {"id": "other", "type": "change_filter"},
+        ]
+    )
+    envelope = {
+        _PERSIST_STATE_VERSION_KEY: _PERSIST_STATE_VERSION,
+        "state": {_PERSIST_STATE_VERSION_KEY: {"value": 1}, "state": {"value": 2}, "other": {"value": 3}},
+    }
+    node_state = json.dumps(envelope, default=_persist_default)
+
+    mgr = _make_manager({})
+    mgr._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": node_state}]
+    )
+
+    await mgr._load_graphs()
+
+    assert mgr._hysteresis["g1"] == {
+        _PERSIST_STATE_VERSION_KEY: {"value": 1},
+        "state": {"value": 2},
+        "other": {"value": 3},
+    }
+
+
+@pytest.mark.asyncio
+async def test_load_graphs_accepts_a_pathological_legacy_two_node_collision_as_an_envelope():
+    """Documents a known, accepted limitation: a legacy (pre-envelope) row
+    is indistinguishable from a genuine version-2 envelope purely from its
+    raw JSON shape when it happens to have EXACTLY two node entries whose
+    ids are literally "__obs_node_state_version__" (stored value: bare int
+    2) and "state" (stored value: a dict) — the exact same shape
+    _persist_node_state itself always writes. Resolving this exact
+    collision in the legacy row's favor was tried (cross-checking the
+    row's node ids against the graph's current flow.nodes) but that broke
+    genuine envelopes for any graph simply containing a node named "state"
+    (see test_load_graphs_recognizes_a_genuine_envelope_for_a_graph_with_reserved_node_ids
+    above) — a real, ongoing regression for a real, reachable scenario
+    (importing a hand-crafted flow_data), traded off here against a
+    one-time legacy-row collision that requires directly tampering with
+    the node_state DB column, which the application itself never exposes
+    a way to do (only flow_data is client-settable via graph import)."""
+    import json
+
+    from obs.logic.manager import _PERSIST_STATE_VERSION, _PERSIST_STATE_VERSION_KEY
+
+    flow = _flow(
+        [
+            {"id": _PERSIST_STATE_VERSION_KEY, "type": "change_filter"},
+            {"id": "state", "type": "change_filter"},
+        ]
+    )
+    node_state = json.dumps({_PERSIST_STATE_VERSION_KEY: _PERSIST_STATE_VERSION, "state": {"value": "kept"}})
+
+    mgr = _make_manager({})
+    mgr._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": node_state}]
+    )
+
+    await mgr._load_graphs()
+
+    assert mgr._hysteresis["g1"] == {"value": "kept"}
+
+
+@pytest.mark.asyncio
+async def test_load_graphs_treats_a_legacy_row_with_extra_nodes_as_legacy():
+    """A legacy row with MORE than the envelope's own two keys (i.e. a
+    third real node beyond the two coincidentally reserved-looking ids)
+    can no longer be mistaken for the envelope shape at all — the exact
+    top-level key count check added above resolves this more common case
+    (an ordinary legacy graph with more than exactly two nodes) without
+    needing the node-id cross-check that regressed genuine envelopes."""
+    import json
+
+    from obs.logic.manager import _PERSIST_STATE_VERSION, _PERSIST_STATE_VERSION_KEY
+
+    flow = _flow(
+        [
+            {"id": _PERSIST_STATE_VERSION_KEY, "type": "change_filter"},
+            {"id": "state", "type": "change_filter"},
+            {"id": "extra", "type": "change_filter"},
+        ]
+    )
+    node_state = json.dumps({_PERSIST_STATE_VERSION_KEY: _PERSIST_STATE_VERSION, "state": {"value": "kept"}, "extra": {"value": "also-kept"}})
+
+    mgr = _make_manager({})
+    mgr._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": node_state}]
+    )
+
+    await mgr._load_graphs()
+
+    assert mgr._hysteresis["g1"] == {
+        _PERSIST_STATE_VERSION_KEY: _PERSIST_STATE_VERSION,
+        "state": {"value": "kept", "_recovered_str": True},
+        "extra": {"value": "also-kept", "_recovered_str": True},
+    }
+
+
+class TestPersistDefaultAndDecode:
+    """Direct tests for the _persist_default/_decode_persisted_value pair
+    (issue #1087 Codex finding: "Preserve non-JSON value types in persisted
+    filter state") covering the date/datetime/list branches and the
+    malformed-tag recovery paths not already exercised by the round-trip
+    tests in test_coverage_adapters_hierarchy_logic.py."""
+
+    def test_persist_default_tags_date_and_datetime(self):
+        from datetime import date
+
+        from obs.logic.manager import _persist_default
+
+        assert _persist_default(date(2026, 1, 1)) == {"__obs_persisted_type__": "date", "value": "2026-01-01"}
+        assert _persist_default(datetime(2026, 1, 1, 12, 30, tzinfo=UTC)) == {
+            "__obs_persisted_type__": "datetime",
+            "value": "2026-01-01T12:30:00+00:00",
+        }
+
+    def test_persist_default_tags_a_named_zoneinfo_datetime_with_its_zone_key(self):
+        """Regression: isoformat() only records the current numeric UTC
+        offset (e.g. "+02:00"), not a named zone like "Europe/Zurich" — the
+        zone key must be captured separately here so _decode_persisted_value
+        can reconstruct the actual named zone, not a fixed-offset stand-in
+        that silently mishandles DST-boundary arithmetic downstream."""
+        from zoneinfo import ZoneInfo
+
+        from obs.logic.manager import _persist_default
+
+        aware = datetime(2026, 7, 1, 12, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+        assert _persist_default(aware) == {
+            "__obs_persisted_type__": "datetime",
+            "value": aware.isoformat(),
+            "tz": "Europe/Zurich",
+        }
+
+    def test_persist_default_tags_the_second_occurrence_of_an_ambiguous_dst_time_with_fold(self):
+        """Regression: isoformat() does not preserve `fold` — during a DST
+        "fall back", the same wall-clock time (e.g. 2:30 in Europe/Zurich)
+        occurs TWICE, an hour apart in real UTC terms; fold=1 marks the
+        SECOND occurrence. The numeric offset in isoformat() alone (e.g.
+        "+01:00") is not restored back into a decoded named-zone datetime
+        by a plain replace(tzinfo=...), so fold must be captured
+        separately here whenever it is set."""
+        from datetime import timedelta, timezone
+        from zoneinfo import ZoneInfo
+
+        from obs.logic.manager import _decode_persisted_value, _persist_default
+
+        second_occurrence = datetime(2025, 10, 26, 2, 30, tzinfo=ZoneInfo("Europe/Zurich"), fold=1)
+        assert _persist_default(second_occurrence) == {
+            "__obs_persisted_type__": "datetime",
+            "value": second_occurrence.isoformat(),
+            "tz": "Europe/Zurich",
+            "fold": 1,
+        }
+        # The first (default) occurrence needs no extra "fold" key — fold=0
+        # is what replace() already re-derives on decode without it.
+        first_occurrence = datetime(2025, 10, 26, 2, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+        assert "fold" not in _persist_default(first_occurrence)
+
+        naive_second = datetime(2025, 10, 26, 2, 30, fold=1)  # noqa: DTZ001 - specifically tests naive persistence
+        encoded_naive = _persist_default(naive_second)
+        assert encoded_naive["fold"] == 1
+        assert _decode_persisted_value(encoded_naive).fold == 1
+
+        fixed_offset_second = datetime(2025, 10, 26, 2, 30, tzinfo=timezone(timedelta(hours=1)), fold=1)
+        encoded_fixed = _persist_default(fixed_offset_second)
+        assert encoded_fixed["fold"] == 1
+        assert _decode_persisted_value(encoded_fixed).fold == 1
+
+    def test_persist_default_preserves_named_zone_and_fold_for_time(self):
+        from datetime import time
+        from zoneinfo import ZoneInfo
+
+        from obs.logic.manager import _decode_persisted_value, _persist_default
+
+        aware = time(2, 30, tzinfo=ZoneInfo("Europe/Zurich"), fold=1)
+        encoded = _persist_default(aware)
+
+        assert encoded == {
+            "__obs_persisted_type__": "time",
+            "value": "02:30:00",
+            "tz": "Europe/Zurich",
+            "fold": 1,
+        }
+        decoded = _decode_persisted_value(encoded)
+        assert decoded == aware
+        assert isinstance(decoded.tzinfo, ZoneInfo)
+        assert decoded.tzinfo.key == "Europe/Zurich"
+        assert decoded.fold == 1
+
+        naive = time(2, 30, fold=1)
+        naive_encoded = _persist_default(naive)
+        assert naive_encoded == {
+            "__obs_persisted_type__": "time",
+            "value": "02:30:00",
+            "fold": 1,
+        }
+        assert _decode_persisted_value(naive_encoded).fold == 1
+
+    def test_persist_default_tags_str_fallback_for_unrecognized_types(self):
+        """Regression: an untagged bare str(v) fallback here would violate
+        the version-2 envelope's own guarantee that every non-JSON-native
+        value is fully tagged — _load_graphs would restore this as an
+        indistinguishable genuine string, and a change_filter comparing a
+        live value of the original type (e.g. a python_script's complex
+        number) against it would report a spurious changed=True forever."""
+        from obs.logic.manager import _persist_default
+
+        assert _persist_default(3 + 4j) == {
+            "__obs_persisted_type__": "opaque_str",
+            "value": str(3 + 4j),
+            "type": "builtins.complex",
+        }
+
+    def test_decimal_round_trips_as_its_original_type(self):
+        from obs.logic.manager import _decode_persisted_value, _persist_default
+
+        encoded = _persist_default(Decimal("1.500"))
+
+        assert encoded == {"__obs_persisted_type__": "decimal", "value": "1.500"}
+        decoded = _decode_persisted_value(encoded)
+        assert decoded == Decimal("1.500")
+        assert isinstance(decoded, Decimal)
+
+    def test_recovered_opaque_dictionary_key_keeps_its_tag_when_repersisted(self):
+        from obs.logic.executor import _OpaqueRecoveredStr
+        from obs.logic.manager import _PERSIST_TYPE_TAG, _escape_persist_collision
+
+        encoded = _escape_persist_collision({_OpaqueRecoveredStr("(3+4j)"): "value"})
+
+        assert encoded == {
+            _PERSIST_TYPE_TAG: "dict_nonstr_keys",
+            "value": [[{_PERSIST_TYPE_TAG: "opaque_str", "value": "(3+4j)"}, "value"]],
+        }
+
+    def test_decode_persisted_value_restores_opaque_str_as_plain_string(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        assert _decode_persisted_value({"__obs_persisted_type__": "opaque_str", "value": "(3+4j)"}) == "(3+4j)"
+
+    def test_contains_opaque_tag_recurses_into_an_untagged_dict(self):
+        """An application dict without its own _PERSIST_TYPE_TAG (e.g. a
+        python_script baseline like {"a": 3 + 4j}) must still be walked
+        recursively for a nested opaque_str tag — not just a list."""
+        from obs.logic.manager import _contains_opaque_tag
+
+        assert _contains_opaque_tag({"a": {"__obs_persisted_type__": "opaque_str", "value": "(3+4j)"}}) is True
+        assert _contains_opaque_tag({"a": 1, "b": "text"}) is False
+
+    def test_persist_default_tags_set_and_frozenset(self):
+        from obs.logic.manager import _persist_default
+
+        assert _persist_default({1, 2}) == {"__obs_persisted_type__": "set", "value": [1, 2]}
+        assert _persist_default(frozenset({1, 2})) == {"__obs_persisted_type__": "frozenset", "value": [1, 2]}
+
+    def test_decode_preserves_opaque_and_genuine_string_set_collision(self):
+        from obs.logic.executor import GraphExecutor
+        from obs.logic.manager import _decode_persisted_value
+
+        decoded = _decode_persisted_value(
+            {
+                "__obs_persisted_type__": "set",
+                "value": [
+                    {"__obs_persisted_type__": "opaque_str", "value": "(3+4j)"},
+                    "(3+4j)",
+                ],
+            }
+        )
+        state = {"cf": {"value": decoded, "_opaque_recovered_str": True}}
+        exc = GraphExecutor(
+            FlowData.model_validate({"nodes": [{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}], "edges": []}),
+            hysteresis_state=state,
+        )
+
+        out = exc.execute({"cf": {"in": {3 + 4j, "(3+4j)"}}})
+
+        assert out["cf"]["changed"] is True
+        assert state["cf"] == {"value": {3 + 4j, "(3+4j)"}}
+
+    def test_decode_preserves_opaque_and_genuine_string_dict_key_collision(self):
+        from obs.logic.executor import GraphExecutor
+        from obs.logic.manager import _decode_persisted_value
+
+        decoded = _decode_persisted_value(
+            {
+                "__obs_persisted_type__": "dict_nonstr_keys",
+                "value": [
+                    [{"__obs_persisted_type__": "opaque_str", "value": "(3+4j)"}, "complex"],
+                    ["(3+4j)", "string"],
+                ],
+            }
+        )
+        state = {"cf": {"value": decoded, "_opaque_recovered_str": True}}
+        exc = GraphExecutor(
+            FlowData.model_validate({"nodes": [{"id": "cf", "type": "change_filter", "position": {"x": 0, "y": 0}, "data": {}}], "edges": []}),
+            hysteresis_state=state,
+        )
+
+        live = {3 + 4j: "complex", "(3+4j)": "string"}
+        out = exc.execute({"cf": {"in": live}})
+
+        assert out["cf"]["changed"] is True
+        assert state["cf"] == {"value": live}
+
+    def test_persist_default_recursively_escapes_set_members(self):
+        """Regression: a set member that json.dumps' own encoder handles
+        NATIVELY (a tuple) is never passed through default=, unlike a plain
+        set/frozenset member — so converting a set straight to list(v)
+        would silently flatten a tuple member into an indistinguishable
+        plain JSON array, exactly the collision _escape_persist_collision's
+        own tuple branch exists to prevent for top-level lists. Each set
+        member must be pre-escaped the same way before being handed to
+        json.dumps."""
+        from obs.logic.manager import _persist_default
+
+        assert _persist_default({(1, 2)}) == {
+            "__obs_persisted_type__": "set",
+            "value": [{"__obs_persisted_type__": "tuple", "value": [1, 2]}],
+        }
+        assert _persist_default(frozenset({(1, 2)})) == {
+            "__obs_persisted_type__": "frozenset",
+            "value": [{"__obs_persisted_type__": "tuple", "value": [1, 2]}],
+        }
+
+    def test_persist_state_round_trip_survives_a_set_of_tuples(self):
+        """Full _escape_persist_collision -> json.dumps(default=
+        _persist_default) -> json.loads -> _decode_persisted_value round
+        trip, matching _persist_node_state's exact production pipeline.
+        Without escaping tuple members inside a set first, the decoded
+        "value" list would contain a plain (unhashable) list instead of a
+        tuple, and set(decoded_items) would raise TypeError — silently
+        skipping restoration of the graph's entire persisted state."""
+        import json
+
+        from obs.logic.manager import _decode_persisted_value, _escape_persist_collision, _persist_default
+
+        state_to_save = {"cf": {"value": {(1, 2)}}}
+        dumped = json.dumps(_escape_persist_collision(state_to_save), default=_persist_default)
+        restored = _decode_persisted_value(json.loads(dumped))
+
+        assert restored == {"cf": {"value": {(1, 2)}}}
+
+    @pytest.mark.asyncio
+    async def test_deep_change_filter_state_persists_and_restores_iteratively(self):
+        import json
+
+        flow = _flow([{"id": "cf", "type": "change_filter"}])
+        retained: list = []
+        cursor = retained
+        for _ in range(1100):
+            child: list = []
+            cursor.append(child)
+            cursor = child
+        cursor.append("leaf")
+
+        mgr = _make_manager({})
+        mgr._graphs["g1"] = ("G", True, flow)
+        mgr._hysteresis["g1"] = {"cf": {"value": retained}}
+        await mgr._persist_node_state("g1")
+        saved_json = mgr._db.execute_and_commit.await_args.args[1][0]
+        assert "cf" in json.loads(saved_json)["state"]
+
+        mgr2 = _make_manager({})
+        mgr2._db.fetchall = AsyncMock(
+            return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": saved_json}]
+        )
+        await mgr2._load_graphs()
+
+        live: list = []
+        cursor = live
+        for _ in range(1100):
+            child = []
+            cursor.append(child)
+            cursor = child
+        cursor.append("leaf")
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = await mgr2._execute_graph("g1", "G", flow, {"cf": {"in": live}})
+
+        assert outputs["cf"]["changed"] is False
+        assert "__error__" not in outputs["cf"]
+
+    def test_decode_persisted_value_restores_set_and_frozenset(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        assert _decode_persisted_value({"__obs_persisted_type__": "set", "value": [1, 2]}) == {1, 2}
+        restored_fs = _decode_persisted_value({"__obs_persisted_type__": "frozenset", "value": [1, 2]})
+        assert restored_fs == frozenset({1, 2})
+        assert isinstance(restored_fs, frozenset)
+
+    def test_decode_persisted_value_keeps_malformed_tagged_set_as_is(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "set", "value": "not-a-list"}
+        assert _decode_persisted_value(malformed) is malformed
+
+    def test_escape_persist_collision_tags_nonstring_keyed_dicts(self):
+        from obs.logic.manager import _escape_persist_collision
+
+        assert _escape_persist_collision({1: "x"}) == {"__obs_persisted_type__": "dict_nonstr_keys", "value": [[1, "x"]]}
+
+    def test_decode_persisted_value_restores_nonstring_keyed_dicts(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        decoded = _decode_persisted_value({"__obs_persisted_type__": "dict_nonstr_keys", "value": [[1, "x"], [2, "y"]]})
+        assert decoded == {1: "x", 2: "y"}
+
+    def test_decode_persisted_value_keeps_malformed_tagged_nonstring_keys_as_is(self):
+        """A corrupted/hand-edited pair list (e.g. an unhashable "key" like
+        a nested list) must not crash the whole graph load."""
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "dict_nonstr_keys", "value": [[["not", "hashable"], "x"]]}
+        assert _decode_persisted_value(malformed) is malformed
+
+    def test_decode_persisted_value_keeps_tagged_nonstring_keys_with_non_list_value_as_is(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "dict_nonstr_keys", "value": "not-a-list"}
+        assert _decode_persisted_value(malformed) is malformed
+
+    def test_decode_persisted_value_restores_date_and_walks_lists(self):
+        from datetime import date
+
+        from obs.logic.manager import _decode_persisted_value
+
+        decoded = _decode_persisted_value({"value": [{"__obs_persisted_type__": "date", "value": "2026-01-01"}, 1]})
+        assert decoded == {"value": [date(2026, 1, 1), 1]}
+
+    def test_decode_persisted_value_reconstructs_a_named_zoneinfo_datetime(self):
+        """Regression: restoring a "tz"-tagged datetime must produce the
+        ORIGINAL named ZoneInfo zone, not the fixed-offset tzinfo
+        datetime.fromisoformat() alone would reconstruct — verified via
+        .tzinfo identity/key, not just == (which compares equal for either
+        tzinfo representation of the same instant, masking the bug)."""
+        from zoneinfo import ZoneInfo
+
+        from obs.logic.manager import _decode_persisted_value
+
+        decoded = _decode_persisted_value({"__obs_persisted_type__": "datetime", "value": "2026-07-01T12:30:00+02:00", "tz": "Europe/Zurich"})
+        assert decoded == datetime(2026, 7, 1, 12, 30, tzinfo=ZoneInfo("Europe/Zurich"))
+        assert isinstance(decoded.tzinfo, ZoneInfo)
+        assert decoded.tzinfo.key == "Europe/Zurich"
+
+    def test_decode_persisted_value_restores_the_second_occurrence_of_an_ambiguous_dst_time(self):
+        """Regression: without restoring "fold" explicitly, replace() on the
+        fixed-offset-parsed datetime re-derives fold=0 from the wall-clock
+        numbers alone — for the SECOND occurrence of an ambiguous DST
+        "fall back" wall-clock time, that reconstructs an instant ONE HOUR
+        EARLIER than the original, even though the wall-clock numbers and
+        zone name both look correct. Verified via .timestamp() (the actual
+        UTC instant), which fold alone determines here — .replace()-derived
+        fold=0 vs the correct fold=1 both produce a datetime object that
+        looks identical when printed, but represents a different moment."""
+        from zoneinfo import ZoneInfo
+
+        from obs.logic.manager import _decode_persisted_value
+
+        second_occurrence = datetime(2025, 10, 26, 2, 30, tzinfo=ZoneInfo("Europe/Zurich"), fold=1)
+        decoded = _decode_persisted_value(
+            {
+                "__obs_persisted_type__": "datetime",
+                "value": second_occurrence.isoformat(),
+                "tz": "Europe/Zurich",
+                "fold": 1,
+            }
+        )
+        assert decoded.fold == 1
+        assert decoded.timestamp() == second_occurrence.timestamp()
+
+    def test_decode_persisted_value_falls_back_when_the_named_zone_is_unknown(self):
+        """A zone no longer known on this host (e.g. a tzdata update/removal
+        since the value was persisted) must not crash the whole graph
+        load — fall back to the plain fixed-offset decode instead."""
+        from obs.logic.manager import _decode_persisted_value
+
+        decoded = _decode_persisted_value({"__obs_persisted_type__": "datetime", "value": "2026-07-01T12:30:00+02:00", "tz": "Not/AZone"})
+        assert decoded == datetime.fromisoformat("2026-07-01T12:30:00+02:00")
+        assert decoded.isoformat() == "2026-07-01T12:30:00+02:00"
+
+    def test_decode_persisted_value_keeps_malformed_tagged_bytes_as_is(self):
+        """A corrupted DB row (e.g. hand-edited or from a future format)
+        must not crash the whole graph load — bytes.fromhex on a
+        non-hex string raises ValueError, which must be caught and the
+        tagged dict returned unchanged rather than propagating."""
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "bytes", "value": "not-hex"}
+        assert _decode_persisted_value(malformed) is malformed
+
+    def test_decode_persisted_value_keeps_malformed_tagged_isoformat_as_is(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "time", "value": "not-a-time"}
+        assert _decode_persisted_value(malformed) is malformed
+
+    def test_escape_persist_collision_wraps_a_colliding_dict(self):
+        from obs.logic.manager import _escape_persist_collision
+
+        colliding = {"__obs_persisted_type__": "date", "value": "2026-01-01"}
+        assert _escape_persist_collision(colliding) == {"__obs_persisted_type__": "escaped", "value": colliding}
+
+    def test_escape_persist_collision_tags_tuples(self):
+        from obs.logic.manager import _escape_persist_collision
+
+        assert _escape_persist_collision((1, "a")) == {"__obs_persisted_type__": "tuple", "value": [1, "a"]}
+
+    def test_decode_persisted_value_restores_tuples(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        assert _decode_persisted_value({"__obs_persisted_type__": "tuple", "value": [1, "a"]}) == (1, "a")
+
+    def test_decode_persisted_value_keeps_malformed_tagged_tuple_as_is(self):
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "tuple", "value": "not-a-list"}
+        assert _decode_persisted_value(malformed) is malformed
+
+    def test_decode_persisted_value_keeps_malformed_tagged_escape_as_is(self):
+        """An "escaped" tag whose "value" isn't a dict can only come from a
+        corrupted/hand-edited row — _escape_persist_collision itself never
+        produces that shape. Must not crash; return the tagged dict as-is,
+        matching the bytes/isoformat malformed-tag recovery above."""
+        from obs.logic.manager import _decode_persisted_value
+
+        malformed = {"__obs_persisted_type__": "escaped", "value": "not-a-dict"}
+        assert _decode_persisted_value(malformed) is malformed
+
+
+# ---------------------------------------------------------------------------
+# reinitialize_graph
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reinitialize_graph_clears_state_after_disabling_persist_state():
+    """Regression: disabling persist_state on a save must clear the node's
+    stale DB snapshot immediately. Without a state-committing init publish
+    (no seed value here), initialize_graph's own conditional persist never
+    fires, so only the unconditional persist at the end of reinitialize_graph
+    can prevent a restart before the next real execution from restoring the
+    stale pre-toggle value via _load_graphs()."""
+    import json
+
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "cf1", "type": "change_filter", "data": {"persist_state": False}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={})
+    mgr._hysteresis["g1"] = {"cf1": {"value": "stale"}}
+    mgr._db.fetchall = AsyncMock(
+        return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": '{"cf1": {"value": "stale"}}'}]
+    )
+
+    await mgr.reinitialize_graph("g1")
+
+    persist_calls = [c for c in mgr._db.execute_and_commit.await_args_list if "node_state" in c.args[0]]
+    assert persist_calls
+    final_state = json.loads(persist_calls[-1].args[1][0])
+    assert "cf1" not in final_state
 
 
 @pytest.mark.asyncio
@@ -960,6 +2278,36 @@ async def test_changed_handle_branch_is_not_initialized():
     await mgr.initialize_graph("g1")
 
     mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_change_filter_changed_handle_branch_is_not_initialized():
+    """Regression: a change_filter's "changed" port is the same kind of
+    discrete event pulse as Read.changed — on a save/startup pseudo-
+    execution it reports a synthetic first-value True (or, after a restart
+    with restored state, a synthetic False), never a real DataValueEvent.
+    A Write descending from Read -> ChangeFilter.in -> ChangeFilter.changed
+    must not be published, exactly like the direct Read.changed case above
+    — even though the change_filter's own baseline is still seeded and
+    committed."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "cf1", "type": "change_filter", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "cf1", "targetHandle": "in"},
+            {"source": "cf1", "sourceHandle": "changed", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: 42})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()
+    assert mgr._hysteresis["g1"]["cf1"] == {"value": 42}
 
 
 @pytest.mark.asyncio

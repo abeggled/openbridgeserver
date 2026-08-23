@@ -62,6 +62,23 @@ describe('DataPointDetailView', () => {
     apiMocks.dpApi.writeValue.mockResolvedValue({})
   })
 
+  it('shows the live value in the regional format and its live timestamp (#1073)', async () => {
+    const { useWebSocketStore } = await import('@/stores/websocket')
+    useWebSocketStore().liveValues['dp-internal'] = {
+      value: 1234.5,
+      quality: 'good',
+      ts: '2026-06-12T08:30:00+00:00',
+    }
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1.234,5 °C')
+    expect(wrapper.text()).toContain('12.06.2026')
+
+    delete useWebSocketStore().liveValues['dp-internal']
+  })
+
   it('allows writing an internal datapoint without writable adapter bindings', async () => {
     const wrapper = mountView()
     await flushPromises()

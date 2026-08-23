@@ -22,6 +22,8 @@ type RouteSignature = tuple[str, str]
 PUBLIC_ROUTE_ALLOWLIST: Final[frozenset[RouteSignature]] = frozenset(
     {
         ("GET", "/api/v1/system/health"),
+        # Display formatting for the Visu, which is served to anonymous/PIN users (#1073).
+        ("GET", "/api/v1/system/display-settings"),
     }
 )
 
@@ -128,6 +130,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/support/debug-log"): "read_live",
     ("GET", "/api/v1/system/adapters"): "read_live",
     ("GET", "/api/v1/system/datatypes"): "read_live",
+    ("GET", "/api/v1/system/display-settings"): "public",
     ("GET", "/api/v1/system/health"): "public",
     ("GET", "/api/v1/system/history/settings"): "read_live",
     ("GET", "/api/v1/system/log-level"): "read_live",

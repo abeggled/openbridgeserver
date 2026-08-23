@@ -203,6 +203,34 @@ describe('retentionSignal (#919/#938)', () => {
     expect(sig.text).not.toContain('NaN')
   })
 
+  it('shows one decimal for short retentions and none above ten hours (#1073)', () => {
+    const { retentionSignal } = useApi()
+    const short = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: Math.round(5.5 * 3600), bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+    const long = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: 12 * 3600, bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+
+    // Decimal separator follows the regional format, German by default.
+    expect(short.text).toContain('5,5')
+    expect(long.text).toContain('12')
+    expect(long.text).not.toContain('12,0')
+  })
+
+  it('drops a trailing zero instead of padding short retentions (#1073)', () => {
+    const { retentionSignal } = useApi()
+    const whole = retentionSignal(stats({
+      max_age: 5 * 24 * 3600,
+      prognosis: { estimated_retention_seconds: 5 * 3600, bytes_per_hour: 50 * 1024 * 1024 },
+    }))
+
+    expect(whole.text).toContain('5')
+    expect(whole.text).not.toContain('5,0')
+  })
+
   it('omits the budget recommendation when bytes_per_hour is unknown', () => {
     const { retentionSignal } = useApi()
     const sig = retentionSignal(stats({

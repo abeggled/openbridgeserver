@@ -10,6 +10,7 @@ import {
 } from 'chart.js'
 import { history } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useFormatStore } from '@/stores/format'
 import type { DataPointValue } from '@/types'
 import type { WriteContext } from '@/api/client'
 import { aggregateBucketEndTimestamp, sortedUniqueTimestamps, weightedAverage, weightedValuesByTimestamp } from './aggregation'
@@ -65,8 +66,12 @@ let wsOff:        (() => void) | null = null
 let reloadTimer:  ReturnType<typeof setTimeout> | null = null
 const seriesUnits = ref<string[]>([])
 
+// Achsen-, Tooltip- und Wertformatierung folgen dem konfigurierten
+// Regionalformat (Issue #1073); die Rohdaten bleiben locale-neutral.
+const format = useFormatStore()
+
 function fmtMs(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
+  return format.fmtDateTime(ms, {
     month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
@@ -103,6 +108,9 @@ function initChart() {
       responsive:          true,
       maintainAspectRatio: false,
       animation:           false,
+      // Chart.js formats axis ticks with Intl.NumberFormat under this locale;
+      // without it, it would silently follow the browser language (issue #1073).
+      locale:              format.regionFormat,
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -118,7 +126,7 @@ function initChart() {
               if (v == null) return ''
               const u    = seriesUnits.value[ctx.datasetIndex] ?? ''
               const name = ctx.dataset.label || ''
-              const val  = u ? `${v.toFixed(2)} ${u}` : String(v)
+              const val  = u ? `${format.fmtNumber(v, { decimals: 2 })} ${u}` : format.fmtNumber(v)
               return name ? `${name}: ${val}` : val
             },
           },
@@ -316,6 +324,14 @@ watch(() => props.config, async (newCfg, oldCfg) => {
   await loadData()
 }, { deep: true })
 watch(selectedTimeRange, loadData)
+// The public display settings load asynchronously from App.vue's onMounted, which
+// Vue runs *after* this child mounted and already built its chart — so the axis
+// locale has to be refreshed once the real regional format arrives (issue #1073).
+watch(() => format.regionFormat, (regionFormat) => {
+  if (!chart) return
+  chart.options.locale = regionFormat
+  chart.update()
+})
 
 onUnmounted(() => {
   wsOff?.()

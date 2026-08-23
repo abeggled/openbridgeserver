@@ -1296,7 +1296,8 @@
       "export": "Export",
       "failed": "Export failed",
       "title": "Export",
-      "fileExtHint": "File extension: {ext}."
+      "fileExtHint": "File extension: {ext}.",
+      "escapeCharPlaceholder": "(empty)"
     },
     "topbar": {
       "activeTitle": "Active — click to deactivate (for me only)",
@@ -1604,6 +1605,12 @@
     "deleteBlock": "Delete block",
     "deleteNode": "Delete branch",
     "init": "Init",
+    "blockName": {
+      "label": "Block name",
+      "editTitle": "{name} — double-click to rename",
+      "panelHint": "Custom name for this block. Leave empty for the block type's default title.",
+      "typeAndId": "{type} · {id}"
+    },
     "nodeTypes": {
       "divide": "Divide",
       "const_value": "Constant",
@@ -1614,6 +1621,7 @@
       "xor": "XOR",
       "gate": "Gate",
       "memory": "Memory",
+      "change_filter": "Change filter",
       "compare": "Comparison",
       "hysteresis": "Hysteresis",
       "merge": "Merge",
@@ -1628,6 +1636,7 @@
       "statistics": "Statistics",
       "avg_multi": "Average",
       "string_concat": "Concatenate",
+      "string_replace": "Search/Replace",
       "heating_circuit": "Summer/Winter (DIN)",
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Energy counter",
@@ -1668,7 +1677,6 @@
     "errorToggle": "Error changing status",
     "debugBtn": "Debug",
     "debugInspector": {
-      "title": "Debug inspector",
       "inputs": "Inputs",
       "outputs": "Outputs",
       "incoming": "Incoming value",
@@ -1680,7 +1688,6 @@
       "copyAll": "Copy payload",
       "copy": "Copy",
       "copied": "Copied!",
-      "close": "Close",
       "noValues": "No inputs",
       "noExecution": "Run the sheet to inspect outputs.",
       "timestamp": "Executed",
@@ -1773,6 +1780,7 @@
       "out": "Out",
       "in_n": "IN {n}",
       "data": "Data",
+      "text": "Text",
       "body": "Body",
       "done": "Done",
       "running": "Running",
@@ -1800,6 +1808,10 @@
       "inputs": "{n} Inputs",
       "parts": "{n} Parts",
       "rules": "{n} Rules",
+      "replaceModes": {
+        "plain": "Plain",
+        "regex": "RegEx"
+      },
       "sequence": "{n} steps · {mode}",
       "hold": "→ hold",
       "filters": "{n} Filters",
@@ -1825,6 +1837,10 @@
         "text": "Text",
         "textPlaceholder": "Note text…",
         "empty": "Empty comment — edit in the panel"
+      },
+      "panelTabs": {
+        "settings": "Settings",
+        "debug": "Debug values"
       },
       "tabs": {
         "connection": "Connection",
@@ -1993,6 +2009,24 @@
         "staticHint": "Connected inputs override static text. Empty fields produce an empty substring.",
         "inputPlaceholder": "Input {n} …"
       },
+      "stringReplace": {
+        "rules": "Rules",
+        "moveUp": "Move rule up",
+        "moveDown": "Move rule down",
+        "orderHint": "Rules are applied one after another from top to bottom — each rule works on the result of the previous one.",
+        "modes": {
+          "plain": "Search text (plain)",
+          "regex": "Regular expression (RegEx)"
+        },
+        "searchLabel": "Search for",
+        "searchPlaceholder": "e.g. old",
+        "patternLabel": "RegEx pattern",
+        "patternPlaceholder": "e.g. (\\d+)",
+        "replaceLabel": "Replace with",
+        "replacePlaceholder": "empty = remove match",
+        "groupHint": "Group references such as \\1 or \\g<name> are supported.",
+        "replaceAll": "Replace all occurrences"
+      },
       "rules": {
         "add": "+ Rule",
         "remove": "Remove rule",
@@ -2145,6 +2179,9 @@
       },
       "merge": {
         "input_count": "Input count",
+        "persist_state": "Restore state on restart"
+      },
+      "change_filter": {
         "persist_state": "Restore state on restart"
       },
       "hysteresis": {
@@ -2328,13 +2365,13 @@
         "response_type": "Response Content-Type",
         "verify_ssl": "Verify SSL certificate",
         "headers": "Headers (JSON object, optional)",
-        "headers_secret_file": "Headers from secret file (optional)",
+        "headers_value_file": "Headers from file (optional)",
         "timeout_s": "Timeout (s)",
         "auth_type": "Authentication",
         "auth_username": "Username (Basic/Digest)",
         "auth_password": "Password (Basic/Digest)",
         "auth_token": "Bearer token",
-        "auth_token_file": "Bearer token from secret file"
+        "auth_value_file": "Bearer token from file"
       },
       "math_formula": {
         "formula": "Formula",
@@ -2406,6 +2443,7 @@
       "xor": "Output is true when EXACTLY ONE input is true. Inputs (2–30) and output can be individually negated.",
       "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
       "memory": "Outputs the stored value from the previous logic run and stores the current input value for the next run. Explicit tick boundary for controlled feedback.",
+      "change_filter": "Outputs the input value and sets the changed trigger only when it differs from the last received value. Repeated identical values are suppressed.",
       "compare": "Compares two values (>, <, =, >=, <=, !=)",
       "hysteresis": "Switches ON when threshold is exceeded, OFF only when it falls below",
       "merge": "Bundles several independent value sources into one shared output: whichever source last delivered a new value is passed through (Edomi-style terminal/junction).",
@@ -2420,6 +2458,7 @@
       "statistics": "Continuously calculates Min/Max/Average over all received values. Reset input resets the statistics.",
       "avg_multi": "Calculates the average of 2–20 inputs (current) and moving averages over time windows: 1 min, 1 h, 1 day, 7/14/30/180/365 days. Each new value is stored with a timestamp. Time window values are retained after restart (configurable).",
       "string_concat": "Concatenates 2–20 texts into one result. Each input can be dynamically connected or statically preset. A connected input takes precedence over the static text.",
+      "string_replace": "Replaces matches in a text. Several rules are applied one after another, in the given order, to the intermediate result. Per rule: plain search text or regular expression (RegEx, group references such as \\1 in the replace field), case sensitivity, and all or only the first occurrence.",
       "heating_circuit": "Summer/winter switching according to DIN (Mannheim method). Input: outdoor temperature. Measurement times (first crossing): T1 = value from 07:00, T2 = from 14:00, T3 = from 21:00. Works even if the sensor does not hit the measurement hours exactly. Each slot is recorded only once per day. Daily average: T_avg = (T1 + T2 + 2×T3) / 4. Monthly average: moving average of the last 31 daily averages. Heating mode ON when T_avg < threshold, OFF when T_avg ≥ threshold + hysteresis. Missing slots are filled from history on startup. State is retained across restarts.",
       "min_max_tracker": "Tracks minimum and maximum over time periods (daily, weekly, monthly, yearly, absolute). Period values are automatically reset at day/week/month/year boundaries.",
       "consumption_counter": "Calculates consumption values (daily, weekly, monthly, yearly) from a continuously incrementing counter value. Also stores the previous period's consumption for comparisons.",
@@ -2488,7 +2527,13 @@
       "themeLightDesc": "Light appearance",
       "themeDark": "Dark",
       "themeDarkDesc": "Dark appearance",
-      "tzSaved": "Timezone set to «{tz}»"
+      "tzSaved": "Timezone set to «{tz}»",
+      "regionFormat": "Regional format",
+      "regionFormatHint": "Controls number, currency and date formats. Independent of the language — German in Switzerland formats differently from German in Germany.",
+      "regionFormatAuto": "Automatic (from language: {format} · {sample})",
+      "currency": "Currency",
+      "currencyAuto": "Automatic (from regional format: {currency})",
+      "formatPreview": "Preview"
     },
     "security": {
       "title": "URL target allowlist",

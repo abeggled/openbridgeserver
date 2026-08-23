@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useFormatStore } from '@/stores/format'
 import type { DataPointValue } from '@/types'
 import { getJwt, getWriteContext } from '@/api/client'
 
@@ -72,6 +73,8 @@ const props = defineProps<{
   editorMode: boolean
 }>()
 const { locale } = useI18n()
+// Zahlen und Uhrzeiten folgen dem konfigurierten Regionalformat (Issue #1073).
+const format = useFormatStore()
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -127,7 +130,11 @@ function fmtTemp(t: number): string {
 }
 
 function fmtSpeed(s: number): string {
-  return s.toFixed(1) + ' ' + speedUnit.value
+  return format.fmtNumber(s, { decimals: 1 }) + ' ' + speedUnit.value
+}
+
+function fmtNum1(v: number): string {
+  return format.fmtNumber(v, { decimals: 1 })
 }
 
 function windDir(deg: number): string {
@@ -136,10 +143,15 @@ function windDir(deg: number): string {
 }
 
 function fmtTime(unixTs: number): string {
-  return new Date(unixTs * 1000).toLocaleTimeString(locale.value || 'de', { hour: '2-digit', minute: '2-digit' })
+  // Uhrzeit-Struktur (12h/24h) folgt dem Regionalformat, die Zone der
+  // konfigurierten Server-Zeitzone statt der Browser-Zone — wie überall sonst
+  // in OBS (Issue #1073).
+  return format.fmtDateTime(unixTs * 1000, { hour: '2-digit', minute: '2-digit' })
 }
 
 function fmtDay(unixTs: number): string {
+  // Wochentagsnamen sind Übersetzungen — sie folgen bewusst der UI-Sprache,
+  // nicht dem Regionalformat (Issue #1073).
   return new Date(unixTs * 1000).toLocaleDateString(locale.value || 'de', { weekday: 'short' })
 }
 
@@ -340,13 +352,13 @@ const activeAlerts = computed(() => {
           📊 {{ weatherData.current.pressure }} hPa
         </span>
         <span v-if="showUvi">
-          ☀️ UV {{ weatherData.current.uvi.toFixed(1) }}
+          ☀️ UV {{ fmtNum1(weatherData.current.uvi) }}
         </span>
         <span v-if="showClouds">
           ☁️ {{ weatherData.current.clouds }} %
         </span>
         <span v-if="showVisibility">
-          👁️ {{ (weatherData.current.visibility / 1000).toFixed(1) }} km
+          👁️ {{ fmtNum1(weatherData.current.visibility / 1000) }} km
         </span>
         <span v-if="showSunriseSunset">
           🌅 {{ fmtTime(weatherData.current.sunrise) }}

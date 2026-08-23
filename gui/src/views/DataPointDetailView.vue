@@ -23,7 +23,7 @@
           {{ displayVal }}
         </div>
         <div class="text-xs text-slate-500">
-          {{ liveState?.ts ? new Date(liveState.ts).toLocaleString('de-CH') : dp.updated_at }}
+          {{ liveState?.ts ? fmtDateTime(liveState.ts) : fmtDateTime(dp.updated_at) }}
         </div>
         <div class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_topic }}</div>
         <div v-if="dp.mqtt_alias" class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_alias }}</div>
@@ -90,8 +90,8 @@
           <dd>
             <Badge :variant="dp.record_history ? 'success' : 'muted'" size="xs" data-testid="badge-record-history">{{ dp.record_history ? $t('common.active') : $t('common.disabled') }}</Badge>
           </dd>
-          <dt class="text-slate-500">{{ $t('datapoints.detail.createdAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.created_at).toLocaleString('de-CH') }}</dd>
-          <dt class="text-slate-500">{{ $t('datapoints.detail.updatedAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.updated_at).toLocaleString('de-CH') }}</dd>
+          <dt class="text-slate-500">{{ $t('datapoints.detail.createdAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ fmtDateTime(dp.created_at) }}</dd>
+          <dt class="text-slate-500">{{ $t('datapoints.detail.updatedAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ fmtDateTime(dp.updated_at) }}</dd>
         </dl>
         <div class="flex gap-3 mt-5">
           <button @click="showEdit = true" class="btn-secondary btn-sm">{{ $t('common.edit') }}</button>
@@ -231,6 +231,8 @@ import { useI18n } from 'vue-i18n'
 import { dpApi, logicApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useTz } from '@/composables/useTz'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
@@ -241,6 +243,9 @@ import DataPointHierarchyCard from '@/components/datapoints/DataPointHierarchyCa
 
 const props   = defineProps({ id: { type: String, required: true } })
 const { t } = useI18n()
+// Timestamps follow the configured timezone and date/time format (issue #1073).
+const { fmtDateTime } = useTz()
+const { fmtNumber } = useRegionalFormat()
 const dpStore = useDatapointStore()
 const ws      = useWebSocketStore()
 
@@ -265,9 +270,12 @@ let unsubWs = null
 const liveState  = computed(() => ws.liveValues[props.id])
 const currentRawValue = computed(() => liveState.value?.value ?? dp.value?.value)
 const displayVal = computed(() => {
+  // Display only — numbers use the configured regional format (issue #1073),
+  // while the edit field below keeps the raw, locale-neutral value.
   const v = currentRawValue.value
   if (v === null || v === undefined) return '—'
-  return dp.value?.unit ? `${v} ${dp.value.unit}` : String(v)
+  const text = typeof v === 'number' && Number.isFinite(v) ? fmtNumber(v) : String(v)
+  return dp.value?.unit ? `${text} ${dp.value.unit}` : text
 })
 const activeBindings = computed(() => bindings.value.filter(b => b.enabled))
 const activeWritableBindings = computed(() => activeBindings.value.filter(b => b.adapter_type !== 'MESSAGE'))

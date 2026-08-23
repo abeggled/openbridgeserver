@@ -120,6 +120,7 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { systemApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import { useAdapterStore } from '@/stores/adapters'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -133,6 +134,7 @@ const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
 
 const dpStore  = useDatapointStore()
 const ws       = useWebSocketStore()
+const { fmtNumber } = useRegionalFormat()
 const adStore  = useAdapterStore()
 
 const health   = ref({ status: '…', datapoints: '…', adapters_running: '…' })
@@ -169,12 +171,14 @@ onMounted(async () => {
 onUnmounted(() => { unsubWs?.() })
 
 function displayValue(dp) {
+  // Display only — numbers use the configured regional format (issue #1073).
   const live = ws.liveValues[dp.id]
   const val  = live?.value ?? dp.value
   if (val === null || val === undefined) return '—'
   if (typeof val === 'boolean') return val ? 'true' : 'false'
-  if (dp.unit) return `${val} ${dp.unit}`
-  return String(val)
+  const text = typeof val === 'number' && Number.isFinite(val) ? fmtNumber(val) : String(val)
+  if (dp.unit) return `${text} ${dp.unit}`
+  return text
 }
 
 function liveClass(dp) {

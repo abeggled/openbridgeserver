@@ -5,5 +5,12 @@
     "submit": "Accedi",
     "username": "Nome utente",
     "password": "Password"
+  },
+  "datetimeNames": {
+    "weekdays": "lunedì|martedì|mercoledì|giovedì|venerdì|sabato|domenica",
+    "weekdaysShort": "lun|mar|mer|gio|ven|sab|dom",
+    "weekdaysTwo": "lu|ma|me|gi|ve|sa|do",
+    "months": "gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre",
+    "monthsShort": "gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic"
   }
 }

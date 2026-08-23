@@ -58,13 +58,13 @@
               maxlength="1"
               class="input font-mono w-16 text-center"
               data-testid="export-escape-char"
-              placeholder="(leer)"
+              :placeholder="$t('ringbuffer.export.escapeCharPlaceholder')"
             />
           </div>
         </div>
         <p class="text-xs text-slate-500 mt-1.5">
           <i18n-t keypath="ringbuffer.export.fileExtHint" tag="span">
-            <template #ext><code class="font-mono">.{{ form.delimiter === '\t' ? 'tsv' : 'csv' }}</code></template>
+            <template #ext><code class="font-mono">.{{ fileExtension }}</code></template>
           </i18n-t>
           {{ $t('ringbuffer.export.escapeHint') }}
         </p>
@@ -100,7 +100,7 @@
         data-testid="export-warning"
       >
         <i18n-t keypath="ringbuffer.export.rowWarning" tag="span">
-          <template #n><strong>{{ pendingRowCount.toLocaleString() }}</strong></template>
+          <template #n><strong>{{ formattedPendingRowCount }}</strong></template>
         </i18n-t>
       </div>
 
@@ -121,6 +121,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -159,6 +160,11 @@ const form = reactive({
 const busy = ref(false)
 const errorMsg = ref('')
 const pendingRowCount = ref(null)
+// Row counts follow the configured regional format (issue #1073).
+const { fmtNumber } = useRegionalFormat()
+const formattedPendingRowCount = computed(() => fmtNumber(pendingRowCount.value, { decimals: 0 }))
+// Technical file extension — derived in script so the i18n guard does not see a literal.
+const fileExtension = computed(() => (form.delimiter === '\t' ? 'tsv' : 'csv'))
 
 // delimiter and quote_char are required single characters. escape_char may be
 // empty (= no escape, RFC 4180 quote-doubling). Both backend Pydantic and the
@@ -252,8 +258,7 @@ async function onExport() {
     // Extract filename from Content-Disposition if present
     const cd = resp.headers?.['content-disposition'] || ''
     const match = cd.match(/filename="([^"]+)"/)
-    const fallbackExt = form.delimiter === '\t' ? 'tsv' : 'csv'
-    a.download = match ? match[1] : `ringbuffer_export.${fallbackExt}`
+    a.download = match ? match[1] : `ringbuffer_export.${fileExtension.value}`
     document.body.appendChild(a)
     a.click()
     a.remove()

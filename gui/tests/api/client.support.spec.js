@@ -13,6 +13,7 @@ beforeEach(() => {
     get: vi.fn().mockResolvedValue({ data: {} }),
     post: vi.fn().mockResolvedValue({ data: {} }),
     patch: vi.fn().mockResolvedValue({ data: {} }),
+    put: vi.fn().mockResolvedValue({ data: {} }),
     delete: vi.fn().mockResolvedValue({ data: {} }),
   })
   axiosDefault = {
@@ -135,5 +136,19 @@ describe('messageArchivesApi client', () => {
       expect.any(FormData),
       { headers: { 'Content-Type': 'multipart/form-data' } },
     )
+  })
+})
+
+describe('settingsApi client (#1073)', () => {
+  it('reads and writes app settings including the regional format', async () => {
+    const { settingsApi } = await import('@/api/client')
+
+    await settingsApi.get()
+    await settingsApi.update({ region_format: 'de-CH', currency: 'CHF' })
+    await settingsApi.displaySettings()
+
+    expect(api.get).toHaveBeenCalledWith('/system/settings')
+    expect(api.put).toHaveBeenCalledWith('/system/settings', { region_format: 'de-CH', currency: 'CHF' })
+    expect(api.get).toHaveBeenCalledWith('/system/display-settings')
   })
 })

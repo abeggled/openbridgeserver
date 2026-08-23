@@ -49,6 +49,11 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 - Neue Prüfung blockiert das Herstellen einer zweiten Verbindung auf denselben Eingang, blockiert das Speichern eines Graphen mit einer solchen Verbindung und markiert bereits gespeicherte betroffene Graphen mit einer Warnung
 - Für das Zusammenführen mehrerer Quellen jetzt die neue Klemme-Node verwenden
 
+**Logik-Editor — Änderungsfilter-Block (#1087)**
+- Neuer Block **„Änderungsfilter"** (Edomi-artiges SendByChange): gibt den Eingangswert unverändert am Ausgang aus und setzt den `changed`-Trigger nur in dem Tick, in dem sich der Wert vom zuletzt empfangenen unterscheidet
+- Wiederholt gleiche Werte lösen keine erneute Aktion aus — `changed` lässt sich wie bei DP Lesen als Trigger-Eingang in nachgelagerte Blöcke (DP Schreiben, Benachrichtigung, Sequenz, …) verdrahten
+- Zustand wird wie beim Speicher-Block generisch persistiert (`Zustand nach Neustart wiederherstellen`)
+
 **Einstellungen — Zeitzone**
 - Neue Zeitzone-Auswahl unter Einstellungen → Allgemein
 - Alle Zeitangaben in der Oberfläche werden in der gewählten Zeitzone dargestellt: Verlauf, Änderungsprotokoll, History-Suche, Astro-Block

@@ -74,6 +74,25 @@
             <label class="label">{{ $t('settings.general.timeFormat') }}</label>
             <input v-model="timeFormatSelected" class="input text-sm font-mono" type="text" />
           </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.general.regionFormat') }}</label>
+            <p class="text-xs text-slate-500 mb-2">{{ $t('settings.general.regionFormatHint') }}</p>
+            <select v-model="regionFormatSelected" class="input text-sm" data-testid="region-format-select">
+              <option v-for="opt in regionFormatOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.general.currency') }}</label>
+            <select v-model="currencySelected" class="input text-sm" data-testid="currency-select">
+              <option v-for="opt in currencyOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+          <div class="rounded-lg bg-slate-100 dark:bg-slate-800/60 p-3 text-xs text-slate-600 dark:text-slate-300 flex flex-col gap-1"
+            data-testid="region-format-preview">
+            <span class="uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.general.formatPreview') }}</span>
+            <span class="font-mono">{{ regionFormatPreview.number }}</span>
+            <span class="font-mono">{{ regionFormatPreview.currency }}</span>
+          </div>
           <div v-if="tzMsg" :class="['p-3 rounded-lg text-sm', tzMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ tzMsg.text }}</div>
           <button @click="saveTz" class="btn-primary" :disabled="tzSaving">
             <Spinner v-if="tzSaving" size="sm" color="white" />
@@ -1521,6 +1540,8 @@ import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
+import { formatCurrency, formatNumber } from '@/utils/numberFormat'
+import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/composables/useRegionalFormat'
 
 const { t, te } = useI18n()
 const auth     = useAuthStore()
@@ -1557,6 +1578,10 @@ const tzSearch         = ref('')
 const tzSelected       = ref(settings.timezone)
 const dateFormatSelected = ref(settings.dateFormat)
 const timeFormatSelected = ref(settings.timeFormat)
+// Numbers on this page follow the *saved* regional format, not the pending selection.
+const { regionFormat: activeRegionFormat } = useRegionalFormat()
+const regionFormatSelected = ref(settings.regionFormat)
+const currencySelected = ref(settings.currency)
 const tzSaving         = ref(false)
 const tzMsg            = ref(null)
 const tzDropdownOpen   = ref(false)
@@ -1601,6 +1626,8 @@ onMounted(async () => {
   tzSelected.value = settings.timezone
   dateFormatSelected.value = settings.dateFormat
   timeFormatSelected.value = settings.timeFormat
+  regionFormatSelected.value = settings.regionFormat
+  currencySelected.value = settings.currency
   document.addEventListener('mousedown', onOutsideClick)
   if (auth.isAdmin) {
     loadHistorySettings()
@@ -1640,10 +1667,64 @@ onUnmounted(() => {
   stopSupportDebugTick()
 })
 
+// Regional format is its own setting, independent of the UI language (issue #1073).
+// Option labels mix runtime locale data with translated text, so they are built in
+// local variables and translated via t() — never as hardcoded literals.
+const REGION_FORMAT_FALLBACK = ['auto', 'de-DE', 'de-AT', 'de-CH', 'en-US', 'en-GB', 'fr-FR', 'fr-CH', 'it-IT', 'it-CH', 'es-ES']
+const CURRENCY_FALLBACK = ['auto', 'EUR', 'CHF', 'USD', 'GBP']
+const SAMPLE_AMOUNT = 1234.5
+
+function regionDisplayName(code) {
+  try {
+    return new Intl.DisplayNames([settings.language], { type: 'language' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+const regionFormatOptions = computed(() => {
+  const codes = settings.supportedRegionFormats.length ? settings.supportedRegionFormats : REGION_FORMAT_FALLBACK
+  return codes.map((code) => {
+    const resolved = resolveRegionFormat(code, settings.language)
+    const sample = formatNumber(SAMPLE_AMOUNT, resolved, { decimals: 2 })
+    const optionLabel = code === 'auto'
+      ? t('settings.general.regionFormatAuto', { format: resolved, sample })
+      : `${regionDisplayName(code)} · ${code} · ${sample}`
+    return { value: code, label: optionLabel }
+  })
+})
+
+const currencyOptions = computed(() => {
+  const codes = settings.supportedCurrencies.length ? settings.supportedCurrencies : CURRENCY_FALLBACK
+  const resolvedRegion = resolveRegionFormat(regionFormatSelected.value, settings.language)
+  return codes.map((code) => {
+    const resolved = resolveCurrency(code, resolvedRegion)
+    const optionLabel = code === 'auto'
+      ? t('settings.general.currencyAuto', { currency: resolved })
+      : `${code} · ${formatCurrency(SAMPLE_AMOUNT, resolvedRegion, code)}`
+    return { value: code, label: optionLabel }
+  })
+})
+
+const regionFormatPreview = computed(() => {
+  const resolvedRegion = resolveRegionFormat(regionFormatSelected.value, settings.language)
+  return {
+    number: formatNumber(SAMPLE_AMOUNT, resolvedRegion, { decimals: 3 }),
+    currency: formatCurrency(SAMPLE_AMOUNT, resolvedRegion, resolveCurrency(currencySelected.value, resolvedRegion)),
+  }
+})
+
 async function saveTz() {
   tzSaving.value = true; tzMsg.value = null
   try {
-    await settings.save(tzSelected.value, dateFormatSelected.value, timeFormatSelected.value)
+    await settings.save(
+      tzSelected.value,
+      dateFormatSelected.value,
+      timeFormatSelected.value,
+      settings.language,
+      regionFormatSelected.value,
+      currencySelected.value,
+    )
     tzMsg.value = { ok: true, text: t('settings.general.tzSaved', { tz: tzSelected.value }) }
   } catch (e) {
     tzMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
@@ -1940,7 +2021,8 @@ function supportFormat(value) {
 
 function supportFormatNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return value.toLocaleString()
+  // `toLocaleString()` semantics: at most three fraction digits, no padding.
+  return formatNumber(value, activeRegionFormat.value, { maxDecimals: 3 })
 }
 
 function supportFormatBytes(value) {
@@ -1954,7 +2036,7 @@ function supportFormatCpu(resources) {
   if (typeof cpuCount !== 'number' && typeof load !== 'number') return '—'
   const parts = []
   if (typeof cpuCount === 'number') parts.push(`${cpuCount} ${t('settings.support.viewerCpuUnit')}`)
-  if (typeof load === 'number') parts.push(`${t('settings.support.viewerLoad')} ${load.toFixed(2)}`)
+  if (typeof load === 'number') parts.push(`${t('settings.support.viewerLoad')} ${formatNumber(load, activeRegionFormat.value, { decimals: 2 })}`)
   return parts.join(' / ')
 }
 
@@ -1993,7 +2075,7 @@ function supportFormatTopMemory(resources) {
 
 function supportFormatPercent(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return `${value.toFixed(1)}%`
+  return `${formatNumber(value, activeRegionFormat.value, { decimals: 1 })}%`
 }
 
 function supportDuration(seconds) {
@@ -2600,8 +2682,9 @@ function formatAutobackupName(name) {
 
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  const region = activeRegionFormat.value
+  if (bytes < 1024 * 1024) return `${formatNumber(bytes / 1024, region, { decimals: 1 })} KB`
+  return `${formatNumber(bytes / 1024 / 1024, region, { decimals: 1 })} MB`
 }
 
 // ── KNX Projekt Import ──────────────────────────────────────────────────────

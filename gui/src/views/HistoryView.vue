@@ -69,7 +69,7 @@
     </div>
 
     <!-- Raw table (raw mode only) -->
-    <div v-if="mode === 'raw' && points.length" class="card overflow-hidden">
+    <div v-if="loadedRaw && points.length" class="card overflow-hidden">
       <div class="card-header"><span class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ $t('history.rawData') }}</span></div>
       <div class="table-wrap max-h-64 overflow-y-auto">
         <table class="table">
@@ -89,7 +89,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { historyApi, dpApi } from '@/api/client'
@@ -137,21 +137,53 @@ const intervals = computed(() => [
   { v: '6h', l: t('history.intervals.6h') }, { v: '12h', l: t('history.intervals.12h') }, { v: '1d', l: t('history.intervals.1d') },
 ])
 
-const chartTitle = computed(() => {
+// What the next Load would fetch, i.e. the current state of the controls.
+const selectionTitle = computed(() => {
   if (!selectedDp.value) return t('history.chartTitleDefault')
   const name = selectedDpName.value || selectedDp.value
   return `${name} ${mode.value === 'aggregate' ? `(${aggFn.value} / ${aggInterval.value})` : '(raw)'}`
+})
+
+// How the drawn series is described. Captured when the request is issued, not
+// when it returns: the user can change the aggregation — or pick another object
+// entirely — while it is in flight, and the response still belongs to whatever
+// was asked for. Empty means nothing is loaded, so the header falls back to
+// describing what the next Load would fetch.
+const loadedTitle = ref('')
+const loadedUnit  = ref('')
+const loadedRaw   = ref(false)
+
+// Loads can overlap — opening with ?dp=<id> starts one after the metadata
+// lookup, and Load is clickable before that resolves. Only the newest request
+// may write results, or an older response lands last and wins.
+let requestSeq = 0
+const chartTitle  = computed(() => loadedTitle.value || selectionTitle.value)
+
+// A selection change invalidates whatever is on screen. Without this the canvas
+// is remounted for the new object while `points` still holds the old series, and
+// the watcher below happily redraws it under the new object's name and unit.
+watch(selectedDp, () => {
+  points.value      = []
+  loadedTitle.value = ''
+  loadedUnit.value  = ''
+  loadedRaw.value   = false
 })
 
 // defaultFrom is no longer needed — fromTs is initialized via toDatetimeLocal()
 
 onMounted(async () => {
   // If opened with ?dp=<uuid>, resolve the name so the combobox shows it
-  if (selectedDp.value) {
+  const requestDp = selectedDp.value
+  if (requestDp) {
     try {
-      const { data } = await dpApi.get(selectedDp.value)
-      selectedDpName.value = data.name
-      selectedDpUnit.value = data.unit ?? ''
+      const { data } = await dpApi.get(requestDp)
+      // Another object may have been picked while this lookup was in flight —
+      // attaching this one's name and unit to that selection would label the
+      // series the user actually gets with the metadata of the one they left.
+      if (requestDp === selectedDp.value) {
+        selectedDpName.value = data.name
+        selectedDpUnit.value = data.unit ?? ''
+      }
     } catch { /* ignore */ }
     await load()
   }
@@ -159,24 +191,63 @@ onMounted(async () => {
 
 async function load() {
   if (!selectedDp.value) return
+  // Everything describing this request is read before the first await, so a
+  // selection or aggregation change mid-flight cannot relabel the response.
+  const requestDp    = selectedDp.value
+  const requestTitle = selectionTitle.value
+  const requestUnit  = selectedDpUnit.value
+  const requestRaw   = mode.value === 'raw'
+  const seq          = ++requestSeq
+
   loading.value = true
   points.value  = []
+  loadedTitle.value = ''
   try {
     const from = fromDatetimeLocal(fromTs.value)
     const to   = fromDatetimeLocal(toTs.value)
 
-    if (mode.value === 'raw') {
-      const { data } = await historyApi.query(selectedDp.value, { from, to })
-      points.value = data
-    } else {
-      const { data } = await historyApi.aggregate(selectedDp.value, { fn: aggFn.value, interval: aggInterval.value, from, to })
-      points.value = data
+    const { data } = requestRaw
+      ? await historyApi.query(requestDp, { from, to })
+      : await historyApi.aggregate(requestDp, { fn: aggFn.value, interval: aggInterval.value, from, to })
+
+    // Superseded by a newer load, or the user moved on while this was in
+    // flight — either way this response no longer describes what is on screen.
+    if (seq !== requestSeq || requestDp !== selectedDp.value) return
+
+    points.value = data
+    if (points.value.length) {
+      loadedTitle.value = requestTitle
+      loadedUnit.value  = requestUnit
+      loadedRaw.value   = requestRaw
     }
-    await nextTick()
-    renderChart()
   } finally {
-    loading.value = false
+    // A superseded load must not clear the spinner for the one still running.
+    if (seq === requestSeq) loading.value = false
   }
+}
+
+// A load swaps the canvas out for the spinner and back, so the chart is rebuilt
+// from a post-flush watcher — it runs after the DOM patch that assigns
+// `chartCanvas`, whereas rendering straight out of load() ran while the spinner
+// was still up and the ref was null, so the chart was never created at all.
+// Sources are the canvas and the data: whichever changes, the drawn chart is
+// stale. The template only mounts the canvas for a selected data point with
+// points loaded, so a non-null ref is the whole condition for having something
+// to draw.
+watch([chartCanvas, points], syncChart, { flush: 'post' })
+
+onBeforeUnmount(destroyChart)
+
+function syncChart() {
+  // Always drop the old chart first: it is bound to a canvas that has just been
+  // unmounted, replaced, or is about to be redrawn.
+  destroyChart()
+  if (chartCanvas.value) renderChart()
+}
+
+function destroyChart() {
+  chartInstance?.destroy()
+  chartInstance = null
 }
 
 function qualityLabel(q) {
@@ -184,17 +255,26 @@ function qualityLabel(q) {
 }
 
 function renderChart() {
-  if (!chartCanvas.value || !points.value.length) return
-  chartInstance?.destroy()
+  // Read once, here: the tooltip callbacks below run on hover, long after this
+  // chart was built, and reading the live refs would describe this series with
+  // whatever object the user has selected by then.
+  const seriesUnit = loadedUnit.value
+  const seriesRaw  = loadedRaw.value
 
   // Convert every point to {x: Unix-ms, y: value} so Chart.js never has to
   // guess the scale type from label strings (which caused it to auto-activate
   // the TimeScale without an adapter and display raw ms).
-  const chartData = points.value.map(p => {
-    const isoStr = p.ts ?? p.bucket ?? null
-    const ms = isoStr ? (toUtcDate(isoStr)?.getTime() ?? 0) : 0
-    return { x: ms, y: p.v }
-  })
+  //
+  // Points whose timestamp is missing or unparsable are dropped instead of
+  // plotted — the backend passes a malformed aggregate bucket through verbatim
+  // (_format_utc_bucket in obs/api/v1/history.py), and a single such row placed
+  // at epoch would stretch the linear axis back to 1970 and squash the real
+  // series against the right edge. They remain visible in the raw table. The
+  // unit travels with the point because a filtered dataset no longer lines up
+  // index-wise with points.value.
+  const chartData = points.value
+    .map(p => ({ x: toUtcDate(p.ts ?? p.bucket)?.getTime(), y: p.v, u: p.u ?? null }))
+    .filter(p => Number.isFinite(p.x))
 
   const dark = document.documentElement.classList.contains('dark')
   const tickColor    = dark ? '#64748b' : '#94a3b8'
@@ -232,9 +312,7 @@ function renderChart() {
             title: (items) => fmtChartLabel(new Date(items[0].parsed.x).toISOString()),
             label: (ctx) => {
               const v = ctx.parsed.y
-              const unit = mode.value === 'raw'
-                ? (points.value[ctx.dataIndex]?.u ?? selectedDpUnit.value)
-                : selectedDpUnit.value
+              const unit = seriesRaw ? (ctx.raw.u ?? seriesUnit) : seriesUnit
               return unit ? `${v} ${unit}` : String(v)
             },
           },

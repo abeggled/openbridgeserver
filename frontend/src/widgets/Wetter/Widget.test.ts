@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { getJwt, getWriteContext } from '@/api/client'
 import WetterWidget from './Widget.vue'
 
@@ -51,6 +52,8 @@ function mountWidget() {
 }
 
 beforeEach(() => {
+  // Widgets read the regional format from a Pinia store (issue #1073).
+  setActivePinia(createPinia())
   apiState.jwt = 'jwt-1'
   apiState.context = {
     pageId: 'page-1',

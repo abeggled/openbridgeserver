@@ -6,7 +6,6 @@ describe('DebugInspector', () => {
   it('shows complete structured values and emits temporary override changes', async () => {
     const wrapper = mount(DebugInspector, {
       props: {
-        node: { id: 'n1', data: { label: 'Parser' } },
         inputs: [{
           id: 'payload',
           label: 'Payload',
@@ -31,11 +30,21 @@ describe('DebugInspector', () => {
     expect(wrapper.emitted('set-override')[0]).toEqual(['payload', '{"test":true}'])
   })
 
+  it('falls back to placeholders for incomplete execution metadata', async () => {
+    const wrapper = mount(DebugInspector, {
+      props: { outputs: { result: 1 }, metadata: { timestamp: '', used_overrides: false } },
+    })
+
+    expect(wrapper.text()).toContain('Ausgeführt: —')
+    expect(wrapper.text()).toContain('Dauer: — ms')
+    expect(wrapper.text()).not.toContain('Diese Ausführung verwendete temporäre Eingangsüberschreibungen.')
+  })
+
   it('confirms individual and complete payload copies', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     const wrapper = mount(DebugInspector, {
-      props: { node: { id: 'n1', data: {} }, outputs: { result: 42 } },
+      props: { outputs: { result: 42 } },
     })
 
     await wrapper.find('button[title="Kopieren"]').trigger('click')
@@ -50,7 +59,7 @@ describe('DebugInspector', () => {
     const execCommand = vi.fn().mockReturnValue(true)
     Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true })
     const wrapper = mount(DebugInspector, {
-      props: { node: { id: 'n1', data: {} }, outputs: { result: 42 } },
+      props: { outputs: { result: 42 } },
     })
 
     await wrapper.find('button[title="Kopieren"]').trigger('click')
@@ -67,7 +76,7 @@ describe('DebugInspector', () => {
     const execCommand = vi.fn().mockReturnValue(true)
     Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true })
     const wrapper = mount(DebugInspector, {
-      props: { node: { id: 'n1', data: {} }, outputs: { result: 42 } },
+      props: { outputs: { result: 42 } },
     })
 
     await wrapper.find('button[title="Kopieren"]').trigger('click')
@@ -78,20 +87,17 @@ describe('DebugInspector', () => {
     expect(wrapper.text()).toContain('Kopiert!')
   })
 
-  it('emits close and override clearing actions', async () => {
+  it('emits override clearing actions', async () => {
     const wrapper = mount(DebugInspector, {
       props: {
-        node: { id: 'n1', data: {} },
         inputs: [{ id: 'value', label: 'Value', incoming: null, overridden: true, locallyOverridden: true, overrideText: '42' }],
         hasOverrides: true,
       },
     })
 
-    await wrapper.find('button[title="Schließen"]').trigger('click')
     await wrapper.findAll('button').find(button => button.text() === 'Alle Überschreibungen löschen').trigger('click')
     await wrapper.findAll('button').find(button => button.text() === 'Löschen').trigger('click')
 
-    expect(wrapper.emitted('close')).toHaveLength(1)
     expect(wrapper.emitted('clear-all')).toHaveLength(1)
     expect(wrapper.emitted('clear-override')[0]).toEqual(['value'])
   })

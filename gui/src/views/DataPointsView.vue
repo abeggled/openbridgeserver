@@ -462,6 +462,7 @@ import { useI18n } from 'vue-i18n'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import { hierarchyApi } from '@/api/client'
 import Badge         from '@/components/ui/Badge.vue'
 import Spinner       from '@/components/ui/Spinner.vue'
@@ -492,6 +493,7 @@ const { t } = useI18n()
 const store = useDatapointStore()
 const auth  = useAuthStore()
 const ws    = useWebSocketStore()
+const { fmtNumber } = useRegionalFormat()
 
 const filters      = ref({ q: '', tags: [], adapters: [], quality: '', type: '', node_ids: [], tree_ids: [] })
 const showForm     = ref(false)
@@ -860,9 +862,11 @@ function isAncestorSelected(ref) {
 // --------------------------------------------------------------------------
 
 function liveValue(dp) {
+  // Display only — numbers use the configured regional format (issue #1073).
   const v = ws.liveValues[dp.id]?.value ?? dp.value
   if (v === null || v === undefined) return '—'
-  return dp.unit ? `${v} ${dp.unit}` : String(v)
+  const text = typeof v === 'number' && Number.isFinite(v) ? fmtNumber(v) : String(v)
+  return dp.unit ? `${text} ${dp.unit}` : text
 }
 function liveQuality(dp) { return ws.liveValues[dp.id]?.quality ?? dp.quality }
 function qualityVariant(q) {

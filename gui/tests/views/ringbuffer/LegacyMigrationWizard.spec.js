@@ -254,6 +254,16 @@ describe('LegacyMigrationWizard — nullish Backend-Werte (#968)', () => {
     expect(wrapper.find('[data-testid="wizard-row-estimate"]').text()).toBe('–')
   })
 
+  it('shows a dash instead of a recommended budget when the legacy size is unknown (#1073)', async () => {
+    const wrapper = await mountWizard(statusPayload({
+      budget_bytes: 10 * 1024 * 1024,
+      legacy: { ...statusPayload().legacy, size_bytes: null },
+    }))
+    const hint = wrapper.find('[data-testid="wizard-budget-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('–')
+  })
+
   it('treats unknown disk space as unknown, not 0 B, and does not block the start', async () => {
     // disk_free_bytes: null → freier Platz unbekannt. Number(null) wäre 0 und würde
     // fälschlich „0 B", ein rotes Verdict und einen gesperrten Start erzeugen.

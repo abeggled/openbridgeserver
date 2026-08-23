@@ -4,6 +4,7 @@ GET    /api/v1/system/health           liveness check (no auth required)
 GET    /api/v1/system/adapters         detailed adapter instances + binding stats
 GET    /api/v1/system/datatypes        all registered DataTypes
 GET    /api/v1/system/settings         read app settings (timezone, …)
+GET    /api/v1/system/display-settings display formatting settings (public, used by the Visu)
 PUT    /api/v1/system/settings         update app settings
 GET    /api/v1/system/history/settings read history backend configuration
 PUT    /api/v1/system/history/settings update history backend configuration
@@ -35,6 +36,16 @@ from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, validate_datetime_setting
 from obs.db.database import Database, get_db
 from obs.models.types import DataTypeRegistry
+from obs.regional_format import (
+    DEFAULT_CURRENCY,
+    DEFAULT_REGION_FORMAT,
+    REGIONAL_SETTING_KEYS,
+    SUPPORTED_CURRENCIES,
+    SUPPORTED_REGION_FORMATS,
+    resolve_currency,
+    resolve_region_format,
+    validate_regional_setting,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +85,8 @@ class AppSettingsOut(BaseModel):
     date_format: str
     time_format: str
     language: str
+    region_format: str = DEFAULT_REGION_FORMAT
+    currency: str = DEFAULT_CURRENCY
 
 
 class AppSettingsIn(BaseModel):
@@ -81,6 +94,27 @@ class AppSettingsIn(BaseModel):
     date_format: str | None = None
     time_format: str | None = None
     language: str | None = None
+    region_format: str | None = None
+    currency: str | None = None
+
+
+class DisplaySettingsOut(BaseModel):
+    """Public, read-only display formatting settings.
+
+    Consumed by the Visu SPA, which is reachable without an admin login, and by
+    the Admin GUI to build the regional-format/currency option lists.
+    """
+
+    language: str
+    timezone: str
+    date_format: str
+    time_format: str
+    region_format: str
+    currency: str
+    resolved_region_format: str
+    resolved_currency: str
+    supported_region_formats: list[str]
+    supported_currencies: list[str]
 
 
 class HistorySettingsOut(BaseModel):
@@ -228,11 +262,39 @@ async def get_app_settings(
     date_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'date_format'")
     time_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'time_format'")
     language_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'language'")
+    region_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'region_format'")
+    currency_row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'currency'")
     return AppSettingsOut(
         timezone=timezone_row["value"] if timezone_row else "Europe/Zurich",
         date_format=date_row["value"] if date_row else DEFAULT_DATE_FORMAT,
         time_format=time_row["value"] if time_row else DEFAULT_TIME_FORMAT,
         language=language_row["value"] if language_row else "de",
+        region_format=region_row["value"] if region_row else DEFAULT_REGION_FORMAT,
+        currency=currency_row["value"] if currency_row else DEFAULT_CURRENCY,
+    )
+
+
+@router.get("/display-settings", response_model=DisplaySettingsOut)
+async def get_display_settings(db: Database = Depends(get_db)) -> DisplaySettingsOut:
+    """Read the display formatting settings.
+
+    Deliberately unauthenticated: the Visu is served to anonymous and PIN-only
+    users, who still have to see numbers and dates in the configured regional
+    format. The response carries no sensitive data and is read-only.
+    """
+    settings = await get_app_settings(db=db, _user="")
+    region = resolve_region_format(settings.region_format, settings.language)
+    return DisplaySettingsOut(
+        language=settings.language,
+        timezone=settings.timezone,
+        date_format=settings.date_format,
+        time_format=settings.time_format,
+        region_format=settings.region_format,
+        currency=settings.currency,
+        resolved_region_format=region,
+        resolved_currency=resolve_currency(settings.currency, region),
+        supported_region_formats=list(SUPPORTED_REGION_FORMATS),
+        supported_currencies=list(SUPPORTED_CURRENCIES),
     )
 
 
@@ -255,14 +317,17 @@ async def update_app_settings(
         )
     try:
         for field in supplied_fields:
-            validate_datetime_setting(field, getattr(body, field))
+            if field in REGIONAL_SETTING_KEYS:
+                validate_regional_setting(field, getattr(body, field))
+            else:
+                validate_datetime_setting(field, getattr(body, field))
     except ValueError as exc:
         raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     current_settings = await get_app_settings(db=db, _user=_user)
     updated_config = {
         field: value
-        for field in ("timezone", "date_format", "time_format", "language")
+        for field in ("timezone", "date_format", "time_format", "language", "region_format", "currency")
         if field in supplied_fields and (value := getattr(body, field)) is not None
     }
     before_config = {field: getattr(current_settings, field) for field in updated_config}
@@ -299,6 +364,8 @@ async def update_app_settings(
         date_format=updated_config.get("date_format", current_settings.date_format),
         time_format=updated_config.get("time_format", current_settings.time_format),
         language=updated_config.get("language", current_settings.language),
+        region_format=updated_config.get("region_format", current_settings.region_format),
+        currency=updated_config.get("currency", current_settings.currency),
     )
 
 

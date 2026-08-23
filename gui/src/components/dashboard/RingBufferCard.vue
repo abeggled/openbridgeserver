@@ -181,6 +181,13 @@ import { useAuthStore } from '@/stores/auth'
 import { useSegmentProblems } from '@/composables/useSegmentProblems'
 import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
+
+// Byte sizes follow the configured regional format (issue #1073).
+const { regionFormat } = useRegionalFormat()
+const fmtBytes = (bytes) => formatBytesBinary(bytes, regionFormat.value)
+
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal from '@/components/ui/Modal.vue'
 import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
@@ -310,19 +317,16 @@ const budgetPercent = computed(() => {
 })
 const budgetBarWidth = computed(() => Math.min(100, Math.max(0, budgetPercent.value)))
 const budgetText = computed(() => {
-  if (!hasBudget.value) return formatBytesBinary(usedBytes.value)
-  return `${formatBytesBinary(usedBytes.value)} / ${formatBytesBinary(maxBudgetBytes.value)}`
+  if (!hasBudget.value) return fmtBytes(usedBytes.value)
+  return `${fmtBytes(usedBytes.value)} / ${fmtBytes(maxBudgetBytes.value)}`
 })
 
 // ── Kennzahlen ───────────────────────────────────────────────────────────
 function fmtInt(n) {
   const value = Number(n)
   if (!Number.isFinite(value)) return '0'
-  try {
-    return new Intl.NumberFormat('de-DE').format(value)
-  } catch {
-    return String(value)
-  }
+  // Counts follow the configured regional format (issue #1073).
+  return formatNumber(value, regionFormat.value, { decimals: 0 })
 }
 
 const segmentCount = computed(() => fmtInt(common.value.segment_count ?? segments.value.length))
@@ -343,5 +347,5 @@ const retentionSignal = computed(() => buildRetentionSignal(stats.value))
 
 // ── Legacy ───────────────────────────────────────────────────────────────
 const legacyTotal = computed(() => fmtInt(stats.value?.total ?? 0))
-const legacyFileSize = computed(() => formatBytesBinary(stats.value?.file_size_bytes ?? 0))
+const legacyFileSize = computed(() => fmtBytes(stats.value?.file_size_bytes ?? 0))
 </script>

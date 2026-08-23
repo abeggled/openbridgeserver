@@ -11,6 +11,8 @@
  */
 import { useI18n } from 'vue-i18n'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
 
 /** Recovery-Zustände, die ein Segment als problematisch markieren (#938). */
 export const PROBLEM_RECOVERY = new Set(['quarantined', 'pending', 'dirty_wal'])
@@ -43,6 +45,8 @@ export function isSegmentProblem(seg) {
 
 export function useSegmentProblems() {
   const { t } = useI18n()
+  // Numbers and sizes follow the configured regional format (issue #1073).
+  const { regionFormat } = useRegionalFormat()
 
   function integrityLabel(value) {
     const map = {
@@ -140,9 +144,9 @@ export function useSegmentProblems() {
     if (s === null) return null
     const hours = s / 3600
     if (hours < 48) {
-      return t('ringbuffer.prognosis.hours', { n: new Intl.NumberFormat('de-DE', { maximumFractionDigits: hours < 10 ? 1 : 0 }).format(hours) })
+      return t('ringbuffer.prognosis.hours', { n: formatNumber(hours, regionFormat.value, { maxDecimals: hours < 10 ? 1 : 0 }) })
     }
-    return t('ringbuffer.prognosis.days', { n: new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(hours / 24) })
+    return t('ringbuffer.prognosis.days', { n: formatNumber(hours / 24, regionFormat.value, { maxDecimals: 0 }) })
   }
 
   /**
@@ -169,7 +173,7 @@ export function useSegmentProblems() {
       const bytesPerHour = posNumber(stats?.prognosis?.bytes_per_hour)
       const params = { current: humanDuration(est), target: humanDuration(maxAge) }
       if (bytesPerHour !== null) {
-        return { level: 'warn', text: t('ringbuffer.retentionSignal.belowTarget', { ...params, budget: formatBytesBinary(bytesPerHour * (maxAge / 3600)) }) }
+        return { level: 'warn', text: t('ringbuffer.retentionSignal.belowTarget', { ...params, budget: formatBytesBinary(bytesPerHour * (maxAge / 3600), regionFormat.value) }) }
       }
       return { level: 'warn', text: t('ringbuffer.retentionSignal.belowTargetNoBudget', params) }
     }

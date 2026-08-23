@@ -680,6 +680,11 @@ INSERT OR IGNORE INTO app_settings (key, value) VALUES ('time_format', 'HH:mm:ss
 INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'de');
 """
 
+_MIGRATION_V51_REGIONAL_SETTINGS = """
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('region_format', 'auto');
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('currency', 'auto');
+"""
+
 
 _MIGRATION_V38 = """
 CREATE TABLE IF NOT EXISTS hierarchy_device_links (
@@ -1199,6 +1204,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (48, _migration_v46),
     (49, _migration_v47),
     (50, _migration_v50),
+    (51, _MIGRATION_V51_REGIONAL_SETTINGS),
 ]
 
 

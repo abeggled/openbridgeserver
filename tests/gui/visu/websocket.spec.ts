@@ -57,7 +57,9 @@ test('Wert via WebSocket im Widget anzeigen', async ({ page }) => {
 
     // 4. Widget must show "23.1" within 3 s
     const widgetValue = page.locator(`[data-dp="${dpId}"] [data-testid="widget-value"]`)
-    await expect(widgetValue).toContainText('23.1', { timeout: 3_000 })
+    // Decimal separator follows the configured regional format — the OBS
+    // default language `de` resolves to de-DE (issue #1073).
+    await expect(widgetValue).toContainText('23,1', { timeout: 3_000 })
   } finally {
     // Cleanup
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)

@@ -541,3 +541,22 @@ export const messageArchives = {
     return request<MessageArchiveEntry>(`/message-archives/${archiveId}/entries/${entryId}/acknowledge`, { method: 'POST', headers, silent401: true })
   },
 }
+
+// ── Display-Settings (öffentlich, ohne Login — Issue #1073) ──────────────────
+
+export interface DisplaySettings {
+  language: string
+  timezone: string
+  date_format: string
+  time_format: string
+  region_format: string
+  currency: string
+  resolved_region_format: string
+  resolved_currency: string
+  supported_region_formats: string[]
+  supported_currencies: string[]
+}
+
+export const displaySettings = {
+  get: () => request<DisplaySettings>('/system/display-settings', { silent401: true }),
+}

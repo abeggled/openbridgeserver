@@ -633,6 +633,8 @@ The graph can also be started manually via the **▶ Run** button.
 
 Direct feedback loops are validated in the editor and blocked when saving or connecting nodes. Use a **Memory** block as an explicit tick boundary for controlled feedback: it outputs the value stored from the previous graph run and stores the current input for the next run.
 
+Every block can be **renamed** — function blocks and comment blocks alike: double-click its title on the logic sheet to turn it into a text field — Enter or clicking away commits the name, Escape aborts. The same field is also available at the top of the block properties, so a block can be renamed during a debug session as well. The custom name replaces the block type's default title on the card and in the block properties, with the block type and the generated block id kept below as a secondary line. Clearing the name restores the default title. Connections and references keep addressing the block by its id, and a rename on its own does not reset stored block state (memory, counters, statistics). Renaming edits the logic sheet and is therefore only offered to users who may change it; without that permission the title stays read-only.
+
 Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual blocks) and use **Copy** / **Paste** (or Ctrl/Cmd+C / Ctrl/Cmd+V) to duplicate them with their configuration intact — including across a switch to a different logic sheet, so a block group can be copied from one sheet to another. Pasted blocks are placed with a slight offset and come in pre-selected, ready to be dragged to their new position.
 
 ---
@@ -686,6 +688,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | Block | Inputs | Outputs | Description |
 |---|---|---|---|
 | **Concatenate** | 2–20 inputs (configurable) | Result | Joins multiple texts into one. Optional separator (e.g. `,` or ` `). |
+| **Search/Replace** | Text | Result | Replaces matches in a text using an ordered list of rules — add, reorder and delete them in the block. Each rule searches for a plain text or a regular expression (RegEx, group references such as `\1` in the replacement), optionally ignoring case and optionally only replacing the first occurrence. Rules run top to bottom, each on the result of the previous one. |
 
 #### Timer
 
@@ -865,6 +868,11 @@ Shows calculated intermediate values directly on the blocks — live and automat
 2. Click the **🔍 Debug** button in the toolbar
 3. Each block shows a yellow band with its current output values
 4. The display updates automatically after each execution (value change, schedule, manual start)
+5. Click a block to open its configuration panel — while debug mode is active it offers a
+   **Debug values** tab (appended to the tab bar of Read/Write Object blocks, next to a
+   **Settings** tab for all other blocks), so the block can still be configured during a
+   debug session. The **Debug values** tab shows the complete inputs and outputs, execution
+   metadata and allows temporary input overrides for a single test run
 
 | Type | Display |
 |---|---|
@@ -1453,7 +1461,9 @@ Sends notifications when a linked data point changes and the binding condition i
 | `cooldown_seconds` | Minimum delay between two sent messages |
 | `enabled` | Enables/disables the binding |
 
-Message placeholders: `###DP###` = value, `###DPU###` = unit, `###DPN###` = data point name, `###DPI###` = data point ID, `###TS###` = timestamp.
+Message placeholders: `###DP###` = value, `###DPU###` = unit, `###DPN###` = data point name, `###DPI###` = data point ID, `###TS###` = ISO timestamp, `###DATE###` / `###TIME###` = date and time in the configured display formats.
+
+Numeric values in `###DP###` are rendered in the configured **regional format** (see [Settings](#settings)) — with the German default, `1.05` becomes `1,05`. Non-numeric values (strings, booleans, objects) keep their locale-neutral representation, and `###TS###` always stays a locale-neutral ISO timestamp.
 
 > **Note:** Signal is not offered by the MESSAGE adapter for now because it would require operating a separate Signal gateway service.
 
@@ -1679,7 +1689,14 @@ Settings are accessible via the web interface (⚙ in the sidebar).
 
 **General:**
 - **Timezone** — all timestamps in the interface are displayed in this timezone (history, RingBuffer, history search, astro block)
+- **Default date format / default time format** — token patterns (`dd.MM.yyyy`, `HH:mm:ss`, …) used wherever a date or time is shown
+- **Regional format** — decimal separator, thousands grouping and date/currency conventions for **all** numeric output in the Admin GUI, the Visu and server-rendered notification text. This is a **separate setting from the language**, because the two are independent: German in Switzerland formats `1'234.50` while German in Germany formats `1.234,50`. `Automatic` derives the format from the selected language (`de` → `de-DE`, `gsw` → `de-CH`, `en` → `en-US`, …); any explicit entry (`de-DE`, `de-AT`, `de-CH`, `en-US`, `en-GB`, `fr-FR`, `fr-CH`, `it-IT`, `it-CH`, `es-ES`) overrides it. Data point values, calculations, API payloads, exports and stored history stay locale-neutral numbers.
+- **Currency** — ISO currency (`EUR`, `CHF`, `USD`, `GBP`) used for monetary output. `Automatic` derives it from the regional format (`de-CH`/`fr-CH`/`it-CH` → `CHF`, `en-US` → `USD`, `en-GB` → `GBP`, otherwise `EUR`).
 - **Import KNX project file** — upload ETS project file (`.knxproj`) to use group addresses as search suggestions in the binding form
+
+The regional format is also served read-only and without authentication at `GET /api/v1/system/display-settings`, so the Visu applies it for anonymous and PIN-only viewers as well.
+
+Formatting conventions and translated names are deliberately separated: **separators, date/time patterns and currency come from these server settings and are identical for every viewer** — one installation has one numeric convention — while **weekday and month names follow each viewer's own UI language**. A Visu opened in an English browser therefore shows English month names with the configured German number and date format.
 
 **History:** Overview of all data points with history recording. Data points with disabled recording (`record_history: false`) are shown first. Toggle recording per data point.
 

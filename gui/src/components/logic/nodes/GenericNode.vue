@@ -16,7 +16,13 @@
          :style="{ borderTopColor: def.color, '--node-tint': cardTint, minHeight: cardH + 'px' }">
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
-        <span class="gn-title" :title="def.label">{{ def.label }}</span>
+        <NodeTitleEditor
+          :value="customLabel"
+          :fallback="def.label"
+          :editable="auth.isAdmin"
+          :title-class="['gn-title', customLabel && 'gn-title--custom']"
+          @rename="renameNode"
+        />
         <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
@@ -71,6 +77,8 @@ import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
+import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const { updateNodeData } = useVueFlow()
 const { t, te } = useI18n()
@@ -106,6 +114,7 @@ const NODE_DEFS = computed(() => ({
   merge:        { label: 'Klemme',      color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
+  change_filter:{ label: t('logic.nodeTypes.change_filter'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')}],                                        outputs: [{id:'out',label:t('logic.ports.output')},{id:'changed',label:t('logic.ports.changed')}] },
   compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.portLabels.resultShort')}] },
   hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   decision:     { label: 'Entscheidung', color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out_1',label:t('logic.nodeConfig.decision.defaultOutput', { n: 1 })},{id:'out_2',label:t('logic.nodeConfig.decision.defaultOutput', { n: 2 })}] },
@@ -154,6 +163,7 @@ const NODE_DEFS = computed(() => ({
   },
   // String
   string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:t('logic.ports.result')}] },
+  string_replace:     { label: 'String Suchen/Ersetzen', color: '#0891b2', inputs: [{id:'text',label:t('logic.ports.text')}], outputs: [{id:'result',label:t('logic.ports.result')}] },
   // Integration
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'body',label:t('logic.ports.body')}],     outputs: [{id:'response',   label:t('logic.ports.response')},{id:'status',label:t('logic.ports.status')},{id:'success',label:t('logic.ports.success')}] },
   json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:t('logic.ports.data')}], outputs: [{id:'value',label:t('logic.ports.value')}] },
@@ -263,6 +273,15 @@ const def = computed(() => {
 // Category tint painted over the opaque card surface (issue #1074)
 const cardTint = computed(() => nodeTint(def.value.color))
 
+// ── User-defined block name (issue #1157) ──────────────────────────────────
+// Kept in `data.label`, separate from the generated node id, so edges and
+// references keep addressing the block by id.
+const customLabel = computed(() => String(props.data?.label ?? '').trim())
+function renameNode(label) { updateNodeData(props.id, { label }) }
+// Only admins can save a sheet, so offering the inline field to a read-only
+// viewer would silently discard whatever they typed.
+const auth = useAuthStore()
+
 // ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
 function toggleNegate(portId) {
   const key = `negate_${portId}`
@@ -309,6 +328,13 @@ const summary = computed(() => {
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
     return t('logic.summary.inputs', { n: count })
+  }
+  if (props.type === 'string_replace') {
+    const rules = parseRowList(d.rules)
+    const modes = new Set(rules.map(rule => (String(rule.mode ?? '').trim().toLowerCase() === 'regex' ? 'regex' : 'plain')))
+    const mode = modes.size === 1 ? t(`logic.summary.replaceModes.${[...modes][0]}`) : null
+    const label = t('logic.summary.rules', { n: rules.length })
+    return mode ? `${label} · ${mode}` : label
   }
   if (props.type === 'string_concat') {
     const count = Math.max(2, Math.min(20, Number(d.count) || 2))
@@ -428,6 +454,9 @@ function remove() { removeNodes([props.id]) }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A user-chosen name keeps its own casing — the uppercase treatment is for
+   the generated type titles. */
+.gn-title--custom { text-transform: none; letter-spacing: .02em; }
 .gn-del   { flex-shrink:0; font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
 .gn-del:hover { color:#f87171; }
 

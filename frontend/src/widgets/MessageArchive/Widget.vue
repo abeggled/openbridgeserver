@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ApiRequestError, getJwt, getWriteContext, messageArchives, type MessageArchiveEntry } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useFormatStore } from '@/stores/format'
 
 const props = defineProps<{
   config: Record<string, unknown>
@@ -11,6 +12,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const format = useFormatStore()
 const ws = useWebSocket()
 const entries = ref<MessageArchiveEntry[]>([])
 const total = ref(0)
@@ -77,7 +79,8 @@ function severityClass(severity: string): string {
 }
 
 function fmt(value: string): string {
-  return new Date(value).toLocaleString()
+  // Zeitstempel folgen Regionalformat und Server-Zeitzone (Issue #1073).
+  return format.fmtDateTime(value)
 }
 
 function statusLabel(value: string): string {

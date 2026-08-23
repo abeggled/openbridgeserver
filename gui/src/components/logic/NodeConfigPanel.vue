@@ -7,28 +7,55 @@
       :title="$t('logic.nodeConfig.resizeHandle')"
     />
 
-    <!-- Header -->
-    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ $te('logic.nodeTypes.' + node?.type) ? $t('logic.nodeTypes.' + node?.type) : (nodeDef?.label ?? node?.type) }}</h3>
-      <button @click="$emit('close')" class="btn-icon text-slate-500">
+    <!-- Header — the user-defined block name is the heading and stays editable
+         here (and therefore in the debug values tab, issue #1157); the block
+         type and the generated node id follow as secondary information. -->
+    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-start justify-between gap-2">
+      <div class="min-w-0 flex-1">
+        <input
+          v-model="localData.label"
+          type="text"
+          maxlength="80"
+          class="w-full bg-transparent border-0 border-b border-transparent hover:border-slate-300 dark:hover:border-slate-600 focus:border-teal-500 focus:outline-none px-0 py-0.5 text-sm font-semibold text-slate-700 dark:text-slate-200 placeholder:font-normal placeholder:text-slate-400"
+          :placeholder="defaultNodeTitle"
+          :aria-label="$t('logic.blockName.label')"
+          :title="$t('logic.blockName.panelHint')"
+          data-testid="node-label-input"
+          @change="onNodeLabelChange"
+          @keydown.enter.prevent="onNodeLabelChange"
+        />
+        <p class="mt-0.5 text-[10px] text-slate-500 truncate" :title="node.id" data-testid="node-identity">
+          {{ $t('logic.blockName.typeAndId', { type: defaultNodeTitle, id: node.id }) }}
+        </p>
+      </div>
+      <button @click="$emit('close')" class="btn-icon text-slate-500 shrink-0">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
         </svg>
       </button>
     </div>
 
-    <!-- ── DataPoint nodes: tab UI ────────────────────────────────────── -->
-    <template v-if="isDatapointNode">
+    <!-- ── Tab bar — the block's own setting tabs plus, while debug mode is
+             active, the debug values of that block (issue #1128) ────────── -->
+    <div v-if="panelTabs.length > 1" class="flex border-b border-slate-200 dark:border-slate-700/60" data-testid="node-panel-tabs">
+      <button v-for="tab in panelTabs" :key="tab.id"
+        :data-testid="'node-panel-tab-' + tab.id"
+        @click="selectPanelTab(tab)"
+        :title="tab.label"
+        :class="['tab-btn', isPanelTabActive(tab) && 'tab-btn--active', tab.debug && 'tab-btn--debug']">
+        <span class="tab-btn__label">{{ tab.label }}</span>
+        <span v-if="tab.dot" class="tab-dot">•</span>
+      </button>
+    </div>
 
-      <!-- Tab bar -->
-      <div class="flex border-b border-slate-200 dark:border-slate-700/60">
-        <button v-for="tab in tabs" :key="tab.id"
-          @click="activeTab = tab.id"
-          :class="['tab-btn', activeTab === tab.id && 'tab-btn--active']">
-          {{ tab.label }}
-          <span v-if="tab.dot" class="tab-dot">•</span>
-        </button>
-      </div>
+    <!-- Block settings — hidden while the debug tab is shown. Wrapped in a
+         render-only template element so the existing per-type layout keeps its
+         own flex child of the panel root; edits in progress live in script
+         state and are unaffected by the switch. -->
+    <template v-if="!debugMode || panelTab === 'settings'">
+
+    <!-- ── DataPoint nodes: one pane per setting tab of the bar above ─── -->
+    <template v-if="isDatapointNode">
 
       <div class="flex-1 overflow-y-auto">
 
@@ -37,7 +64,7 @@
           <p class="text-xs text-slate-500 mb-3 shrink-0">{{ nodeDescription(nodeDef) }}</p>
           <div class="flex flex-col flex-1 min-h-0 gap-1">
             <label class="label shrink-0">{{ $t('logic.ports.object') }}</label>
-            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" @input="searchDps" />
+            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" data-testid="dp-search" @input="searchDps" />
             <div v-if="dpResults.length"
               class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden flex-1 min-h-0 overflow-y-auto">
               <button v-for="dp in dpResults" :key="dp.id"
@@ -536,6 +563,108 @@
               :data-testid="`concat-text-${i}`"
             />
           </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ── string_replace: ordered search/replace rules (issue #871) ────── -->
+    <template v-else-if="isStringReplaceNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="flex items-center justify-between">
+          <span class="section-label">{{ $t('logic.nodeConfig.stringReplace.rules') }}</span>
+          <button
+            @click="addReplaceRule()"
+            class="btn-secondary btn-sm text-teal-400"
+            data-testid="replace-rule-add"
+          >{{ $t('logic.nodeConfig.rules.add') }}</button>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.stringReplace.orderHint') }}</p>
+
+        <div
+          v-for="(rule, i) in stringReplaceRules" :key="i"
+          class="rule-row"
+          :data-testid="`replace-rule-${i}`"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400 w-5 shrink-0">{{ i + 1 }}</span>
+            <select
+              :value="replaceRuleIsRegex(rule) ? 'regex' : 'plain'"
+              @change="updateReplaceRule(i, 'mode', $event.target.value)"
+              class="input text-xs flex-1"
+              :data-testid="`replace-rule-mode-${i}`"
+            >
+              <option value="plain">{{ $t('logic.nodeConfig.stringReplace.modes.plain') }}</option>
+              <option value="regex">{{ $t('logic.nodeConfig.stringReplace.modes.regex') }}</option>
+            </select>
+            <button
+              @click="moveReplaceRule(i, -1)"
+              class="text-xs text-slate-500 hover:text-slate-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="i === 0"
+              :title="$t('logic.nodeConfig.stringReplace.moveUp')"
+              :data-testid="`replace-rule-up-${i}`"
+            >↑</button>
+            <button
+              @click="moveReplaceRule(i, 1)"
+              class="text-xs text-slate-500 hover:text-slate-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="i === stringReplaceRules.length - 1"
+              :title="$t('logic.nodeConfig.stringReplace.moveDown')"
+              :data-testid="`replace-rule-down-${i}`"
+            >↓</button>
+            <button
+              @click="removeReplaceRule(i)"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="stringReplaceRules.length <= 1"
+              :title="$t('logic.nodeConfig.rules.remove')"
+              :data-testid="`replace-rule-remove-${i}`"
+            >×</button>
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ replaceRuleIsRegex(rule) ? $t('logic.nodeConfig.stringReplace.patternLabel') : $t('logic.nodeConfig.stringReplace.searchLabel') }}</label>
+            <input
+              :value="rule.search ?? ''"
+              @input="updateReplaceRule(i, 'search', $event.target.value)"
+              class="input text-xs font-mono"
+              :placeholder="replaceRuleIsRegex(rule) ? $t('logic.nodeConfig.stringReplace.patternPlaceholder') : $t('logic.nodeConfig.stringReplace.searchPlaceholder')"
+              :data-testid="`replace-rule-search-${i}`"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.stringReplace.replaceLabel') }}</label>
+            <input
+              :value="rule.replace ?? ''"
+              @input="updateReplaceRule(i, 'replace', $event.target.value)"
+              class="input text-xs font-mono"
+              :placeholder="$t('logic.nodeConfig.stringReplace.replacePlaceholder')"
+              :data-testid="`replace-rule-replacement-${i}`"
+            />
+            <p v-if="replaceRuleIsRegex(rule)" class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.stringReplace.groupHint') }}</p>
+          </div>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="replaceRuleFlag(rule, 'case_sensitive')"
+              @change="updateReplaceRule(i, 'case_sensitive', $event.target.checked)"
+              class="accent-teal-500"
+              :data-testid="`replace-rule-case-${i}`"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.rules.caseSensitive') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="replaceRuleFlag(rule, 'replace_all')"
+              @change="updateReplaceRule(i, 'replace_all', $event.target.checked)"
+              class="accent-teal-500"
+              :data-testid="`replace-rule-all-${i}`"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.stringReplace.replaceAll') }}</span>
+          </label>
         </div>
       </div>
     </template>
@@ -1212,6 +1341,7 @@
             v-model="localData.title"
             class="input text-sm"
             :placeholder="$t('logic.nodeConfig.messageArchive.titlePlaceholder')"
+            data-testid="message-archive-title"
             @change="emitUpdate"
           />
         </div>
@@ -1300,6 +1430,19 @@
       </div>
     </template>
 
+    </template>
+
+    <DebugInspector
+      v-if="debugMode && panelTab === 'debug'"
+      :inputs="debugInputs"
+      :outputs="debugOutputs"
+      :metadata="debugMetadata"
+      :has-overrides="hasDebugOverrides"
+      @set-override="(inputId, text) => emit('set-override', inputId, text)"
+      @clear-override="inputId => emit('clear-override', inputId)"
+      @clear-all="emit('clear-all')"
+    />
+
   </div>
 </template>
 
@@ -1310,6 +1453,7 @@ import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 import { useResizablePanel } from '@/composables/useResizablePanel'
+import DebugInspector from './DebugInspector.vue'
 
 const { t, te } = useI18n()
 const auth = useAuthStore()
@@ -1318,11 +1462,16 @@ const { width: panelWidth, isResizing: isResizingPanel, startResize: startPanelR
   useResizablePanel({ storageKey: 'obs.logic.nodeConfigPanelWidth', defaultWidth: 288, min: 260, max: 800 })
 
 const props = defineProps({
-  node:        { type: Object, default: null },
-  nodeTypes:   { type: Array,  default: () => [] },
-  nodeOutputs: { type: Object, default: () => ({}) },
+  node:              { type: Object,  default: null },
+  nodeTypes:         { type: Array,   default: () => [] },
+  nodeOutputs:       { type: Object,  default: () => ({}) },
+  debugMode:         { type: Boolean, default: false },
+  debugInputs:       { type: Array,   default: () => [] },
+  debugOutputs:      { type: Object,  default: () => ({}) },
+  debugMetadata:     { type: Object,  default: null },
+  hasDebugOverrides: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update', 'close'])
+const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all'])
 
 const EXTRACTOR_OUTPUT_BG = 'rgba(30, 41, 59, 0.6)'
 const EXTRACTOR_OUTPUT_FG = getAutoContrastText(EXTRACTOR_OUTPUT_BG)
@@ -1336,6 +1485,11 @@ const localData          = ref({})
 const dpSearch           = ref('')
 const dpResults          = ref([])
 const activeTab          = ref('connection')
+// Outer pane switch (issue #1128): 'debug' can only occur while debug mode is
+// on. Enabling debug mode jumps to the debug values, disabling it returns to
+// the settings; a manual choice then sticks across block selections.
+// `activeTab` stays the setting sub-tab of DataPoint blocks.
+const panelTab           = ref(props.debugMode ? 'debug' : 'settings')
 const valueMapPreset     = ref('')
 const valueMapCustom     = ref('')
 const valueMapCustomError = ref('')
@@ -1541,6 +1695,7 @@ const isExtractorNode  = computed(() =>
 )
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
+const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
@@ -1753,6 +1908,73 @@ function removeConditionRow(i) {
 
 function isTextCondition(operator) {
   return ['text_eq', 'contains', 'starts_with', 'ends_with', 'regex'].includes(operator)
+}
+
+// ── string_replace: ordered search/replace rules (issue #871) ─────────────
+// Rules are persisted as a JSON string (like decision/value_mapping) so the
+// list stays one config field; order is meaningful — each rule works on the
+// result of its predecessor.
+function _defaultReplaceRule() {
+  return { search: '', replace: '', mode: 'plain', case_sensitive: true, replace_all: true }
+}
+
+const stringReplaceRules = computed(() => {
+  const rows = _parseRows(localData.value.rules)
+  return rows.length ? rows : [_defaultReplaceRule()]
+})
+
+// Same normalisation as the executor: anything that is not "regex" (after
+// trimming and lowercasing) is a plain search, so a rule imported as "REGEX"
+// is not shown as a plain one while being executed as a regular expression.
+function replaceRuleIsRegex(rule) {
+  return String(rule.mode ?? '').trim().toLowerCase() === 'regex'
+}
+
+// Mirrors GraphExecutor._to_bool for the two rule flags that default to true.
+// A checkbox bound to `value !== false` would show "on" for an imported rule
+// carrying null, 0, "false" or "off" — all of which the executor reads as off.
+const FALSY_RULE_FLAGS = ['0', 'false', 'no', 'off', '']
+
+function replaceRuleFlag(rule, key) {
+  const value = rule[key]
+  if (value === undefined) return true
+  if (typeof value === 'string') return !FALSY_RULE_FLAGS.includes(value.trim().toLowerCase())
+  return Boolean(value)
+}
+
+function _cloneReplaceRules() {
+  return stringReplaceRules.value.map(rule => ({ ...rule }))
+}
+
+function _saveReplaceRules(rows) {
+  localData.value.rules = JSON.stringify(rows)
+  emitUpdate()
+}
+
+function addReplaceRule() {
+  _saveReplaceRules([..._cloneReplaceRules(), _defaultReplaceRule()])
+}
+
+function updateReplaceRule(i, key, value) {
+  const rows = _cloneReplaceRules()
+  if (!rows[i]) return
+  rows[i][key] = value
+  _saveReplaceRules(rows)
+}
+
+function removeReplaceRule(i) {
+  const rows = _cloneReplaceRules()
+  if (rows.length <= 1 || !rows[i]) return
+  rows.splice(i, 1)
+  _saveReplaceRules(rows)
+}
+
+function moveReplaceRule(i, delta) {
+  const rows = _cloneReplaceRules()
+  const target = i + delta
+  if (target < 0 || target >= rows.length) return
+  ;[rows[i], rows[target]] = [rows[target], rows[i]]
+  _saveReplaceRules(rows)
 }
 
 // ── Extractor: preview + path helpers ─────────────────────────────────────
@@ -2088,6 +2310,30 @@ const hasFilter    = computed(() => {
   return boolVal('trigger_on_change') || boolVal('only_on_change') ||
          !!(d.min_delta || d.min_delta_pct || d.throttle_value)
 })
+
+// One tab bar per block: the setting tabs a block already has (DataPoint
+// blocks) or a single "Settings" tab, plus the debug values while debug mode
+// is on. Blocks without setting tabs therefore show a bar only in debug mode.
+const panelTabs = computed(() => {
+  const settingsTabs = isDatapointNode.value
+    ? tabs.value.map(tab => ({ ...tab, debug: false }))
+    : [{ id: 'settings', label: t('logic.nodeConfig.panelTabs.settings'), dot: false, debug: false }]
+  if (!props.debugMode) return settingsTabs
+  return [...settingsTabs, { id: 'debug', label: t('logic.nodeConfig.panelTabs.debug'), dot: false, debug: true }]
+})
+
+function selectPanelTab(tab) {
+  panelTab.value = tab.debug ? 'debug' : 'settings'
+  if (!tab.debug && isDatapointNode.value) activeTab.value = tab.id
+}
+
+function isPanelTabActive(tab) {
+  if (tab.debug) return panelTab.value === 'debug'
+  if (panelTab.value === 'debug') return false
+  return !isDatapointNode.value || activeTab.value === tab.id
+}
+
+watch(() => props.debugMode, isDebugMode => { panelTab.value = isDebugMode ? 'debug' : 'settings' })
 
 const tabs = computed(() => [
   { id: 'connection', label: t('logic.nodeConfig.tabs.connection'), dot: false              },
@@ -2472,6 +2718,23 @@ function toggleNotificationTarget(target, selected) {
   emitUpdate()
 }
 
+// ── Block name (issue #1157) ───────────────────────────────────────────────
+// Default title of the block type — the placeholder of the rename field and
+// the secondary type line, shown when no custom name is set.
+const defaultNodeTitle = computed(() => {
+  const key = `logic.nodeTypes.${props.node?.type}`
+  return te(key) ? t(key) : (nodeDef.value?.label ?? props.node?.type)
+})
+
+function onNodeLabelChange() {
+  const next = String(localData.value.label ?? '').trim()
+  localData.value.label = next
+  // Committing an untouched field (Enter on a block that was never renamed)
+  // must not write an empty `label` into the block and trigger a save.
+  if (next === String(props.node.data.label ?? '').trim()) return
+  emitUpdate()
+}
+
 // ── Emit ───────────────────────────────────────────────────────────────────
 function emitUpdate() {
   emit('update', { ...localData.value })
@@ -2528,15 +2791,31 @@ function emitBoundedUpdate(key, schema) {
   align-items: center;
   justify-content: center;
   gap: 3px;
+  /* Four tabs (DataPoint setting tabs + debug values) must still fit into the
+     narrowest panel width, so labels shrink and ellipsize instead of pushing
+     the bar wider than the panel. */
+  min-width: 0;
+}
+.tab-btn__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tab-btn:hover   { color: #334155; }
 .tab-btn--active { color: #0f172a; border-bottom-color: #0d9488; }
 .tab-dot { color: #0d9488; font-size: 14px; line-height: 1; }
+.tab-btn--debug              { color: #b45309; }
+.tab-btn--debug:hover        { color: #92400e; }
+.tab-btn--debug.tab-btn--active { color: #b45309; border-bottom-color: #f59e0b; }
 
 :global(.dark) .tab-btn          { color: #64748b; }
 :global(.dark) .tab-btn:hover    { color: #94a3b8; }
 :global(.dark) .tab-btn--active  { color: #e2e8f0; border-bottom-color: #14b8a6; }
 :global(.dark) .tab-dot          { color: #14b8a6; }
+:global(.dark) .tab-btn--debug                  { color: #d97706; }
+:global(.dark) .tab-btn--debug:hover            { color: #fbbf24; }
+:global(.dark) .tab-btn--debug.tab-btn--active  { color: #fbbf24; border-bottom-color: #f59e0b; }
 
 .section-label {
   font-size: 9px;

@@ -149,7 +149,113 @@ def test_render_message_replaces_value_unit_and_metadata():
         ts=ts,
     )
 
-    assert rendered == f"Temperatur {dp_id} 29.4 °C 2026-06-28T12:00:00+00:00"
+    # ###DP### is human-readable text: the German default regional format renders
+    # the decimal separator as a comma (issue #1073).
+    assert rendered == f"Temperatur {dp_id} 29,4 °C 2026-06-28T12:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("region_format", "language", "expected"),
+    [
+        ("auto", "de", "1.234,5"),
+        ("auto", "en", "1,234.5"),
+        ("de-CH", "de", "1'234.5"),
+        ("en-US", "de", "1,234.5"),
+    ],
+)
+def test_render_message_number_uses_configured_regional_format(region_format, language, expected):
+    rendered = render_message(
+        "###DP###",
+        value=1234.5,
+        unit=None,
+        name="Sensor",
+        datapoint_id=uuid.uuid4(),
+        ts=datetime(2026, 6, 28, 12, 0, tzinfo=UTC),
+        language=language,
+        region_format=region_format,
+    )
+
+    assert rendered == expected
+
+
+def test_render_message_keeps_non_numeric_values_locale_neutral():
+    rendered = render_message(
+        "###DP###",
+        value={"a": 1.5},
+        unit=None,
+        name="Sensor",
+        datapoint_id=uuid.uuid4(),
+        ts=datetime(2026, 6, 28, 12, 0, tzinfo=UTC),
+        region_format="de-DE",
+    )
+
+    assert rendered == '{"a": 1.5}'
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (float("inf"), "Infinity"),
+        (float("-inf"), "-Infinity"),
+        (float("nan"), "NaN"),
+    ],
+)
+def test_render_message_keeps_non_finite_numbers_as_json(value, expected):
+    """Infinities and NaN have no regional form — and must not raise (#1073)."""
+    rendered = render_message(
+        "###DP###",
+        value=value,
+        unit=None,
+        name="Sensor",
+        datapoint_id=uuid.uuid4(),
+        ts=datetime(2026, 6, 28, 12, 0, tzinfo=UTC),
+        region_format="de-DE",
+    )
+
+    assert rendered == expected
+
+
+def test_render_message_handles_integers_beyond_the_float_range():
+    """math.isfinite() would raise OverflowError on a valid Python int (#1073)."""
+    rendered = render_message(
+        "###DP###",
+        value=10**309,
+        unit=None,
+        name="Sensor",
+        datapoint_id=uuid.uuid4(),
+        ts=datetime(2026, 6, 28, 12, 0, tzinfo=UTC),
+        region_format="en-US",
+    )
+
+    assert rendered == "1" + "," + ",".join(["000"] * 103)
+
+
+def test_render_message_formats_very_large_numbers_without_raising():
+    rendered = render_message(
+        "###DP###",
+        value=1e30,
+        unit=None,
+        name="Sensor",
+        datapoint_id=uuid.uuid4(),
+        ts=datetime(2026, 6, 28, 12, 0, tzinfo=UTC),
+        region_format="de-DE",
+    )
+
+    assert rendered == "1." + ".".join(["000"] * 10)
+
+
+def test_render_message_keeps_booleans_as_json():
+    rendered = render_message(
+        "###DP###",
+        value=True,
+        unit=None,
+        name="Sensor",
+        datapoint_id=uuid.uuid4(),
+        ts=datetime(2026, 6, 28, 12, 0, tzinfo=UTC),
+        region_format="de-DE",
+    )
+
+    assert rendered == "true"
 
 
 def test_render_message_formats_date_and_time_without_changing_timestamp():
@@ -322,7 +428,7 @@ async def test_datapoint_update_sends_message_to_provider(bus, dummy_provider, m
     dummy_provider.send.assert_awaited_once()
     kwargs = dummy_provider.send.await_args.kwargs
     assert kwargs["title"] == "OBS Alarm"
-    assert kwargs["message"] == "Temperatur kritisch: 29.4 °C"
+    assert kwargs["message"] == "Temperatur kritisch: 29,4 °C"  # German default regional format
     assert kwargs["target_name"] == "default"
 
 
@@ -380,6 +486,8 @@ async def test_datetime_settings_use_defaults_before_database_initialization(mon
         "date_format": "dd.MM.yyyy",
         "time_format": "HH:mm:ss",
         "language": "de",
+        "region_format": "auto",
+        "currency": "auto",
     }
 
 

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { DataPointValue } from '@/types'
+import { useI18n } from 'vue-i18n'
+import { useFormatStore } from '@/stores/format'
 
 const props = defineProps<{
   config: Record<string, unknown>
@@ -19,6 +21,13 @@ const label       = computed(() => (props.config.label       as string  | undefi
 const timezone    = computed(() => (props.config.timezone    as string  | undefined) ?? '')
 
 // ── Live-Zeit ─────────────────────────────────────────────────────────────────
+// Wochentags-, Monats- und Zeitzonennamen sind Übersetzungen und folgen der
+// UI-Sprache — nicht dem Regionalformat (Issue #1073). Das Regionalformat regelt
+// Zahlen-/Datumskonventionen, nicht die Sprache der Namen.
+const format = useFormatStore()
+
+const { locale: uiLocale } = useI18n()
+
 const now = ref(new Date())
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -29,23 +38,7 @@ onUnmounted(() => {
   if (timer !== null) clearInterval(timer)
 })
 
-// ── Digital ───────────────────────────────────────────────────────────────────
-const timeStr = computed(() => {
-  const d  = now.value
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  const ss = String(d.getSeconds()).padStart(2, '0')
-  return showSeconds.value ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`
-})
-
-const dateStr = computed(() =>
-  now.value.toLocaleDateString('de-CH', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  }),
-)
-
-// ── Analog ────────────────────────────────────────────────────────────────────
-
+// ── Zeitzone ──────────────────────────────────────────────────────────────────
 /**
  * Gibt Stunden/Minuten/Sekunden für eine beliebige IANA-Zeitzone zurück.
  * Leerer String oder ungültige Zeitzone → lokale Zeit.
@@ -66,7 +59,33 @@ function getZonedTime(date: Date, tz: string): { h: number; m: number; s: number
   }
 }
 
-const zonedTime  = computed(() => getZonedTime(now.value, timezone.value))
+/**
+ * Eine einzige Quelle für Zeiger, Uhrzeit und Datum (Issue #1073).
+ *
+ * Reihenfolge: eigene Widget-Zone → konfigurierte Anlagen-Zeitzone →
+ * Browser-Zone. Alle drei Anzeigen leiten sich hiervon ab; würden sie ihre Zone
+ * je selbst bestimmen, könnten Datum und Uhrzeit wieder auseinanderlaufen.
+ */
+const effectiveTimeZone = computed(() => timezone.value || format.timezone || '')
+
+const zonedTime  = computed(() => getZonedTime(now.value, effectiveTimeZone.value))
+
+// ── Digital ───────────────────────────────────────────────────────────────────
+const timeStr = computed(() => {
+  const { h, m, s } = zonedTime.value
+  const hh = String(h).padStart(2, '0')
+  const mm = String(m).padStart(2, '0')
+  const ss = String(s).padStart(2, '0')
+  return showSeconds.value ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`
+})
+
+// Datum im konfigurierten `date_format`-Muster (Issue #1073), in derselben Zone
+// wie Uhrzeit und Zeiger; Namen kommen aus der UI-Sprache. Das Uhrzeit-*Muster*
+// bleibt bewusst widget-eigen, weil dort die `showSeconds`-Option bestimmt, was
+// angezeigt wird — nur die Zone ist gemeinsam.
+const dateStr = computed(() => format.fmtDate(now.value, effectiveTimeZone.value || null))
+
+// ── Analog ────────────────────────────────────────────────────────────────────
 const hourDeg    = computed(() => (zonedTime.value.h % 12) * 30 + zonedTime.value.m * 0.5)
 const minuteDeg  = computed(() => zonedTime.value.m * 6)
 const secondDeg  = computed(() => zonedTime.value.s * 6)
@@ -75,7 +94,7 @@ const secondDeg  = computed(() => zonedTime.value.s * 6)
 const timezoneLabel = computed(() => {
   if (!timezone.value) return ''
   try {
-    return new Intl.DateTimeFormat('de-CH', {
+    return new Intl.DateTimeFormat(uiLocale.value, {
       timeZone: timezone.value,
       timeZoneName: 'short',
     }).formatToParts(now.value).find(p => p.type === 'timeZoneName')?.value ?? timezone.value
