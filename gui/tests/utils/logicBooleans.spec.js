@@ -17,6 +17,14 @@ describe('isBackendFalse', () => {
     expect(isBackendFalse(undefined)).toBe(true)
   })
 
+  it('follows Python bool() for collections, not their string form', () => {
+    // bool([0]) is True in Python even though String([0]) is "0".
+    expect(isBackendFalse([0])).toBe(false)
+    expect(isBackendFalse([])).toBe(true)
+    expect(isBackendFalse({ a: 1 })).toBe(false)
+    expect(isBackendFalse({})).toBe(true)
+  })
+
   it('accepts real booleans and numbers, not only strings', () => {
     expect(isBackendFalse(false)).toBe(true)
     expect(isBackendFalse(true)).toBe(false)

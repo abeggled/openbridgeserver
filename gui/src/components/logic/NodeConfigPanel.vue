@@ -2258,8 +2258,10 @@ function normaliseTypedValue(value, kind, schema) {
   // would otherwise fall back to the field default and silently INVERT what
   // the actuator receives.
   if (kind === 'bool') {
-    if (text === '') return String(schema.default ?? 'false')
-    return isBackendFalse(text) ? 'false' : 'true'
+    // The raw value, not `text`: stringifying first would turn an imported
+    // [0] into "0" and invert it, since the backend applies bool([0]) = True.
+    if (value === null || value === undefined || value === '') return String(schema.default ?? 'false')
+    return isBackendFalse(value) ? 'false' : 'true'
   }
   // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
   // "Infinity", which the backend's float() rejects — it would coerce them to

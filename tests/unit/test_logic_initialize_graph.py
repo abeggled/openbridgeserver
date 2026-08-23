@@ -679,6 +679,56 @@ async def test_edge_detect_trigger_handles_do_not_error_intermediate_nodes_on_sa
 
 
 @pytest.mark.asyncio
+async def test_a_changed_pulse_into_reset_does_not_discard_the_seeded_level():
+    """A synthetic changed=False at save time means "do not reset" — the same
+    thing a real quiet pass delivers — so the level seeded through "in" is
+    still valid and must be committed."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+            {"source": "r1", "sourceHandle": "changed", "target": "ed", "targetHandle": "reset"},
+            {"source": "ed", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: False})
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["ed"] == {"value": False}
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_changed_pulse_into_the_value_input_still_taints_the_detector():
+    """The other side: fed into "in", the synthetic pulse IS the value, so the
+    level derived from it must not be committed."""
+    src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "r1", "type": "datapoint_read", "data": {"datapoint_id": src_id}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "r1", "sourceHandle": "changed", "target": "ed", "targetHandle": "in"},
+            {"source": "ed", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_id: False})
+
+    await mgr.initialize_graph("g1")
+
+    assert "ed" not in mgr._hysteresis.get("g1", {})
+    mgr._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_write_downstream_of_timer_is_suppressed():
     """timer_delay/timer_pulse are async manager-driven nodes; the executor
     returns {} for them, so downstream coercions must not be written."""

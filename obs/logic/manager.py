@@ -2211,7 +2211,13 @@ class LogicManager:
         changed_targets = {
             e.target
             for e in _effective_edges_init
-            if e.sourceHandle == "changed" and (e.source in read_node_ids or node_type_by_id.get(e.source) == "change_filter")
+            if e.sourceHandle == "changed"
+            and (e.source in read_node_ids or node_type_by_id.get(e.source) == "change_filter")
+            # …except into edge_detect.reset: a synthetic changed=False there
+            # means "do not reset", which is exactly what a real quiet pass
+            # delivers. The level seeded through "in" stays valid, and
+            # discarding it would lose the block's first real edge.
+            and not (node_type_by_id.get(e.target) == "edge_detect" and (e.targetHandle or "in") == "reset")
         }
         # Every Edge Detection output is edge-gated: "out" exists only on an
         # edge and the triggers are only true on one. On a save/startup

@@ -253,6 +253,13 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Wahr')
   })
 
+  it('follows the backend for an imported collection value', async () => {
+    // bool([0]) is True, so the card must not read the "0" of its string form.
+    const w = await mountGN('edge_detect', { value_rising: [0], value_falling: [] })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
+  })
+
   it('localizes backend boolean spellings on the card', async () => {
     const w = await mountGN('edge_detect', { value_rising: 'False', value_falling: 'off' })
     await flushPromises()
