@@ -639,6 +639,8 @@ The graph can also be started manually via the **▶ Run** button.
 
 Direct feedback loops are validated in the editor and blocked when saving or connecting nodes. Use a **Memory** block as an explicit tick boundary for controlled feedback: it outputs the value stored from the previous graph run and stores the current input for the next run.
 
+Every block can be **renamed** — function blocks and comment blocks alike: double-click its title on the logic sheet to turn it into a text field — Enter or clicking away commits the name, Escape aborts. The same field is also available at the top of the block properties, so a block can be renamed during a debug session as well. The custom name replaces the block type's default title on the card and in the block properties, with the block type and the generated block id kept below as a secondary line. Clearing the name restores the default title. Connections and references keep addressing the block by its id, and a rename on its own does not reset stored block state (memory, counters, statistics). Renaming edits the logic sheet and is therefore only offered to users who may change it; without that permission the title stays read-only.
+
 Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual blocks) and use **Copy** / **Paste** (or Ctrl/Cmd+C / Ctrl/Cmd+V) to duplicate them with their configuration intact — including across a switch to a different logic sheet, so a block group can be copied from one sheet to another. Pasted blocks are placed with a slight offset and come in pre-selected, ready to be dragged to their new position.
 
 ---
@@ -692,6 +694,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | Block | Inputs | Outputs | Description |
 |---|---|---|---|
 | **Concatenate** | 2–20 inputs (configurable) | Result | Joins multiple texts into one. Optional separator (e.g. `,` or ` `). |
+| **Search/Replace** | Text | Result | Replaces matches in a text using an ordered list of rules — add, reorder and delete them in the block. Each rule searches for a plain text or a regular expression (RegEx, group references such as `\1` in the replacement), optionally ignoring case and optionally only replacing the first occurrence. Rules run top to bottom, each on the result of the previous one. |
 
 #### Timer
 

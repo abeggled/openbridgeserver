@@ -3879,6 +3879,7 @@ class LogicManager:
                 "math_map",
                 "clamp",
                 "string_concat",
+                "string_replace",
                 "json_extractor",
                 "xml_extractor",
                 "substring_extractor",
@@ -6957,3 +6958,13 @@ class LogicManager:
             _migrate_legacy_api_client_field_names(flow)
             self._graphs[graph_id] = (name, enabled, flow)
             self._sequence_graph_signatures[graph_id] = flow.model_dump_json()
+            # A layout-only save leaves execution semantics untouched by
+            # definition, but it can still change `node.data` — a block rename
+            # writes the cosmetic `data.label` (issue #1157). `reload()` cancels
+            # a running sequence whose node data no longer matches the config it
+            # was started with, so leaving these entries stale would kill an
+            # active sequence on the next reload over a rename.
+            for node in flow.nodes:
+                key = (graph_id, node.id)
+                if key in self._sequence_configs:
+                    self._sequence_configs[key] = dict(node.data)

@@ -48,6 +48,7 @@ PURE_LOGIC_NODE_TYPES = frozenset(
         "random_value",
         "statistics",
         "string_concat",
+        "string_replace",
         "substring_extractor",
         "timer_cron",
         "timer_delay",

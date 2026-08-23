@@ -7,7 +7,13 @@
 
     <div class="gn-card logic-node-surface" :style="{ '--node-tint': cardTint }">
       <div class="gn-header">
-        <span class="gn-label">{{ $t('logic.nodeTypes.python_script') }}</span>
+        <NodeTitleEditor
+          :value="customLabel"
+          :fallback="$t('logic.nodeTypes.python_script')"
+          :editable="auth.isAdmin"
+          :title-class="['gn-label', customLabel && 'gn-label--custom']"
+          @rename="renameNode"
+        />
         <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
       </div>
       <div class="gn-body">
@@ -33,6 +39,8 @@
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { nodeTint } from '@/utils/logicNodeSurface'
+import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps({
   id:   { type: String, required: true },
@@ -51,8 +59,15 @@ const shortScript = computed(() => {
 })
 
 const hovered = ref(false)
-const { removeNodes } = useVueFlow()
+const { removeNodes, updateNodeData } = useVueFlow()
 function remove() { removeNodes([props.id]) }
+
+// ── User-defined block name (issue #1157) ─────────────────────────────────
+const customLabel = computed(() => String(props.data?.label ?? '').trim())
+function renameNode(label) { updateNodeData(props.id, { label }) }
+// Only admins can save a sheet, so offering the inline field to a read-only
+// viewer would silently discard whatever they typed.
+const auth = useAuthStore()
 </script>
 
 <style scoped>
@@ -86,8 +101,11 @@ function remove() { removeNodes([props.id]) }
   z-index: 1;
 }
 .gn-header  { display:flex; align-items:center; justify-content:space-between; padding:5px 10px; background:rgba(190,24,93,.18); border-radius:5px 5px 0 0; }
-.gn-label   { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--node-title-color); }
-.gn-delete  { font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
+.gn-label   { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--node-title-color); }
+/* A user-chosen name keeps its own casing — the uppercase treatment is for
+   the generated type titles. */
+.gn-label--custom { text-transform:none; letter-spacing:.02em; }
+.gn-delete  { flex-shrink:0; font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
 .gn-delete:hover { color:#f87171; }
 .gn-body    { padding: 6px 10px 4px; }
 .script-preview { font-size:10px; color:var(--node-script-color); font-family:ui-monospace,monospace; white-space:pre-wrap; max-height:55px; overflow:hidden; margin:0; }

@@ -1366,6 +1366,42 @@ class GraphExecutor:
                 return [r for r in parsed if isinstance(r, dict)]
         return []
 
+    @classmethod
+    def _apply_replace_rules(cls, text: str, rules: list[dict[str, Any]]) -> str:
+        """Apply ordered search/replace rules to ``text``.
+
+        Every rule works on the result of its predecessor, so rules can build on
+        each other. A rule without a search term is skipped, and so is a rule
+        whose regular expression (or group reference) does not compile — an
+        unfinished rule must not discard the text of the whole block.
+        """
+        for rule in rules:
+            search = rule.get("search")
+            if not isinstance(search, str) or search == "":
+                continue
+            raw_replacement = rule.get("replace")
+            replacement = "" if raw_replacement is None else str(raw_replacement)
+            case_sensitive = cls._to_bool(rule.get("case_sensitive", True))
+            replace_all = cls._to_bool(rule.get("replace_all", True))
+            if str(rule.get("mode") or "plain").strip().lower() == "regex":
+                try:
+                    text = re.sub(search, replacement, text, count=0 if replace_all else 1, flags=0 if case_sensitive else re.IGNORECASE)
+                except (re.error, IndexError):
+                    continue
+            elif case_sensitive:
+                text = text.replace(search, replacement, -1 if replace_all else 1)
+            else:
+                # Literal replacement via a callable — a plain replacement string
+                # would be read as a regex template (backslashes, \g<…>).
+                text = re.sub(
+                    re.escape(search),
+                    lambda _match, literal=replacement: literal,
+                    text,
+                    count=0 if replace_all else 1,
+                    flags=re.IGNORECASE,
+                )
+        return text
+
     @staticmethod
     def _condition_value(rule: dict[str, Any], key: str, fallback: Any = None, *, blank_is_missing: bool = False) -> Any:
         value = rule.get(key, fallback)
@@ -1775,6 +1811,12 @@ class GraphExecutor:
                     val = inputs.get(f"in_{i}")
                     parts.append(str(val) if val is not None else "")
                 return {"result": sep.join(parts)}
+
+            case "string_replace":
+                raw_text = inputs.get("text")
+                if raw_text is None:
+                    return {"result": None}
+                return {"result": self._apply_replace_rules(str(raw_text), self._load_rule_list(d.get("rules")))}
 
             case "statistics":
                 # State stored in hysteresis_state keyed by node.id

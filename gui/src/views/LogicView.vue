@@ -430,7 +430,7 @@ const nodeTypeComponents = {
   // Timer extended
   operating_hours: _generic,
   // String
-  string_concat: _generic,
+  string_concat: _generic, string_replace: _generic,
   // Notification
   notify_message: _generic, notify_pushover: _generic, notify_sms: _generic, message_archive: _generic, wake_on_lan: _generic, host_check: _generic,
   // Integration
@@ -1180,6 +1180,25 @@ function onNodeClick({ node }) {
   if (!auth.isAdmin) return
   selectedNode.value = { ...node }
 }
+
+// The properties panel holds its own copy of the selected block, so a rename
+// typed directly on the card (issue #1157) would otherwise leave the panel
+// heading showing the previous name until the block is reselected.
+watch(
+  () => {
+    const node = nodes.value.find(n => n.id === selectedNode.value?.id)
+    // `null` marks "no such block on the canvas" — distinct from a block
+    // that simply carries no name, so removing the selected block does not
+    // push a bogus update into the panel and make it re-read the block.
+    return node ? String(node.data?.label ?? '') : null
+  },
+  (label) => {
+    const current = selectedNode.value
+    if (label === null || !current) return
+    if (String(current.data?.label ?? '') === label) return
+    selectedNode.value = { ...current, data: { ...current.data, label } }
+  },
+)
 
 // ── Copy/Paste selected nodes (issue #1084) ────────────────────────────────
 const clipboard  = ref(null)
