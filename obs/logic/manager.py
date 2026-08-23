@@ -4046,7 +4046,18 @@ class LogicManager:
                         # the absent-input default would wrongly call AND(True,
                         # missing) independent when the missing False itself
                         # is what determines the output.
-                        for counterfactual in (False, True):
+                        counterfactuals: list[Any] = [False, True]
+                        _pulse_source = _node_by_id_early.get(pulse_edge.source)
+                        if _pulse_source is not None and _pulse_source.type == "edge_detect" and (pulse_edge.sourceHandle or "out") == "out":
+                            # "out" carries a CONFIGURED value, not a boolean.
+                            # Probing only False/True would call `in1 > 5`
+                            # independent of a pulse whose real value is 10,
+                            # and the idle placeholder would then be published.
+                            for _field, _default in (("value_rising", "true"), ("value_falling", "false")):
+                                counterfactuals.append(
+                                    _fan_in_probe._coerce_typed_value(_pulse_source, (_pulse_source.data or {}).get(_field, _default), "bool")
+                                )
+                        for counterfactual in counterfactuals:
                             counterfactual_inputs = dict(target_inputs)
                             counterfactual_inputs[pulse_edge.targetHandle or "in"] = counterfactual
                             effective_counterfactual = GraphExecutor._resolve_effective_inputs(target_node, counterfactual_inputs)

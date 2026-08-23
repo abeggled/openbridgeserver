@@ -67,6 +67,7 @@
 </template>
 
 <script setup>
+import { isBackendFalse } from '@/utils/logicBooleans'
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
@@ -310,12 +311,13 @@ const summary = computed(() => {
     const edgeValue = (raw, fallback) => {
       const text = raw ?? fallback
       if ((d.data_type ?? 'bool') !== 'bool') return text
-      // Stringified first: an imported graph may carry real JSON booleans
-      // rather than the "true"/"false" the editor writes.
-      const normalized = String(text)
-      if (normalized === 'true')  return t('logic.nodeConfig.common.boolTrue')
-      if (normalized === 'false') return t('logic.nodeConfig.common.boolFalse')
-      return text
+      // Decided with the backend's own rule rather than an exact "true"/
+      // "false" match: with data_type bool the executor coerces ANY value, so
+      // an imported "False"/"off" — or a real JSON boolean — must read as the
+      // value that will actually be sent, not as raw English.
+      return isBackendFalse(text)
+        ? t('logic.nodeConfig.common.boolFalse')
+        : t('logic.nodeConfig.common.boolTrue')
     }
     // A direction set to trigger-only shows an em dash instead of a value;
     // one set to off is left out of the summary entirely.

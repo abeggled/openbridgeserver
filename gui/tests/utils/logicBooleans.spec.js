@@ -1,0 +1,26 @@
+import { describe, it, expect } from 'vitest'
+import { isBackendFalse } from '@/utils/logicBooleans'
+
+// Mirrors GraphExecutor._to_bool — the editor and the block card both decide
+// with this, so it must not drift from the backend.
+describe('isBackendFalse', () => {
+  it.each(['0', 'false', 'FALSE', ' False ', 'no', 'off', 'OFF', ''])('treats %j as false', v => {
+    expect(isBackendFalse(v)).toBe(true)
+  })
+
+  it.each(['1', 'true', 'True', 'yes', 'on', 'AN', 'JA', '0.0', 'null'])('treats %j as true', v => {
+    expect(isBackendFalse(v)).toBe(false)
+  })
+
+  it('treats null and undefined as false, like a missing value', () => {
+    expect(isBackendFalse(null)).toBe(true)
+    expect(isBackendFalse(undefined)).toBe(true)
+  })
+
+  it('accepts real booleans and numbers, not only strings', () => {
+    expect(isBackendFalse(false)).toBe(true)
+    expect(isBackendFalse(true)).toBe(false)
+    expect(isBackendFalse(0)).toBe(true)
+    expect(isBackendFalse(1)).toBe(false)
+  })
+})

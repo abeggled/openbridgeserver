@@ -1340,6 +1340,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import { isBackendFalse } from '@/utils/logicBooleans'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import DebugInspector from './DebugInspector.vue'
 
@@ -2232,9 +2233,6 @@ function onSchemaEnumChange(key) {
 
 // The decimal/scientific syntax Python's float() accepts, minus the special
 // inf/nan spellings that make no sense as a configured edge value.
-// The spellings GraphExecutor._to_bool treats as false; anything else is true.
-const BACKEND_FALSE_WORDS = new Set(['0', 'false', 'no', 'off'])
-
 const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
 // A directly entered value goes through the same rule as a type switch —
@@ -2261,7 +2259,7 @@ function normaliseTypedValue(value, kind, schema) {
   // the actuator receives.
   if (kind === 'bool') {
     if (text === '') return String(schema.default ?? 'false')
-    return BACKEND_FALSE_WORDS.has(text.trim().toLowerCase()) ? 'false' : 'true'
+    return isBackendFalse(text) ? 'false' : 'true'
   }
   // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
   // "Infinity", which the backend's float() rejects — it would coerce them to

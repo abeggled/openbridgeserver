@@ -540,3 +540,36 @@ async def test_a_pulse_on_one_handle_does_not_release_an_action_on_the_other():
     assert outputs["ed"]["falling"] is True
     assert outputs["ed"]["rising"] is False
     assert ping.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_numeric_edge_value_is_probed_with_its_real_value():
+    """The fan-in independence probe tries False/True; a numeric edge value of
+    10 against `in1 > 5` is decisive for neither, so the probe would call the
+    Compare independent of the pulse and publish its idle placeholder."""
+    manager = _manager()
+    target = uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("ed", "edge_detect", {"data_type": "number", "value_rising": "10", "value_falling": "10"}),
+                node("c", "const_value", {"value": "5", "data_type": "number"}),
+                node("cmp", "compare", {"operator": ">"}),
+                node("w", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [
+                edge("ed", "cmp", "out", "in1"),
+                edge("c", "cmp", "value", "in2"),
+                edge("cmp", "w", "out", "value"),
+            ],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await manager._execute_graph("g", "G", flow, {"ed": {"in": True}})
+
+    assert outputs["ed"] == {"rising": False, "falling": False}
+    manager._event_bus.publish.assert_not_awaited()

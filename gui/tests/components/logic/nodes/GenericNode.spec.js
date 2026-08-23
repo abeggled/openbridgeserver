@@ -245,10 +245,18 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 1  \u2193 0')
   })
 
-  it('shows an unrecognized boolean edge_detect value verbatim', async () => {
+  it('shows what a boolean edge_detect will actually send, not the raw spelling', async () => {
+    // With data_type bool the executor coerces ANY value through _to_bool, so
+    // "JA" is sent as true — showing it verbatim would misstate the output.
     const w = await mountGN('edge_detect', { value_rising: 'JA', value_falling: 'NEIN' })
     await flushPromises()
-    expect(w.find('.gn-summary').text()).toBe('\u2191 JA  \u2193 NEIN')
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Wahr')
+  })
+
+  it('localizes backend boolean spellings on the card', async () => {
+    const w = await mountGN('edge_detect', { value_rising: 'False', value_falling: 'off' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Falsch  \u2193 Falsch')
   })
 
   it('omits an edge_detect direction that is switched off', async () => {
