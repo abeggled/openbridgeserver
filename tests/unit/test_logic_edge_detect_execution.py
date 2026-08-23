@@ -490,3 +490,26 @@ async def test_a_pulse_on_the_wired_handle_is_delivered():
     assert outputs["a"]["rising"] is True
     assert manager._hysteresis["g"]["b"] == {"value": True}
     assert [c.args[0].value for c in manager._event_bus.publish.await_args_list] == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_pulse_inverted_into_reset_does_not_clear_the_level():
+    """The reset handle is a trigger port, so a no-pulse placeholder that a
+    synchronous node inverts into True would clear the remembered level for
+    good — and the next real transition would only re-seed it."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("a", "edge_detect"), node("n", "not", {}), node("b", "edge_detect")],
+            "edges": [edge("a", "n", "rising", "in1"), edge("n", "b", "out", "reset")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    # a repeats its level, so "rising" carries the placeholder, not a pulse.
+    manager._hysteresis["g"] = {"a": {"value": True}, "b": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await manager._execute_graph("g", "G", flow, {"a": {"in": True}})
+
+    assert manager._hysteresis["g"]["b"] == {"value": True}

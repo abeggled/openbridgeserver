@@ -310,8 +310,11 @@ const summary = computed(() => {
     const edgeValue = (raw, fallback) => {
       const text = raw ?? fallback
       if ((d.data_type ?? 'bool') !== 'bool') return text
-      if (text === 'true')  return t('logic.nodeConfig.common.boolTrue')
-      if (text === 'false') return t('logic.nodeConfig.common.boolFalse')
+      // Stringified first: an imported graph may carry real JSON booleans
+      // rather than the "true"/"false" the editor writes.
+      const normalized = String(text)
+      if (normalized === 'true')  return t('logic.nodeConfig.common.boolTrue')
+      if (normalized === 'false') return t('logic.nodeConfig.common.boolFalse')
       return text
     }
     // A direction set to trigger-only shows an em dash instead of a value;

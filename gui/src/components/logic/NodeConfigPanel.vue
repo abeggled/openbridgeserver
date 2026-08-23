@@ -1297,7 +1297,7 @@
             </select>
             <input v-else-if="typedValueKind(schema) === 'number'"
               type="number" step="any" v-model="localData[key]"
-              class="input text-sm" @change="emitUpdate" />
+              class="input text-sm" @change="onTypedValueChange(key, schema)" />
             <input v-else-if="schema.type === 'boolean'"
               type="checkbox" v-model="localData[key]"
               class="text-sm" @change="emitUpdate" />
@@ -2233,6 +2233,13 @@ function onSchemaEnumChange(key) {
 const BACKEND_FALSE_WORDS = new Set(['0', 'false', 'no', 'off'])
 
 const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
+
+// A directly entered value goes through the same rule as a type switch —
+// otherwise "1e309" is stored as JavaScript Infinity, which serializes to null.
+function onTypedValueChange(key, schema) {
+  localData.value[key] = normaliseTypedValue(localData.value[key], typedValueKind(schema), schema)
+  emitUpdate()
+}
 
 function normaliseTypedValue(value, kind, schema) {
   const text = value === null || value === undefined ? '' : String(value)

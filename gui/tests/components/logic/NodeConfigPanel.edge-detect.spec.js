@@ -206,9 +206,9 @@ describe('NodeConfigPanel edge_detect typed edge values', () => {
     await numberInput.setValue('23')
     await numberInput.trigger('change')
 
-    // Vue casts a type="number" v-model to a real number; the executor's
-    // _to_num accepts either, and normaliseTypedValue stringifies on a switch.
-    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 23 })
+    // Directly entered values run through the same normalizer as a type
+    // switch, which yields the string form the schema declares.
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '23' })
     w.unmount()
   })
 
@@ -422,6 +422,20 @@ describe('NodeConfigPanel typed value backend agreement', () => {
     // "AN" is truthy for _to_bool; an empty value has no meaning, so the
     // field's own default applies.
     expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'true', value_falling: 'false' })
+    w.unmount()
+  })
+
+  it('rejects an overflowing number typed directly into the field', async () => {
+    // The type-switch normalizer is not enough: this input emits on its own,
+    // and Infinity serializes to null on the way to the backend.
+    const w = await mountPanel({ data_type: 'number', value_rising: '1', value_falling: '0' })
+    await flushPromises()
+
+    const numberInput = w.findAll('input[type="number"]')[0]
+    await numberInput.setValue('1e309')
+    await numberInput.trigger('change')
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0' })
     w.unmount()
   })
 

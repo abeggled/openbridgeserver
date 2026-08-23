@@ -231,6 +231,14 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
   })
 
+  it('localizes real JSON booleans from an imported graph', async () => {
+    // LogicGraphImport accepts node data verbatim, so the values may be actual
+    // booleans rather than the "true"/"false" strings the editor writes.
+    const w = await mountGN('edge_detect', { value_rising: true, value_falling: false })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
+  })
+
   it('shows a non-boolean edge_detect value verbatim', async () => {
     const w = await mountGN('edge_detect', { data_type: 'number', value_rising: '1', value_falling: '0' })
     await flushPromises()

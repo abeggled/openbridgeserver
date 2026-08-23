@@ -4282,7 +4282,11 @@ class LogicManager:
                     hyst.pop(node_id, None)
             _apply_operating_hours_state(held_descendants, pre_execute_node_state)
 
-        synchronous_trigger_types = {"statistics", "operating_hours", "random_value"}
+        # edge_detect belongs here too: its "reset" is a trigger port, so a
+        # no-pulse placeholder inverted into True by a synchronous node would
+        # otherwise clear its remembered level for good — the stateful-relay
+        # replay below only guards its "in".
+        synchronous_trigger_types = {"statistics", "operating_hours", "random_value", "edge_detect"}
         missing_synchronous_handles = {
             target_id: {handle for handle, origins in handle_origins.items() if not any(_origin_pulsed(origin) for origin in origins)}
             for target_id, handle_origins in _cf_changed_trigger_handle_origins.items()
