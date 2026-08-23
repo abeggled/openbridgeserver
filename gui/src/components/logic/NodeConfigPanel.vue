@@ -2229,11 +2229,21 @@ function onSchemaEnumChange(key) {
 
 // The decimal/scientific syntax Python's float() accepts, minus the special
 // inf/nan spellings that make no sense as a configured edge value.
+// The spellings GraphExecutor._to_bool treats as false; anything else is true.
+const BACKEND_FALSE_WORDS = new Set(['0', 'false', 'no', 'off'])
+
 const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
 function normaliseTypedValue(value, kind, schema) {
   const text = value === null || value === undefined ? '' : String(value)
-  if (kind === 'bool') return text === 'true' || text === 'false' ? text : String(schema.default ?? 'false')
+  // Decide with the backend's own rule (GraphExecutor._to_bool) rather than an
+  // exact "true"/"false" match: a supported spelling like "False" or "off"
+  // would otherwise fall back to the field default and silently INVERT what
+  // the actuator receives.
+  if (kind === 'bool') {
+    if (text === '') return String(schema.default ?? 'false')
+    return BACKEND_FALSE_WORDS.has(text.trim().toLowerCase()) ? 'false' : 'true'
+  }
   // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
   // "Infinity", which the backend's float() rejects — it would coerce them to
   // 0.0 while the editor kept displaying the original spelling.

@@ -2793,6 +2793,18 @@ class TestEdgeDetectNode:
         assert exc.execute({"ed": {"in": None}})["ed"] == {"rising": False, "falling": False}
         assert state == {"ed": {"value": True}}
 
+    def test_a_held_node_neither_advances_its_level_nor_emits(self):
+        # LogicManager sets this flag while an upstream async node has not
+        # resolved; the value on "in" is then a placeholder, not a level.
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": False, "reset": True, "_suppress_change_filter": True}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        # Neither the placeholder nor the reset took effect.
+        assert state == {"ed": {"value": True}}
+
     def test_reset_drops_the_level_so_the_next_value_produces_no_edge(self):
         state = {"ed": {"value": True}}
         exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)

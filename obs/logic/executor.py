@@ -1656,6 +1656,17 @@ class GraphExecutor:
                 state = self.hysteresis_state.get(node.id)
                 has_prev = isinstance(state, dict) and "value" in state
                 idle: dict[str, Any] = {"rising": False, "falling": False}
+                if inputs.get("_suppress_change_filter"):
+                    # Held by LogicManager (the flag is shared with
+                    # change_filter): an upstream async node — api_client/
+                    # host_check/message_archive/notify — hasn't resolved on
+                    # this pass, so whatever feeds "in" is a placeholder, not
+                    # a real level. Treat it exactly like an absent input —
+                    # no state write, no edge, nothing sent — and let the
+                    # manager re-run this node once the real value is known.
+                    # Checked before "reset" because that input can be fed
+                    # from the same unresolved source.
+                    return idle
                 if self._to_bool(inputs.get("reset")):
                     # Reset wins over a value arriving on the same tick (same
                     # precedence as memory's deferred commit): the remembered

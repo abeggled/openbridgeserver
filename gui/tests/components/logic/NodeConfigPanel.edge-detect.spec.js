@@ -399,6 +399,32 @@ describe('NodeConfigPanel typed value backend agreement', () => {
     w.unmount()
   })
 
+  it('keeps the backend meaning of a boolean spelling when switching to Boolean', async () => {
+    // GraphExecutor._to_bool('False') and ('off') are both false; an exact
+    // "true"/"false" match would fall back to the default and invert them.
+    const w = await mountBare({ data_type: 'string', value_rising: 'False', value_falling: 'off' })
+
+    const dataTypeSelect = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'bool'))
+    await dataTypeSelect.setValue('bool')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'false', value_falling: 'false' })
+    w.unmount()
+  })
+
+  it('maps any other text to true when switching to Boolean, as the backend does', async () => {
+    const w = await mountBare({ data_type: 'string', value_rising: 'AN', value_falling: '' })
+
+    const dataTypeSelect = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'bool'))
+    await dataTypeSelect.setValue('bool')
+    await flushPromises()
+
+    // "AN" is truthy for _to_bool; an empty value has no meaning, so the
+    // field's own default applies.
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'true', value_falling: 'false' })
+    w.unmount()
+  })
+
   it('rejects a number that the backend would parse into infinity', async () => {
     // float('1e309') is inf in Python; the actuator must not receive that.
     const w = await mountBare({ data_type: 'string', value_rising: '1e309', value_falling: '-1e309' })

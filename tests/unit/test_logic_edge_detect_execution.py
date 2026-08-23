@@ -269,3 +269,70 @@ async def test_a_tick_without_an_edge_does_not_bypass_the_async_dedup():
     assert first["ed"] == {"rising": False, "falling": False}
     # Sustained trigger, no pulse behind it: the second run is deduplicated.
     assert ping.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_held_node_does_not_commit_an_unresolved_async_placeholder():
+    """host_check emits reachable=False as a placeholder until it has actually
+    run. Committing that as a level would report a falling edge that never
+    happened — and the action it drives runs irreversibly, long before the
+    replay could correct it."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("c", "const_value", {"value": "true", "data_type": "bool"}),
+                node("a", "host_check", {"host": "source"}),
+                node("ed", "edge_detect", {"on_rising": "off", "on_falling": "trigger"}),
+                node("b", "host_check", {"host": "downstream"}),
+            ],
+            "edges": [
+                edge("c", "a", "value", "trigger"),
+                edge("a", "ed", "reachable", "in"),
+                edge("ed", "b", "falling", "trigger"),
+            ],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", return_value=ws),
+        patch("obs.logic.manager._ping_host", new=AsyncMock(return_value=(True, 1.0))) as ping,
+    ):
+        outputs = await manager._execute_graph("g", "G", flow, {})
+
+    # The real result equals the stored level, so there is no edge at all.
+    assert outputs["ed"] == {"rising": False, "falling": False}
+    assert manager._hysteresis["g"]["ed"] == {"value": True}
+    assert [c.args[0] for c in ping.await_args_list] == ["source"]
+
+
+@pytest.mark.asyncio
+async def test_consecutive_edges_each_restart_a_value_sequence():
+    """A sequence has its own reverse pulse trace, separate from the one the
+    host_check path uses — both must recognise an edge as retriggerable."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("ed", "edge_detect", {"data_type": "bool", "value_rising": "true", "value_falling": "true"}),
+                node("seq", "value_sequence", {"steps": "[]", "run_mode": "restart"}),
+            ],
+            "edges": [edge("ed", "seq", "out", "trigger")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws), patch.object(manager, "_start_value_sequence") as start:
+        rising = await manager._execute_graph("g", "G", flow, {"ed": {"in": True}})
+        falling = await manager._execute_graph("g", "G", flow, {"ed": {"in": False}})
+
+    # Both edges deliver an identical truthy value — only the pulse provenance
+    # distinguishes them from one sustained trigger.
+    assert rising["ed"]["out"] is True
+    assert falling["ed"]["out"] is True
+    assert start.call_count == 2

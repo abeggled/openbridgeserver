@@ -203,6 +203,12 @@ _INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge", "chang
 # transition.
 _INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
 
+# Stateful blocks that must be held back while an upstream async node has not
+# resolved yet: committing that pass's placeholder would record a level/value
+# that never occurred, and any action they drive would already have run
+# irreversibly by the time the replay corrects them.
+_HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
+
 # Input handles that control WHEN a node's output fires/passes but do not
 # deliver the value itself. Seeded eligibility must not propagate through
 # them: a Const → Gate.in → Write.value sheet whose Read Object only drives
@@ -3622,6 +3628,12 @@ class LogicManager:
                             if not _enable_v:
                                 continue
                     _tainted.add(_te.target)
+                    if _target_type == "edge_detect":
+                        # A held Edge Detection node emits nothing at all this
+                        # pass — no edge, no state write — which is fully
+                        # deterministic whatever it remembers, so nothing
+                        # downstream still depends on the unresolved source.
+                        continue
                     if _target_type == "change_filter":
                         # A change_filter that becomes tainted/held here is,
                         # for THIS pass, fully deterministic: the executor's
@@ -3637,7 +3649,7 @@ class LogicManager:
                         if isinstance(_pre_hold_state, dict) and "value" in _pre_hold_state:
                             continue
                     _tq.append(_te.target)
-            return {n.id for n in flow.nodes if n.type == "change_filter" and n.id in _tainted}
+            return {n.id for n in flow.nodes if n.type in _HELD_ON_UNRESOLVED_SOURCE and n.id in _tainted}
 
         # Async nodes whose real side effect has actually run this tick (as
         # opposed to merely having their _trigger read true) — updated
@@ -6519,11 +6531,16 @@ class LogicManager:
                     if not _edge_carries_pulse(edge):
                         continue
                     source = node_by_id.get(edge.source)
-                    if (
-                        source
-                        and source.type in ("datapoint_read", "change_filter")
-                        and (edge.sourceHandle or "out") == "changed"
-                        and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                    if source and (
+                        (
+                            source.type in ("datapoint_read", "change_filter")
+                            and (edge.sourceHandle or "out") == "changed"
+                            and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                        )
+                        # Every Edge Detection handle is discrete, so the one
+                        # that fired this pass retriggers a sequence exactly
+                        # like a "changed" pulse does.
+                        or (source.type == "edge_detect" and (edge.source, edge.sourceHandle or "out") in _discrete_pulse_handles({edge.source}))
                     ):
                         change_pulse_triggered = True
                         break
