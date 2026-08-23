@@ -209,6 +209,11 @@ _INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
 # irreversibly by the time the replay corrects them.
 _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 
+# Blocks whose outputs are discrete event pulses rather than sustained levels.
+# They are the roots of the pulse-provenance trace: a consumer fed from one of
+# them must not read the "no pulse this pass" placeholder as a real value.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
+
 # Input handles that control WHEN a node's output fires/passes but do not
 # deliver the value itself. Seeded eligibility must not propagate through
 # them: a Const → Gate.in → Write.value sheet whose Read Object only drives
@@ -3313,12 +3318,17 @@ class LogicManager:
             if node.type
             in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write", "edge_detect"}
         }
+        # Keyed on every pulse origin, not just change_filter: the correction
+        # pass for a consumer fed by a non-firing pulse restores state from
+        # this snapshot, so without it the placeholder the first pass already
+        # committed is simply re-committed.
+        _pulse_origin_ids = {n.id for n in flow.nodes if n.type in _PULSE_ORIGIN_NODE_TYPES}
         _needs_cf_pulse_correction_snapshot = any(
             bool(
-                (_downstream_closure({_cf_id}, _effective_edges) - {_cf_id})
-                & (_change_filter_ids | _synchronous_correction_ids | _stateful_relay_correction_ids)
+                (_downstream_closure({_pid}, _effective_edges) - {_pid})
+                & (_pulse_origin_ids | _synchronous_correction_ids | _stateful_relay_correction_ids)
             )
-            for _cf_id in _change_filter_ids
+            for _pid in _pulse_origin_ids
         )
         _needs_pre_execute_snapshot = (
             needs_async_replay_snapshot
@@ -3810,6 +3820,17 @@ class LogicManager:
                         pulses.add((_pn.id, "out"))
             return pulses
 
+        def _origin_pulsed(origin_id: str) -> bool:
+            """Did this pulse origin actually fire this pass?
+
+            Origins are change_filter or edge_detect nodes. A change_filter
+            reports it on "changed"; an Edge Detection node has no single such
+            flag — whichever of its discrete handles fired counts.
+            """
+            if _node_type_by_id.get(origin_id) == "edge_detect":
+                return bool(_discrete_pulse_handles({origin_id}))
+            return GraphExecutor._to_bool(outputs.get(origin_id, {}).get("changed"))
+
         def _edge_carries_pulse(edge: Any, *, require_fired_change_filter: bool = True) -> bool:
             # A pulse only continues through an edge if its target either has
             # no dedicated trigger-typed input at all (a pure logic/relay
@@ -3936,7 +3957,12 @@ class LogicManager:
                         if new_origins:
                             target_origins.update(new_origins)
                             changed = True
-            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type == "change_filter"}
+            # Both block types emit discrete event pulses, so both are pulse
+            # origins: without this an Edge Detection node's idle "False" on a
+            # trigger handle is taken for a real level by a stateful consumer,
+            # and a synchronous node can invert it into a truthy value that
+            # fires an action node (issue #1090's machinery, generalized).
+            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type in _PULSE_ORIGIN_NODE_TYPES}
 
             _pure_fan_in_types = {
                 "and",
@@ -4032,6 +4058,9 @@ class LogicManager:
                         continue
                     if _node_type_by_id.get(source_id) == "change_filter" and (pulse_edge.sourceHandle or "out") != "changed":
                         continue
+                    # No source-handle restriction for edge_detect: unlike a
+                    # change_filter, whose "out" carries a sustained value, all
+                    # three of its handles are discrete.
                     if (pulse_edge.targetHandle or "in") == "message":
                         message_origins.setdefault(pulse_edge.target, set()).update(source_origins)
                         continue
@@ -4159,13 +4188,13 @@ class LogicManager:
             for target_id, origins in _cf_changed_trigger_origins.items():
                 if node_ids is not None and target_id not in node_ids:
                     continue
-                if any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                if any(_origin_pulsed(origin) for origin in origins):
                     continue
                 target_output = outputs.get(target_id, {})
                 target_node = _node_by_id_early.get(target_id)
                 message_origins = _cf_changed_message_origins.get(target_id, set())
                 has_independent_message = target_output.get("_message") is not None and (
-                    not message_origins or any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in message_origins)
+                    not message_origins or any(_origin_pulsed(origin) for origin in message_origins)
                 )
                 if (
                     target_node is not None
@@ -4182,7 +4211,7 @@ class LogicManager:
             for target_id, origins in _cf_changed_message_origins.items():
                 if node_ids is not None and target_id not in node_ids:
                     continue
-                if any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                if any(_origin_pulsed(origin) for origin in origins):
                     continue
                 target_output = outputs.get(target_id, {})
                 if "_message" in target_output:
@@ -4191,11 +4220,11 @@ class LogicManager:
         def _refresh_missing_cf_override_values() -> None:
             missing_cf_override_values.clear()
             for target_id, origins in _cf_changed_message_origins.items():
-                if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                if not any(_origin_pulsed(origin) for origin in origins):
                     missing_cf_override_values.setdefault(target_id, {})["message"] = None
             for target_id, handle_origins in _cf_changed_trigger_handle_origins.items():
                 for handle, origins in handle_origins.items():
-                    if any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                    if any(_origin_pulsed(origin) for origin in origins):
                         continue
                     if _node_type_by_id.get(target_id) == "operating_hours" and handle == "active":
                         value = bool((pre_execute_node_state or {}).get(target_id, {}).get("last_start"))
@@ -4206,7 +4235,7 @@ class LogicManager:
                 if _node_type_by_id.get(target_id) in {"gate", "hysteresis"}:
                     continue
                 for handle, origins in handle_origins.items():
-                    if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                    if not any(_origin_pulsed(origin) for origin in origins):
                         missing_cf_override_values.setdefault(target_id, {})[handle] = None
 
         _refresh_missing_cf_override_values()
@@ -4214,9 +4243,7 @@ class LogicManager:
         _neutralize_missing_cf_messages()
 
         missing_downstream_filters = {
-            target_id
-            for target_id, origins in _cf_downstream_filter_origins.items()
-            if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins)
+            target_id for target_id, origins in _cf_downstream_filter_origins.items() if not any(_origin_pulsed(origin) for origin in origins)
         }
         if missing_downstream_filters:
             held_descendants = missing_downstream_filters | _downstream_closure(missing_downstream_filters, _effective_edges)
@@ -4237,11 +4264,7 @@ class LogicManager:
 
         synchronous_trigger_types = {"statistics", "operating_hours", "random_value"}
         missing_synchronous_handles = {
-            target_id: {
-                handle
-                for handle, origins in handle_origins.items()
-                if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins)
-            }
+            target_id: {handle for handle, origins in handle_origins.items() if not any(_origin_pulsed(origin) for origin in origins)}
             for target_id, handle_origins in _cf_changed_trigger_handle_origins.items()
             if _node_type_by_id.get(target_id) in synchronous_trigger_types
         }
@@ -4276,9 +4299,7 @@ class LogicManager:
         missing_stateful_relay_targets = {
             target_id
             for target_id, handle_origins in _cf_changed_stateful_relay_origins.items()
-            if any(
-                not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins) for origins in handle_origins.values()
-            )
+            if any(not any(_origin_pulsed(origin) for origin in origins) for origins in handle_origins.values())
         }
         if missing_stateful_relay_targets:
             stateful_descendants = missing_stateful_relay_targets | _downstream_closure(missing_stateful_relay_targets, _effective_edges)
@@ -4293,7 +4314,7 @@ class LogicManager:
                 else:
                     target_overrides = stateful_overrides.setdefault(target_id, {})
                     for handle, origins in _cf_changed_stateful_relay_origins[target_id].items():
-                        if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                        if not any(_origin_pulsed(origin) for origin in origins):
                             target_overrides[handle] = None
             stateful_outputs = await _execute_pass(
                 await _executor(stateful_hyst),
@@ -5990,13 +6011,9 @@ class LogicManager:
             event_fresh_inputs = _event_fresh_inputs()
             _msg = out.get("_message")
             _pulse_origins = _cf_changed_message_origins.get(node_id, set())
-            _is_missing_cf_pulse = bool(_pulse_origins) and not any(
-                GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in _pulse_origins
-            )
+            _is_missing_cf_pulse = bool(_pulse_origins) and not any(_origin_pulsed(origin) for origin in _pulse_origins)
             _trigger_origins = _cf_changed_trigger_origins.get(node_id, set())
-            _is_missing_cf_trigger = bool(_trigger_origins) and not any(
-                GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in _trigger_origins
-            )
+            _is_missing_cf_trigger = bool(_trigger_origins) and not any(_origin_pulsed(origin) for origin in _trigger_origins)
             if event_fresh_inputs is None:
                 fresh_message = _msg is not None and not _is_missing_cf_pulse
                 fresh_trigger = GraphExecutor._to_bool(_current_input_value(node_id, "trigger")) and not _is_missing_cf_trigger
@@ -6432,10 +6449,10 @@ class LogicManager:
             if memory_node.type != "memory":
                 continue
             origins = _cf_changed_trigger_origins.get(memory_node.id, set())
-            if origins and not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+            if origins and not any(_origin_pulsed(origin) for origin in origins):
                 memory_commit_overrides.setdefault(memory_node.id, {})["reset"] = False
             data_origins = _cf_changed_stateful_relay_origins.get(memory_node.id, {}).get("in", set())
-            if data_origins and not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in data_origins):
+            if data_origins and not any(_origin_pulsed(origin) for origin in data_origins):
                 blocked_memory_inputs.add((memory_node.id, "in"))
         executor.commit_memory_inputs(outputs, memory_commit_overrides, blocked_memory_inputs)
 
@@ -6449,9 +6466,7 @@ class LogicManager:
             output = outputs.get(node.id, {})
             key = (graph_id, node.id)
             condition_origins = _cf_changed_stateful_relay_origins.get(node.id, {}).get("condition", set())
-            condition_missing = condition_origins and not any(
-                GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in condition_origins
-            )
+            condition_missing = condition_origins and not any(_origin_pulsed(origin) for origin in condition_origins)
             condition = (
                 self._sequence_conditions.get(key, True)
                 if condition_missing

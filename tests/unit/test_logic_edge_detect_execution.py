@@ -232,8 +232,9 @@ async def test_consecutive_edges_each_retrigger_an_async_action():
 async def test_a_tick_without_an_edge_does_not_bypass_the_async_dedup():
     """The mirror of the case above: a cron tick reaching Edge Detection must
     not count as a pulse having propagated through it when no edge occurred.
-    Here host_check's trigger is held true by a constant, so only the pulse
-    provenance decides whether the second run is deduplicated."""
+    host_check's trigger is held true by a constant, but a sustained value
+    alone must not fire an action on a tick where nothing happened — verified
+    to match a non-pulsing Change Filter in the same wiring."""
     manager = _manager()
     flow = FlowData.model_validate(
         {
@@ -267,8 +268,8 @@ async def test_a_tick_without_an_edge_does_not_bypass_the_async_dedup():
         await manager._execute_graph("g", "G", flow, {"cron": {"trigger": True}})
 
     assert first["ed"] == {"rising": False, "falling": False}
-    # Sustained trigger, no pulse behind it: the second run is deduplicated.
-    assert ping.await_count == 1
+    # Sustained trigger with no pulse behind it: the action does not run.
+    assert ping.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -336,3 +337,96 @@ async def test_consecutive_edges_each_restart_a_value_sequence():
     assert rising["ed"]["out"] is True
     assert falling["ed"]["out"] is True
     assert start.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_held_nodes_idle_trigger_cannot_be_inverted_into_an_action():
+    """A held node still emits rising=False, and a NOT downstream turns that
+    into a truthy trigger. Edge Detection is a pulse origin, so the manager
+    neutralizes the trigger of an action whose provenance reaches a pulse that
+    did not fire — exactly as it already did for Change Filter."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("c", "const_value", {"value": "true", "data_type": "bool"}),
+                node("src", "host_check", {"host": "source"}),
+                node("ed", "edge_detect", {"on_rising": "trigger", "on_falling": "off"}),
+                node("n", "not", {}),
+                node("dst", "host_check", {"host": "downstream"}),
+            ],
+            "edges": [
+                edge("c", "src", "value", "trigger"),
+                edge("src", "ed", "reachable", "in"),
+                edge("ed", "n", "rising", "in1"),
+                edge("n", "dst", "out", "trigger"),
+            ],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", return_value=ws),
+        patch("obs.logic.manager._ping_host", new=AsyncMock(return_value=(True, 1.0))) as ping,
+    ):
+        await manager._execute_graph("g", "G", flow, {})
+
+    assert [c.args[0] for c in ping.await_args_list] == ["source"]
+
+
+@pytest.mark.asyncio
+async def test_a_non_firing_trigger_is_not_committed_by_a_second_edge_detect():
+    """One Edge Detection node's trigger feeding another: on a pass without an
+    edge the source emits False on a discrete handle, which the consumer must
+    not record as a real low level."""
+    manager = _manager()
+    target = uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("a", "edge_detect"),
+                node("b", "edge_detect"),
+                node("w", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [edge("a", "b", "rising", "in"), edge("b", "w", "out", "value")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"a": {"value": False}, "b": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await manager._execute_graph("g", "G", flow, {"a": {"in": False}})
+
+    assert manager._hysteresis["g"]["b"] == {"value": True}
+    manager._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_only_the_handles_whose_pulse_is_missing_are_neutralized():
+    """Two Edge Detection nodes feeding one stateful consumer, one firing and
+    one not: the correction must neutralize only the handle behind the pulse
+    that did not fire, and leave the real one alone."""
+    manager = _manager()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("a", "edge_detect", {"data_type": "number", "value_rising": "10"}),
+                node("b", "edge_detect", {"data_type": "number", "value_rising": "20"}),
+                node("avg", "avg_multi", {"input_count": 2}),
+            ],
+            "edges": [edge("a", "avg", "out", "in_1"), edge("b", "avg", "out", "in_2")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"a": {"value": False}, "b": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        # a sees a rising edge and sends 10; b repeats its level and sends nothing.
+        outputs = await manager._execute_graph("g", "G", flow, {"a": {"in": True}, "b": {"in": False}})
+
+    assert outputs["a"]["out"] == 10.0
+    assert "out" not in outputs["b"]
