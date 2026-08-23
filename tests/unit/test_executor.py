@@ -2925,6 +2925,29 @@ class TestEdgeDetectNode:
 
         assert exc.execute({"ed": {"in": True}})["ed"]["out"] == "1"
 
+    def test_a_non_finite_configured_number_never_reaches_the_output(self):
+        # The editor rejects "1e309", but LogicGraphImport and direct API
+        # clients bypass that guard, and this value drives an actuator.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": "1e309"})],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute({"ed": {"in": True}})["ed"]
+
+        assert out["out"] == 0.0
+        assert math.isfinite(out["out"])
+
+    def test_an_ordinary_configured_number_is_passed_through(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": "42.5"})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"]["out"] == 42.5
+
     def test_string_data_type_maps_a_missing_configured_value_to_empty_text(self):
         state = {"ed": {"value": False}}
         exc = make_executor(

@@ -1714,7 +1714,14 @@ class GraphExecutor:
                 edge_result: dict[str, Any] = {"rising": rising, "falling": not rising}
                 if action != "trigger":
                     configured = d.get("value_rising", "true") if rising else d.get("value_falling", "false")
-                    edge_result["out"] = self._coerce_typed_value(node, configured, "bool")
+                    edge_value = self._coerce_typed_value(node, configured, "bool")
+                    if isinstance(edge_value, float) and not math.isfinite(edge_value):
+                        # An imported or API-supplied "1e309" coerces to inf.
+                        # The editor rejects it, but that guard does not cover
+                        # LogicGraphImport or a direct API client, and this
+                        # value goes straight to an actuator.
+                        edge_value = 0.0
+                    edge_result["out"] = edge_value
                 return edge_result
 
             case "compare":

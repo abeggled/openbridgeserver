@@ -1291,7 +1291,8 @@
               <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ enumOptionLabel(nodeDef?.type, key, opt) }}</option>
             </select>
             <select v-else-if="typedValueKind(schema) === 'bool'"
-              v-model="localData[key]" class="input text-sm" @change="emitUpdate">
+              :value="normaliseTypedValue(localData[key], 'bool', schema)"
+              class="input text-sm" @change="onBooleanFieldChange(key, $event)">
               <option value="true">{{ $t('logic.nodeConfig.common.boolTrue') }}</option>
               <option value="false">{{ $t('logic.nodeConfig.common.boolFalse') }}</option>
             </select>
@@ -2236,6 +2237,15 @@ const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
 // A directly entered value goes through the same rule as a type switch —
 // otherwise "1e309" is stored as JavaScript Infinity, which serializes to null.
+// Bound through normaliseTypedValue rather than v-model: an imported node may
+// carry a backend-supported spelling such as "False" or "off", which matches
+// neither option value and would leave the dropdown blank. Display is
+// normalized; the stored value is only rewritten once the user picks one.
+function onBooleanFieldChange(key, event) {
+  localData.value[key] = event.target.value
+  emitUpdate()
+}
+
 function onTypedValueChange(key, schema) {
   localData.value[key] = normaliseTypedValue(localData.value[key], typedValueKind(schema), schema)
   emitUpdate()

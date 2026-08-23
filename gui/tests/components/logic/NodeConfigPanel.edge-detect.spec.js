@@ -386,6 +386,26 @@ describe('NodeConfigPanel typed value backend agreement', () => {
     w.unmount()
   })
 
+  it('renders an imported boolean spelling in the dropdown', async () => {
+    // LogicGraphImport accepts "False"/"off" verbatim; neither matches an
+    // option value, so a v-model binding would leave both selects blank.
+    const w = await mountBare({ data_type: 'bool', value_rising: 'False', value_falling: 'off' })
+
+    const boolSelects = selects(w).filter(s => s.findAll('option').some(o => o.attributes('value') === 'true'))
+    expect(boolSelects.map(s => s.element.value)).toEqual(['false', 'false'])
+    w.unmount()
+  })
+
+  it('writes the canonical spelling once the dropdown is used', async () => {
+    const w = await mountBare({ data_type: 'bool', value_rising: 'False', value_falling: 'off' })
+
+    const boolSelects = selects(w).filter(s => s.findAll('option').some(o => o.attributes('value') === 'true'))
+    await boolSelects[0].setValue('true')
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'true' })
+    w.unmount()
+  })
+
   it('rejects numeric notation the backend cannot parse', async () => {
     // Number("0x10") is finite in JavaScript, but Python's float() raises and
     // the executor would silently emit 0.0 while the editor showed "0x10".
