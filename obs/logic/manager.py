@@ -3820,15 +3820,22 @@ class LogicManager:
                         pulses.add((_pn.id, "out"))
             return pulses
 
-        def _origin_pulsed(origin_id: str) -> bool:
+        def _origin_pulsed(origin: str | tuple[str, str]) -> bool:
             """Did this pulse origin actually fire this pass?
 
             Origins are change_filter or edge_detect nodes. A change_filter
-            reports it on "changed"; an Edge Detection node has no single such
-            flag — whichever of its discrete handles fired counts.
+            reports it on "changed"; an Edge Detection node has several
+            discrete handles, and only the one a consumer is actually fed from
+            counts — a falling edge says nothing about the "rising" handle,
+            which stays False and would otherwise be read as a real level.
+            Handle-keyed origin maps therefore carry ``(node id, handle)``
+            pairs; the node-wide maps pass a bare id and ask whether anything
+            on that node fired.
             """
+            origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
             if _node_type_by_id.get(origin_id) == "edge_detect":
-                return bool(_discrete_pulse_handles({origin_id}))
+                pulses = _discrete_pulse_handles({origin_id})
+                return (origin_id, handle) in pulses if handle is not None else bool(pulses)
             return GraphExecutor._to_bool(outputs.get(origin_id, {}).get("changed"))
 
         def _edge_carries_pulse(edge: Any, *, require_fired_change_filter: bool = True) -> bool:
@@ -3963,6 +3970,10 @@ class LogicManager:
             # and a synchronous node can invert it into a truthy value that
             # fires an action node (issue #1090's machinery, generalized).
             relay_origins = {node.id: {node.id} for node in flow.nodes if node.type in _PULSE_ORIGIN_NODE_TYPES}
+            # Parallel to relay_origins, but keyed by (origin, source handle).
+            # relay_origins itself must stay node-keyed: _has_independent_fresh_trigger
+            # subtracts it against fresh_origins, which is node-keyed too.
+            _handle_origins: dict[str, set[tuple[str, str]]] = {}
 
             _pure_fan_in_types = {
                 "and",
@@ -4068,10 +4079,19 @@ class LogicManager:
                     if target_type and target_type.type == "change_filter":
                         downstream_filter_origins.setdefault(pulse_edge.target, set()).update(source_origins)
                     trigger_ports = {port.id for port in target_type.inputs if port.type == "trigger"} if target_type else set()
+                    # Handle-keyed maps remember WHICH handle of the origin fed
+                    # this consumer. Leaving a pulse origin, that is this edge's
+                    # own source handle; further downstream the pair travels
+                    # unchanged, so the root handle survives every hop.
+                    if _node_type_by_id.get(source_id) in _PULSE_ORIGIN_NODE_TYPES:
+                        handle_origins_out = {(source_id, pulse_edge.sourceHandle or "out")}
+                    else:
+                        handle_origins_out = _handle_origins.get(source_id, set())
+                    _handle_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
                     if (pulse_edge.targetHandle or "in") in trigger_ports:
                         trigger_origins.setdefault(pulse_edge.target, set()).update(source_origins)
                         trigger_handle_origins.setdefault(pulse_edge.target, {}).setdefault(pulse_edge.targetHandle or "in", set()).update(
-                            source_origins
+                            handle_origins_out
                         )
                         continue
                     target_type_name = _node_type_by_id.get(pulse_edge.target)
@@ -4095,7 +4115,7 @@ class LogicManager:
                         ("value_sequence", "condition"),
                     } or (target_type_name == "avg_multi" and target_handle.startswith("in_"))
                     if stateful_data_handle:
-                        stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(source_origins)
+                        stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
                         if (
                             target_type
                             and trigger_ports
@@ -4159,7 +4179,7 @@ class LogicManager:
                             target_type_name == "hysteresis" and target_handle == "value"
                         )
                         if stateful_handle:
-                            stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(source_origins)
+                            stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
                         target_origins = relay_origins.setdefault(pulse_edge.target, set())
                         new_origins = source_origins - target_origins
                         if new_origins:

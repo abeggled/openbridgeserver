@@ -430,3 +430,63 @@ async def test_only_the_handles_whose_pulse_is_missing_are_neutralized():
 
     assert outputs["a"]["out"] == 10.0
     assert "out" not in outputs["b"]
+
+
+@pytest.mark.asyncio
+async def test_a_pulse_on_one_handle_does_not_validate_the_other():
+    """A falling edge says nothing about the "rising" handle, which stays
+    False. Asking only whether the source node fired somewhere would accept
+    that placeholder as a real low level for a consumer wired to "rising"."""
+    manager = _manager()
+    target = uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("a", "edge_detect"),
+                node("b", "edge_detect"),
+                node("w", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [edge("a", "b", "rising", "in"), edge("b", "w", "out", "value")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"a": {"value": True}, "b": {"value": True}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await manager._execute_graph("g", "G", flow, {"a": {"in": False}})
+
+    # a genuinely pulses — but on "falling", not on the wired "rising".
+    assert outputs["a"]["falling"] is True
+    assert outputs["a"]["rising"] is False
+    assert manager._hysteresis["g"]["b"] == {"value": True}
+    manager._event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_pulse_on_the_wired_handle_is_delivered():
+    """The other side of the same check: the consumer must still see a real
+    pulse on the handle it is actually wired to."""
+    manager = _manager()
+    target = uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("a", "edge_detect"),
+                node("b", "edge_detect"),
+                node("w", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [edge("a", "b", "rising", "in"), edge("b", "w", "out", "value")],
+        }
+    )
+    manager._graphs["g"] = ("G", True, flow)
+    # b is low, so a real rising pulse on "rising" is an edge for b too.
+    manager._hysteresis["g"] = {"a": {"value": False}, "b": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await manager._execute_graph("g", "G", flow, {"a": {"in": True}})
+
+    assert outputs["a"]["rising"] is True
+    assert manager._hysteresis["g"]["b"] == {"value": True}
+    assert [c.args[0].value for c in manager._event_bus.publish.await_args_list] == [True]
