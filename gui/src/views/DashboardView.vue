@@ -7,16 +7,11 @@
     </div>
 
     <!-- Stat cards -->
-    <div class="flex flex-col gap-2">
-      <div class="flex justify-end">
-        <HelpButton help-id="dashboard-stats" />
-      </div>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" />
-        <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" />
-        <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" />
-        <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
-      </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" help-id="dashboard-stats-datapoints" />
+      <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" help-id="dashboard-stats-adapters" />
+      <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" help-id="dashboard-stats-wsstatus" />
+      <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" help-id="dashboard-stats-server" />
     </div>
 
     <!-- Aktive Warnungen (issue #466) — nur sichtbar bei degraded/fehlerhaften Adaptern -->

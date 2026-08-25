@@ -8,16 +8,25 @@ Die Übersicht ist die Startseite des Admin-GUI und zeigt den aktuellen System-S
 einen Blick — sie aktualisiert sich live über die WebSocket-Verbindung, ein manuelles
 Neuladen ist nicht nötig.
 
-## Kennzahlen {#dashboard-stats}
+## Objekte {#dashboard-stats-datapoints}
 
-Die vier Kacheln oben zeigen:
+Anzahl aller angelegten Objekte (DataPoints) — unabhängig davon, ob sie gerade
+Verknüpfungen (Bindings) zu Adaptern haben oder nicht.
 
-- **Objekte** — Anzahl aller angelegten DataPoints.
-- **Aktive Adapter-Instanzen** — Anzahl der Adapter-Instanzen, die aktuell laufen.
-- **WS-Status** — Status der WebSocket-Verbindung des Admin-GUI zum Server (**Live** /
-  **Offline**). Bei „Offline" aktualisieren sich Live-Werte und Status auf dieser Seite
-  nicht mehr automatisch; ein Neuladen der Seite stellt die Verbindung neu her.
-- **Server** — Grundzustand des Servers (**Online** / **Fehler**) aus dem Health-Check.
+## Aktive Adapter-Instanzen {#dashboard-stats-adapters}
+
+Anzahl der Adapter-Instanzen, die aktuell laufen. Details zu einzelnen Instanzen —
+inklusive Warnungen und Fehlern — finden sich unter **Adapter**.
+
+## WS-Status {#dashboard-stats-wsstatus}
+
+Status der WebSocket-Verbindung des Admin-GUI zum Server (**Live** / **Offline**). Bei
+„Offline" aktualisieren sich Live-Werte und Status auf dieser Seite nicht mehr
+automatisch; ein Neuladen der Seite stellt die Verbindung neu her.
+
+## Server {#dashboard-stats-server}
+
+Grundzustand des Servers (**Online** / **Fehler**) aus dem Health-Check.
 
 ## Aktive Warnungen {#dashboard-warnings}
 

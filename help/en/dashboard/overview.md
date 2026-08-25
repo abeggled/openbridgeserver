@@ -7,16 +7,25 @@ title: Overview
 The Overview is the Admin-GUI's landing page and shows the current system status at a
 glance — it updates live over the WebSocket connection, no manual reload needed.
 
-## Key figures {#dashboard-stats}
+## Data Points {#dashboard-stats-datapoints}
 
-The four tiles at the top show:
+Number of all created data points — regardless of whether they currently have adapter
+bindings or not.
 
-- **Data Points** — number of all created data points.
-- **Active Adapter Instances** — number of adapter instances currently running.
-- **WS Status** — status of the Admin-GUI's WebSocket connection to the server (**Live** /
-  **Offline**). While "Offline", live values and status on this page stop updating
-  automatically; reloading the page re-establishes the connection.
-- **Server** — the server's basic health status (**Online** / **Error**) from its health check.
+## Active Adapter Instances {#dashboard-stats-adapters}
+
+Number of adapter instances currently running. Details on individual instances —
+including warnings and errors — are under **Adapters**.
+
+## WS Status {#dashboard-stats-wsstatus}
+
+Status of the Admin-GUI's WebSocket connection to the server (**Live** / **Offline**).
+While "Offline", live values and status on this page stop updating automatically;
+reloading the page re-establishes the connection.
+
+## Server {#dashboard-stats-server}
+
+The server's basic health status (**Online** / **Error**) from its health check.
 
 ## Active Warnings {#dashboard-warnings}
 

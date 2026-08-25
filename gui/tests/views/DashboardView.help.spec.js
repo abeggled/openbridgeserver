@@ -1,10 +1,13 @@
 /**
  * Integrated help drawer wiring on the Dashboard/"Übersicht" view (#896).
  *
- * The stats row, active-warnings card, adapter-status card, and live-values
- * card each got a HelpButton pointing at a help_id documented in
- * help/dashboard/overview.md. This spec checks the buttons are present with
- * the right help_id and that clicking one opens the real help store.
+ * Each of the four stat cards, the active-warnings card, the adapter-status
+ * card, and the live-values card got a HelpButton pointing at a help_id
+ * documented in help/dashboard/overview.md. This spec checks the buttons are
+ * present with the right help_id and that clicking one opens the real help
+ * store. The stat cards' own HelpButton wiring (the helpId prop on
+ * StatCard.vue) is unit-tested directly in StatCard.spec.js — this file only
+ * checks DashboardView passes the right id to each instance.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -80,9 +83,14 @@ function helpButton(wrapper, helpId) {
 }
 
 describe('DashboardView — help buttons (#896)', () => {
-  it('renders a help button for the stat cards', async () => {
+  it.each([
+    'dashboard-stats-datapoints',
+    'dashboard-stats-adapters',
+    'dashboard-stats-wsstatus',
+    'dashboard-stats-server',
+  ])('renders a help button for the %s stat card', async (helpId) => {
     const wrapper = await mountDashboard()
-    expect(helpButton(wrapper, 'dashboard-stats').exists()).toBe(true)
+    expect(helpButton(wrapper, helpId).exists()).toBe(true)
   })
 
   it('renders a help button for the active-warnings card when it is visible', async () => {
@@ -101,11 +109,14 @@ describe('DashboardView — help buttons (#896)', () => {
   })
 
   it.each([
-    ['dashboard-stats', {}],
-    ['dashboard-adapters', {}],
-    ['dashboard-values', {}],
-  ])('opens the help store with %s when its button is clicked', async (helpId, opts) => {
-    const wrapper = await mountDashboard(opts)
+    'dashboard-stats-datapoints',
+    'dashboard-stats-adapters',
+    'dashboard-stats-wsstatus',
+    'dashboard-stats-server',
+    'dashboard-adapters',
+    'dashboard-values',
+  ])('opens the help store with %s when its button is clicked', async (helpId) => {
+    const wrapper = await mountDashboard()
     const { useHelpStore } = await import('@/stores/help')
     const helpStore = useHelpStore()
 
