@@ -375,3 +375,76 @@ async def test_bare_help_path_returns_json_404_when_dist_missing(no_help_dist_cl
     resp = await no_help_dist_client.get("/help")
     assert resp.status_code == 404
     assert resp.json() == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
+async def test_help_starts_working_without_a_restart_once_help_dist_appears(tmp_path):
+    """help_dist/ is a separate npm build with no guaranteed ordering against
+    backend startup (issue #1179 — a PyCharm "before launch" step for this
+    turned out not to be reliably awaited). /help must recover on its own, on
+    the very next request, the moment the directory appears — not require a
+    fresh `create_app()` / process restart."""
+    from obs.config import (
+        DatabaseSettings,
+        MosquittoSettings,
+        MqttSettings,
+        SecuritySettings,
+        Settings,
+        get_settings,
+        override_settings,
+    )
+    from obs.main import create_app
+
+    saved_settings = get_settings()
+    override_settings(
+        Settings(
+            database=DatabaseSettings(path=str(tmp_path / "test.db")),
+            mqtt=MqttSettings(host="localhost", port=11883, username=None, password=None),
+            security=SecuritySettings(
+                jwt_secret="test-secret-32-chars-xxxxxxxxxxxx",
+                jwt_expire_minutes=60,
+                url_target_allowlist_path=str(tmp_path / "allowlist.yaml"),
+            ),
+            mosquitto=MosquittoSettings(
+                passwd_file=str(tmp_path / "passwd"),
+                reload_pid=None,
+                reload_command=None,
+                service_username="obs",
+                service_password="test",
+            ),
+        )
+    )
+
+    help_dist = _PROJECT_ROOT / "help_dist"
+    assert not help_dist.exists(), "help_dist/ must not exist for this test to be meaningful"
+
+    try:
+        app = create_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            before = await client.get("/help/index.html")
+            assert before.status_code == 404
+            assert before.json() == {"detail": "Not found"}
+
+            help_dist.mkdir()
+            (help_dist / "index.html").write_bytes(b"<html><body>Hilfe Start</body></html>")
+            (help_dist / "404.html").write_bytes(b"<html><body>Nicht gefunden</body></html>")
+
+            after = await client.get("/help/index.html")
+            assert after.status_code == 200
+            assert "Hilfe Start" in after.text
+    finally:
+        for name in ("index.html", "404.html"):
+            (help_dist / name).unlink(missing_ok=True)
+        if help_dist.exists():
+            help_dist.rmdir()
+        override_settings(saved_settings)
+
+
+@pytest.mark.asyncio
+async def test_bare_help_path_redirects_when_dist_exists(help_dist_client):
+    """Mirrors the missing-dist bare-path test above, for the existing-dist
+    case: the bare "/help" still redirects to "/help/" (unchanged from before
+    the lazy-mount rewrite), it just no longer masks a missing help_dist/."""
+    resp = await help_dist_client.get("/help", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/help/"
