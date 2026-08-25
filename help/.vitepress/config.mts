@@ -44,6 +44,10 @@ export default defineConfig({
             items: [{ text: 'Übersicht', link: '/' }],
           },
           {
+            text: 'Dashboard',
+            items: [{ text: 'Übersicht', link: '/dashboard/overview' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -79,6 +83,10 @@ export default defineConfig({
           {
             text: 'Getting Started',
             items: [{ text: 'Overview', link: '/en/' }],
+          },
+          {
+            text: 'Dashboard',
+            items: [{ text: 'Overview', link: '/en/dashboard/overview' }],
           },
           {
             text: 'Settings',
