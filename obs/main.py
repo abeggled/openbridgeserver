@@ -394,6 +394,17 @@ def create_app() -> FastAPI:
     _help_dist = Path(__file__).parent.parent / "help_dist"
     if _help_dist.is_dir():
         app.mount("/help", StaticFiles(directory=_help_dist, html=True), name="help")
+    else:
+        # Common in a bare source checkout run via `python -m obs` — help/ is
+        # a separate VitePress project (`cd help && npm run build`) not built
+        # by any Python-side step. Without this warning, the Admin-GUI's help
+        # drawer just silently shows its generic "not available" fallback for
+        # every single help button with no indication why (issue feedback).
+        logger.warning(
+            "help_dist/ not found at %s — the integrated help system will be unavailable "
+            "until it is built (cd help && npm run build) or the packaged app bundle is used.",
+            _help_dist,
+        )
 
     # ── 404-Handler für alles andere ──────────────────────────────────────
     @app.exception_handler(404)

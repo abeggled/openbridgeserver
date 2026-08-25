@@ -177,4 +177,22 @@ describe('useHelpStore', () => {
 
     expect(store.currentUrl).toBe(null)
   })
+
+  it('reservedRight is 0px while closed, regardless of a persisted drawerWidth', async () => {
+    const { useHelpStore } = await import('@/stores/help')
+    const store = useHelpStore()
+    store.setDrawerWidth(500)
+
+    expect(store.reservedRight).toBe('0px')
+  })
+
+  it('reservedRight mirrors drawerWidth (clamped to 90vw) once open — shared by App.vue and every full-viewport popup so they never drift out of sync with the drawer', async () => {
+    helpApiMock.index.mockResolvedValue({ data: SAMPLE_INDEX })
+    const { useHelpStore } = await import('@/stores/help')
+    const store = useHelpStore()
+    store.open('datapoints-overview')
+    store.setDrawerWidth(420)
+
+    expect(store.reservedRight).toBe('min(420px, 90vw)')
+  })
 })

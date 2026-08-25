@@ -24,6 +24,15 @@ export const useHelpStore = defineStore('help', () => {
     drawerWidth.value = w
   }
 
+  // Shared with App.vue (main-content margin) and every full-viewport overlay
+  // (Modal.vue, HierarchyManager.vue's bespoke dialogs): the space the drawer
+  // occupies on the right, so popups center over the remaining OBS area
+  // instead of the drawer becoming unreadable under a dialog's backdrop
+  // (issue feedback). `min(...)` mirrors HelpDrawer.vue's own `maxWidth: '90vw'`
+  // rather than clamping drawerWidth in JS, so it stays correct across later
+  // viewport resizes with no resize-event listener needed.
+  const reservedRight = computed(() => (isOpen.value ? `min(${drawerWidth.value}px, 90vw)` : '0px'))
+
   function loadIndex() {
     if (helpIndex.value || loadPromise) return loadPromise
     loadPromise = helpApi.index()
@@ -58,5 +67,17 @@ export const useHelpStore = defineStore('help', () => {
     isOpen.value = false
   }
 
-  return { isOpen, currentHelpId, helpIndex, loadError, drawerWidth, currentUrl, loadIndex, open, close, setDrawerWidth }
+  return {
+    isOpen,
+    currentHelpId,
+    helpIndex,
+    loadError,
+    drawerWidth,
+    currentUrl,
+    reservedRight,
+    loadIndex,
+    open,
+    close,
+    setDrawerWidth,
+  }
 })

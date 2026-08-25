@@ -6,7 +6,8 @@
     >
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center p-4"
+        :style="{ right: help.reservedRight }"
         @mousedown.self="onBackdropClick"
       >
         <!-- Backdrop -->
@@ -56,6 +57,9 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useHelpStore } from '@/stores/help'
+
+const help = useHelpStore()
 const props = defineProps({
   modelValue: Boolean,
   title:      String,
