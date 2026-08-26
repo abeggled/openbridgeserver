@@ -126,7 +126,24 @@
       "persistValueHint": "immediately available after restart",
       "recordHistory": "History active",
       "recordHistoryHint": "store values in history DB",
-      "saveError": "Error saving"
+      "externalWriteEnabled": "Allow external write",
+      "externalWriteEnabledHint": "any MQTT client that can reach the broker can then set this value",
+      "saveError": "Error saving",
+      "unitCategories": {
+        "temperature": "Temperature",
+        "humidityAirQuality": "Humidity & air quality",
+        "pressure": "Pressure",
+        "electricity": "Electricity",
+        "light": "Light",
+        "speedAcceleration": "Speed & acceleration",
+        "angle": "Angle",
+        "volumeFlow": "Volume & flow",
+        "lengthArea": "Length & area",
+        "mass": "Mass",
+        "time": "Time",
+        "radiation": "Radiation",
+        "other": "Other"
+      }
     },
     "delete": {
       "confirm": "Really delete data point?",
@@ -151,7 +168,7 @@
     "duplicate": {
       "action": "Duplicate",
       "title": "Duplicate data point",
-      "hint": "All properties and adapter bindings are copied. Current values and history are not copied.",
+      "hint": "All properties and adapter bindings are copied, except central-plant classification and external write access — both always start off on the copy. Current values and history are not copied.",
       "defaultName": "Copy of {name}",
       "saving": "Duplicating …",
       "error": "The data point could not be duplicated."

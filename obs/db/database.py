@@ -686,6 +686,13 @@ INSERT OR IGNORE INTO app_settings (key, value) VALUES ('currency', 'auto');
 """
 
 
+async def _migration_v52_external_write(conn: aiosqlite.Connection) -> None:
+    async with conn.execute("PRAGMA table_info(datapoints)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+    if columns and "external_write_enabled" not in columns:
+        await conn.execute("ALTER TABLE datapoints ADD COLUMN external_write_enabled INTEGER NOT NULL DEFAULT 0")
+
+
 _MIGRATION_V38 = """
 CREATE TABLE IF NOT EXISTS hierarchy_device_links (
     id         TEXT PRIMARY KEY,
@@ -1205,6 +1212,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (49, _migration_v47),
     (50, _migration_v50),
     (51, _MIGRATION_V51_REGIONAL_SETTINGS),
+    (52, _migration_v52_external_write),
 ]
 
 

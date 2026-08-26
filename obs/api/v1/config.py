@@ -61,6 +61,7 @@ class ExportedDataPoint(BaseModel):
     tags: list[str]
     mqtt_alias: str | None
     control_class: Literal["room_local", "central_plant"] = "room_local"
+    external_write_enabled: bool = False
 
 
 class ExportedBinding(BaseModel):
@@ -355,6 +356,7 @@ async def export_config(
             tags=dp.tags,
             mqtt_alias=dp.mqtt_alias,
             control_class=getattr(dp, "control_class", "room_local"),
+            external_write_enabled=getattr(dp, "external_write_enabled", False),
         )
         for dp in all_dps
     ]
@@ -775,9 +777,19 @@ async def import_config(
     now = datetime.now(UTC).isoformat()
 
     # --- DataPoints ---
+    # external_write_enabled is deliberately imported as False here, regardless
+    # of what the document requests: this loop runs before bindings are
+    # imported below, so checking binding topology at this point would miss
+    # bindings the same document is about to create — a datapoint could then
+    # end up with both an enabled binding and the opt-in flag, silently
+    # violating the invariant the PATCH route enforces (Codex review). Actually
+    # enabling a requested opt-in is deferred to the post-bindings pass further
+    # down, once the full, final topology is known.
+    requested_external_write: dict[uuid.UUID, bool] = {}
     for dp_data in body.datapoints:
         try:
             dp_id = uuid.UUID(dp_data.id)
+            requested_external_write[dp_id] = bool(dp_data.external_write_enabled)
             existing = reg.get(dp_id)
             if existing:
                 from obs.models.datapoint import DataPointUpdate
@@ -791,6 +803,7 @@ async def import_config(
                         tags=dp_data.tags,
                         mqtt_alias=dp_data.mqtt_alias,
                         control_class=dp_data.control_class,
+                        external_write_enabled=False,
                     ),
                 )
                 result.datapoints_updated += 1
@@ -803,11 +816,12 @@ async def import_config(
                     tags=dp_data.tags,
                     mqtt_alias=dp_data.mqtt_alias,
                     control_class=dp_data.control_class,
+                    external_write_enabled=False,
                 )
                 await db.execute_and_commit(
                     """INSERT OR IGNORE INTO datapoints
-                       (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, control_class, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                       (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, control_class, external_write_enabled, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         str(dp.id),
                         dp.name,
@@ -817,6 +831,7 @@ async def import_config(
                         dp.mqtt_topic,
                         dp.mqtt_alias,
                         dp.control_class,
+                        int(dp.external_write_enabled),
                         now,
                         now,
                     ),
@@ -956,6 +971,27 @@ async def import_config(
         except Exception as exc:
             logger.exception(f"Binding {b_data.id} failed")
             result.errors.append(f"Binding {b_data.id}: {exc}")
+
+    # --- External write opt-in (post-bindings) ---
+    # Deferred from the DataPoints pass above so the binding topology this
+    # checks against already includes any bindings the same import document
+    # just created — matches the invariant the PATCH route enforces (a
+    # datapoint may only opt in while genuinely bindingless).
+    if any(requested_external_write.values()):
+        from obs.api.v1.datapoints import _has_write_semantic_binding
+        from obs.models.datapoint import DataPointUpdate
+
+        for dp_id, requested in requested_external_write.items():
+            if not requested:
+                continue
+            try:
+                if await _has_write_semantic_binding(db, dp_id):
+                    result.errors.append(f"DataPoint {dp_id}: external_write_enabled ignored — datapoint has an adapter binding")
+                    continue
+                await reg.update(dp_id, DataPointUpdate(external_write_enabled=True))
+            except Exception as exc:
+                logger.exception(f"DataPoint {dp_id} external_write_enabled opt-in failed")
+                result.errors.append(f"DataPoint {dp_id}: external_write_enabled opt-in failed: {exc}")
 
     # --- KNX Group Addresses ---
     for ga in body.knx_group_addresses:
