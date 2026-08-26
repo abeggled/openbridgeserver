@@ -45,6 +45,10 @@ async function mountPanel(data = {}) {
 }
 
 const selects = w => w.findAll('select')
+// The panel header holds the editable block name (issue #1157), which is a
+// text input too — keep it out of assertions about the value fields.
+const valueTextInputs = w =>
+  w.findAll('input[type="text"]:not([data-testid="node-label-input"])')
 
 // The panel runs against the real i18n instance (locale 'de').
 describe('NodeConfigPanel edge_detect enum labels', () => {
@@ -392,7 +396,9 @@ describe('NodeConfigPanel typed value backend agreement', () => {
 
     const boolSelects = selects(w).filter(s => s.findAll('option').some(o => o.attributes('value') === 'true'))
     expect(boolSelects).toHaveLength(2)
-    expect(w.findAll('input[type="text"]')).toHaveLength(0)
+    // The header carries the editable block name (issue #1157); only the value
+    // fields matter here — none of them may fall back to free text.
+    expect(valueTextInputs(w)).toHaveLength(0)
     w.unmount()
   })
 
