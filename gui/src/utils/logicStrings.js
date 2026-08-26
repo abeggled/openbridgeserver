@@ -16,6 +16,13 @@
 // JavaScript would — a plain "5.0", which has no JavaScript literal and reads
 // back as int 5, or a large one such as "1e+16" or "1000000000000000000000",
 // where the two disagree on digits versus exponent.
+//
+// Second known limit — JavaScript orders integer-like object keys numerically
+// as an intrinsic property of the object, so JSON.parse has already discarded
+// the insertion order that Python preserves: {"10":..,"2":..} enumerates as
+// 2, 10 here and as 10, 2 there, whichever way it is enumerated. Recovering it
+// would mean parsing graph payloads into order-preserving Maps across the API
+// layer, which is out of proportion to numeric-looking keys in an edge value.
 
 // Python's float repr switches to scientific notation outside 1e-4 <= |v| <
 // 1e16 — a wider fixed range than JavaScript's — pads the exponent to two
