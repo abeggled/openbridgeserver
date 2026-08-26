@@ -18,8 +18,8 @@ respective adapter instance.
 
 - **Search field** — searches name, UUID, and configuration.
 - **Type** — restricts to a single data type (e.g. FLOAT, BOOL, STRING).
-- **Adapter** — multi-select; shows only data points bound to the selected adapter
-  instances.
+- **Adapter** — multi-select by adapter **type** (e.g. KNX, Modbus); shows data points bound
+  to any instance of the selected types.
 - **Tag** — multi-select over the tags currently in use across the system.
 - **Quality** — filters by the last reported quality status (**Good** / **Uncertain** /
   **Bad**).

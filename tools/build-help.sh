@@ -9,4 +9,10 @@ set -e
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 cd "$(dirname "$0")/../help"
+# help/ has its own package.json, separate from gui/'s — a checkout that only
+# ran the documented `cd gui && npm install` one-time step (help/ isn't
+# mentioned there) fails here with "vitepress: not found" otherwise, breaking
+# this script's use as a PyCharm "before launch" step on a fresh clone
+# (Codex review on PR #1180).
+[ -x node_modules/.bin/vitepress ] || npm install
 exec npm run build

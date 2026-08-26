@@ -1,5 +1,5 @@
 <template>
-  <div class="card p-4 flex items-center gap-4 relative">
+  <div class="card pt-4 pb-4 pl-4 flex items-center gap-4 relative" :class="helpId ? 'pr-10' : 'pr-4'">
     <div :class="['w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0', bgClass]">
       {{ icon }}
     </div>

@@ -188,7 +188,7 @@ describe('Modal — leaves room for an open help drawer (issue feedback: a dialo
     help.helpIndex = {} // avoid open()'s loadIndex() hitting the real (unmocked) API client
     help.open('some-topic')
     help.setDrawerWidth(420)
-    expect(help.reservedRight).toBe('min(420px, 90vw)')
+    expect(help.reservedRight).toBe('min(420px, 90vw, max(0px, 100vw - 300px))')
 
     mountModal()
     await nextTick()

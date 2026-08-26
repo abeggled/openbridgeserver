@@ -448,3 +448,28 @@ async def test_bare_help_path_redirects_when_dist_exists(help_dist_client):
     resp = await help_dist_client.get("/help", follow_redirects=False)
     assert resp.status_code == 307
     assert resp.headers["location"] == "/help/"
+
+
+@pytest.mark.asyncio
+async def test_bare_help_path_head_request_redirects_like_get(help_dist_client):
+    """A HEAD request must be answered the same way as GET (a 307 to
+    "/help/"), not the bare 405 an @app.get()-only route would give — an
+    availability probe using HEAD (Codex review on PR #1180)."""
+    resp = await help_dist_client.head("/help", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/help/"
+
+
+@pytest.mark.asyncio
+async def test_help_static_mount_is_reused_across_requests(help_dist_client):
+    """_LazyHelpStatic caches its inner StaticFiles instance after the first
+    request through it (self._static). A second request through the same
+    app/client must be served from that cached instance, not just the
+    construct-it-for-the-first-time path (Codex review on PR #1180)."""
+    first = await help_dist_client.get("/help/")
+    assert first.status_code == 200
+    assert "Hilfe Start" in first.text
+
+    second = await help_dist_client.get("/help/")
+    assert second.status_code == 200
+    assert "Hilfe Start" in second.text

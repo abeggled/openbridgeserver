@@ -18,8 +18,8 @@ zunächst bindungsloses Objekt an — Verknüpfungen (Bindings) zu Adaptern werd
 
 - **Suchfeld** — durchsucht Name, UUID und Konfiguration.
 - **Typ** — schränkt auf einen Datentyp ein (z. B. FLOAT, BOOL, STRING).
-- **Adapter** — Mehrfachauswahl; zeigt nur Objekte mit Verknüpfung zu den gewählten
-  Adapter-Instanzen.
+- **Adapter** — Mehrfachauswahl nach Adapter-**Typ** (z. B. KNX, Modbus); zeigt Objekte mit
+  einer Verknüpfung zu einer beliebigen Instanz der gewählten Typen.
 - **Tag** — Mehrfachauswahl über die im System vorkommenden Tags.
 - **Qualität** — filtert nach dem zuletzt gemeldeten Qualitätsstatus (**Gut** / **Unbekannt** /
   **Schlecht**).

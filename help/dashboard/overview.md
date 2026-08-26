@@ -5,8 +5,9 @@ title: Übersicht
 # Übersicht
 
 Die Übersicht ist die Startseite des Admin-GUI und zeigt den aktuellen System-Status auf
-einen Blick — sie aktualisiert sich live über die WebSocket-Verbindung, ein manuelles
-Neuladen ist nicht nötig.
+einen Blick. Die Live-Werte und der WS-Status aktualisieren sich live über die
+WebSocket-Verbindung; die übrigen Kennzahlen (Objekte, Aktive Adapter-Instanzen, Server)
+werden beim Öffnen der Seite geladen und erst durch ein Neuladen aktualisiert.
 
 ## Objekte {#dashboard-stats-datapoints}
 
@@ -15,8 +16,9 @@ Verknüpfungen (Bindings) zu Adaptern haben oder nicht.
 
 ## Aktive Adapter-Instanzen {#dashboard-stats-adapters}
 
-Anzahl der Adapter-Instanzen, die aktuell laufen. Details zu einzelnen Instanzen —
-inklusive Warnungen und Fehlern — finden sich unter **Adapter**.
+Anzahl der Adapter-Instanzen, die aktuell verbunden sind — eine laufende, aber (noch)
+nicht verbundene Instanz (z. B. während eines Reconnects) zählt hier nicht mit. Details zu
+einzelnen Instanzen — inklusive Warnungen und Fehlern — finden sich unter **Adapter**.
 
 ## WS-Status {#dashboard-stats-wsstatus}
 

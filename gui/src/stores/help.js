@@ -24,14 +24,27 @@ export const useHelpStore = defineStore('help', () => {
     drawerWidth.value = w
   }
 
+  // The narrowest a full-viewport overlay (Modal.vue's dialog, or App.vue's
+  // main content) may be squeezed to by the reservation below — without this
+  // floor, a modal on a narrow/phone-sized viewport could be reserved down to
+  // a few unusable pixels beside a wide drawer (Codex review on PR #1180).
+  const MIN_REMAINING_WIDTH_PX = 300
+
   // Shared with App.vue (main-content margin) and every full-viewport overlay
   // (Modal.vue, HierarchyManager.vue's bespoke dialogs): the space the drawer
   // occupies on the right, so popups center over the remaining OBS area
   // instead of the drawer becoming unreadable under a dialog's backdrop
   // (issue feedback). `min(...)` mirrors HelpDrawer.vue's own `maxWidth: '90vw'`
   // rather than clamping drawerWidth in JS, so it stays correct across later
-  // viewport resizes with no resize-event listener needed.
-  const reservedRight = computed(() => (isOpen.value ? `min(${drawerWidth.value}px, 90vw)` : '0px'))
+  // viewport resizes with no resize-event listener needed — the third term
+  // caps the reservation so at least MIN_REMAINING_WIDTH_PX always remains
+  // (falling back to 0, i.e. the overlay covers the drawer, once the viewport
+  // itself is narrower than that).
+  const reservedRight = computed(() => (
+    isOpen.value
+      ? `min(${drawerWidth.value}px, 90vw, max(0px, 100vw - ${MIN_REMAINING_WIDTH_PX}px))`
+      : '0px'
+  ))
 
   function loadIndex() {
     if (helpIndex.value || loadPromise) return loadPromise

@@ -420,14 +420,18 @@ def create_app() -> FastAPI:
                 self._static = StaticFiles(directory=self._directory, html=True, check_dir=False)
             await self._static(scope, receive, send)
 
-    @app.get("/help", include_in_schema=False)
+    @app.api_route("/help", methods=["GET", "HEAD"], include_in_schema=False)
     async def help_bare_path():
         # A bare "/help" (no trailing slash) is a distinct request from
         # "/help/..." — Starlette's Mount below redirects it to "/help/"
         # before ever reaching _LazyHelpStatic, which would mask a missing
         # help_dist/ behind a 307 instead of the same JSON 404 every other
         # /help/... path gets. Registered before the mount so this exact
-        # route wins over Mount's own redirect for this one path.
+        # route wins over Mount's own redirect for this one path. Must accept
+        # HEAD explicitly — unlike a plain Mount, an @app.get()-only route
+        # does not also answer HEAD, so an availability probe using HEAD
+        # would otherwise get a bare 405 instead of following the redirect
+        # (Codex review on PR #1180).
         if not _help_dist.is_dir():
             return JSONResponse({"detail": "Not found"}, status_code=404)
         return RedirectResponse(url="/help/")
