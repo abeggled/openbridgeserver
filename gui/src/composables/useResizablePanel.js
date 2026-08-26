@@ -8,7 +8,7 @@ import { ref, onBeforeUnmount } from 'vue'
 export function useResizablePanel({ storageKey, defaultWidth = 288, min = 240, max = 640 } = {}) {
   const stored = storageKey ? Number(localStorage.getItem(storageKey)) : NaN
   const clamp = (w) => Math.min(max, Math.max(min, w))
-  const width = ref(Number.isFinite(stored) && stored > 0 ? clamp(stored) : defaultWidth)
+  const width = ref(clamp(Number.isFinite(stored) && stored > 0 ? stored : defaultWidth))
   const isResizing = ref(false)
 
   let startX = 0

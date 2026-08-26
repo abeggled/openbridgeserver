@@ -1,7 +1,7 @@
-"""Tests for Visu SPA static file routes (favicon.svg, manifest.webmanifest).
+"""Tests for Visu SPA and Help site static file routes.
 
-These routes are only registered when frontend_dist/ exists on disk at
-create_app() time, so the fixture creates a minimal directory temporarily.
+These routes are only registered when frontend_dist/ / help_dist/ exist on disk
+at create_app() time, so the fixtures create a minimal directory temporarily.
 No MQTT/DB startup is needed — static file routes have no lifespan dependency.
 """
 
@@ -154,6 +154,127 @@ async def gui_dist_client(tmp_path):
         override_settings(saved_settings)
 
 
+@pytest_asyncio.fixture
+async def help_dist_client(tmp_path):
+    """AsyncClient wired to a fresh app instance that has help_dist in place."""
+    from obs.config import (
+        DatabaseSettings,
+        MosquittoSettings,
+        MqttSettings,
+        SecuritySettings,
+        Settings,
+        get_settings,
+        override_settings,
+    )
+    from obs.main import create_app
+
+    saved_settings = get_settings()
+    override_settings(
+        Settings(
+            database=DatabaseSettings(path=str(tmp_path / "test.db")),
+            mqtt=MqttSettings(host="localhost", port=11883, username=None, password=None),
+            security=SecuritySettings(
+                jwt_secret="test-secret-32-chars-xxxxxxxxxxxx",
+                jwt_expire_minutes=60,
+                url_target_allowlist_path=str(tmp_path / "allowlist.yaml"),
+            ),
+            mosquitto=MosquittoSettings(
+                passwd_file=str(tmp_path / "passwd"),
+                reload_pid=None,
+                reload_command=None,
+                service_username="obs",
+                service_password="test",
+            ),
+        )
+    )
+
+    help_dist = _PROJECT_ROOT / "help_dist"
+    en_dir = help_dist / "en"
+    created_dir = not help_dist.exists()
+    created_en_dir = not en_dir.exists()
+    created_files: list[Path] = []
+
+    try:
+        help_dist.mkdir(exist_ok=True)
+        for name, content in [
+            ("index.html", b"<html><body>Hilfe Start</body></html>"),
+            ("404.html", b"<html><body>Nicht gefunden</body></html>"),
+        ]:
+            target = help_dist / name
+            if not target.exists():
+                target.write_bytes(content)
+                created_files.append(target)
+
+        en_dir.mkdir(exist_ok=True)
+        en_index = en_dir / "index.html"
+        if not en_index.exists():
+            en_index.write_bytes(b"<html><body>Help Start</body></html>")
+            created_files.append(en_index)
+
+        app = create_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+
+    finally:
+        for f in created_files:
+            f.unlink(missing_ok=True)
+        if created_en_dir:
+            try:
+                en_dir.rmdir()
+            except OSError:
+                pass
+        if created_dir:
+            try:
+                help_dist.rmdir()
+            except OSError:
+                pass
+        override_settings(saved_settings)
+
+
+@pytest_asyncio.fixture
+async def no_help_dist_client(tmp_path):
+    """AsyncClient wired to a fresh app instance where help_dist does NOT exist."""
+    from obs.config import (
+        DatabaseSettings,
+        MosquittoSettings,
+        MqttSettings,
+        SecuritySettings,
+        Settings,
+        get_settings,
+        override_settings,
+    )
+    from obs.main import create_app
+
+    saved_settings = get_settings()
+    override_settings(
+        Settings(
+            database=DatabaseSettings(path=str(tmp_path / "test.db")),
+            mqtt=MqttSettings(host="localhost", port=11883, username=None, password=None),
+            security=SecuritySettings(
+                jwt_secret="test-secret-32-chars-xxxxxxxxxxxx",
+                jwt_expire_minutes=60,
+                url_target_allowlist_path=str(tmp_path / "allowlist.yaml"),
+            ),
+            mosquitto=MosquittoSettings(
+                passwd_file=str(tmp_path / "passwd"),
+                reload_pid=None,
+                reload_command=None,
+                service_username="obs",
+                service_password="test",
+            ),
+        )
+    )
+
+    help_dist = _PROJECT_ROOT / "help_dist"
+    assert not help_dist.exists(), "help_dist/ must not exist for this fixture to be meaningful"
+
+    app = create_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+    override_settings(saved_settings)
+
+
 @pytest.mark.asyncio
 async def test_visu_favicon_returns_svg(visu_dist_client):
     resp = await visu_dist_client.get("/visu/favicon.svg")
@@ -208,3 +329,49 @@ async def test_obs_logo_dark_returns_svg(gui_dist_client):
     resp = await gui_dist_client.get("/obs_logo_dark.svg")
     assert resp.status_code == 200
     assert "svg" in resp.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_help_root_index_served(help_dist_client):
+    resp = await help_dist_client.get("/help/")
+    assert resp.status_code == 200
+    assert "Hilfe Start" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_help_en_locale_index_served(help_dist_client):
+    resp = await help_dist_client.get("/help/en/")
+    assert resp.status_code == 200
+    assert "Help Start" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_help_unknown_path_returns_help_404_page(help_dist_client):
+    resp = await help_dist_client.get("/help/does-not-exist")
+    assert resp.status_code == 404
+    assert "Nicht gefunden" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_help_unknown_path_does_not_fall_back_to_admin_gui(help_dist_client):
+    """A missing /help/... path must not silently render the Admin-GUI shell."""
+    resp = await help_dist_client.get("/help/does-not-exist")
+    assert "Hilfe Start" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_help_path_returns_json_404_when_dist_missing(no_help_dist_client):
+    """Without a built help_dist/, /help/... must not fall back to the Admin-GUI shell either."""
+    resp = await no_help_dist_client.get("/help/anything")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
+async def test_bare_help_path_returns_json_404_when_dist_missing(no_help_dist_client):
+    """The bare "/help" (no trailing slash/path) is a distinct request path from
+    "/help/..." — without this exact-match guard it fell through to the Admin-GUI
+    SPA fallback instead of the same JSON 404 every other /help/... path gets."""
+    resp = await no_help_dist_client.get("/help")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Not found"}

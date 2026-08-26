@@ -28,7 +28,10 @@
 
       <!-- Zeitzone -->
       <div class="card" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.title') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.title') }}</h3>
+          <HelpButton help-id="settings-general" />
+        </div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
             <label class="label">{{ $t('settings.general.timezone') }}</label>
@@ -105,6 +108,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.appearance') }}</h3>
+          <HelpButton help-id="settings-appearance" />
         </div>
         <div class="card-body flex flex-col gap-3">
           <p class="text-sm text-slate-500">{{ $t('settings.general.appearanceHint') }}</p>
@@ -133,7 +137,10 @@
 
     <!-- ── Passwort ── -->
     <div v-if="activeTab === 'password'" class="card max-w-md" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
-      <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.password.title') }}</h3></div>
+      <div class="card-header">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.password.title') }}</h3>
+        <HelpButton help-id="settings-password" />
+      </div>
       <div class="card-body">
         <form @submit.prevent="changePassword" class="flex flex-col gap-4">
           <div class="form-group">
@@ -161,6 +168,7 @@
     <div v-if="activeTab === 'users' && (auth.isAdmin || isDemo)" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
         <span class="flex-1 text-sm text-slate-400">{{ $t('settings.users.count', { n: users.length }) }}</span>
+        <HelpButton help-id="settings-users" />
         <button @click="openCreateUser" class="btn-primary btn-sm">{{ $t('settings.users.addButton') }}</button>
       </div>
       <div class="card">
@@ -254,6 +262,7 @@
     <div v-if="activeTab === 'apikeys'" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
         <span class="flex-1 text-sm text-slate-400">{{ $t('settings.apikeys.count', { n: apiKeys.length }) }}</span>
+        <HelpButton help-id="settings-apikeys" />
         <button @click="createApiKey" class="btn-primary btn-sm">{{ $t('settings.apikeys.addButton') }}</button>
       </div>
       <div class="card overflow-hidden mb-4">
@@ -286,7 +295,10 @@
     <!-- ── Sicherheit ── -->
     <div v-if="activeTab === 'security' && (auth.isAdmin || isDemo)" class="flex flex-col gap-4 max-w-3xl" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.title') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.title') }}</h3>
+          <HelpButton help-id="settings-security" />
+        </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.security.description') }}</p>
           <div class="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-700 dark:text-amber-300">{{ $t('settings.security.warning') }}</div>
@@ -297,7 +309,10 @@
       </div>
 
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.checkTitle') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.checkTitle') }}</h3>
+          <HelpButton help-id="settings-security-check" />
+        </div>
         <div class="card-body flex flex-col gap-3">
           <div class="grid gap-3 md:grid-cols-[1fr_auto]">
             <input v-model="urlTargetCheckInput" class="input text-sm font-mono" placeholder="http://10.38.113.23/api/v1/status" @keydown.enter.prevent="checkUrlTarget" data-testid="security-url-target-check-input" />
@@ -324,7 +339,10 @@
       <div class="card overflow-hidden">
         <div class="card-header flex items-center justify-between">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.allowlistTitle') }}</h3>
-          <button class="btn-secondary btn-sm" @click="loadUrlTargets">{{ $t('settings.security.reload') }}</button>
+          <div class="flex items-center gap-1">
+            <HelpButton help-id="settings-security-entries" />
+            <button class="btn-secondary btn-sm" @click="loadUrlTargets">{{ $t('settings.security.reload') }}</button>
+          </div>
         </div>
         <div class="card-body flex flex-col gap-4">
           <form class="grid gap-3 md:grid-cols-[1fr_1fr_auto]" @submit.prevent="addManualUrlTarget">
@@ -358,6 +376,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.debugSettingsTitle') }}</h3>
+          <HelpButton help-id="settings-support-debug" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.support.debugDescription') }}</p>
@@ -391,6 +410,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.packageTitle') }}</h3>
+          <HelpButton help-id="settings-support-package" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.support.description') }}</p>
@@ -416,6 +436,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.viewerTitle') }}</h3>
+          <HelpButton help-id="settings-support-viewer" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.support.viewerDescription') }}</p>
@@ -606,7 +627,10 @@
 
       <!-- Sicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.exportTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.exportTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-config" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.exportDesc') }}</p>
         <button @click="doExport" class="btn-secondary">{{ $t('settings.importexport.exportButton') }}</button>
       </div>
@@ -625,7 +649,10 @@
 
       <!-- Datenbanksicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.dbExportTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.dbExportTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-db" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.dbExportDesc') }}</p>
         <button @click="doExportDb" class="btn-secondary">{{ $t('settings.importexport.dbExportButton') }}</button>
       </div>
@@ -653,7 +680,10 @@
 
       <!-- Meldungsarchiv-Datenbanksicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.messageArchiveDbExportTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.messageArchiveDbExportTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-messagearchive" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.messageArchiveDbExportDesc') }}</p>
         <button @click="doExportMessageArchiveDb" class="btn-secondary">{{ $t('settings.importexport.messageArchiveDbExportButton') }}</button>
       </div>
@@ -679,7 +709,10 @@
 
       <!-- Autobackup -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-autobackup" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.autobackupDesc') }}</p>
         <div class="flex flex-col gap-3">
           <label class="flex items-center gap-2 cursor-pointer select-none">
@@ -745,9 +778,12 @@
 
       <!-- KNX Projekt Import -->
       <div id="knx-project-import" class="card p-5 flex flex-col gap-3">
-        <div class="flex items-center gap-2">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
-          <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
+            <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
+          </div>
+          <HelpButton help-id="settings-importexport-knx" />
         </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.knxDesc') }}</p>
         <div class="flex flex-col gap-2">
@@ -854,6 +890,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.history.dbTitle') }}</h3>
+          <HelpButton help-id="settings-history-db" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.history.dbDesc') }}</p>
@@ -980,7 +1017,10 @@
       <div class="card" data-testid="history-filter-card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.history.filterTitle') }}</h3>
-          <span class="text-xs text-slate-500">{{ $t('settings.history.filterCount', { excluded: histFilterExcludedCount, total: histAllDps.length }) }}</span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-500">{{ $t('settings.history.filterCount', { excluded: histFilterExcludedCount, total: histAllDps.length }) }}</span>
+            <HelpButton help-id="settings-history-filter" />
+          </div>
         </div>
         <div class="card-body flex flex-col gap-3">
           <p class="text-sm text-slate-500">{{ $t('settings.history.filterDesc') }}</p>
@@ -1044,6 +1084,9 @@
 
     <!-- ── Hierarchie ── -->
     <div v-if="activeTab === 'hierarchy'" class="flex flex-col gap-4" data-testid="hierarchy-tab">
+      <div class="flex justify-end">
+        <HelpButton help-id="settings-hierarchy" />
+      </div>
       <div class="card">
         <div class="card-body" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
           <HierarchyManager />
@@ -1058,6 +1101,7 @@
       <div class="flex flex-wrap items-center gap-3">
         <span class="text-sm text-slate-400" data-testid="icons-count">{{ $t('settings.icons.count', { n: iconsFiltered.length }) }}</span>
         <div class="flex-1" />
+        <HelpButton help-id="settings-icons" />
         <button v-if="iconsSelected.size > 0" @click="doIconsExport" class="btn-secondary btn-sm" data-testid="btn-icons-export">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/></svg>
           {{ $t('settings.icons.export', { n: iconsSelected.size }) }}
@@ -1108,7 +1152,10 @@
 
       <!-- Upload area -->
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.importTitle') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.importTitle') }}</h3>
+          <HelpButton help-id="settings-icons-import" />
+        </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">{{ $t('settings.icons.importDesc') }}</p>
 
@@ -1148,6 +1195,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.knxufTitle') }}</h3>
+          <HelpButton help-id="settings-icons-knxuf" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">{{ $t('settings.icons.knxufDesc') }}</p>
@@ -1165,6 +1213,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.faTitle') }}</h3>
+          <HelpButton help-id="settings-icons-fontawesome" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">{{ $t('settings.icons.faDesc') }}</p>
@@ -1233,9 +1282,12 @@
             <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.links.title') }}</h3>
             <p class="text-xs text-slate-500 mt-0.5">{{ $t('settings.links.desc') }}</p>
           </div>
-          <button @click="openNavLinkForm()" class="btn-primary btn-sm" data-testid="btn-add-nav-link">
-            {{ $t('settings.links.addButton') }}
-          </button>
+          <div class="flex items-center gap-1">
+            <HelpButton help-id="settings-links" />
+            <button @click="openNavLinkForm()" class="btn-primary btn-sm" data-testid="btn-add-nav-link">
+              {{ $t('settings.links.addButton') }}
+            </button>
+          </div>
         </div>
         <div class="card-body flex flex-col gap-2">
 
@@ -1313,11 +1365,14 @@
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
-        <div class="px-5 py-3 border-b border-red-500/30 flex items-center gap-2">
-          <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-          </svg>
-          <h3 class="font-semibold text-sm text-red-400">{{ $t('settings.dangerzone.title') }}</h3>
+        <div class="px-5 py-3 border-b border-red-500/30 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+            <h3 class="font-semibold text-sm text-red-400">{{ $t('settings.dangerzone.title') }}</h3>
+          </div>
+          <HelpButton help-id="settings-dangerzone" />
         </div>
         <div class="divide-y divide-red-500/20">
 
@@ -1540,6 +1595,7 @@ import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
+import HelpButton     from '@/components/ui/HelpButton.vue'
 import { formatCurrency, formatNumber } from '@/utils/numberFormat'
 import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/composables/useRegionalFormat'
 

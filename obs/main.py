@@ -387,6 +387,14 @@ def create_app() -> FastAPI:
                 return _spa_index_response(index)
             return JSONResponse({"detail": "Visu nicht gebaut"}, status_code=404)
 
+    # ── Serve Help site (help_dist → /help) ────────────────────────────────
+    # VitePress renders a static multi-page site (a real .html file per route),
+    # unlike the Vue Admin-GUI/Visu SPAs — html=True lets StaticFiles resolve
+    # directory requests to their index.html without the SPA fallback trick above.
+    _help_dist = Path(__file__).parent.parent / "help_dist"
+    if _help_dist.is_dir():
+        app.mount("/help", StaticFiles(directory=_help_dist, html=True), name="help")
+
     # ── 404-Handler für alles andere ──────────────────────────────────────
     @app.exception_handler(404)
     async def spa_404_handler(request: Request, exc):
@@ -397,6 +405,13 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "Not found"}, status_code=404)
         if request.url.path.startswith("/visu/"):
             # Bereits durch visu_spa abgedeckt — sollte nicht hier landen
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if request.url.path == "/help" or request.url.path.startswith("/help/"):
+            # Der /help-Mount serviert seine eigene help_dist/404.html bereits
+            # via StaticFiles(html=True) — landet nur hier, wenn help_dist/
+            # gar nicht existiert (Dev-Umgebung ohne gebauten Help-Site).
+            # Das nackte "/help" (ohne Slash) muss explizit dazu, sonst faellt
+            # es durch auf den Admin-GUI-SPA-Fallback statt JSON-404.
             return JSONResponse({"detail": "Not found"}, status_code=404)
         if _gui_dist.is_dir():
             index = _gui_dist / "index.html"

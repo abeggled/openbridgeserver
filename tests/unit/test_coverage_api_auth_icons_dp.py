@@ -10,6 +10,7 @@ Covers the previously-uncovered statements in:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import uuid
 import zipfile
@@ -157,6 +158,7 @@ class _RegistryStub:
     def __init__(self, dps=None):
         self._dps: dict[uuid.UUID, _DpStub] = {}
         self._values: dict[uuid.UUID, Any] = {}
+        self.external_write_lock = asyncio.Lock()
         if dps:
             for dp in dps:
                 self._dps[dp.id] = dp
@@ -1981,6 +1983,7 @@ class TestUpdateBinding:
         db._fetchone_side_effects = [current_row, updated_row]
 
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
+        monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub())
 
         body = AdapterBindingUpdate(enabled=False)
         result = await bindings_api.update_binding(dp_id=dp_id, binding_id=bid, body=body, _user="admin", db=db)

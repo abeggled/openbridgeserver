@@ -174,6 +174,7 @@ Admin GUI (`gui/src/locales/`):
 | `settings.*` | Settings view |
 | `common.*` | Shared across views (save, cancel, delete, error, warning, …) |
 | `hierarchy.*` | Hierarchy manager |
+| `help.*` | Integrated help drawer (#896) — `HelpButton.vue`/`HelpDrawer.vue` |
 
 Visu SPA (`frontend/src/locales/`):
 
@@ -286,6 +287,20 @@ The Playwright suite lives in `tests/gui/` and requires a running full stack (ba
 **i18n-guard and non-ASCII language names:** The `label` field in `SUPPORTED_LOCALES` holds the native name of the language (e.g. `Español`, `Français`). These are intentionally hardcoded — `$t()` cannot be used here because the locale has not been bootstrapped yet when `SUPPORTED_LOCALES` is evaluated. The i18n-guard passes pure-ASCII names automatically (e.g. `Italiano`, `Schweizerdeutsch`) via its technical-token check, but **names containing non-ASCII characters** (accented letters, ñ, ç, etc.) must be added to `tools/i18n-allowlist.txt` with a short comment. Do this in the same commit that introduces the new locale.
 
 **Weblate** components are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project on [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). Source language is `de`; file format is `JSON (simple)`. CLI tool: `pip install wlc`; credentials in `~/.config/weblate` or via `WLC_URL` / `WLC_KEY` env vars.
+
+#### Help site translations (Weblate) — #896
+
+The `help/` VitePress site (issue #896 — no dedicated architecture doc yet, this section is the reference) is content, not UI strings, so it doesn't fit the `de.json`/`en.json` pattern above. Weblate supports it via a different mechanism — see `.weblate` for the exact recommended "Component discovery" add-on configuration (not wired up yet as of this writing; `.weblate` documents the plan for whoever sets up the Weblate-side component).
+
+**The one rule that matters for anyone editing `help/*.md` by hand or reviewing a Weblate-sourced translation:**
+
+Every `help_id` lives *inside* the heading it belongs to, as an explicit anchor:
+
+```md
+## Zeitzone, Datums- und Zeitformat {#settings-general}
+```
+
+If Weblate (or a human translator) changes or drops the `{#settings-general}` part while translating the heading text, that locale's `help_id` silently stops resolving — the Admin-GUI's `HelpButton` for that section will show "no help available" for that language instead of erroring loudly. `help/scripts/generate-help-index.mjs` does warn (non-blocking) when a `help_id` exists in one locale but not another, which catches this *after the fact* — check that warning after pulling new translations, don't rely on it as a preventive gate. When reviewing a Weblate-translated heading, always verify the `{#...}` suffix survived unchanged.
 
 ## Architecture
 
@@ -465,7 +480,7 @@ RCs never receive the `latest` tag.
 - Three release assets are produced:
   - `openbridgeserver-lxc_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
   - `openbridgeserver-lxc_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
-  - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
+  - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `help_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
 - Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)
 - `obs-update` script at `/usr/local/bin/obs-update` presents an interactive version picker (all RCs + up to two stable releases, sorted semantically). It self-updates on every install by copying the `obs-update` from the extracted bundle.

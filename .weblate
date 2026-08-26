@@ -31,3 +31,47 @@ url = https://hosted.weblate.org/api/components/openbridgeserver/frontend-visu/
 # Source file:  frontend/src/locales/de.json
 # File filter:  frontend/src/locales/*.json
 
+# ── Help site (#896) ─────────────────────────────────────────────────────────
+# Not wired up yet — this section documents the recommended setup for whoever
+# creates the Weblate side (see docs/AGENT_REFERENCE.md, "Help site
+# translations (Weblate)" for the full rationale and the {#help_id} anchor
+# caveat). Uses the "Markdown files" format (monolingual) with the
+# "Component discovery" add-on, because help/ has multiple independent pages
+# (general.md, password.md, more over time) rather than one fixed file like
+# de.json/en.json — a single [components.help] entry can't represent that;
+# discovery creates one Weblate component per matching page automatically.
+#
+# Recommended "Component discovery" add-on configuration, at the project
+# level on hosted.weblate.org (Project -> Manage -> Add-ons -> Component
+# discovery):
+#   match:              ^help/(?:(?P<language>en)/)?(?P<component>.+)\.md$
+#   name_template:       Help: {{ component }}
+#   base_file_template:  help/{{ component }}.md
+#   file_format:          Markdown files
+#
+# IMPORTANT — unverified against the live Weblate UI: the `match` regex above
+# makes the "language" group optional to model VitePress's root-locale
+# convention (German lives at help/settings/general.md with NO /de/ prefix;
+# English lives at help/en/settings/general.md). It is not confirmed whether
+# Weblate's discovery add-on accepts an *unmatched* language group as "this
+# is the source/base file" the way this comment assumes — verify by running
+# discovery once and checking it finds exactly one component per page with
+# German as the source. If it does not, the fallback is to give German an
+# explicit /de/ prefix in help/.vitepress/config.mts (making the locale
+# structure fully uniform) and drop the optional group from the regex:
+#   match: ^help/(?P<language>[a-z]{2})/(?P<component>.+)\.md$
+#
+# Markdown format options worth setting explicitly on the discovered
+# components (Weblate defaults may differ):
+#   md_extract_code_blocks:  false  (none of our pages use code fences today;
+#                                     if that changes, code must stay verbatim)
+#   md_extract_frontmatter:  false  (the `title:` front matter is maintained
+#                                     by hand per locale file today, same as
+#                                     every other page — leave Weblate out of
+#                                     that unless it becomes a real burden)
+#
+# Once discovery has created components (expect names like
+# "help-settings-general", "help-settings-password", ...), add one
+# [components.help-<slug>] section per page here, mirroring gui-admin/
+# frontend-visu above, and `wlc push`/`wlc pull` work the same way.
+

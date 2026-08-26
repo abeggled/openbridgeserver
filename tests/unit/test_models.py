@@ -52,6 +52,10 @@ class TestDataPointDefaults:
         dp = DataPoint(name="Test")
         assert dp.persist_value is True
 
+    def test_default_external_write_enabled_is_false(self):
+        dp = DataPoint(name="Test")
+        assert dp.external_write_enabled is False
+
     def test_default_mqtt_alias_is_none(self):
         dp = DataPoint(name="Test")
         assert dp.mqtt_alias is None
@@ -115,10 +119,12 @@ class TestDataPointValidation:
             tags=["klima"],
             mqtt_alias="alias/klima/wohnzimmer/value",
             persist_value=False,
+            external_write_enabled=True,
         )
         assert dp.data_type == "FLOAT"
         assert dp.unit == "°C"
         assert dp.persist_value is False
+        assert dp.external_write_enabled is True
 
 
 class TestDataPointCreate:
@@ -134,9 +140,11 @@ class TestDataPointCreate:
             unit="°C",
             tags=["tag1"],
             persist_value=False,
+            external_write_enabled=True,
         )
         assert create.unit == "°C"
         assert create.persist_value is False
+        assert create.external_write_enabled is True
 
     def test_name_max_length(self):
         with pytest.raises(ValidationError):
@@ -159,6 +167,11 @@ class TestDataPointUpdate:
         upd = DataPointUpdate(name="New Name")
         assert upd.name == "New Name"
         assert upd.unit is None
+        assert upd.external_write_enabled is None
+
+    def test_external_write_enabled_update(self):
+        upd = DataPointUpdate(external_write_enabled=True)
+        assert upd.external_write_enabled is True
 
     def test_name_max_length_enforced(self):
         with pytest.raises(ValidationError):

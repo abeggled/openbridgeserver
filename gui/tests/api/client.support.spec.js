@@ -152,3 +152,14 @@ describe('settingsApi client (#1073)', () => {
     expect(api.get).toHaveBeenCalledWith('/system/display-settings')
   })
 })
+
+describe('helpApi client (#896)', () => {
+  it('fetches help-index.json via the raw axios instance, bypassing /api/v1 and its JWT interceptor', async () => {
+    const { helpApi } = await import('@/api/client')
+
+    await helpApi.index()
+
+    expect(axiosDefault.get).toHaveBeenCalledWith('/help/help-index.json')
+    expect(api.get).not.toHaveBeenCalledWith('/help/help-index.json')
+  })
+})

@@ -16,6 +16,7 @@ import asyncio
 import datetime
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -54,6 +55,7 @@ _AUDITABLE_METADATA_FIELDS = (
     "persist_value",
     "record_history",
     "control_class",
+    "external_write_enabled",
 )
 
 
@@ -106,6 +108,7 @@ class DataPointOut(BaseModel):
     persist_value: bool
     record_history: bool
     control_class: Literal["room_local", "central_plant"] = "room_local"
+    external_write_enabled: bool = False
     created_at: str
     updated_at: str
     # Runtime
@@ -212,6 +215,7 @@ def _enrich(dp: Any) -> DataPointOut:
         persist_value=dp.persist_value,
         record_history=dp.record_history,
         control_class=getattr(dp, "control_class", "room_local"),
+        external_write_enabled=getattr(dp, "external_write_enabled", False),
         created_at=dp.created_at.isoformat(),
         updated_at=dp.updated_at.isoformat(),
         value=state.value if state else None,
@@ -564,6 +568,29 @@ async def get_datapoint_knx_context(
     return await build_datapoint_knx_context(dp_id, db)
 
 
+async def _has_write_semantic_binding(db: Database, dp_id: uuid.UUID) -> bool:
+    """Mirrors WriteRouter's has_write_semantic_bindings (obs/core/write_router.py):
+    any enabled, non-MESSAGE adapter binding, regardless of direction."""
+    row = await db.fetchone(
+        "SELECT 1 FROM adapter_bindings WHERE datapoint_id=? AND enabled=1 AND adapter_type != 'MESSAGE' LIMIT 1",
+        (str(dp_id),),
+    )
+    return row is not None
+
+
+@asynccontextmanager
+async def _maybe_lock(lock: asyncio.Lock, condition: bool):
+    """Only serializes via `lock` when `condition` is true — an enable-PATCH
+    not touching external_write_enabled has nothing to race with
+    create_binding()/update_binding()'s opt-in cleanup and shouldn't
+    contend with unrelated concurrent PATCHes on other DataPoints."""
+    if condition:
+        async with lock:
+            yield
+    else:
+        yield
+
+
 @router.patch(
     "/{dp_id}",
     response_model=DataPointOut,
@@ -597,9 +624,29 @@ async def update_datapoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
     before = _audit_metadata_snapshot(current_dp)
 
+    # `body.external_write_enabled` can only be truthy if the field was
+    # explicitly submitted (its default is None), so no separate
+    # `model_fields_set` check is needed here.
+    can_set_external_write_true = principal.type == "user" and principal.is_admin
+    enabling_external_write = bool(body.external_write_enabled) and not getattr(current_dp, "external_write_enabled", False)
+
+    # Authorization must be resolved before any check that queries this
+    # target's internal state (the binding-topology check below): otherwise
+    # a principal with the metadata capability but no WRITE grant for this
+    # specific target would get a different status code (422 vs 403) purely
+    # depending on whether the target happens to have a binding, leaking
+    # that internal state to a caller who isn't authorized to see it at all
+    # (Codex review).
     if used_capability:
         allowed = await filter_authorized_datapoints(db, principal, [str(dp_id)], action=AuthzAction.WRITE)
-        if not allowed or "value" in body.model_fields_set:
+        if not allowed or "value" in body.model_fields_set or enabling_external_write:
+            # API-key principals are never administrative (see obs/api/authz.py),
+            # so an API key attempting a false-to-true external_write_enabled
+            # transition is always denied here — same admin-only rule as the
+            # plain-user branch below, but funneled through this audit trail
+            # instead of a bare HTTPException, so repeated attempts to cross
+            # this gate stay visible in the capability-use audit log rather
+            # than only the generic route/request logs.
             await audit_config_capability_use(
                 db,
                 principal,
@@ -610,35 +657,78 @@ async def update_datapoint(
                 request=request,
             )
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Datapoint write scope required")
+    elif enabling_external_write and not can_set_external_write_true:
+        # Enabling this flag opens the DataPoint to any MQTT-broker-capable
+        # client (see obs/core/write_router.py), a broader trust boundary than
+        # ordinary datapoint WRITE authorization covers — require admin,
+        # unlike other metadata fields (e.g. control_class) that a delegated
+        # WRITE grant may already change. Disabling it, and re-submitting an
+        # already-true value unchanged (the GUI form always resends the full
+        # state on save), both stay unrestricted — only a false-to-true
+        # transition needs admin. The `used_capability` branch above handles
+        # the equivalent case for API keys, with its own audit trail.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Enabling external_write_enabled requires admin")
 
-    # --- Validation phase (no side effects) ---
-    if body.data_type is not None:
-        from obs.models.types import DataTypeRegistry
-
-        if not DataTypeRegistry.is_registered(body.data_type):
+    # Held across the binding check and the persist below — not just the
+    # check alone — so a concurrent create_binding()/update_binding() can't
+    # commit a new write-semantic binding in between: either that binding
+    # commits first (and this check below then sees it, correctly rejecting
+    # the enable) or this whole section commits first (and the binding
+    # route's own opt-in cleanup then sees the now-true flag and clears it).
+    # Without this, each side's check could observe the other's
+    # not-yet-committed state and both changes could land together
+    # (Codex review).
+    async with _maybe_lock(reg.external_write_lock, enabling_external_write):
+        if enabling_external_write and await _has_write_semantic_binding(db, dp_id):
+            # A DataPoint with any enabled, non-MESSAGE adapter binding already
+            # has an authoritative external source/sink — a SOURCE-only binding
+            # in particular means the value is meant to be a passive read-out of
+            # a real device, and WriteRouter's existing non-writable-binding
+            # guard (obs/core/write_router.py) rejects the MQTT set for it
+            # regardless of this flag, silently making the toggle a no-op. Only
+            # a genuinely bindingless DataPoint may opt in (Codex review).
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                f"Unknown data_type '{body.data_type}'",
+                "external_write_enabled can only be set on a DataPoint with no adapter binding",
             )
 
-    coerced: Any = None
-    quality: str | None = None
-    if "value" in body.model_fields_set:
-        if body.value is not None:
-            # Use the incoming data_type when it changes in the same request.
-            effective_type = body.data_type if body.data_type is not None else current_dp.data_type
-            try:
-                coerced = _coerce_value_for_type(body.value, effective_type)
-            except ValueError as exc:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
-            quality = "good"
-        else:
-            quality = "uncertain"
+        # --- Validation phase (no side effects) ---
+        if body.data_type is not None:
+            from obs.models.types import DataTypeRegistry
 
-    # --- Mutation phase (all validation passed) ---
-    # value=None in model_copy keeps value updates out of DataPoint metadata;
-    # DataPoint has no value field.
-    dp = await reg.update(dp_id, body.model_copy(update={"value": None}))
+            if not DataTypeRegistry.is_registered(body.data_type):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"Unknown data_type '{body.data_type}'",
+                )
+
+        coerced: Any = None
+        quality: str | None = None
+        if "value" in body.model_fields_set:
+            if body.value is not None:
+                # Use the incoming data_type when it changes in the same request.
+                effective_type = body.data_type if body.data_type is not None else current_dp.data_type
+                try:
+                    coerced = _coerce_value_for_type(body.value, effective_type)
+                except ValueError as exc:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+                quality = "good"
+            else:
+                quality = "uncertain"
+
+        # --- Mutation phase (all validation passed) ---
+        # value=None in model_copy keeps value updates out of DataPoint metadata;
+        # DataPoint has no value field. external_write_enabled is neutralized
+        # here too — at the latest possible point, using the principal's own
+        # (request-invariant) authorization instead of the `enabling_external_write`
+        # snapshot computed above — so a non-admin's already-gate-passed PATCH
+        # (submitted while the flag already read true) can never persist a stale
+        # `true` and silently revert a concurrent admin PATCH that disabled it in
+        # between (Codex review: TOCTOU between the check above and this write).
+        persisted_body = body
+        if body.external_write_enabled and not can_set_external_write_true:
+            persisted_body = persisted_body.model_copy(update={"external_write_enabled": None})
+        dp = await reg.update(dp_id, persisted_body.model_copy(update={"value": None}))
     after = _audit_metadata_snapshot(dp)
     details: dict[str, Any] = {
         "before": before,

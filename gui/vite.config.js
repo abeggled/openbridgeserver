@@ -15,7 +15,7 @@ export default defineConfig({
     alias: { '@': resolve(import.meta.dirname, 'src') }
   },
 
-  // Dev server: proxy /api to backend, /visu to the Visu frontend dev server (port 5174)
+  // Dev server: proxy /api and /help to backend, /visu to the Visu frontend dev server (port 5174)
   server: {
     port: 5173,
     proxy: {
@@ -26,6 +26,10 @@ export default defineConfig({
       },
       '/visu': {
         target: 'http://localhost:5174',
+        changeOrigin: true,
+      },
+      '/help': {
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
     }

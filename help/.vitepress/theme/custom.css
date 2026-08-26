@@ -1,0 +1,50 @@
+/*
+ * Overrides VitePress default-theme color tokens to match the Admin-GUI's
+ * Tailwind palette (gui/src/style.css: --surface-900/800/700, slate-*, blue-*)
+ * so the help drawer's embedded iframe doesn't visually clash with the
+ * surrounding app. Both apps toggle the same ".dark" class name on <html>,
+ * but each instance (the Admin-GUI window vs. this iframe's own document)
+ * still tracks its own theme choice independently — actual light/dark
+ * *sync* between the two is a separate, still-open piece of work.
+ *
+ * Only the token *values* are overridden here — variable names and the
+ * light/.dark selector structure are VitePress's own, documented at
+ * https://vitepress.dev/reference/default-theme-config#colors (see also
+ * vitepress/dist/client/theme-default/styles/vars.css).
+ */
+
+:root {
+  --vp-c-bg: #f0f2f7;         /* --surface-900 (page bg) */
+  --vp-c-bg-alt: #ffffff;     /* --surface-800 (sidebar/nav — same as cards in the GUI) */
+  --vp-c-bg-elv: #ffffff;     /* --surface-800 (elevated: dialogs, mobile menu) */
+  --vp-c-bg-soft: #f1f5f9;    /* --surface-700 (code blocks, tables) */
+
+  --vp-c-divider: #e2e8f0;    /* slate-200 — matches border-slate-200 */
+  --vp-c-gutter: #e2e8f0;
+
+  --vp-c-text-1: #0f172a;     /* slate-900 — matches text-slate-900 */
+  --vp-c-text-2: #64748b;     /* slate-500 */
+  --vp-c-text-3: #94a3b8;     /* slate-400 */
+
+  --vp-c-brand-1: #2563eb;    /* blue-600 — matches .btn-primary bg */
+  --vp-c-brand-2: #3b82f6;    /* blue-500 — matches .btn-primary hover */
+  --vp-c-brand-3: #1d4ed8;    /* blue-700 */
+}
+
+.dark {
+  --vp-c-bg: #0f1117;         /* --surface-900 (page bg) */
+  --vp-c-bg-alt: #161b27;     /* --surface-800 (sidebar/nav — same as cards in the GUI) */
+  --vp-c-bg-elv: #161b27;     /* --surface-800 (elevated: dialogs, mobile menu) */
+  --vp-c-bg-soft: #1e2435;    /* --surface-700 (code blocks, tables) */
+
+  --vp-c-divider: #334155;    /* slate-700 — matches dark:border-slate-700 */
+  --vp-c-gutter: #334155;
+
+  --vp-c-text-1: #f1f5f9;     /* slate-100 — matches dark:text-slate-100 */
+  --vp-c-text-2: #94a3b8;     /* slate-400 — matches dark:text-slate-400 */
+  --vp-c-text-3: #64748b;     /* slate-500 */
+
+  --vp-c-brand-1: #60a5fa;    /* blue-400 — lighter for contrast on the dark bg */
+  --vp-c-brand-2: #3b82f6;    /* blue-500 */
+  --vp-c-brand-3: #2563eb;    /* blue-600 */
+}

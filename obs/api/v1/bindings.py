@@ -38,6 +38,23 @@ from obs.models.binding import (
 router = APIRouter(tags=["bindings"])
 
 
+async def _clear_stale_external_write_enabled(dp_id: uuid.UUID, *, adapter_type: str, enabled: bool) -> None:
+    """A newly enabled, non-MESSAGE binding takes precedence over the
+    external_write_enabled opt-in at request time (see WriteRouter.handle()
+    and datapoints.py's has_write_semantic_binding), but the flag itself
+    stays stored on the DataPoint. Left untouched, it would silently
+    reactivate — without a fresh admin decision — if this binding is later
+    deleted or disabled (Codex review, issue #1169 follow-up)."""
+    if not enabled or adapter_type == "MESSAGE":
+        return
+    reg = get_registry()
+    dp = reg.get(dp_id)
+    if dp is not None and getattr(dp, "external_write_enabled", False):
+        from obs.models.datapoint import DataPointUpdate
+
+        await reg.update(dp_id, DataPointUpdate(external_write_enabled=False))
+
+
 # ---------------------------------------------------------------------------
 # Response model
 # ---------------------------------------------------------------------------
@@ -377,30 +394,38 @@ async def create_binding(
         set_contract_audit_resource_id(request, binding_id)
     now = datetime.now(UTC).isoformat()
 
-    await db.execute_and_commit(
-        """INSERT INTO adapter_bindings
-           (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled,
-            send_throttle_ms, send_on_change, send_min_delta, send_min_delta_pct,
-            value_formula, value_map, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            binding_id,
-            str(dp_id),
-            adapter_type,
-            str(body.adapter_instance_id),
-            body.direction,
-            json.dumps(body.config),
-            int(body.enabled),
-            body.send_throttle_ms,
-            int(body.send_on_change),
-            body.send_min_delta,
-            body.send_min_delta_pct,
-            body.value_formula or None,
-            json.dumps(body.value_map) if body.value_map else None,
-            now,
-            now,
-        ),
-    )
+    # Held across the insert and the opt-in cleanup below — the same lock
+    # update_datapoint() holds across its own bindingless check and persist
+    # — so the two operations can't race: whichever acquires it first either
+    # commits before the other's check runs, or leaves a state the other
+    # then observes correctly (Codex review, see datapoints.py).
+    reg = get_registry()
+    async with reg.external_write_lock:
+        await db.execute_and_commit(
+            """INSERT INTO adapter_bindings
+               (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled,
+                send_throttle_ms, send_on_change, send_min_delta, send_min_delta_pct,
+                value_formula, value_map, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                binding_id,
+                str(dp_id),
+                adapter_type,
+                str(body.adapter_instance_id),
+                body.direction,
+                json.dumps(body.config),
+                int(body.enabled),
+                body.send_throttle_ms,
+                int(body.send_on_change),
+                body.send_min_delta,
+                body.send_min_delta_pct,
+                body.value_formula or None,
+                json.dumps(body.value_map) if body.value_map else None,
+                now,
+                now,
+            ),
+        )
+        await _clear_stale_external_write_enabled(dp_id, adapter_type=adapter_type, enabled=body.enabled)
     await _reload_adapter_instance(str(body.adapter_instance_id), db)
 
     row = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (binding_id,))
@@ -473,26 +498,31 @@ async def update_binding(
         if err:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Ungültige Formel: {err}")
 
-    await db.execute_and_commit(
-        """UPDATE adapter_bindings
-           SET direction=?, config=?, enabled=?,
-               send_throttle_ms=?, send_on_change=?, send_min_delta=?, send_min_delta_pct=?,
-               value_formula=?, value_map=?, updated_at=?
-           WHERE id=?""",
-        (
-            direction,
-            config_val,
-            enabled,
-            throttle_ms,
-            on_change,
-            min_delta,
-            min_delta_pct,
-            formula,
-            value_map_json,
-            now,
-            str(binding_id),
-        ),
-    )
+    # Held across the update and the opt-in cleanup below — see create_binding()
+    # above and datapoints.py's update_datapoint() for why (Codex review).
+    reg = get_registry()
+    async with reg.external_write_lock:
+        await db.execute_and_commit(
+            """UPDATE adapter_bindings
+               SET direction=?, config=?, enabled=?,
+                   send_throttle_ms=?, send_on_change=?, send_min_delta=?, send_min_delta_pct=?,
+                   value_formula=?, value_map=?, updated_at=?
+               WHERE id=?""",
+            (
+                direction,
+                config_val,
+                enabled,
+                throttle_ms,
+                on_change,
+                min_delta,
+                min_delta_pct,
+                formula,
+                value_map_json,
+                now,
+                str(binding_id),
+            ),
+        )
+        await _clear_stale_external_write_enabled(dp_id, adapter_type=row["adapter_type"], enabled=bool(enabled))
 
     instance_id = row["adapter_instance_id"]
     if instance_id:
