@@ -371,6 +371,122 @@ describe('NodeConfigPanel edge_detect value visibility', () => {
   })
 })
 
+describe('NodeConfigPanel schema defaults for a bare node', () => {
+  // LogicGraphImport accepts a node with empty {} data; the backend then runs
+  // it on the schema defaults, so the panel must show those rather than blank
+  // controls — otherwise it misstates three active settings.
+  async function mountBareNode() {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'ed4', type: 'edge_detect', data: {} },
+        nodeTypes: [{ type: 'edge_detect', label: 'Flankenerkennung', config_schema: CONFIG_SCHEMA }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+    return w
+  }
+
+  it('renders the enum default instead of a blank select', async () => {
+    const w = await mountBareNode()
+
+    const actions = selects(w)
+      .filter(s => s.findAll('option').some(o => o.attributes('value') === 'trigger'))
+      .map(s => s.element.value)
+    expect(actions).toEqual(['value', 'value'])
+    w.unmount()
+  })
+
+  it('renders the boolean default instead of an unchecked box', async () => {
+    const w = await mountBareNode()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(true)
+    w.unmount()
+  })
+
+  it('still emits an explicit pick over the displayed default', async () => {
+    const w = await mountBareNode()
+
+    // The controls are bound with :value/:checked, not v-model, so the change
+    // handlers own the write — a missing one would silently drop the edit.
+    const rising = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'trigger'))
+    await rising.setValue('trigger')
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ on_rising: 'trigger' })
+
+    const persist = w.find('input[type="checkbox"]')
+    await persist.setValue(false)
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ persist_state: false })
+    w.unmount()
+  })
+
+  it('renders unchecked when the boolean field declares no default at all', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const { default: _d, ...persistNoDefault } = CONFIG_SCHEMA.persist_state
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'ed5', type: 'edge_detect', data: {} },
+        nodeTypes: [{ type: 'edge_detect', config_schema: { ...CONFIG_SCHEMA, persist_state: persistNoDefault } }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(false)
+    w.unmount()
+  })
+
+  it('keeps a stored value that differs from the schema default', async () => {
+    const w = await mountPanel({ on_rising: 'off', persist_state: false })
+    await flushPromises()
+
+    const rising = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'trigger'))
+    expect(rising.element.value).toBe('off')
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('NodeConfigPanel empty value conversion', () => {
+  it('converts a cleared text value to false, not to the schema default', async () => {
+    // _to_bool('') is false. Falling back to the field default ('true' for the
+    // rising edge) would invert what the actuator receives.
+    const w = await mountPanel({ data_type: 'string', value_rising: '', value_falling: 'x' })
+    await flushPromises()
+
+    const dataType = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'bool'))
+    await dataType.setValue('bool')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'false', value_falling: 'true' })
+    w.unmount()
+  })
+
+  it('still applies the schema default when the value is genuinely absent', async () => {
+    // A missing field is the one case the backend itself defaults, so the
+    // rising edge must stay 'true' here.
+    const w = await mountPanel({ data_type: 'string', value_rising: undefined, value_falling: undefined })
+    await flushPromises()
+
+    const dataType = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'bool'))
+    await dataType.setValue('bool')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'true', value_falling: 'false' })
+    w.unmount()
+  })
+})
+
 describe('NodeConfigPanel imported number edge values', () => {
   // LogicGraphImport accepts native JSON values, so a Number edge value can
   // arrive as a real boolean or a collection. The panel must show what

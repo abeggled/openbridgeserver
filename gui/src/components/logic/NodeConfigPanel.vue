@@ -1408,7 +1408,8 @@
               v-model="localData[key]" rows="6"
               class="input text-xs font-mono resize-y" @change="emitUpdate" />
             <select v-else-if="schema.enum"
-              v-model="localData[key]" class="input text-sm" @change="onSchemaEnumChange(key)">
+              :value="localData[key] ?? schema.default"
+              class="input text-sm" @change="onSchemaEnumChange(key, $event)">
               <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ enumOptionLabel(nodeDef?.type, key, opt) }}</option>
             </select>
             <select v-else-if="typedValueKind(schema) === 'bool'"
@@ -1422,8 +1423,8 @@
               :value="normaliseTypedValue(localData[key], 'number', schema)"
               class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else-if="schema.type === 'boolean'"
-              type="checkbox" v-model="localData[key]"
-              class="text-sm" @change="emitUpdate" />
+              type="checkbox" :checked="localData[key] ?? schema.default ?? false"
+              class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
             <input v-else
               v-model="localData[key]"
               :type="schema.subtype === 'password' ? 'password' : ['number', 'integer'].includes(schema.type) ? 'number' : 'text'"
@@ -2411,7 +2412,10 @@ function typedValueKind(schema) {
 // Switching that sibling leaves the dependent values in the previous notation
 // ("true" once Number is selected). Re-normalize them so the widget always has
 // something valid to show and the backend never receives a stale notation.
-function onSchemaEnumChange(key) {
+function onSchemaEnumChange(key, event) {
+  // Bound with :value rather than v-model so a missing field can render the
+  // schema default; that also means the pick has to be written here.
+  localData.value[key] = event.target.value
   // Deliberately schemaFields, not configFields: a dependent value that is
   // hidden right now must still be normalized, or it would resurface in the
   // previous notation once its direction is switched back on.
@@ -2436,6 +2440,13 @@ function onBooleanFieldChange(key, event) {
 // Reads the DOM value, not localData: the input is bound through
 // normaliseTypedValue rather than v-model, so localData still holds the
 // pre-edit value at this point.
+// Same reason as onSchemaEnumChange: the checkbox renders the schema default
+// when the field is absent, so v-model cannot own the value.
+function onSchemaBooleanChange(key, event) {
+  localData.value[key] = event.target.checked
+  emitUpdate()
+}
+
 function onTypedValueChange(key, schema, event) {
   localData.value[key] = normaliseTypedValue(event.target.value, typedValueKind(schema), schema)
   emitUpdate()
@@ -2448,9 +2459,13 @@ function normaliseTypedValue(value, kind, schema) {
   // would otherwise fall back to the field default and silently INVERT what
   // the actuator receives.
   if (kind === 'bool') {
+    // Only a genuinely absent value falls back to the schema default, because
+    // that is what the backend itself applies when the field is missing. An
+    // empty string is a configured value, and _to_bool('') is false — taking
+    // the default here would INVERT a cleared text value on conversion.
     // The raw value, not `text`: stringifying first would turn an imported
     // [0] into "0" and invert it, since the backend applies bool([0]) = True.
-    if (value === null || value === undefined || value === '') return String(schema.default ?? 'false')
+    if (value === null || value === undefined) return String(schema.default ?? 'false')
     return isBackendFalse(value) ? 'false' : 'true'
   }
   // The raw value, not `text`: an imported node may carry a native JSON
