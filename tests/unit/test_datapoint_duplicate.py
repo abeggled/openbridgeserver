@@ -268,6 +268,7 @@ async def test_duplicate_datapoint_snapshots_metadata_inside_transaction(monkeyp
             mqtt_alias="current/source",
             persist_value=0,
             record_history=0,
+            external_write_enabled=1,
         ),
     )
     monkeypatch.setattr(datapoints_api, "get_registry", lambda: registry)
@@ -287,6 +288,10 @@ async def test_duplicate_datapoint_snapshots_metadata_inside_transaction(monkeyp
     assert payload.mqtt_alias == "current/source"
     assert payload.persist_value is False
     assert payload.record_history is False
+    # external_write_enabled is a security-trust flag (like control_class) and is
+    # deliberately NOT copied — duplicates stay fail-closed even if the source had
+    # external MQTT writes enabled.
+    assert payload.external_write_enabled is False
 
 
 @pytest.mark.asyncio

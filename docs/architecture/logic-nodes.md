@@ -182,7 +182,7 @@ and update this table, rather than opening a node-specific branch somewhere new:
 |---|---|---|
 | `obs/logic/validation.py` — `_DURATION_FIELDS` | duration bounds for `timer_delay`, `timer_pulse`, `api_client` | persistence-time validation runs before execution; a per-node validation hook on the node contract is the intended replacement |
 | `obs/logic/graph_analysis.py` — `TICK_BOUNDARY_NODE_TYPES` | `memory` is the explicit tick boundary | a graph-topology property, evaluated without instantiating nodes |
-| `obs/api/v1/logic.py` | `comment` excluded from layout-only diffs; `datapoint_read`/`datapoint_write` for usage reporting; `missing_node` placeholder on import | API-level concerns (change detection, usage lists, import fallback) |
+| `obs/api/v1/logic.py` | `comment` excluded from layout-only diffs (as is the cosmetic `data.label` block name of every node); `datapoint_read`/`datapoint_write` for usage reporting; `missing_node` placeholder on import, and its shape canonicalized on read (pre-#1157 generated label marker dropped, a missing type carried in `label` promoted to `original_type`) | API-level concerns (change detection, usage lists, import fallback, read-time migrations) |
 
 Note that `_DURATION_FIELDS` duplicates bounds the node definitions already declare in their
 `config_schema` (`min`). Deriving them generically would silently widen validation to every

@@ -7,10 +7,28 @@
       :title="$t('logic.nodeConfig.resizeHandle')"
     />
 
-    <!-- Header -->
-    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ $te('logic.nodeTypes.' + node?.type) ? $t('logic.nodeTypes.' + node?.type) : (nodeDef?.label ?? node?.type) }}</h3>
-      <button @click="$emit('close')" class="btn-icon text-slate-500">
+    <!-- Header — the user-defined block name is the heading and stays editable
+         here (and therefore in the debug values tab, issue #1157); the block
+         type and the generated node id follow as secondary information. -->
+    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700/60 flex items-start justify-between gap-2">
+      <div class="min-w-0 flex-1">
+        <input
+          v-model="localData.label"
+          type="text"
+          maxlength="80"
+          class="w-full bg-transparent border-0 border-b border-transparent hover:border-slate-300 dark:hover:border-slate-600 focus:border-teal-500 focus:outline-none px-0 py-0.5 text-sm font-semibold text-slate-700 dark:text-slate-200 placeholder:font-normal placeholder:text-slate-400"
+          :placeholder="defaultNodeTitle"
+          :aria-label="$t('logic.blockName.label')"
+          :title="$t('logic.blockName.panelHint')"
+          data-testid="node-label-input"
+          @change="onNodeLabelChange"
+          @keydown.enter.prevent="onNodeLabelChange"
+        />
+        <p class="mt-0.5 text-[10px] text-slate-500 truncate" :title="node.id" data-testid="node-identity">
+          {{ $t('logic.blockName.typeAndId', { type: defaultNodeTitle, id: node.id }) }}
+        </p>
+      </div>
+      <button @click="$emit('close')" class="btn-icon text-slate-500 shrink-0">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
         </svg>
@@ -46,7 +64,7 @@
           <p class="text-xs text-slate-500 mb-3 shrink-0">{{ nodeDescription(nodeDef) }}</p>
           <div class="flex flex-col flex-1 min-h-0 gap-1">
             <label class="label shrink-0">{{ $t('logic.ports.object') }}</label>
-            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" @input="searchDps" />
+            <input v-model="dpSearch" type="text" class="input text-sm shrink-0" :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')" data-testid="dp-search" @input="searchDps" />
             <div v-if="dpResults.length"
               class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden flex-1 min-h-0 overflow-y-auto">
               <button v-for="dp in dpResults" :key="dp.id"
@@ -545,6 +563,108 @@
               :data-testid="`concat-text-${i}`"
             />
           </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ── string_replace: ordered search/replace rules (issue #871) ────── -->
+    <template v-else-if="isStringReplaceNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="flex items-center justify-between">
+          <span class="section-label">{{ $t('logic.nodeConfig.stringReplace.rules') }}</span>
+          <button
+            @click="addReplaceRule()"
+            class="btn-secondary btn-sm text-teal-400"
+            data-testid="replace-rule-add"
+          >{{ $t('logic.nodeConfig.rules.add') }}</button>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.stringReplace.orderHint') }}</p>
+
+        <div
+          v-for="(rule, i) in stringReplaceRules" :key="i"
+          class="rule-row"
+          :data-testid="`replace-rule-${i}`"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400 w-5 shrink-0">{{ i + 1 }}</span>
+            <select
+              :value="replaceRuleIsRegex(rule) ? 'regex' : 'plain'"
+              @change="updateReplaceRule(i, 'mode', $event.target.value)"
+              class="input text-xs flex-1"
+              :data-testid="`replace-rule-mode-${i}`"
+            >
+              <option value="plain">{{ $t('logic.nodeConfig.stringReplace.modes.plain') }}</option>
+              <option value="regex">{{ $t('logic.nodeConfig.stringReplace.modes.regex') }}</option>
+            </select>
+            <button
+              @click="moveReplaceRule(i, -1)"
+              class="text-xs text-slate-500 hover:text-slate-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="i === 0"
+              :title="$t('logic.nodeConfig.stringReplace.moveUp')"
+              :data-testid="`replace-rule-up-${i}`"
+            >↑</button>
+            <button
+              @click="moveReplaceRule(i, 1)"
+              class="text-xs text-slate-500 hover:text-slate-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="i === stringReplaceRules.length - 1"
+              :title="$t('logic.nodeConfig.stringReplace.moveDown')"
+              :data-testid="`replace-rule-down-${i}`"
+            >↓</button>
+            <button
+              @click="removeReplaceRule(i)"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="stringReplaceRules.length <= 1"
+              :title="$t('logic.nodeConfig.rules.remove')"
+              :data-testid="`replace-rule-remove-${i}`"
+            >×</button>
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ replaceRuleIsRegex(rule) ? $t('logic.nodeConfig.stringReplace.patternLabel') : $t('logic.nodeConfig.stringReplace.searchLabel') }}</label>
+            <input
+              :value="rule.search ?? ''"
+              @input="updateReplaceRule(i, 'search', $event.target.value)"
+              class="input text-xs font-mono"
+              :placeholder="replaceRuleIsRegex(rule) ? $t('logic.nodeConfig.stringReplace.patternPlaceholder') : $t('logic.nodeConfig.stringReplace.searchPlaceholder')"
+              :data-testid="`replace-rule-search-${i}`"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.stringReplace.replaceLabel') }}</label>
+            <input
+              :value="rule.replace ?? ''"
+              @input="updateReplaceRule(i, 'replace', $event.target.value)"
+              class="input text-xs font-mono"
+              :placeholder="$t('logic.nodeConfig.stringReplace.replacePlaceholder')"
+              :data-testid="`replace-rule-replacement-${i}`"
+            />
+            <p v-if="replaceRuleIsRegex(rule)" class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.stringReplace.groupHint') }}</p>
+          </div>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="replaceRuleFlag(rule, 'case_sensitive')"
+              @change="updateReplaceRule(i, 'case_sensitive', $event.target.checked)"
+              class="accent-teal-500"
+              :data-testid="`replace-rule-case-${i}`"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.rules.caseSensitive') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              :checked="replaceRuleFlag(rule, 'replace_all')"
+              @change="updateReplaceRule(i, 'replace_all', $event.target.checked)"
+              class="accent-teal-500"
+              :data-testid="`replace-rule-all-${i}`"
+            />
+            <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.stringReplace.replaceAll') }}</span>
+          </label>
         </div>
       </div>
     </template>
@@ -1221,6 +1341,7 @@
             v-model="localData.title"
             class="input text-sm"
             :placeholder="$t('logic.nodeConfig.messageArchive.titlePlaceholder')"
+            data-testid="message-archive-title"
             @change="emitUpdate"
           />
         </div>
@@ -1584,6 +1705,7 @@ const isExtractorNode  = computed(() =>
 )
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
+const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
@@ -1796,6 +1918,73 @@ function removeConditionRow(i) {
 
 function isTextCondition(operator) {
   return ['text_eq', 'contains', 'starts_with', 'ends_with', 'regex'].includes(operator)
+}
+
+// ── string_replace: ordered search/replace rules (issue #871) ─────────────
+// Rules are persisted as a JSON string (like decision/value_mapping) so the
+// list stays one config field; order is meaningful — each rule works on the
+// result of its predecessor.
+function _defaultReplaceRule() {
+  return { search: '', replace: '', mode: 'plain', case_sensitive: true, replace_all: true }
+}
+
+const stringReplaceRules = computed(() => {
+  const rows = _parseRows(localData.value.rules)
+  return rows.length ? rows : [_defaultReplaceRule()]
+})
+
+// Same normalisation as the executor: anything that is not "regex" (after
+// trimming and lowercasing) is a plain search, so a rule imported as "REGEX"
+// is not shown as a plain one while being executed as a regular expression.
+function replaceRuleIsRegex(rule) {
+  return String(rule.mode ?? '').trim().toLowerCase() === 'regex'
+}
+
+// Mirrors GraphExecutor._to_bool for the two rule flags that default to true.
+// A checkbox bound to `value !== false` would show "on" for an imported rule
+// carrying null, 0, "false" or "off" — all of which the executor reads as off.
+const FALSY_RULE_FLAGS = ['0', 'false', 'no', 'off', '']
+
+function replaceRuleFlag(rule, key) {
+  const value = rule[key]
+  if (value === undefined) return true
+  if (typeof value === 'string') return !FALSY_RULE_FLAGS.includes(value.trim().toLowerCase())
+  return Boolean(value)
+}
+
+function _cloneReplaceRules() {
+  return stringReplaceRules.value.map(rule => ({ ...rule }))
+}
+
+function _saveReplaceRules(rows) {
+  localData.value.rules = JSON.stringify(rows)
+  emitUpdate()
+}
+
+function addReplaceRule() {
+  _saveReplaceRules([..._cloneReplaceRules(), _defaultReplaceRule()])
+}
+
+function updateReplaceRule(i, key, value) {
+  const rows = _cloneReplaceRules()
+  if (!rows[i]) return
+  rows[i][key] = value
+  _saveReplaceRules(rows)
+}
+
+function removeReplaceRule(i) {
+  const rows = _cloneReplaceRules()
+  if (rows.length <= 1 || !rows[i]) return
+  rows.splice(i, 1)
+  _saveReplaceRules(rows)
+}
+
+function moveReplaceRule(i, delta) {
+  const rows = _cloneReplaceRules()
+  const target = i + delta
+  if (target < 0 || target >= rows.length) return
+  ;[rows[i], rows[target]] = [rows[target], rows[i]]
+  _saveReplaceRules(rows)
 }
 
 // ── Extractor: preview + path helpers ─────────────────────────────────────
@@ -2634,6 +2823,23 @@ function toggleNotificationTarget(target, selected) {
   localData.value.providers = selected
     ? [...refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target), { provider: target.provider, target: target.target }]
     : refs.filter(ref => ref.provider !== target.provider || ref.target !== target.target)
+  emitUpdate()
+}
+
+// ── Block name (issue #1157) ───────────────────────────────────────────────
+// Default title of the block type — the placeholder of the rename field and
+// the secondary type line, shown when no custom name is set.
+const defaultNodeTitle = computed(() => {
+  const key = `logic.nodeTypes.${props.node?.type}`
+  return te(key) ? t(key) : (nodeDef.value?.label ?? props.node?.type)
+})
+
+function onNodeLabelChange() {
+  const next = String(localData.value.label ?? '').trim()
+  localData.value.label = next
+  // Committing an untouched field (Enter on a block that was never renamed)
+  // must not write an empty `label` into the block and trigger a save.
+  if (next === String(props.node.data.label ?? '').trim()) return
   emitUpdate()
 }
 

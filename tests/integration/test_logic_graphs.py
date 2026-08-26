@@ -7,7 +7,7 @@ Covers:
   PUT    /api/v1/logic/graphs/{id}           full replace (success, 404)
   PATCH  /api/v1/logic/graphs/{id}           partial update (name, enabled, description, flow_data)
   DELETE /api/v1/logic/graphs/{id}           delete (success, 404)
-  POST   /api/v1/logic/graphs/{id}/run       run (empty flow, disabled 422, 404)
+  POST   /api/v1/logic/graphs/{id}/run       run (empty flow, node execution, disabled 422, 404)
   POST   /api/v1/logic/graphs/{id}/duplicate duplicate (success, 404)
   GET    /api/v1/logic/graphs/{id}/export    export JSON download (success, 404)
   POST   /api/v1/logic/graphs/import         import from JSON (success, bad format)
@@ -15,6 +15,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -474,6 +475,43 @@ async def test_run_graph_cycle_returns_node_warnings(client, auth_headers):
     assert body["outputs"]["a"]["__diagnostic__"] == "graph_cycle"
     assert body["outputs"]["b"]["__diagnostic__"] == "graph_cycle"
     assert {warning["node_id"] for warning in body["warnings"]} == {"a", "b"}
+
+
+async def test_run_graph_applies_string_replace_rules_in_order(client, auth_headers):
+    """The rule list is persisted as JSON inside the node data — run it for real."""
+    flow_data = {
+        "nodes": [
+            {
+                "id": "src",
+                "type": "const_value",
+                "position": {"x": 0, "y": 0},
+                "data": {"value": "the cold water 12-34", "data_type": "string"},
+            },
+            {
+                "id": "rep",
+                "type": "string_replace",
+                "position": {"x": 160, "y": 0},
+                "data": {
+                    "rules": json.dumps(
+                        [
+                            {"search": "COLD", "replace": "warm", "mode": "plain", "case_sensitive": False},
+                            {"search": r"(\d+)-(\d+)", "replace": r"\2/\1", "mode": "regex"},
+                        ]
+                    )
+                },
+            },
+        ],
+        "edges": [{"id": "src-rep", "source": "src", "target": "rep", "sourceHandle": "value", "targetHandle": "text"}],
+    }
+    graph = await _create_graph(client, auth_headers, flow_data=flow_data)
+
+    resp = await client.post(f"/api/v1/logic/graphs/{graph['id']}/run", headers=auth_headers)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["outputs"]["rep"] == {"result": "the warm water 34/12"}
+    assert not body["warnings"]
 
 
 async def test_run_disabled_graph_returns_422(client, auth_headers):

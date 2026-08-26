@@ -49,13 +49,19 @@ npm ci --prefer-offline
 npm run build
 cd ..
 
+echo "==> Building Help site..."
+cd help
+npm ci --prefer-offline
+npm run build
+cd ..
+
 # ── Write obs-update ───────────────────────────────────────────────────────────
 sed "s|__REPO__|$REPO|g" scripts/obs-update > obs-update
 chmod +x obs-update
 
 # ── App bundle ─────────────────────────────────────────────────────────────────
 echo "==> Creating app bundle..."
-tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ requirements.txt obs-update \
+tar -czf "/tmp/$APP_BUNDLE_FILE" obs/ gui_dist/ frontend_dist/ help_dist/ requirements.txt obs-update \
     -C scripts obs-admin obs-onewire-configure.sh obs-onewire-should-run.sh
 (cd /tmp && sha256sum "$APP_BUNDLE_FILE" > "$APP_BUNDLE_FILE.sha256")
 # Backward-compat: pre-migration obs-update versions verify via a .sha512 asset.
@@ -146,6 +152,7 @@ mkdir -p "$ROOTFS/opt/obs"
 cp -r obs              "$ROOTFS/opt/obs/"
 cp -r gui_dist         "$ROOTFS/opt/obs/"
 cp -r frontend_dist    "$ROOTFS/opt/obs/"
+cp -r help_dist        "$ROOTFS/opt/obs/"
 cp    requirements.txt "$ROOTFS/opt/obs/"
 cp    scripts/obs-admin   "$ROOTFS/opt/obs/"
 cp    scripts/obs-onewire-configure.sh scripts/obs-onewire-should-run.sh "$ROOTFS/opt/obs/"

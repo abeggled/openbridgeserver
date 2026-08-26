@@ -134,6 +134,197 @@ def test_invalid_configured_string_input_count_is_isolated_to_its_node():
     assert "invalid literal" in outputs["target"]["__error__"]
 
 
+def _replace_node(rules, data=None):
+    return node("target", "string_replace", {"rules": rules, **(data or {})})
+
+
+def test_string_replace_applies_plain_rules_in_order_on_the_intermediate_result():
+    executor = make_executor(
+        [
+            _replace_node(
+                json.dumps(
+                    [
+                        {"search": "cold", "replace": "warm", "mode": "plain"},
+                        {"search": "warm water", "replace": "hot water", "mode": "plain"},
+                    ]
+                )
+            )
+        ]
+    )
+
+    outputs = executor.execute({"target": {"text": "the cold water is cold"}})
+
+    assert outputs["target"]["result"] == "the hot water is warm"
+
+
+def test_string_replace_honours_first_occurrence_and_case_sensitivity_per_rule():
+    executor = make_executor(
+        [
+            _replace_node(
+                json.dumps(
+                    [
+                        {"search": "a", "replace": "-", "replace_all": False},
+                        {"search": "B", "replace": "+", "case_sensitive": False},
+                    ]
+                )
+            )
+        ]
+    )
+
+    outputs = executor.execute({"target": {"text": "aabb"}})
+
+    assert outputs["target"]["result"] == "-a++"
+
+
+def test_string_replace_case_insensitive_plain_rule_keeps_the_replacement_literal():
+    executor = make_executor([_replace_node(json.dumps([{"search": "x", "replace": "\\1&", "case_sensitive": False}]))])
+
+    outputs = executor.execute({"target": {"text": "aXb"}})
+
+    assert outputs["target"]["result"] == "a\\1&b"
+
+
+def test_string_replace_regex_rule_supports_group_references_and_flags():
+    executor = make_executor(
+        [
+            _replace_node(
+                json.dumps(
+                    [
+                        {"search": r"(\d+)-(\d+)", "replace": r"\2/\1", "mode": "regex"},
+                        {"search": "ABC", "replace": "ok", "mode": "regex", "case_sensitive": False},
+                    ]
+                )
+            )
+        ]
+    )
+
+    outputs = executor.execute({"target": {"text": "abc 12-34"}})
+
+    assert outputs["target"]["result"] == "ok 34/12"
+
+
+def test_string_replace_regex_rule_can_be_limited_to_the_first_match():
+    executor = make_executor([_replace_node(json.dumps([{"search": r"\d", "replace": "#", "mode": "regex", "replace_all": False}]))])
+
+    outputs = executor.execute({"target": {"text": "1a2"}})
+
+    assert outputs["target"]["result"] == "#a2"
+
+
+@pytest.mark.parametrize(
+    ("flag_value", "expected"),
+    [
+        (True, "ax"),
+        ("true", "ax"),
+        (False, "xx"),
+        (None, "xx"),
+        (0, "xx"),
+        ("false", "xx"),
+        (" Off ", "xx"),
+    ],
+    ids=["true", "string-true", "false", "null", "zero", "string-false", "padded-off"],
+)
+def test_string_replace_coerces_non_boolean_rule_flags(flag_value, expected):
+    """Mirrored by replaceRuleFlag() in NodeConfigPanel.vue — keep both in sync."""
+    executor = make_executor([_replace_node(json.dumps([{"search": "A", "replace": "x", "case_sensitive": flag_value}]))])
+
+    outputs = executor.execute({"target": {"text": "aA"}})
+
+    assert outputs["target"]["result"] == expected
+
+
+def test_string_replace_defaults_both_rule_flags_to_true_when_absent():
+    executor = make_executor([_replace_node(json.dumps([{"search": "A", "replace": "x"}]))])
+
+    outputs = executor.execute({"target": {"text": "aAA"}})
+
+    assert outputs["target"]["result"] == "axx"
+
+
+@pytest.mark.parametrize("mode", ["regex", " REGEX ", "Regex"])
+def test_string_replace_normalises_the_rule_mode(mode):
+    """Mirrored by replaceRuleIsRegex() in NodeConfigPanel.vue — keep both in sync."""
+    executor = make_executor([_replace_node(json.dumps([{"search": r"\(a\)", "replace": "X", "mode": mode}]))])
+
+    outputs = executor.execute({"target": {"text": "(a)a"}})
+
+    assert outputs["target"]["result"] == "Xa"
+
+
+@pytest.mark.parametrize("mode", ["plain", "", None, "fuzzy"])
+def test_string_replace_treats_any_other_mode_as_a_plain_search(mode):
+    executor = make_executor([_replace_node(json.dumps([{"search": "(a)", "replace": "X", "mode": mode}]))])
+
+    outputs = executor.execute({"target": {"text": "(a)a"}})
+
+    assert outputs["target"]["result"] == "Xa"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"search": "[", "replace": "x", "mode": "regex"},
+        {"search": "(a)", "replace": r"\9", "mode": "regex"},
+    ],
+    ids=["invalid-pattern", "invalid-group-reference"],
+)
+def test_string_replace_skips_a_broken_regex_rule_instead_of_dropping_the_text(rule):
+    executor = make_executor([_replace_node(json.dumps([rule, {"search": "a", "replace": "b"}]))])
+
+    outputs = executor.execute({"target": {"text": "a["}})
+
+    assert outputs["target"]["result"] == "b["
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"search": "", "replace": "x"},
+        {"replace": "x"},
+        {"search": 42, "replace": "x"},
+    ],
+    ids=["empty-search", "missing-search", "non-string-search"],
+)
+def test_string_replace_skips_a_rule_without_a_usable_search_term(rule):
+    executor = make_executor([_replace_node(json.dumps([rule]))])
+
+    outputs = executor.execute({"target": {"text": "a b"}})
+
+    assert outputs["target"]["result"] == "a b"
+
+
+def test_string_replace_treats_a_missing_replacement_as_deletion_and_coerces_other_types():
+    executor = make_executor([_replace_node(json.dumps([{"search": " "}, {"search": "b", "replace": 2}]))])
+
+    outputs = executor.execute({"target": {"text": "a b"}})
+
+    assert outputs["target"]["result"] == "a2"
+
+
+def test_string_replace_accepts_rules_stored_as_a_list_and_coerces_the_input_to_text():
+    executor = make_executor([_replace_node([{"search": "2", "replace": "9", "mode": "plain"}])])
+
+    outputs = executor.execute({"target": {"text": 1234}})
+
+    assert outputs["target"]["result"] == "1934"
+
+
+def test_string_replace_without_input_returns_no_result():
+    executor = make_executor([_replace_node(json.dumps([{"search": "a", "replace": "b"}]))])
+
+    outputs = executor.execute()
+
+    assert outputs["target"] == {"result": None}
+
+
+def test_string_replace_with_unparsable_rules_passes_the_text_through():
+    executor = make_executor([_replace_node("not json")])
+
+    outputs = executor.execute({"target": {"text": "unchanged"}})
+
+    assert outputs["target"]["result"] == "unchanged"
+
+
 def test_datetime_node_uses_application_formats():
     executor = make_executor(
         [node("clock", "datetime", {"custom_format": "yyyy-MM-dd HH:mm:ss"})],

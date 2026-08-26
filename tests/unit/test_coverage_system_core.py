@@ -6,6 +6,7 @@ All tests are self-contained (no Docker, no real DB, no network).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -997,6 +998,121 @@ class TestDataPointRegistryCRUD:
         assert event.new_name == "New"
 
     @pytest.mark.asyncio
+    async def test_update_leaves_live_object_unchanged_when_persistence_fails(self):
+        from obs.core.registry import DataPointRegistry
+        from obs.models.datapoint import DataPoint, DataPointUpdate
+
+        class _FailingDb(_DbStub):
+            async def execute_and_commit(self, query, params=()):
+                raise RuntimeError("simulated disk full")
+
+        db = _FailingDb()
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = db
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+
+        dp = DataPoint(name="Virtual Switch", external_write_enabled=False)
+        reg._points = {dp.id: dp}
+        reg._values = {dp.id: MagicMock()}
+
+        payload = DataPointUpdate(external_write_enabled=True)
+        with pytest.raises(RuntimeError, match="simulated disk full"):
+            await reg.update(dp.id, payload)
+
+        # The live registry object — the same instance WriteRouter reads
+        # directly, with no DB re-check — must not reflect the failed write.
+        assert reg._points[dp.id].external_write_enabled is False
+        assert reg._points[dp.id] is dp
+
+    @pytest.mark.asyncio
+    async def test_update_only_persists_the_changed_columns(self):
+        # A full-row UPDATE built from a stale snapshot could lose a second,
+        # concurrently-committed PATCH to a different field (Codex review):
+        # both requests would snapshot the same pre-update row, so whichever
+        # commits last silently overwrites the first request's already-
+        # persisted column with its own stale value for it. Asserting that a
+        # PATCH's SQL only ever names the columns it actually changes is a
+        # timing-independent proof this can't happen, regardless of how two
+        # concurrent requests interleave.
+        from obs.core.registry import DataPointRegistry
+        from obs.models.datapoint import DataPoint, DataPointUpdate
+
+        db = _DbStub()
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = db
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+
+        dp = DataPoint(name="Old", unit="U0")
+        reg._points = {dp.id: dp}
+        reg._values = {dp.id: MagicMock()}
+
+        await reg.update(dp.id, DataPointUpdate(unit="U1"))
+
+        query, _params = db.executed[-1]
+        assert "unit=?" in query
+        assert "name=?" not in query
+        assert "data_type=?" not in query
+        assert "external_write_enabled=?" not in query
+
+    @pytest.mark.asyncio
+    async def test_update_applies_change_even_when_caller_is_cancelled_after_commit_succeeds(self):
+        # If the caller's own task is cancelled (client disconnect, server
+        # timeout) exactly while awaiting an in-flight DB write that has
+        # already committed, the live registry object must still end up
+        # reflecting it — otherwise WriteRouter keeps reading a stale
+        # external_write_enabled=True after the DB write that was meant to
+        # disable it in fact succeeded (Codex review).
+        from obs.core.registry import DataPointRegistry
+        from obs.models.datapoint import DataPoint, DataPointUpdate
+
+        class _SlowCommitDb(_DbStub):
+            async def execute_and_commit(self, query, params=()):
+                await asyncio.sleep(0.05)
+                self.executed.append((query, params))
+
+        db = _SlowCommitDb()
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = db
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+
+        dp = DataPoint(name="Virtual Switch", external_write_enabled=True)
+        reg._points = {dp.id: dp}
+        reg._values = {dp.id: MagicMock()}
+
+        task = asyncio.create_task(reg.update(dp.id, DataPointUpdate(external_write_enabled=False)))
+        await asyncio.sleep(0.01)  # let update() start and reach the shielded await
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert reg._points[dp.id].external_write_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_update_deletes_last_value_when_persistence_is_disabled(self):
+        from obs.core.registry import DataPointRegistry
+        from obs.models.datapoint import DataPoint, DataPointUpdate
+
+        db = _DbStub()
+        reg = DataPointRegistry.__new__(DataPointRegistry)
+        reg._db = db
+        reg._mqtt = AsyncMock()
+        reg._bus = AsyncMock()
+
+        dp = DataPoint(name="Sensor", persist_value=True)
+        reg._points = {dp.id: dp}
+        reg._values = {dp.id: MagicMock()}
+
+        await reg.update(dp.id, DataPointUpdate(persist_value=False))
+
+        assert reg._points[dp.id].persist_value is False
+        delete_calls = [q for q, _p in db.executed if q.startswith("DELETE FROM datapoint_last_values")]
+        assert len(delete_calls) == 1
+
+    @pytest.mark.asyncio
     async def test_update_nonexistent_raises(self):
         from obs.core.registry import DataPointRegistry
         from obs.models.datapoint import DataPointUpdate
@@ -1174,6 +1290,30 @@ class TestWriteRouterHandle:
         await router.handle(dp_id, "42.0")
         router._bus.publish.assert_not_awaited()
         router._write_to_dest_bindings.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_handle_publishes_for_external_write_enabled_bindingless_datapoint(self):
+        from obs.core.event_bus import DataValueEvent
+        from obs.core.write_router import WriteRouter
+
+        dp = SimpleNamespace(name="dp", data_type="FLOAT", external_write_enabled=True)
+        router = WriteRouter.__new__(WriteRouter)
+        router._db = _DbStub()
+        router._registry = SimpleNamespace(get=lambda _: dp)
+        router._bus = SimpleNamespace(publish=AsyncMock())
+        router._last_sent = {}
+        router._last_value = {}
+        router._write_to_dest_bindings = AsyncMock()
+
+        dp_id = uuid.uuid4()
+        await router.handle(dp_id, "42.0")
+        router._write_to_dest_bindings.assert_not_awaited()
+        router._bus.publish.assert_awaited_once()
+        (event,), _kwargs = router._bus.publish.call_args
+        assert isinstance(event, DataValueEvent)
+        assert event.datapoint_id == dp_id
+        assert event.value == 42.0
+        assert event.source_adapter == "mqtt_set"
 
 
 class TestWriteRouterHandleValueEvent:

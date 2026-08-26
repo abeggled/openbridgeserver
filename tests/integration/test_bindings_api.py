@@ -499,3 +499,70 @@ async def test_delete_binding_success(client, auth_headers):
     list_resp = await client.get(f"/api/v1/datapoints/{dp['id']}/bindings", headers=auth_headers)
     ids = [b["id"] for b in list_resp.json()]
     assert binding_id not in ids
+
+
+# ---------------------------------------------------------------------------
+# external_write_enabled must not silently reactivate after a binding that
+# cleared it is later removed (Codex review, issue #1169 follow-up)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_binding_clears_stale_external_write_enabled(client, auth_headers):
+    dp = await _create_dp(client, auth_headers)
+    patch_resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}",
+        json={"external_write_enabled": True},
+        headers=auth_headers,
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["external_write_enabled"] is True
+
+    inst = await _create_instance(client, auth_headers)
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={"adapter_instance_id": inst["id"], "direction": "SOURCE", "config": {}},
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    binding_id = create_resp.json()["id"]
+
+    get_resp = await client.get(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
+    assert get_resp.json()["external_write_enabled"] is False
+
+    delete_resp = await client.delete(
+        f"/api/v1/datapoints/{dp['id']}/bindings/{binding_id}",
+        headers=auth_headers,
+    )
+    assert delete_resp.status_code == 204
+
+    get_after_delete_resp = await client.get(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
+    assert get_after_delete_resp.json()["external_write_enabled"] is False
+
+
+async def test_update_binding_enabling_clears_stale_external_write_enabled(client, auth_headers):
+    dp = await _create_dp(client, auth_headers)
+    inst = await _create_instance(client, auth_headers)
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={"adapter_instance_id": inst["id"], "direction": "SOURCE", "config": {}, "enabled": False},
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    binding_id = create_resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}",
+        json={"external_write_enabled": True},
+        headers=auth_headers,
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    update_resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}/bindings/{binding_id}",
+        json={"enabled": True},
+        headers=auth_headers,
+    )
+    assert update_resp.status_code == 200, update_resp.text
+
+    get_resp = await client.get(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
+    assert get_resp.json()["external_write_enabled"] is False

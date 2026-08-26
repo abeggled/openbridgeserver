@@ -264,6 +264,74 @@ async def test_config_roundtrip_preserves_resource_control_classes(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_config_roundtrip_preserves_external_write_enabled(monkeypatch, db: Database) -> None:
+    registry = _registry(db)
+    datapoint = await registry.create(DataPointCreate(name="Virtual Switch", external_write_enabled=True))
+    monkeypatch.setattr(config_api, "get_registry", lambda: registry)
+    with patch("obs.api.v1.icons._icons_dir") as icons_dir:
+        icons_dir.return_value.glob.return_value = []
+        exported = await config_api.export_config(_user="admin", db=db)
+
+    assert exported.datapoints[0].external_write_enabled is True
+
+    # Simulate a fresh install: the flag resets before import restores it.
+    datapoint.external_write_enabled = False
+    await db.execute_and_commit("UPDATE datapoints SET external_write_enabled=0")
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(body=exported, _user="admin", db=db)
+
+    assert result.errors == []
+    assert registry.get(datapoint.id).external_write_enabled is True
+    assert (
+        bool((await db.fetchone("SELECT external_write_enabled FROM datapoints WHERE id=?", (str(datapoint.id),)))["external_write_enabled"]) is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_config_import_creates_new_datapoint_with_external_write_enabled(monkeypatch, db: Database) -> None:
+    registry = _registry(db)
+    monkeypatch.setattr(config_api, "get_registry", lambda: registry)
+    exported = config_api.ConfigExport(
+        obs_version="test",
+        exported_at="2026-08-24T00:00:00+00:00",
+        datapoints=[
+            config_api.ExportedDataPoint(
+                id=str(uuid.uuid4()),
+                name="New Virtual Switch",
+                data_type="BOOLEAN",
+                unit=None,
+                tags=[],
+                mqtt_alias=None,
+                external_write_enabled=True,
+            )
+        ],
+        bindings=[],
+        adapter_instances=[],
+        knx_group_addresses=[],
+        logic_graphs=[],
+        icons=[],
+    )
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(body=exported, _user="admin", db=db)
+
+    assert result.errors == []
+    assert result.datapoints_created == 1
+    dp_id = uuid.UUID(exported.datapoints[0].id)
+    assert registry.get(dp_id).external_write_enabled is True
+    assert bool((await db.fetchone("SELECT external_write_enabled FROM datapoints WHERE id=?", (str(dp_id),)))["external_write_enabled"]) is True
+
+
+@pytest.mark.asyncio
 async def test_export_omits_orphan_grant_targets_and_preserves_valid_principals(
     monkeypatch: pytest.MonkeyPatch,
     db: Database,
@@ -578,3 +646,43 @@ async def test_factory_reset_clears_reset_resource_grants_while_preserving_filte
     ]
     assert reset_result.errors == []
     assert [row["node_type"] for row in grants_after_reset] == ["ringbuffer_filterset"]
+
+
+@pytest.mark.asyncio
+async def test_import_records_an_error_when_the_deferred_external_write_opt_in_itself_fails(monkeypatch: pytest.MonkeyPatch, db: Database) -> None:
+    """The post-bindings opt-in pass (Codex review, PR #1170 round 7) follows
+    the same per-item try/except pattern as every other loop in import_config —
+    one item's unexpected failure is recorded and does not abort the import."""
+    registry = _registry(db)
+    await registry.load_from_db()
+    monkeypatch.setattr(config_api, "get_registry", lambda: registry)
+
+    dp_id = str(uuid.uuid4())
+    payload = config_api.ConfigExport(
+        obs_version="5",
+        exported_at="2026-07-13T00:00:00+00:00",
+        datapoints=[
+            config_api.ExportedDataPoint(
+                id=dp_id,
+                name="Opt-in failure target",
+                data_type="BOOLEAN",
+                unit=None,
+                tags=[],
+                mqtt_alias=None,
+                external_write_enabled=True,
+            )
+        ],
+        bindings=[],
+    )
+
+    monkeypatch.setattr(registry, "update", AsyncMock(side_effect=RuntimeError("simulated disk full")))
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        result = await config_api.import_config(body=payload, _user="admin", db=db)
+
+    assert result.datapoints_created == 1
+    assert any("external_write_enabled opt-in failed" in e and "simulated disk full" in e for e in result.errors)
