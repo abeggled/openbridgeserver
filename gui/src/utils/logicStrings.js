@@ -9,14 +9,13 @@
 // not "[object Object]".
 //
 // Known limit — JSON.parse erases Python's int/float distinction, and the two
-// print differently ('5' vs '5.0'). A JS number is rendered as an int when it
-// is an exact integer within MAX_SAFE_INTEGER and as a float otherwise, which
-// is right for every ordinary value but cannot be right for both readings of
-// an integral float (1.0 shows as "1") or of an integer too large to be held
-// exactly (100000000000000000000 shows as "1e+20"). The information is gone
-// before this function sees the value. Verified against CPython over 2695
-// generated JSON inputs: 26 diverge, and every one of them is one of those
-// two shapes.
+// print differently ('5' vs '5.0'). The reading is recovered from the JSON
+// token the value would be written as, which is exact for every value that
+// travelled through the editor (verified over 650 browser round trips) and
+// wrong only where the stored JSON spells an INTEGRAL number differently than
+// JavaScript would — a plain "5.0", which has no JavaScript literal and reads
+// back as int 5, or a large one such as "1e+16" or "1000000000000000000000",
+// where the two disagree on digits versus exponent.
 
 // Python's float repr switches to scientific notation outside 1e-4 <= |v| <
 // 1e16 — a wider fixed range than JavaScript's — pads the exponent to two
@@ -37,17 +36,14 @@ function floatRepr(value) {
 function numberRepr(value) {
   if (Number.isNaN(value)) return 'nan'
   if (!Number.isFinite(value)) return value > 0 ? 'inf' : '-inf'
-  // JSON.parse cannot tell an int from an integral float, and the two print
-  // differently in Python ('5' vs '5.0'). Integer literals are by far the
-  // common case in a configured value, so an exactly representable integer
-  // takes the int spelling. Past MAX_SAFE_INTEGER that claim is unfounded —
-  // the double no longer carries an exact integer — so the float repr, which
-  // is the shortest round trip of the value actually held, is the better
-  // reading there.
-  if (Number.isInteger(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER) {
-    return String(value)
-  }
-  return floatRepr(value)
+  // JSON.parse erases Python's int/float distinction, but the JSON *token*
+  // does not: a number written without '.', 'e' or 'E' is an int to Python's
+  // parser. Re-serializing recovers the token this value travels as, which is
+  // what the backend parsed and stored for anything the editor saved — the
+  // browser writes 1e20 as 100000000000000000000 and 1e21 as 1e+21, and
+  // Python reads those as int and float respectively.
+  const token = JSON.stringify(value)
+  return /[.eE]/.test(token) ? floatRepr(value) : token
 }
 
 // repr() of a string: single quotes normally, double quotes when the string

@@ -284,6 +284,24 @@ describe('NodeConfigPanel typed value fallbacks', () => {
     w.unmount()
   })
 
+  it('renders an explicit null as empty for a data type it does not coerce', async () => {
+    // str(None) would be "None", but an uncoerced null has nothing to show.
+    const w = await mountSynthetic(
+      {
+        val: { type: 'string', default: '', label: 'Value', value_type_field: 'dt' },
+        dt: { type: 'string', enum: ['auto', 'bool'], default: 'bool', label: 'Type' },
+      },
+      { val: null, dt: 'bool' },
+    )
+
+    const typeSelect = selects(w).find(x => x.findAll('option').some(o => o.attributes('value') === 'auto'))
+    await typeSelect.setValue('auto')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ val: '', dt: 'auto' })
+    w.unmount()
+  })
+
   it('renders plain text when the named type field is absent from the data', async () => {
     const w = await mountSynthetic(
       { val: { type: 'string', default: '', label: 'Value', value_type_field: 'not_in_data' } },
@@ -524,17 +542,49 @@ describe('NodeConfigPanel empty value conversion', () => {
     w.unmount()
   })
 
-  it('still applies the schema default when the value is genuinely absent', async () => {
-    // A missing field is the one case the backend itself defaults, so the
-    // rising edge must stay 'true' here.
-    const w = await mountPanel({ data_type: 'string', value_rising: undefined, value_falling: undefined })
+  it('still applies the schema default when the field is genuinely absent', async () => {
+    // The key must be missing, not set to undefined: the backend reads it as
+    // d.get(key, default), so only an absent key takes the default.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'ed6', type: 'edge_detect', data: { data_type: 'string', on_rising: 'value', on_falling: 'value' } },
+        nodeTypes: [{ type: 'edge_detect', config_schema: CONFIG_SCHEMA }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
     await flushPromises()
 
-    const dataType = selects(w).find(s => s.findAll('option').some(o => o.attributes('value') === 'bool'))
-    await dataType.setValue('bool')
+    // data_type is string, so the declared 'true'/'false' defaults are what
+    // the executor sends — they must be visible, not two blank inputs.
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['true', 'false'])
+    w.unmount()
+  })
+
+  it('treats an explicit null as a configured value, not a missing field', async () => {
+    // LogicGraphImport accepts JSON null; the key then exists, so d.get finds
+    // it and _to_bool(None) is False — the rising default must NOT apply.
+    const w = await mountPanel({ data_type: 'bool', value_rising: null, value_falling: null })
     await flushPromises()
 
-    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'true', value_falling: 'false' })
+    const bools = selects(w).filter(x => x.findAll('option').some(o => o.attributes('value') === 'true'))
+    expect(bools.map(x => x.element.value)).toEqual(['false', 'false'])
+    w.unmount()
+  })
+
+  it('leaves the value uncoerced when data_type is explicitly null', async () => {
+    // _coerce_typed_value only converts bool/number/string; an explicit null
+    // is an unrecognised type and the configured value is sent unchanged.
+    const w = await mountPanel({ data_type: null, value_rising: 'off', value_falling: 'raw' })
+    await flushPromises()
+
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['off', 'raw'])
+    expect(selects(w).filter(x => x.findAll('option').some(o => o.attributes('value') === 'true'))).toHaveLength(0)
     w.unmount()
   })
 })

@@ -1413,21 +1413,21 @@
               <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ enumOptionLabel(nodeDef?.type, key, opt) }}</option>
             </select>
             <select v-else-if="typedValueKind(schema) === 'bool'"
-              :value="normaliseTypedValue(localData[key], 'bool', schema)"
+              :value="normaliseTypedValue(configuredValue(key, schema), 'bool')"
               class="input text-sm" @change="onBooleanFieldChange(key, $event)">
               <option value="true">{{ $t('logic.nodeConfig.common.boolTrue') }}</option>
               <option value="false">{{ $t('logic.nodeConfig.common.boolFalse') }}</option>
             </select>
             <input v-else-if="typedValueKind(schema) === 'number'"
               type="number" step="any"
-              :value="normaliseTypedValue(localData[key], 'number', schema)"
+              :value="normaliseTypedValue(configuredValue(key, schema), 'number')"
               class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else-if="schema.type === 'boolean'"
               type="checkbox" :checked="localData[key] ?? schema.default ?? false"
               class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
             <input v-else-if="typedValueKind(schema) === 'string'"
               type="text"
-              :value="normaliseTypedValue(localData[key], 'string', schema)"
+              :value="normaliseTypedValue(configuredValue(key, schema), 'string')"
               class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else
               v-model="localData[key]"
@@ -2408,10 +2408,19 @@ function enumOptionLabel(nodeType, fieldKey, option) {
 // text. Returns '' when the field has no such dependency.
 function typedValueKind(schema) {
   if (!schema?.value_type_field) return ''
-  // Same schema-default fallback as isFieldVisible: an imported node may omit
-  // the referenced field entirely, and the backend then applies its default —
-  // rendering an unrestricted text box here would misstate what runs.
-  return localData.value[schema.value_type_field] ?? schemaFields.value[schema.value_type_field]?.default ?? ''
+  // Mirrors node.data.get("data_type", <schema default>): only an ABSENT key
+  // takes the default. An explicit null is a configured type that
+  // _coerce_typed_value does not recognise, and it then returns the value
+  // uncoerced — so fall through to the plain text field rather than guessing
+  // a type and misstating what runs.
+  return (configuredValue(schema.value_type_field, schemaFields.value[schema.value_type_field]) ?? '')
+}
+
+// The backend reads a configured field as d.get(key, <schema default>), so an
+// absent key takes the default while an explicit null stays null and is
+// handled by the coercion itself. `??` cannot express that difference.
+function configuredValue(key, schema) {
+  return key in localData.value ? localData.value[key] : schema?.default
 }
 
 // Switching that sibling leaves the dependent values in the previous notation
@@ -2426,7 +2435,7 @@ function onSchemaEnumChange(key, event) {
   // previous notation once its direction is switched back on.
   for (const [fieldKey, fieldSchema] of Object.entries(schemaFields.value)) {
     if (fieldSchema?.value_type_field !== key) continue
-    localData.value[fieldKey] = normaliseTypedValue(localData.value[fieldKey], localData.value[key], fieldSchema)
+    localData.value[fieldKey] = normaliseTypedValue(configuredValue(fieldKey, fieldSchema), localData.value[key])
   }
   emitUpdate()
 }
@@ -2453,35 +2462,28 @@ function onSchemaBooleanChange(key, event) {
 }
 
 function onTypedValueChange(key, schema, event) {
-  localData.value[key] = normaliseTypedValue(event.target.value, typedValueKind(schema), schema)
+  localData.value[key] = normaliseTypedValue(event.target.value, typedValueKind(schema))
   emitUpdate()
 }
 
-function normaliseTypedValue(value, kind, schema) {
-  const text = value === null || value === undefined ? '' : String(value)
-  // Decide with the backend's own rule (GraphExecutor._to_bool) rather than an
-  // exact "true"/"false" match: a supported spelling like "False" or "off"
-  // would otherwise fall back to the field default and silently INVERT what
-  // the actuator receives.
-  if (kind === 'bool') {
-    // Only a genuinely absent value falls back to the schema default, because
-    // that is what the backend itself applies when the field is missing. An
-    // empty string is a configured value, and _to_bool('') is false — taking
-    // the default here would INVERT a cleared text value on conversion.
-    // The raw value, not `text`: stringifying first would turn an imported
-    // [0] into "0" and invert it, since the backend applies bool([0]) = True.
-    if (value === null || value === undefined) return String(schema.default ?? 'false')
-    return isBackendFalse(value) ? 'false' : 'true'
-  }
-  // The raw value, not `text`: an imported node may carry a native JSON
-  // boolean or collection, and stringifying first would show "true" as blank
-  // and [1] as 1, while the backend (GraphExecutor._to_num) sends 1.0 and 0.0.
+// Pure coercion, mirroring _coerce_typed_value. The caller resolves the
+// configured value first (see configuredValue), so every value arriving here
+// — an explicit null included — is one the backend would coerce, never a
+// stand-in for a missing field.
+function normaliseTypedValue(value, kind) {
+  // Decided with the backend's own rule (GraphExecutor._to_bool) rather than
+  // an exact "true"/"false" match: a supported spelling like "False" or "off"
+  // would otherwise read as its opposite. The raw value, not a stringified
+  // one: bool([0]) is True in Python although String([0]) is "0", and
+  // _to_bool(None) is False.
+  if (kind === 'bool') return isBackendFalse(value) ? 'false' : 'true'
+  // Raw as well: an imported native boolean or collection would otherwise show
+  // as blank or as JavaScript's own stringification instead of what _to_num
+  // and str() actually send.
   if (kind === 'number') return toBackendNumberText(value)
-  // Likewise the raw value: an imported [1] must read as Python's "[1]", not
-  // as JavaScript's "1". Only "string" coerces — _coerce_typed_value returns
-  // any other data_type untouched.
   if (kind === 'string') return toBackendStringText(value)
-  return text
+  // Any other data_type is returned untouched by _coerce_typed_value.
+  return value === null || value === undefined ? '' : String(value)
 }
 
 function fieldLabel(nodeType, fieldKey, fallback) {

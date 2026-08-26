@@ -83,10 +83,19 @@ describe('toBackendStringText', () => {
     expect(toBackendStringText(0.0001)).toBe('0.0001')
     expect(toBackendStringText(0.00001)).toBe('1e-05')
     expect(toBackendStringText(1e-7)).toBe('1e-07')
-    expect(toBackendStringText(1.5e20)).toBe('1.5e+20')
-    expect(toBackendStringText(1e20)).toBe('1e+20')
-    expect(toBackendStringText(1.7976931348623157e308)).toBe('1.7976931348623157e+308')
     expect(toBackendStringText(5e-324)).toBe('5e-324')
+    expect(toBackendStringText(1.7976931348623157e308)).toBe('1.7976931348623157e+308')
+  })
+
+  it('reads int vs float from the JSON token the value travels as', () => {
+    // The browser writes 1e20 as an integer token, which Python parses as int
+    // and prints in full; 1e21 it writes as 1e+21, which Python parses as a
+    // float. Re-serializing recovers that distinction.
+    expect(JSON.stringify(1e20)).toBe('100000000000000000000')
+    expect(toBackendStringText(1e20)).toBe('100000000000000000000')
+    expect(JSON.stringify(1e21)).toBe('1e+21')
+    expect(toBackendStringText(1e21)).toBe('1e+21')
+    expect(toBackendStringText(1.5e20)).toBe('150000000000000000000')
   })
 
   it('keeps the int spelling for exactly representable integers', () => {
