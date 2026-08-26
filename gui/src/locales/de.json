@@ -2173,7 +2173,8 @@
       "common": {
         "optional": "(optional)",
         "boolTrue": "Wahr",
-        "boolFalse": "Falsch"
+        "boolFalse": "Falsch",
+        "unsetEnum": "Nicht gesetzt"
       },
       "const_value": {
         "value": "Wert",

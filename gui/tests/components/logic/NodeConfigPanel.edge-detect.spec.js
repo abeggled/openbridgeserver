@@ -495,6 +495,39 @@ describe('NodeConfigPanel schema defaults for a bare node', () => {
     w.unmount()
   })
 
+  it('shows no setting when an enum value is explicitly null', async () => {
+    // The backend reads d.get(key, default): an explicit null is a configured
+    // value that matches no listed setting, and a <select> whose value matches
+    // no option would otherwise fall back to displaying the first one.
+    const w = await mountPanel({ on_rising: null })
+    await flushPromises()
+
+    const rising = selects(w).find(x => x.findAll('option').some(o => o.attributes('value') === 'trigger'))
+    expect(rising.element.value).toBe('')
+    expect(rising.findAll('option')[0].attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('shows no setting for a stored enum value the schema does not list', async () => {
+    // Same path for a setting written by a newer version of the block.
+    const w = await mountPanel({ on_rising: 'from_the_future' })
+    await flushPromises()
+
+    const rising = selects(w).find(x => x.findAll('option').some(o => o.attributes('value') === 'trigger'))
+    expect(rising.element.value).toBe('')
+    w.unmount()
+  })
+
+  it('leaves a boolean unchecked when it is explicitly null', async () => {
+    // d.get finds the key, so the True default does not apply and None is
+    // falsy — the box must not claim the setting is on.
+    const w = await mountPanel({ persist_state: null })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(false)
+    w.unmount()
+  })
+
   it('renders unchecked when the boolean field declares no default at all', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

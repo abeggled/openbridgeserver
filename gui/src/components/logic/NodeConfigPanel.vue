@@ -1408,8 +1408,16 @@
               v-model="localData[key]" rows="6"
               class="input text-xs font-mono resize-y" @change="emitUpdate" />
             <select v-else-if="schema.enum"
-              :value="localData[key] ?? schema.default"
+              :value="enumDisplayValue(key, schema)"
               class="input text-sm" @change="onSchemaEnumChange(key, $event)">
+              <!-- A configured setting the schema does not list — an explicit
+                   null, or one from a newer version — needs an option of its
+                   own: a <select> whose value matches no option falls back to
+                   showing the first one, which would claim a setting that is
+                   not active. -->
+              <option v-if="enumDisplayValue(key, schema) === ''" value="" disabled>
+                {{ $t('logic.nodeConfig.common.unsetEnum') }}
+              </option>
               <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ enumOptionLabel(nodeDef?.type, key, opt) }}</option>
             </select>
             <select v-else-if="typedValueKind(schema) === 'bool'"
@@ -1423,7 +1431,7 @@
               :value="normaliseTypedValue(configuredValue(key, schema), 'number')"
               class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else-if="schema.type === 'boolean'"
-              type="checkbox" :checked="localData[key] ?? schema.default ?? false"
+              type="checkbox" :checked="!!configuredValue(key, schema)"
               class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
             <input v-else-if="typedValueKind(schema) === 'string'"
               type="text"
@@ -2316,12 +2324,14 @@ const configFields = computed(() =>
 // another field makes it meaningless — e.g. an edge value while that direction
 // only pulses its trigger. An exclusion rather than an exact match, so a
 // setting the runtime still treats as value-sending (imported, or added later)
-// keeps its field visible. Falls back to the referenced field's own schema
-// default so a node saved before that field existed still renders correctly.
+// keeps its field visible. Resolved through configuredValue, so a node saved
+// before the referenced field existed takes its schema default while an
+// explicit null stays null — which the runtime also treats as "not one of the
+// excluded settings" and therefore as value-sending.
 function isFieldVisible(schema) {
   const rule = schema?.visible_when
   if (!rule) return true
-  const current = localData.value[rule.field] ?? schemaFields.value[rule.field]?.default
+  const current = configuredValue(rule.field, schemaFields.value[rule.field])
   return !rule.not_in.includes(current)
 }
 
@@ -2414,6 +2424,14 @@ function typedValueKind(schema) {
   // uncoerced — so fall through to the plain text field rather than guessing
   // a type and misstating what runs.
   return (configuredValue(schema.value_type_field, schemaFields.value[schema.value_type_field]) ?? '')
+}
+
+// The value the enum dropdown shows: '' whenever the configured setting is
+// not one the schema lists, so the blank placeholder is selected rather than
+// the first real option.
+function enumDisplayValue(key, schema) {
+  const value = configuredValue(key, schema)
+  return schema?.enum?.includes(value) ? value : ''
 }
 
 // The backend reads a configured field as d.get(key, <schema default>), so an
