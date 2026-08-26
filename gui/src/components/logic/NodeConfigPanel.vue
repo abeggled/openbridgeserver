@@ -1425,6 +1425,10 @@
             <input v-else-if="schema.type === 'boolean'"
               type="checkbox" :checked="localData[key] ?? schema.default ?? false"
               class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
+            <input v-else-if="typedValueKind(schema) === 'string'"
+              type="text"
+              :value="normaliseTypedValue(localData[key], 'string', schema)"
+              class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else
               v-model="localData[key]"
               :type="schema.subtype === 'password' ? 'password' : ['number', 'integer'].includes(schema.type) ? 'number' : 'text'"
@@ -1465,6 +1469,7 @@ import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 import { isBackendFalse } from '@/utils/logicBooleans'
 import { toBackendNumberText } from '@/utils/logicNumbers'
+import { toBackendStringText } from '@/utils/logicStrings'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import DebugInspector from './DebugInspector.vue'
 
@@ -2472,6 +2477,10 @@ function normaliseTypedValue(value, kind, schema) {
   // boolean or collection, and stringifying first would show "true" as blank
   // and [1] as 1, while the backend (GraphExecutor._to_num) sends 1.0 and 0.0.
   if (kind === 'number') return toBackendNumberText(value)
+  // Likewise the raw value: an imported [1] must read as Python's "[1]", not
+  // as JavaScript's "1". Only "string" coerces — _coerce_typed_value returns
+  // any other data_type untouched.
+  if (kind === 'string') return toBackendStringText(value)
   return text
 }
 

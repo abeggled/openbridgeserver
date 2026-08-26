@@ -262,6 +262,19 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 AN  \u2193 AUS')
   })
 
+  it('stringifies an imported collection on a string edge_detect card', async () => {
+    const w = await mountGN('edge_detect', { data_type: 'string', value_rising: [1], value_falling: { a: 1 } })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe("\u2191 [1]  \u2193 {'a': 1}")
+  })
+
+  it('leaves an unknown data_type untouched on the card', async () => {
+    // _coerce_typed_value returns anything but bool/number/string unchanged.
+    const w = await mountGN('edge_detect', { data_type: 'auto', value_rising: 'raw', value_falling: 'x' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 raw  \u2193 x')
+  })
+
   it('shows what a boolean edge_detect will actually send, not the raw spelling', async () => {
     // With data_type bool the executor coerces ANY value through _to_bool, so
     // "JA" is sent as true — showing it verbatim would misstate the output.

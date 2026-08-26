@@ -264,6 +264,26 @@ describe('NodeConfigPanel typed value fallbacks', () => {
     return w
   }
 
+  it('leaves the value untouched when the data type is one it does not coerce', async () => {
+    // _coerce_typed_value only converts bool/number/string and returns any
+    // other data_type — "auto" on the Memory block — unchanged, so switching
+    // to it must not rewrite the stored value.
+    const w = await mountSynthetic(
+      {
+        val: { type: 'string', default: '', label: 'Value', value_type_field: 'dt' },
+        dt: { type: 'string', enum: ['auto', 'bool'], default: 'bool', label: 'Type' },
+      },
+      { val: 'keep me', dt: 'bool' },
+    )
+
+    const typeSelect = selects(w).find(x => x.findAll('option').some(o => o.attributes('value') === 'auto'))
+    await typeSelect.setValue('auto')
+    await flushPromises()
+
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ val: 'keep me', dt: 'auto' })
+    w.unmount()
+  })
+
   it('renders plain text when the named type field is absent from the data', async () => {
     const w = await mountSynthetic(
       { val: { type: 'string', default: '', label: 'Value', value_type_field: 'not_in_data' } },
@@ -367,6 +387,38 @@ describe('NodeConfigPanel edge_detect value visibility', () => {
     await flushPromises()
 
     expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0', value_falling: '0' })
+    w.unmount()
+  })
+})
+
+describe('NodeConfigPanel imported string edge values', () => {
+  it('shows an imported collection the way the backend stringifies it', async () => {
+    // str([1]) is "[1]" and str({'a': 1}) is "{'a': 1}"; JavaScript would
+    // render "1" and "[object Object]" and misstate the actuator values.
+    const w = await mountPanel({ data_type: 'string', value_rising: [1], value_falling: { a: 1 } })
+    await flushPromises()
+
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['[1]', "{'a': 1}"])
+    w.unmount()
+  })
+
+  it('shows an imported boolean in Python spelling', async () => {
+    const w = await mountPanel({ data_type: 'string', value_rising: true, value_falling: false })
+    await flushPromises()
+
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['True', 'False'])
+    w.unmount()
+  })
+
+  it('keeps an ordinary typed string untouched and emits the edit', async () => {
+    const w = await mountPanel({ data_type: 'string', value_rising: 'AN', value_falling: 'AUS' })
+    await flushPromises()
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['AN', 'AUS'])
+
+    const rising = valueTextInputs(w)[0]
+    await rising.setValue('EIN')
+    await rising.trigger('change')
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: 'EIN' })
     w.unmount()
   })
 })

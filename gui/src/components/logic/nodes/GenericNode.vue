@@ -75,6 +75,7 @@
 <script setup>
 import { isBackendFalse } from '@/utils/logicBooleans'
 import { toBackendNumberText } from '@/utils/logicNumbers'
+import { toBackendStringText } from '@/utils/logicStrings'
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
@@ -334,6 +335,9 @@ const summary = computed(() => {
       // native JSON boolean or collection, which the card would otherwise
       // print verbatim while the executor sends _to_num's 1.0 / 0.0.
       if (dataType === 'number') return toBackendNumberText(text)
+      if (dataType === 'string') return toBackendStringText(text)
+      // Any other data_type — "auto", or one this GUI does not know — is
+      // returned untouched by _coerce_typed_value, so show it verbatim.
       if (dataType !== 'bool') return text
       // Decided with the backend's own rule rather than an exact "true"/
       // "false" match: with data_type bool the executor coerces ANY value, so
