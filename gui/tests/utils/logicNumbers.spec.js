@@ -18,6 +18,39 @@ describe('toBackendNumberText', () => {
     },
   )
 
+  it('accepts Python digit separators and strips them for display', () => {
+    // float('1_000') is 1000.0. The raw spelling has to be stripped, because
+    // a number input cannot display "1_000" and would render blank.
+    expect(toBackendNumberText('1_000')).toBe('1000')
+    expect(toBackendNumberText('1_000_000')).toBe('1000000')
+    expect(toBackendNumberText('1_000.5')).toBe('1000.5')
+    expect(toBackendNumberText('+1_0')).toBe('+10')
+    expect(toBackendNumberText('1_0.5_5e1_0')).toBe('10.55e10')
+    expect(toBackendNumberText('0_1')).toBe('01')
+  })
+
+  it.each(['_1', '1_', '1__0', '1_.5', '1._5', '1e_5', '_.5', '1._'])(
+    'rejects %j, the separator placements float() also rejects',
+    v => {
+      expect(toBackendNumberText(v)).toBe('0')
+    },
+  )
+
+  it('accepts Unicode decimal digits, as float() does', () => {
+    // float('١٢٣') is 123.0; mixed scripts are allowed too.
+    expect(toBackendNumberText('٣')).toBe('3')
+    expect(toBackendNumberText('١٢٣')).toBe('123')
+    expect(toBackendNumberText('１２３')).toBe('123')
+    expect(toBackendNumberText('١٢٣.٥')).toBe('123.5')
+    expect(toBackendNumberText('1٢3')).toBe('123')
+    // Digits from a block that sits directly next to another Nd block.
+    expect(toBackendNumberText('\u{1D7D9}')).toBe('1')
+  })
+
+  it.each(['½', 'Ⅴ', '²', '〇'])('rejects %j — No/Nl are not Nd, and float() raises', v => {
+    expect(toBackendNumberText(v)).toBe('0')
+  })
+
   it('treats null and undefined as the default, like a missing value', () => {
     expect(toBackendNumberText(null)).toBe('0')
     expect(toBackendNumberText(undefined)).toBe('0')

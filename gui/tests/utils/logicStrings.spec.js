@@ -47,11 +47,65 @@ describe('toBackendStringText', () => {
     expect(toBackendStringText([''])).toBe("['']")
   })
 
-  it('escapes backslashes and control characters inside collections', () => {
+  it('escapes backslashes and the named control characters', () => {
     expect(toBackendStringText(['back\\slash'])).toBe("['back\\\\slash']")
     expect(toBackendStringText(['new\nline'])).toBe("['new\\nline']")
     expect(toBackendStringText(['tab\there'])).toBe("['tab\\there']")
     expect(toBackendStringText(['cr\rhere'])).toBe("['cr\\rhere']")
+  })
+
+  it('escapes every other non-printable by code point width', () => {
+    // repr() escapes everything str.isprintable() rejects, not just the three
+    // that have a named escape.
+    expect(toBackendStringText(['\b'])).toBe("['\\x08']")
+    expect(toBackendStringText(['\x00'])).toBe("['\\x00']")
+    expect(toBackendStringText(['\x0b'])).toBe("['\\x0b']")
+    expect(toBackendStringText(['\x0c'])).toBe("['\\x0c']")
+    expect(toBackendStringText(['\x1f'])).toBe("['\\x1f']")
+    expect(toBackendStringText(['\x7f'])).toBe("['\\x7f']")
+    expect(toBackendStringText(['\x85'])).toBe("['\\x85']")
+    expect(toBackendStringText(['\xa0'])).toBe("['\\xa0']")
+    expect(toBackendStringText(['\u200b'])).toBe("['\\u200b']")
+    expect(toBackendStringText(['\u{10ffff}'])).toBe("['\\U0010ffff']")
+  })
+
+  it('leaves printable non-ASCII alone, as repr() does', () => {
+    expect(toBackendStringText(['ä'])).toBe("['ä']")
+    expect(toBackendStringText(['日本'])).toBe("['日本']")
+    expect(toBackendStringText(['\u{1f600}'])).toBe("['\u{1f600}']")
+    // The ASCII space is the one printable character in category Zs.
+    expect(toBackendStringText(['a b'])).toBe("['a b']")
+  })
+
+  it('switches to scientific notation on Python float boundaries', () => {
+    // Python uses a fixed range of 1e-4 <= |v| < 1e16, wider on the small end
+    // and narrower on the large end than JavaScript's.
+    expect(toBackendStringText(0.0001)).toBe('0.0001')
+    expect(toBackendStringText(0.00001)).toBe('1e-05')
+    expect(toBackendStringText(1e-7)).toBe('1e-07')
+    expect(toBackendStringText(1.5e20)).toBe('1.5e+20')
+    expect(toBackendStringText(1e20)).toBe('1e+20')
+    expect(toBackendStringText(1.7976931348623157e308)).toBe('1.7976931348623157e+308')
+    expect(toBackendStringText(5e-324)).toBe('5e-324')
+  })
+
+  it('keeps the int spelling for exactly representable integers', () => {
+    // The int reading is the common one, and str(int) never uses an exponent.
+    expect(toBackendStringText(0)).toBe('0')
+    expect(toBackendStringText(-42)).toBe('-42')
+    expect(toBackendStringText(Number.MAX_SAFE_INTEGER)).toBe('9007199254740991')
+    expect(toBackendStringText([1, 2])).toBe('[1, 2]')
+    // Non-integral values are unambiguously floats.
+    expect(toBackendStringText(-0.25)).toBe('-0.25')
+    expect(toBackendStringText([0.1])).toBe('[0.1]')
+  })
+
+  it('uses Python spelling for the non-finite floats', () => {
+    // JSON cannot carry these, but the exported helper takes any JS number.
+    expect(toBackendStringText(Infinity)).toBe('inf')
+    expect(toBackendStringText(-Infinity)).toBe('-inf')
+    expect(toBackendStringText(NaN)).toBe('nan')
+    expect(toBackendStringText([Infinity, NaN])).toBe('[inf, nan]')
   })
 
   it('falls back to plain stringification for a non-JSON member', () => {
