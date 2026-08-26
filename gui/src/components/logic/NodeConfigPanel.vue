@@ -1418,8 +1418,9 @@
               <option value="false">{{ $t('logic.nodeConfig.common.boolFalse') }}</option>
             </select>
             <input v-else-if="typedValueKind(schema) === 'number'"
-              type="number" step="any" v-model="localData[key]"
-              class="input text-sm" @change="onTypedValueChange(key, schema)" />
+              type="number" step="any"
+              :value="normaliseTypedValue(localData[key], 'number', schema)"
+              class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else-if="schema.type === 'boolean'"
               type="checkbox" v-model="localData[key]"
               class="text-sm" @change="emitUpdate" />
@@ -1462,6 +1463,7 @@ import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 import { isBackendFalse } from '@/utils/logicBooleans'
+import { toBackendNumberText } from '@/utils/logicNumbers'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import DebugInspector from './DebugInspector.vue'
 
@@ -2420,10 +2422,6 @@ function onSchemaEnumChange(key) {
   emitUpdate()
 }
 
-// The decimal/scientific syntax Python's float() accepts, minus the special
-// inf/nan spellings that make no sense as a configured edge value.
-const BACKEND_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
-
 // A directly entered value goes through the same rule as a type switch —
 // otherwise "1e309" is stored as JavaScript Infinity, which serializes to null.
 // Bound through normaliseTypedValue rather than v-model: an imported node may
@@ -2435,8 +2433,11 @@ function onBooleanFieldChange(key, event) {
   emitUpdate()
 }
 
-function onTypedValueChange(key, schema) {
-  localData.value[key] = normaliseTypedValue(localData.value[key], typedValueKind(schema), schema)
+// Reads the DOM value, not localData: the input is bound through
+// normaliseTypedValue rather than v-model, so localData still holds the
+// pre-edit value at this point.
+function onTypedValueChange(key, schema, event) {
+  localData.value[key] = normaliseTypedValue(event.target.value, typedValueKind(schema), schema)
   emitUpdate()
 }
 
@@ -2452,15 +2453,10 @@ function normaliseTypedValue(value, kind, schema) {
     if (value === null || value === undefined || value === '') return String(schema.default ?? 'false')
     return isBackendFalse(value) ? 'false' : 'true'
   }
-  // Deliberately not Number(): JavaScript also accepts 0x/0o/0b literals and
-  // "Infinity", which the backend's float() rejects — it would coerce them to
-  // 0.0 while the editor kept displaying the original spelling.
-  // Both checks are needed: the regex rejects spellings float() cannot parse
-  // (0x10, Infinity), isFinite rejects ones it parses into infinity (1e309).
-  if (kind === 'number') {
-    const trimmed = text.trim()
-    return BACKEND_NUMBER_RE.test(trimmed) && Number.isFinite(Number(trimmed)) ? text : '0'
-  }
+  // The raw value, not `text`: an imported node may carry a native JSON
+  // boolean or collection, and stringifying first would show "true" as blank
+  // and [1] as 1, while the backend (GraphExecutor._to_num) sends 1.0 and 0.0.
+  if (kind === 'number') return toBackendNumberText(value)
   return text
 }
 

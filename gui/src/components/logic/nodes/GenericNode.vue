@@ -74,6 +74,7 @@
 
 <script setup>
 import { isBackendFalse } from '@/utils/logicBooleans'
+import { toBackendNumberText } from '@/utils/logicNumbers'
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
@@ -328,7 +329,12 @@ const summary = computed(() => {
     // the viewer's language instead of raw English on the block card.
     const edgeValue = (raw, fallback) => {
       const text = raw ?? fallback
-      if ((d.data_type ?? 'bool') !== 'bool') return text
+      const dataType = d.data_type ?? 'bool'
+      // Same reason as the bool branch below: an imported node may carry a
+      // native JSON boolean or collection, which the card would otherwise
+      // print verbatim while the executor sends _to_num's 1.0 / 0.0.
+      if (dataType === 'number') return toBackendNumberText(text)
+      if (dataType !== 'bool') return text
       // Decided with the backend's own rule rather than an exact "true"/
       // "false" match: with data_type bool the executor coerces ANY value, so
       // an imported "False"/"off" — or a real JSON boolean — must read as the

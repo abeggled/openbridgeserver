@@ -45,6 +45,7 @@ async function mountPanel(data = {}) {
 }
 
 const selects = w => w.findAll('select')
+const numbers = w => w.findAll('input[type="number"]')
 // The panel header holds the editable block name (issue #1157), which is a
 // text input too — keep it out of assertions about the value fields.
 const valueTextInputs = w =>
@@ -366,6 +367,58 @@ describe('NodeConfigPanel edge_detect value visibility', () => {
     await flushPromises()
 
     expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0', value_falling: '0' })
+    w.unmount()
+  })
+})
+
+describe('NodeConfigPanel imported number edge values', () => {
+  // LogicGraphImport accepts native JSON values, so a Number edge value can
+  // arrive as a real boolean or a collection. The panel must show what
+  // GraphExecutor._to_num will actually send, not the HTML/JS coercion of the
+  // raw value — otherwise the editor misstates the actuator value.
+  it('shows an imported boolean as the number the backend sends', async () => {
+    const w = await mountPanel({ data_type: 'number', value_rising: true, value_falling: false })
+    await flushPromises()
+
+    // Raw binding rendered "" for true, because "true" is not a valid
+    // number-input value; the backend sends 1.0.
+    expect(numbers(w).map(i => i.element.value)).toEqual(['1', '0'])
+    w.unmount()
+  })
+
+  it('shows an imported collection as 0, the value float() falls back to', async () => {
+    const w = await mountPanel({ data_type: 'number', value_rising: [1], value_falling: [] })
+    await flushPromises()
+
+    // Raw binding rendered "1" for [1] via String([1]); float([1]) raises, so
+    // the backend sends 0.0.
+    expect(numbers(w).map(i => i.element.value)).toEqual(['0', '0'])
+    w.unmount()
+  })
+
+  it('normalizes an edited value through the backend rule on change', async () => {
+    const w = await mountPanel({ data_type: 'number', value_rising: 1, value_falling: 0 })
+    await flushPromises()
+
+    const rising = numbers(w)[0]
+    await rising.setValue('2.5')
+    await rising.trigger('change')
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '2.5' })
+
+    // The input is no longer bound with v-model, so the change handler has to
+    // read the DOM — a stale localData read would re-emit the old value.
+    expect(numbers(w)[0].element.value).toBe('2.5')
+    w.unmount()
+  })
+
+  it('rejects an edited overflow spelling instead of storing Infinity', async () => {
+    const w = await mountPanel({ data_type: 'number', value_rising: 1, value_falling: 0 })
+    await flushPromises()
+
+    const rising = numbers(w)[0]
+    await rising.setValue('1e309')
+    await rising.trigger('change')
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '0' })
     w.unmount()
   })
 })

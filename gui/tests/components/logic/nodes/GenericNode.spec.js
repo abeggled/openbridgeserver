@@ -247,6 +247,21 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 1  \u2193 0')
   })
 
+  it('shows what a number edge_detect will actually send, not the raw import', async () => {
+    // LogicGraphImport accepts native JSON values; GraphExecutor._to_num maps
+    // a real boolean to 1/0 and makes float() raise on a collection, so the
+    // card must not print "true"/"1" from JavaScript stringification.
+    const w = await mountGN('edge_detect', { data_type: 'number', value_rising: true, value_falling: [1] })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 1  \u2193 0')
+  })
+
+  it('shows a string edge_detect value verbatim, without the numeric rule', async () => {
+    const w = await mountGN('edge_detect', { data_type: 'string', value_rising: 'AN', value_falling: 'AUS' })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 AN  \u2193 AUS')
+  })
+
   it('shows what a boolean edge_detect will actually send, not the raw spelling', async () => {
     // With data_type bool the executor coerces ANY value through _to_bool, so
     // "JA" is sent as true — showing it verbatim would misstate the output.
