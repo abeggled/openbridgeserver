@@ -4,8 +4,8 @@ import { toBackendNumberText } from '@/utils/logicNumbers'
 // Mirrors GraphExecutor._to_num — the editor and the block card both decide
 // with this, so it must not drift from the backend.
 describe('toBackendNumberText', () => {
-  it.each(['0', '1', '-2', '+3', '1.5', '.5', '2.', '1e3', '1E-3'])(
-    'keeps %j, which float() parses and a number input can display',
+  it.each(['0', '1', '-2', '1.5', '1e3', '1E-3', '007'])(
+    'keeps %j, which float() parses and a number input already accepts',
     v => {
       expect(toBackendNumberText(v)).toBe(v)
     },
@@ -17,6 +17,21 @@ describe('toBackendNumberText', () => {
       expect(toBackendNumberText(v)).toBe('0')
     },
   )
+
+  it.each([
+    ['2.', '2'],
+    ['+3', '3'],
+    ['.5', '0.5'],
+    ['+.5', '0.5'],
+    ['-.5', '-0.5'],
+    ['1.', '1'],
+    ['2.e3', '2000'],
+  ])('canonicalizes %j to %j, which float() accepts but the widget does not', (input, expected) => {
+    // <input type="number"> rejects a trailing point, a leading plus and a
+    // bare fraction, so an imported node would show a blank, invalid field for
+    // a value the executor runs happily.
+    expect(toBackendNumberText(input)).toBe(expected)
+  })
 
   it('returns the canonical spelling so a number input can display it', () => {
     // float() ignores surrounding whitespace, but <input type="number"> cannot
@@ -32,7 +47,8 @@ describe('toBackendNumberText', () => {
     expect(toBackendNumberText('1_000')).toBe('1000')
     expect(toBackendNumberText('1_000_000')).toBe('1000000')
     expect(toBackendNumberText('1_000.5')).toBe('1000.5')
-    expect(toBackendNumberText('+1_0')).toBe('+10')
+    // Also drops the leading plus, which the widget rejects.
+    expect(toBackendNumberText('+1_0')).toBe('10')
     expect(toBackendNumberText('1_0.5_5e1_0')).toBe('10.55e10')
     expect(toBackendNumberText('0_1')).toBe('01')
   })

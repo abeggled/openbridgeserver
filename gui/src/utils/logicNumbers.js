@@ -19,6 +19,11 @@ export const BACKEND_NUMBER_RE = new RegExp(
   'u',
 )
 
+// What <input type="number"> accepts: an optional minus, digits, an optional
+// fraction, an optional exponent. Narrower than float() — no leading plus, no
+// bare ".5", no trailing "2.".
+const HTML_NUMBER_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/
+
 // Every Nd block is ten consecutive code points, but blocks can sit directly
 // next to each other (the mathematical digits are five sets in a row), so the
 // value is the offset within the whole contiguous run, modulo ten. Needed
@@ -53,7 +58,10 @@ export function toBackendNumberText(value, fallback = '0') {
   // display "1_000" and would render blank.
   const plain = trimmed.replace(/_/g, '').replace(/\p{Nd}/gu, toAsciiDigit)
   if (!Number.isFinite(Number(plain))) return fallback
-  // The canonical spelling, never the original: float() ignores surrounding
-  // whitespace, but a number input cannot display " 4 " and would show blank.
-  return plain
+  // float() accepts spellings <input type="number"> rejects — a trailing point
+  // ("2."), a leading plus ("+3"), a bare fraction (".5"). Those must be
+  // canonicalized or the widget shows an invalid, blank field for a value the
+  // executor happily runs. Spellings the widget already accepts are left as
+  // they are, so an exponent or a leading zero survives editing.
+  return HTML_NUMBER_RE.test(plain) ? plain : String(Number(plain))
 }

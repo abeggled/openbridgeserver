@@ -551,10 +551,20 @@ describe('NodeConfigPanel schema defaults for a bare node', () => {
     w.unmount()
   })
 
-  it('leaves a boolean unchecked when it is explicitly null', async () => {
-    // d.get finds the key, so the True default does not apply and None is
-    // falsy — the box must not claim the setting is on.
+  it('shows the declared default when a boolean is explicitly null', async () => {
+    // An explicit null is not a boolean, and every consumer of these fields
+    // falls back to its own default for one: LogicManager excludes a node from
+    // persistence only for a literal False (manager.py, `is False`), so a null
+    // persist_state still persists and the box must be checked.
     const w = await mountPanel({ persist_state: null })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(true)
+    w.unmount()
+  })
+
+  it('still unchecks a boolean that is explicitly false', async () => {
+    const w = await mountPanel({ persist_state: false })
     await flushPromises()
 
     expect(w.find('input[type="checkbox"]').element.checked).toBe(false)
@@ -831,7 +841,11 @@ describe('NodeConfigPanel typed value backend agreement', () => {
     await dataTypeSelect.setValue('number')
     await flushPromises()
 
-    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '-1.5e3', value_falling: '.25' })
+    // The exponent survives, because <input type="number"> accepts it. The
+    // bare fraction does not — the widget rejects ".25" and would render an
+    // empty, invalid field — so it is canonicalized to the same value.
+    expect(Number('.25')).toBe(Number('0.25'))
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '-1.5e3', value_falling: '0.25' })
     w.unmount()
   })
 })

@@ -1431,7 +1431,7 @@
               :value="normaliseTypedValue(configuredValue(key, schema), 'number')"
               class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else-if="schema.type === 'boolean'"
-              type="checkbox" :checked="!!configuredValue(key, schema)"
+              type="checkbox" :checked="schemaBooleanChecked(key, schema)"
               class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
             <!-- Every remaining typed value field, not just data_type 'string':
                  an unrecognised type is passed through uncoerced by the
@@ -2426,6 +2426,22 @@ function typedValueKind(schema) {
   // uncoerced — so fall through to the plain text field rather than guessing
   // a type and misstating what runs.
   return (configuredValue(schema.value_type_field, schemaFields.value[schema.value_type_field]) ?? '')
+}
+
+// Whether a boolean schema field renders as checked. An explicit null is not
+// a boolean, and every backend consumer of these fields falls back to its own
+// default behaviour for one: LogicManager opts a node out of persistence only
+// for a literal False, the Gate tests negate_enable for truthiness, and the
+// API client passes verify_ssl to requests, which treats None as its default.
+// In each case that lands on the field's declared default, so show it.
+//
+// Known limit: for a configured value that is neither a boolean nor null —
+// 0, "", [] — those three consumers genuinely disagree, and a generic form
+// cannot encode per-field semantics. Ordinary truthiness is used there.
+function schemaBooleanChecked(key, schema) {
+  const value = configuredValue(key, schema)
+  if (value === null || value === undefined) return !!(schema?.default ?? false)
+  return !!value
 }
 
 // The value the enum dropdown shows: '' whenever the configured setting is
