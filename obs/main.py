@@ -456,6 +456,19 @@ def create_app() -> FastAPI:
         if request.url.path.startswith("/visu/"):
             # Bereits durch visu_spa abgedeckt — sollte nicht hier landen
             return JSONResponse({"detail": "Not found"}, status_code=404)
+        if request.url.path == "/help" or request.url.path.startswith("/help/"):
+            # _LazyHelpStatic already 404s directly (JSON) when help_dist/
+            # doesn't exist at all — this handler is only reached once the
+            # directory exists but StaticFiles itself can't resolve the
+            # request (no matching page and no local 404.html). That's not
+            # only the "no dist" case it was assumed to be: a help_dist/
+            # mid-build (e.g. index.html already written, 404.html not yet)
+            # hits it too, and without this guard it fell through to the
+            # Admin-GUI SPA shell as a misleading 200 instead of the JSON 404
+            # the help store's loadIndex() needs to know to retry (Codex
+            # review on PR #1180 — this guard was previously removed here as
+            # "dead code", which the partial-build case disproves).
+            return JSONResponse({"detail": "Not found"}, status_code=404)
         if _gui_dist.is_dir():
             index = _gui_dist / "index.html"
             if index.exists():
