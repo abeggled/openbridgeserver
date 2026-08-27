@@ -73,9 +73,7 @@
 </template>
 
 <script setup>
-import { isBackendFalse } from '@/utils/logicBooleans'
-import { toBackendNumberText } from '@/utils/logicNumbers'
-import { toBackendStringText } from '@/utils/logicStrings'
+import { coercedValueText } from '@/utils/logicTypedValue'
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
@@ -332,21 +330,13 @@ const summary = computed(() => {
     // an ABSENT key takes the default — an explicit JSON null is a configured
     // value it coerces (and _to_bool(None) is False). `??` cannot express that.
     const configured = (key, fallback) => (key in d ? d[key] : fallback)
+    // The shared rule decides everything; only the boolean labels are local,
+    // because the card shows them in the viewer's language while the panel
+    // uses the stored 'true'/'false' as option values.
     const edgeValue = (text, dataType) => {
-      // Same reason as the bool branch below: an imported node may carry a
-      // native JSON boolean or collection, which the card would otherwise
-      // print verbatim while the executor sends _to_num's 1.0 / 0.0.
-      if (dataType === 'number') return toBackendNumberText(text)
-      if (dataType === 'string') return toBackendStringText(text)
-      // Any other data_type — "auto", or one this GUI does not know — is
-      // returned untouched by _coerce_typed_value, so show it verbatim. A null
-      // shows as empty rather than the word "null", matching the panel.
-      if (dataType !== 'bool') return text === null || text === undefined ? '' : text
-      // Decided with the backend's own rule rather than an exact "true"/
-      // "false" match: with data_type bool the executor coerces ANY value, so
-      // an imported "False"/"off" — or a real JSON boolean — must read as the
-      // value that will actually be sent, not as raw English.
-      return isBackendFalse(text)
+      const coerced = coercedValueText(text, dataType)
+      if (dataType !== 'bool') return coerced
+      return coerced === 'false'
         ? t('logic.nodeConfig.common.boolFalse')
         : t('logic.nodeConfig.common.boolTrue')
     }

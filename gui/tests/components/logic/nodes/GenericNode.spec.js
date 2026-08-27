@@ -255,6 +255,14 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
   })
 
+  it('keeps a collection shape under an uncoerced data_type', async () => {
+    // _coerce_typed_value passes the value through untouched, so it is still a
+    // list; a template literal would render "1" and "[object Object]".
+    const w = await mountGN('edge_detect', { data_type: 42, value_rising: [1], value_falling: { a: 2 } })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 [1]  \u2193 {"a":2}')
+  })
+
   it('shows an explicit null data_type as uncoerced and empty', async () => {
     // _coerce_typed_value returns an unrecognised data_type untouched.
     const w = await mountGN('edge_detect', { data_type: null, value_rising: 'off', value_falling: null })

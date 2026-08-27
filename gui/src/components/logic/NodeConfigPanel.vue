@@ -1479,9 +1479,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
-import { isBackendFalse } from '@/utils/logicBooleans'
-import { toBackendNumberText } from '@/utils/logicNumbers'
-import { toBackendStringText } from '@/utils/logicStrings'
+import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import DebugInspector from './DebugInspector.vue'
 
@@ -2488,28 +2486,11 @@ function onTypedValueChange(key, schema, event) {
   emitUpdate()
 }
 
-// Pure coercion, mirroring _coerce_typed_value. The caller resolves the
-// configured value first (see configuredValue), so every value arriving here
-// — an explicit null included — is one the backend would coerce, never a
-// stand-in for a missing field.
+// Delegates to the shared rule so the panel and the block card cannot drift
+// apart; the caller resolves the configured value first (see configuredValue),
+// because only an ABSENT field takes the schema default at the backend.
 function normaliseTypedValue(value, kind) {
-  // Decided with the backend's own rule (GraphExecutor._to_bool) rather than
-  // an exact "true"/"false" match: a supported spelling like "False" or "off"
-  // would otherwise read as its opposite. The raw value, not a stringified
-  // one: bool([0]) is True in Python although String([0]) is "0", and
-  // _to_bool(None) is False.
-  if (kind === 'bool') return isBackendFalse(value) ? 'false' : 'true'
-  // Raw as well: an imported native boolean or collection would otherwise show
-  // as blank or as JavaScript's own stringification instead of what _to_num
-  // and str() actually send.
-  if (kind === 'number') return toBackendNumberText(value)
-  if (kind === 'string') return toBackendStringText(value)
-  // Any other data_type is returned untouched by _coerce_typed_value, so the
-  // value may still be a list or object. String() would scalarize those —
-  // [1] to "1" and {a:2} to "[object Object]" — so show the JSON form, which
-  // is how the value is actually stored and sent.
-  if (value === null || value === undefined) return ''
-  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+  return coercedValueText(value, kind)
 }
 
 function fieldLabel(nodeType, fieldKey, fallback) {
