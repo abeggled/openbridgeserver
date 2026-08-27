@@ -241,6 +241,27 @@ describe('GenericNode — summary', () => {
     expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
   })
 
+  it('shows an explicit null edge value as what the executor sends', async () => {
+    // The executor reads d.get(key, default): the key exists, so the 'true'
+    // default does not apply and _to_bool(None) is False.
+    const w = await mountGN('edge_detect', { value_rising: null, value_falling: null })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Falsch  \u2193 Falsch')
+  })
+
+  it('still takes the schema default when the edge value is absent', async () => {
+    const w = await mountGN('edge_detect', {})
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 Wahr  \u2193 Falsch')
+  })
+
+  it('shows an explicit null data_type as uncoerced and empty', async () => {
+    // _coerce_typed_value returns an unrecognised data_type untouched.
+    const w = await mountGN('edge_detect', { data_type: null, value_rising: 'off', value_falling: null })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('\u2191 off  \u2193')
+  })
+
   it('shows a non-boolean edge_detect value verbatim', async () => {
     const w = await mountGN('edge_detect', { data_type: 'number', value_rising: '1', value_falling: '0' })
     await flushPromises()

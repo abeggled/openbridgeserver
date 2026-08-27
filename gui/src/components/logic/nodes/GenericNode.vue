@@ -328,17 +328,20 @@ const summary = computed(() => {
     // "↑ <rising>  ↓ <falling>", one part per edge direction.
     // A boolean edge value is stored as the literal "true"/"false"; show it in
     // the viewer's language instead of raw English on the block card.
-    const edgeValue = (raw, fallback) => {
-      const text = raw ?? fallback
-      const dataType = d.data_type ?? 'bool'
+    // The executor reads every one of these as d.get(key, <default>), so only
+    // an ABSENT key takes the default — an explicit JSON null is a configured
+    // value it coerces (and _to_bool(None) is False). `??` cannot express that.
+    const configured = (key, fallback) => (key in d ? d[key] : fallback)
+    const edgeValue = (text, dataType) => {
       // Same reason as the bool branch below: an imported node may carry a
       // native JSON boolean or collection, which the card would otherwise
       // print verbatim while the executor sends _to_num's 1.0 / 0.0.
       if (dataType === 'number') return toBackendNumberText(text)
       if (dataType === 'string') return toBackendStringText(text)
       // Any other data_type — "auto", or one this GUI does not know — is
-      // returned untouched by _coerce_typed_value, so show it verbatim.
-      if (dataType !== 'bool') return text
+      // returned untouched by _coerce_typed_value, so show it verbatim. A null
+      // shows as empty rather than the word "null", matching the panel.
+      if (dataType !== 'bool') return text === null || text === undefined ? '' : text
       // Decided with the backend's own rule rather than an exact "true"/
       // "false" match: with data_type bool the executor coerces ANY value, so
       // an imported "False"/"off" — or a real JSON boolean — must read as the
@@ -349,13 +352,14 @@ const summary = computed(() => {
     }
     // A direction set to trigger-only shows an em dash instead of a value;
     // one set to off is left out of the summary entirely.
-    const edgePart = (arrow, action, raw, fallback) => {
+    const edgePart = (arrow, action, valueKey, fallback) => {
       if (action === 'off') return null
-      return `${arrow} ${action === 'trigger' ? '\u2014' : edgeValue(raw, fallback)}`
+      const value = edgeValue(configured(valueKey, fallback), configured('data_type', 'bool'))
+      return `${arrow} ${action === 'trigger' ? '\u2014' : value}`
     }
     const parts = [
-      edgePart('\u2191', d.on_rising  ?? 'value', d.value_rising,  'true'),
-      edgePart('\u2193', d.on_falling ?? 'value', d.value_falling, 'false'),
+      edgePart('\u2191', configured('on_rising',  'value'), 'value_rising',  'true'),
+      edgePart('\u2193', configured('on_falling', 'value'), 'value_falling', 'false'),
     ].filter(Boolean)
     return parts.join('  ')
   }
