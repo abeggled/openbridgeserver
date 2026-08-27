@@ -87,6 +87,15 @@ describe('toBackendStringText', () => {
     expect(toBackendStringText(1.7976931348623157e308)).toBe('1.7976931348623157e+308')
   })
 
+  it('keeps negative zero, whose sign JSON.stringify drops', () => {
+    // JSON.parse('-0.0') is -0, but JSON.stringify(-0) is "0", so the token
+    // rule cannot see the sign. Python prints the float as -0.0.
+    expect(Object.is(JSON.parse('-0.0'), -0)).toBe(true)
+    expect(toBackendStringText(-0)).toBe('-0.0')
+    expect(toBackendStringText([-0])).toBe('[-0.0]')
+    expect(toBackendStringText(0)).toBe('0')
+  })
+
   it('reads int vs float from the JSON token the value travels as', () => {
     // The browser writes 1e20 as an integer token, which Python parses as int
     // and prints in full; 1e21 it writes as 1e+21, which Python parses as a

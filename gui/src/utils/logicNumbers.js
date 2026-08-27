@@ -53,5 +53,7 @@ export function toBackendNumberText(value, fallback = '0') {
   // display "1_000" and would render blank.
   const plain = trimmed.replace(/_/g, '').replace(/\p{Nd}/gu, toAsciiDigit)
   if (!Number.isFinite(Number(plain))) return fallback
-  return trimmed === plain ? text : plain
+  // The canonical spelling, never the original: float() ignores surrounding
+  // whitespace, but a number input cannot display " 4 " and would show blank.
+  return plain
 }

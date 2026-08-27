@@ -409,6 +409,39 @@ describe('NodeConfigPanel edge_detect value visibility', () => {
   })
 })
 
+describe('NodeConfigPanel uncoerced edge values', () => {
+  it('keeps a collection shape when the data type is not one the backend coerces', async () => {
+    // _coerce_typed_value returns an unrecognised data_type untouched, so the
+    // value stays a list or object. The plain text field would scalarize them
+    // into "1" and "[object Object]".
+    const w = await mountPanel({ data_type: 42, value_rising: [1], value_falling: { a: 2 } })
+    await flushPromises()
+
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['[1]', '{"a":2}'])
+    w.unmount()
+  })
+
+  it('keeps a scalar uncoerced value as plain text', async () => {
+    const w = await mountPanel({ data_type: 42, value_rising: 'raw', value_falling: 7 })
+    await flushPromises()
+
+    expect(valueTextInputs(w).map(i => i.element.value)).toEqual(['raw', '7'])
+    w.unmount()
+  })
+
+  it('renders a number edge value without surrounding whitespace', async () => {
+    // The widget must be valid, not just parseable: <input type="number">
+    // shows blank for " 4 ".
+    const w = await mountPanel({ data_type: 'number', value_rising: ' 4 ', value_falling: '1' })
+    await flushPromises()
+
+    const first = numbers(w)[0]
+    expect(first.element.value).toBe('4')
+    expect(first.element.checkValidity()).toBe(true)
+    w.unmount()
+  })
+})
+
 describe('NodeConfigPanel imported string edge values', () => {
   it('shows an imported collection the way the backend stringifies it', async () => {
     // str([1]) is "[1]" and str({'a': 1}) is "{'a': 1}"; JavaScript would

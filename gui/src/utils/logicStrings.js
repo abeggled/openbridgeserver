@@ -23,6 +23,15 @@
 // 2, 10 here and as 10, 2 there, whichever way it is enumerated. Recovering it
 // would mean parsing graph payloads into order-preserving Maps across the API
 // layer, which is out of proportion to numeric-looking keys in an edge value.
+//
+// Third known limit — the non-printable test below uses the JavaScript
+// engine's Unicode tables, and the server's Python has its own. They disagree
+// about code points assigned between the two versions: U+088F is unassigned
+// in Unicode 16 (escaped by Python 3.14) and assigned in Unicode 17 (printed
+// literally by a current browser). There is no single backend version to pin
+// to — the Python shipped in the Docker image, the LXC template and a local
+// install can each differ — and dropping category Cn would break the far more
+// common case where both runtimes agree a code point is unassigned.
 
 // Python's float repr switches to scientific notation outside 1e-4 <= |v| <
 // 1e16 — a wider fixed range than JavaScript's — pads the exponent to two
@@ -49,6 +58,10 @@ function numberRepr(value) {
   // what the backend parsed and stored for anything the editor saved — the
   // browser writes 1e20 as 100000000000000000000 and 1e21 as 1e+21, and
   // Python reads those as int and float respectively.
+  // JSON.stringify erases the sign of negative zero, rendering it "0", so the
+  // token rule below cannot see it. A JS -0 can only come from a signed token,
+  // and Python prints that float as -0.0.
+  if (Object.is(value, -0)) return '-0.0'
   const token = JSON.stringify(value)
   return /[.eE]/.test(token) ? floatRepr(value) : token
 }

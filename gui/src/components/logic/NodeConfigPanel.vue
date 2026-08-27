@@ -1433,9 +1433,13 @@
             <input v-else-if="schema.type === 'boolean'"
               type="checkbox" :checked="!!configuredValue(key, schema)"
               class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
-            <input v-else-if="typedValueKind(schema) === 'string'"
+            <!-- Every remaining typed value field, not just data_type 'string':
+                 an unrecognised type is passed through uncoerced by the
+                 executor and may still be a list or object, which the generic
+                 v-model input below would scalarize. -->
+            <input v-else-if="schema.value_type_field"
               type="text"
-              :value="normaliseTypedValue(configuredValue(key, schema), 'string')"
+              :value="normaliseTypedValue(configuredValue(key, schema), typedValueKind(schema))"
               class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else
               v-model="localData[key]"
@@ -2500,8 +2504,12 @@ function normaliseTypedValue(value, kind) {
   // and str() actually send.
   if (kind === 'number') return toBackendNumberText(value)
   if (kind === 'string') return toBackendStringText(value)
-  // Any other data_type is returned untouched by _coerce_typed_value.
-  return value === null || value === undefined ? '' : String(value)
+  // Any other data_type is returned untouched by _coerce_typed_value, so the
+  // value may still be a list or object. String() would scalarize those —
+  // [1] to "1" and {a:2} to "[object Object]" — so show the JSON form, which
+  // is how the value is actually stored and sent.
+  if (value === null || value === undefined) return ''
+  return typeof value === 'object' ? JSON.stringify(value) : String(value)
 }
 
 function fieldLabel(nodeType, fieldKey, fallback) {

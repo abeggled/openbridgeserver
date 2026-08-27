@@ -4,8 +4,8 @@ import { toBackendNumberText } from '@/utils/logicNumbers'
 // Mirrors GraphExecutor._to_num — the editor and the block card both decide
 // with this, so it must not drift from the backend.
 describe('toBackendNumberText', () => {
-  it.each(['0', '1', '-2', '+3', '1.5', '.5', '2.', '1e3', '1E-3', ' 4 '])(
-    'keeps %j, which float() parses',
+  it.each(['0', '1', '-2', '+3', '1.5', '.5', '2.', '1e3', '1E-3'])(
+    'keeps %j, which float() parses and a number input can display',
     v => {
       expect(toBackendNumberText(v)).toBe(v)
     },
@@ -17,6 +17,14 @@ describe('toBackendNumberText', () => {
       expect(toBackendNumberText(v)).toBe('0')
     },
   )
+
+  it('returns the canonical spelling so a number input can display it', () => {
+    // float() ignores surrounding whitespace, but <input type="number"> cannot
+    // display " 4 " and would render blank and invalid.
+    expect(toBackendNumberText(' 4 ')).toBe('4')
+    expect(toBackendNumberText('\t2\n')).toBe('2')
+    expect(toBackendNumberText(' 1_0 ')).toBe('10')
+  })
 
   it('accepts Python digit separators and strips them for display', () => {
     // float('1_000') is 1000.0. The raw spelling has to be stripped, because
