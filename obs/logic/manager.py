@@ -229,7 +229,29 @@ _MERGE_INPUT_HANDLE_RE = re.compile(r"in[1-9][0-9]*$")
 _INIT_CONTROL_INPUT_HANDLES: dict[str, frozenset[str]] = {
     "datapoint_write": frozenset({"trigger"}),
     "gate": frozenset({"enable"}),
+    # edge_detect.reset only drops the remembered level; the value that leaves
+    # "out" descends from "in" alone. Counting it as a value edge would both
+    # make an unrelated branch initializable and fabricate a DataPoint-level
+    # settle dependency, which can close a false cycle and silently suppress a
+    # genuinely seeded Write elsewhere on the sheet.
+    "edge_detect": frozenset({"reset"}),
 }
+
+
+def _edge_detect_sends_value(node: Any) -> bool:
+    """Whether an Edge Detection node's "out" handle can EVER carry a value.
+
+    The executor sends "out" only for a direction whose action is neither
+    "off" (silent) nor "trigger" (pulse without a value) — mirrored here the
+    same way it decides, so an imported or future setting keeps sending. With
+    both directions configured otherwise, "out" never appears in the output at
+    all: it is then not a pulse handle whose absence needs correcting, and
+    treating it as one blanks out consumers that are in fact driven entirely by
+    independent, genuinely fresh inputs.
+    """
+    d = node.data or {}
+    silent = {"off", "trigger"}
+    return str(d.get("on_rising", "value")) not in silent or str(d.get("on_falling", "value")) not in silent
 
 
 def _downstream_closure(start: set[str], edges: list[Any]) -> set[str]:
@@ -2379,6 +2401,17 @@ class LogicManager:
                         acc += (now - ns["last_start"]).total_seconds() / 3600
                     overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
 
+                # A save/startup is not a transition, so no reset arrives on
+                # this pass. Whatever drives "reset" reports a SYNTHETIC value
+                # here — a newly seeded Change Filter in particular reports its
+                # first value as changed=True — and letting that clear the
+                # detector's level would discard the baseline just seeded
+                # through "in" and swallow the block's first real edge. The
+                # matching taint exceptions above rely on exactly this.
+                for node in flow.nodes:
+                    if node.type == "edge_detect":
+                        overrides[node.id] = {**overrides.get(node.id, {}), "reset": False}
+
                 # Fresh state copy per pass: the executor mutates gate/
                 # hysteresis state during evaluation, and a later pass with
                 # settled seeds must evaluate against the ORIGINAL persisted
@@ -4109,6 +4142,19 @@ class LogicManager:
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
                         continue
                     if _node_type_by_id.get(source_id) == "change_filter" and (pulse_edge.sourceHandle or "out") != "changed":
+                        continue
+                    # A handle that can never fire is not a pulse origin. With
+                    # both directions set to "off"/"trigger", "out" never
+                    # appears at all, so its consumers are permanently fed by
+                    # their other inputs — correcting them for a missing pulse
+                    # would blank out a result that is entirely independent.
+                    _pulse_source_node = _node_by_id_early.get(source_id)
+                    if (
+                        _pulse_source_node is not None
+                        and _pulse_source_node.type == "edge_detect"
+                        and (pulse_edge.sourceHandle or "out") == "out"
+                        and not _edge_detect_sends_value(_pulse_source_node)
+                    ):
                         continue
                     # No source-handle restriction for edge_detect: unlike a
                     # change_filter, whose "out" carries a sustained value, all

@@ -1479,6 +1479,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import DebugInspector from './DebugInspector.vue'
@@ -2445,13 +2446,15 @@ const IDENTITY_FALSE_BOOLEAN_FIELDS = new Set(['persist_state'])
 //
 // Known limit: for a configured value that is neither a boolean nor null —
 // 0, "", [] — the remaining consumers genuinely disagree, and a generic form
-// cannot encode per-field semantics beyond the identity list above. Ordinary
-// truthiness is used there.
+// cannot encode per-field semantics beyond the identity list above. Those
+// consumers all read the raw value with Python's own truthiness (`if
+// d.get(...)`), which is what isPythonTruthy mirrors — `!!value` would call an
+// imported empty list or object enabled where the backend reads it as false.
 function schemaBooleanChecked(key, schema) {
   const value = configuredValue(key, schema)
   if (value === null || value === undefined) return !!(schema?.default ?? false)
   if (IDENTITY_FALSE_BOOLEAN_FIELDS.has(key)) return value !== false
-  return !!value
+  return isPythonTruthy(value)
 }
 
 // The value the enum dropdown shows: '' whenever the configured setting is

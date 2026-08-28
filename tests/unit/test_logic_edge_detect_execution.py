@@ -650,3 +650,75 @@ async def test_an_idle_pulse_on_a_merge_without_prior_state_stays_absent():
 
     assert manager._hysteresis["g"]["merge"] == {"values": {"in1": None, "in2": 7}, "active": "in2"}
     assert outputs["merge"]["out"] == 7
+
+
+def _disabled_out_flow(target: uuid.UUID, source_dp: str, data: dict) -> FlowData:
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("ed", "edge_detect", data),
+                node("rb", "datapoint_read", {"datapoint_id": source_dp}),
+                node("sum", "math_formula", {"formula": "a + b"}),
+                node("w", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [
+                edge("ed", "sum", "out", "in1"),
+                edge("rb", "sum", "value", "in2"),
+                edge("sum", "w", "result", "value"),
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_handle_that_can_never_fire_does_not_suppress_independent_inputs():
+    """With both directions silent, "out" never appears at all — it is not a
+    pulse whose absence needs correcting, and treating it as one blanked out a
+    Formula fed entirely by its own fresh input."""
+    source = str(uuid.uuid4())
+    manager = _manager({source: 5})
+    flow = _disabled_out_flow(uuid.uuid4(), source, {"on_rising": "off", "on_falling": "off"})
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await manager._execute_graph("g", "G", flow, {"rb": {"value": 5, "changed": True}})
+
+    assert outputs["sum"]["result"] == 5.0
+    assert [c.args[0].value for c in manager._event_bus.publish.await_args_list] == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_trigger_only_directions_also_never_send_a_value():
+    """A "trigger" direction pulses without sending, so "out" is just as
+    permanently absent as with "off" — the same exemption has to apply."""
+    source = str(uuid.uuid4())
+    manager = _manager({source: 5})
+    flow = _disabled_out_flow(uuid.uuid4(), source, {"on_rising": "trigger", "on_falling": "off"})
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await manager._execute_graph("g", "G", flow, {"rb": {"value": 5, "changed": True}})
+
+    assert [c.args[0].value for c in manager._event_bus.publish.await_args_list] == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_a_direction_that_still_sends_keeps_the_missing_pulse_correction():
+    """The boundary: as soon as ONE direction sends, "out" is a real pulse
+    handle again and its idle absence must still suppress the descendant —
+    otherwise the placeholder reaches the actuator."""
+    source = str(uuid.uuid4())
+    manager = _manager({source: 5})
+    flow = _disabled_out_flow(uuid.uuid4(), source, {"on_rising": "value", "on_falling": "off"})
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await manager._execute_graph("g", "G", flow, {"rb": {"value": 5, "changed": True}})
+
+    manager._event_bus.publish.assert_not_awaited()

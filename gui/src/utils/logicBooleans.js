@@ -17,3 +17,16 @@ export function isBackendFalse(value) {
   if (typeof value === 'object') return Object.keys(value).length === 0
   return !value
 }
+
+// Python's own truthiness for a raw configured value. Distinct from
+// isBackendFalse above: this is the rule for the schema settings whose backend
+// consumer is a plain `if d.get(...)` rather than GraphExecutor._to_bool, so
+// the string "false" counts as true here. It differs from JavaScript's `!!`
+// only for collections — `[]` and `{}` are false in Python and true in
+// JavaScript — which is exactly what an imported or API-supplied value can
+// carry into a boolean field.
+export function isPythonTruthy(value) {
+  if (Array.isArray(value)) return value.length > 0
+  if (value !== null && typeof value === 'object') return Object.keys(value).length > 0
+  return !!value
+}

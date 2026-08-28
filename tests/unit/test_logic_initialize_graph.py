@@ -3348,3 +3348,125 @@ async def test_a_detector_whose_reset_comes_from_an_edge_value_stays_tainted():
 
     assert mgr._hysteresis["g1"]["ea"] == {"value": False}
     assert "eb" not in mgr._hysteresis["g1"]
+
+
+@pytest.mark.asyncio
+async def test_a_synthetic_reset_pulse_does_not_clear_the_seeded_detector_level():
+    """A save is not a transition, so no reset arrives — but a newly seeded
+    Change Filter reports its first value as changed=True. Letting that clear
+    the detector would discard the baseline seeded through "in" and swallow the
+    block's first real edge."""
+    src_a, src_b, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "cf", "type": "change_filter", "data": {}},
+            {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "cf", "targetHandle": "in"},
+            {"source": "cf", "sourceHandle": "changed", "target": "ed", "targetHandle": "reset"},
+            {"source": "rb", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+            {"source": "ed", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 1, src_b: False})
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["ed"] == {"value": False}
+    mgr._event_bus.publish.assert_not_awaited()
+
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await mgr._execute_graph("g1", "G", flow, {"rb": {"value": True, "changed": True}})
+
+    assert outputs["ed"]["rising"] is True
+    assert [c.args[0].value for c in mgr._event_bus.publish.await_args_list] == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_real_reset_still_clears_the_level_after_initialization():
+    """The override is scoped to the initialization dry run: once the graph is
+    live, a genuine reset pulse still drops the remembered level."""
+    src_a, src_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "cf", "type": "change_filter", "data": {}},
+            {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "cf", "targetHandle": "in"},
+            {"source": "cf", "sourceHandle": "changed", "target": "ed", "targetHandle": "reset"},
+            {"source": "rb", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: 1, src_b: False})
+
+    await mgr.initialize_graph("g1")
+    assert mgr._hysteresis["g1"]["ed"] == {"value": False}
+
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await mgr._execute_graph("g1", "G", flow, {"ra": {"value": 2, "changed": True}})
+
+    assert mgr._hysteresis["g1"]["ed"] == {}
+
+
+@pytest.mark.asyncio
+async def test_a_read_feeding_only_reset_forms_no_initialization_dependency():
+    """`reset` controls WHEN the level is dropped but delivers no value, so it
+    must not create a DataPoint-level settle dependency — one closes a false
+    cycle that suppresses an unrelated, genuinely seeded Write."""
+    dp_a, dp_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": dp_a}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "wb", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wa", "type": "datapoint_write", "data": {"datapoint_id": dp_a}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "ed", "targetHandle": "reset"},
+            {"source": "ed", "sourceHandle": "out", "target": "wb", "targetHandle": "value"},
+            {"source": "rb", "sourceHandle": "value", "target": "wa", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={dp_a: 1, dp_b: 7})
+
+    await mgr.initialize_graph("g1")
+
+    writes = [(str(c.args[0].datapoint_id), c.args[0].value) for c in mgr._event_bus.publish.await_args_list]
+    assert writes == [(dp_a, 7)]
+
+
+@pytest.mark.asyncio
+async def test_a_read_feeding_the_level_still_forms_an_initialization_dependency():
+    """The boundary: only `reset` is control-only. A Read that feeds `in`
+    genuinely delivers the value that leaves `out`, so the same topology does
+    stay a cycle and both writes are suppressed."""
+    dp_a, dp_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": dp_a}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "wb", "type": "datapoint_write", "data": {"datapoint_id": dp_b}},
+            {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": dp_b}},
+            {"id": "wa", "type": "datapoint_write", "data": {"datapoint_id": dp_a}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+            {"source": "ed", "sourceHandle": "out", "target": "wb", "targetHandle": "value"},
+            {"source": "rb", "sourceHandle": "value", "target": "wa", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={dp_a: 1, dp_b: 7})
+
+    await mgr.initialize_graph("g1")
+
+    mgr._event_bus.publish.assert_not_awaited()

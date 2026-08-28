@@ -602,6 +602,49 @@ describe('NodeConfigPanel schema defaults for a bare node', () => {
     w.unmount()
   })
 
+  it.each([[[]], [{}]])('reads an imported empty collection %j as the backend does: false', async (stored) => {
+    // Python's bool() is false for an empty list or dict, but JavaScript's `!!`
+    // is true for both — a Gate whose negate_enable arrived as [] does not
+    // invert, so showing it as enabled states the opposite of what runs.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'g1', type: 'gate', data: { negate_enable: stored } },
+        nodeTypes: [{ type: 'gate', config_schema: { negate_enable: { type: 'boolean', default: false, label: 'Negieren' } } }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(false)
+    w.unmount()
+  })
+
+  it('reads a non-empty imported collection as true, as Python does', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'g2', type: 'gate', data: { negate_enable: [0] } },
+        nodeTypes: [{ type: 'gate', config_schema: { negate_enable: { type: 'boolean', default: false, label: 'Negieren' } } }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(true)
+    w.unmount()
+  })
+
   it('reads a plain truthiness boolean field by truthiness, not by identity', async () => {
     // The identity rule is scoped to the fields whose backend consumer uses
     // it. A generic boolean setting keeps ordinary truthiness, so a stored 0
