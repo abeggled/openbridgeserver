@@ -19,6 +19,8 @@ const NODE_TYPES = [
   { type: 'timer_delay',   label: 'Verzögerung', category: 'timer', color: '#b45309' },
   { type: 'astro_sun',     label: 'Astro Sonne', category: 'astro', color: '#f59e0b' },
   { type: 'notify_message', label: 'Benachrichtigung', category: 'notification', color: '#dc2626' },
+  { type: 'message_archive', label: 'Meldungsarchiv', category: 'notification', color: '#2563eb' },
+  { type: 'wake_on_lan', label: 'Wake on LAN', category: 'integration', color: '#0ea5e9' },
 ]
 
 function mockStorage() {
@@ -53,6 +55,8 @@ describe('NodePalette — per-block help buttons', () => {
     ['string_concat', 'logic-block-string-concat'],
     ['timer_delay', 'logic-block-timer-delay'],
     ['astro_sun', 'logic-block-astro-sun'],
+    ['notify_message', 'logic-block-notify-message'],
+    ['message_archive', 'logic-block-message-archive'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
@@ -60,8 +64,8 @@ describe('NodePalette — per-block help buttons', () => {
 
   it('does not render a help button for a block type with no documented help yet', () => {
     const wrapper = mountPalette()
-    // notify_message isn't in NODE_HELP_IDS yet (documented in a later category commit).
-    expect(wrapper.find('[data-testid="help-button-logic-block-notify-message"]').exists()).toBe(false)
+    // wake_on_lan isn't in NODE_HELP_IDS yet (documented in a later category commit).
+    expect(wrapper.find('[data-testid="help-button-logic-block-wake-on-lan"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
@@ -79,6 +83,8 @@ describe('NodePalette — per-block help buttons', () => {
     ['string_concat', 'logic-block-string-concat'],
     ['timer_delay', 'logic-block-timer-delay'],
     ['astro_sun', 'logic-block-astro-sun'],
+    ['notify_message', 'logic-block-notify-message'],
+    ['message_archive', 'logic-block-message-archive'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')

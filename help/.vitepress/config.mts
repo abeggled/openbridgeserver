@@ -90,6 +90,7 @@ export default defineConfig({
               { text: 'Bausteine: Text', link: '/de/logic/blocks-string' },
               { text: 'Bausteine: Zeit', link: '/de/logic/blocks-timer' },
               { text: 'Bausteine: Astro', link: '/de/logic/blocks-astro' },
+              { text: 'Bausteine: Benachrichtigung', link: '/de/logic/blocks-notification' },
             ],
           },
           {
@@ -171,6 +172,7 @@ export default defineConfig({
               { text: 'Blocks: Text', link: '/en/logic/blocks-string' },
               { text: 'Blocks: Timer', link: '/en/logic/blocks-timer' },
               { text: 'Blocks: Astro', link: '/en/logic/blocks-astro' },
+              { text: 'Blocks: Notification', link: '/en/logic/blocks-notification' },
             ],
           },
           {

@@ -118,6 +118,8 @@ const NODE_HELP_IDS = {
   operating_hours: 'logic-block-operating-hours',
   value_sequence: 'logic-block-value-sequence',
   astro_sun: 'logic-block-astro-sun',
+  notify_message: 'logic-block-notify-message',
+  message_archive: 'logic-block-message-archive',
 }
 
 const categories = computed(() =>
