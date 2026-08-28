@@ -128,6 +128,7 @@ const NODE_HELP_IDS = {
   ical: 'logic-block-ical',
   api_client: 'logic-block-api-client',
   python_script: 'logic-block-python-script',
+  ai_logic: 'logic-block-ai-logic',
 }
 
 const categories = computed(() =>

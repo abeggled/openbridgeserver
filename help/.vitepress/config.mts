@@ -93,6 +93,7 @@ export default defineConfig({
               { text: 'Bausteine: Benachrichtigung', link: '/de/logic/blocks-notification' },
               { text: 'Bausteine: Integration', link: '/de/logic/blocks-integration' },
               { text: 'Bausteine: Skript', link: '/de/logic/blocks-script' },
+              { text: 'Bausteine: KI', link: '/de/logic/blocks-ai' },
             ],
           },
           {
@@ -177,6 +178,7 @@ export default defineConfig({
               { text: 'Blocks: Notification', link: '/en/logic/blocks-notification' },
               { text: 'Blocks: Integration', link: '/en/logic/blocks-integration' },
               { text: 'Blocks: Script', link: '/en/logic/blocks-script' },
+              { text: 'Blocks: AI', link: '/en/logic/blocks-ai' },
             ],
           },
           {

@@ -29,6 +29,9 @@ const NODE_TYPES = [
   { type: 'api_client', label: 'API Client', category: 'integration', color: '#0e7490' },
   { type: 'python_script', label: 'Python Script', category: 'script', color: '#65a30d' },
   { type: 'ai_logic', label: 'AI Logic', category: 'ai', color: '#9333ea' },
+  // Synthetic type, not a real backend node — exercises the "no entry in
+  // NODE_HELP_IDS" branch now that every real registered type is documented.
+  { type: 'not_yet_documented', label: 'Not Yet Documented', category: 'ai', color: '#9333ea' },
 ]
 
 function mockStorage() {
@@ -73,15 +76,17 @@ describe('NodePalette — per-block help buttons', () => {
     ['ical', 'logic-block-ical'],
     ['api_client', 'logic-block-api-client'],
     ['python_script', 'logic-block-python-script'],
+    ['ai_logic', 'logic-block-ai-logic'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
   })
 
-  it('does not render a help button for a block type with no documented help yet', () => {
+  it('does not render a help button for a block type with no entry in NODE_HELP_IDS', () => {
     const wrapper = mountPalette()
-    // ai_logic isn't in NODE_HELP_IDS yet (documented in the final category commit).
-    expect(wrapper.find('[data-testid="help-button-logic-block-ai-logic"]').exists()).toBe(false)
+    // not_yet_documented is a synthetic type absent from NODE_HELP_IDS — every
+    // real registered node type is now documented (all 10 categories shipped).
+    expect(wrapper.find('[data-testid="help-button-logic-block-not-yet-documented"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
@@ -109,6 +114,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['ical', 'logic-block-ical'],
     ['api_client', 'logic-block-api-client'],
     ['python_script', 'logic-block-python-script'],
+    ['ai_logic', 'logic-block-ai-logic'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')
