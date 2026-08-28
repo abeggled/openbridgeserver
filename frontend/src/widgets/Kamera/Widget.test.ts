@@ -50,6 +50,31 @@ describe('Kamera Widget.vue', () => {
     expect(wrapper.find('img').attributes('src')).not.toContain('jwt-1')
   })
 
+  it('drops the token from the proxy URL when the session ends', async () => {
+    const wrapper = mountWidget()
+    expect(wrapper.find('img').attributes('src')).toContain('_token=jwt-1')
+
+    // Endgültig abgelehnte Erneuerung: die Tokens sind geräumt, der laufende
+    // Stream zöge sonst weiter mit dem Token der beendeten Anmeldung.
+    localStorage.removeItem('visu_jwt')
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('img').attributes('src')).not.toContain('_token=')
+    expect(wrapper.find('img').attributes('src')).not.toContain('jwt-1')
+    wrapper.unmount()
+  })
+
+  it('removes its session-end listener on unmount', () => {
+    const removeListener = vi.spyOn(window, 'removeEventListener')
+    const wrapper = mountWidget()
+
+    wrapper.unmount()
+
+    expect(removeListener).toHaveBeenCalledWith('visu:unauthorized', expect.any(Function))
+    removeListener.mockRestore()
+  })
+
   it('removes its token listener on unmount', () => {
     const removeListener = vi.spyOn(window, 'removeEventListener')
     const wrapper = mountWidget()
