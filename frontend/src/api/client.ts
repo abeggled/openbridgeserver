@@ -2,9 +2,12 @@
  * API-Client für open bridge server Visu
  *
  * - JWT aus localStorage (admin-Login)
+ * - Refresh-Token aus localStorage — erneuert den JWT transparent (Issue #1160)
  * - Session-Tokens aus sessionStorage (PIN-Auth pro Knoten)
- * - 401 → automatischer Redirect zur Login-Route
+ * - 401 → einmaliger Refresh-Versuch, sonst Redirect zur Login-Route
  */
+
+import { notifyAuthTokenRefreshed } from '@/utils/authEvents'
 
 const BASE = '/api/v1'
 
@@ -36,28 +39,261 @@ export class ApiRequestError extends Error {
 
 // ── Token-Verwaltung ──────────────────────────────────────────────────────────
 
+const JWT_KEY = 'visu_jwt'
+const REFRESH_KEY = 'visu_refresh_token'
+const IS_ADMIN_KEY = 'visu_is_admin'
+
 export function getJwt(): string | null {
-  return localStorage.getItem('visu_jwt')
+  return localStorage.getItem(JWT_KEY)
 }
 
-export function setJwt(token: string): void {
-  localStorage.setItem('visu_jwt', token)
+function setJwt(token: string): void {
+  localStorage.setItem(JWT_KEY, token)
 }
 
-export function clearJwt(): void {
-  localStorage.removeItem('visu_jwt')
+function clearJwt(): void {
+  localStorage.removeItem(JWT_KEY)
+}
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_KEY)
+}
+
+function setRefreshToken(token: string): void {
+  localStorage.setItem(REFRESH_KEY, token)
+}
+
+function clearRefreshToken(): void {
+  localStorage.removeItem(REFRESH_KEY)
+}
+
+/** Beide Tokens nach Login/Refresh ablegen und den proaktiven Refresh neu planen */
+export function setTokens(accessToken: string, refreshToken?: string | null): void {
+  setJwt(accessToken)
+  if (refreshToken) setRefreshToken(refreshToken)
+  scheduleTokenRefresh()
+}
+
+/** Access-Token, Refresh-Token und Admin-Flag verwerfen (Logout / endgültiges 401) */
+export function clearAuthTokens(): void {
+  cancelTokenRefresh()
+  clearJwt()
+  clearRefreshToken()
+  clearIsAdmin()
 }
 
 export function getIsAdmin(): boolean {
-  return localStorage.getItem('visu_is_admin') === '1'
+  return localStorage.getItem(IS_ADMIN_KEY) === '1'
 }
 
 export function setIsAdmin(value: boolean): void {
-  localStorage.setItem('visu_is_admin', value ? '1' : '0')
+  localStorage.setItem(IS_ADMIN_KEY, value ? '1' : '0')
 }
 
-export function clearIsAdmin(): void {
-  localStorage.removeItem('visu_is_admin')
+function clearIsAdmin(): void {
+  localStorage.removeItem(IS_ADMIN_KEY)
+}
+
+// ── Token-Refresh ─────────────────────────────────────────────────────────────
+// /auth/refresh ist auf 10 Requests/Minute limitiert, die Visu feuert beim
+// Seitenaufbau aber viele Requests parallel. Alle 401-Antworten teilen sich
+// deshalb genau einen In-Flight-Refresh.
+
+/**
+ * - `renewed`    — neuer Access-Token liegt vor
+ * - `rejected`   — Refresh-Token abgelehnt; die Sitzung ist endgültig vorbei
+ * - `missing`    — gar kein Refresh-Token gespeichert; nichts zu erneuern
+ * - `transient`  — Server nicht erreichbar, 5xx, Rate-Limit oder unbrauchbare
+ *                  Antwort; Tokens behalten und später erneut versuchen
+ * - `superseded` — eine andere Anmeldung hat die Tokens übernommen; sie gehören
+ *                  nicht mehr zu diesem Request und dürfen nicht angefasst werden
+ */
+type RefreshOutcome = 'renewed' | 'rejected' | 'missing' | 'transient' | 'superseded'
+type RefreshResult = { token: string | null; outcome: RefreshOutcome }
+
+/** Nur diese Ausgänge bedeuten, dass die gespeicherte Sitzung wertlos ist */
+function endsSession(outcome: RefreshOutcome): boolean {
+  return outcome === 'rejected' || outcome === 'missing'
+}
+
+let _refreshInFlight: Promise<RefreshResult> | null = null
+
+async function performRefresh(): Promise<RefreshResult> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) return { token: null, outcome: 'missing' }
+
+  /**
+   * Hat zwischenzeitlich eine Abmeldung oder eine andere Anmeldung die Tokens
+   * übernommen, geht uns dieses Ergebnis nichts mehr an — weder ein Erfolg, der
+   * die alte Sitzung wiederbeleben würde, noch eine Ablehnung, die die neue
+   * abräumen würde. Nach jedem `await` erneut prüfen.
+   */
+  const superseded = () => getRefreshToken() !== refreshToken
+
+  let res: Response | null = null
+  try {
+    res = await fetch(`${BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+  } catch {
+    // Netzwerkfehler — Tokens behalten, der nächste Versuch kann klappen
+  }
+  if (superseded()) return { token: null, outcome: 'superseded' }
+  if (res === null) return { token: null, outcome: 'transient' }
+  if (!res.ok) {
+    // 408 (Gateway-Timeout) und 429 sagen nichts über die Gültigkeit des
+    // Refresh-Tokens aus — genauso wenig wie ein 5xx.
+    const transient = res.status === 408 || res.status === 429 || res.status >= 500
+    return { token: null, outcome: transient ? 'transient' : 'rejected' }
+  }
+  const data = await res.json().catch(() => null) as { access_token?: string; refresh_token?: string } | null
+  if (superseded()) return { token: null, outcome: 'superseded' }
+  // Unbrauchbare Antwort wie ein Serverfehler behandeln — der Refresh-Token ist
+  // deswegen nicht ungültig und darf nicht verworfen werden.
+  if (!data?.access_token) return { token: null, outcome: 'transient' }
+  setTokens(data.access_token, data.refresh_token)
+  notifyAuthTokenRefreshed()
+  return { token: data.access_token, outcome: 'renewed' }
+}
+
+/** Genau ein Refresh gleichzeitig — parallele Aufrufer teilen sich den Promise */
+function refreshSession(): Promise<RefreshResult> {
+  if (_refreshInFlight) return _refreshInFlight
+  const pending = performRefresh().finally(() => { _refreshInFlight = null })
+  _refreshInFlight = pending
+  return pending
+}
+
+/**
+ * Access-Token erneuern. Parallele Aufrufe teilen sich denselben Promise.
+ * Liefert den neuen Token oder `null`, wenn kein Refresh möglich war.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  return (await refreshSession()).token
+}
+
+// ── Proaktiver Refresh ────────────────────────────────────────────────────────
+// Eine offene Viewer-Seite (Wandpanel) feuert keine HTTP-Requests mehr, sobald
+// sie geladen ist. Ohne 401 gäbe es also keinen Auslöser für den Refresh und die
+// WebSocket-Verbindung verlöre nach Token-Ablauf still ihren Datapoint-Scope.
+// Deshalb wird der Refresh zusätzlich kurz vor Ablauf des JWT eingeplant.
+
+const REFRESH_LEEWAY_MS = 60_000
+// /auth/refresh erlaubt 10 Requests/Minute — nie öfter als alle 10 s erneuern.
+const MIN_REFRESH_DELAY_MS = 10_000
+const RETRY_BASE_MS = 30_000
+const RETRY_MAX_MS = 600_000
+// setTimeout rechnet mit 32-Bit-Vorzeichen: alles darüber wird auf 1 ms gekürzt.
+// security.jwt_expire_minutes ist unbegrenzt, 43200 (30 Tage) läuft darüber.
+const MAX_TIMER_MS = 2_147_483_647
+
+let _refreshTimer: ReturnType<typeof setTimeout> | null = null
+let _retryDelay = RETRY_BASE_MS
+
+/** JWT-Payload lesen; `null` wenn er nicht dekodierbar ist */
+function jwtClaims(token: string): Record<string, unknown> | null {
+  const payload = token.split('.')[1]
+  if (!payload) return null
+  const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+  try {
+    const parsed: unknown = JSON.parse(atob(padded))
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+/** `exp` (ms seit Epoch) aus dem JWT-Payload lesen; `null` wenn nicht lesbar */
+function jwtExpiresAt(token: string): number | null {
+  const exp = jwtClaims(token)?.exp
+  return typeof exp === 'number' ? exp * 1000 : null
+}
+
+/** Frühester der beiden Ablaufzeitpunkte; `null` wenn keiner lesbar ist */
+function earliestExpiry(...expiries: Array<number | null>): number | null {
+  const known = expiries.filter((value): value is number => value !== null)
+  return known.length === 0 ? null : Math.min(...known)
+}
+
+/** Angemeldeter Benutzer laut JWT; `null` wenn nicht lesbar */
+function jwtSubject(token: string): string | null {
+  const sub = jwtClaims(token)?.sub
+  return typeof sub === 'string' ? sub : null
+}
+
+export function cancelTokenRefresh(): void {
+  if (_refreshTimer !== null) {
+    clearTimeout(_refreshTimer)
+    _refreshTimer = null
+  }
+}
+
+function armRefreshTimer(delay: number): void {
+  cancelTokenRefresh()
+  if (delay > MAX_TIMER_MS) {
+    // Lange Laufzeiten in Etappen abwarten, sonst kürzt setTimeout auf 1 ms und
+    // jeder Durchlauf würde sofort erneut /auth/refresh aufrufen.
+    _refreshTimer = setTimeout(() => {
+      _refreshTimer = null
+      scheduleTokenRefresh()
+    }, MAX_TIMER_MS)
+    return
+  }
+  _refreshTimer = setTimeout(() => {
+    _refreshTimer = null
+    void refreshSession().then(({ outcome }) => {
+      // Erfolg plant sich über setTokens() → scheduleTokenRefresh() selbst neu.
+      if (outcome === 'renewed') return
+      if (outcome === 'transient' && getRefreshToken()) {
+        // Ohne erneuten Versuch bliebe eine dauerhaft geöffnete Viewer-Seite bis
+        // zum nächsten HTTP-401 ohne Erneuerung — und ein Wandpanel feuert keinen.
+        armRefreshTimer(_retryDelay)
+        _retryDelay = Math.min(_retryDelay * 2, RETRY_MAX_MS)
+        return
+      }
+      if (outcome === 'superseded') {
+        // Ein anderer Tab hat die Sitzung im gemeinsamen localStorage erneuert.
+        // Ohne neuen Timer bliebe dieser Tab ohne Erneuerung zurück; ohne das
+        // Event behielte sein WebSocket den alten JWT im Subprotokoll und
+        // verlöre nach dessen Ablauf still den Datapoint-Scope. Der gespeicherte
+        // Token ist bereits der neue — die Verbraucher müssen ihn nur abholen.
+        scheduleTokenRefresh()
+        notifyAuthTokenRefreshed()
+        return
+      }
+      if (outcome === 'rejected') {
+        // Refresh-Token endgültig ungültig. Ohne Aufräumen liefe die Seite bis
+        // zum Ablauf des Access-Tokens weiter und verlöre danach still die
+        // WebSocket-Werte, statt die Sitzung sichtbar zu beenden.
+        clearAuthTokens()
+        window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+      }
+    })
+  }, delay)
+}
+
+/** Refresh kurz vor Ablauf des aktuellen JWT einplanen (idempotent) */
+export function scheduleTokenRefresh(): void {
+  cancelTokenRefresh()
+  _retryDelay = RETRY_BASE_MS
+  const jwt = getJwt()
+  const refreshToken = getRefreshToken()
+  if (!jwt || !refreshToken) return
+  // Der Refresh-Token läuft fest nach 30 Tagen ab (`_REFRESH_DAYS`), der
+  // Access-Token nach `security.jwt_expire_minutes` — das kann länger sein.
+  // Massgeblich ist, was zuerst abläuft: nach dem Refresh-Token gibt es nichts
+  // mehr zu erneuern, die Sitzung liesse sich nie über Tag 30 hinaus verlängern.
+  const expiresAt = earliestExpiry(jwtExpiresAt(jwt), jwtExpiresAt(refreshToken))
+  if (expiresAt === null) return
+  const remaining = expiresAt - Date.now()
+  // Bei kurzer Token-Laufzeit (security.jwt_expire_minutes: 1) würde ein fester
+  // Vorlauf von 60 s jeden neuen Token sofort wieder fällig machen — höchstens
+  // die halbe Restlaufzeit vorziehen.
+  const leeway = Math.min(REFRESH_LEEWAY_MS, Math.max(remaining, 0) / 2)
+  armRefreshTimer(Math.max(remaining - leeway, MIN_REFRESH_DELAY_MS))
 }
 
 /** Session-Token für einen bestimmten Knoten (PIN-Auth), nur für diese Browser-Session */
@@ -107,10 +343,15 @@ type RequestOptions = Omit<RequestInit, 'headers'> & {
   sessionToken?: string
   /** 401 still throws but does NOT dispatch visu:unauthorized (no global redirect) */
   silent401?: boolean
+  /**
+   * 401 bedeutet auf dieser Route eine fehlgeschlagene Anmeldung (z. B. falscher
+   * PIN), nicht einen abgelaufenen JWT — kein Refresh-Versuch, kein Retry.
+   */
+  noAuthRefresh?: boolean
 }
 
-async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const jwt = getJwt()
+function buildHeaders(opts: RequestOptions, jwtOverride?: string): Record<string, string> {
+  const jwt = jwtOverride ?? getJwt()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...opts.headers,
@@ -118,18 +359,130 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (jwt) headers['Authorization'] = `Bearer ${jwt}`
   if (opts.sessionToken) headers['X-Session-Token'] = opts.sessionToken
+  return headers
+}
 
-  const res = await fetch(`${BASE}${path}`, {
-    ...opts,
-    headers,
-  })
+/**
+ * Erneuerten Access-Token für einen mit 401 abgewiesenen Request besorgen.
+ *
+ * Hat ein paralleler Request den Token schon erneuert, wird dieser genutzt statt
+ * ein weiterer Refresh gegen das Rate-Limit von /auth/refresh gefeuert. Der
+ * Retry darf dabei nie die Anmeldung wechseln: meldet sich in einem anderen Tab
+ * ein anderer Benutzer an, gehört der gespeicherte Token diesem — der
+ * ursprüngliche, womöglich schreibende Request würde sonst unter fremden
+ * Rechten wiederholt. Nicht dekodierbare Tokens können keinen Wechsel belegen
+ * und blockieren den Retry deshalb nicht.
+ */
+type Renewal = { token: string | null; sessionIsOver: boolean }
 
-  if (res.status === 401) {
-    if (!opts.silent401) {
-      clearJwt()
-      // Redirect zur Login-Seite — der Router fängt das auf
+async function renewedTokenFor(previous: string | null): Promise<Renewal> {
+  const current = getJwt()
+  if (current && current !== previous) {
+    // Ein paralleler Request war schneller — kein weiterer Refresh nötig.
+    return { token: sameAccount(previous, current) ? current : null, sessionIsOver: false }
+  }
+  const { token, outcome } = await refreshSession()
+  if (!token) return { token: null, sessionIsOver: endsSession(outcome) }
+  // Ein Kontowechsel darf die Tokens des neuen Kontos nicht abräumen.
+  return { token: sameAccount(previous, token) ? token : null, sessionIsOver: false }
+}
+
+/** `false` nur wenn beide Tokens lesbar sind und zu verschiedenen Benutzern gehören */
+function sameAccount(previous: string | null, next: string): boolean {
+  const before = previous === null ? null : jwtSubject(previous)
+  const after = jwtSubject(next)
+  return before === null || after === null || before === after
+}
+
+/**
+ * Darf ein endgültiges 401 die gespeicherte Sitzung abräumen?
+ *
+ * Nur wenn im Speicher noch die Anmeldung steht, mit der dieser Request
+ * unterwegs war. Hat sich währenddessen jemand anderes angemeldet, gehört sie
+ * ihm — sein Token wegen unseres veralteten Requests zu löschen würde ihn aus
+ * einer gültigen Sitzung werfen.
+ */
+function mayClearSession(usedJwt: string | null): boolean {
+  const current = getJwt()
+  if (current === null) return true
+  if (usedJwt === null) return false
+  return sameAccount(usedJwt, current)
+}
+
+/**
+ * Meint dieses 401 die PIN-Sitzung der Seite statt den Access-Token?
+ *
+ * Ein `protected`-Knoten weist Requests ohne gültigen Session-Token ab, auch
+ * wenn der Benutzer angemeldet ist (`_page_scoped_archive_access`, `/history`,
+ * `/weather`). Den JWT zu erneuern hilft dabei nicht: der Retry liefe in
+ * dasselbe 401, verbrauchte aber Rate-Limit von /auth/refresh und löste über
+ * das Refresh-Event WebSocket-Neuaufbau, Rollenabfrage und Baum-Reload aus.
+ */
+async function isPageSessionRejection(res: Response): Promise<boolean> {
+  const body = await res.clone().json().catch(() => null)
+  return extractDetail(body, '') === 'Valid session token required'
+}
+
+type RenewalOptions = { silent401?: boolean; noAuthRefresh?: boolean }
+
+/**
+ * Request absetzen und bei 401 einmal mit erneuertem Token wiederholen.
+ *
+ * Einziger Ort für die Sitzungsregeln — JSON- und Multipart-Requests teilen
+ * ihn sich, damit nicht wieder eine Kopie hinterherhinkt.
+ */
+async function sendWithRenewal(
+  send: (jwtOverride?: string) => Promise<Response>,
+  opts: RenewalOptions = {},
+): Promise<Response> {
+  const jwtBefore = getJwt()
+  let usedJwt = jwtBefore
+  let res = await send()
+
+  // Abgelaufener Access-Token: genau einen Refresh anstossen (geteilt über alle
+  // parallelen Requests) und den ursprünglichen Request einmal wiederholen.
+  let sessionIsOver = true
+  if (res.status === 401 && !opts.noAuthRefresh) {
+    if (await isPageSessionRejection(res)) {
+      // Nicht der Access-Token ist abgelaufen, sondern die PIN-Sitzung der
+      // Seite — die Anmeldung bleibt gültig und unangetastet.
+      sessionIsOver = false
+    } else {
+      const renewal = await renewedTokenFor(jwtBefore)
+      if (renewal.token) {
+        usedJwt = renewal.token
+        res = await send(renewal.token)
+      } else {
+        sessionIsOver = renewal.sessionIsOver
+      }
+    }
+  }
+
+  if (res.status === 401 && !opts.silent401) {
+    // Nur aufräumen, wenn die Sitzung wirklich hin ist — ein 5xx oder ein
+    // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen —
+    // und nur, wenn sie noch uns gehört.
+    if (sessionIsOver && mayClearSession(usedJwt)) clearAuthTokens()
+    // Redirect zur Login-Seite — der Router fängt das auf. Nur melden, wenn die
+    // Anmeldung tatsächlich weg ist: bei einem Netzwerkfehler, 408, 429 oder
+    // 5xx auf /auth/refresh behalten wir die Tokens bewusst, und ein Redirect
+    // zum Login würde den Benutzer trotz gültiger Sitzung aus /manage werfen.
+    if (sessionIsOver || !getJwt()) {
       window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     }
+  }
+  return res
+}
+
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const send = (jwtOverride?: string) => fetch(`${BASE}${path}`, {
+    ...opts,
+    headers: buildHeaders(opts, jwtOverride),
+  })
+
+  const res = await sendWithRenewal(send, opts)
+
+  if (res.status === 401) {
     throw new ApiRequestError('Unauthorized', 401)
   }
 
@@ -165,12 +518,20 @@ export const auth = {
         const body = await res.json().catch(() => null)
         throw new Error(extractDetail(body, 'Login fehlgeschlagen'))
       }
-      return res.json() as Promise<{ access_token: string; token_type: string }>
+      return res.json() as Promise<{ access_token: string; refresh_token: string; token_type: string }>
     })
   },
 
+  /**
+   * Wird direkt nach Login und Refresh aufgerufen — der Token ist also frisch.
+   * `noAuthRefresh` verhindert, dass ein 401 hier eine weitere Erneuerung und
+   * damit erneut diesen Aufruf anstösst.
+   */
   me() {
-    return request<{ id: string; username: string; is_admin: boolean }>('/auth/me', { silent401: true })
+    return request<{ id: string; username: string; is_admin: boolean }>('/auth/me', {
+      silent401: true,
+      noAuthRefresh: true,
+    })
   },
 }
 
@@ -215,6 +576,7 @@ export const visu = {
       method: 'POST',
       body: JSON.stringify({ pin }),
       silent401: true,
+      noAuthRefresh: true,
     }),
 
   getPage: (id: string, sessionToken?: string) =>
@@ -413,19 +775,20 @@ export const visuBackgrounds = {
     const formData = new FormData()
     for (const file of files) formData.append('files', file, file.name)
 
-    const jwt = getJwt()
-    const headers: Record<string, string> = {}
-    if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+    const send = (jwtOverride?: string) => {
+      const jwt = jwtOverride ?? getJwt()
+      const headers: Record<string, string> = {}
+      if (jwt) headers['Authorization'] = `Bearer ${jwt}`
+      return fetch(`${BASE}/visu/backgrounds/import`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      })
+    }
 
-    const res = await fetch(`${BASE}/visu/backgrounds/import`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    })
+    const res = await sendWithRenewal(send)
     if (res.status === 401) {
-      clearJwt()
-      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
-      throw new Error('Unauthorized')
+      throw new ApiRequestError('Unauthorized', 401)
     }
     if (!res.ok) {
       const body = await res.json().catch(() => null)
