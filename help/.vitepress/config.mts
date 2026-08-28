@@ -89,6 +89,7 @@ export default defineConfig({
               { text: 'Bausteine: Mathematik', link: '/de/logic/blocks-math' },
               { text: 'Bausteine: Text', link: '/de/logic/blocks-string' },
               { text: 'Bausteine: Zeit', link: '/de/logic/blocks-timer' },
+              { text: 'Bausteine: Astro', link: '/de/logic/blocks-astro' },
             ],
           },
           {
@@ -169,6 +170,7 @@ export default defineConfig({
               { text: 'Blocks: Math', link: '/en/logic/blocks-math' },
               { text: 'Blocks: Text', link: '/en/logic/blocks-string' },
               { text: 'Blocks: Timer', link: '/en/logic/blocks-timer' },
+              { text: 'Blocks: Astro', link: '/en/logic/blocks-astro' },
             ],
           },
           {
