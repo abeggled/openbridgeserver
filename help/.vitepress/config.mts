@@ -52,6 +52,10 @@ export default defineConfig({
             items: [{ text: 'Objektliste', link: '/datapoints/list' }],
           },
           {
+            text: 'KNX-Geräte',
+            items: [{ text: 'Geräteliste', link: '/knxdevices/list' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -95,6 +99,10 @@ export default defineConfig({
           {
             text: 'Data Points',
             items: [{ text: 'Data Point List', link: '/en/datapoints/list' }],
+          },
+          {
+            text: 'KNX Devices',
+            items: [{ text: 'Device List', link: '/en/knxdevices/list' }],
           },
           {
             text: 'Settings',
