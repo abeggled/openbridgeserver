@@ -172,7 +172,7 @@ ringbuffer:
 
 security:
   jwt_secret: changeme        # Sitzungsschlüssel — unbedingt ändern!
-  jwt_expire_minutes: 1440    # Sitzungsdauer (Standard: 24 Stunden)
+  jwt_expire_minutes: 1440    # Laufzeit des Access-Tokens (Standard: 24 Stunden)
   # Optionaler Override für die Allowlist privater/interner URL-Ziele.
   # Standard: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml, wenn OBS_SECRET_FILE_DIR gesetzt ist,
   # sonst secrets/url-target-allowlist.yaml neben der konfigurierten Datenbank.
@@ -180,6 +180,12 @@ security:
 ```
 
 > **Hinweis:** Der `mqtt`-Abschnitt betrifft den **internen** Mosquitto-Broker. Externe MQTT-Broker werden als separate Adapter-Instanzen eingerichtet (siehe [MQTT-Adapter](#mqtt-adapter-externer-broker)).
+
+> **Hinweis:** `jwt_expire_minutes` begrenzt die Laufzeit eines einzelnen **Access-Tokens**, nicht
+> die Dauer der Anmeldung. `POST /api/v1/auth/login` liefert zusätzlich einen 30 Tage gültigen
+> Refresh-Token, mit dem Admin-GUI und Visu den Access-Token automatisch erneuern. Ein Browser, der
+> mindestens alle 30 Tage genutzt wird, muss sich deshalb nicht neu anmelden; ein kleinerer Wert
+> verkürzt nur das Zeitfenster, in dem ein entwendeter Access-Token nutzbar ist.
 
 ### Offline-Administration mit `obs-admin`
 

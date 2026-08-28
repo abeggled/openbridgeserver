@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { getJwt } from '@/api/client'
+import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 import type { DataPointValue } from '@/types'
 
 const props = defineProps<{
@@ -35,6 +37,23 @@ const aspectRatio     = computed(() => (props.config.aspectRatio     as string) 
 const objectFit       = computed(() => (props.config.objectFit       as string) ?? 'contain')
 const useProxy        = computed(() => (props.config.useProxy        as boolean) ?? false)
 
+// Der JWT steckt als Query-Parameter in der Proxy-URL. Nach einem Token-Refresh
+// muss die URL neu gebaut werden, sonst zieht ein Reconnect des Streams noch den
+// abgelaufenen Token (Issue #1160). Endet die Sitzung endgültig, gilt dasselbe
+// umgekehrt: der Parameter muss verschwinden, sonst laufen Schnappschüsse und
+// ein bereits offener MJPEG-Stream mit dem Token der beendeten Anmeldung
+// weiter, während die Anzeige „abgemeldet" meldet.
+const jwt = ref(getJwt() ?? '')
+function syncJwt() { jwt.value = getJwt() ?? '' }
+onMounted(() => {
+  window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, syncJwt)
+  window.addEventListener('visu:unauthorized', syncJwt)
+})
+onUnmounted(() => {
+  window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, syncJwt)
+  window.removeEventListener('visu:unauthorized', syncJwt)
+})
+
 /** Baut die finale Stream-URL — direkt oder über den Backend-Proxy */
 const streamUrl = computed(() => {
   if (!url.value) return ''
@@ -42,9 +61,8 @@ const streamUrl = computed(() => {
 
   if (useProxy.value) {
     // Proxy-URL: /api/v1/camera/proxy?url=...&_token=...
-    const jwt = localStorage.getItem('visu_jwt') ?? ''
     const p = new URLSearchParams({ url: base })
-    if (jwt) p.set('_token', jwt)
+    if (jwt.value) p.set('_token', jwt.value)
     if (props.editorMode) p.set('editor_preview', '1')
     if (props.pageId) p.set('page_id', props.pageId)
     if (props.sessionToken) p.set('session_token', props.sessionToken)
