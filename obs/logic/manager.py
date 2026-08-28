@@ -214,6 +214,13 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # them must not read the "no pulse this pass" placeholder as a real value.
 _PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
 
+# Merge's input ports (in1…in30). Merge remembers the last value seen on every
+# wired port plus which one was "active", so a no-pulse placeholder arriving on
+# one of them must not overwrite that memory — see the merge branch of the
+# stateful-relay correction, which replays the port with its remembered value
+# instead of the placeholder.
+_MERGE_INPUT_HANDLE_RE = re.compile(r"in[1-9][0-9]*$")
+
 # Input handles that control WHEN a node's output fires/passes but do not
 # deliver the value itself. Seeded eligibility must not propagate through
 # them: a Const → Gate.in → Write.value sheet whose Read Object only drives
@@ -2226,7 +2233,23 @@ class LogicManager:
         # observed transition — so a Write descending from it must not be
         # published, exactly like the change_filter case above. Its own level
         # is still committed below (_INIT_STATE_ALWAYS_COMMIT).
-        changed_targets |= {e.target for e in _effective_edges_init if node_type_by_id.get(e.source) == "edge_detect"}
+        changed_targets |= {
+            e.target
+            for e in _effective_edges_init
+            if node_type_by_id.get(e.source) == "edge_detect"
+            # …with the same exception as the change_filter "changed" case:
+            # a synthetic edge pulse landing on another detector's "reset"
+            # means "do not reset" — exactly what a real quiet pass delivers.
+            # Tainting the downstream detector would discard the level seeded
+            # through its own "in" and swallow its first real edge. Only the
+            # discrete trigger handles qualify; "out" carries a configured
+            # value that could genuinely read as a reset.
+            and not (
+                node_type_by_id.get(e.target) == "edge_detect"
+                and (e.targetHandle or "in") == "reset"
+                and (e.sourceHandle or "out") in {"rising", "falling"}
+            )
+        }
         excluded_ids = {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}
         value_edges = [
             e
@@ -4135,7 +4158,16 @@ class LogicManager:
                         ("notify_pushover", "url_title"),
                         ("message_archive", "title"),
                         ("value_sequence", "condition"),
-                    } or (target_type_name == "avg_multi" and target_handle.startswith("in_"))
+                    } or (
+                        (target_type_name == "avg_multi" and target_handle.startswith("in_"))
+                        # Merge keeps per-port memory ("values"/"active"), so a
+                        # no-pulse placeholder on one of its ports is just as
+                        # damaging as on the stateful handles listed above: it
+                        # would overwrite the remembered pulse value and make
+                        # the block relay the placeholder on the next unrelated
+                        # event.
+                        or (target_type_name == "merge" and _MERGE_INPUT_HANDLE_RE.fullmatch(target_handle) is not None)
+                    )
                     if stateful_data_handle:
                         stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
                         if (
@@ -4259,6 +4291,22 @@ class LogicManager:
                 if "_message" in target_output:
                     target_output["_message"] = None
 
+        def _missing_relay_override_value(target_id: str, handle: str) -> Any:
+            """Value to feed a stateful consumer's port when its pulse is idle.
+
+            None means "nothing arrived" for every block that treats an absent
+            input as a no-op. Merge is the exception: it records *every* wired
+            port's value, so None would still overwrite the remembered pulse
+            and drop the port out of the "active" selection. Replaying the port
+            with the value merge itself remembered keeps it unchanged this pass
+            while leaving the genuinely fresh ports free to win.
+            """
+            if _node_type_by_id.get(target_id) != "merge":
+                return None
+            state = (pre_execute_hyst if pre_execute_hyst is not None else hyst).get(target_id)
+            values = state.get("values") if isinstance(state, dict) else None
+            return values.get(handle) if isinstance(values, dict) else None
+
         def _refresh_missing_cf_override_values() -> None:
             missing_cf_override_values.clear()
             for target_id, origins in _cf_changed_message_origins.items():
@@ -4278,7 +4326,7 @@ class LogicManager:
                     continue
                 for handle, origins in handle_origins.items():
                     if not any(_origin_pulsed(origin) for origin in origins):
-                        missing_cf_override_values.setdefault(target_id, {})[handle] = None
+                        missing_cf_override_values.setdefault(target_id, {})[handle] = _missing_relay_override_value(target_id, handle)
 
         _refresh_missing_cf_override_values()
         _suppress_missing_cf_trigger_pulses()
@@ -4361,7 +4409,7 @@ class LogicManager:
                     target_overrides = stateful_overrides.setdefault(target_id, {})
                     for handle, origins in _cf_changed_stateful_relay_origins[target_id].items():
                         if not any(_origin_pulsed(origin) for origin in origins):
-                            target_overrides[handle] = None
+                            target_overrides[handle] = _missing_relay_override_value(target_id, handle)
             stateful_outputs = await _execute_pass(
                 await _executor(stateful_hyst),
                 stateful_overrides,

@@ -573,3 +573,80 @@ async def test_a_numeric_edge_value_is_probed_with_its_real_value():
 
     assert outputs["ed"] == {"rising": False, "falling": False}
     manager._event_bus.publish.assert_not_awaited()
+
+
+def _merge_flow(target: uuid.UUID, source_dp: str) -> FlowData:
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("ed", "edge_detect", {"on_rising": "trigger"}),
+                node("read", "datapoint_read", {"datapoint_id": source_dp}),
+                node("merge", "merge", {"input_count": 2}),
+                node("w", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [
+                edge("ed", "merge", "rising", "in1"),
+                edge("read", "merge", "value", "in2"),
+                edge("merge", "w", "out", "value"),
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_idle_pulse_does_not_overwrite_the_remembered_merge_input():
+    """Merge records every wired port's value plus which one is active. An
+    unrelated event must not let the pulse port's idle False replace the pulse
+    value Merge is still relaying."""
+    source = str(uuid.uuid4())
+    manager = _manager({source: 7})
+    flow = _merge_flow(uuid.uuid4(), source)
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}, "merge": {"values": {"in1": False, "in2": 7}, "active": "in2"}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await manager._execute_graph("g", "G", flow, {"ed": {"in": True}})
+        after_pulse = manager._hysteresis["g"]["merge"].copy()
+        outputs = await manager._execute_graph("g", "G", flow, {"read": {"value": 7, "changed": True}})
+
+    assert after_pulse == {"values": {"in1": True, "in2": 7}, "active": "in1"}
+    assert manager._hysteresis["g"]["merge"] == after_pulse
+    assert outputs["merge"]["out"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_fresh_merge_input_still_wins_over_an_idle_pulse():
+    """The counterpart: replaying the idle port with its remembered value must
+    not freeze Merge — a port that really did change still becomes active."""
+    source = str(uuid.uuid4())
+    manager = _manager({source: 7})
+    flow = _merge_flow(uuid.uuid4(), source)
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"ed": {"value": False}, "merge": {"values": {"in1": False, "in2": 7}, "active": "in2"}}
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        await manager._execute_graph("g", "G", flow, {"ed": {"in": True}})
+        manager._registry.get_value.side_effect = lambda dp_id: SimpleNamespace(value=9 if str(dp_id) == source else None, ts=None)
+        outputs = await manager._execute_graph("g", "G", flow, {"read": {"value": 9, "changed": True}})
+
+    assert manager._hysteresis["g"]["merge"] == {"values": {"in1": True, "in2": 9}, "active": "in2"}
+    assert outputs["merge"]["out"] == 9
+
+
+@pytest.mark.asyncio
+async def test_an_idle_pulse_on_a_merge_without_prior_state_stays_absent():
+    """No remembered value to replay: the port must fall back to "nothing
+    arrived" rather than relaying the placeholder."""
+    source = str(uuid.uuid4())
+    manager = _manager({source: 7})
+    flow = _merge_flow(uuid.uuid4(), source)
+    manager._graphs["g"] = ("G", True, flow)
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await manager._execute_graph("g", "G", flow, {"read": {"value": 7, "changed": True}})
+
+    assert manager._hysteresis["g"]["merge"] == {"values": {"in1": None, "in2": 7}, "active": "in2"}
+    assert outputs["merge"]["out"] == 7

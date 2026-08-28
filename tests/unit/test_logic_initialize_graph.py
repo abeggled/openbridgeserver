@@ -3285,3 +3285,66 @@ async def test_real_logic_write_during_init_publish_executes():
     mgr._execute_graph.assert_awaited_once()
     overrides = mgr._execute_graph.await_args.args[3]
     assert overrides == {"rB": {"value": 99, "changed": True}}
+
+
+@pytest.mark.asyncio
+async def test_a_detector_whose_reset_comes_from_another_detector_is_still_seeded():
+    """An idle edge pulse on "reset" means "do not reset" — exactly what a real
+    quiet pass delivers. Tainting the downstream detector would discard the
+    level seeded through its own "in" and swallow its first real edge."""
+    src_a, src_b, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "ea", "type": "edge_detect", "data": {}},
+            {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
+            {"id": "eb", "type": "edge_detect", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "ea", "targetHandle": "in"},
+            {"source": "ea", "sourceHandle": "rising", "target": "eb", "targetHandle": "reset"},
+            {"source": "rb", "sourceHandle": "value", "target": "eb", "targetHandle": "in"},
+            {"source": "eb", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: False, src_b: False})
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["ea"] == {"value": False}
+    assert mgr._hysteresis["g1"]["eb"] == {"value": False}
+    mgr._event_bus.publish.assert_not_awaited()
+
+    # …so the first real transition on the downstream detector is an edge.
+    outputs = await mgr._execute_graph("g1", "G", flow, {"rb": {"value": True, "changed": True}})
+
+    assert outputs["eb"]["rising"] is True
+    assert [c.args[0].value for c in mgr._event_bus.publish.await_args_list] == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_detector_whose_reset_comes_from_an_edge_value_stays_tainted():
+    """The exception is limited to the discrete trigger handles: "out" carries
+    a configured value that can genuinely read as a reset, so a detector fed
+    from it must keep the taint and stay unseeded."""
+    src_a, src_b = str(uuid.uuid4()), str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "ea", "type": "edge_detect", "data": {}},
+            {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
+            {"id": "eb", "type": "edge_detect", "data": {}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "ea", "targetHandle": "in"},
+            {"source": "ea", "sourceHandle": "out", "target": "eb", "targetHandle": "reset"},
+            {"source": "rb", "sourceHandle": "value", "target": "eb", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: False, src_b: False})
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["ea"] == {"value": False}
+    assert "eb" not in mgr._hysteresis["g1"]
