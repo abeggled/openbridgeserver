@@ -56,6 +56,10 @@ export default defineConfig({
             items: [{ text: 'Geräteliste', link: '/knxdevices/list' }],
           },
           {
+            text: 'Adapter',
+            items: [{ text: 'Adapter-Instanzen', link: '/adapters/list' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -103,6 +107,10 @@ export default defineConfig({
           {
             text: 'KNX Devices',
             items: [{ text: 'Device List', link: '/en/knxdevices/list' }],
+          },
+          {
+            text: 'Adapters',
+            items: [{ text: 'Adapter Instances', link: '/en/adapters/list' }],
           },
           {
             text: 'Settings',
