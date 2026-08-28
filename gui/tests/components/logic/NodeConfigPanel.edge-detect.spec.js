@@ -429,6 +429,17 @@ describe('NodeConfigPanel uncoerced edge values', () => {
     w.unmount()
   })
 
+  it('renders a negative zero with its sign in the number input', async () => {
+    // The widget accepts "-0", and the executor sends a signed zero.
+    const w = await mountPanel({ data_type: 'number', value_rising: '-0.0', value_falling: '0' })
+    await flushPromises()
+
+    const fields = numbers(w)
+    expect(fields.map(i => i.element.value)).toEqual(['-0', '0'])
+    expect(fields[0].element.checkValidity()).toBe(true)
+    w.unmount()
+  })
+
   it('renders a number edge value without surrounding whitespace', async () => {
     // The widget must be valid, not just parseable: <input type="number">
     // shows blank for " 4 ".

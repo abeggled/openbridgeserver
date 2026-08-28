@@ -59,8 +59,22 @@ describe('toBackendNumberText', () => {
     // float('1e-400') underflows to 0.0 and 9007199254740993 rounds to ...992.
     // Keeping the imported spelling would show a value the actuator never gets.
     expect(toBackendNumberText('1e-400')).toBe('0')
-    expect(toBackendNumberText('-1e-400')).toBe('0')
+    // float('-1e-400') is -0.0, not 0.0 — the sign survives the underflow.
+    expect(toBackendNumberText('-1e-400')).toBe('-0')
     expect(toBackendNumberText('9007199254740993')).toBe('9007199254740992')
+  })
+
+  it('keeps the sign of a negative zero, which String() drops', () => {
+    // float() reaches -0.0 from all of these, and the executor sends a signed
+    // zero; String(Number(x)) would render every one of them as "0".
+    expect(toBackendNumberText('-0')).toBe('-0')
+    expect(toBackendNumberText('-0.0')).toBe('-0')
+    expect(toBackendNumberText('-0.0000')).toBe('-0')
+    expect(toBackendNumberText('-1e-400')).toBe('-0')
+    // A positive zero stays unsigned.
+    expect(toBackendNumberText('0')).toBe('0')
+    expect(toBackendNumberText('0.0')).toBe('0')
+    expect(toBackendNumberText('1e-400')).toBe('0')
   })
 
   it('rewrites a notation the value does not need', () => {

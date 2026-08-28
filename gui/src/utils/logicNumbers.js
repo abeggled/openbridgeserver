@@ -54,12 +54,17 @@ export function toBackendNumberText(value, fallback = '0') {
   // check — and return the stripped spelling, because a number input cannot
   // display "1_000" and would render blank.
   const plain = trimmed.replace(/_/g, '').replace(/\p{Nd}/gu, toAsciiDigit)
-  if (!Number.isFinite(Number(plain))) return fallback
+  const coerced = Number(plain)
+  if (!Number.isFinite(coerced)) return fallback
   // Always the coerced value's own spelling, never the imported one. Keeping a
   // "valid-looking" spelling was wrong twice over: float() accepts forms the
   // number input rejects ("2.", "+3", ".5"), and a spelling can denote a
-  // different number than the double it parses to — "1e-400" underflows to 0.0
-  // and 9007199254740993 rounds to ...992, both of which the editor would
+  // different number than the double it parses to — "1e-400" underflows to a
+  // zero and 9007199254740993 rounds to ...992, both of which the editor would
   // otherwise show as the original, misstating what the actuator receives.
-  return String(Number(plain))
+  //
+  // String() drops the sign of a negative zero, but float() keeps it — and
+  // reaches one from "-0", "-0.0" and an underflowing "-1e-400" alike — so the
+  // executor sends a signed zero that a downstream actuator can tell apart.
+  return Object.is(coerced, -0) ? '-0' : String(coerced)
 }
