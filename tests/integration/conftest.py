@@ -250,6 +250,7 @@ _DATAPOINT_OUT_FIELDS = {
     "persist_value",
     "record_history",
     "control_class",
+    "external_write_enabled",
     "created_at",
     "updated_at",
     "value",

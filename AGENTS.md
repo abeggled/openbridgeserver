@@ -74,6 +74,11 @@ docker compose up -d mosquitto
 
 # Admin GUI dev server (proxies /api to localhost:8080)
 cd gui && npm run dev
+
+# Build the integrated help site for local testing (help_dist/ is gitignored
+# and NOT built by `python -m obs` — without this, the Admin-GUI's help
+# drawer shows its generic "unavailable" fallback for every topic)
+cd help && npm run build
 ```
 
 ## Pre-Push Gate (verbindlich)
@@ -214,10 +219,21 @@ this root file, this root file wins.
   their results, and post one consolidated review.
 - Continue until two consecutive complete passes on that same HEAD produce no new findings. If
   that cannot be completed, report review coverage as partial and list every deferred surface.
-- Publish partial coverage and every deferred surface in the consolidated summary when that surface
-  exists. In a `findings`-only transport, include the same coverage metadata in each emitted item; if
-  the array would otherwise be empty, emit one `[P3] [PARTIAL] Review coverage incomplete` transport
-  envelope. State explicitly that this envelope is neither a confirmed finding nor a severity.
+- Publish one partial-coverage notice listing every deferred surface and its exact blocker. In a
+  `findings`-only transport, emit one `[P3] [PARTIAL] Review coverage incomplete` transport envelope
+  instead of repeating the coverage metadata in individual items. State explicitly that this envelope
+  is neither a confirmed finding nor a severity.
+
+### Reproduction preflight
+
+- Before investigating candidates, run one preflight for each relevant test surface and verify that
+  its documented runner and shared dependencies can start. Record the commands, exit statuses, and
+  logs in the review state.
+- A shared preflight failure defers that complete surface. Report it once as partial coverage and do
+  not publish the untested hypotheses from that surface as individual blocked candidates.
+- Classify a candidate as `blocked` only when its shared surface preflight passed and a prerequisite
+  unique to that candidate, such as credentials, hardware, a service, data, or permission, remains
+  unavailable.
 
 ### Reproduction evidence
 
@@ -233,17 +249,20 @@ this root file, this root file wins.
   ran to completion and the claimed behavior did not occur, or no reachable path from a supported
   entry point to the claimed behavior could be demonstrated. Exclude such candidates from the
   published review and retain them only in internal deduplication state for the reviewed HEAD.
-- Use `blocked` only when reproduction could not complete because a required prerequisite such as
-  credentials, hardware, a service, data, or permission was unavailable. Keep every blocked candidate
-  visible in the consolidated review, but do not present it as confirmed or count it as a finding.
-  Failure to identify a reachable path is `not_reproduced`, not `blocked`.
+- Keep every candidate-specific `blocked` item visible in the consolidated review, but do not present
+  it as confirmed or count it as a finding. Failure to identify a reachable path is `not_reproduced`,
+  not `blocked`.
 - When the review transport supports a summary body, publish confirmed findings and blocked candidates
   in separate sections. When it accepts only a `findings` array, use that array as a transport envelope
   for blocked candidates: place `[BLOCKED]` immediately after the transport's required priority prefix
   (for example, `[P3] [BLOCKED] ...`), use the lowest supported priority only as a schema placeholder,
   and state explicitly that the entry is not a confirmed finding and the priority is not a severity.
-- Every published finding or blocked candidate must include executable reproduction code, the exact
-  command, expected and observed behavior, exit status, validation logs, and its status.
+- Every published finding or blocked candidate must include the complete executable reproduction code
+  inline or link to a publicly accessible committed artifact. A temporary filename or prose description
+  of code is not executable evidence. Also include the exact command, expected behavior, observed
+  application or supported-workflow behavior, exit status, validation logs, and status.
+- Dependency installation, test discovery, and test-runner startup failures are preflight evidence,
+  not observed defect behavior. Never use such a failure to claim that a candidate reproduced.
 - Every confirmed finding must also demonstrate the causal link to the effective diff. When practical,
   run the same reproducer against the captured base and head and show that the failure is absent at the
   base and present at the head; otherwise explain why that comparison cannot run and prove the causal

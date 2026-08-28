@@ -126,7 +126,24 @@
       "persistValueHint": "nach Neustart sofort verfügbar",
       "recordHistory": "Historisierung aktiv",
       "recordHistoryHint": "Werte in der Historie-DB speichern",
-      "saveError": "Fehler beim Speichern"
+      "externalWriteEnabled": "Externes Schreiben erlauben",
+      "externalWriteEnabledHint": "jeder MQTT-Client mit Broker-Zugriff kann diesen Wert dann setzen",
+      "saveError": "Fehler beim Speichern",
+      "unitCategories": {
+        "temperature": "Temperatur",
+        "humidityAirQuality": "Feuchte & Luftqualität",
+        "pressure": "Druck",
+        "electricity": "Elektrizität",
+        "light": "Licht",
+        "speedAcceleration": "Geschwindigkeit & Beschleunigung",
+        "angle": "Winkel",
+        "volumeFlow": "Volumen & Durchfluss",
+        "lengthArea": "Länge & Fläche",
+        "mass": "Masse",
+        "time": "Zeit",
+        "radiation": "Strahlung",
+        "other": "Sonstiges"
+      }
     },
     "delete": {
       "confirm": "Objekt wirklich löschen?",
@@ -151,7 +168,7 @@
     "duplicate": {
       "action": "Duplizieren",
       "title": "Objekt duplizieren",
-      "hint": "Alle Eigenschaften und Adapter-Verknüpfungen werden kopiert. Aktuelle Werte und Historie werden nicht übernommen.",
+      "hint": "Alle Eigenschaften und Adapter-Verknüpfungen werden kopiert, mit Ausnahme der Zentraltechnik-Einstufung und der externen Schreibfreigabe — beide sind bei der Kopie immer deaktiviert. Aktuelle Werte und Historie werden nicht übernommen.",
       "defaultName": "Kopie von {name}",
       "saving": "Wird dupliziert …",
       "error": "Das Objekt konnte nicht dupliziert werden."
@@ -3353,5 +3370,12 @@
       "acknowledged": "Quittiert",
       "closed": "Geschlossen"
     }
+  },
+  "help": {
+    "title": "Hilfe",
+    "openLabel": "Hilfe zu diesem Bereich öffnen",
+    "unavailable": "Für diesen Bereich ist noch keine Hilfe verfügbar.",
+    "systemUnavailable": "Die Hilfe-Inhalte sind auf diesem Server aktuell nicht verfügbar.",
+    "openInNewTab": "In neuem Tab öffnen"
   }
 }

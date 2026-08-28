@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,6 +19,7 @@ NOW = "2026-06-10T00:00:00+00:00"
 class _RegistryStub:
     def __init__(self, dp_id: uuid.UUID):
         self._dp = SimpleNamespace(id=dp_id)
+        self.external_write_lock = asyncio.Lock()
 
     def get(self, dp_id: uuid.UUID):
         if dp_id == self._dp.id:
@@ -439,3 +441,86 @@ async def test_binding_mutation_direct_datapoint_grant_central_plant_requires_ce
         (str(dp_id),),
     )
     await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+
+class _ExternalWriteRegistryStub:
+    """Minimal registry double exposing only what `_clear_stale_external_write_enabled` needs."""
+
+    def __init__(self, dp) -> None:
+        self._dp = dp
+        self.update_calls: list[object] = []
+
+    def get(self, dp_id):
+        return self._dp if dp_id == self._dp.id else None
+
+    async def update(self, dp_id, body):
+        self.update_calls.append(body)
+        self._dp.external_write_enabled = body.external_write_enabled
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_clears_when_flag_true(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="KNX", enabled=True)
+
+    assert dp.external_write_enabled is False
+    assert len(registry.update_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_when_already_false(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=False)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="KNX", enabled=True)
+
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_for_message_binding(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="MESSAGE", enabled=True)
+
+    assert dp.external_write_enabled is True
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_when_disabled(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="KNX", enabled=False)
+
+    assert dp.external_write_enabled is True
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_for_unknown_datapoint(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(uuid.uuid4(), adapter_type="KNX", enabled=True)
+
+    assert registry.update_calls == []

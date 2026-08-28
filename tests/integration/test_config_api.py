@@ -316,6 +316,88 @@ async def test_import_creates_new_datapoints(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
+# POST /config/import  — external_write_enabled validated against topology
+# ---------------------------------------------------------------------------
+
+
+async def test_import_ignores_external_write_enabled_when_document_also_binds_the_datapoint(client, auth_headers):
+    """A document requesting the opt-in for a datapoint it also binds in the
+    same import must not end up with both — the binding is imported first
+    internally, but the opt-in check must still see it (Codex review)."""
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [
+            {
+                "id": dp_id,
+                "name": f"Imported-{uuid.uuid4().hex[:6]}",
+                "data_type": "BOOLEAN",
+                "unit": None,
+                "tags": [],
+                "mqtt_alias": None,
+                "external_write_enabled": True,
+            }
+        ],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": _ADAPTER_TYPE,
+                "adapter_instance_id": inst_id,
+                "direction": "SOURCE",
+                "config": {},
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [
+            {"id": inst_id, "adapter_type": _ADAPTER_TYPE, "name": f"BoundInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False}
+        ],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["datapoints_created"] == 1
+    assert result["bindings_created"] == 1
+    assert any("external_write_enabled" in e for e in result["errors"])
+
+    get_resp = await client.get(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["external_write_enabled"] is False
+
+
+async def test_import_applies_external_write_enabled_for_a_genuinely_bindingless_datapoint(client, auth_headers):
+    new_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [
+            {
+                "id": new_id,
+                "name": f"Imported-{uuid.uuid4().hex[:6]}",
+                "data_type": "BOOLEAN",
+                "unit": None,
+                "tags": [],
+                "mqtt_alias": None,
+                "external_write_enabled": True,
+            }
+        ],
+        "bindings": [],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["datapoints_created"] == 1
+    assert result["errors"] == []
+
+    get_resp = await client.get(f"/api/v1/datapoints/{new_id}", headers=auth_headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["external_write_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
 # POST /config/import  — adapter instances upsert
 # ---------------------------------------------------------------------------
 

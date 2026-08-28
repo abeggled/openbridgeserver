@@ -16,7 +16,10 @@
       <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-2">
         {{ $t('dashboard.ringbuffer.title') }}
       </h3>
-      <RouterLink to="/ringbuffer" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.ringbuffer.toMonitor') }}</RouterLink>
+      <div class="flex items-center gap-2">
+        <RouterLink to="/ringbuffer" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.ringbuffer.toMonitor') }}</RouterLink>
+        <HelpButton help-id="dashboard-ringbuffer" />
+      </div>
     </div>
 
     <div class="card-body flex flex-col gap-4">
@@ -190,6 +193,7 @@ const fmtBytes = (bytes) => formatBytesBinary(bytes, regionFormat.value)
 
 import Spinner from '@/components/ui/Spinner.vue'
 import Modal from '@/components/ui/Modal.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
 import LegacyMigrationBanner from '@/components/ringbuffer/LegacyMigrationBanner.vue'
 import MonitorConfigModal from '@/views/ringbuffer/MonitorConfigModal.vue'

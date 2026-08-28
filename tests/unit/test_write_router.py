@@ -506,6 +506,38 @@ async def test_handle_ignores_unknown_raw_payload_for_bindingless_datapoint():
 
 
 @pytest.mark.asyncio
+async def test_handle_publishes_value_event_for_external_write_enabled_bindingless_datapoint():
+    dp_id = uuid.uuid4()
+    router = _make_router([])
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="BOOLEAN", external_write_enabled=True))
+    bus = SimpleNamespace(publish=AsyncMock())
+    router._bus = bus
+
+    await router.handle(dp_id, "true")
+
+    bus.publish.assert_awaited_once()
+    (event,), _kwargs = bus.publish.call_args
+    assert isinstance(event, DataValueEvent)
+    assert event.datapoint_id == dp_id
+    assert event.value is True
+    assert event.quality == "good"
+    assert event.source_adapter == "mqtt_set"
+
+
+@pytest.mark.asyncio
+async def test_handle_ignores_invalid_payload_for_external_write_enabled_bindingless_datapoint():
+    dp_id = uuid.uuid4()
+    router = _make_router([])
+    router._registry = SimpleNamespace(get=lambda _dp_id: SimpleNamespace(name="dp", data_type="INTEGER", external_write_enabled=True))
+    bus = SimpleNamespace(publish=AsyncMock())
+    router._bus = bus
+
+    await router.handle(dp_id, "not-an-integer")
+
+    bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_handle_ignores_source_only_datapoint_without_publishing_state():
     dp_id = uuid.uuid4()
     bus = SimpleNamespace(publish=AsyncMock())

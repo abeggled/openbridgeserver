@@ -90,6 +90,7 @@ jobs:
           cache-dependency-path: |
             gui/package-lock.json
             frontend/package-lock.json
+            help/package-lock.json
 
       - name: Stamp gui/package.json version
         run: npm pkg set version="${{ steps.meta.outputs.version }}" --prefix gui
@@ -103,6 +104,12 @@ jobs:
       - name: Build Visu Frontend
         run: |
           cd frontend
+          npm ci --prefer-offline
+          npm run build
+
+      - name: Build Help site
+        run: |
+          cd help
           npm ci --prefer-offline
           npm run build
 
@@ -124,7 +131,7 @@ jobs:
         if: matrix.arch == 'amd64'
         run: |
           tar -czf "${{ runner.temp }}/${{ steps.meta.outputs.app_bundle_file }}" \
-            obs/ gui_dist/ frontend_dist/ requirements.txt obs-update -C scripts obs-admin
+            obs/ gui_dist/ frontend_dist/ help_dist/ requirements.txt obs-update -C scripts obs-admin
           cd "${{ runner.temp }}"
           sha256sum "${{ steps.meta.outputs.app_bundle_file }}" \
             > "${{ steps.meta.outputs.app_bundle_file }}.sha256"
@@ -250,6 +257,7 @@ jobs:
           sudo cp -r obs              "$ROOTFS/opt/obs/"
           sudo cp -r gui_dist         "$ROOTFS/opt/obs/"
           sudo cp -r frontend_dist    "$ROOTFS/opt/obs/"
+          sudo cp -r help_dist        "$ROOTFS/opt/obs/"
           sudo cp    requirements.txt "$ROOTFS/opt/obs/"
           sudo cp    scripts/obs-admin   "$ROOTFS/opt/obs/"
           echo "${{ steps.meta.outputs.version }}" | sudo tee "$ROOTFS/opt/obs/version" > /dev/null

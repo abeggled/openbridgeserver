@@ -347,3 +347,11 @@ export const logicApi = {
   exportGraph:      (id)         => api.get(`/logic/graphs/${id}/export`),
   datapointUsages:  (dpId)       => api.get(`/logic/datapoint/${dpId}/usages`),
 }
+
+// ── Help site (#896) ─────────────────────────────────────────────────────
+// Served by FastAPI at /help, outside /api/v1 — no JWT needed (static, public
+// content) — so this bypasses the scoped `api` instance and its auth
+// interceptors, same as the raw axios.post(...) used for token refresh above.
+export const helpApi = {
+  index: () => axios.get('/help/help-index.json'),
+}

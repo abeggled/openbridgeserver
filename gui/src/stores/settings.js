@@ -16,11 +16,19 @@ export const useSettingsStore = defineStore('settings', () => {
   const supportedCurrencies = ref([])
   const theme    = ref(localStorage.getItem('theme') ?? 'system')
   const loaded   = ref(false)
+  // Reactive mirror of the resolved dark/light state applyTheme() puts on
+  // <html>. `theme` alone isn't enough for anything that needs to react to
+  // the *effective* palette (e.g. HelpDrawer's iframe) — when theme is
+  // 'system', the resolved value can also change from the OS-level
+  // prefers-color-scheme listener (see App.vue), which never touches
+  // `theme.value` itself.
+  const isDarkResolved = ref(false)
 
   function applyTheme() {
     const isDark = theme.value === 'dark' ||
       (theme.value === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     document.documentElement.classList.toggle('dark', isDark)
+    isDarkResolved.value = isDark
   }
 
   async function load() {
@@ -83,6 +91,6 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     timezone, dateFormat, timeFormat, language, regionFormat, currency,
     supportedRegionFormats, supportedCurrencies,
-    theme, loaded, load, save, saveLanguage, setTheme, applyTheme,
+    theme, isDarkResolved, loaded, load, save, saveLanguage, setTheme, applyTheme,
   }
 })

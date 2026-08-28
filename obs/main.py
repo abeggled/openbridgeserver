@@ -316,7 +316,7 @@ def create_app() -> FastAPI:
     app.include_router(router, prefix="/api/v1")
 
     from fastapi import Request
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, RedirectResponse
 
     def _spa_index_response(index: Path) -> FileResponse:
         return FileResponse(
@@ -387,6 +387,64 @@ def create_app() -> FastAPI:
                 return _spa_index_response(index)
             return JSONResponse({"detail": "Visu nicht gebaut"}, status_code=404)
 
+    # ── Serve Help site (help_dist → /help) ────────────────────────────────
+    # VitePress renders a static multi-page site (a real .html file per route),
+    # unlike the Vue Admin-GUI/Visu SPAs — html=True lets StaticFiles resolve
+    # directory requests to their index.html without the SPA fallback trick above.
+    #
+    # Mounted unconditionally (unlike gui_dist/frontend_dist above) via a small
+    # wrapper that re-checks help_dist/'s existence on every request instead of
+    # once at startup: help/ is a separate VitePress project (`cd help && npm
+    # run build`), not built by any Python-side step, and there's no reliable
+    # way to guarantee that build finishes before the backend starts in every
+    # dev workflow (issue #1179 — a PyCharm "before launch" step for this
+    # turned out not to be awaited reliably). A plain `StaticFiles(...)` would
+    # either raise at construction (check_dir=True, the default) or raise on
+    # its own first-request check_config() if the directory doesn't exist yet
+    # — this wrapper defers that to a per-request is_dir() check instead, so
+    # /help starts working the moment the directory appears on disk, before or
+    # after the backend started, with no restart required.
+    _help_dist = Path(__file__).parent.parent / "help_dist"
+
+    class _LazyHelpStatic:
+        def __init__(self, directory: Path) -> None:
+            self._directory = directory
+            self._static: StaticFiles | None = None
+
+        async def __call__(self, scope, receive, send) -> None:
+            if not self._directory.is_dir():
+                response = JSONResponse({"detail": "Not found"}, status_code=404)
+                await response(scope, receive, send)
+                return
+            if self._static is None:
+                self._static = StaticFiles(directory=self._directory, html=True, check_dir=False)
+            await self._static(scope, receive, send)
+
+    @app.api_route("/help", methods=["GET", "HEAD"], include_in_schema=False)
+    async def help_bare_path():
+        # A bare "/help" (no trailing slash) is a distinct request from
+        # "/help/..." — Starlette's Mount below redirects it to "/help/"
+        # before ever reaching _LazyHelpStatic, which would mask a missing
+        # help_dist/ behind a 307 instead of the same JSON 404 every other
+        # /help/... path gets. Registered before the mount so this exact
+        # route wins over Mount's own redirect for this one path. Must accept
+        # HEAD explicitly — unlike a plain Mount, an @app.get()-only route
+        # does not also answer HEAD, so an availability probe using HEAD
+        # would otherwise get a bare 405 instead of following the redirect
+        # (Codex review on PR #1180).
+        if not _help_dist.is_dir():
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return RedirectResponse(url="/help/")
+
+    app.mount("/help", _LazyHelpStatic(_help_dist), name="help")
+    if not _help_dist.is_dir():
+        logger.warning(
+            "help_dist/ not found at %s yet — /help returns 404 until it is built "
+            "(cd help && npm run build) or the packaged app bundle is used; no restart "
+            "needed once it appears.",
+            _help_dist,
+        )
+
     # ── 404-Handler für alles andere ──────────────────────────────────────
     @app.exception_handler(404)
     async def spa_404_handler(request: Request, exc):
@@ -397,6 +455,19 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "Not found"}, status_code=404)
         if request.url.path.startswith("/visu/"):
             # Bereits durch visu_spa abgedeckt — sollte nicht hier landen
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if request.url.path == "/help" or request.url.path.startswith("/help/"):
+            # _LazyHelpStatic already 404s directly (JSON) when help_dist/
+            # doesn't exist at all — this handler is only reached once the
+            # directory exists but StaticFiles itself can't resolve the
+            # request (no matching page and no local 404.html). That's not
+            # only the "no dist" case it was assumed to be: a help_dist/
+            # mid-build (e.g. index.html already written, 404.html not yet)
+            # hits it too, and without this guard it fell through to the
+            # Admin-GUI SPA shell as a misleading 200 instead of the JSON 404
+            # the help store's loadIndex() needs to know to retry (Codex
+            # review on PR #1180 — this guard was previously removed here as
+            # "dead code", which the partial-build case disproves).
             return JSONResponse({"detail": "Not found"}, status_code=404)
         if _gui_dist.is_dir():
             index = _gui_dist / "index.html"

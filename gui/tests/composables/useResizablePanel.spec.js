@@ -23,6 +23,16 @@ describe('useResizablePanel', () => {
     expect(width.value).toBe(300)
   })
 
+  it('clamps a defaultWidth below min when nothing is stored (e.g. computed from a narrow viewport)', () => {
+    const { width } = useResizablePanel({ defaultWidth: 156, min: 320, max: 960 })
+    expect(width.value).toBe(320)
+  })
+
+  it('clamps a defaultWidth above max when nothing is stored', () => {
+    const { width } = useResizablePanel({ defaultWidth: 5000, min: 200, max: 500 })
+    expect(width.value).toBe(500)
+  })
+
   it('restores a previously persisted width from localStorage, clamped to min/max', () => {
     localStorage.setItem('obs.test.panel', '400')
     const { width } = useResizablePanel({ storageKey: 'obs.test.panel', defaultWidth: 288, min: 240, max: 640 })
@@ -110,5 +120,28 @@ describe('useResizablePanel', () => {
     expect(isResizing.value).toBe(false)
     // Second pointerup after listeners were already removed must not throw.
     expect(() => firePointer('pointerup', 500)).not.toThrow()
+  })
+
+  it('stops resizing on pointercancel, not just pointerup (issue feedback: an interrupted drag gesture — e.g. a fast move the browser can\'t track, or an OS trackpad tap-and-drag ending abnormally — never fired pointerup, leaving the panel resizing from unrelated later mouse movement anywhere on the page with no click involved)', () => {
+    const { width, isResizing, startResize } = useResizablePanel({ defaultWidth: 300, min: 200, max: 500 })
+    startResize({ clientX: 500, preventDefault: () => {} })
+    firePointer('pointermove', 400)
+    expect(width.value).toBe(400)
+
+    firePointer('pointercancel', 400)
+    expect(isResizing.value).toBe(false)
+
+    // Movement after the cancel must be inert — no click, no resize.
+    firePointer('pointermove', 100)
+    expect(width.value).toBe(400)
+  })
+
+  it('persists the width reached before a pointercancel, same as a normal pointerup', () => {
+    const { startResize } = useResizablePanel({ storageKey: 'obs.test.panel', defaultWidth: 300, min: 200, max: 500 })
+    startResize({ clientX: 500, preventDefault: () => {} })
+    firePointer('pointermove', 420)
+    firePointer('pointercancel', 420)
+
+    expect(localStorage.getItem('obs.test.panel')).toBe('380')
   })
 })
