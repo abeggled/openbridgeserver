@@ -120,6 +120,13 @@ const NODE_HELP_IDS = {
   astro_sun: 'logic-block-astro-sun',
   notify_message: 'logic-block-notify-message',
   message_archive: 'logic-block-message-archive',
+  wake_on_lan: 'logic-block-wake-on-lan',
+  host_check: 'logic-block-host-check',
+  json_extractor: 'logic-block-json-extractor',
+  xml_extractor: 'logic-block-xml-extractor',
+  substring_extractor: 'logic-block-substring-extractor',
+  ical: 'logic-block-ical',
+  api_client: 'logic-block-api-client',
 }
 
 const categories = computed(() =>

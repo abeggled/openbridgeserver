@@ -20,7 +20,14 @@ const NODE_TYPES = [
   { type: 'astro_sun',     label: 'Astro Sonne', category: 'astro', color: '#f59e0b' },
   { type: 'notify_message', label: 'Benachrichtigung', category: 'notification', color: '#dc2626' },
   { type: 'message_archive', label: 'Meldungsarchiv', category: 'notification', color: '#2563eb' },
-  { type: 'wake_on_lan', label: 'Wake on LAN', category: 'integration', color: '#0ea5e9' },
+  { type: 'wake_on_lan', label: 'Wake on LAN', category: 'integration', color: '#0369a1' },
+  { type: 'host_check', label: 'Host Check (Ping)', category: 'integration', color: '#0369a1' },
+  { type: 'json_extractor', label: 'JSON Extractor', category: 'integration', color: '#0369a1' },
+  { type: 'xml_extractor', label: 'XML Extractor', category: 'integration', color: '#0369a1' },
+  { type: 'substring_extractor', label: 'Substring / RegEx', category: 'integration', color: '#0369a1' },
+  { type: 'ical', label: 'iCalendar', category: 'integration', color: '#0369a1' },
+  { type: 'api_client', label: 'API Client', category: 'integration', color: '#0e7490' },
+  { type: 'python_script', label: 'Python Script', category: 'script', color: '#65a30d' },
 ]
 
 function mockStorage() {
@@ -57,6 +64,13 @@ describe('NodePalette — per-block help buttons', () => {
     ['astro_sun', 'logic-block-astro-sun'],
     ['notify_message', 'logic-block-notify-message'],
     ['message_archive', 'logic-block-message-archive'],
+    ['wake_on_lan', 'logic-block-wake-on-lan'],
+    ['host_check', 'logic-block-host-check'],
+    ['json_extractor', 'logic-block-json-extractor'],
+    ['xml_extractor', 'logic-block-xml-extractor'],
+    ['substring_extractor', 'logic-block-substring-extractor'],
+    ['ical', 'logic-block-ical'],
+    ['api_client', 'logic-block-api-client'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
@@ -64,8 +78,8 @@ describe('NodePalette — per-block help buttons', () => {
 
   it('does not render a help button for a block type with no documented help yet', () => {
     const wrapper = mountPalette()
-    // wake_on_lan isn't in NODE_HELP_IDS yet (documented in a later category commit).
-    expect(wrapper.find('[data-testid="help-button-logic-block-wake-on-lan"]').exists()).toBe(false)
+    // python_script isn't in NODE_HELP_IDS yet (documented in a later category commit).
+    expect(wrapper.find('[data-testid="help-button-logic-block-python-script"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
@@ -85,6 +99,13 @@ describe('NodePalette — per-block help buttons', () => {
     ['astro_sun', 'logic-block-astro-sun'],
     ['notify_message', 'logic-block-notify-message'],
     ['message_archive', 'logic-block-message-archive'],
+    ['wake_on_lan', 'logic-block-wake-on-lan'],
+    ['host_check', 'logic-block-host-check'],
+    ['json_extractor', 'logic-block-json-extractor'],
+    ['xml_extractor', 'logic-block-xml-extractor'],
+    ['substring_extractor', 'logic-block-substring-extractor'],
+    ['ical', 'logic-block-ical'],
+    ['api_client', 'logic-block-api-client'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')
