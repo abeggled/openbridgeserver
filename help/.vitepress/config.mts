@@ -82,7 +82,10 @@ export default defineConfig({
           },
           {
             text: 'Logikmodul',
-            items: [{ text: 'Logikmodul', link: '/de/logic/overview' }],
+            items: [
+              { text: 'Logikmodul', link: '/de/logic/overview' },
+              { text: 'Bausteine: Logik', link: '/de/logic/blocks-logic' },
+            ],
           },
           {
             text: 'Einstellungen',
@@ -155,7 +158,10 @@ export default defineConfig({
           },
           {
             text: 'Logic Module',
-            items: [{ text: 'Logic Module', link: '/en/logic/overview' }],
+            items: [
+              { text: 'Logic Module', link: '/en/logic/overview' },
+              { text: 'Blocks: Logic', link: '/en/logic/blocks-logic' },
+            ],
           },
           {
             text: 'Settings',

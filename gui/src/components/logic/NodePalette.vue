@@ -54,7 +54,8 @@
               class="flex items-center gap-2 px-2 py-1.5 rounded cursor-grab hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors select-none"
             >
               <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ background: nt.color }"></span>
-              <span class="text-xs text-slate-700 dark:text-slate-200">{{ $te('logic.nodeTypes.' + nt.type) ? $t('logic.nodeTypes.' + nt.type) : nt.label }}</span>
+              <span class="text-xs text-slate-700 dark:text-slate-200 flex-1 min-w-0 truncate">{{ $te('logic.nodeTypes.' + nt.type) ? $t('logic.nodeTypes.' + nt.type) : nt.label }}</span>
+              <HelpButton v-if="NODE_HELP_IDS[nt.type]" :help-id="NODE_HELP_IDS[nt.type]" class="flex-shrink-0" />
             </div>
           </div>
         </div>
@@ -67,6 +68,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import HelpButton from '@/components/ui/HelpButton.vue'
 
 const props = defineProps({
   nodeTypes: { type: Array, default: () => [] },
@@ -77,6 +79,25 @@ const emit = defineEmits(['drag-start', 'toggle'])
 const { t } = useI18n()
 
 const CATEGORY_IDS = ['logic', 'datapoint', 'math', 'string', 'timer', 'astro', 'notification', 'integration', 'script', 'ai']
+
+// Per-block-type help — documented one category at a time (see
+// help/de/logic/blocks-<category>.md); a type with no entry here simply
+// gets no help button yet rather than one pointing at nonexistent content.
+const NODE_HELP_IDS = {
+  and: 'logic-block-and',
+  or: 'logic-block-or',
+  xor: 'logic-block-xor',
+  not: 'logic-block-not',
+  gate: 'logic-block-gate',
+  memory: 'logic-block-memory',
+  change_filter: 'logic-block-change-filter',
+  compare: 'logic-block-compare',
+  hysteresis: 'logic-block-hysteresis',
+  merge: 'logic-block-merge',
+  decision: 'logic-block-decision',
+  value_mapping: 'logic-block-value-mapping',
+  const_value: 'logic-block-const-value',
+}
 
 const categories = computed(() =>
   CATEGORY_IDS
