@@ -86,6 +86,7 @@ export default defineConfig({
               { text: 'Logikmodul', link: '/de/logic/overview' },
               { text: 'Bausteine: Logik', link: '/de/logic/blocks-logic' },
               { text: 'Bausteine: Objekt-Zugriff', link: '/de/logic/blocks-datapoint' },
+              { text: 'Bausteine: Mathematik', link: '/de/logic/blocks-math' },
             ],
           },
           {
@@ -163,6 +164,7 @@ export default defineConfig({
               { text: 'Logic Module', link: '/en/logic/overview' },
               { text: 'Blocks: Logic', link: '/en/logic/blocks-logic' },
               { text: 'Blocks: Data Point Access', link: '/en/logic/blocks-datapoint' },
+              { text: 'Blocks: Math', link: '/en/logic/blocks-math' },
             ],
           },
           {

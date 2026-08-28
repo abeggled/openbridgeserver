@@ -99,6 +99,15 @@ const NODE_HELP_IDS = {
   const_value: 'logic-block-const-value',
   datapoint_read: 'logic-block-datapoint-read',
   datapoint_write: 'logic-block-datapoint-write',
+  math_formula: 'logic-block-math-formula',
+  math_map: 'logic-block-math-map',
+  clamp: 'logic-block-clamp',
+  random_value: 'logic-block-random-value',
+  statistics: 'logic-block-statistics',
+  avg_multi: 'logic-block-avg-multi',
+  min_max_tracker: 'logic-block-min-max-tracker',
+  consumption_counter: 'logic-block-consumption-counter',
+  heating_circuit: 'logic-block-heating-circuit',
 }
 
 const categories = computed(() =>

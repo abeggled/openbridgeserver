@@ -14,7 +14,8 @@ const NODE_TYPES = [
   { type: 'or',              label: 'OR',            category: 'logic',     color: '#4ade80' },
   { type: 'datapoint_read',  label: 'Objekt lesen',  category: 'datapoint', color: '#0f766e' },
   { type: 'datapoint_write', label: 'Objekt schreiben', category: 'datapoint', color: '#0f766e' },
-  { type: 'math_formula',   label: 'Formula', category: 'math',  color: '#60a5fa' },
+  { type: 'math_formula',  label: 'Formel',  category: 'math',   color: '#7c3aed' },
+  { type: 'string_concat', label: 'String Verketten', category: 'string', color: '#60a5fa' },
 ]
 
 function mockStorage() {
@@ -45,6 +46,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['or', 'logic-block-or'],
     ['datapoint_read', 'logic-block-datapoint-read'],
     ['datapoint_write', 'logic-block-datapoint-write'],
+    ['math_formula', 'logic-block-math-formula'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
@@ -52,8 +54,8 @@ describe('NodePalette — per-block help buttons', () => {
 
   it('does not render a help button for a block type with no documented help yet', () => {
     const wrapper = mountPalette()
-    // math_formula isn't in NODE_HELP_IDS yet (documented in a later category commit).
-    expect(wrapper.find('[data-testid="help-button-logic-block-math-formula"]').exists()).toBe(false)
+    // string_concat isn't in NODE_HELP_IDS yet (documented in a later category commit).
+    expect(wrapper.find('[data-testid="help-button-logic-block-string-concat"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
@@ -67,6 +69,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['or', 'logic-block-or'],
     ['datapoint_read', 'logic-block-datapoint-read'],
     ['datapoint_write', 'logic-block-datapoint-write'],
+    ['math_formula', 'logic-block-math-formula'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')
