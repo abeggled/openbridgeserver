@@ -64,7 +64,7 @@
             data-testid="help-drawer-iframe"
           />
           <div v-else class="card-body text-sm text-slate-500 dark:text-slate-400">
-            {{ $t('help.unavailable') }}
+            {{ helpStore.loadError ? $t('help.systemUnavailable') : $t('help.unavailable') }}
           </div>
         </div>
       </div>

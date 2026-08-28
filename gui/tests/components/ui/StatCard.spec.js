@@ -43,4 +43,14 @@ describe('StatCard', () => {
     const w = mountCard({ label: 'Count', value: 99 })
     expect(w.text()).toContain('99')
   })
+
+  it('does not render a help button when no helpId is given', () => {
+    const w = mountCard({ label: 'L', value: '0' })
+    expect(w.find('[data-testid^="help-button-"]').exists()).toBe(false)
+  })
+
+  it('renders a help button for the given helpId', () => {
+    const w = mountCard({ label: 'L', value: '0', helpId: 'dashboard-stats-datapoints' })
+    expect(w.find('[data-testid="help-button-dashboard-stats-datapoints"]').exists()).toBe(true)
+  })
 })

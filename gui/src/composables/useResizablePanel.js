@@ -23,6 +23,7 @@ export function useResizablePanel({ storageKey, defaultWidth = 288, min = 240, m
     isResizing.value = false
     document.removeEventListener('pointermove', onPointerMove)
     document.removeEventListener('pointerup', stopResize)
+    document.removeEventListener('pointercancel', stopResize)
     if (storageKey) localStorage.setItem(storageKey, String(width.value))
   }
 
@@ -32,6 +33,17 @@ export function useResizablePanel({ storageKey, defaultWidth = 288, min = 240, m
     startWidth = width.value
     document.addEventListener('pointermove', onPointerMove)
     document.addEventListener('pointerup', stopResize)
+    // Without this, an interrupted gesture (the browser dropping/canceling
+    // the pointer sequence — e.g. a fast move outside the tracked area, an
+    // OS-level trackpad tap-and-drag gesture ending abnormally, or losing
+    // window focus mid-drag — never fires 'pointerup', leaving isResizing
+    // stuck true and these document-level listeners permanently attached.
+    // Any later mouse movement anywhere on the page then keeps resizing the
+    // panel from that stale startX/startWidth, with no click involved at all
+    // (issue feedback: "moving the mouse near the divider moves it without
+    // clicking; moving fast makes it stop, probably because the browser
+    // can't keep up" — exactly this failure mode).
+    document.addEventListener('pointercancel', stopResize)
     e.preventDefault()
   }
 

@@ -3405,6 +3405,7 @@
     "title": "Hilfe",
     "openLabel": "Hilfe zu diesem Bereich öffnen",
     "unavailable": "Für diesen Bereich ist noch keine Hilfe verfügbar.",
+    "systemUnavailable": "Die Hilfe-Inhalte sind auf diesem Server aktuell nicht verfügbar.",
     "openInNewTab": "In neuem Tab öffnen"
   }
 }

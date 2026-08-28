@@ -275,6 +275,68 @@ async def no_help_dist_client(tmp_path):
     override_settings(saved_settings)
 
 
+@pytest_asyncio.fixture
+async def partial_help_dist_client(tmp_path):
+    """AsyncClient wired to a fresh app instance where help_dist/ exists but is
+    only partially built — has an index.html but no 404.html yet, the state a
+    VitePress build can be in mid-run (or an incomplete copy)."""
+    from obs.config import (
+        DatabaseSettings,
+        MosquittoSettings,
+        MqttSettings,
+        SecuritySettings,
+        Settings,
+        get_settings,
+        override_settings,
+    )
+    from obs.main import create_app
+
+    saved_settings = get_settings()
+    override_settings(
+        Settings(
+            database=DatabaseSettings(path=str(tmp_path / "test.db")),
+            mqtt=MqttSettings(host="localhost", port=11883, username=None, password=None),
+            security=SecuritySettings(
+                jwt_secret="test-secret-32-chars-xxxxxxxxxxxx",
+                jwt_expire_minutes=60,
+                url_target_allowlist_path=str(tmp_path / "allowlist.yaml"),
+            ),
+            mosquitto=MosquittoSettings(
+                passwd_file=str(tmp_path / "passwd"),
+                reload_pid=None,
+                reload_command=None,
+                service_username="obs",
+                service_password="test",
+            ),
+        )
+    )
+
+    help_dist = _PROJECT_ROOT / "help_dist"
+    created_dir = not help_dist.exists()
+    created_files: list[Path] = []
+
+    try:
+        help_dist.mkdir(exist_ok=True)
+        index = help_dist / "index.html"
+        if not index.exists():
+            index.write_bytes(b"<html><body>Hilfe Start</body></html>")
+            created_files.append(index)
+
+        app = create_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+
+    finally:
+        for f in created_files:
+            f.unlink(missing_ok=True)
+        if created_dir:
+            try:
+                help_dist.rmdir()
+            except OSError:
+                pass
+        override_settings(saved_settings)
+
+
 @pytest.mark.asyncio
 async def test_visu_favicon_returns_svg(visu_dist_client):
     resp = await visu_dist_client.get("/visu/favicon.svg")
@@ -373,5 +435,116 @@ async def test_bare_help_path_returns_json_404_when_dist_missing(no_help_dist_cl
     "/help/..." — without this exact-match guard it fell through to the Admin-GUI
     SPA fallback instead of the same JSON 404 every other /help/... path gets."""
     resp = await no_help_dist_client.get("/help")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
+async def test_help_starts_working_without_a_restart_once_help_dist_appears(tmp_path):
+    """help_dist/ is a separate npm build with no guaranteed ordering against
+    backend startup (issue #1179 — a PyCharm "before launch" step for this
+    turned out not to be reliably awaited). /help must recover on its own, on
+    the very next request, the moment the directory appears — not require a
+    fresh `create_app()` / process restart."""
+    from obs.config import (
+        DatabaseSettings,
+        MosquittoSettings,
+        MqttSettings,
+        SecuritySettings,
+        Settings,
+        get_settings,
+        override_settings,
+    )
+    from obs.main import create_app
+
+    saved_settings = get_settings()
+    override_settings(
+        Settings(
+            database=DatabaseSettings(path=str(tmp_path / "test.db")),
+            mqtt=MqttSettings(host="localhost", port=11883, username=None, password=None),
+            security=SecuritySettings(
+                jwt_secret="test-secret-32-chars-xxxxxxxxxxxx",
+                jwt_expire_minutes=60,
+                url_target_allowlist_path=str(tmp_path / "allowlist.yaml"),
+            ),
+            mosquitto=MosquittoSettings(
+                passwd_file=str(tmp_path / "passwd"),
+                reload_pid=None,
+                reload_command=None,
+                service_username="obs",
+                service_password="test",
+            ),
+        )
+    )
+
+    help_dist = _PROJECT_ROOT / "help_dist"
+    assert not help_dist.exists(), "help_dist/ must not exist for this test to be meaningful"
+
+    try:
+        app = create_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            before = await client.get("/help/index.html")
+            assert before.status_code == 404
+            assert before.json() == {"detail": "Not found"}
+
+            help_dist.mkdir()
+            (help_dist / "index.html").write_bytes(b"<html><body>Hilfe Start</body></html>")
+            (help_dist / "404.html").write_bytes(b"<html><body>Nicht gefunden</body></html>")
+
+            after = await client.get("/help/index.html")
+            assert after.status_code == 200
+            assert "Hilfe Start" in after.text
+    finally:
+        for name in ("index.html", "404.html"):
+            (help_dist / name).unlink(missing_ok=True)
+        if help_dist.exists():
+            help_dist.rmdir()
+        override_settings(saved_settings)
+
+
+@pytest.mark.asyncio
+async def test_bare_help_path_redirects_when_dist_exists(help_dist_client):
+    """Mirrors the missing-dist bare-path test above, for the existing-dist
+    case: the bare "/help" still redirects to "/help/" (unchanged from before
+    the lazy-mount rewrite), it just no longer masks a missing help_dist/."""
+    resp = await help_dist_client.get("/help", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/help/"
+
+
+@pytest.mark.asyncio
+async def test_bare_help_path_head_request_redirects_like_get(help_dist_client):
+    """A HEAD request must be answered the same way as GET (a 307 to
+    "/help/"), not the bare 405 an @app.get()-only route would give — an
+    availability probe using HEAD (Codex review on PR #1180)."""
+    resp = await help_dist_client.head("/help", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/help/"
+
+
+@pytest.mark.asyncio
+async def test_help_static_mount_is_reused_across_requests(help_dist_client):
+    """_LazyHelpStatic caches its inner StaticFiles instance after the first
+    request through it (self._static). A second request through the same
+    app/client must be served from that cached instance, not just the
+    construct-it-for-the-first-time path (Codex review on PR #1180)."""
+    first = await help_dist_client.get("/help/")
+    assert first.status_code == 200
+    assert "Hilfe Start" in first.text
+
+    second = await help_dist_client.get("/help/")
+    assert second.status_code == 200
+    assert "Hilfe Start" in second.text
+
+
+@pytest.mark.asyncio
+async def test_help_unresolvable_path_returns_json_404_even_with_a_partial_dist(partial_help_dist_client):
+    """A help_dist/ that exists but has no local 404.html yet (e.g. mid-build)
+    must still get the same JSON 404 contract as a missing dist — not silently
+    fall through to the Admin-GUI SPA shell as a misleading 200, which would
+    make the help store's loadIndex() cache the wrong thing as "loaded"
+    (Codex review on PR #1180 — a guard for this in the global 404 handler
+    was previously removed as unreachable "dead code"; it wasn't)."""
+    resp = await partial_help_dist_client.get("/help/help-index.json")
     assert resp.status_code == 404
     assert resp.json() == {"detail": "Not found"}

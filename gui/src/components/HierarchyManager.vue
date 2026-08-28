@@ -91,7 +91,7 @@
     </div>
 
     <!-- ── Modal: Create/Edit Tree ── -->
-    <div v-if="treeModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="treeModal.open = false">
+    <div v-if="treeModal.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="treeModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">
           {{ treeModal.isEdit ? $t('hierarchy.rename') : $t('hierarchy.newHierarchy') }}
@@ -123,7 +123,7 @@
     </div>
 
     <!-- ── Modal: Create/Edit Node ── -->
-    <div v-if="nodeModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="nodeModal.open = false">
+    <div v-if="nodeModal.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="nodeModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">
           {{ nodeModal.isEdit ? $t('hierarchy.editNode') : $t('hierarchy.addNode') }}
@@ -148,7 +148,7 @@
     </div>
 
     <!-- ── Modal: ETS Import ── -->
-    <div v-if="etsModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="etsModal.open = false">
+    <div v-if="etsModal.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="etsModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">{{ $t('hierarchy.importTitle') }}</h3>
         <p class="text-sm text-slate-500">
@@ -211,7 +211,7 @@
     </div>
 
     <!-- ── Modal: Confirm Delete ── -->
-    <div v-if="deleteConfirm.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="deleteConfirm.open = false">
+    <div v-if="deleteConfirm.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="deleteConfirm.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">{{ deleteConfirm.heading }}</h3>
         <p class="text-sm text-slate-500">{{ deleteConfirm.body }}</p>
@@ -235,8 +235,10 @@ import { hierarchyApi } from '@/api/client.js'
 import HierarchyNodeTree from '@/components/HierarchyNodeTree.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { buildDepthOptions } from '@/utils/hierarchyDepthOptions.js'
+import { useHelpStore } from '@/stores/help'
 
 const { t } = useI18n()
+const help = useHelpStore()
 
 // ── State ─────────────────────────────────────────────────────────────────
 

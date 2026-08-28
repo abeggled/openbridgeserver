@@ -31,7 +31,12 @@ async function mountApp({ isLoggedIn = false, helpIsOpen = false, helpDrawerWidt
     useSettingsStore: () => ({ theme: 'system', load: vi.fn(), applyTheme: vi.fn() }),
   }))
   vi.doMock('@/stores/help', () => ({
-    useHelpStore: () => ({ loadIndex: loadIndexMock, isOpen: helpIsOpen, drawerWidth: helpDrawerWidth }),
+    useHelpStore: () => ({
+      loadIndex: loadIndexMock,
+      isOpen: helpIsOpen,
+      drawerWidth: helpDrawerWidth,
+      reservedRight: helpIsOpen ? `min(${helpDrawerWidth}px, 90vw)` : '0px',
+    }),
   }))
 
   const pinia = createPinia()
