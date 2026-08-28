@@ -76,6 +76,10 @@ export default defineConfig({
             items: [{ text: 'Logs', link: '/logs/overview' }],
           },
           {
+            text: 'Logikmodul',
+            items: [{ text: 'Logikmodul', link: '/logic/overview' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -143,6 +147,10 @@ export default defineConfig({
           {
             text: 'Logs',
             items: [{ text: 'Logs', link: '/en/logs/overview' }],
+          },
+          {
+            text: 'Logic Module',
+            items: [{ text: 'Logic Module', link: '/en/logic/overview' }],
           },
           {
             text: 'Settings',
