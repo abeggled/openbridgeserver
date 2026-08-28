@@ -19,6 +19,19 @@ export const BACKEND_NUMBER_RE = new RegExp(
   'u',
 )
 
+// The exact set float() skips around a number. JavaScript's trim() is NOT the
+// same set, in both directions: it also strips U+FEFF, which float() rejects,
+// and it leaves U+0085, which float() skips. Using trim() therefore showed a
+// BOM-wrapped value as valid while the executor sent 0.0, and showed a
+// NEL-wrapped one as 0 while the executor sent the number. Derived by
+// comparing both runtimes over every code point up to U+3100.
+const PY_SPACE = '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000'
+const PY_TRIM_RE = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, 'gu')
+
+function pythonTrim(text) {
+  return text.replace(PY_TRIM_RE, '')
+}
+
 // What <input type="number"> accepts: an optional minus, digits, an optional
 // fraction, an optional exponent. Narrower than float() — no leading plus, no
 // bare ".5", no trailing "2.".
@@ -51,7 +64,7 @@ export function toBackendNumberText(value, fallback = '0') {
   // editor kept displaying the original spelling. Both checks are needed: the
   // regex rejects spellings float() cannot parse (0x10, Infinity), isFinite
   // rejects ones it parses into infinity (1e309).
-  const trimmed = text.trim()
+  const trimmed = pythonTrim(text)
   if (!BACKEND_NUMBER_RE.test(trimmed)) return fallback
   // Number() does not understand separators, so strip them before the finite
   // check — and return the stripped spelling, because a number input cannot

@@ -33,6 +33,28 @@ describe('toBackendNumberText', () => {
     expect(toBackendNumberText(input)).toBe(expected)
   })
 
+  it('trims exactly what float() skips, not what JavaScript trim() strips', () => {
+    // The two sets differ in both directions. trim() also removes U+FEFF,
+    // which float() rejects — the panel showed 4 while the executor sent 0.0 —
+    // and it leaves U+0085, which float() skips, so the panel showed 0 while
+    // the executor sent the number.
+    expect('\ufeff4\ufeff'.trim()).toBe('4')
+    expect(toBackendNumberText('\ufeff4\ufeff')).toBe('0')
+    expect('\u00854\u0085'.trim()).not.toBe('4')
+    expect(toBackendNumberText('\u00854\u0085')).toBe('4')
+  })
+
+  it.each(['\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2000', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000'])(
+    'skips %j around a number, as float() does',
+    ws => {
+      expect(toBackendNumberText(ws + '4' + ws)).toBe('4')
+    },
+  )
+
+  it.each(['\u200b', '\u180e', '\ufeff'])('rejects %j, which float() does not skip', ws => {
+    expect(toBackendNumberText(ws + '4' + ws)).toBe('0')
+  })
+
   it('returns the canonical spelling so a number input can display it', () => {
     // float() ignores surrounding whitespace, but <input type="number"> cannot
     // display " 4 " and would render blank and invalid.
