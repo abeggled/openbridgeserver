@@ -68,6 +68,10 @@ export default defineConfig({
             items: [{ text: 'Monitor', link: '/ringbuffer/overview' }],
           },
           {
+            text: 'Meldungsarchive',
+            items: [{ text: 'Archivliste', link: '/messagearchives/list' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -127,6 +131,10 @@ export default defineConfig({
           {
             text: 'Monitor',
             items: [{ text: 'Monitor', link: '/en/ringbuffer/overview' }],
+          },
+          {
+            text: 'Message Archives',
+            items: [{ text: 'Archive List', link: '/en/messagearchives/list' }],
           },
           {
             text: 'Settings',
