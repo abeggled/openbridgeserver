@@ -24,7 +24,30 @@ export const useVisuStore = defineStore('visu', () => {
 
   // Lokale Änderungen am Baum (Anlegen, Verschieben, Löschen). Eine Antwort, die
   // vor einer Änderung angefordert und danach zugestellt wurde, ist veraltet.
+  // Gezählt wird vor *und* nach dem Request: eine Momentaufnahme, die während
+  // einer laufenden Änderung entsteht, ist in beide Richtungen unbrauchbar —
+  // sie kann den Knoten noch nicht enthalten (Server hat noch nicht committet)
+  // oder schon (committet, aber die Antwort auf die Änderung ist noch
+  // unterwegs). Nur der lokale Stand kennt beides sicher.
   let treeMutations = 0
+
+  /** Änderung anmelden; liefert die Quittung für den Abschluss zurück */
+  function beginTreeMutation(): () => void {
+    treeMutations += 1
+    return () => { treeMutations += 1 }
+  }
+
+  /**
+   * Knoten einfügen oder ersetzen.
+   *
+   * Eine akzeptierte Momentaufnahme kann den gerade angelegten Knoten bereits
+   * enthalten; ein blindes `push` legte ihn dann ein zweites Mal in den Baum.
+   */
+  function upsertNode(node: VisuNode): void {
+    const idx = nodes.value.findIndex((n) => n.id === node.id)
+    if (idx === -1) nodes.value.push(node)
+    else nodes.value[idx] = node
+  }
 
   /**
    * Baum laden und nur übernehmen, wenn die Antwort noch die maßgebliche ist.
@@ -184,38 +207,58 @@ export const useVisuStore = defineStore('visu', () => {
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
   async function createNode(data: Partial<VisuNode>): Promise<VisuNode> {
-    const node = await visuApi.createNode(data)
-    nodes.value.push(node)
-    treeMutations += 1
-    return node
+    const done = beginTreeMutation()
+    try {
+      const node = await visuApi.createNode(data)
+      upsertNode(node)
+      return node
+    } finally {
+      done()
+    }
   }
 
   async function updateNode(id: string, data: VisuNodeUpdate): Promise<VisuNode> {
-    const node = await visuApi.updateNode(id, data)
-    const idx = nodes.value.findIndex((n) => n.id === id)
-    if (idx !== -1) nodes.value[idx] = node
-    treeMutations += 1
-    return node
+    const done = beginTreeMutation()
+    try {
+      const node = await visuApi.updateNode(id, data)
+      const idx = nodes.value.findIndex((n) => n.id === id)
+      if (idx !== -1) nodes.value[idx] = node
+      return node
+    } finally {
+      done()
+    }
   }
 
   async function deleteNode(id: string): Promise<void> {
-    await visuApi.deleteNode(id)
-    nodes.value = nodes.value.filter((n) => n.id !== id)
-    treeMutations += 1
+    const done = beginTreeMutation()
+    try {
+      await visuApi.deleteNode(id)
+      nodes.value = nodes.value.filter((n) => n.id !== id)
+    } finally {
+      done()
+    }
   }
 
   async function copyNode(id: string, targetParentId: string | null, newName: string): Promise<VisuNode> {
-    const node = await visuApi.copyNode(id, targetParentId, newName)
-    nodes.value.push(node)
-    treeMutations += 1
-    return node
+    const done = beginTreeMutation()
+    try {
+      const node = await visuApi.copyNode(id, targetParentId, newName)
+      upsertNode(node)
+      return node
+    } finally {
+      done()
+    }
   }
 
   async function moveNode(id: string, newParentId: string | null, order: number): Promise<void> {
-    const node = await visuApi.moveNode(id, newParentId, order)
-    const idx = nodes.value.findIndex((n) => n.id === id)
-    if (idx !== -1) nodes.value[idx] = node
-    treeMutations += 1
+    const done = beginTreeMutation()
+    try {
+      const node = await visuApi.moveNode(id, newParentId, order)
+      const idx = nodes.value.findIndex((n) => n.id === id)
+      if (idx !== -1) nodes.value[idx] = node
+    } finally {
+      done()
+    }
   }
 
   return {

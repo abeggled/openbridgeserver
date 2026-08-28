@@ -410,6 +410,104 @@ describe('visu store auth state', () => {
     expect(store.nodes.map(n => n.id)).toContain('new-node')
   })
 
+  it('does not duplicate a node the reloaded tree already contains', async () => {
+    // Der Server hat die Neuanlage committet, bevor er die Momentaufnahme
+    // erstellt hat — die Antwort auf das POST ist aber noch unterwegs.
+    const created = {
+      id: 'new-node', parent_id: null, name: 'Neu', type: 'PAGE' as const, order: 1, access: 'public' as const,
+    }
+    let releaseTree: (value: Response) => void = () => {}
+    let releaseCreate: (value: Response) => void = () => {}
+    const pendingTree = new Promise<Response>(resolve => { releaseTree = resolve })
+    const pendingCreate = new Promise<Response>(resolve => { releaseCreate = resolve })
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      if (init.method === 'POST') return pendingCreate
+      return pendingTree
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-1')
+    localStorage.setItem('visu_refresh_token', 'refresh-1')
+    notifyAuthTokenRefreshed()
+    await flushPromises()               // /auth/me durch, Baum-Request unterwegs
+
+    const pending = store.createNode(created)
+    await flushPromises()
+    releaseTree(jsonResponse([created]))
+    await flushPromises()
+    releaseCreate(jsonResponse(created))
+    await pending
+
+    expect(store.nodes.map(n => n.id)).toEqual(['new-node'])
+  })
+
+  it('does not resurrect a node the reloaded tree still contains', async () => {
+    const doomed = {
+      id: 'old-node', parent_id: null, name: 'Alt', type: 'PAGE' as const, order: 1, access: 'public' as const,
+    }
+    let releaseTree: (value: Response) => void = () => {}
+    let releaseDelete: (value: Response) => void = () => {}
+    const pendingTree = new Promise<Response>(resolve => { releaseTree = resolve })
+    const pendingDelete = new Promise<Response>(resolve => { releaseDelete = resolve })
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      if (init.method === 'DELETE') return pendingDelete
+      return pendingTree
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-1')
+    localStorage.setItem('visu_refresh_token', 'refresh-1')
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    const pending = store.deleteNode('old-node')
+    await flushPromises()
+    // Momentaufnahme von vor dem Löschen — sie darf den Knoten nicht zurückholen
+    releaseTree(jsonResponse([doomed]))
+    await flushPromises()
+    releaseDelete(new Response(null, { status: 204 }))
+    await pending
+
+    expect(store.nodes.map(n => n.id)).toEqual([])
+  })
+
+  it('counts a failed change, whose tree state is just as unknown', async () => {
+    const created = {
+      id: 'new-node', parent_id: null, name: 'Neu', type: 'PAGE' as const, order: 1, access: 'public' as const,
+    }
+    let releaseTree: (value: Response) => void = () => {}
+    const pendingTree = new Promise<Response>(resolve => { releaseTree = resolve })
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      if (String(url).endsWith('/auth/me')) {
+        return jsonResponse({ id: 'u1', username: 'admin', is_admin: true })
+      }
+      if (init.method === 'POST') return new Response(null, { status: 500 })
+      return pendingTree
+    }))
+
+    const store = useVisuStore()
+    localStorage.setItem('visu_jwt', 'jwt-1')
+    localStorage.setItem('visu_refresh_token', 'refresh-1')
+    notifyAuthTokenRefreshed()
+    await flushPromises()
+
+    // Auch ein gescheitertes POST kann serverseitig committet haben
+    await expect(store.createNode(created)).rejects.toBeTruthy()
+    releaseTree(jsonResponse([created]))
+    await flushPromises()
+
+    expect(store.nodes.map(n => n.id)).toEqual([])
+  })
+
   it('discards a tree reload that a newer login has overtaken', async () => {
     let releaseAliceTree: (value: Response) => void = () => {}
     const alicePendingTree = new Promise<Response>(resolve => { releaseAliceTree = resolve })
