@@ -2428,6 +2428,14 @@ function typedValueKind(schema) {
   return (configuredValue(schema.value_type_field, schemaFields.value[schema.value_type_field]) ?? '')
 }
 
+// Boolean fields the backend reads by IDENTITY against False rather than by
+// truthiness. LogicManager excludes a node from the persisted snapshot only
+// for `n.data.get("persist_state") is False`, so an imported 0, "" or [] still
+// has its state saved and restored — rendering those as unchecked would state
+// the opposite of what runs. The field name is the key because that single
+// check covers every block type that declares the setting.
+const IDENTITY_FALSE_BOOLEAN_FIELDS = new Set(['persist_state'])
+
 // Whether a boolean schema field renders as checked. An explicit null is not
 // a boolean, and every backend consumer of these fields falls back to its own
 // default behaviour for one: LogicManager opts a node out of persistence only
@@ -2436,11 +2444,13 @@ function typedValueKind(schema) {
 // In each case that lands on the field's declared default, so show it.
 //
 // Known limit: for a configured value that is neither a boolean nor null —
-// 0, "", [] — those three consumers genuinely disagree, and a generic form
-// cannot encode per-field semantics. Ordinary truthiness is used there.
+// 0, "", [] — the remaining consumers genuinely disagree, and a generic form
+// cannot encode per-field semantics beyond the identity list above. Ordinary
+// truthiness is used there.
 function schemaBooleanChecked(key, schema) {
   const value = configuredValue(key, schema)
   if (value === null || value === undefined) return !!(schema?.default ?? false)
+  if (IDENTITY_FALSE_BOOLEAN_FIELDS.has(key)) return value !== false
   return !!value
 }
 

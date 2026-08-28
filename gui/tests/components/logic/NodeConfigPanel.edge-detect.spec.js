@@ -582,6 +582,52 @@ describe('NodeConfigPanel schema defaults for a bare node', () => {
     w.unmount()
   })
 
+  it.each([[0], [''], [[]]])('keeps persistence checked for the non-boolean %j the backend still persists', async (stored) => {
+    // LogicManager opts out only for a literal False (`is False`), so 0, "" and
+    // [] — which an import or a direct API client can supply — leave the node
+    // state saved and restored. JavaScript truthiness alone would show an
+    // unchecked box for a setting that is in fact active.
+    const w = await mountPanel({ persist_state: stored })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(true)
+    w.unmount()
+  })
+
+  it('keeps persistence checked for the string "false", which is not Python False', async () => {
+    const w = await mountPanel({ persist_state: 'false' })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(true)
+    w.unmount()
+  })
+
+  it('reads a plain truthiness boolean field by truthiness, not by identity', async () => {
+    // The identity rule is scoped to the fields whose backend consumer uses
+    // it. A generic boolean setting keeps ordinary truthiness, so a stored 0
+    // still renders unchecked.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'ed6', type: 'edge_detect', data: { negate_enable: 0 } },
+        nodeTypes: [{
+          type: 'edge_detect',
+          config_schema: { negate_enable: { type: 'boolean', default: true, label: 'Negieren' } },
+        }],
+        nodeOutputs: {},
+      },
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(w.find('input[type="checkbox"]').element.checked).toBe(false)
+    w.unmount()
+  })
+
   it('renders unchecked when the boolean field declares no default at all', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
