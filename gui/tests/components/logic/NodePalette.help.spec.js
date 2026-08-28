@@ -16,7 +16,8 @@ const NODE_TYPES = [
   { type: 'datapoint_write', label: 'Objekt schreiben', category: 'datapoint', color: '#0f766e' },
   { type: 'math_formula',  label: 'Formel',  category: 'math',   color: '#7c3aed' },
   { type: 'string_concat', label: 'String Verketten', category: 'string', color: '#0891b2' },
-  { type: 'timer_delay',   label: 'Verzögerung', category: 'timer', color: '#f59e0b' },
+  { type: 'timer_delay',   label: 'Verzögerung', category: 'timer', color: '#b45309' },
+  { type: 'astro_sun',     label: 'Astro Sonne', category: 'astro', color: '#f59e0b' },
 ]
 
 function mockStorage() {
@@ -49,6 +50,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['datapoint_write', 'logic-block-datapoint-write'],
     ['math_formula', 'logic-block-math-formula'],
     ['string_concat', 'logic-block-string-concat'],
+    ['timer_delay', 'logic-block-timer-delay'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
@@ -56,8 +58,8 @@ describe('NodePalette — per-block help buttons', () => {
 
   it('does not render a help button for a block type with no documented help yet', () => {
     const wrapper = mountPalette()
-    // timer_delay isn't in NODE_HELP_IDS yet (documented in a later category commit).
-    expect(wrapper.find('[data-testid="help-button-logic-block-timer-delay"]').exists()).toBe(false)
+    // astro_sun isn't in NODE_HELP_IDS yet (documented in a later category commit).
+    expect(wrapper.find('[data-testid="help-button-logic-block-astro-sun"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
@@ -73,6 +75,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['datapoint_write', 'logic-block-datapoint-write'],
     ['math_formula', 'logic-block-math-formula'],
     ['string_concat', 'logic-block-string-concat'],
+    ['timer_delay', 'logic-block-timer-delay'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')

@@ -88,6 +88,7 @@ export default defineConfig({
               { text: 'Bausteine: Objekt-Zugriff', link: '/de/logic/blocks-datapoint' },
               { text: 'Bausteine: Mathematik', link: '/de/logic/blocks-math' },
               { text: 'Bausteine: Text', link: '/de/logic/blocks-string' },
+              { text: 'Bausteine: Zeit', link: '/de/logic/blocks-timer' },
             ],
           },
           {
@@ -167,6 +168,7 @@ export default defineConfig({
               { text: 'Blocks: Data Point Access', link: '/en/logic/blocks-datapoint' },
               { text: 'Blocks: Math', link: '/en/logic/blocks-math' },
               { text: 'Blocks: Text', link: '/en/logic/blocks-string' },
+              { text: 'Blocks: Timer', link: '/en/logic/blocks-timer' },
             ],
           },
           {

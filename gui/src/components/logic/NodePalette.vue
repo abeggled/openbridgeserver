@@ -111,6 +111,12 @@ const NODE_HELP_IDS = {
   string_concat: 'logic-block-string-concat',
   string_replace: 'logic-block-string-replace',
   comment: 'logic-block-comment',
+  timer_cron: 'logic-block-timer-cron',
+  datetime: 'logic-block-datetime',
+  timer_delay: 'logic-block-timer-delay',
+  timer_pulse: 'logic-block-timer-pulse',
+  operating_hours: 'logic-block-operating-hours',
+  value_sequence: 'logic-block-value-sequence',
 }
 
 const categories = computed(() =>
