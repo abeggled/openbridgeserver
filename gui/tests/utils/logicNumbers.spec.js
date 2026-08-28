@@ -4,8 +4,8 @@ import { toBackendNumberText } from '@/utils/logicNumbers'
 // Mirrors GraphExecutor._to_num — the editor and the block card both decide
 // with this, so it must not drift from the backend.
 describe('toBackendNumberText', () => {
-  it.each(['0', '1', '-2', '1.5', '1e3', '1E-3', '007'])(
-    'keeps %j, which float() parses and a number input already accepts',
+  it.each(['0', '1', '-2', '1.5', '0.1', '1e-7', '-0.25'])(
+    'keeps %j, which is already the shortest form of its value',
     v => {
       expect(toBackendNumberText(v)).toBe(v)
     },
@@ -55,6 +55,25 @@ describe('toBackendNumberText', () => {
     expect(toBackendNumberText(ws + '4' + ws)).toBe('0')
   })
 
+  it('shows the coerced value when the spelling denotes a different number', () => {
+    // float('1e-400') underflows to 0.0 and 9007199254740993 rounds to ...992.
+    // Keeping the imported spelling would show a value the actuator never gets.
+    expect(toBackendNumberText('1e-400')).toBe('0')
+    expect(toBackendNumberText('-1e-400')).toBe('0')
+    expect(toBackendNumberText('9007199254740993')).toBe('9007199254740992')
+  })
+
+  it('rewrites a notation the value does not need', () => {
+    // Canonicalizing everything is deliberate: preserving "valid-looking"
+    // spellings is what let the two cases above through.
+    expect(toBackendNumberText('1e3')).toBe('1000')
+    expect(toBackendNumberText('007')).toBe('7')
+    expect(toBackendNumberText('1.50')).toBe('1.5')
+    // Notation that IS the shortest form of the value survives untouched.
+    expect(toBackendNumberText('1e-7')).toBe('1e-7')
+    expect(toBackendNumberText('0.1')).toBe('0.1')
+  })
+
   it('returns the canonical spelling so a number input can display it', () => {
     // float() ignores surrounding whitespace, but <input type="number"> cannot
     // display " 4 " and would render blank and invalid.
@@ -71,8 +90,9 @@ describe('toBackendNumberText', () => {
     expect(toBackendNumberText('1_000.5')).toBe('1000.5')
     // Also drops the leading plus, which the widget rejects.
     expect(toBackendNumberText('+1_0')).toBe('10')
-    expect(toBackendNumberText('1_0.5_5e1_0')).toBe('10.55e10')
-    expect(toBackendNumberText('0_1')).toBe('01')
+    // Canonicalized like every other spelling: 10.55e10 is 105500000000.
+    expect(toBackendNumberText('1_0.5_5e1_0')).toBe('105500000000')
+    expect(toBackendNumberText('0_1')).toBe('1')
   })
 
   it.each(['_1', '1_', '1__0', '1_.5', '1._5', '1e_5', '_.5', '1._'])(

@@ -1,3 +1,5 @@
+import { trimLikeFloat } from '@/utils/pythonWhitespace'
+
 // The numeric rule the backend applies to Logic values, kept in one place so
 // the block card and the configuration panel cannot drift apart — the same
 // reason logicBooleans.js exists.
@@ -18,24 +20,6 @@ export const BACKEND_NUMBER_RE = new RegExp(
   String.raw`^[+-]?(?:${DIGITS}(?:\.(?:${DIGITS})?)?|\.${DIGITS})(?:[eE][+-]?${DIGITS})?$`,
   'u',
 )
-
-// The exact set float() skips around a number. JavaScript's trim() is NOT the
-// same set, in both directions: it also strips U+FEFF, which float() rejects,
-// and it leaves U+0085, which float() skips. Using trim() therefore showed a
-// BOM-wrapped value as valid while the executor sent 0.0, and showed a
-// NEL-wrapped one as 0 while the executor sent the number. Derived by
-// comparing both runtimes over every code point up to U+3100.
-const PY_SPACE = '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000'
-const PY_TRIM_RE = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, 'gu')
-
-function pythonTrim(text) {
-  return text.replace(PY_TRIM_RE, '')
-}
-
-// What <input type="number"> accepts: an optional minus, digits, an optional
-// fraction, an optional exponent. Narrower than float() — no leading plus, no
-// bare ".5", no trailing "2.".
-const HTML_NUMBER_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/
 
 // Every Nd block is ten consecutive code points, but blocks can sit directly
 // next to each other (the mathematical digits are five sets in a row), so the
@@ -64,17 +48,18 @@ export function toBackendNumberText(value, fallback = '0') {
   // editor kept displaying the original spelling. Both checks are needed: the
   // regex rejects spellings float() cannot parse (0x10, Infinity), isFinite
   // rejects ones it parses into infinity (1e309).
-  const trimmed = pythonTrim(text)
+  const trimmed = trimLikeFloat(text)
   if (!BACKEND_NUMBER_RE.test(trimmed)) return fallback
   // Number() does not understand separators, so strip them before the finite
   // check — and return the stripped spelling, because a number input cannot
   // display "1_000" and would render blank.
   const plain = trimmed.replace(/_/g, '').replace(/\p{Nd}/gu, toAsciiDigit)
   if (!Number.isFinite(Number(plain))) return fallback
-  // float() accepts spellings <input type="number"> rejects — a trailing point
-  // ("2."), a leading plus ("+3"), a bare fraction (".5"). Those must be
-  // canonicalized or the widget shows an invalid, blank field for a value the
-  // executor happily runs. Spellings the widget already accepts are left as
-  // they are, so an exponent or a leading zero survives editing.
-  return HTML_NUMBER_RE.test(plain) ? plain : String(Number(plain))
+  // Always the coerced value's own spelling, never the imported one. Keeping a
+  // "valid-looking" spelling was wrong twice over: float() accepts forms the
+  // number input rejects ("2.", "+3", ".5"), and a spelling can denote a
+  // different number than the double it parses to — "1e-400" underflows to 0.0
+  // and 9007199254740993 rounds to ...992, both of which the editor would
+  // otherwise show as the original, misstating what the actuator receives.
+  return String(Number(plain))
 }

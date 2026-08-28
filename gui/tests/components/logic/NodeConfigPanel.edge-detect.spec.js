@@ -841,11 +841,13 @@ describe('NodeConfigPanel typed value backend agreement', () => {
     await dataTypeSelect.setValue('number')
     await flushPromises()
 
-    // The exponent survives, because <input type="number"> accepts it. The
-    // bare fraction does not — the widget rejects ".25" and would render an
-    // empty, invalid field — so it is canonicalized to the same value.
+    // Both are canonicalized to the value the executor sends: the widget
+    // rejects ".25", and keeping any "valid-looking" spelling is what let
+    // underflowing and precision-losing imports display a value the actuator
+    // never receives.
+    expect(Number('-1.5e3')).toBe(Number('-1500'))
     expect(Number('.25')).toBe(Number('0.25'))
-    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '-1.5e3', value_falling: '0.25' })
+    expect(w.emitted('update').at(-1)[0]).toMatchObject({ value_rising: '-1500', value_falling: '0.25' })
     w.unmount()
   })
 })
