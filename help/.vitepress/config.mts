@@ -44,6 +44,14 @@ export default defineConfig({
             items: [{ text: 'Übersicht', link: '/' }],
           },
           {
+            text: 'Dashboard',
+            items: [{ text: 'Übersicht', link: '/dashboard/overview' }],
+          },
+          {
+            text: 'Objekte',
+            items: [{ text: 'Objektliste', link: '/datapoints/list' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -79,6 +87,14 @@ export default defineConfig({
           {
             text: 'Getting Started',
             items: [{ text: 'Overview', link: '/en/' }],
+          },
+          {
+            text: 'Dashboard',
+            items: [{ text: 'Overview', link: '/en/dashboard/overview' }],
+          },
+          {
+            text: 'Data Points',
+            items: [{ text: 'Data Point List', link: '/en/datapoints/list' }],
           },
           {
             text: 'Settings',

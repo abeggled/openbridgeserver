@@ -7,6 +7,7 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('datapoints.title') }}</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ $t('datapoints.subtitle', { count: store.total }) }}</p>
       </div>
+      <HelpButton help-id="datapoints-list" />
       <button v-if="auth.isAdmin" @click="openCreate" class="btn-primary" data-testid="btn-new-datapoint">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -241,19 +242,25 @@
         </div>
 
         <!-- Aktive Filter: Alle zurücksetzen -->
-        <button v-if="hasActiveFilters" @click="clearAllFilters"
-          class="text-xs text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors ml-auto flex items-center gap-1"
-          data-testid="btn-clear-filters">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-          </svg>
-          {{ $t('datapoints.clearAllFilters') }}
-        </button>
+        <div class="ml-auto flex items-center gap-2">
+          <button v-if="hasActiveFilters" @click="clearAllFilters"
+            class="text-xs text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors flex items-center gap-1"
+            data-testid="btn-clear-filters">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            {{ $t('datapoints.clearAllFilters') }}
+          </button>
+          <HelpButton help-id="datapoints-filters" />
+        </div>
       </div>
     </div>
 
     <!-- Tabelle -->
     <div class="card overflow-hidden">
+      <div class="flex justify-end px-4 pt-3">
+        <HelpButton help-id="datapoints-table" />
+      </div>
       <div v-if="store.loading && !store.items.length" class="flex justify-center py-12">
         <Spinner size="lg" />
       </div>
@@ -467,6 +474,7 @@ import { hierarchyApi } from '@/api/client'
 import Badge         from '@/components/ui/Badge.vue'
 import Spinner       from '@/components/ui/Spinner.vue'
 import Modal         from '@/components/ui/Modal.vue'
+import HelpButton    from '@/components/ui/HelpButton.vue'
 import PathLabel     from '@/components/ui/PathLabel.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import AdapterCombobox from '@/components/ui/AdapterCombobox.vue'
