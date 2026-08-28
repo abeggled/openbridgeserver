@@ -51,7 +51,20 @@ describe('HelpButton', () => {
     // even though a demo-mode ancestor sets pointer-events-none — real
     // browser cascade behaviour, not something happy-dom's layout engine
     // resolves, so this asserts the class is present rather than a computed
-    // style or a simulated click through an actual pointer-events-none parent.
+    // style or a simulated style through an actual pointer-events-none parent.
     expect(w.find('button').classes()).toContain('pointer-events-auto')
+  })
+
+  it('uses the default btn-icon size when compact is not set', () => {
+    const w = mountButton()
+    expect(w.find('button').classes()).toContain('btn-icon')
+    expect(w.find('svg').classes()).toContain('w-4')
+  })
+
+  it('shrinks to a smaller footprint when compact is set (issue feedback: the default size nearly doubled row height in the Logic Module block palette)', () => {
+    const w = mountButton({ compact: true })
+    expect(w.find('button').classes()).not.toContain('btn-icon')
+    expect(w.find('button').classes()).toContain('p-0.5')
+    expect(w.find('svg').classes()).toContain('w-3')
   })
 })

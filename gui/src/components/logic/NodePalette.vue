@@ -55,7 +55,7 @@
             >
               <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ background: nt.color }"></span>
               <span class="text-xs text-slate-700 dark:text-slate-200 flex-1 min-w-0 truncate">{{ $te('logic.nodeTypes.' + nt.type) ? $t('logic.nodeTypes.' + nt.type) : nt.label }}</span>
-              <HelpButton v-if="NODE_HELP_IDS[nt.type]" :help-id="NODE_HELP_IDS[nt.type]" class="flex-shrink-0" />
+              <HelpButton v-if="NODE_HELP_IDS[nt.type]" :help-id="NODE_HELP_IDS[nt.type]" compact class="flex-shrink-0" />
             </div>
           </div>
         </div>

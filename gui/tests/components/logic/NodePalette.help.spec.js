@@ -52,6 +52,12 @@ describe('NodePalette — per-block help buttons', () => {
     expect(wrapper.find('[data-testid="help-button-logic-block-math-formula"]').exists()).toBe(false)
   })
 
+  it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
+    const wrapper = mountPalette()
+    expect(helpButton(wrapper, 'logic-block-and').classes()).not.toContain('btn-icon')
+    expect(helpButton(wrapper, 'logic-block-and').classes()).toContain('p-0.5')
+  })
+
   it.each([
     ['and', 'logic-block-and'],
     ['or', 'logic-block-or'],
