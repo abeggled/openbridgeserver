@@ -499,7 +499,12 @@ class GraphExecutor:
             return 1.0 if v else 0.0
         try:
             return float(v)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: an imported JSON integer can exceed what a float
+            # can hold (10**400), and float() raises rather than returning inf.
+            # Without it the exception escapes this coercion and fails the whole
+            # node, instead of degrading to the default like every other
+            # unusable value.
             return default
 
     @staticmethod
@@ -509,7 +514,9 @@ class GraphExecutor:
             return 1.0 if v else 0.0
         try:
             return float(v)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # Same reason as _to_num: an int beyond float range raises here.
+            # Callers that need such a value exactly use _try_int/_try_decimal.
             return None
 
     @staticmethod

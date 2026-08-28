@@ -2912,6 +2912,51 @@ class TestChangeFilterNode:
 # ===========================================================================
 
 
+class TestNumericCoercionLimits:
+    """float() raises on an int beyond its range instead of returning inf.
+
+    LogicGraphImport accepts such a value as a Python int, so the coercion
+    helpers have to degrade to their documented fallback rather than let the
+    OverflowError escape and fail the whole node.
+    """
+
+    def test_float_itself_raises_on_an_oversized_int(self):
+        # The premise, asserted so the tests below cannot quietly stop testing
+        # anything if CPython ever starts returning inf here.
+        with pytest.raises(OverflowError):
+            float(10**400)
+
+    def test_to_num_falls_back_to_the_default(self):
+        assert GraphExecutor._to_num(10**400) == 0.0
+        assert GraphExecutor._to_num(-(10**400)) == 0.0
+        assert GraphExecutor._to_num(10**400, default=7.0) == 7.0
+
+    def test_try_num_reports_not_numeric(self):
+        assert GraphExecutor._try_num(10**400) is None
+
+    def test_an_oversized_edge_value_sends_the_fallback_instead_of_failing(self):
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": 10**400})],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        out = exc.execute({"ed": {"in": True}})["ed"]
+
+        assert out == {"rising": True, "falling": False, "out": 0.0}
+
+    def test_an_oversized_string_still_takes_the_non_finite_path(self):
+        # float("1e400") returns inf rather than raising, which the node's own
+        # guard already replaced with 0.0 — that path must stay intact.
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": "1e400"})],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        out = exc.execute({"ed": {"in": True}})["ed"]
+
+        assert out == {"rising": True, "falling": False, "out": 0.0}
+
+
 class TestEdgeDetectNode:
     def test_first_value_after_start_seeds_the_level_without_an_edge(self):
         state = {}
