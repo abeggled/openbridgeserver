@@ -60,6 +60,10 @@ export default defineConfig({
             items: [{ text: 'Adapter-Instanzen', link: '/adapters/list' }],
           },
           {
+            text: 'Historie',
+            items: [{ text: 'Verlauf', link: '/history/overview' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -111,6 +115,10 @@ export default defineConfig({
           {
             text: 'Adapters',
             items: [{ text: 'Adapter Instances', link: '/en/adapters/list' }],
+          },
+          {
+            text: 'History',
+            items: [{ text: 'History', link: '/en/history/overview' }],
           },
           {
             text: 'Settings',
