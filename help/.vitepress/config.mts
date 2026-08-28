@@ -72,6 +72,10 @@ export default defineConfig({
             items: [{ text: 'Archivliste', link: '/messagearchives/list' }],
           },
           {
+            text: 'Logs',
+            items: [{ text: 'Logs', link: '/logs/overview' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -135,6 +139,10 @@ export default defineConfig({
           {
             text: 'Message Archives',
             items: [{ text: 'Archive List', link: '/en/messagearchives/list' }],
+          },
+          {
+            text: 'Logs',
+            items: [{ text: 'Logs', link: '/en/logs/overview' }],
           },
           {
             text: 'Settings',
