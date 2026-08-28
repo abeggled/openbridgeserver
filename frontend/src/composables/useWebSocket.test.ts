@@ -253,6 +253,99 @@ describe('createWebSocketClient', () => {
     expect(mocks.sockets).toHaveLength(1)
   })
 
+  it('closes the JWT socket when the session ends and continues anonymously', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const client = newClient()
+    client.connect({ pageId: 'public-page' })
+    const initialSocket = mocks.sockets[0]
+    expect(initialSocket.protocols).toEqual(['obs.jwt.jwt-old'])
+
+    // Endgültig abgelehnte Erneuerung: der Handshake hat den alten JWT
+    // gebunden, der Socket lieferte sonst weiter dessen Datapoint-Scope.
+    mocks.getJwt.mockReturnValue(null)
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+
+    expect(initialSocket.readyState).toBe(3)
+    expect(initialSocket.onclose).toBeNull()
+    expect(mocks.sockets).toHaveLength(2)
+    expect(mocks.sockets[1].protocols).toBeUndefined()
+    expect(mocks.sockets[1].url).toContain('page_id=public-page')
+  })
+
+  it('drops a pending backoff reconnect when the session ends', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const client = newClient()
+    client.connect({ pageId: 'public-page' })
+    mocks.sockets[0].onclose?.({ code: 1006 })
+    expect(vi.getTimerCount()).toBe(1)
+
+    mocks.getJwt.mockReturnValue(null)
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+
+    // Sonst baute der Backoff gleich noch eine Verbindung mit dem alten Token auf
+    expect(vi.getTimerCount()).toBe(0)
+    expect(mocks.sockets).toHaveLength(2)
+    expect(mocks.sockets[1].protocols).toBeUndefined()
+  })
+
+  it('leaves no connection behind when the ended session had no page context', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const client = newClient()
+    client.connect()
+    const initialSocket = mocks.sockets[0]
+
+    mocks.getJwt.mockReturnValue(null)
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+
+    expect(initialSocket.readyState).toBe(3)
+    expect(mocks.sockets).toHaveLength(1)
+  })
+
+  it('keeps a page-scoped socket, which never carried the session', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const client = newClient()
+    client.connect({ pageId: 'anon-page', sessionToken: 'session-1', preferPageScope: true })
+    const initialSocket = mocks.sockets[0]
+
+    mocks.getJwt.mockReturnValue(null)
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+
+    expect(initialSocket.readyState).toBe(MockWebSocket.CONNECTING)
+    expect(mocks.sockets).toHaveLength(1)
+  })
+
+  it('keeps the socket when another login already replaced the session', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const client = newClient()
+    client.connect({ pageId: 'viewer-page' })
+    const initialSocket = mocks.sockets[0]
+
+    // Anderer Tab hat sich neu angemeldet — dieser Socket gehört bereits ihm
+    mocks.getJwt.mockReturnValue('jwt-other')
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+
+    expect(initialSocket.readyState).toBe(MockWebSocket.CONNECTING)
+    expect(mocks.sockets).toHaveLength(1)
+  })
+
+  it('releases its session-end listener on disconnect', () => {
+    mocks.getJwt.mockReturnValue('jwt-old')
+
+    const client = newClient()
+    client.connect({ pageId: 'viewer-page' })
+    client.disconnect()
+
+    mocks.getJwt.mockReturnValue(null)
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+
+    expect(mocks.sockets).toHaveLength(1)
+  })
+
   it('does not reconnect after an explicit disconnect', () => {
     mocks.getJwt.mockReturnValue('jwt-token')
 

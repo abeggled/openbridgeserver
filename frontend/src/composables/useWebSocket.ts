@@ -33,6 +33,9 @@ export function createWebSocketClient() {
   const connected = ref(false)
   const handlers = new Set<MessageHandler>()
   let connectContext: ConnectContext = {}
+  // Nur ein mit JWT aufgebauter Socket trägt den Scope der Anmeldung und muss
+  // fallen, wenn diese endet — ein seitenbezogener ist davon unabhängig.
+  let socketUsesJwt = false
   const subscribedIds = new Set<string>()
 
   function send(data: unknown) {
@@ -67,7 +70,7 @@ export function createWebSocketClient() {
 
     connectContext = nextContext
     shouldReconnect = true
-    attachRefreshListener()
+    attachAuthListeners()
     const jwt = getJwt()
     let url = WS_URL()
     if (jwt && !connectContext.preferPageScope) {
@@ -75,12 +78,14 @@ export function createWebSocketClient() {
         url = `${url}?${new URLSearchParams({ page_id: connectContext.pageId }).toString()}`
       }
       socket = new WebSocket(url, [`obs.jwt.${jwt}`])
+      socketUsesJwt = true
     } else {
       if (!connectContext.pageId) return
       const params = new URLSearchParams({ page_id: connectContext.pageId })
       if (connectContext.sessionToken) params.set('session_token', connectContext.sessionToken)
       url = `${url}?${params.toString()}`
       socket = new WebSocket(url)
+      socketUsesJwt = false
     }
 
     socket.onopen = () => {
@@ -126,20 +131,22 @@ export function createWebSocketClient() {
     }, reconnectDelay)
   }
 
-  // Jeder Client hört selbst auf den Refresh — WidgetRef betreibt eine eigene
-  // Instanz neben dem Singleton und muss genauso neu verbinden.
-  let refreshListenerAttached = false
+  // Jeder Client hört selbst auf Refresh und Sitzungsende — WidgetRef betreibt
+  // eine eigene Instanz neben dem Singleton und muss genauso reagieren.
+  let authListenersAttached = false
 
-  function attachRefreshListener() {
-    if (refreshListenerAttached) return
+  function attachAuthListeners() {
+    if (authListenersAttached) return
     window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, reconnectWithFreshToken)
-    refreshListenerAttached = true
+    window.addEventListener('visu:unauthorized', dropSessionSocket)
+    authListenersAttached = true
   }
 
-  function detachRefreshListener() {
-    if (!refreshListenerAttached) return
+  function detachAuthListeners() {
+    if (!authListenersAttached) return
     window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, reconnectWithFreshToken)
-    refreshListenerAttached = false
+    window.removeEventListener('visu:unauthorized', dropSessionSocket)
+    authListenersAttached = false
   }
 
   /**
@@ -168,6 +175,38 @@ export function createWebSocketClient() {
     connect(context)
   }
 
+  /**
+   * Die Anmeldung ist endgültig weg (Refresh-Token abgelehnt oder Logout).
+   *
+   * Der Handshake bindet den JWT — ein bereits offener Socket behält deshalb
+   * den Datapoint-Scope der beendeten Anmeldung, bis der Token serverseitig
+   * abläuft. Besonders sichtbar auf einer öffentlichen Seite, die nach dem
+   * Ereignis bewusst stehen bleibt: die Anzeige meldet „abgemeldet", während
+   * der Socket weiter Werte aus dem Scope der alten Anmeldung liefert. Mit
+   * Seiten-ID wird danach anonym im öffentlichen Scope neu verbunden.
+   */
+  function dropSessionSocket() {
+    if (!socketUsesJwt) return
+    // Eine andere Anmeldung hat den Speicher bereits übernommen — deren Socket
+    // gehört nicht uns und darf nicht wegen unseres 401 fallen.
+    if (getJwt()) return
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (socket) {
+      detachSocketHandlers(socket)
+      socket.close()
+      socket = null
+      connected.value = false
+    }
+    socketUsesJwt = false
+    reconnectDelay = 1000
+    // Der Listener hängt nur zwischen connect() und disconnect(), ein
+    // `shouldReconnect`-Check wäre hier also immer wahr.
+    if (connectContext.pageId) connect(connectContext)
+  }
+
   return {
     connected: readonly(connected),
 
@@ -179,9 +218,10 @@ export function createWebSocketClient() {
     /** Verbindung trennen und Reconnect verhindern */
     disconnect() {
       shouldReconnect = false
-      detachRefreshListener()
+      detachAuthListeners()
       subscribedIds.clear()
       connectContext = {}
+      socketUsesJwt = false
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null

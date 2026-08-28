@@ -119,9 +119,18 @@ watch(allDpIds, (newIds, oldIds) => {
   if (removed.length) dpStore.unsubscribe(removed)
 }, { immediate: false })
 
+// Ein Lauf kann auf den Breadcrumb warten, während die Erneuerung den Baum
+// bereits neu geholt hat. Der Knoten taucht dann mitten im Lauf auf, dessen
+// Ergebnis ihn noch nicht kennt — ohne Vormerkung gäbe es danach keine
+// Änderung mehr, die einen zweiten Versuch auslösen könnte.
+let loadRunning = false
+let nodeAppearedWhileLoading = false
+
 async function load() {
   loading.value = true
   error.value = ''
+  loadRunning = true
+  nodeAppearedWhileLoading = false
   try {
     if (!visuStore.treeLoaded) await visuStore.loadTree()
     await visuStore.loadBreadcrumb(props.id)
@@ -161,6 +170,11 @@ async function load() {
     error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
+    loadRunning = false
+  }
+  if (nodeAppearedWhileLoading) {
+    nodeAppearedWhileLoading = false
+    await load()
   }
 }
 
@@ -196,12 +210,29 @@ onUnmounted(() => {
 })
 watch(() => props.id, load)
 
-// Kaltstart mit abgelaufenem Access-Token: das Backend liefert dafür keine 401,
-// sondern eine anonym gefilterte Sicht, in der ein privater Knoten fehlt — die
-// Seite landet im Fehlerzustand. Sobald die Token-Erneuerung den Baum neu geholt
-// hat und der Knoten auftaucht, den Ladevorgang wiederholen.
-watch(node, (found, previous) => {
-  if (found && !previous && error.value) load()
+// Der Baum kann sich unter der offenen Seite ändern — die Token-Erneuerung holt
+// ihn neu, und die autorisierte Sicht kann Knoten hinzufügen wie entfernen.
+watch([() => props.id, node], ([id, found], [previousId, previous]) => {
+  // Ein Seitenwechsel lädt bereits über den `props.id`-Watcher; sein
+  // Knotenwechsel ist keine Änderung am Baum.
+  if (id !== previousId) return
+
+  // Kaltstart mit abgelaufenem Access-Token: das Backend liefert dafür keine
+  // 401, sondern eine anonym gefilterte Sicht, in der ein privater Knoten
+  // fehlt — die Seite landet im Fehlerzustand oder als leere Übersicht. Sobald
+  // die Erneuerung den Baum neu geholt hat und der Knoten auftaucht, den
+  // Ladevorgang wiederholen; er lief bisher gegen einen unbekannten Knoten.
+  if (found && !previous) {
+    if (loadRunning) nodeAppearedWhileLoading = true
+    else load()
+    return
+  }
+
+  // Umgekehrter Fall: die Erneuerung hat den Baum neu geholt und der Knoten
+  // fehlt jetzt darin — die Berechtigung für diese Seite wurde entzogen. Ohne
+  // Umleitung bliebe der Viewer als leere LOCATION-Hülle auf /:id stehen,
+  // deren neu verbundener WebSocket abgewiesen wird.
+  if (previous && !found) router.push({ name: 'tree' })
 })
 
 // Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)

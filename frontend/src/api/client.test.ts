@@ -368,6 +368,71 @@ describe('access token refresh', () => {
     expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
   })
 
+  it('does not send the viewer to the login form while the refresh fails transiently', async () => {
+    stubAuthFetch(() => new Response(null, { status: 503 }))
+    const unauthorized = vi.fn()
+    window.addEventListener('visu:unauthorized', unauthorized)
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    // Die Tokens bleiben bewusst liegen — dann darf auch der Router den
+    // Benutzer nicht aus einer geschützten Ansicht zum Login werfen.
+    expect(unauthorized).not.toHaveBeenCalled()
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-old')
+    window.removeEventListener('visu:unauthorized', unauthorized)
+  })
+
+  it('still reports the session end when a transient failure leaves no access token', async () => {
+    localStorage.removeItem('visu_jwt')
+    stubAuthFetch(() => new Response(null, { status: 503 }))
+    const unauthorized = vi.fn()
+    window.addEventListener('visu:unauthorized', unauthorized)
+
+    await expect(visu.tree()).rejects.toMatchObject({ status: 401 })
+
+    expect(unauthorized).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
+    window.removeEventListener('visu:unauthorized', unauthorized)
+  })
+
+  it('skips the renewal when only the page PIN session has expired', async () => {
+    // `protected`-Seite: der Access-Token ist gültig, der Session-Token nicht.
+    // Eine Erneuerung liefe ins gleiche 401 und löste WebSocket-Neuaufbau,
+    // Rollenabfrage und Baum-Reload aus.
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/refresh')) {
+        return jsonResponse({ access_token: 'jwt-new', refresh_token: 'refresh-new' })
+      }
+      return jsonResponse({ detail: 'Valid session token required' }, 401)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const unauthorized = vi.fn()
+    window.addEventListener('visu:unauthorized', unauthorized)
+
+    await expect(visu.getPage('protected-page', 'expired-session')).rejects.toMatchObject({ status: 401 })
+
+    expect(refreshCalls(fetchMock)).toHaveLength(0)
+    expect(unauthorized).not.toHaveBeenCalled()
+    expect(localStorage.getItem('visu_jwt')).toBe('jwt-old')
+    expect(localStorage.getItem('visu_refresh_token')).toBe('refresh-old')
+    expect(localStorage.getItem('visu_is_admin')).toBe('1')
+    window.removeEventListener('visu:unauthorized', unauthorized)
+  })
+
+  it('sends an anonymous viewer with an expired PIN session to the login route', async () => {
+    localStorage.clear()
+    const fetchMock = vi.fn(async () => jsonResponse({ detail: 'Valid session token required' }, 401))
+    vi.stubGlobal('fetch', fetchMock)
+    const unauthorized = vi.fn()
+    window.addEventListener('visu:unauthorized', unauthorized)
+
+    await expect(visu.getPage('protected-page', 'expired-session')).rejects.toMatchObject({ status: 401 })
+
+    expect(refreshCalls(fetchMock)).toHaveLength(0)
+    expect(unauthorized).toHaveBeenCalledTimes(1)
+    window.removeEventListener('visu:unauthorized', unauthorized)
+  })
+
   it('ignores a refresh response without an access token', async () => {
     localStorage.setItem('visu_jwt', 'jwt-old')
     localStorage.setItem('visu_refresh_token', 'refresh-old')

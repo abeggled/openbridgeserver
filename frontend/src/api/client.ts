@@ -409,6 +409,20 @@ function mayClearSession(usedJwt: string | null): boolean {
   return sameAccount(usedJwt, current)
 }
 
+/**
+ * Meint dieses 401 die PIN-Sitzung der Seite statt den Access-Token?
+ *
+ * Ein `protected`-Knoten weist Requests ohne gültigen Session-Token ab, auch
+ * wenn der Benutzer angemeldet ist (`_page_scoped_archive_access`, `/history`,
+ * `/weather`). Den JWT zu erneuern hilft dabei nicht: der Retry liefe in
+ * dasselbe 401, verbrauchte aber Rate-Limit von /auth/refresh und löste über
+ * das Refresh-Event WebSocket-Neuaufbau, Rollenabfrage und Baum-Reload aus.
+ */
+async function isPageSessionRejection(res: Response): Promise<boolean> {
+  const body = await res.clone().json().catch(() => null)
+  return extractDetail(body, '') === 'Valid session token required'
+}
+
 type RenewalOptions = { silent401?: boolean; noAuthRefresh?: boolean }
 
 /**
@@ -429,12 +443,18 @@ async function sendWithRenewal(
   // parallelen Requests) und den ursprünglichen Request einmal wiederholen.
   let sessionIsOver = true
   if (res.status === 401 && !opts.noAuthRefresh) {
-    const renewal = await renewedTokenFor(jwtBefore)
-    if (renewal.token) {
-      usedJwt = renewal.token
-      res = await send(renewal.token)
+    if (await isPageSessionRejection(res)) {
+      // Nicht der Access-Token ist abgelaufen, sondern die PIN-Sitzung der
+      // Seite — die Anmeldung bleibt gültig und unangetastet.
+      sessionIsOver = false
     } else {
-      sessionIsOver = renewal.sessionIsOver
+      const renewal = await renewedTokenFor(jwtBefore)
+      if (renewal.token) {
+        usedJwt = renewal.token
+        res = await send(renewal.token)
+      } else {
+        sessionIsOver = renewal.sessionIsOver
+      }
     }
   }
 
@@ -443,8 +463,13 @@ async function sendWithRenewal(
     // Netzwerkfehler beim Refresh darf den 30-Tage-Token nicht wegwerfen —
     // und nur, wenn sie noch uns gehört.
     if (sessionIsOver && mayClearSession(usedJwt)) clearAuthTokens()
-    // Redirect zur Login-Seite — der Router fängt das auf
-    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    // Redirect zur Login-Seite — der Router fängt das auf. Nur melden, wenn die
+    // Anmeldung tatsächlich weg ist: bei einem Netzwerkfehler, 408, 429 oder
+    // 5xx auf /auth/refresh behalten wir die Tokens bewusst, und ein Redirect
+    // zum Login würde den Benutzer trotz gültiger Sitzung aus /manage werfen.
+    if (sessionIsOver || !getJwt()) {
+      window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    }
   }
   return res
 }

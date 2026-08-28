@@ -175,6 +175,57 @@ describe('VisuViewer session end', () => {
     wrapper.unmount()
   })
 
+  it('recovers when the authorized tree arrives before the concealed breadcrumb fails', async () => {
+    // Kaltstart mit abgelaufenem Token: die Erneuerung holt den Baum neu,
+    // während der erste Lauf noch auf den Breadcrumb wartet. Der Knoten ist
+    // dann da, bevor der Fehler gesetzt wird — ohne Vormerkung käme danach
+    // keine Änderung mehr, die einen zweiten Versuch auslösen könnte.
+    mocks.store.nodes = []
+    let rejectBreadcrumb: (error: Error) => void = () => {}
+    mocks.loadBreadcrumb.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectBreadcrumb = reject
+    }))
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    mocks.store.nodes = [mocks.node]
+    await flushPromises()
+    rejectBreadcrumb(new Error('common.loadError'))
+    await flushPromises()
+
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('returns to the tree when a renewal removes the current page', async () => {
+    const wrapper = mountViewer()
+    await flushPromises()
+    mocks.push.mockClear()
+
+    // Die Berechtigung wurde entzogen: die Erneuerung holt den Baum neu und
+    // der angezeigte Knoten fehlt darin.
+    mocks.store.nodes = []
+    await flushPromises()
+
+    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'tree' }))
+    wrapper.unmount()
+  })
+
+  it('stays put when a page switch replaces the node', async () => {
+    const wrapper = mountViewer()
+    await flushPromises()
+    mocks.push.mockClear()
+
+    // Navigation auf einen Knoten, den der Baum (noch) nicht kennt: das ist
+    // kein Entzug, sondern lädt bereits über den id-Watcher.
+    await wrapper.setProps({ id: 'page-2' })
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'tree' }))
+    wrapper.unmount()
+  })
+
   it('ignores the event once the viewer is gone', async () => {
     const wrapper = mountViewer()
     await flushPromises()
