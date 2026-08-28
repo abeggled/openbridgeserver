@@ -64,6 +64,10 @@ export default defineConfig({
             items: [{ text: 'Verlauf', link: '/history/overview' }],
           },
           {
+            text: 'Monitor',
+            items: [{ text: 'Monitor', link: '/ringbuffer/overview' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Allgemeine Einstellungen', link: '/settings/general' },
@@ -119,6 +123,10 @@ export default defineConfig({
           {
             text: 'History',
             items: [{ text: 'History', link: '/en/history/overview' }],
+          },
+          {
+            text: 'Monitor',
+            items: [{ text: 'Monitor', link: '/en/ringbuffer/overview' }],
           },
           {
             text: 'Settings',
