@@ -127,6 +127,7 @@ const NODE_HELP_IDS = {
   substring_extractor: 'logic-block-substring-extractor',
   ical: 'logic-block-ical',
   api_client: 'logic-block-api-client',
+  python_script: 'logic-block-python-script',
 }
 
 const categories = computed(() =>

@@ -28,6 +28,7 @@ const NODE_TYPES = [
   { type: 'ical', label: 'iCalendar', category: 'integration', color: '#0369a1' },
   { type: 'api_client', label: 'API Client', category: 'integration', color: '#0e7490' },
   { type: 'python_script', label: 'Python Script', category: 'script', color: '#65a30d' },
+  { type: 'ai_logic', label: 'AI Logic', category: 'ai', color: '#9333ea' },
 ]
 
 function mockStorage() {
@@ -71,6 +72,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['substring_extractor', 'logic-block-substring-extractor'],
     ['ical', 'logic-block-ical'],
     ['api_client', 'logic-block-api-client'],
+    ['python_script', 'logic-block-python-script'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
@@ -78,8 +80,8 @@ describe('NodePalette — per-block help buttons', () => {
 
   it('does not render a help button for a block type with no documented help yet', () => {
     const wrapper = mountPalette()
-    // python_script isn't in NODE_HELP_IDS yet (documented in a later category commit).
-    expect(wrapper.find('[data-testid="help-button-logic-block-python-script"]').exists()).toBe(false)
+    // ai_logic isn't in NODE_HELP_IDS yet (documented in the final category commit).
+    expect(wrapper.find('[data-testid="help-button-logic-block-ai-logic"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {
@@ -106,6 +108,7 @@ describe('NodePalette — per-block help buttons', () => {
     ['substring_extractor', 'logic-block-substring-extractor'],
     ['ical', 'logic-block-ical'],
     ['api_client', 'logic-block-api-client'],
+    ['python_script', 'logic-block-python-script'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')

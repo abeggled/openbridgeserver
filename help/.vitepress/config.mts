@@ -92,6 +92,7 @@ export default defineConfig({
               { text: 'Bausteine: Astro', link: '/de/logic/blocks-astro' },
               { text: 'Bausteine: Benachrichtigung', link: '/de/logic/blocks-notification' },
               { text: 'Bausteine: Integration', link: '/de/logic/blocks-integration' },
+              { text: 'Bausteine: Skript', link: '/de/logic/blocks-script' },
             ],
           },
           {
@@ -175,6 +176,7 @@ export default defineConfig({
               { text: 'Blocks: Astro', link: '/en/logic/blocks-astro' },
               { text: 'Blocks: Notification', link: '/en/logic/blocks-notification' },
               { text: 'Blocks: Integration', link: '/en/logic/blocks-integration' },
+              { text: 'Blocks: Script', link: '/en/logic/blocks-script' },
             ],
           },
           {
