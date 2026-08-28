@@ -108,6 +108,9 @@ const NODE_HELP_IDS = {
   min_max_tracker: 'logic-block-min-max-tracker',
   consumption_counter: 'logic-block-consumption-counter',
   heating_circuit: 'logic-block-heating-circuit',
+  string_concat: 'logic-block-string-concat',
+  string_replace: 'logic-block-string-replace',
+  comment: 'logic-block-comment',
 }
 
 const categories = computed(() =>
