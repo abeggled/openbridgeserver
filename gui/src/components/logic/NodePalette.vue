@@ -97,6 +97,8 @@ const NODE_HELP_IDS = {
   decision: 'logic-block-decision',
   value_mapping: 'logic-block-value-mapping',
   const_value: 'logic-block-const-value',
+  datapoint_read: 'logic-block-datapoint-read',
+  datapoint_write: 'logic-block-datapoint-write',
 }
 
 const categories = computed(() =>

@@ -10,9 +10,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import NodePalette from '@/components/logic/NodePalette.vue'
 
 const NODE_TYPES = [
-  { type: 'and',          label: 'AND',     category: 'logic', color: '#4ade80' },
-  { type: 'or',           label: 'OR',      category: 'logic', color: '#4ade80' },
-  { type: 'math_formula', label: 'Formula', category: 'math',  color: '#60a5fa' },
+  { type: 'and',             label: 'AND',           category: 'logic',     color: '#4ade80' },
+  { type: 'or',              label: 'OR',            category: 'logic',     color: '#4ade80' },
+  { type: 'datapoint_read',  label: 'Objekt lesen',  category: 'datapoint', color: '#0f766e' },
+  { type: 'datapoint_write', label: 'Objekt schreiben', category: 'datapoint', color: '#0f766e' },
+  { type: 'math_formula',   label: 'Formula', category: 'math',  color: '#60a5fa' },
 ]
 
 function mockStorage() {
@@ -41,6 +43,8 @@ describe('NodePalette — per-block help buttons', () => {
   it.each([
     ['and', 'logic-block-and'],
     ['or', 'logic-block-or'],
+    ['datapoint_read', 'logic-block-datapoint-read'],
+    ['datapoint_write', 'logic-block-datapoint-write'],
   ])('renders a help button for the %s block', (_type, helpId) => {
     const wrapper = mountPalette()
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
@@ -61,6 +65,8 @@ describe('NodePalette — per-block help buttons', () => {
   it.each([
     ['and', 'logic-block-and'],
     ['or', 'logic-block-or'],
+    ['datapoint_read', 'logic-block-datapoint-read'],
+    ['datapoint_write', 'logic-block-datapoint-write'],
   ])('opens the help store with %s\'s help_id when its button is clicked', async (_type, helpId) => {
     const wrapper = mountPalette()
     const { useHelpStore } = await import('@/stores/help')
