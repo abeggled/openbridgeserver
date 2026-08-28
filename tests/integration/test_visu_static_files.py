@@ -189,21 +189,28 @@ async def help_dist_client(tmp_path):
     )
 
     help_dist = _PROJECT_ROOT / "help_dist"
+    de_dir = help_dist / "de"
     en_dir = help_dist / "en"
     created_dir = not help_dist.exists()
+    created_de_dir = not de_dir.exists()
     created_en_dir = not en_dir.exists()
     created_files: list[Path] = []
 
     try:
         help_dist.mkdir(exist_ok=True)
-        for name, content in [
-            ("index.html", b"<html><body>Hilfe Start</body></html>"),
-            ("404.html", b"<html><body>Nicht gefunden</body></html>"),
-        ]:
-            target = help_dist / name
-            if not target.exists():
-                target.write_bytes(content)
-                created_files.append(target)
+        # No root-level index.html: every locale, including German, lives
+        # under its own prefixed directory (de/, en/) — there is no
+        # unprefixed "root" locale (see help/.vitepress/config.mts).
+        target = help_dist / "404.html"
+        if not target.exists():
+            target.write_bytes(b"<html><body>Nicht gefunden</body></html>")
+            created_files.append(target)
+
+        de_dir.mkdir(exist_ok=True)
+        de_index = de_dir / "index.html"
+        if not de_index.exists():
+            de_index.write_bytes(b"<html><body>Hilfe Start</body></html>")
+            created_files.append(de_index)
 
         en_dir.mkdir(exist_ok=True)
         en_index = en_dir / "index.html"
@@ -221,6 +228,11 @@ async def help_dist_client(tmp_path):
         if created_en_dir:
             try:
                 en_dir.rmdir()
+            except OSError:
+                pass
+        if created_de_dir:
+            try:
+                de_dir.rmdir()
             except OSError:
                 pass
         if created_dir:
@@ -312,12 +324,15 @@ async def partial_help_dist_client(tmp_path):
     )
 
     help_dist = _PROJECT_ROOT / "help_dist"
+    de_dir = help_dist / "de"
     created_dir = not help_dist.exists()
+    created_de_dir = not de_dir.exists()
     created_files: list[Path] = []
 
     try:
         help_dist.mkdir(exist_ok=True)
-        index = help_dist / "index.html"
+        de_dir.mkdir(exist_ok=True)
+        index = de_dir / "index.html"
         if not index.exists():
             index.write_bytes(b"<html><body>Hilfe Start</body></html>")
             created_files.append(index)
@@ -329,6 +344,11 @@ async def partial_help_dist_client(tmp_path):
     finally:
         for f in created_files:
             f.unlink(missing_ok=True)
+        if created_de_dir:
+            try:
+                de_dir.rmdir()
+            except OSError:
+                pass
         if created_dir:
             try:
                 help_dist.rmdir()
@@ -394,8 +414,18 @@ async def test_obs_logo_dark_returns_svg(gui_dist_client):
 
 
 @pytest.mark.asyncio
-async def test_help_root_index_served(help_dist_client):
-    resp = await help_dist_client.get("/help/")
+async def test_help_bare_root_redirects_to_german(help_dist_client):
+    """The help site has no unprefixed "root" locale — every locale, including
+    German, lives under its own /help/<lang>/ prefix. The bare /help/ (with
+    trailing slash) redirects to German explicitly instead of 404ing."""
+    resp = await help_dist_client.get("/help/", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/help/de/"
+
+
+@pytest.mark.asyncio
+async def test_help_de_locale_index_served(help_dist_client):
+    resp = await help_dist_client.get("/help/de/")
     assert resp.status_code == 200
     assert "Hilfe Start" in resp.text
 
@@ -417,7 +447,7 @@ async def test_help_unknown_path_returns_help_404_page(help_dist_client):
 @pytest.mark.asyncio
 async def test_help_unknown_path_does_not_fall_back_to_admin_gui(help_dist_client):
     """A missing /help/... path must not silently render the Admin-GUI shell."""
-    resp = await help_dist_client.get("/help/does-not-exist")
+    resp = await help_dist_client.get("/help/de/does-not-exist")
     assert "Hilfe Start" not in resp.text
 
 
@@ -435,6 +465,16 @@ async def test_bare_help_path_returns_json_404_when_dist_missing(no_help_dist_cl
     "/help/..." — without this exact-match guard it fell through to the Admin-GUI
     SPA fallback instead of the same JSON 404 every other /help/... path gets."""
     resp = await no_help_dist_client.get("/help")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
+async def test_help_root_path_returns_json_404_when_dist_missing(no_help_dist_client):
+    """The bare "/help/" (with trailing slash, no locale) must not redirect to
+    a locale that doesn't exist — same JSON 404 contract as every other
+    /help/... path when help_dist/ itself is missing."""
+    resp = await no_help_dist_client.get("/help/", follow_redirects=False)
     assert resp.status_code == 404
     assert resp.json() == {"detail": "Not found"}
 
@@ -523,16 +563,25 @@ async def test_bare_help_path_head_request_redirects_like_get(help_dist_client):
 
 
 @pytest.mark.asyncio
+async def test_help_root_path_head_request_redirects_to_german(help_dist_client):
+    """Same HEAD-must-match-GET reasoning as the bare "/help" path, for the
+    "/help/" -> "/help/de/" locale redirect."""
+    resp = await help_dist_client.head("/help/", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/help/de/"
+
+
+@pytest.mark.asyncio
 async def test_help_static_mount_is_reused_across_requests(help_dist_client):
     """_LazyHelpStatic caches its inner StaticFiles instance after the first
     request through it (self._static). A second request through the same
     app/client must be served from that cached instance, not just the
     construct-it-for-the-first-time path (Codex review on PR #1180)."""
-    first = await help_dist_client.get("/help/")
+    first = await help_dist_client.get("/help/de/")
     assert first.status_code == 200
     assert "Hilfe Start" in first.text
 
-    second = await help_dist_client.get("/help/")
+    second = await help_dist_client.get("/help/de/")
     assert second.status_code == 200
     assert "Hilfe Start" in second.text
 

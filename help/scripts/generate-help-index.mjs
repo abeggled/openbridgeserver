@@ -17,18 +17,20 @@
 // publicDir passthrough copies verbatim to help_dist/help-index.json — so it
 // ships alongside the built site with no separate build step to wire up.
 //
-// Locale layout must match help/.vitepress/config.mts: everything under
-// `en/` is the `en` locale; everything else is the root (`de`) locale. When
-// adding a new locale in config.mts, add its directory prefix to LOCALE_DIRS
-// below too.
+// Locale layout must match help/.vitepress/config.mts: every locale —
+// including German — lives under its own prefixed directory (`de/`, `en/`,
+// ...) and is served at that same prefixed URL; there is no unprefixed
+// "root" locale. This mirrors gui/frontend's Weblate setup, where German is
+// a normal (if usually already-complete) target language rather than the
+// translation source — English is. When adding a new locale in config.mts,
+// add its directory prefix to LOCALE_DIRS below too.
 
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HELP_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const LOCALE_DIRS = { en: 'en' } // dir prefix -> locale code; anything else → 'de' (root)
-const DEFAULT_LOCALE = 'de'
+const LOCALE_DIRS = { de: 'de', en: 'en' } // dir prefix -> locale code — every locale is prefixed
 const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scripts'])
 
 const HEADING_RE = /^#{1,6}\s+.*\{#([A-Za-z][\w-]*)\}\s*$/gm
@@ -49,16 +51,18 @@ function findMarkdownFiles(dir, base = dir) {
 }
 
 export function localeAndRoutePath(relPath) {
-  // The locale directory (e.g. `en/`) is only stripped from the URL for the
-  // *root* locale — VitePress serves other locales at their own prefixed
-  // path (e.g. `/help/en/...`), it does not relocate them to the site root.
-  // routeParts therefore keeps the full path for a non-root locale.
+  // Every locale is served at its own prefixed URL (e.g. `/help/de/...`,
+  // `/help/en/...`) — routeParts keeps the full path, prefix included.
   const parts = relPath.split(sep)
-  const [maybeLocaleDir] = parts
-  if (maybeLocaleDir in LOCALE_DIRS) {
-    return { locale: LOCALE_DIRS[maybeLocaleDir], routeParts: parts }
+  const [localeDir] = parts
+  if (!(localeDir in LOCALE_DIRS)) {
+    throw new Error(
+      `generate-help-index: "${relPath}" is not under a recognized locale directory ` +
+      `(${Object.keys(LOCALE_DIRS).join(', ')}) — move it under one of those, or add ` +
+      `its directory to LOCALE_DIRS if this is a new locale.`
+    )
   }
-  return { locale: DEFAULT_LOCALE, routeParts: parts }
+  return { locale: LOCALE_DIRS[localeDir], routeParts: parts }
 }
 
 export function routePartsToUrl(routeParts) {
@@ -118,7 +122,7 @@ export function buildHelpIndex(root) {
     }
   }
 
-  const allLocales = new Set([DEFAULT_LOCALE, ...Object.values(LOCALE_DIRS)])
+  const allLocales = new Set(Object.values(LOCALE_DIRS))
   const incomplete = Object.entries(helpIds)
     .filter(([, byLocale]) => allLocales.difference(new Set(Object.keys(byLocale))).size > 0)
     .map(([id, byLocale]) => ({ id, missing: [...allLocales].filter((l) => !(l in byLocale)) }))

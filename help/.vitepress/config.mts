@@ -5,9 +5,13 @@ import { defineConfig } from 'vitepress'
 // gui_dist/ and frontend_dist/, same as gui/ and frontend/ build to their
 // own *_dist/ directories.
 //
-// German (`de`) is the Weblate source language for this repo (see
-// docs/AGENT_REFERENCE.md, Internationalisation section) — it is the root
-// locale here too. English lives under /en/.
+// Every locale, including German, lives under its own prefixed path
+// (/de/, /en/, ...) — there is no unprefixed "root" locale. This mirrors
+// gui/frontend's Weblate setup, where English is the translation source and
+// German is a normal (if usually already-complete) target language, not the
+// source (see docs/AGENT_REFERENCE.md, Internationalisation section). The
+// backend redirects the bare /help/ to /help/de/ (see obs/main.py) since
+// VitePress does not do that on its own for a root-less locale config.
 export default defineConfig({
   base: '/help/',
   outDir: '../help_dist',
@@ -31,69 +35,70 @@ export default defineConfig({
   ],
 
   locales: {
-    root: {
+    de: {
       label: 'Deutsch',
       lang: 'de',
+      link: '/de/',
       title: 'open bridge server Hilfe',
       description: 'Integriertes Hilfesystem für open bridge server',
       themeConfig: {
-        nav: [{ text: 'Start', link: '/' }],
+        nav: [{ text: 'Start', link: '/de/' }],
         sidebar: [
           {
             text: 'Erste Schritte',
-            items: [{ text: 'Übersicht', link: '/' }],
+            items: [{ text: 'Übersicht', link: '/de/' }],
           },
           {
             text: 'Dashboard',
-            items: [{ text: 'Übersicht', link: '/dashboard/overview' }],
+            items: [{ text: 'Übersicht', link: '/de/dashboard/overview' }],
           },
           {
             text: 'Objekte',
-            items: [{ text: 'Objektliste', link: '/datapoints/list' }],
+            items: [{ text: 'Objektliste', link: '/de/datapoints/list' }],
           },
           {
             text: 'KNX-Geräte',
-            items: [{ text: 'Geräteliste', link: '/knxdevices/list' }],
+            items: [{ text: 'Geräteliste', link: '/de/knxdevices/list' }],
           },
           {
             text: 'Adapter',
-            items: [{ text: 'Adapter-Instanzen', link: '/adapters/list' }],
+            items: [{ text: 'Adapter-Instanzen', link: '/de/adapters/list' }],
           },
           {
             text: 'Historie',
-            items: [{ text: 'Verlauf', link: '/history/overview' }],
+            items: [{ text: 'Verlauf', link: '/de/history/overview' }],
           },
           {
             text: 'Monitor',
-            items: [{ text: 'Monitor', link: '/ringbuffer/overview' }],
+            items: [{ text: 'Monitor', link: '/de/ringbuffer/overview' }],
           },
           {
             text: 'Meldungsarchive',
-            items: [{ text: 'Archivliste', link: '/messagearchives/list' }],
+            items: [{ text: 'Archivliste', link: '/de/messagearchives/list' }],
           },
           {
             text: 'Logs',
-            items: [{ text: 'Logs', link: '/logs/overview' }],
+            items: [{ text: 'Logs', link: '/de/logs/overview' }],
           },
           {
             text: 'Logikmodul',
-            items: [{ text: 'Logikmodul', link: '/logic/overview' }],
+            items: [{ text: 'Logikmodul', link: '/de/logic/overview' }],
           },
           {
             text: 'Einstellungen',
             items: [
-              { text: 'Allgemeine Einstellungen', link: '/settings/general' },
-              { text: 'Passwort ändern', link: '/settings/password' },
-              { text: 'Benutzer', link: '/settings/users' },
-              { text: 'API Keys', link: '/settings/apikeys' },
-              { text: 'Sicherheit', link: '/settings/security' },
-              { text: 'Support', link: '/settings/support' },
-              { text: 'Links', link: '/settings/links' },
-              { text: 'Hierarchie', link: '/settings/hierarchy' },
-              { text: 'Datenmanagement', link: '/settings/importexport' },
-              { text: 'Icons', link: '/settings/icons' },
-              { text: 'Historie DB', link: '/settings/history' },
-              { text: 'Gefahrenzone', link: '/settings/dangerzone' },
+              { text: 'Allgemeine Einstellungen', link: '/de/settings/general' },
+              { text: 'Passwort ändern', link: '/de/settings/password' },
+              { text: 'Benutzer', link: '/de/settings/users' },
+              { text: 'API Keys', link: '/de/settings/apikeys' },
+              { text: 'Sicherheit', link: '/de/settings/security' },
+              { text: 'Support', link: '/de/settings/support' },
+              { text: 'Links', link: '/de/settings/links' },
+              { text: 'Hierarchie', link: '/de/settings/hierarchy' },
+              { text: 'Datenmanagement', link: '/de/settings/importexport' },
+              { text: 'Icons', link: '/de/settings/icons' },
+              { text: 'Historie DB', link: '/de/settings/history' },
+              { text: 'Gefahrenzone', link: '/de/settings/dangerzone' },
             ],
           },
         ],
