@@ -21,7 +21,7 @@ respective adapter instance.
 - **Adapter** — multi-select by adapter **type** (e.g. KNX, Modbus); shows data points bound
   to any instance of the selected types.
 - **Tag** — multi-select over the tags currently in use across the system.
-- **Quality** — filters by the last reported quality status (**Good** / **Uncertain** /
+- **Quality** — filters by the last reported quality status (**Good** / **Unknown** /
   **Bad**).
 - **Hierarchy nodes** — filters to one or more nodes/branches of the data point hierarchy;
   the search also finds nodes outside the currently selected trees.
