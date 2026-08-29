@@ -2237,16 +2237,22 @@ class LogicManager:
         # False), never a real DataValueEvent. A Write descending from it
         # must not be published, exactly like the direct Read.changed
         # case just above.
+
+        # Nothing arriving on edge_detect.reset can influence the dry run: the
+        # init overrides below force that handle False for every detector,
+        # because a save/startup is not a transition. Such an edge therefore
+        # carries no synthetic pulse into the block, whatever its source or
+        # source handle — tainting the detector over it would discard the level
+        # seeded through "in" and swallow the block's first real edge.
+        def _feeds_inert_init_reset(e: Any) -> bool:
+            return node_type_by_id.get(e.target) == "edge_detect" and (e.targetHandle or "in") == "reset"
+
         changed_targets = {
             e.target
             for e in _effective_edges_init
             if e.sourceHandle == "changed"
             and (e.source in read_node_ids or node_type_by_id.get(e.source) == "change_filter")
-            # …except into edge_detect.reset: a synthetic changed=False there
-            # means "do not reset", which is exactly what a real quiet pass
-            # delivers. The level seeded through "in" stays valid, and
-            # discarding it would lose the block's first real edge.
-            and not (node_type_by_id.get(e.target) == "edge_detect" and (e.targetHandle or "in") == "reset")
+            and not _feeds_inert_init_reset(e)
         }
         # Every Edge Detection output is edge-gated: "out" exists only on an
         # edge and the triggers are only true on one. On a save/startup
@@ -2256,21 +2262,7 @@ class LogicManager:
         # published, exactly like the change_filter case above. Its own level
         # is still committed below (_INIT_STATE_ALWAYS_COMMIT).
         changed_targets |= {
-            e.target
-            for e in _effective_edges_init
-            if node_type_by_id.get(e.source) == "edge_detect"
-            # …with the same exception as the change_filter "changed" case:
-            # a synthetic edge pulse landing on another detector's "reset"
-            # means "do not reset" — exactly what a real quiet pass delivers.
-            # Tainting the downstream detector would discard the level seeded
-            # through its own "in" and swallow its first real edge. Only the
-            # discrete trigger handles qualify; "out" carries a configured
-            # value that could genuinely read as a reset.
-            and not (
-                node_type_by_id.get(e.target) == "edge_detect"
-                and (e.targetHandle or "in") == "reset"
-                and (e.sourceHandle or "out") in {"rising", "falling"}
-            )
+            e.target for e in _effective_edges_init if node_type_by_id.get(e.source) == "edge_detect" and not _feeds_inert_init_reset(e)
         }
         excluded_ids = {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}
         value_edges = [

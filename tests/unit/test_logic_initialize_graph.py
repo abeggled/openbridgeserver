@@ -3324,25 +3324,60 @@ async def test_a_detector_whose_reset_comes_from_another_detector_is_still_seede
 
 
 @pytest.mark.asyncio
-async def test_a_detector_whose_reset_comes_from_an_edge_value_stays_tainted():
-    """The exception is limited to the discrete trigger handles: "out" carries
-    a configured value that can genuinely read as a reset, so a detector fed
-    from it must keep the taint and stay unseeded."""
-    src_a, src_b = str(uuid.uuid4()), str(uuid.uuid4())
+async def test_a_detector_reset_by_an_edge_value_is_seeded_too():
+    """The exemption is not per source handle: the dry run forces every
+    detector's "reset" false, so an "out" edge into it is just as inert as a
+    trigger one and must not taint the downstream block either."""
+    src_a, src_b, dst_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
     flow = _flow(
         [
             {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
             {"id": "ea", "type": "edge_detect", "data": {}},
             {"id": "rb", "type": "datapoint_read", "data": {"datapoint_id": src_b}},
             {"id": "eb", "type": "edge_detect", "data": {}},
+            {"id": "w1", "type": "datapoint_write", "data": {"datapoint_id": dst_id}},
         ],
         [
             {"source": "ra", "sourceHandle": "value", "target": "ea", "targetHandle": "in"},
             {"source": "ea", "sourceHandle": "out", "target": "eb", "targetHandle": "reset"},
             {"source": "rb", "sourceHandle": "value", "target": "eb", "targetHandle": "in"},
+            {"source": "eb", "sourceHandle": "out", "target": "w1", "targetHandle": "value"},
         ],
     )
     mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: False, src_b: False})
+
+    await mgr.initialize_graph("g1")
+
+    assert mgr._hysteresis["g1"]["ea"] == {"value": False}
+    assert mgr._hysteresis["g1"]["eb"] == {"value": False}
+    mgr._event_bus.publish.assert_not_awaited()
+
+    ws = SimpleNamespace(has_logic_debug_subscribers=lambda _gid: False)
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        outputs = await mgr._execute_graph("g1", "G", flow, {"rb": {"value": True, "changed": True}})
+
+    assert outputs["eb"]["rising"] is True
+    assert [c.args[0].value for c in mgr._event_bus.publish.await_args_list] == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_detector_fed_through_in_by_another_detector_stays_tainted():
+    """The boundary: only "reset" is inert during initialization. A detector
+    whose LEVEL comes from another detector's synthetic edge value keeps the
+    taint, because that value is not an observed transition."""
+    src_a = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "ra", "type": "datapoint_read", "data": {"datapoint_id": src_a}},
+            {"id": "ea", "type": "edge_detect", "data": {}},
+            {"id": "eb", "type": "edge_detect", "data": {}},
+        ],
+        [
+            {"source": "ra", "sourceHandle": "value", "target": "ea", "targetHandle": "in"},
+            {"source": "ea", "sourceHandle": "out", "target": "eb", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g1": ("G", True, flow)}, values={src_a: False})
 
     await mgr.initialize_graph("g1")
 
