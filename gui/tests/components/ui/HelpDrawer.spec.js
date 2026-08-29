@@ -8,7 +8,7 @@ vi.mock('@/stores/help', () => ({ useHelpStore: () => helpStoreMock }))
 
 beforeEach(() => {
   helpStoreMock = reactive({
-    isOpen: false, currentUrl: null, drawerWidth: 0,
+    isOpen: false, currentUrl: null, drawerWidth: 0, loadError: false,
     close: vi.fn(), setDrawerWidth: vi.fn((w) => { helpStoreMock.drawerWidth = w }),
   })
   document.body.innerHTML = ''
@@ -234,5 +234,29 @@ describe('HelpDrawer — open with no resolvable URL', () => {
     await flushPromises()
 
     expect(document.querySelector('[data-testid="help-drawer-open-new-tab"]')).toBeFalsy()
+  })
+
+  it('shows a distinct message when the help index itself failed to load, instead of the per-topic "not available" text (issue feedback: both cases looked identical, masking a missing/unbuilt help_dist as "no content for this area")', async () => {
+    helpStoreMock.isOpen = true
+    helpStoreMock.currentUrl = null
+    helpStoreMock.loadError = true
+    const { default: HelpDrawer } = await import('@/components/ui/HelpDrawer.vue')
+    mount(HelpDrawer, { attachTo: document.body })
+    await flushPromises()
+
+    const body = document.querySelector('.card-body')
+    expect(body.textContent).toContain('Hilfe-Inhalte sind auf diesem Server aktuell nicht verfügbar')
+  })
+
+  it('shows the per-topic message (not the system-unavailable one) when the index loaded fine but this help_id just has no mapping', async () => {
+    helpStoreMock.isOpen = true
+    helpStoreMock.currentUrl = null
+    helpStoreMock.loadError = false
+    const { default: HelpDrawer } = await import('@/components/ui/HelpDrawer.vue')
+    mount(HelpDrawer, { attachTo: document.body })
+    await flushPromises()
+
+    const body = document.querySelector('.card-body')
+    expect(body.textContent).toContain('Für diesen Bereich ist noch keine Hilfe verfügbar')
   })
 })

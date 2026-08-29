@@ -172,7 +172,7 @@ ringbuffer:
 
 security:
   jwt_secret: changeme        # Sitzungsschlüssel — unbedingt ändern!
-  jwt_expire_minutes: 1440    # Sitzungsdauer (Standard: 24 Stunden)
+  jwt_expire_minutes: 1440    # Laufzeit des Access-Tokens (Standard: 24 Stunden)
   # Optionaler Override für die Allowlist privater/interner URL-Ziele.
   # Standard: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml, wenn OBS_SECRET_FILE_DIR gesetzt ist,
   # sonst secrets/url-target-allowlist.yaml neben der konfigurierten Datenbank.
@@ -180,6 +180,12 @@ security:
 ```
 
 > **Hinweis:** Der `mqtt`-Abschnitt betrifft den **internen** Mosquitto-Broker. Externe MQTT-Broker werden als separate Adapter-Instanzen eingerichtet (siehe [MQTT-Adapter](#mqtt-adapter-externer-broker)).
+
+> **Hinweis:** `jwt_expire_minutes` begrenzt die Laufzeit eines einzelnen **Access-Tokens**, nicht
+> die Dauer der Anmeldung. `POST /api/v1/auth/login` liefert zusätzlich einen 30 Tage gültigen
+> Refresh-Token, mit dem Admin-GUI und Visu den Access-Token automatisch erneuern. Ein Browser, der
+> mindestens alle 30 Tage genutzt wird, muss sich deshalb nicht neu anmelden; ein kleinerer Wert
+> verkürzt nur das Zeitfenster, in dem ein entwendeter Access-Token nutzbar ist.
 
 ### Offline-Administration mit `obs-admin`
 
@@ -625,7 +631,7 @@ Der Logik-Editor ermöglicht das visuelle Erstellen von Automatisierungsregeln �
 
 Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden.
 
-**Zustände** (Hysterese, Speicher, Statistik, Betriebsstunden, Min/Max-Tracker, Verbrauchszähler) werden in der Datenbank gespeichert und überleben einen Neustart.
+**Zustände** (Hysterese, Speicher, Flankenerkennung, Statistik, Betriebsstunden, Min/Max-Tracker, Verbrauchszähler) werden in der Datenbank gespeichert und überleben einen Neustart.
 
 Direkte Rückkopplungen werden im Editor validiert und beim Verbinden oder Speichern blockiert. Für kontrollierte Rückkopplungen wird ein **Speicher**-Block als explizite Tick-Grenze verwendet: Er gibt den Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf.
 
@@ -653,6 +659,7 @@ Ein oder mehrere Blöcke lassen sich markieren (Shift + Rahmen aufziehen, oder S
 | **EXKLUSIV-ODER** | A, B | Aus | Wahr wenn **genau ein** Eingang wahr ist. |
 | **Speicher** | Ein, Zurücksetzen | Aus | Gibt den gespeicherten Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf. Für kontrollierte Rückkopplungen verwenden. |
 | **Vergleich** | A, B | Ergebnis | Vergleicht zwei Werte. Auswahl: `>` `<` `=` `>=` `<=` `≠` |
+| **Flankenerkennung** | Ein, Zurücksetzen | Aus, Trigger-Steigend, Trigger-Fallend | Wertet den Eingang boolesch aus und reagiert auf den Wechsel: Bei steigender Flanke (falsch → wahr) wird der konfigurierte Wert für steigende Flanken ausgegeben und der Trigger „Steigend" gesetzt, bei fallender Flanke (wahr → falsch) entsprechend der Wert für fallende Flanken und der Trigger „Fallend". Ohne Flanke wird nichts auf „Aus" gesendet, ein nachgelagertes Objekt schreiben schreibt also nicht bei jedem Lauf. Jede Flankenrichtung wird für sich eingestellt — Wert senden, nur den Trigger auslösen oder ganz stumm bleiben — und „Zurücksetzen" verwirft den gemerkten Vorzustand, sodass der nächste Wert wieder flankenlos startet. |
 | **Hysterese** | Wert | Aus | Schaltet ein wenn der Wert über „Schwelle EIN" steigt, und erst wieder aus wenn er unter „Schwelle AUS" fällt. Verhindert schnelles Hin- und Herschalten. |
 | **Klemme** | IN 1, IN 2, … (2-30) | Aus | Bündelt mehrere unabhängige Wertquellen auf einen gemeinsamen Ausgang: wer zuletzt einen neuen Wert liefert, wird durchgereicht (Edomi-Klemme). Ersetzt das Verdrahten mehrerer Quellen auf denselben Eingang eines anderen Blocks — das wird nicht unterstützt und beim Verbinden/Speichern blockiert. |
 | **Entscheidung** | Wert | 2-n boolesche Ausgänge | Prüft mehrere unabhängige Bedingungen gegen einen Eingang. Jeder Ausgang hat eigenen Namen und eigene Bedingung; mehrere Ausgänge können gleichzeitig wahr sein. |

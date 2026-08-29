@@ -6,7 +6,8 @@
     >
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center p-4"
+        :style="{ right: help.reservedRight }"
         @mousedown.self="onBackdropClick"
       >
         <!-- Backdrop -->
@@ -56,6 +57,9 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useHelpStore } from '@/stores/help'
+
+const help = useHelpStore()
 const props = defineProps({
   modelValue: Boolean,
   title:      String,
@@ -114,8 +118,14 @@ watch(() => props.modelValue, () => {
 .modal-resizable {
   resize: both;
   overflow: hidden;
-  min-width: min(42rem, calc(100vw - 2rem));
+  /* % resolves against this flex item's container (the outer `fixed` wrapper,
+     already narrowed by its own `right: reservedRight` and `p-4` padding),
+     not the raw viewport — a fixed `calc(100vw - ...)` here ignored that
+     narrowing and could force the dialog wider than the space actually left
+     beside an open help drawer, pushing it underneath (Codex review on PR
+     #1180). */
+  min-width: min(42rem, 100%);
   min-height: min(28rem, calc(100vh - 2rem));
-  max-width: calc(100vw - 2rem);
+  max-width: 100%;
 }
 </style>

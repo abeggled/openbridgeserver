@@ -54,6 +54,7 @@
           {{ statusBadgeText }}
         </span>
         <TopbarStats ref="topbarStatsRef" @stats="onMonitorStats" />
+        <HelpButton help-id="ringbuffer-toolbar" />
       </div>
     </div>
 
@@ -143,6 +144,9 @@
     />
 
     <div class="card overflow-hidden flex-1 min-h-0 flex flex-col">
+      <div class="flex justify-end px-4 pt-3 shrink-0">
+        <HelpButton help-id="ringbuffer-table" />
+      </div>
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
       <div v-else-if="listError" class="px-4 py-6 text-sm text-red-500" data-testid="ringbuffer-error">{{ listError }}</div>
       <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12" data-testid="ringbuffer-empty">{{ $t('ringbuffer.noEntries') }}</div>
@@ -204,6 +208,7 @@ import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge from '@/components/ui/Badge.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import TimeFilterPopover from '@/components/ui/TimeFilterPopover.vue'
 import TopbarFilterChips from '@/views/ringbuffer/TopbarFilterChips.vue'

@@ -177,4 +177,32 @@ describe('useHelpStore', () => {
 
     expect(store.currentUrl).toBe(null)
   })
+
+  it('reservedRight is 0px while closed, regardless of a persisted drawerWidth', async () => {
+    const { useHelpStore } = await import('@/stores/help')
+    const store = useHelpStore()
+    store.setDrawerWidth(500)
+
+    expect(store.reservedRight).toBe('0px')
+  })
+
+  it('reservedRight mirrors drawerWidth (clamped to 90vw and a minimum remaining width) once open — shared by App.vue and every full-viewport popup so they never drift out of sync with the drawer', async () => {
+    helpApiMock.index.mockResolvedValue({ data: SAMPLE_INDEX })
+    const { useHelpStore } = await import('@/stores/help')
+    const store = useHelpStore()
+    store.open('datapoints-overview')
+    store.setDrawerWidth(420)
+
+    expect(store.reservedRight).toBe('min(420px, 90vw, max(0px, 100vw - 300px))')
+  })
+
+  it('reservedRight includes the minimum-remaining-width floor even for a small drawerWidth (Codex review, PR #1180 — a narrow viewport could otherwise squeeze a full-viewport modal beside the drawer to a sliver)', async () => {
+    helpApiMock.index.mockResolvedValue({ data: SAMPLE_INDEX })
+    const { useHelpStore } = await import('@/stores/help')
+    const store = useHelpStore()
+    store.open('datapoints-overview')
+    store.setDrawerWidth(320)
+
+    expect(store.reservedRight).toBe('min(320px, 90vw, max(0px, 100vw - 300px))')
+  })
 })

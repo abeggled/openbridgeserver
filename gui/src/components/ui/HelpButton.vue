@@ -5,13 +5,15 @@
        action, so it must stay clickable even there. -->
   <button
     type="button"
-    class="btn-icon pointer-events-auto"
+    :class="compact
+      ? 'p-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700/60 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 transition-colors pointer-events-auto'
+      : 'btn-icon pointer-events-auto'"
     :aria-label="$t('help.openLabel')"
     :title="$t('help.openLabel')"
     :data-testid="`help-button-${helpId}`"
     @click="helpStore.open(props.helpId)"
   >
-    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg :class="compact ? 'w-3 h-3' : 'w-4 h-4'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path
         stroke-linecap="round"
         stroke-linejoin="round"
@@ -27,6 +29,11 @@ import { useHelpStore } from '@/stores/help'
 
 const props = defineProps({
   helpId: { type: String, required: true },
+  // Smaller footprint (20px vs the default 32px) for dense lists like the
+  // Logic Module's block palette, where the default btn-icon size nearly
+  // doubles each row's height (issue feedback: ~45px vs ~26px for a row
+  // with no button yet).
+  compact: { type: Boolean, default: false },
 })
 
 const helpStore = useHelpStore()

@@ -74,6 +74,11 @@ docker compose up -d mosquitto
 
 # Admin GUI dev server (proxies /api to localhost:8080)
 cd gui && npm run dev
+
+# Build the integrated help site for local testing (help_dist/ is gitignored
+# and NOT built by `python -m obs` — without this, the Admin-GUI's help
+# drawer shows its generic "unavailable" fallback for every topic)
+cd help && npm run build
 ```
 
 ## Pre-Push Gate (verbindlich)

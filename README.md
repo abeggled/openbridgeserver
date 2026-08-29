@@ -170,7 +170,7 @@ ringbuffer:
 
 security:
   jwt_secret: changeme        # Session key — must be changed!
-  jwt_expire_minutes: 1440    # Session duration (default: 24 hours)
+  jwt_expire_minutes: 1440    # Access token lifetime (default: 24 hours)
   # Optional override for the private/internal URL target allowlist.
   # Default: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml when OBS_SECRET_FILE_DIR is set,
   # otherwise secrets/url-target-allowlist.yaml next to the configured database.
@@ -178,6 +178,12 @@ security:
 ```
 
 > **Note:** The `mqtt` section refers to the **internal** Mosquitto broker. External MQTT brokers are set up as separate adapter instances (see [MQTT adapter](#mqtt-adapter-external-broker)).
+
+> **Note:** `jwt_expire_minutes` limits the lifetime of a single **access token**, not how long you
+> stay signed in. `POST /api/v1/auth/login` also issues a refresh token that is valid for 30 days,
+> and both the Admin GUI and the Visu use it to renew the access token automatically. A browser that
+> is used at least once every 30 days therefore never has to sign in again; lowering
+> `jwt_expire_minutes` only shortens the window in which a stolen access token is usable.
 
 ### Offline administration with `obs-admin`
 
@@ -629,7 +635,7 @@ The logic editor enables visual creation of automation rules — without program
 
 The graph can also be started manually via the **▶ Run** button.
 
-**States** (hysteresis, memory, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
+**States** (hysteresis, memory, edge detection, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
 
 Direct feedback loops are validated in the editor and blocked when saving or connecting nodes. Use a **Memory** block as an explicit tick boundary for controlled feedback: it outputs the value stored from the previous graph run and stores the current input for the next run.
 
@@ -657,6 +663,7 @@ Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual
 | **XOR** | A, B | Out | True when **exactly one** input is true. |
 | **Memory** | In, Reset | Out | Outputs the stored value from the previous graph run and stores the current input for the next run. Use this block to build controlled feedback loops. |
 | **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
+| **Edge detection** | In, Reset | Out, Trigger rising, Trigger falling | Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the configured rising value and sets the Rising trigger, a falling edge (true → false) the falling value and the Falling trigger. Without an edge nothing is sent on Out, so a downstream Write Object does not write on every run. Each direction is configured on its own — send a value, only pulse the trigger, or stay silent — and Reset drops the remembered level so the next value starts fresh. |
 | **Hysteresis** | Value | Out | Switches on when the value exceeds "threshold ON", and switches off only when it falls below "threshold OFF". Prevents rapid toggling. |
 | **Merge** | IN 1, IN 2, … (2-30) | Out | Bundles several independent value sources into one shared output: whichever source last delivered a new value is passed through (Edomi-style terminal/junction). Replaces wiring several sources into the same input of another block — that isn't supported and is blocked at connect/save time. |
 | **Decision** | Value | 2-n boolean outputs | Evaluates multiple independent conditions against one input. Every output has its own name and condition; several outputs can be true at the same time. |

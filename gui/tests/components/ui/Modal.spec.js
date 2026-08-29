@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import Modal from '@/components/ui/Modal.vue'
+import { useHelpStore } from '@/stores/help'
 
 function mountModal(props = {}) {
   return mount(Modal, {
@@ -58,7 +59,7 @@ describe('Modal — default backdrop behaviour', () => {
 
   it('emits update:modelValue=false when clicking outside the panel (default)', async () => {
     const wrapper = mountModal()
-    const outer = document.querySelector('.fixed.inset-0.z-50')
+    const outer = document.querySelector('.fixed.z-50')
     expect(outer).toBeTruthy()
     // Simulate a mousedown directly on the outer wrapper (i.e. backdrop area)
     outer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
@@ -141,7 +142,7 @@ describe('Modal — softBackdrop=true', () => {
 
   it('does NOT close when clicking outside the panel (soft mode)', async () => {
     const wrapper = mountModal({ softBackdrop: true })
-    const outer = document.querySelector('.fixed.inset-0.z-50')
+    const outer = document.querySelector('.fixed.z-50')
     expect(outer).toBeTruthy()
     outer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await nextTick()
@@ -171,6 +172,37 @@ describe('Modal — softBackdrop=true', () => {
   })
 })
 
+describe('Modal — leaves room for an open help drawer (issue feedback: a dialog used to darken/blur the whole viewport, making the drawer unreadable underneath it)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('spans the full viewport (right: 0px) while the help drawer is closed', () => {
+    mountModal()
+    const outer = document.querySelector('.fixed.z-50')
+    expect(outer.style.right).toBe('0px')
+  })
+
+  it("stops at the drawer's reserved width instead of covering it once the drawer is open", async () => {
+    const help = useHelpStore()
+    help.helpIndex = {} // avoid open()'s loadIndex() hitting the real (unmocked) API client
+    help.open('some-topic')
+    help.setDrawerWidth(420)
+    expect(help.reservedRight).toBe('min(420px, 90vw, max(0px, 100vw - 300px))')
+
+    mountModal()
+    await nextTick()
+    const outer = document.querySelector('.fixed.z-50')
+    // happy-dom doesn't implement the CSS min() function and silently drops
+    // the whole declaration, here even from the serialized style attribute
+    // (see App.spec.js for the same limitation) — the exact string is instead
+    // covered directly against the store in help.spec.js. What's left
+    // observable here is that it's no longer the closed-state '0px'.
+    expect(outer.style.right).not.toBe('0px')
+    expect(outer.className).not.toContain('inset-0')
+  })
+})
+
 describe('Modal — dismissible=false', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
@@ -178,7 +210,7 @@ describe('Modal — dismissible=false', () => {
 
   it('blocks backdrop, close-button, and ESC dismissal', async () => {
     const wrapper = mountModal({ dismissible: false })
-    const outer = document.querySelector('.fixed.inset-0.z-50')
+    const outer = document.querySelector('.fixed.z-50')
     const closeBtn = document.querySelector('.btn-icon')
 
     outer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))

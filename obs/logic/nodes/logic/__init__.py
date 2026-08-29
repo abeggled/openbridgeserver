@@ -12,6 +12,7 @@ from obs.logic.nodes.logic.change_filter import NODE_TYPE as CHANGE_FILTER
 from obs.logic.nodes.logic.compare import NODE_TYPE as COMPARE
 from obs.logic.nodes.logic.const_value import NODE_TYPE as CONST_VALUE
 from obs.logic.nodes.logic.decision import NODE_TYPE as DECISION
+from obs.logic.nodes.logic.edge_detect import NODE_TYPE as EDGE_DETECT
 from obs.logic.nodes.logic.gate import NODE_TYPE as GATE
 from obs.logic.nodes.logic.hysteresis import NODE_TYPE as HYSTERESIS
 from obs.logic.nodes.logic.memory import NODE_TYPE as MEMORY
@@ -31,6 +32,7 @@ NODE_TYPES: tuple[NodeTypeDef, ...] = (
     MEMORY,
     MERGE,
     CHANGE_FILTER,
+    EDGE_DETECT,
     COMPARE,
     HYSTERESIS,
     DECISION,

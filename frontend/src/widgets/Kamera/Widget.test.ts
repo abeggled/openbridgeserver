@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import KameraWidget from './Widget.vue'
+import { AUTH_TOKEN_REFRESHED_EVENT, notifyAuthTokenRefreshed } from '@/utils/authEvents'
 
 function mountWidget(
   config: Record<string, unknown> = {
@@ -37,6 +38,59 @@ afterEach(() => {
 })
 
 describe('Kamera Widget.vue', () => {
+  it('rebuilds the proxy URL with the renewed token', async () => {
+    const wrapper = mountWidget()
+    expect(wrapper.find('img').attributes('src')).toContain('_token=jwt-1')
+
+    localStorage.setItem('visu_jwt', 'jwt-2')
+    notifyAuthTokenRefreshed()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('img').attributes('src')).toContain('_token=jwt-2')
+    expect(wrapper.find('img').attributes('src')).not.toContain('jwt-1')
+  })
+
+  it('drops the token from the proxy URL when the session ends', async () => {
+    const wrapper = mountWidget()
+    expect(wrapper.find('img').attributes('src')).toContain('_token=jwt-1')
+
+    // Endgültig abgelehnte Erneuerung: die Tokens sind geräumt, der laufende
+    // Stream zöge sonst weiter mit dem Token der beendeten Anmeldung.
+    localStorage.removeItem('visu_jwt')
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('img').attributes('src')).not.toContain('_token=')
+    expect(wrapper.find('img').attributes('src')).not.toContain('jwt-1')
+    wrapper.unmount()
+  })
+
+  it('removes its session-end listener on unmount', () => {
+    const removeListener = vi.spyOn(window, 'removeEventListener')
+    const wrapper = mountWidget()
+
+    wrapper.unmount()
+
+    expect(removeListener).toHaveBeenCalledWith('visu:unauthorized', expect.any(Function))
+    removeListener.mockRestore()
+  })
+
+  it('removes its token listener on unmount', () => {
+    const removeListener = vi.spyOn(window, 'removeEventListener')
+    const wrapper = mountWidget()
+
+    wrapper.unmount()
+
+    expect(removeListener).toHaveBeenCalledWith(AUTH_TOKEN_REFRESHED_EVENT, expect.any(Function))
+    removeListener.mockRestore()
+  })
+
+  it('omits the token parameter when no session is stored', () => {
+    localStorage.removeItem('visu_jwt')
+    const wrapper = mountWidget()
+    expect(wrapper.find('img').attributes('src')).not.toContain('_token=')
+  })
+
   it('embeds basic auth credentials in URL', () => {
     const wrapper = mountWidget({
       url: 'http://camera.local/stream.mjpeg',

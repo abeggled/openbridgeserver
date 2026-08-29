@@ -193,7 +193,33 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
 # that same value looks like a fresh first value and fires the action again.
 # So change_filter always commits once seeded/untainted, independent of
 # published_writes.
-_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge", "change_filter"})
+_INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge", "change_filter", "edge_detect"})
+
+# …and edge_detect for the same reason: its remembered level is meaningful on
+# its own. Excluding it from initialization instead would leave a newly placed
+# block with no baseline at all, so the first real transition would merely seed
+# the level and the edge would be lost. Its outputs are kept out of the
+# published writes separately (see changed_targets), because a save is not a
+# transition.
+_INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
+
+# Stateful blocks that must be held back while an upstream async node has not
+# resolved yet: committing that pass's placeholder would record a level/value
+# that never occurred, and any action they drive would already have run
+# irreversibly by the time the replay corrects them.
+_HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
+
+# Blocks whose outputs are discrete event pulses rather than sustained levels.
+# They are the roots of the pulse-provenance trace: a consumer fed from one of
+# them must not read the "no pulse this pass" placeholder as a real value.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
+
+# Merge's input ports (in1…in30). Merge remembers the last value seen on every
+# wired port plus which one was "active", so a no-pulse placeholder arriving on
+# one of them must not overwrite that memory — see the merge branch of the
+# stateful-relay correction, which replays the port with its remembered value
+# instead of the placeholder.
+_MERGE_INPUT_HANDLE_RE = re.compile(r"in[1-9][0-9]*$")
 
 # Input handles that control WHEN a node's output fires/passes but do not
 # deliver the value itself. Seeded eligibility must not propagate through
@@ -203,7 +229,29 @@ _INIT_COMMIT_STATE_NODE_TYPES = frozenset({"gate", "hysteresis", "merge", "chang
 _INIT_CONTROL_INPUT_HANDLES: dict[str, frozenset[str]] = {
     "datapoint_write": frozenset({"trigger"}),
     "gate": frozenset({"enable"}),
+    # edge_detect.reset only drops the remembered level; the value that leaves
+    # "out" descends from "in" alone. Counting it as a value edge would both
+    # make an unrelated branch initializable and fabricate a DataPoint-level
+    # settle dependency, which can close a false cycle and silently suppress a
+    # genuinely seeded Write elsewhere on the sheet.
+    "edge_detect": frozenset({"reset"}),
 }
+
+
+def _edge_detect_sends_value(node: Any) -> bool:
+    """Whether an Edge Detection node's "out" handle can EVER carry a value.
+
+    The executor sends "out" only for a direction whose action is neither
+    "off" (silent) nor "trigger" (pulse without a value) — mirrored here the
+    same way it decides, so an imported or future setting keeps sending. With
+    both directions configured otherwise, "out" never appears in the output at
+    all: it is then not a pulse handle whose absence needs correcting, and
+    treating it as one blanks out consumers that are in fact driven entirely by
+    independent, genuinely fresh inputs.
+    """
+    d = node.data or {}
+    silent = {"off", "trigger"}
+    return str(d.get("on_rising", "value")) not in silent or str(d.get("on_falling", "value")) not in silent
 
 
 def _downstream_closure(start: set[str], edges: list[Any]) -> set[str]:
@@ -2189,10 +2237,32 @@ class LogicManager:
         # False), never a real DataValueEvent. A Write descending from it
         # must not be published, exactly like the direct Read.changed
         # case just above.
+
+        # Nothing arriving on edge_detect.reset can influence the dry run: the
+        # init overrides below force that handle False for every detector,
+        # because a save/startup is not a transition. Such an edge therefore
+        # carries no synthetic pulse into the block, whatever its source or
+        # source handle — tainting the detector over it would discard the level
+        # seeded through "in" and swallow the block's first real edge.
+        def _feeds_inert_init_reset(e: Any) -> bool:
+            return node_type_by_id.get(e.target) == "edge_detect" and (e.targetHandle or "in") == "reset"
+
         changed_targets = {
             e.target
             for e in _effective_edges_init
-            if e.sourceHandle == "changed" and (e.source in read_node_ids or node_type_by_id.get(e.source) == "change_filter")
+            if e.sourceHandle == "changed"
+            and (e.source in read_node_ids or node_type_by_id.get(e.source) == "change_filter")
+            and not _feeds_inert_init_reset(e)
+        }
+        # Every Edge Detection output is edge-gated: "out" exists only on an
+        # edge and the triggers are only true on one. On a save/startup
+        # pseudo-execution any edge it reports is synthetic — derived from the
+        # restored level versus the freshly seeded value, never from an
+        # observed transition — so a Write descending from it must not be
+        # published, exactly like the change_filter case above. Its own level
+        # is still committed below (_INIT_STATE_ALWAYS_COMMIT).
+        changed_targets |= {
+            e.target for e in _effective_edges_init if node_type_by_id.get(e.source) == "edge_detect" and not _feeds_inert_init_reset(e)
         }
         excluded_ids = {node.id for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES}
         value_edges = [
@@ -2271,7 +2341,12 @@ class LogicManager:
             # subgraphs are tainted) — replace them with inert placeholders
             # for the dry run so e.g. a python_script cannot burn CPU inside
             # the save request.
-            init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type == "memory"}
+            # Built from `flow`, not `init_flow`: both types are replaced by an
+            # inert missing_node below, so their "out" is absent for the dry run.
+            # That absence is a boundary, not a failed producer — without this a
+            # synchronous node between one of them and a Change Filter would log
+            # "Missing upstream output" on every single save.
+            init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
@@ -2317,6 +2392,17 @@ class LogicManager:
                     if ns.get("last_start"):
                         acc += (now - ns["last_start"]).total_seconds() / 3600
                     overrides[node.id] = {**overrides.get(node.id, {}), "_computed_hours": round(acc, 6)}
+
+                # A save/startup is not a transition, so no reset arrives on
+                # this pass. Whatever drives "reset" reports a SYNTHETIC value
+                # here — a newly seeded Change Filter in particular reports its
+                # first value as changed=True — and letting that clear the
+                # detector's level would discard the baseline just seeded
+                # through "in" and swallow the block's first real edge. The
+                # matching taint exceptions above rely on exactly this.
+                for node in flow.nodes:
+                    if node.type == "edge_detect":
+                        overrides[node.id] = {**overrides.get(node.id, {}), "reset": False}
 
                 # Fresh state copy per pass: the executor mutates gate/
                 # hysteresis state during evaluation, and a later pass with
@@ -2552,9 +2638,10 @@ class LogicManager:
             for node in flow.nodes:
                 if node.type not in _INIT_COMMIT_STATE_NODE_TYPES or node.id not in seeded_paths or node.id not in hyst_copy:
                     continue
-                if node.id in (cf_tainted if node.type == "change_filter" else tainted):
+                always_commit = node.type in _INIT_STATE_ALWAYS_COMMIT
+                if node.id in (cf_tainted if always_commit else tainted):
                     continue
-                if node.type != "change_filter" and not (_downstream_closure({node.id}, flow.edges) & published_writes):
+                if not always_commit and not (_downstream_closure({node.id}, flow.edges) & published_writes):
                     continue
                 self._hysteresis.setdefault(graph_id, {})[node.id] = hyst_copy[node.id]
                 state_committed = True
@@ -3282,14 +3369,20 @@ class LogicManager:
         _stateful_relay_correction_ids = {
             node.id
             for node in flow.nodes
-            if node.type in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write"}
+            if node.type
+            in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write", "edge_detect"}
         }
+        # Keyed on every pulse origin, not just change_filter: the correction
+        # pass for a consumer fed by a non-firing pulse restores state from
+        # this snapshot, so without it the placeholder the first pass already
+        # committed is simply re-committed.
+        _pulse_origin_ids = {n.id for n in flow.nodes if n.type in _PULSE_ORIGIN_NODE_TYPES}
         _needs_cf_pulse_correction_snapshot = any(
             bool(
-                (_downstream_closure({_cf_id}, _effective_edges) - {_cf_id})
-                & (_change_filter_ids | _synchronous_correction_ids | _stateful_relay_correction_ids)
+                (_downstream_closure({_pid}, _effective_edges) - {_pid})
+                & (_pulse_origin_ids | _synchronous_correction_ids | _stateful_relay_correction_ids)
             )
-            for _cf_id in _change_filter_ids
+            for _pid in _pulse_origin_ids
         )
         _needs_pre_execute_snapshot = (
             needs_async_replay_snapshot
@@ -3599,6 +3692,12 @@ class LogicManager:
                             if not _enable_v:
                                 continue
                     _tainted.add(_te.target)
+                    if _target_type == "edge_detect":
+                        # A held Edge Detection node emits nothing at all this
+                        # pass — no edge, no state write — which is fully
+                        # deterministic whatever it remembers, so nothing
+                        # downstream still depends on the unresolved source.
+                        continue
                     if _target_type == "change_filter":
                         # A change_filter that becomes tainted/held here is,
                         # for THIS pass, fully deterministic: the executor's
@@ -3614,7 +3713,7 @@ class LogicManager:
                         if isinstance(_pre_hold_state, dict) and "value" in _pre_hold_state:
                             continue
                     _tq.append(_te.target)
-            return {n.id for n in flow.nodes if n.type == "change_filter" and n.id in _tainted}
+            return {n.id for n in flow.nodes if n.type in _HELD_ON_UNRESOLVED_SOURCE and n.id in _tainted}
 
         # Async nodes whose real side effect has actually run this tick (as
         # opposed to merely having their _trigger read true) — updated
@@ -3748,6 +3847,51 @@ class LogicManager:
         # cron are not suppressed by the rising-edge deduplication below.
         _node_type_by_id = {n.id: n.type for n in flow.nodes}
 
+        def _discrete_pulse_handles(node_ids: set[str] | None = None) -> set[tuple[str, str]]:
+            """(node id, handle) pairs carrying a discrete event pulse this pass.
+
+            A change_filter pulses on "changed". An Edge Detection node pulses
+            on whichever of "rising"/"falling" fired and on "out" — that handle
+            exists ONLY on an edge, so its mere presence is the event, unlike
+            change_filter's "out", which carries the sustained held value.
+            Without this, two consecutive real edges combined through e.g. an
+            OR into host_check/wake_on_lan look like one sustained trigger and
+            the second is silently deduplicated.
+            """
+            pulses: set[tuple[str, str]] = set()
+            for _pn in flow.nodes:
+                if node_ids is not None and _pn.id not in node_ids:
+                    continue
+                _pout = outputs.get(_pn.id, {})
+                if _pn.type == "change_filter":
+                    if GraphExecutor._to_bool(_pout.get("changed")):
+                        pulses.add((_pn.id, "changed"))
+                elif _pn.type == "edge_detect":
+                    for _ph in ("rising", "falling"):
+                        if GraphExecutor._to_bool(_pout.get(_ph)):
+                            pulses.add((_pn.id, _ph))
+                    if "out" in _pout:
+                        pulses.add((_pn.id, "out"))
+            return pulses
+
+        def _origin_pulsed(origin: str | tuple[str, str]) -> bool:
+            """Did this pulse origin actually fire this pass?
+
+            Origins are change_filter or edge_detect nodes. A change_filter
+            reports it on "changed"; an Edge Detection node has several
+            discrete handles, and only the one a consumer is actually fed from
+            counts — a falling edge says nothing about the "rising" handle,
+            which stays False and would otherwise be read as a real level.
+            Handle-keyed origin maps therefore carry ``(node id, handle)``
+            pairs; the node-wide maps pass a bare id and ask whether anything
+            on that node fired.
+            """
+            origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
+            if _node_type_by_id.get(origin_id) == "edge_detect":
+                pulses = _discrete_pulse_handles({origin_id})
+                return (origin_id, handle) in pulses if handle is not None else bool(pulses)
+            return GraphExecutor._to_bool(outputs.get(origin_id, {}).get("changed"))
+
         def _edge_carries_pulse(edge: Any, *, require_fired_change_filter: bool = True) -> bool:
             # A pulse only continues through an edge if its target either has
             # no dedicated trigger-typed input at all (a pure logic/relay
@@ -3774,6 +3918,15 @@ class LogicManager:
             # itself becomes cron_reachable through cf1's real "changed"
             # pulse — bypassing rising-edge dedup on every execution even
             # though cf2 itself did not change.
+            # Every Edge Detection handle is discrete, but only the one that
+            # actually fired this pass carries a pulse — the same restriction
+            # the change_filter branch below applies.
+            if (
+                _node_type_by_id.get(edge.source) == "edge_detect"
+                and require_fired_change_filter
+                and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
+            ):
+                return False
             if _node_type_by_id.get(edge.source) == "change_filter":
                 if (edge.sourceHandle or "out") != "changed":
                     return False
@@ -3865,7 +4018,16 @@ class LogicManager:
                         if new_origins:
                             target_origins.update(new_origins)
                             changed = True
-            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type == "change_filter"}
+            # Both block types emit discrete event pulses, so both are pulse
+            # origins: without this an Edge Detection node's idle "False" on a
+            # trigger handle is taken for a real level by a stateful consumer,
+            # and a synchronous node can invert it into a truthy value that
+            # fires an action node (issue #1090's machinery, generalized).
+            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type in _PULSE_ORIGIN_NODE_TYPES}
+            # Parallel to relay_origins, but keyed by (origin, source handle).
+            # relay_origins itself must stay node-keyed: _has_independent_fresh_trigger
+            # subtracts it against fresh_origins, which is node-keyed too.
+            _handle_origins: dict[str, set[tuple[str, str]]] = {}
 
             _pure_fan_in_types = {
                 "and",
@@ -3939,7 +4101,18 @@ class LogicManager:
                         # the absent-input default would wrongly call AND(True,
                         # missing) independent when the missing False itself
                         # is what determines the output.
-                        for counterfactual in (False, True):
+                        counterfactuals: list[Any] = [False, True]
+                        _pulse_source = _node_by_id_early.get(pulse_edge.source)
+                        if _pulse_source is not None and _pulse_source.type == "edge_detect" and (pulse_edge.sourceHandle or "out") == "out":
+                            # "out" carries a CONFIGURED value, not a boolean.
+                            # Probing only False/True would call `in1 > 5`
+                            # independent of a pulse whose real value is 10,
+                            # and the idle placeholder would then be published.
+                            for _field, _default in (("value_rising", "true"), ("value_falling", "false")):
+                                counterfactuals.append(
+                                    _fan_in_probe._coerce_typed_value(_pulse_source, (_pulse_source.data or {}).get(_field, _default), "bool")
+                                )
+                        for counterfactual in counterfactuals:
                             counterfactual_inputs = dict(target_inputs)
                             counterfactual_inputs[pulse_edge.targetHandle or "in"] = counterfactual
                             effective_counterfactual = GraphExecutor._resolve_effective_inputs(target_node, counterfactual_inputs)
@@ -3962,17 +4135,46 @@ class LogicManager:
                         continue
                     if _node_type_by_id.get(source_id) == "change_filter" and (pulse_edge.sourceHandle or "out") != "changed":
                         continue
+                    # A handle that can never fire is not a pulse origin. With
+                    # both directions set to "off"/"trigger", "out" never
+                    # appears at all, so its consumers are permanently fed by
+                    # their other inputs — correcting them for a missing pulse
+                    # would blank out a result that is entirely independent.
+                    _pulse_source_node = _node_by_id_early.get(source_id)
+                    if (
+                        _pulse_source_node is not None
+                        and _pulse_source_node.type == "edge_detect"
+                        and (pulse_edge.sourceHandle or "out") == "out"
+                        and not _edge_detect_sends_value(_pulse_source_node)
+                    ):
+                        continue
+                    # No source-handle restriction for edge_detect: unlike a
+                    # change_filter, whose "out" carries a sustained value, all
+                    # three of its handles are discrete.
+                    # Every origin map remembers WHICH handle of the origin fed
+                    # this consumer: a pulse on "falling" says nothing about
+                    # "rising", whose False is still a placeholder. Leaving a
+                    # pulse origin, that is this edge's own source handle;
+                    # further downstream the pair travels unchanged, so the root
+                    # handle survives every hop. Only relay_origins stays
+                    # node-keyed — _has_independent_fresh_trigger subtracts it
+                    # against the node-keyed fresh_origins.
+                    if _node_type_by_id.get(source_id) in _PULSE_ORIGIN_NODE_TYPES:
+                        handle_origins_out = {(source_id, pulse_edge.sourceHandle or "out")}
+                    else:
+                        handle_origins_out = _handle_origins.get(source_id, set())
+                    _handle_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
                     if (pulse_edge.targetHandle or "in") == "message":
-                        message_origins.setdefault(pulse_edge.target, set()).update(source_origins)
+                        message_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
                         continue
                     target_type = get_node_type(_node_type_by_id.get(pulse_edge.target))
                     if target_type and target_type.type == "change_filter":
-                        downstream_filter_origins.setdefault(pulse_edge.target, set()).update(source_origins)
+                        downstream_filter_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
                     trigger_ports = {port.id for port in target_type.inputs if port.type == "trigger"} if target_type else set()
                     if (pulse_edge.targetHandle or "in") in trigger_ports:
-                        trigger_origins.setdefault(pulse_edge.target, set()).update(source_origins)
+                        trigger_origins.setdefault(pulse_edge.target, set()).update(handle_origins_out)
                         trigger_handle_origins.setdefault(pulse_edge.target, {}).setdefault(pulse_edge.targetHandle or "in", set()).update(
-                            source_origins
+                            handle_origins_out
                         )
                         continue
                     target_type_name = _node_type_by_id.get(pulse_edge.target)
@@ -3983,6 +4185,7 @@ class LogicManager:
                     stateful_data_handle = (target_type_name, target_handle) in {
                         ("statistics", "value"),
                         ("memory", "in"),
+                        ("edge_detect", "in"),
                         ("min_max_tracker", "value"),
                         ("consumption_counter", "value"),
                         ("heating_circuit", "value"),
@@ -3993,9 +4196,18 @@ class LogicManager:
                         ("notify_pushover", "url_title"),
                         ("message_archive", "title"),
                         ("value_sequence", "condition"),
-                    } or (target_type_name == "avg_multi" and target_handle.startswith("in_"))
+                    } or (
+                        (target_type_name == "avg_multi" and target_handle.startswith("in_"))
+                        # Merge keeps per-port memory ("values"/"active"), so a
+                        # no-pulse placeholder on one of its ports is just as
+                        # damaging as on the stateful handles listed above: it
+                        # would overwrite the remembered pulse value and make
+                        # the block relay the placeholder on the next unrelated
+                        # event.
+                        or (target_type_name == "merge" and _MERGE_INPUT_HANDLE_RE.fullmatch(target_handle) is not None)
+                    )
                     if stateful_data_handle:
-                        stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(source_origins)
+                        stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
                         if (
                             target_type
                             and trigger_ports
@@ -4059,7 +4271,7 @@ class LogicManager:
                             target_type_name == "hysteresis" and target_handle == "value"
                         )
                         if stateful_handle:
-                            stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(source_origins)
+                            stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
                         target_origins = relay_origins.setdefault(pulse_edge.target, set())
                         new_origins = source_origins - target_origins
                         if new_origins:
@@ -4088,13 +4300,13 @@ class LogicManager:
             for target_id, origins in _cf_changed_trigger_origins.items():
                 if node_ids is not None and target_id not in node_ids:
                     continue
-                if any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                if any(_origin_pulsed(origin) for origin in origins):
                     continue
                 target_output = outputs.get(target_id, {})
                 target_node = _node_by_id_early.get(target_id)
                 message_origins = _cf_changed_message_origins.get(target_id, set())
                 has_independent_message = target_output.get("_message") is not None and (
-                    not message_origins or any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in message_origins)
+                    not message_origins or any(_origin_pulsed(origin) for origin in message_origins)
                 )
                 if (
                     target_node is not None
@@ -4111,20 +4323,36 @@ class LogicManager:
             for target_id, origins in _cf_changed_message_origins.items():
                 if node_ids is not None and target_id not in node_ids:
                     continue
-                if any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                if any(_origin_pulsed(origin) for origin in origins):
                     continue
                 target_output = outputs.get(target_id, {})
                 if "_message" in target_output:
                     target_output["_message"] = None
 
+        def _missing_relay_override_value(target_id: str, handle: str) -> Any:
+            """Value to feed a stateful consumer's port when its pulse is idle.
+
+            None means "nothing arrived" for every block that treats an absent
+            input as a no-op. Merge is the exception: it records *every* wired
+            port's value, so None would still overwrite the remembered pulse
+            and drop the port out of the "active" selection. Replaying the port
+            with the value merge itself remembered keeps it unchanged this pass
+            while leaving the genuinely fresh ports free to win.
+            """
+            if _node_type_by_id.get(target_id) != "merge":
+                return None
+            state = (pre_execute_hyst if pre_execute_hyst is not None else hyst).get(target_id)
+            values = state.get("values") if isinstance(state, dict) else None
+            return values.get(handle) if isinstance(values, dict) else None
+
         def _refresh_missing_cf_override_values() -> None:
             missing_cf_override_values.clear()
             for target_id, origins in _cf_changed_message_origins.items():
-                if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                if not any(_origin_pulsed(origin) for origin in origins):
                     missing_cf_override_values.setdefault(target_id, {})["message"] = None
             for target_id, handle_origins in _cf_changed_trigger_handle_origins.items():
                 for handle, origins in handle_origins.items():
-                    if any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+                    if any(_origin_pulsed(origin) for origin in origins):
                         continue
                     if _node_type_by_id.get(target_id) == "operating_hours" and handle == "active":
                         value = bool((pre_execute_node_state or {}).get(target_id, {}).get("last_start"))
@@ -4135,17 +4363,15 @@ class LogicManager:
                 if _node_type_by_id.get(target_id) in {"gate", "hysteresis"}:
                     continue
                 for handle, origins in handle_origins.items():
-                    if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
-                        missing_cf_override_values.setdefault(target_id, {})[handle] = None
+                    if not any(_origin_pulsed(origin) for origin in origins):
+                        missing_cf_override_values.setdefault(target_id, {})[handle] = _missing_relay_override_value(target_id, handle)
 
         _refresh_missing_cf_override_values()
         _suppress_missing_cf_trigger_pulses()
         _neutralize_missing_cf_messages()
 
         missing_downstream_filters = {
-            target_id
-            for target_id, origins in _cf_downstream_filter_origins.items()
-            if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins)
+            target_id for target_id, origins in _cf_downstream_filter_origins.items() if not any(_origin_pulsed(origin) for origin in origins)
         }
         if missing_downstream_filters:
             held_descendants = missing_downstream_filters | _downstream_closure(missing_downstream_filters, _effective_edges)
@@ -4164,13 +4390,13 @@ class LogicManager:
                     hyst.pop(node_id, None)
             _apply_operating_hours_state(held_descendants, pre_execute_node_state)
 
-        synchronous_trigger_types = {"statistics", "operating_hours", "random_value"}
+        # edge_detect belongs here too: its "reset" is a trigger port, so a
+        # no-pulse placeholder inverted into True by a synchronous node would
+        # otherwise clear its remembered level for good — the stateful-relay
+        # replay below only guards its "in".
+        synchronous_trigger_types = {"statistics", "operating_hours", "random_value", "edge_detect"}
         missing_synchronous_handles = {
-            target_id: {
-                handle
-                for handle, origins in handle_origins.items()
-                if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins)
-            }
+            target_id: {handle for handle, origins in handle_origins.items() if not any(_origin_pulsed(origin) for origin in origins)}
             for target_id, handle_origins in _cf_changed_trigger_handle_origins.items()
             if _node_type_by_id.get(target_id) in synchronous_trigger_types
         }
@@ -4205,9 +4431,7 @@ class LogicManager:
         missing_stateful_relay_targets = {
             target_id
             for target_id, handle_origins in _cf_changed_stateful_relay_origins.items()
-            if any(
-                not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins) for origins in handle_origins.values()
-            )
+            if any(not any(_origin_pulsed(origin) for origin in origins) for origins in handle_origins.values())
         }
         if missing_stateful_relay_targets:
             stateful_descendants = missing_stateful_relay_targets | _downstream_closure(missing_stateful_relay_targets, _effective_edges)
@@ -4222,8 +4446,8 @@ class LogicManager:
                 else:
                     target_overrides = stateful_overrides.setdefault(target_id, {})
                     for handle, origins in _cf_changed_stateful_relay_origins[target_id].items():
-                        if not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
-                            target_overrides[handle] = None
+                        if not any(_origin_pulsed(origin) for origin in origins):
+                            target_overrides[handle] = _missing_relay_override_value(target_id, handle)
             stateful_outputs = await _execute_pass(
                 await _executor(stateful_hyst),
                 stateful_overrides,
@@ -4238,12 +4462,11 @@ class LogicManager:
                     hyst.pop(node_id, None)
 
         cron_node_ids = {n.id for n in flow.nodes if n.type == "timer_cron"}
-        # A change_filter's "changed" pulse is a discrete edge just like a
-        # cron tick: consecutive real changes must each retrigger host_check /
-        # wake_on_lan instead of being deduplicated as a "sustained" trigger.
-        change_filter_pulse_ids = {
-            n.id for n in flow.nodes if n.type == "change_filter" and GraphExecutor._to_bool(outputs.get(n.id, {}).get("changed"))
-        }
+        # A change_filter's "changed" pulse — and an Edge Detection edge — is a
+        # discrete event just like a cron tick: consecutive real pulses must
+        # each retrigger host_check / wake_on_lan instead of being deduplicated
+        # as one "sustained" trigger.
+        _initial_pulse_handles = _discrete_pulse_handles()
         # Forward-reachability from the cron nodes that actually fired this
         # execution, plus any change_filter pulses — scopes the retrigger
         # exception to only those async nodes driven by the firing pulse
@@ -4254,7 +4477,7 @@ class LogicManager:
         # "changed" handle — its "out" handle carries the held/passthrough
         # value, not a discrete pulse, and must not bypass rising-edge dedup.
         for _cfe in _effective_edges:
-            if _cfe.source in change_filter_pulse_ids and (_cfe.sourceHandle or "out") == "changed" and _edge_carries_pulse(_cfe):
+            if (_cfe.source, _cfe.sourceHandle or "out") in _initial_pulse_handles and _edge_carries_pulse(_cfe):
                 cron_reachable.add(_cfe.target)
         if cron_reachable:
             _cq: list[str] = list(cron_reachable)
@@ -4291,21 +4514,12 @@ class LogicManager:
             # `node_ids`, before anything downstream reads cron_reachable.
             _suppress_missing_cf_trigger_pulses(node_ids)
             _refresh_missing_cf_override_values()
-            _new_pulses = {
-                n.id
-                for n in flow.nodes
-                if n.type == "change_filter" and n.id in node_ids and GraphExecutor._to_bool(outputs.get(n.id, {}).get("changed"))
-            }
+            _new_pulses = _discrete_pulse_handles(node_ids)
             if not _new_pulses:
                 return
             _pq: list[str] = []
             for _pe in _effective_edges:
-                if (
-                    _pe.source in _new_pulses
-                    and (_pe.sourceHandle or "out") == "changed"
-                    and _pe.target not in cron_reachable
-                    and _edge_carries_pulse(_pe)
-                ):
+                if (_pe.source, _pe.sourceHandle or "out") in _new_pulses and _pe.target not in cron_reachable and _edge_carries_pulse(_pe):
                     cron_reachable.add(_pe.target)
                     _pq.append(_pe.target)
             while _pq:
@@ -5929,13 +6143,9 @@ class LogicManager:
             event_fresh_inputs = _event_fresh_inputs()
             _msg = out.get("_message")
             _pulse_origins = _cf_changed_message_origins.get(node_id, set())
-            _is_missing_cf_pulse = bool(_pulse_origins) and not any(
-                GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in _pulse_origins
-            )
+            _is_missing_cf_pulse = bool(_pulse_origins) and not any(_origin_pulsed(origin) for origin in _pulse_origins)
             _trigger_origins = _cf_changed_trigger_origins.get(node_id, set())
-            _is_missing_cf_trigger = bool(_trigger_origins) and not any(
-                GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in _trigger_origins
-            )
+            _is_missing_cf_trigger = bool(_trigger_origins) and not any(_origin_pulsed(origin) for origin in _trigger_origins)
             if event_fresh_inputs is None:
                 fresh_message = _msg is not None and not _is_missing_cf_pulse
                 fresh_trigger = GraphExecutor._to_bool(_current_input_value(node_id, "trigger")) and not _is_missing_cf_trigger
@@ -6371,10 +6581,10 @@ class LogicManager:
             if memory_node.type != "memory":
                 continue
             origins = _cf_changed_trigger_origins.get(memory_node.id, set())
-            if origins and not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in origins):
+            if origins and not any(_origin_pulsed(origin) for origin in origins):
                 memory_commit_overrides.setdefault(memory_node.id, {})["reset"] = False
             data_origins = _cf_changed_stateful_relay_origins.get(memory_node.id, {}).get("in", set())
-            if data_origins and not any(GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in data_origins):
+            if data_origins and not any(_origin_pulsed(origin) for origin in data_origins):
                 blocked_memory_inputs.add((memory_node.id, "in"))
         executor.commit_memory_inputs(outputs, memory_commit_overrides, blocked_memory_inputs)
 
@@ -6388,9 +6598,7 @@ class LogicManager:
             output = outputs.get(node.id, {})
             key = (graph_id, node.id)
             condition_origins = _cf_changed_stateful_relay_origins.get(node.id, {}).get("condition", set())
-            condition_missing = condition_origins and not any(
-                GraphExecutor._to_bool(outputs.get(origin, {}).get("changed")) for origin in condition_origins
-            )
+            condition_missing = condition_origins and not any(_origin_pulsed(origin) for origin in condition_origins)
             condition = (
                 self._sequence_conditions.get(key, True)
                 if condition_missing
@@ -6470,11 +6678,16 @@ class LogicManager:
                     if not _edge_carries_pulse(edge):
                         continue
                     source = node_by_id.get(edge.source)
-                    if (
-                        source
-                        and source.type in ("datapoint_read", "change_filter")
-                        and (edge.sourceHandle or "out") == "changed"
-                        and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                    if source and (
+                        (
+                            source.type in ("datapoint_read", "change_filter")
+                            and (edge.sourceHandle or "out") == "changed"
+                            and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                        )
+                        # Every Edge Detection handle is discrete, so the one
+                        # that fired this pass retriggers a sequence exactly
+                        # like a "changed" pulse does.
+                        or (source.type == "edge_detect" and (edge.source, edge.sourceHandle or "out") in _discrete_pulse_handles({edge.source}))
                     ):
                         change_pulse_triggered = True
                         break

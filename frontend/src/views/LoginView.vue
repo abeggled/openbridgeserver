@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
-import { auth, setJwt } from '@/api/client'
+import { auth } from '@/api/client'
 import { useVisuStore } from '@/stores/visu'
 import { useWebSocket } from '@/composables/useWebSocket'
 
@@ -23,8 +23,9 @@ async function login() {
   loading.value = true
   try {
     const res = await auth.login(username.value, password.value)
-    setJwt(res.access_token)
-    await store.login(res.access_token)
+    // Refresh-Token mit ablegen — sonst müsste nach Ablauf des Access-Tokens
+    // neu angemeldet werden (Issue #1160)
+    await store.login(res.access_token, res.refresh_token)
     ws.connect()
     // Zurück zur ursprünglichen Seite oder zur Übersicht
     const redirect = route.query.redirect as string | undefined

@@ -28,11 +28,14 @@
           {{ $t('logic.blockName.typeAndId', { type: defaultNodeTitle, id: node.id }) }}
         </p>
       </div>
-      <button @click="$emit('close')" class="btn-icon text-slate-500 shrink-0">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
+      <div class="flex items-center gap-1 shrink-0">
+        <button @click="$emit('close')" class="btn-icon text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+        <HelpButton help-id="logic-node-config" />
+      </div>
     </div>
 
     <!-- ── Tab bar — the block's own setting tabs plus, while debug mode is
@@ -1408,12 +1411,39 @@
               v-model="localData[key]" rows="6"
               class="input text-xs font-mono resize-y" @change="emitUpdate" />
             <select v-else-if="schema.enum"
-              v-model="localData[key]" class="input text-sm" @change="emitUpdate">
-              <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ opt }}</option>
+              :value="enumDisplayValue(key, schema)"
+              class="input text-sm" @change="onSchemaEnumChange(key, $event)">
+              <!-- A configured setting the schema does not list — an explicit
+                   null, or one from a newer version — needs an option of its
+                   own: a <select> whose value matches no option falls back to
+                   showing the first one, which would claim a setting that is
+                   not active. -->
+              <option v-if="enumDisplayValue(key, schema) === ''" value="" disabled>
+                {{ $t('logic.nodeConfig.common.unsetEnum') }}
+              </option>
+              <option v-for="opt in schema.enum" :key="opt" :value="opt">{{ enumOptionLabel(nodeDef?.type, key, opt) }}</option>
             </select>
+            <select v-else-if="typedValueKind(schema) === 'bool'"
+              :value="normaliseTypedValue(configuredValue(key, schema), 'bool')"
+              class="input text-sm" @change="onBooleanFieldChange(key, $event)">
+              <option value="true">{{ $t('logic.nodeConfig.common.boolTrue') }}</option>
+              <option value="false">{{ $t('logic.nodeConfig.common.boolFalse') }}</option>
+            </select>
+            <input v-else-if="typedValueKind(schema) === 'number'"
+              type="number" step="any"
+              :value="normaliseTypedValue(configuredValue(key, schema), 'number')"
+              class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else-if="schema.type === 'boolean'"
-              type="checkbox" v-model="localData[key]"
-              class="text-sm" @change="emitUpdate" />
+              type="checkbox" :checked="schemaBooleanChecked(key, schema)"
+              class="text-sm" @change="onSchemaBooleanChange(key, $event)" />
+            <!-- Every remaining typed value field, not just data_type 'string':
+                 an unrecognised type is passed through uncoerced by the
+                 executor and may still be a list or object, which the generic
+                 v-model input below would scalarize. -->
+            <input v-else-if="schema.value_type_field"
+              type="text"
+              :value="normaliseTypedValue(configuredValue(key, schema), typedValueKind(schema))"
+              class="input text-sm" @change="onTypedValueChange(key, schema, $event)" />
             <input v-else
               v-model="localData[key]"
               :type="schema.subtype === 'password' ? 'password' : ['number', 'integer'].includes(schema.type) ? 'number' : 'text'"
@@ -1452,7 +1482,10 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import { isPythonTruthy } from '@/utils/logicBooleans'
+import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import DebugInspector from './DebugInspector.vue'
 
 const { t, te } = useI18n()
@@ -2280,12 +2313,34 @@ const substringRegex101Url = computed(() => {
   return `https://regex101.com/?${params.toString()}`
 })
 
-const configFields = computed(() => {
+// Every schema field the generic form owns. Keeps carrying fields that are
+// currently hidden, so they are still maintained when a sibling changes.
+const schemaFields = computed(() => {
   const schema = nodeDef.value?.config_schema ?? {}
   return Object.fromEntries(
     Object.entries(schema).filter(([k]) => !k.startsWith('datapoint_'))
   )
 })
+
+// The subset actually rendered right now.
+const configFields = computed(() =>
+  Object.fromEntries(Object.entries(schemaFields.value).filter(([, schema]) => isFieldVisible(schema)))
+)
+
+// A field may declare `visible_when: { field, not_in }` to hide itself while
+// another field makes it meaningless — e.g. an edge value while that direction
+// only pulses its trigger. An exclusion rather than an exact match, so a
+// setting the runtime still treats as value-sending (imported, or added later)
+// keeps its field visible. Resolved through configuredValue, so a node saved
+// before the referenced field existed takes its schema default while an
+// explicit null stays null — which the runtime also treats as "not one of the
+// excluded settings" and therefore as value-sending.
+function isFieldVisible(schema) {
+  const rule = schema?.visible_when
+  if (!rule) return true
+  const current = configuredValue(rule.field, schemaFields.value[rule.field])
+  return !rule.not_in.includes(current)
+}
 
 const formulaPreset = computed({
   get() {
@@ -2354,6 +2409,121 @@ function nodeDescription(def) {
   if (!def?.type) return def?.description ?? ''
   const key = `logic.nodeDescriptions.${def.type}`
   return te(key) ? t(key) : (def.description ?? '')
+}
+
+// Enum options are stored as stable identifiers ("both", "bool", ...). Render
+// them through logic.nodeConfig.<type>.<field>Options.<value> so the editor
+// does not show raw English in a localized UI; the identifier itself remains
+// the fallback for schemas that declare no translations.
+function enumOptionLabel(nodeType, fieldKey, option) {
+  const key = `logic.nodeConfig.${nodeType}.${fieldKey}Options.${option}`
+  return te(key) ? t(key) : option
+}
+
+// A schema field may declare `value_type_field`, naming the sibling field that
+// decides how it is entered — a true/false dropdown, a number input, or plain
+// text. Returns '' when the field has no such dependency.
+function typedValueKind(schema) {
+  if (!schema?.value_type_field) return ''
+  // Mirrors node.data.get("data_type", <schema default>): only an ABSENT key
+  // takes the default. An explicit null is a configured type that
+  // _coerce_typed_value does not recognise, and it then returns the value
+  // uncoerced — so fall through to the plain text field rather than guessing
+  // a type and misstating what runs.
+  return (configuredValue(schema.value_type_field, schemaFields.value[schema.value_type_field]) ?? '')
+}
+
+// Boolean fields the backend reads by IDENTITY against False rather than by
+// truthiness. LogicManager excludes a node from the persisted snapshot only
+// for `n.data.get("persist_state") is False`, so an imported 0, "" or [] still
+// has its state saved and restored — rendering those as unchecked would state
+// the opposite of what runs. The field name is the key because that single
+// check covers every block type that declares the setting.
+const IDENTITY_FALSE_BOOLEAN_FIELDS = new Set(['persist_state'])
+
+// Whether a boolean schema field renders as checked. An explicit null is not
+// a boolean, and every backend consumer of these fields falls back to its own
+// default behaviour for one: LogicManager opts a node out of persistence only
+// for a literal False, the Gate tests negate_enable for truthiness, and the
+// API client passes verify_ssl to requests, which treats None as its default.
+// In each case that lands on the field's declared default, so show it.
+//
+// Known limit: for a configured value that is neither a boolean nor null —
+// 0, "", [] — the remaining consumers genuinely disagree, and a generic form
+// cannot encode per-field semantics beyond the identity list above. Those
+// consumers all read the raw value with Python's own truthiness (`if
+// d.get(...)`), which is what isPythonTruthy mirrors — `!!value` would call an
+// imported empty list or object enabled where the backend reads it as false.
+function schemaBooleanChecked(key, schema) {
+  const value = configuredValue(key, schema)
+  if (value === null || value === undefined) return !!(schema?.default ?? false)
+  if (IDENTITY_FALSE_BOOLEAN_FIELDS.has(key)) return value !== false
+  return isPythonTruthy(value)
+}
+
+// The value the enum dropdown shows: '' whenever the configured setting is
+// not one the schema lists, so the blank placeholder is selected rather than
+// the first real option.
+function enumDisplayValue(key, schema) {
+  const value = configuredValue(key, schema)
+  return schema?.enum?.includes(value) ? value : ''
+}
+
+// The backend reads a configured field as d.get(key, <schema default>), so an
+// absent key takes the default while an explicit null stays null and is
+// handled by the coercion itself. `??` cannot express that difference.
+function configuredValue(key, schema) {
+  return key in localData.value ? localData.value[key] : schema?.default
+}
+
+// Switching that sibling leaves the dependent values in the previous notation
+// ("true" once Number is selected). Re-normalize them so the widget always has
+// something valid to show and the backend never receives a stale notation.
+function onSchemaEnumChange(key, event) {
+  // Bound with :value rather than v-model so a missing field can render the
+  // schema default; that also means the pick has to be written here.
+  localData.value[key] = event.target.value
+  // Deliberately schemaFields, not configFields: a dependent value that is
+  // hidden right now must still be normalized, or it would resurface in the
+  // previous notation once its direction is switched back on.
+  for (const [fieldKey, fieldSchema] of Object.entries(schemaFields.value)) {
+    if (fieldSchema?.value_type_field !== key) continue
+    localData.value[fieldKey] = normaliseTypedValue(configuredValue(fieldKey, fieldSchema), localData.value[key])
+  }
+  emitUpdate()
+}
+
+// A directly entered value goes through the same rule as a type switch —
+// otherwise "1e309" is stored as JavaScript Infinity, which serializes to null.
+// Bound through normaliseTypedValue rather than v-model: an imported node may
+// carry a backend-supported spelling such as "False" or "off", which matches
+// neither option value and would leave the dropdown blank. Display is
+// normalized; the stored value is only rewritten once the user picks one.
+function onBooleanFieldChange(key, event) {
+  localData.value[key] = event.target.value
+  emitUpdate()
+}
+
+// Reads the DOM value, not localData: the input is bound through
+// normaliseTypedValue rather than v-model, so localData still holds the
+// pre-edit value at this point.
+// Same reason as onSchemaEnumChange: the checkbox renders the schema default
+// when the field is absent, so v-model cannot own the value.
+function onSchemaBooleanChange(key, event) {
+  localData.value[key] = event.target.checked
+  emitUpdate()
+}
+
+function onTypedValueChange(key, schema, event) {
+  localData.value[key] = normaliseTypedValue(event.target.value, typedValueKind(schema))
+  emitUpdate()
+}
+
+// Delegates to the shared rule so the panel and the block card cannot drift
+// apart; the caller resolves the configured value first (see configuredValue),
+// because only an ABSENT field takes the schema default at the backend.
+function normaliseTypedValue(value, kind) {
+  return coercedValueText(value, kind)
 }
 
 function fieldLabel(nodeType, fieldKey, fallback) {

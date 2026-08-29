@@ -39,12 +39,7 @@ const runtimeStripText = computed(() => showRuntimeStrip.value ? `Instanz: ${ins
 // disappeared behind the drawer). AppLayout's/PlainLayout's single root
 // element receives this via Vue's automatic non-prop-attribute fallthrough.
 const contentAreaStyle = computed(() => ({
-  // Mirrors HelpDrawer.vue's own `maxWidth: '90vw'` via CSS min() rather than
-  // clamping help.drawerWidth in JS — a narrow viewport after the drawer was
-  // last resized wide (drawerWidth is persisted) would otherwise reserve more
-  // margin than the drawer actually renders at, and CSS min() stays correct
-  // across later viewport resizes with no resize-event listener needed.
-  marginRight: help.isOpen ? `min(${help.drawerWidth}px, 90vw)` : '0px',
+  marginRight: help.reservedRight,
   transition: 'margin-right 200ms ease',
 }))
 

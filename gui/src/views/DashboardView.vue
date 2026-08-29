@@ -8,10 +8,10 @@
 
     <!-- Stat cards -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" />
-      <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" />
-      <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" />
-      <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
+      <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" help-id="dashboard-stats-datapoints" />
+      <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" help-id="dashboard-stats-adapters" />
+      <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" help-id="dashboard-stats-wsstatus" />
+      <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" help-id="dashboard-stats-server" />
     </div>
 
     <!-- Aktive Warnungen (issue #466) — nur sichtbar bei degraded/fehlerhaften Adaptern -->
@@ -30,7 +30,10 @@
           {{ $t('dashboard.activeWarnings') }}
           <span class="text-xs text-slate-500 font-normal">({{ adapterIssues.length }})</span>
         </h3>
-        <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.toAdapters') }}</RouterLink>
+        <div class="flex items-center gap-2">
+          <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.toAdapters') }}</RouterLink>
+          <HelpButton help-id="dashboard-warnings" />
+        </div>
       </div>
       <div class="card-body flex flex-col gap-2">
         <RouterLink
@@ -70,7 +73,10 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('dashboard.adapterStatus.title') }}</h3>
-          <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.adapterStatus.showAll') }}</RouterLink>
+          <div class="flex items-center gap-2">
+            <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.adapterStatus.showAll') }}</RouterLink>
+            <HelpButton help-id="dashboard-adapters" />
+          </div>
         </div>
         <div class="card-body flex flex-col gap-2">
           <div v-if="adaptersLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -89,7 +95,10 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('dashboard.liveValues.title') }}</h3>
-          <RouterLink to="/datapoints" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.liveValues.showAll') }}</RouterLink>
+          <div class="flex items-center gap-2">
+            <RouterLink to="/datapoints" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.liveValues.showAll') }}</RouterLink>
+            <HelpButton help-id="dashboard-values" />
+          </div>
         </div>
         <div class="card-body flex flex-col gap-0 -mx-5 -my-5 overflow-hidden rounded-b-xl">
           <div v-if="dpStore.loading" class="flex justify-center py-8"><Spinner /></div>
@@ -125,6 +134,7 @@ import { useAdapterStore } from '@/stores/adapters'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import StatCard from '@/components/ui/StatCard.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import RingBufferCard from '@/components/dashboard/RingBufferCard.vue'
 import { adapterDotClass as adapterDot, adapterBadgeVariant, adapterStatusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 import { useI18n } from 'vue-i18n'
