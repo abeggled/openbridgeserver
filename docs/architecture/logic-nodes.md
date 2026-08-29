@@ -201,7 +201,32 @@ today, so it is deliberately left as an explicit table.
    its capability (for blocks with external side effects) or to `PURE_LOGIC_NODE_TYPES`. Without
    this the block cannot be executed.
 4. **Implement it** as a `case "<type>":` branch in `GraphExecutor._eval_node`, unless the block is
-   purely visual.
+   purely visual. Two consequences to think through for a block that carries state across runs or
+   deliberately withholds an output:
+   - *Withholding a handle.* Omitting a key from the returned dict means "sent nothing", which is
+     not the same as returning `None`: a downstream Memory retains its value, a Change Filter does
+     not pulse, and a Write Object does not write. Register the handle in
+     `retained_boundary_handles` (`GraphExecutor.execute`) and `init_retained_boundary_handles`
+     (`LogicManager.initialize_graph`) so the deliberate absence is not reported as a failed
+     upstream producer on every run.
+   - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
+     state copy, so a block whose output depends on persisted state needs a decision. Listing it in
+     `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass
+     entirely — but then it also gets no baseline, and for an edge-triggered block that means the
+     first real transition is swallowed. The alternative, which `change_filter` and `edge_detect`
+     use, is to take part in the pass, commit the seeded state via `_INIT_STATE_ALWAYS_COMMIT`, and
+     add the block's outputs to `changed_targets` so no write descends from it — a save is not an
+     event. Choosing neither publishes a write derived from state that is then discarded, and the
+     same write fires again on the next real execution.
+   - *Discrete pulses.* A trigger output that fires per event, not per level, must be listed in
+     `_discrete_pulse_handles` in `LogicManager`, or two consecutive pulses reaching a host_check /
+     wake_on_lan look like one sustained trigger and the second is deduplicated away.
+   - *`None` is "nothing arrived".* An unseeded Read Object emits `None`, and on an event-driven
+     run `LogicManager` neutralizes a Change Filter's no-pulse placeholder to `None` on unrelated
+     branches (issue #1090). A block that accumulates state must treat that as "did not happen"
+     rather than coercing it to `0`/`False` — see hysteresis' `if val is None` and statistics'
+     `if val is not None` — and register its value handle in the `stateful_data_handle` table plus
+     `_stateful_relay_correction_ids` so the manager's correction pass reaches it.
 5. **Add focused tests** in `tests/unit/logic/nodes/<category>/test_<block>.py`, mirroring the
    source layout, plus execution tests for the dispatcher branch.
 6. Frontend, translations and the block table in `README.md` / `README.de.md` follow the normal GUI

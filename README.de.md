@@ -631,7 +631,7 @@ Der Logik-Editor ermöglicht das visuelle Erstellen von Automatisierungsregeln �
 
 Der Graph kann auch manuell über den **▶ Ausführen**-Button gestartet werden.
 
-**Zustände** (Hysterese, Speicher, Statistik, Betriebsstunden, Min/Max-Tracker, Verbrauchszähler) werden in der Datenbank gespeichert und überleben einen Neustart.
+**Zustände** (Hysterese, Speicher, Flankenerkennung, Statistik, Betriebsstunden, Min/Max-Tracker, Verbrauchszähler) werden in der Datenbank gespeichert und überleben einen Neustart.
 
 Direkte Rückkopplungen werden im Editor validiert und beim Verbinden oder Speichern blockiert. Für kontrollierte Rückkopplungen wird ein **Speicher**-Block als explizite Tick-Grenze verwendet: Er gibt den Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf.
 
@@ -659,6 +659,7 @@ Ein oder mehrere Blöcke lassen sich markieren (Shift + Rahmen aufziehen, oder S
 | **EXKLUSIV-ODER** | A, B | Aus | Wahr wenn **genau ein** Eingang wahr ist. |
 | **Speicher** | Ein, Zurücksetzen | Aus | Gibt den gespeicherten Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf. Für kontrollierte Rückkopplungen verwenden. |
 | **Vergleich** | A, B | Ergebnis | Vergleicht zwei Werte. Auswahl: `>` `<` `=` `>=` `<=` `≠` |
+| **Flankenerkennung** | Ein, Zurücksetzen | Aus, Trigger-Steigend, Trigger-Fallend | Wertet den Eingang boolesch aus und reagiert auf den Wechsel: Bei steigender Flanke (falsch → wahr) wird der konfigurierte Wert für steigende Flanken ausgegeben und der Trigger „Steigend" gesetzt, bei fallender Flanke (wahr → falsch) entsprechend der Wert für fallende Flanken und der Trigger „Fallend". Ohne Flanke wird nichts auf „Aus" gesendet, ein nachgelagertes Objekt schreiben schreibt also nicht bei jedem Lauf. Jede Flankenrichtung wird für sich eingestellt — Wert senden, nur den Trigger auslösen oder ganz stumm bleiben — und „Zurücksetzen" verwirft den gemerkten Vorzustand, sodass der nächste Wert wieder flankenlos startet. |
 | **Hysterese** | Wert | Aus | Schaltet ein wenn der Wert über „Schwelle EIN" steigt, und erst wieder aus wenn er unter „Schwelle AUS" fällt. Verhindert schnelles Hin- und Herschalten. |
 | **Klemme** | IN 1, IN 2, … (2-30) | Aus | Bündelt mehrere unabhängige Wertquellen auf einen gemeinsamen Ausgang: wer zuletzt einen neuen Wert liefert, wird durchgereicht (Edomi-Klemme). Ersetzt das Verdrahten mehrerer Quellen auf denselben Eingang eines anderen Blocks — das wird nicht unterstützt und beim Verbinden/Speichern blockiert. |
 | **Entscheidung** | Wert | 2-n boolesche Ausgänge | Prüft mehrere unabhängige Bedingungen gegen einen Eingang. Jeder Ausgang hat eigenen Namen und eigene Bedingung; mehrere Ausgänge können gleichzeitig wahr sein. |

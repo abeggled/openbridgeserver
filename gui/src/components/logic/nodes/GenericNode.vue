@@ -73,6 +73,7 @@
 </template>
 
 <script setup>
+import { coercedValueText } from '@/utils/logicTypedValue'
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
@@ -115,6 +116,7 @@ const NODE_DEFS = computed(() => ({
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   change_filter:{ label: t('logic.nodeTypes.change_filter'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')}],                                        outputs: [{id:'out',label:t('logic.ports.output')},{id:'changed',label:t('logic.ports.changed')}] },
+  edge_detect:  { label: t('logic.nodeTypes.edge_detect'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}], outputs: [{id:'out',label:t('logic.ports.output')},{id:'rising',label:t('logic.ports.rising')},{id:'falling',label:t('logic.ports.falling')}] },
   compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.portLabels.resultShort')}] },
   hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   decision:     { label: 'Entscheidung', color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out_1',label:t('logic.nodeConfig.decision.defaultOutput', { n: 1 })},{id:'out_2',label:t('logic.nodeConfig.decision.defaultOutput', { n: 2 })}] },
@@ -243,6 +245,22 @@ const def = computed(() => {
     }))
     return { ...base, label, outputs }
   }
+  if (props.type === 'edge_detect') {
+    // Only render the handles this configuration can actually drive, so the
+    // block states what it emits. "out" is shared by both directions, so it
+    // survives as long as *either* direction still sends a value.
+    const rising  = props.data?.on_rising  ?? 'value'
+    const falling = props.data?.on_falling ?? 'value'
+    // Mirror the executor: only 'off' and 'trigger' withhold the value; every
+    // other setting — including an imported or future one — sends. Testing for
+    // the literal 'value' would hide a handle the runtime actually drives.
+    const sends = action => action !== 'off' && action !== 'trigger'
+    const outputs = []
+    if (sends(rising) || sends(falling)) outputs.push({ id: 'out', label: t('logic.ports.output') })
+    if (rising  !== 'off') outputs.push({ id: 'rising',  label: t('logic.ports.rising') })
+    if (falling !== 'off') outputs.push({ id: 'falling', label: t('logic.ports.falling') })
+    return { ...base, label, outputs }
+  }
   if (props.type === 'json_extractor') {
     let pathList = []
     try { pathList = JSON.parse(props.data?.json_paths || '[]') } catch (_) { pathList = [] }
@@ -303,6 +321,37 @@ const summary = computed(() => {
     const rules = parseRowList(d.rules)
     const type = d.output_type || 'string'
     return `${type} · ${t('logic.summary.rules', { n: rules.length || 2 })}`
+  }
+  if (props.type === 'edge_detect') {
+    // "↑ <rising>  ↓ <falling>", one part per edge direction.
+    // A boolean edge value is stored as the literal "true"/"false"; show it in
+    // the viewer's language instead of raw English on the block card.
+    // The executor reads every one of these as d.get(key, <default>), so only
+    // an ABSENT key takes the default — an explicit JSON null is a configured
+    // value it coerces (and _to_bool(None) is False). `??` cannot express that.
+    const configured = (key, fallback) => (key in d ? d[key] : fallback)
+    // The shared rule decides everything; only the boolean labels are local,
+    // because the card shows them in the viewer's language while the panel
+    // uses the stored 'true'/'false' as option values.
+    const edgeValue = (text, dataType) => {
+      const coerced = coercedValueText(text, dataType)
+      if (dataType !== 'bool') return coerced
+      return coerced === 'false'
+        ? t('logic.nodeConfig.common.boolFalse')
+        : t('logic.nodeConfig.common.boolTrue')
+    }
+    // A direction set to trigger-only shows an em dash instead of a value;
+    // one set to off is left out of the summary entirely.
+    const edgePart = (arrow, action, valueKey, fallback) => {
+      if (action === 'off') return null
+      const value = edgeValue(configured(valueKey, fallback), configured('data_type', 'bool'))
+      return `${arrow} ${action === 'trigger' ? '\u2014' : value}`
+    }
+    const parts = [
+      edgePart('\u2191', configured('on_rising',  'value'), 'value_rising',  'true'),
+      edgePart('\u2193', configured('on_falling', 'value'), 'value_falling', 'false'),
+    ].filter(Boolean)
+    return parts.join('  ')
   }
   if (props.type === 'math_formula') return d.formula || 'a + b'
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`

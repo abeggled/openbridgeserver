@@ -2908,6 +2908,386 @@ class TestChangeFilterNode:
 
 
 # ===========================================================================
+# edge_detect node
+# ===========================================================================
+
+
+class TestNumericCoercionLimits:
+    """float() raises on an int beyond its range instead of returning inf.
+
+    LogicGraphImport accepts such a value as a Python int, so the coercion
+    helpers have to degrade to their documented fallback rather than let the
+    OverflowError escape and fail the whole node.
+    """
+
+    def test_float_itself_raises_on_an_oversized_int(self):
+        # The premise, asserted so the tests below cannot quietly stop testing
+        # anything if CPython ever starts returning inf here.
+        with pytest.raises(OverflowError):
+            float(10**400)
+
+    def test_to_num_falls_back_to_the_default(self):
+        assert GraphExecutor._to_num(10**400) == 0.0
+        assert GraphExecutor._to_num(-(10**400)) == 0.0
+        assert GraphExecutor._to_num(10**400, default=7.0) == 7.0
+
+    def test_try_num_reports_not_numeric(self):
+        assert GraphExecutor._try_num(10**400) is None
+
+    def test_an_oversized_edge_value_sends_the_fallback_instead_of_failing(self):
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": 10**400})],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        out = exc.execute({"ed": {"in": True}})["ed"]
+
+        assert out == {"rising": True, "falling": False, "out": 0.0}
+
+    def test_an_oversized_string_still_takes_the_non_finite_path(self):
+        # float("1e400") returns inf rather than raising, which the node's own
+        # guard already replaced with 0.0 — that path must stay intact.
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": "1e400"})],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        out = exc.execute({"ed": {"in": True}})["ed"]
+
+        assert out == {"rising": True, "falling": False, "out": 0.0}
+
+
+class TestEdgeDetectNode:
+    def test_first_value_after_start_seeds_the_level_without_an_edge(self):
+        state = {}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": True}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert "out" not in out["ed"]
+        assert state == {"ed": {"value": True}}
+
+    def test_rising_edge_sends_the_configured_value_and_sets_rising(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": 1}})
+
+        assert out["ed"] == {"rising": True, "falling": False, "out": True}
+        assert state == {"ed": {"value": True}}
+
+    def test_falling_edge_sends_the_configured_value_and_sets_falling(self):
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": "off"}})
+
+        assert out["ed"] == {"rising": False, "falling": True, "out": False}
+        assert state == {"ed": {"value": False}}
+
+    def test_repeated_identical_level_produces_no_edge_and_no_output(self):
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": "yes"}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {"value": True}}
+
+    def test_unwired_input_neither_seeds_nor_advances_the_level(self):
+        state = {}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {}
+
+    def test_unwired_input_keeps_an_existing_level_untouched(self):
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {"value": True}}
+
+    def test_none_input_is_nothing_arrived_not_a_low_level(self):
+        # An unseeded Read Object emits None, and LogicManager neutralizes a
+        # Change Filter's no-pulse placeholder to None (issue #1090). Coercing
+        # either to False would seed a bogus level and make the next real
+        # value look like a rising edge.
+        state = {}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        assert exc.execute({"ed": {"in": None}})["ed"] == {"rising": False, "falling": False}
+        assert state == {}
+
+        # An already-remembered level is left alone, too.
+        state["ed"] = {"value": True}
+        assert exc.execute({"ed": {"in": None}})["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {"value": True}}
+
+    def test_a_held_node_neither_advances_its_level_nor_emits(self):
+        # LogicManager sets this flag while an upstream async node has not
+        # resolved; the value on "in" is then a placeholder, not a level.
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": False, "reset": True, "_suppress_change_filter": True}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        # Neither the placeholder nor the reset took effect.
+        assert state == {"ed": {"value": True}}
+
+    def test_reset_drops_the_level_so_the_next_value_produces_no_edge(self):
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        reset_out = exc.execute({"ed": {"reset": True}})
+        assert reset_out["ed"] == {"rising": False, "falling": False}
+        # An empty marker, not a removed key: a popped entry could leave the
+        # whole map empty, which makes _persist_node_state skip the write and
+        # keeps the pre-reset level in the database.
+        assert state == {"ed": {}}
+
+        after = exc.execute({"ed": {"in": False}})
+        assert after["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {"value": False}}
+
+    def test_reset_wins_over_a_value_arriving_on_the_same_tick(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": True, "reset": True}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {}}
+
+    def test_reset_on_an_unseeded_node_stays_a_no_op(self):
+        state = {}
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"reset": True}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {}}
+
+    def test_falling_off_stays_silent_on_every_output(self):
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect", {"on_falling": "off"})], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": False}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        # …but the level is still tracked, so the next rising edge is reported.
+        assert state == {"ed": {"value": False}}
+        assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": True, "falling": False, "out": True}
+
+    def test_rising_off_stays_silent_on_every_output(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect", {"on_rising": "off"})], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": True}})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {"value": True}}
+        assert exc.execute({"ed": {"in": False}})["ed"] == {"rising": False, "falling": True, "out": False}
+
+    def test_rising_trigger_only_pulses_without_sending_a_value(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect", {"on_rising": "trigger"})], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": True}})
+
+        assert out["ed"] == {"rising": True, "falling": False}
+        assert "out" not in out["ed"]
+
+    def test_falling_trigger_only_pulses_without_sending_a_value(self):
+        state = {"ed": {"value": True}}
+        exc = make_executor([node("ed", "edge_detect", {"on_falling": "trigger"})], hysteresis_state=state)
+
+        out = exc.execute({"ed": {"in": False}})
+
+        assert out["ed"] == {"rising": False, "falling": True}
+        assert "out" not in out["ed"]
+
+    def test_the_two_directions_are_configured_independently(self):
+        # The pairing the old "which edge" enum could not express: pulse the
+        # falling trigger for an alarm, but only ever send a value on rising.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"on_rising": "value", "on_falling": "trigger"})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": True, "falling": False, "out": True}
+        assert exc.execute({"ed": {"in": False}})["ed"] == {"rising": False, "falling": True}
+
+    def test_an_unknown_direction_setting_still_pulses_and_sends(self):
+        # A hand-written or imported flow must not silently go dead; anything
+        # that is not "off"/"trigger" behaves like the default "value".
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect", {"on_rising": "both"})], hysteresis_state=state)
+
+        assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": True, "falling": False, "out": True}
+
+    @pytest.mark.parametrize(
+        ("data_type", "expected_rising", "expected_falling"),
+        [
+            ("bool", True, False),
+            ("number", 1.0, 0.0),
+            ("string", "1", "0"),
+        ],
+    )
+    def test_data_type_types_the_configured_edge_values(self, data_type, expected_rising, expected_falling):
+        data = {"data_type": data_type, "value_rising": "1", "value_falling": "0"}
+        state = {"ed": {"value": False}}
+        exc = make_executor([node("ed", "edge_detect", data)], hysteresis_state=state)
+
+        assert exc.execute({"ed": {"in": True}})["ed"]["out"] == expected_rising
+        assert exc.execute({"ed": {"in": False}})["ed"]["out"] == expected_falling
+
+    def test_unknown_data_type_hands_out_the_configured_value_unchanged(self):
+        # "auto" is not offered for this block, but a hand-written or imported
+        # flow can still carry it (or any other value) — fall back to the raw
+        # configured value rather than erroring.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "auto", "value_rising": "1"})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"]["out"] == "1"
+
+    def test_a_non_finite_configured_number_never_reaches_the_output(self):
+        # The editor rejects "1e309", but LogicGraphImport and direct API
+        # clients bypass that guard, and this value drives an actuator.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": "1e309"})],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute({"ed": {"in": True}})["ed"]
+
+        assert out["out"] == 0.0
+        assert math.isfinite(out["out"])
+
+    def test_an_ordinary_configured_number_is_passed_through(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "number", "value_rising": "42.5"})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"]["out"] == 42.5
+
+    def test_string_data_type_maps_a_missing_configured_value_to_empty_text(self):
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [node("ed", "edge_detect", {"data_type": "string", "value_rising": None})],
+            hysteresis_state=state,
+        )
+
+        assert exc.execute({"ed": {"in": True}})["ed"]["out"] == ""
+
+    def test_level_is_restored_from_persisted_state_after_a_restart(self):
+        # _persist_node_state round-trips the state through JSON.
+        restored = json.loads(json.dumps({"ed": {"value": True}}))
+        exc = make_executor([node("ed", "edge_detect")], hysteresis_state=restored)
+
+        assert exc.execute({"ed": {"in": True}})["ed"] == {"rising": False, "falling": False}
+        assert exc.execute({"ed": {"in": False}})["ed"] == {"rising": False, "falling": True, "out": False}
+
+    def test_without_persisted_state_the_first_value_after_a_restart_is_edgeless(self):
+        # persist_state=False excludes the node from the snapshot, so a restart
+        # starts from an empty state — the first value only re-seeds the level.
+        exc = make_executor([node("ed", "edge_detect", {"persist_state": False})], hysteresis_state={})
+
+        assert exc.execute({"ed": {"in": False}})["ed"] == {"rising": False, "falling": False}
+
+    def test_absent_out_does_not_reach_a_downstream_write_object(self):
+        exc = make_executor(
+            [node("ed", "edge_detect"), node("w", "datapoint_write", {})],
+            [edge("ed", "w", "out", "value")],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        fired = exc.execute({"ed": {"in": True}})
+        assert fired["w"]["_write_value"] is True
+
+        idle = exc.execute({"ed": {"in": True}})
+        assert idle["ed"] == {"rising": False, "falling": False}
+        assert idle["w"]["_write_value"] is None
+
+    def test_withheld_out_is_a_defined_boundary_not_a_broken_producer(self):
+        # A Change Filter downstream normally makes the executor propagate an
+        # absent output as an error, so a failed producer cannot be turned into
+        # a plausible synthetic value. An Edge Detect reporting no edge is not
+        # a failure, so the intermediate node must keep its ordinary
+        # missing-input behaviour instead of erroring on every run.
+        exc = make_executor(
+            [node("ed", "edge_detect"), node("n", "not"), node("cf", "change_filter")],
+            [edge("ed", "n", "out", "in1"), edge("n", "cf", "out", "in")],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        fired = exc.execute({"ed": {"in": True}})
+        assert fired["n"] == {"out": False}
+
+        idle = exc.execute({"ed": {"in": True}})
+        assert idle["ed"] == {"rising": False, "falling": False}
+        assert "__error__" not in idle["n"]
+
+    def test_absent_input_from_a_failed_producer_is_a_defined_no_op(self):
+        # An absent "in" makes Edge Detect do nothing at all, so a failed
+        # producer cannot reach a downstream Change Filter through it. Like
+        # Hysteresis' "value", that defined outcome must not be turned into an
+        # error block merely because a Change Filter exists further down.
+        state = {"ed": {"value": False}}
+        exc = make_executor(
+            [
+                node("boom", "python_script", {"script": "raise RuntimeError('x')"}),
+                node("ed", "edge_detect"),
+                node("cf", "change_filter"),
+            ],
+            [edge("boom", "ed", "result", "in"), edge("ed", "cf", "out", "in")],
+            hysteresis_state=state,
+        )
+
+        out = exc.execute({})
+
+        assert out["ed"] == {"rising": False, "falling": False}
+        assert state == {"ed": {"value": False}}  # level untouched
+        assert out["cf"]["changed"] is False
+
+    def test_absent_reset_from_a_failed_producer_still_propagates(self):
+        # Only "in" has a defined absent outcome. An absent "reset" would be
+        # read as "do not reset" — a synthesized value — so it must keep
+        # propagating the upstream failure.
+        exc = make_executor(
+            [
+                node("boom", "python_script", {"script": "raise RuntimeError('x')"}),
+                node("src", "const_value", {"value": "1", "data_type": "bool"}),
+                node("ed", "edge_detect"),
+                node("cf", "change_filter"),
+            ],
+            [
+                edge("src", "ed", "value", "in"),
+                edge("boom", "ed", "result", "reset"),
+                edge("ed", "cf", "out", "in"),
+            ],
+            hysteresis_state={"ed": {"value": False}},
+        )
+
+        out = exc.execute({})
+
+        assert "__error__" in out["ed"]
+
+
+# ===========================================================================
 # math_formula node
 # ===========================================================================
 

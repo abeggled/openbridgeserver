@@ -635,7 +635,7 @@ The logic editor enables visual creation of automation rules — without program
 
 The graph can also be started manually via the **▶ Run** button.
 
-**States** (hysteresis, memory, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
+**States** (hysteresis, memory, edge detection, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
 
 Direct feedback loops are validated in the editor and blocked when saving or connecting nodes. Use a **Memory** block as an explicit tick boundary for controlled feedback: it outputs the value stored from the previous graph run and stores the current input for the next run.
 
@@ -663,6 +663,7 @@ Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual
 | **XOR** | A, B | Out | True when **exactly one** input is true. |
 | **Memory** | In, Reset | Out | Outputs the stored value from the previous graph run and stores the current input for the next run. Use this block to build controlled feedback loops. |
 | **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
+| **Edge detection** | In, Reset | Out, Trigger rising, Trigger falling | Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the configured rising value and sets the Rising trigger, a falling edge (true → false) the falling value and the Falling trigger. Without an edge nothing is sent on Out, so a downstream Write Object does not write on every run. Each direction is configured on its own — send a value, only pulse the trigger, or stay silent — and Reset drops the remembered level so the next value starts fresh. |
 | **Hysteresis** | Value | Out | Switches on when the value exceeds "threshold ON", and switches off only when it falls below "threshold OFF". Prevents rapid toggling. |
 | **Merge** | IN 1, IN 2, … (2-30) | Out | Bundles several independent value sources into one shared output: whichever source last delivered a new value is passed through (Edomi-style terminal/junction). Replaces wiring several sources into the same input of another block — that isn't supported and is blocked at connect/save time. |
 | **Decision** | Value | 2-n boolean outputs | Evaluates multiple independent conditions against one input. Every output has its own name and condition; several outputs can be true at the same time. |
