@@ -5,9 +5,10 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('messageArchives.title') }}</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ $t('messageArchives.subtitle') }}</p>
       </div>
-      <div v-if="auth.isAdmin" class="flex items-center gap-2">
-        <button class="btn-secondary btn-sm" @click="runIntegrityCheck">{{ $t('messageArchives.integrityCheck') }}</button>
-        <button class="btn-primary btn-sm" @click="startCreate">{{ $t('messageArchives.newArchive') }}</button>
+      <div class="flex items-center gap-2">
+        <button v-if="auth.isAdmin" class="btn-secondary btn-sm" @click="runIntegrityCheck">{{ $t('messageArchives.integrityCheck') }}</button>
+        <button v-if="auth.isAdmin" class="btn-primary btn-sm" @click="startCreate">{{ $t('messageArchives.newArchive') }}</button>
+        <HelpButton help-id="messagearchives-list" />
       </div>
     </div>
 
@@ -49,6 +50,9 @@
 
       <section class="min-h-0 flex flex-col gap-4">
         <div class="card p-4">
+          <div class="flex justify-end -mt-1 -mb-2">
+            <HelpButton help-id="messagearchives-detail" />
+          </div>
           <div v-if="editing" class="grid gap-3 md:grid-cols-2">
             <label class="text-xs text-slate-500">
               {{ $t('messageArchives.form.name') }}
@@ -138,6 +142,7 @@
             </select>
             <button class="btn-secondary btn-sm" @click="loadEntries">{{ $t('messageArchives.refresh') }}</button>
             <span class="ml-auto text-xs text-slate-500">{{ entriesTotal }} {{ $t('messageArchives.entries') }}</span>
+            <HelpButton help-id="messagearchives-entries" />
           </div>
           <div v-if="entriesLoading" class="p-6 text-sm text-slate-500">{{ $t('common.loading') }}</div>
           <div v-else-if="!entries.length" class="p-6 text-sm text-slate-500">{{ $t('messageArchives.noEntries') }}</div>
@@ -180,6 +185,7 @@ import { useI18n } from 'vue-i18n'
 import { messageArchivesApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useTz } from '@/composables/useTz'
+import HelpButton from '@/components/ui/HelpButton.vue'
 
 const { t, te } = useI18n()
 const { fmtDateTime } = useTz()

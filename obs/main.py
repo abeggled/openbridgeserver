@@ -436,6 +436,19 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "Not found"}, status_code=404)
         return RedirectResponse(url="/help/")
 
+    @app.api_route("/help/", methods=["GET", "HEAD"], include_in_schema=False)
+    async def help_root_path():
+        # The help site has no unprefixed "root" locale (every locale,
+        # including German, lives under its own /help/<lang>/ prefix — see
+        # help/.vitepress/config.mts) — VitePress does not build an index.html
+        # at help_dist/index.html, and does not redirect the bare site root to
+        # a default locale on its own. Redirect to German explicitly, mirroring
+        # help_bare_path()'s guard: this exact route wins over the mount below
+        # for "/help/" specifically, same reasoning as the bare "/help" route.
+        if not _help_dist.is_dir():
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return RedirectResponse(url="/help/de/")
+
     app.mount("/help", _LazyHelpStatic(_help_dist), name="help")
     if not _help_dist.is_dir():
         logger.warning(

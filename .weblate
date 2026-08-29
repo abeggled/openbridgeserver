@@ -41,25 +41,30 @@ url = https://hosted.weblate.org/api/components/openbridgeserver/frontend-visu/
 # de.json/en.json — a single [components.help] entry can't represent that;
 # discovery creates one Weblate component per matching page automatically.
 #
-# Recommended "Component discovery" add-on configuration, at the project
-# level on hosted.weblate.org (Project -> Manage -> Add-ons -> Component
-# discovery):
-#   match:              ^help/(?:(?P<language>en)/)?(?P<component>.+)\.md$
+# Unlike gui-admin/frontend-visu above, ENGLISH is the source language here,
+# not German — every help page is hand-authored in both German and English
+# from the start, so translators adding further languages need a source they
+# can read without German. German is still a completely normal Weblate
+# *target* language (same as for gui-admin/frontend-visu), it just starts out
+# already complete. help/*.md content therefore lives under help/de/... and
+# help/en/... symmetrically (both prefixed) — there is no unprefixed "root"
+# locale, confirmed live against the actual Weblate "Create component" form
+# (its own file-mask auto-detection could not represent an unprefixed source
+# locale, which is what surfaced this in the first place).
+#
+# "Component discovery" is installed ON A COMPONENT (Component's own
+# Operations menu -> Add-ons), not directly on the bare project — you need to
+# create one plain component first (e.g. pointing at help/en/index.md, file
+# format "Markdown files", source language English) to act as the "main"
+# component; discovery then creates linked sibling components that share its
+# VCS checkout. Configuration:
+#   match:              ^help/(?P<language>[a-z]{2,3})/(?P<component>.+)\.md$
 #   name_template:       Help: {{ component }}
-#   base_file_template:  help/{{ component }}.md
+#   base_file_template:  help/en/{{ component }}.md
 #   file_format:          Markdown files
 #
-# IMPORTANT — unverified against the live Weblate UI: the `match` regex above
-# makes the "language" group optional to model VitePress's root-locale
-# convention (German lives at help/settings/general.md with NO /de/ prefix;
-# English lives at help/en/settings/general.md). It is not confirmed whether
-# Weblate's discovery add-on accepts an *unmatched* language group as "this
-# is the source/base file" the way this comment assumes — verify by running
-# discovery once and checking it finds exactly one component per page with
-# German as the source. If it does not, the fallback is to give German an
-# explicit /de/ prefix in help/.vitepress/config.mts (making the locale
-# structure fully uniform) and drop the optional group from the regex:
-#   match: ^help/(?P<language>[a-z]{2})/(?P<component>.+)\.md$
+# The regex requires a language folder unconditionally (no optional group
+# needed) — German, English, and any future locale all match it uniformly.
 #
 # Markdown format options worth setting explicitly on the discovered
 # components (Weblate defaults may differ):

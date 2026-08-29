@@ -28,11 +28,14 @@
           {{ $t('logic.blockName.typeAndId', { type: defaultNodeTitle, id: node.id }) }}
         </p>
       </div>
-      <button @click="$emit('close')" class="btn-icon text-slate-500 shrink-0">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
+      <div class="flex items-center gap-1 shrink-0">
+        <button @click="$emit('close')" class="btn-icon text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+        <HelpButton help-id="logic-node-config" />
+      </div>
     </div>
 
     <!-- ── Tab bar — the block's own setting tabs plus, while debug mode is
@@ -1453,6 +1456,7 @@ import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
 import { useResizablePanel } from '@/composables/useResizablePanel'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import DebugInspector from './DebugInspector.vue'
 
 const { t, te } = useI18n()
