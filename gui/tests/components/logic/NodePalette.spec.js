@@ -37,6 +37,13 @@ describe('NodePalette — expanded', () => {
     expect(wrapper.text()).toContain('OR')
   })
 
+  it('falls back to the raw label for a node type with no i18n translation', () => {
+    const wrapper = mountPalette({
+      nodeTypes: [...NODE_TYPES, { type: 'brand_new_block', label: 'Brand New Block', category: 'logic', color: '#4ade80' }],
+    })
+    expect(wrapper.text()).toContain('Brand New Block')
+  })
+
   it('hides legacy node types from the palette', () => {
     const wrapper = mountPalette({
       nodeTypes: [...NODE_TYPES, { type: 'notify_sms', label: 'SMS', category: 'notification', hidden_from_palette: true }],

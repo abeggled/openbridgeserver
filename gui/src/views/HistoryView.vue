@@ -51,6 +51,7 @@
           <Spinner v-if="loading" size="sm" color="white" />
           {{ $t('history.load') }}
         </button>
+        <HelpButton help-id="history-controls" />
       </div>
     </div>
 
@@ -58,7 +59,10 @@
     <div class="card">
       <div class="card-header">
         <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ chartTitle }}</span>
-        <span class="text-xs text-slate-500">{{ $t('history.points', { n: points.length }) }}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500">{{ $t('history.points', { n: points.length }) }}</span>
+          <HelpButton help-id="history-results" />
+        </div>
       </div>
       <div class="card-body">
         <div v-if="loading" class="flex justify-center py-16"><Spinner size="lg" /></div>
@@ -95,6 +99,7 @@ import { useRoute } from 'vue-router'
 import { historyApi, dpApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
 import Badge       from '@/components/ui/Badge.vue'
+import HelpButton  from '@/components/ui/HelpButton.vue'
 import Spinner     from '@/components/ui/Spinner.vue'
 import DpCombobox  from '@/components/ui/DpCombobox.vue'
 import { Chart, LineController, LineElement, PointElement, LinearScale, TimeScale, Tooltip, Legend } from 'chart.js'

@@ -129,6 +129,7 @@
           {{ $t('common.delete') }}
         </button>
       </div>
+      <HelpButton help-id="logic-toolbar" class="flex-shrink-0" />
     </div>
 
     <!-- Main area -->
@@ -148,6 +149,7 @@
              flex column: a normal-flow bar here would grow/shrink the whole
              toolbar-below area on every message, shoving the palette, canvas
              and properties panel up and down while editing. -->
+        <HelpButton help-id="logic-canvas" class="absolute top-2 right-2 z-30" />
         <div v-if="statusMsg" :class="['absolute top-0 inset-x-0 z-20 px-4 py-1.5 text-xs pointer-events-none', statusMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']" data-testid="status-msg">
           {{ statusMsg.text }}
         </div>
@@ -303,6 +305,7 @@ import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
+import HelpButton          from '@/components/ui/HelpButton.vue'
 
 // Node components
 import GenericNode      from '@/components/logic/nodes/GenericNode.vue'

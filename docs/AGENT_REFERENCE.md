@@ -290,7 +290,9 @@ The Playwright suite lives in `tests/gui/` and requires a running full stack (ba
 
 #### Help site translations (Weblate) — #896
 
-The `help/` VitePress site (issue #896 — no dedicated architecture doc yet, this section is the reference) is content, not UI strings, so it doesn't fit the `de.json`/`en.json` pattern above. Weblate supports it via a different mechanism — see `.weblate` for the exact recommended "Component discovery" add-on configuration (not wired up yet as of this writing; `.weblate` documents the plan for whoever sets up the Weblate-side component).
+The `help/` VitePress site (issue #896 — no dedicated architecture doc yet, this section is the reference) is content, not UI strings, so it doesn't fit the `de.json`/`en.json` pattern above. Weblate supports it via a different mechanism — see `.weblate` for the exact "Component discovery" add-on configuration (not wired up yet as of this writing; `.weblate` documents the plan for whoever sets up the Weblate-side component).
+
+**Unlike `gui-admin`/`frontend-visu` above, English (not German) is the Weblate source language for the help site.** Every help page is authored in both German and English by hand from the start (not translated from one into the other), so translators working on additional languages need a source they can read without German — English. German is still a completely normal Weblate *target* language for the help site (same as for `gui-admin`/`frontend-visu`), it just starts out already complete since it's hand-authored alongside English. This is why `help/*.md` content lives under `help/de/...` and `help/en/...` symmetrically — both prefixed, no unprefixed "root" locale — unlike `gui/src/locales/de.json` having no directory-prefix equivalent to worry about. The backend redirects the bare `/help/` to `/help/de/` (see `obs/main.py`) since VitePress does not pick a default locale for you once there's no root locale.
 
 **The one rule that matters for anyone editing `help/*.md` by hand or reviewing a Weblate-sourced translation:**
 
