@@ -8,7 +8,13 @@
     </button>
 
     <!-- Page title -->
-    <h1 class="font-semibold text-slate-800 dark:text-slate-100 text-base flex-1">{{ pageTitle }}</h1>
+    <div class="flex items-center gap-1.5 flex-1 min-w-0">
+      <h1 class="font-semibold text-slate-800 dark:text-slate-100 text-base truncate">{{ pageTitle }}</h1>
+      <!-- Page-level help: the route's own help_id, distinct from the
+           section-level HelpButtons inside the views. Every named route
+           declares one (see router/index.js, tools/check_help_contract.py). -->
+      <HelpButton v-if="pageHelpId" :help-id="pageHelpId" />
+    </div>
 
     <!-- Version badge -->
     <span class="hidden sm:inline text-xs text-slate-400 dark:text-slate-500 font-mono">{{ version }}</span>
@@ -49,6 +55,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
+import HelpButton from '@/components/ui/HelpButton.vue'
 
 defineEmits(['toggle-sidebar'])
 
@@ -75,6 +82,8 @@ const pageTitle = computed(() => {
   const key = routeKeyMap[route.name]
   return key ? t(key) : 'open bridge server'
 })
+
+const pageHelpId = computed(() => route.meta?.helpId ?? null)
 
 function logout() {
   ws.disconnect()
