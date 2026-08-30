@@ -1,5 +1,8 @@
 <template>
-  <div class="section-header">{{ $t('adapters.bindingForm.ztSection') }}</div>
+  <div class="section-header flex items-center justify-between gap-2">
+    <span>{{ $t('adapters.bindingForm.ztSection') }}</span>
+    <HelpButton help-id="adapters-zeitschaltuhr" compact />
+  </div>
 
   <!-- Typ -->
   <div class="grid grid-cols-2 gap-4">
@@ -268,7 +271,10 @@
     </template>
 
     <!-- Ausgabewert -->
-    <div class="optional-divider">{{ $t('adapters.bindingForm.ztOutputDivider') }}</div>
+    <div class="optional-divider flex items-center justify-between gap-2">
+      <span>{{ $t('adapters.bindingForm.ztOutputDivider') }}</span>
+      <HelpButton help-id="adapters-zeitschaltuhr-value" compact />
+    </div>
     <div class="form-group" style="max-width:260px">
       <label class="label">
         {{ $t('adapters.bindingForm.ztOutputValueLabel') }}
@@ -318,6 +324,7 @@ import {
   timerValueStep,
   validateTimerValue,
 } from '@/utils/timerValue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 
 const props = defineProps({
   cfg: { type: Object, required: true },
