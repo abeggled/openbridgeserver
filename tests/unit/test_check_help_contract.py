@@ -202,6 +202,36 @@ def test_parse_routes_skips_the_unnamed_catch_all():
     assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
 
 
+def test_parse_routes_fails_closed_on_a_non_literal_name():
+    """The route is reachable; only the gate cannot tell what it is called."""
+    source = "const routes = [\n  { path: '/c', name: EXTRA_ROUTE_NAME, component: X },\n]\n"
+
+    with pytest.raises(SystemExit, match="'name' is not a string literal"):
+        gate.parse_routes(source)
+
+
+def test_parse_routes_fails_closed_on_children_it_cannot_read():
+    """A non-literal children array can hide named routes from the scan."""
+    source = "const routes = [\n  { path: '/group', children: EXTERNAL_ROUTES },\n]\n"
+
+    with pytest.raises(SystemExit, match="'children' the gate cannot read"):
+        gate.parse_routes(source)
+
+
+def test_parse_routes_names_the_line_of_an_unreadable_declaration():
+    source = "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n  { path: '/c', name: CONST },\n]\n"
+
+    with pytest.raises(SystemExit, match=r"index\.js:3"):
+        gate.parse_routes(source)
+
+
+def test_parse_routes_still_accepts_an_unnamed_record():
+    """The catch-all redirect and a pure layout group carry no name."""
+    source = "const routes = [\n  { path: '/:pathMatch(.*)*', redirect: '/' },\n  { path: '/g', children: [{ path: 'a', name: 'A', meta: { helpId: 'a' } }] },\n]\n"
+
+    assert [route.name for route in gate.parse_routes(source)] == ["A"]
+
+
 def test_parse_routes_rejects_an_unterminated_array():
     with pytest.raises(ValueError, match="unterminated array literal"):
         gate.parse_routes("const routes = [ { name: 'X' },\n")

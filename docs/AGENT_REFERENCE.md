@@ -321,6 +321,8 @@ Routes declare their id explicitly because it is live wiring, not gate-only meta
 
 On top of coverage the gate enforces two things the generator does not: every `help_id` literally referenced from `gui/src` or `frontend/src` must exist in the index (no broken help links — the dynamic `:help-id="expr"` form is out of reach and is skipped), and a `help_id` present in one locale but not another fails instead of warning.
 
+The scans read the frontends' JavaScript textually, ignoring anything inside a comment, string, fenced code block, or raw HTML block — none of which the build renders or executes. Where a declaration cannot be resolved with confidence — a route `name`, a `children` array, or a widget registration's `type` given by a constant rather than a literal — the gate **fails closed** with the file and line, rather than skipping it. A skipped declaration is the one outcome a coverage gate must never produce: the surface ships and the run reports success.
+
 Skins live in the separate `obs-visu-skins` repository. Without `--skins-dir` (or `OBS_VISU_SKINS_DIR`) pointing at a checkout, the gate reports that surface as *not checked* rather than passing it silently; CI does not check skins today.
 
 Deliberately undocumented surfaces belong in `tools/help-contract-allowlist.txt` as `<route|widget|logic-block|skin>:<name>  # reason`, mirroring `tools/i18n-allowlist.txt`. The reason is mandatory, and the list is validated back against reality: an entry for a surface that no longer exists — or for one that meanwhile *is* documented — fails too, so it cannot rot into a blanket exemption. The Visu widget types are currently listed there as tracked debt; each entry disappears as its `{#widget-<type>}` section is written.

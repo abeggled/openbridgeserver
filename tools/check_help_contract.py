@@ -30,6 +30,13 @@ allowlist: the palette is the only place a user can pick a block from, so a
 block it never offers is not a surface anyone can land on (today those are the
 two legacy notification blocks).
 
+The scans read JavaScript textually, and where that cannot be done with
+confidence they **fail closed** rather than skip: a route whose ``name``, a
+``children`` array, or a widget registration's ``type`` is not something the
+scan can resolve to a literal aborts the run with the file and line. Silently
+passing over such a declaration is the one outcome a coverage gate must never
+produce — the surface ships, and the gate reports success.
+
 On top of coverage the gate closes the resolvability hole the help generator
 leaves open: every help_id literally referenced from GUI/Visu sources must
 exist, and — unlike ``generate-help-index.mjs``, which only warns — a help_id
@@ -171,7 +178,8 @@ _REFERENCE_DIRS = (
 _JS_NAME_RE = _js_property("name", r"(['\"])(.*?)\1")
 _JS_TYPE_RE = _js_property("type", r"(['\"])(.*?)\1")
 _META_RE = _js_property("meta", r"(?=\{)")
-_CHILDREN_RE = _js_property("children", r"(?=\[)")
+_CHILDREN_RE = _js_property("children", r"")
+_ANY_NAME_PROPERTY_RE = _js_property("name", r"")
 # `WidgetRegistry . register (` is the same call after a formatter touches it.
 _WIDGET_REGISTER_RE = re.compile(r"\bWidgetRegistry\s*\.\s*register\s*\(")
 
@@ -220,9 +228,18 @@ class AllowlistEntry:
     line: int
 
 
-def _top_level_object_literals(text: str) -> list[str]:
-    """Return the ``{...}`` literals sitting directly in an array body."""
-    items: list[str] = []
+class _UnreadableRoute(Exception):
+    """A route declaration the scan cannot read, with the offset it starts at."""
+
+    def __init__(self, offset: int, problem: str) -> None:
+        super().__init__(problem)
+        self.offset = offset
+        self.problem = problem
+
+
+def _top_level_object_literals(text: str) -> list[tuple[str, int]]:
+    """Return the ``{...}`` literals sitting directly in an array body, with offsets."""
+    items: list[tuple[str, int]] = []
     depth = 0
     start = 0
     for index, char in enumerate(text):
@@ -233,11 +250,11 @@ def _top_level_object_literals(text: str) -> list[str]:
         elif char in "}]":
             depth -= 1
             if depth == 0 and char == "}":
-                items.append(text[start : index + 1])
+                items.append((text[start : index + 1], start))
     return items
 
 
-def _iter_route_records(array_body: str):
+def _iter_route_records(array_body: str, base_offset: int = 0):
     """Yield each route record in ``array_body``, descending through ``children``.
 
     Only ``children`` is followed. Recursing into every nested object would
@@ -245,14 +262,20 @@ def _iter_route_records(array_body: str):
     ``props`` bag, say — into a fictitious route and fail the gate over a page
     that does not exist.
     """
-    for record in _top_level_object_literals(array_body):
-        yield record
+    for record, offset in _top_level_object_literals(array_body):
+        yield record, base_offset + offset
         children = next(_direct_property_matches(record, _CHILDREN_RE), None)
         if children is None:
             continue
+        bracket = record.find("[", children.end())
         nested = _balanced_array_after(record, children.end())
-        if nested is not None:
-            yield from _iter_route_records(nested)
+        if nested is None:
+            # A `children` that is not an array literal can hide named routes,
+            # and the gate cannot see into it — say so instead of passing.
+            # Raised as an offset so parse_routes, which holds the source, can
+            # turn it into a line number.
+            raise _UnreadableRoute(base_offset + offset, "declares 'children' the gate cannot read; give it an inline array literal")
+        yield from _iter_route_records(nested, base_offset + offset + bracket + 1)
 
 
 def _direct_property_matches(obj: str, pattern: re.Pattern):
@@ -307,8 +330,8 @@ def _balanced_array_after(text: str, start: int) -> str | None:
     return None
 
 
-def _array_body(source: str, declaration: str) -> str:
-    """Return the text between the brackets of ``declaration``'s array literal."""
+def _array_body(source: str, declaration: str) -> tuple[str, int]:
+    """Return ``declaration``'s array-literal body and the offset it starts at."""
     start = source.index(declaration) + len(declaration)
     open_bracket = source.index("[", start)
     depth = 0
@@ -318,7 +341,7 @@ def _array_body(source: str, declaration: str) -> str:
         elif source[index] == "]":
             depth -= 1
             if depth == 0:
-                return source[open_bracket + 1 : index]
+                return source[open_bracket + 1 : index], open_bracket + 1
     raise ValueError(f"unterminated array literal after {declaration!r}")
 
 
@@ -334,9 +357,24 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
     """
     surfaces: list[Surface] = []
     source = _blank_comments(source)
-    for item in _iter_route_records(_array_body(source, "const routes")):
+    body, body_offset = _array_body(source, "const routes")
+    try:
+        records = list(_iter_route_records(body, body_offset))
+    except _UnreadableRoute as unreadable:
+        line = source.count("\n", 0, unreadable.offset) + 1
+        raise SystemExit(f"help contract: {origin}:{line} {unreadable.problem}") from None
+    for item, offset in records:
         name_match = next(_direct_property_matches(item, _JS_NAME_RE), None)
         if not name_match:
+            if next(_direct_property_matches(item, _ANY_NAME_PROPERTY_RE), None) is not None:
+                # The route is named and reachable; only the gate cannot tell
+                # what it is called. Skipping would let it ship undocumented,
+                # so it fails closed instead.
+                line = source.count("\n", 0, offset) + 1
+                raise SystemExit(
+                    f"help contract: {origin}:{line} declares a route whose 'name' is not a string "
+                    f"literal — the gate cannot tell which route this is; give 'name' a literal value"
+                )
             continue
         # Scoped to the route's own `meta` object, because that is the only
         # place TopBar.vue reads: a `helpId` sitting in `props` or any other
