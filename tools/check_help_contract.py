@@ -112,58 +112,87 @@ def _js_property(name: str, value: str) -> re.Pattern:
 
 _HELP_ID_LITERAL_RE = _js_property("helpId", r"['\"]([^'\"]*)['\"]")
 
-# Commented-out code neither renders nor executes: a `helpId` literal or a
-# `WidgetRegistry.register` call parked in a comment must not be read as real.
-# Recognising those regions needs string state, not a regex — `'old'// note` is
-# a comment while `href="//cdn"` is not, and the two are indistinguishable
-# without knowing whether the scanner is inside a string.
+# Comments and string text neither render nor execute, so neither may be read
+# as code — and code must never be mistaken for either. One scanner classifies
+# the source once; both views below are built from its regions.
 _STRING_DELIMITERS = frozenset("\"'`")
 
 
-def _blank_comments(source: str) -> str:
-    """Blank out comments, preserving newlines so reported lines stay right.
+def _scan_regions(source: str, start: int = 0, end: int | None = None) -> list[tuple[str, int, int]]:
+    """Classify ``source[start:end]`` into ``code`` / ``string`` / ``comment`` spans.
 
-    Handles `//`, `/* */` and `<!-- -->`, and leaves anything inside a string
-    or template literal alone. Blanked characters become spaces so every
-    offset — and therefore every reported line number — is unchanged.
+    A template literal's ``${...}`` is executable JavaScript, so it is scanned
+    as code rather than swallowed with the surrounding text — a real
+    ``helpId`` declaration can live in there.
     """
-    out: list[str] = []
-    index = 0
-    length = len(source)
-    while index < length:
+    end = len(source) if end is None else end
+    regions: list[tuple[str, int, int]] = []
+    index = start
+    while index < end:
         char = source[index]
         if char in _STRING_DELIMITERS:
-            # Copy the string verbatim, honouring backslash escapes, so a `//`
-            # or `/*` inside it is never mistaken for a comment.
-            out.append(char)
-            index += 1
-            while index < length:
-                out.append(source[index])
-                if source[index] == "\\" and index + 1 < length:
-                    out.append(source[index + 1])
-                    index += 2
-                    continue
-                if source[index] == char:
-                    index += 1
-                    break
-                index += 1
+            index = _scan_string(source, index, end, regions)
             continue
-        if source.startswith("//", index):
-            end = source.find("\n", index)
-            end = length if end < 0 else end
-            out.append(" " * (end - index))
-            index = end
-            continue
-        for opener, closer in (("/*", "*/"), ("<!--", "-->")):
-            if source.startswith(opener, index):
-                end = source.find(closer, index + len(opener))
-                end = length if end < 0 else end + len(closer)
-                out.append("".join(" " if c != "\n" else "\n" for c in source[index:end]))
-                index = end
-                break
-        else:
-            out.append(char)
+        opener = next((o for o in ("//", "/*", "<!--") if source.startswith(o, index)), None)
+        if opener is None:
             index += 1
+            continue
+        closer = {"//": "\n", "/*": "*/", "<!--": "-->"}[opener]
+        stop = source.find(closer, index + len(opener))
+        stop = end if stop < 0 or stop >= end else (stop if opener == "//" else stop + len(closer))
+        regions.append(("comment", index, stop))
+        index = stop
+    return regions
+
+
+def _scan_string(source: str, start: int, end: int, regions: list[tuple[str, int, int]]) -> int:
+    """Append the regions of the string literal at ``start``; return its end."""
+    quote = source[start]
+    index = start + 1
+    text_from = index
+    while index < end:
+        char = source[index]
+        if char == "\\" and index + 1 < end:
+            index += 2
+            continue
+        if quote == "`" and source.startswith("${", index):
+            if text_from < index:
+                regions.append(("string", text_from, index))
+            depth = 0
+            cursor = index + 1
+            while cursor < end:
+                if source[cursor] == "{":
+                    depth += 1
+                elif source[cursor] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                cursor += 1
+            regions.extend(_scan_regions(source, index + 2, min(cursor, end)))
+            index = min(cursor + 1, end)
+            text_from = index
+            continue
+        if char == quote:
+            if text_from < index:
+                regions.append(("string", text_from, index))
+            return index + 1
+        index += 1
+    if text_from < end:
+        regions.append(("string", text_from, end))
+    return end
+
+
+def _blank_span(source: str, start: int, end: int) -> str:
+    """The span with every character replaced by a space, newlines kept."""
+    return "".join("\n" if char == "\n" else " " for char in source[start:end])
+
+
+def _blank_comments(source: str) -> str:
+    """Blank out comments, preserving newlines so reported lines stay right."""
+    out = list(source)
+    for kind, start, end in _scan_regions(source):
+        if kind == "comment":
+            out[start:end] = _blank_span(source, start, end)
     return "".join(out)
 
 
@@ -183,6 +212,9 @@ _JS_TYPE_RE = _js_property("type", r"(['\"])(.*?)\1")
 _META_RE = _js_property("meta", r"(?=\{)")
 _CHILDREN_RE = _js_property("children", r"")
 _ANY_NAME_PROPERTY_RE = _js_property("name", r"")
+# ES6 shorthand: `{ path, name }` gives the route a runtime name with no colon
+# in sight, so the colon-based pattern above never sees it.
+_SHORTHAND_NAME_RE = re.compile(r"(?<![\w$.])name\s*(?=[,}])")
 # `WidgetRegistry . register (` is the same call after a formatter touches it.
 _WIDGET_REGISTER_RE = re.compile(r"\bWidgetRegistry\s*\.\s*register\s*\(")
 
@@ -345,46 +377,35 @@ def _blank_string_contents(source: str) -> str:
     where string text cannot pose as code: `meta: { note: "helpId: 'x'" }`
     declares nothing, and a `{` inside a string would otherwise unbalance the
     brace matching. Values are still read from the untouched source at the
-    same offsets, so this view is only ever used to *locate* things.
+    same offsets, so this view only ever *locates* things.
 
-    A string used as a *key* keeps its content — `'name': 'Dashboard'` is a
-    valid declaration and the key has to stay findable. A string is a key when
-    a colon follows it, which is exactly what separates the two here.
+    A string used as a key keeps its content: `'name': 'Dashboard'` is a valid
+    declaration and the key has to stay findable.
     """
-    out: list[str] = []
-    index = 0
-    length = len(source)
-    while index < length:
-        char = source[index]
-        if char not in _STRING_DELIMITERS:
-            out.append(char)
-            index += 1
-            continue
-        start = index
-        index += 1
-        while index < length:
-            current = source[index]
-            if current == "\\" and index + 1 < length:
-                index += 2
-                continue
-            index += 1
-            if current == char:
-                break
-        literal = source[start:index]
-        after = index
-        while after < length and source[after].isspace():
-            after += 1
-        is_key = after < length and source[after] == ":"
-        out.append(literal if is_key else _blank_inner(literal))
+    out = list(source)
+    for kind, start, end in _scan_regions(source):
+        if kind == "string" and not _is_key_string(source, start, end):
+            out[start:end] = _blank_span(source, start, end)
     return "".join(out)
 
 
-def _blank_inner(literal: str) -> str:
-    """Replace a string literal's content with spaces, keeping quotes and newlines."""
-    if len(literal) < 2:
-        return literal
-    inner = "".join("\n" if char == "\n" else " " for char in literal[1:-1])
-    return literal[0] + inner + literal[-1]
+# A quoted key can only follow `{` or `,`. Anywhere else — after `?`, `(`, `=`
+# — the string is a value, and reading `true ? 'helpId' : 'x'` as a property
+# would fail the gate over an expression that declares nothing.
+_KEY_PREDECESSORS = frozenset("{,")
+
+
+def _is_key_string(source: str, start: int, end: int) -> bool:
+    """Is the string whose text spans ``start:end`` used as a property key?"""
+    before = start - 2  # step back over the opening quote
+    while before >= 0 and source[before].isspace():
+        before -= 1
+    if before >= 0 and source[before] not in _KEY_PREDECESSORS:
+        return False
+    after = end + 1  # step past the closing quote
+    while after < len(source) and source[after].isspace():
+        after += 1
+    return after < len(source) and source[after] == ":"
 
 
 def _literal_start(text: str, start: int, bracket: str) -> int:
@@ -479,7 +500,10 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
         real_item = source[offset : offset + len(item)]
         name_match = next(_direct_property_matches(item, _JS_NAME_RE, real_item), None)
         if not name_match:
-            if next(_direct_property_matches(item, _ANY_NAME_PROPERTY_RE), None) is not None:
+            unreadable_name = next(_direct_property_matches(item, _ANY_NAME_PROPERTY_RE), None) or next(
+                _direct_property_matches(item, _SHORTHAND_NAME_RE), None
+            )
+            if unreadable_name is not None:
                 # The route is named and reachable; only the gate cannot tell
                 # what it is called. Skipping would let it ship undocumented,
                 # so it fails closed instead.

@@ -230,6 +230,21 @@ def test_parse_routes_fails_closed_on_a_non_literal_name():
         gate.parse_routes(source)
 
 
+def test_parse_routes_fails_closed_on_a_shorthand_name():
+    """`{ path, name }` names the route at runtime; the scan cannot read it."""
+    source = "const routes = [\n  { path: '/s', name, component: c },\n]\n"
+
+    with pytest.raises(SystemExit, match="'name' is not a string literal"):
+        gate.parse_routes(source)
+
+
+def test_parse_routes_is_not_confused_by_a_property_ending_in_name():
+    """`componentName: X` is not a shorthand `name`."""
+    source = "const routes = [\n  { path: '/', componentName: X, name: 'A', meta: { helpId: 'a' } },\n]\n"
+
+    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("A", "a")]
+
+
 def test_parse_routes_fails_closed_on_a_spread_route_array():
     """A spread can contribute named routes the scan never sees."""
     source = "const routes = [\n  ...EXTRA_ROUTES,\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\n"
@@ -650,6 +665,33 @@ def test_collect_help_references_keeps_a_help_id_inside_a_template_literal(tmp_p
     (source / "map.js").write_text("const url = `a//b`\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
 
     assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_reads_a_template_expression(tmp_path):
+    """`${…}` is executable JavaScript and can hold a real declaration."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "tpl.js").write_text("const t = `a ${ { helpId: 'logs-level' } } b`\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_ignores_template_literal_text(tmp_path):
+    """The text around `${…}` is still string content, not code."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "tpl.js").write_text("const t = `write helpId: 'gone' here`\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
+
+
+def test_collect_help_references_ignores_a_ternary_that_looks_like_a_property(tmp_path):
+    """`true ? 'helpId' : 'x'` declares nothing — the colon is not a key's."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "pick.js").write_text("const pick = true ? 'helpId' : 'missing-ternary-help'\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
 
 
 def test_collect_help_references_keeps_a_reference_next_to_a_url(tmp_path):
