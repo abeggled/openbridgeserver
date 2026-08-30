@@ -146,6 +146,27 @@ def test_parse_routes_ignores_a_commented_out_route(comment):
     assert [route.name for route in gate.parse_routes(source)] == ["Dashboard"]
 
 
+@pytest.mark.parametrize("key", ["name", "'name'", '"name"'])
+def test_parse_routes_accepts_a_quoted_property_key(key):
+    source = f"const routes = [\n  {{ path: '/', {key}: 'Dashboard', meta: {{ helpId: 'dashboard' }} }},\n]\n"
+
+    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("Dashboard", "dashboard")]
+
+
+def test_parse_routes_ignores_a_name_in_a_non_route_object():
+    """A static `props` bag carrying a `name` is not a route."""
+    source = "const routes = [\n  { path: '/', name: 'Dashboard', props: { name: 'not-a-route' }, meta: { helpId: 'dashboard' } },\n]\n"
+
+    assert [r.name for r in gate.parse_routes(source)] == ["Dashboard"]
+
+
+def test_parse_routes_ignores_a_help_id_nested_inside_meta():
+    """TopBar reads meta.helpId directly; a nested one declares nothing."""
+    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { analytics: { helpId: 'dashboard' } } },\n]\n"
+
+    assert [r.help_id for r in gate.parse_routes(source)] == [None]
+
+
 def test_parse_routes_enumerates_nested_children():
     """vue-router nests routes; each reachable one needs its own help_id."""
     source = (
@@ -217,6 +238,23 @@ def test_parse_widget_types_reads_a_double_quoted_type(tmp_path):
     _write_widget(widgets, "Toggle", 'WidgetRegistry.register({\n  type: "Toggle",\n})\n')
 
     assert [surface.help_id for surface in gate.parse_widget_types(widgets, tmp_path)] == ["widget-toggle"]
+
+
+def test_parse_widget_types_reads_the_registrations_own_type_not_a_nested_one(tmp_path):
+    """`defaultConfig: { type: … }` is the widget's config, not its type."""
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Slider", "WidgetRegistry.register({ type: EXTRA, defaultConfig: { type: 'Slider' } })\n")
+
+    with pytest.raises(SystemExit, match="not a string literal"):
+        gate.parse_widget_types(widgets, tmp_path)
+
+
+@pytest.mark.parametrize("call", ["WidgetRegistry.register(", "WidgetRegistry .register (", "WidgetRegistry\n  .register("])
+def test_parse_widget_types_tolerates_whitespace_in_the_call(tmp_path, call):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Slider", f"{call}{{ type: 'Slider' }})\n")
+
+    assert [surface.name for surface in gate.parse_widget_types(widgets, tmp_path)] == ["Slider"]
 
 
 def test_parse_widget_types_enumerates_every_registration_in_one_module(tmp_path):

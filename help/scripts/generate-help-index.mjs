@@ -121,8 +121,37 @@ export function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\n]/g, ''))
 }
 
+// A tag name, not an autolink: `<https://example.com>` must stay a paragraph.
+const HTML_BLOCK_START_RE = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)/
+
+/**
+ * Blank out raw HTML blocks, keeping the line count. A heading-shaped line
+ * directly inside one is not parsed as a heading — verified against a real
+ * VitePress build: `<div>\n## X {#id}\n</div>` renders no `id`, while the
+ * same heading separated by blank lines does. Indexing the former would hand
+ * out a help_id no element answers to.
+ *
+ * The block ends at the first blank line, which is what lets the separated
+ * form keep working.
+ */
+export function stripRawHtmlBlocks(text) {
+  let inBlock = false
+  return text
+    .split('\n')
+    .map((line) => {
+      if (!inBlock && HTML_BLOCK_START_RE.test(line)) inBlock = true
+      if (!inBlock) return line
+      if (line.trim() === '') {
+        inBlock = false
+        return line
+      }
+      return ''
+    })
+    .join('\n')
+}
+
 function extractHelpIds(absPath) {
-  const text = stripHtmlComments(stripFencedCode(readFileSync(absPath, 'utf-8')))
+  const text = stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(readFileSync(absPath, 'utf-8'))))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
     ids.push(match[1])

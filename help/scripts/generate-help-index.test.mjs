@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments } from './generate-help-index.mjs'
+import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments, stripRawHtmlBlocks } from './generate-help-index.mjs'
 
 // ── Pure URL-mapping helpers ────────────────────────────────────────────────
 
@@ -237,6 +237,43 @@ test('a --> inside a fenced block does not end a comment that never started', ()
   const stripped = stripHtmlComments(stripFencedCode(text))
 
   assert.match(stripped, /## A \{#a\}/)
+})
+
+test('an anchor inside a raw HTML block is not indexed, but a blank-line-separated one is', () => {
+  // Verified against a real VitePress build: `<div>\n## X {#id}\n</div>`
+  // renders no id, while the same heading surrounded by blank lines does.
+  const root = mkdtempSync(join(tmpdir(), 'help-rawhtml-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['# T {#real-anchor}', '', '<div class="tip">', '## Inside {#only-in-html}', '</div>', '', '<div>', '', '## Separated {#separated}', '', '</div>', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('real-anchor' in helpIds)
+    assert.ok('separated' in helpIds, 'a heading separated by blank lines is rendered and must stay indexed')
+    assert.ok(!('only-in-html' in helpIds), 'a heading inside a raw HTML block owns no DOM id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripRawHtmlBlocks leaves an autolink paragraph alone', () => {
+  // `<https://example.com>` is not a tag, so it opens no HTML block.
+  const stripped = stripRawHtmlBlocks(['<https://example.com>', '## E {#e}'].join('\n'))
+
+  assert.match(stripped, /## E \{#e\}/)
+})
+
+test('stripRawHtmlBlocks resumes indexing after the block ends', () => {
+  const stripped = stripRawHtmlBlocks(['<div>', '## B {#b}', '</div>', '', '## C {#c}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.match(stripped, /## C \{#c\}/)
 })
 
 test('the same help_id in two different locales is not a duplicate and is reported complete', () => {

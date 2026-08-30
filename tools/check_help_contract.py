@@ -89,6 +89,8 @@ _DERIVED_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
 # template syntax and both must be seen: an unread reference is a dead help
 # button the gate would wave through.
 _STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(['\"])(.*?)\1")
+
+
 # Object-literal form, used by route meta and by prop defaults. Deliberately
 # narrow: it matches a property literally named `helpId`, so a lookup table
 # keyed by something else (`and: 'logic-block-and'`) is NOT collected here.
@@ -96,7 +98,12 @@ _STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(['\"])(.*?)\1")
 # in the module docstring — because a static scan cannot tell an arbitrary
 # string constant from a help_id. A non-literal value (`helpId: props.helpId`)
 # has no quotes and is skipped by construction.
-_HELP_ID_LITERAL_RE = re.compile(r"\bhelpId:\s*['\"]([^'\"]*)['\"]")
+def _js_property(name: str, value: str) -> re.Pattern:
+    """A JS object property, with the key optionally quoted (`name:`, `'name':`)."""
+    return re.compile(rf"(?:\b{name}|['\"]{name}['\"])\s*:\s*{value}")
+
+
+_HELP_ID_LITERAL_RE = _js_property("helpId", r"['\"]([^'\"]*)['\"]")
 
 # Commented-out code neither renders nor executes: a `helpId` literal or a
 # `WidgetRegistry.register` call parked in a comment must not be read as real.
@@ -161,10 +168,12 @@ _REFERENCE_DIRS = (
 # Vue/JS string properties are written with either quote style, and a route or
 # widget declared with the other one must not fall out of the enumeration —
 # an unseen surface is an undocumented surface the gate would never notice.
-_JS_NAME_RE = re.compile(r"\bname:\s*(['\"])(.*?)\1")
-_JS_TYPE_RE = re.compile(r"\btype:\s*(['\"])(.*?)\1")
-_META_RE = re.compile(r"\bmeta:\s*(?=\{)")
-_ANY_TYPE_PROPERTY_RE = re.compile(r"\btype:")
+_JS_NAME_RE = _js_property("name", r"(['\"])(.*?)\1")
+_JS_TYPE_RE = _js_property("type", r"(['\"])(.*?)\1")
+_META_RE = _js_property("meta", r"(?=\{)")
+_CHILDREN_RE = _js_property("children", r"(?=\[)")
+# `WidgetRegistry . register (` is the same call after a formatter touches it.
+_WIDGET_REGISTER_RE = re.compile(r"\bWidgetRegistry\s*\.\s*register\s*\(")
 
 # Split before an uppercase letter that starts a new word, so acronyms stay
 # whole: ValueDisplay -> value-display, QrCode -> qr-code, RTR -> rtr,
@@ -211,19 +220,39 @@ class AllowlistEntry:
     line: int
 
 
-def _iter_object_literals(text: str):
-    """Yield every balanced ``{...}`` literal in ``text``, at any nesting depth.
-
-    vue-router nests routes under ``children``, so a scan that only saw
-    top-level records would enumerate the group and miss the reachable routes
-    inside it — each of which needs its own help_id.
-    """
-    stack: list[int] = []
+def _top_level_object_literals(text: str) -> list[str]:
+    """Return the ``{...}`` literals sitting directly in an array body."""
+    items: list[str] = []
+    depth = 0
+    start = 0
     for index, char in enumerate(text):
-        if char == "{":
-            stack.append(index)
-        elif char == "}" and stack:
-            yield text[stack.pop() : index + 1]
+        if char in "{[":
+            if depth == 0 and char == "{":
+                start = index
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth == 0 and char == "}":
+                items.append(text[start : index + 1])
+    return items
+
+
+def _iter_route_records(array_body: str):
+    """Yield each route record in ``array_body``, descending through ``children``.
+
+    Only ``children`` is followed. Recursing into every nested object would
+    turn an ordinary static object that happens to carry a ``name`` — a
+    ``props`` bag, say — into a fictitious route and fail the gate over a page
+    that does not exist.
+    """
+    for record in _top_level_object_literals(array_body):
+        yield record
+        children = next(_direct_property_matches(record, _CHILDREN_RE), None)
+        if children is None:
+            continue
+        nested = _balanced_array_after(record, children.end())
+        if nested is not None:
+            yield from _iter_route_records(nested)
 
 
 def _direct_property_matches(obj: str, pattern: re.Pattern):
@@ -262,6 +291,22 @@ def _balanced_object_after(text: str, start: int) -> str | None:
     return None
 
 
+def _balanced_array_after(text: str, start: int) -> str | None:
+    """Return the body of the ``[...]`` literal that starts at or after ``start``."""
+    open_bracket = text.find("[", start)
+    if open_bracket < 0:
+        return None
+    depth = 0
+    for index in range(open_bracket, len(text)):
+        if text[index] == "[":
+            depth += 1
+        elif text[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return text[open_bracket + 1 : index]
+    return None
+
+
 def _array_body(source: str, declaration: str) -> str:
     """Return the text between the brackets of ``declaration``'s array literal."""
     start = source.index(declaration) + len(declaration)
@@ -289,7 +334,7 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
     """
     surfaces: list[Surface] = []
     source = _blank_comments(source)
-    for item in _iter_object_literals(_array_body(source, "const routes")):
+    for item in _iter_route_records(_array_body(source, "const routes")):
         name_match = next(_direct_property_matches(item, _JS_NAME_RE), None)
         if not name_match:
             continue
@@ -299,7 +344,9 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
         # page in fact renders no help button.
         meta_match = next(_direct_property_matches(item, _META_RE), None)
         meta = _balanced_object_after(item, meta_match.end()) if meta_match else None
-        help_id_match = _HELP_ID_LITERAL_RE.search(meta) if meta else None
+        # Direct properties only: TopBar reads `route.meta.helpId`, so a
+        # helpId parked in an object nested inside meta declares nothing.
+        help_id_match = next(_direct_property_matches(meta, _HELP_ID_LITERAL_RE), None) if meta else None
         surfaces.append(
             Surface(
                 kind="route",
@@ -330,9 +377,11 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
         # `WidgetRegistry.register` call produces a second buildable,
         # palette-visible widget type, and missing it would let that type ship
         # undocumented and unexempted.
-        for registration in re.finditer(r"WidgetRegistry\.register\(", source):
+        for registration in _WIDGET_REGISTER_RE.finditer(source):
             body = _balanced_object_after(source, registration.end())
-            type_match = _JS_TYPE_RE.search(body) if body is not None else None
+            # Direct property only: `defaultConfig: { type: 'Slider' }` is the
+            # widget's own config, not the type it registers under.
+            type_match = next(_direct_property_matches(body, _JS_TYPE_RE), None) if body is not None else None
             if type_match is None:
                 # Silently skipping would under-enumerate: the widget is built
                 # and offered in the palette, the gate just cannot tell which
