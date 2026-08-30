@@ -1,0 +1,443 @@
+"""Tests for tools/check_help_contract.py."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPT = REPO_ROOT / "tools" / "check_help_contract.py"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("check_help_contract", _SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+gate = _load_module()
+
+
+def _index(*help_ids: str, duplicates=None, incomplete=None) -> dict:
+    return {
+        "helpIds": {help_id: {"de": f"/help/de/x.html#{help_id}", "en": f"/help/en/x.html#{help_id}"} for help_id in help_ids},
+        "duplicates": duplicates or [],
+        "incomplete": incomplete or [],
+    }
+
+
+def _route(name: str, help_id: str | None) -> gate.Surface:
+    return gate.Surface(kind="route", name=name, help_id=help_id, origin="gui/src/router/index.js")
+
+
+def _widget(name: str, help_id: str) -> gate.Surface:
+    return gate.Surface(kind="widget", name=name, help_id=help_id, origin=f"frontend/src/widgets/{name}/index.ts")
+
+
+def _allow(key: str, reason: str = "because", line: int = 1) -> gate.AllowlistEntry:
+    return gate.AllowlistEntry(key=key, reason=reason, line=line)
+
+
+# ── kebab ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("ValueDisplay", "value-display"),
+        ("HorizontalBar", "horizontal-bar"),
+        ("QrCode", "qr-code"),
+        ("RTR", "rtr"),
+        ("IFrame", "iframe"),
+        ("HTMLElement", "html-element"),
+        ("Zeitschaltuhr", "zeitschaltuhr"),
+        ("dark_mode skin", "dark-mode-skin"),
+    ],
+)
+def test_kebab_keeps_acronyms_whole(name, expected):
+    assert gate.kebab(name) == expected
+
+
+# ── route enumeration ────────────────────────────────────────────────────────
+
+
+ROUTER_SOURCE = """import { createRouter } from 'vue-router'
+
+const routes = [
+  { path: '/login', name: 'Login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
+  { path: '/', name: 'Dashboard', component: () => import('@/views/DashboardView.vue'), meta: { helpId: 'dashboard' } },
+  { path: '/logs', name: 'Logs', component: () => import('@/views/LogView.vue'), meta: { helpId: "logs" } },
+  { path: '/:pathMatch(.*)*', redirect: '/' },
+]
+
+export default createRouter({ routes })
+"""
+
+
+def test_parse_routes_reads_name_and_help_id():
+    routes = gate.parse_routes(ROUTER_SOURCE)
+
+    assert [(route.name, route.help_id) for route in routes] == [
+        ("Login", None),
+        ("Dashboard", "dashboard"),
+        ("Logs", "logs"),
+    ]
+
+
+def test_parse_routes_skips_the_unnamed_catch_all():
+    assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
+
+
+def test_parse_routes_rejects_an_unterminated_array():
+    with pytest.raises(ValueError, match="unterminated array literal"):
+        gate.parse_routes("const routes = [ { name: 'X' },\n")
+
+
+def test_parse_routes_matches_the_real_router():
+    source = (REPO_ROOT / "gui" / "src" / "router" / "index.js").read_text(encoding="utf-8")
+
+    names = {route.name for route in gate.parse_routes(source)}
+
+    assert {"Dashboard", "Settings", "Logic"} <= names
+
+
+# ── widget enumeration ───────────────────────────────────────────────────────
+
+
+def _write_widget(widgets_dir: Path, name: str, body: str) -> None:
+    (widgets_dir / name).mkdir(parents=True)
+    (widgets_dir / name / "index.ts").write_text(body, encoding="utf-8")
+
+
+def test_parse_widget_types_derives_the_expected_help_id(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "ValueDisplay", "WidgetRegistry.register({\n  type: 'ValueDisplay',\n  label: 'x',\n})\n")
+
+    surfaces = gate.parse_widget_types(widgets, tmp_path)
+
+    assert [(surface.name, surface.help_id) for surface in surfaces] == [("ValueDisplay", "widget-value-display")]
+    assert surfaces[0].origin == "widgets/ValueDisplay/index.ts"
+
+
+def test_parse_widget_types_ignores_a_module_without_registration(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Helper", "export const x = { type: 'Helper' }\n")
+
+    assert gate.parse_widget_types(widgets, tmp_path) == []
+
+
+def test_parse_widget_types_ignores_a_registration_without_a_type(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Broken", "WidgetRegistry.register({\n  label: 'x',\n})\n")
+
+    assert gate.parse_widget_types(widgets, tmp_path) == []
+
+
+def test_parse_widget_types_falls_back_to_an_absolute_origin_outside_the_repo(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Toggle", "WidgetRegistry.register({ type: 'Toggle' })\n")
+
+    surfaces = gate.parse_widget_types(widgets, REPO_ROOT)
+
+    assert surfaces[0].origin == (widgets / "Toggle" / "index.ts").as_posix()
+
+
+def test_parse_widget_types_covers_the_real_visu_widgets():
+    surfaces = gate.parse_widget_types(REPO_ROOT / "frontend" / "src" / "widgets", REPO_ROOT)
+
+    assert {"Toggle", "Slider", "Zeitschaltuhr"} <= {surface.name for surface in surfaces}
+
+
+# ── skin enumeration ─────────────────────────────────────────────────────────
+
+
+def _write_skin(skins_root: Path, directory: str, manifest: str) -> None:
+    package = skins_root / "packages" / "skins" / directory
+    package.mkdir(parents=True)
+    (package / "manifest.json").write_text(manifest, encoding="utf-8")
+
+
+def test_parse_skins_derives_the_expected_help_id(tmp_path):
+    _write_skin(tmp_path, "glass", json.dumps({"name": "Glass Dark"}))
+
+    surfaces = gate.parse_skins(tmp_path)
+
+    assert [(surface.kind, surface.name, surface.help_id) for surface in surfaces] == [("skin", "Glass Dark", "skin-glass-dark")]
+
+
+def test_parse_skins_reports_an_unreadable_manifest(tmp_path):
+    _write_skin(tmp_path, "broken", "{not json")
+
+    with pytest.raises(SystemExit, match="cannot read"):
+        gate.parse_skins(tmp_path)
+
+
+@pytest.mark.parametrize("manifest", ['{"name": ""}', '{"name": 42}', "{}"])
+def test_parse_skins_requires_a_usable_name(tmp_path, manifest):
+    _write_skin(tmp_path, "nameless", manifest)
+
+    with pytest.raises(SystemExit, match="no usable 'name'"):
+        gate.parse_skins(tmp_path)
+
+
+def test_parse_skins_is_empty_without_a_skins_package_dir(tmp_path):
+    assert gate.parse_skins(tmp_path) == []
+
+
+# ── reference collection ─────────────────────────────────────────────────────
+
+
+def test_collect_help_references_finds_static_attributes_and_literals(tmp_path):
+    source = tmp_path / "gui" / "src"
+    (source / "nested").mkdir(parents=True)
+    (source / "View.vue").write_text(
+        '<template>\n  <HelpButton help-id="logs-level" />\n  <StatCard :help-id="helpId" />\n</template>\n',
+        encoding="utf-8",
+    )
+    (source / "nested" / "map.js").write_text("const m = { helpId: 'logic-block-and' }\n", encoding="utf-8")
+    (source / "ignored.txt").write_text('help-id="nope"\n', encoding="utf-8")
+
+    references = gate.collect_help_references(tmp_path, (("gui/src", (".vue", ".js")),))
+
+    assert sorted((reference.help_id, reference.location) for reference in references) == [
+        ("logic-block-and", "gui/src/nested/map.js:1"),
+        ("logs-level", "gui/src/View.vue:2"),
+    ]
+
+
+def test_collect_help_references_skips_a_bound_attribute_and_a_non_literal_prop(tmp_path):
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "StatCard.vue").write_text(
+        '<template>\n  <HelpButton v-bind:help-id="helpId" />\n</template>\n'
+        "<script setup>\nconst props = defineProps({ helpId: { type: String, default: null } })\n</script>\n",
+        encoding="utf-8",
+    )
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
+
+
+def test_collect_help_references_skips_a_missing_directory(tmp_path):
+    assert gate.collect_help_references(tmp_path, (("does/not/exist", (".vue",)),)) == []
+
+
+def test_collect_help_references_skips_node_modules(tmp_path):
+    vendored = tmp_path / "gui" / "src" / "node_modules" / "pkg"
+    vendored.mkdir(parents=True)
+    (vendored / "index.js").write_text("const m = { helpId: 'vendored' }\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
+
+
+# ── allowlist parsing ────────────────────────────────────────────────────────
+
+
+def test_load_allowlist_parses_entries_and_ignores_comments():
+    entries, errors = gate.load_allowlist("# header\n\nroute:Login  # public screen\nwidget:Uhr # not written yet\n")
+
+    assert errors == []
+    assert [(entry.key, entry.reason, entry.line) for entry in entries] == [
+        ("route:Login", "public screen", 3),
+        ("widget:Uhr", "not written yet", 4),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("route:Login", "has no reason"),
+        ("route:Login  #", "has no reason"),
+        ("page:Login  # wrong kind", "is not a"),
+        ("route  # no name", "is not a"),
+        ("route:  # empty name", "is not a"),
+    ],
+)
+def test_load_allowlist_rejects_malformed_entries(line, expected):
+    entries, errors = gate.load_allowlist(line + "\n")
+
+    assert entries == []
+    assert expected in errors[0]
+
+
+def test_load_allowlist_rejects_a_duplicate_entry():
+    entries, errors = gate.load_allowlist("route:Login  # a\nroute:Login  # b\n")
+
+    assert len(entries) == 1
+    assert "duplicate entry" in errors[0]
+
+
+def test_the_real_allowlist_is_well_formed():
+    text = (REPO_ROOT / "tools" / "help-contract-allowlist.txt").read_text(encoding="utf-8")
+
+    entries, errors = gate.load_allowlist(text)
+
+    assert errors == []
+    assert any(entry.key == "route:Login" for entry in entries)
+
+
+# ── validation ───────────────────────────────────────────────────────────────
+
+
+def test_validate_accepts_a_documented_surface():
+    errors = gate.validate([_route("Logs", "logs")], [gate.Reference("logs", "gui/src/views/LogView.vue:1")], _index("logs"), [])
+
+    assert errors == []
+
+
+def test_validate_reports_a_route_without_a_help_id():
+    errors = gate.validate([_route("BrandNew", None)], [], _index(), [])
+
+    assert errors == ["route:BrandNew: no help_id declared in gui/src/router/index.js — add one, or allowlist it with a reason"]
+
+
+def test_validate_accepts_an_allowlisted_route_without_a_help_id():
+    assert gate.validate([_route("Login", None)], [], _index(), [_allow("route:Login")]) == []
+
+
+def test_validate_reports_an_undocumented_widget():
+    errors = gate.validate([_widget("Uhr", "widget-uhr")], [], _index(), [])
+
+    assert len(errors) == 1
+    assert "widget:Uhr: help_id 'widget-uhr' has no help page" in errors[0]
+    assert "{#widget-uhr}" in errors[0]
+
+
+def test_validate_accepts_an_allowlisted_widget():
+    assert gate.validate([_widget("Uhr", "widget-uhr")], [], _index(), [_allow("widget:Uhr")]) == []
+
+
+def test_validate_reports_an_unresolvable_reference():
+    reference = gate.Reference("logs-typo", "gui/src/views/LogView.vue:21")
+
+    errors = gate.validate([], [reference], _index("logs-level"), [])
+
+    assert errors == ["gui/src/views/LogView.vue:21: help_id 'logs-typo' does not resolve in the help index"]
+
+
+def test_validate_deduplicates_repeated_references():
+    reference = gate.Reference("logs-typo", "gui/src/views/LogView.vue:21")
+
+    errors = gate.validate([], [reference, reference], _index(), [])
+
+    assert len(errors) == 1
+
+
+@pytest.mark.parametrize("bad_id", ["", "1invalid", "has space", "{{ dynamic }}"])
+def test_validate_rejects_a_syntactically_invalid_reference(bad_id):
+    errors = gate.validate([], [gate.Reference(bad_id, "gui/src/View.vue:3")], _index(), [])
+
+    assert errors == [f"gui/src/View.vue:3: {bad_id!r} is not a valid help_id"]
+
+
+def test_validate_rejects_a_syntactically_invalid_surface_help_id():
+    errors = gate.validate([_route("Logs", "1nope")], [], _index(), [])
+
+    assert errors == ["route:Logs: '1nope' is not a valid help_id (gui/src/router/index.js)"]
+
+
+def test_validate_reports_two_surfaces_sharing_one_help_id():
+    errors = gate.validate([_route("Logs", "logs"), _route("Alogs", "logs")], [], _index("logs"), [])
+
+    assert errors == ["route:Logs: help_id 'logs' is already used by route:Alogs"]
+
+
+def test_validate_reports_help_index_duplicates():
+    errors = gate.validate([], [], _index(duplicates=['duplicate help_id "logs" in locale "de" (de/logs.md)']), [])
+
+    assert errors == ['help index: duplicate help_id "logs" in locale "de" (de/logs.md)']
+
+
+def test_validate_reports_a_help_id_missing_in_one_locale():
+    """generate-help-index.mjs only warns about this; the gate must fail."""
+    errors = gate.validate([], [], _index(incomplete=[{"id": "logs", "missing": ["en"]}]), [])
+
+    assert errors == ["help index: help_id 'logs' is missing in locale(s): en"]
+
+
+def test_validate_reports_a_stale_allowlist_entry():
+    errors = gate.validate([], [], _index(), [_allow("widget:Gone", line=7)])
+
+    assert errors == ["allowlist line 7: 'widget:Gone' is not a surface that exists — remove it"]
+
+
+def test_validate_reports_a_redundant_allowlist_entry():
+    errors = gate.validate([_route("Logs", "logs")], [], _index("logs"), [_allow("route:Logs", line=4)])
+
+    assert errors == ["allowlist line 4: 'route:Logs' is documented — remove the exemption"]
+
+
+def test_validate_keeps_skin_exemptions_when_skins_are_not_checked():
+    assert gate.validate([], [], _index(), [_allow("skin:glass")], skins_checked=False) == []
+
+
+def test_validate_checks_skin_exemptions_when_skins_are_checked():
+    errors = gate.validate([], [], _index(), [_allow("skin:glass", line=9)], skins_checked=True)
+
+    assert errors == ["allowlist line 9: 'skin:glass' is not a surface that exists — remove it"]
+
+
+def test_validate_tolerates_an_index_without_optional_keys():
+    assert gate.validate([], [], {}, []) == []
+
+
+# ── end to end ───────────────────────────────────────────────────────────────
+
+
+def test_collect_surfaces_without_a_skins_checkout():
+    surfaces = gate.collect_surfaces(REPO_ROOT, None)
+
+    assert {surface.kind for surface in surfaces} == {"route", "widget"}
+
+
+def test_collect_surfaces_with_a_skins_checkout(tmp_path):
+    _write_skin(tmp_path, "glass", json.dumps({"name": "glass"}))
+
+    surfaces = gate.collect_surfaces(REPO_ROOT, tmp_path)
+
+    assert [surface.key for surface in surfaces if surface.kind == "skin"] == ["skin:glass"]
+
+
+def test_main_rejects_a_missing_skins_dir(tmp_path, capsys):
+    assert gate.main(["--skins-dir", str(tmp_path / "absent")]) == 1
+    assert "does not exist" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the help index is built by generate-help-index.mjs")
+def test_the_repository_satisfies_its_own_help_contract(capsys):
+    assert gate.main([]) == 0
+    assert "Help contract check passed" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the help index is built by generate-help-index.mjs")
+def test_build_help_index_matches_the_generated_index():
+    index = gate.build_help_index(REPO_ROOT / "help")
+
+    assert index["duplicates"] == []
+    assert set(index["helpIds"]["settings"]) == {"de", "en"}
+
+
+def test_build_help_index_requires_node(monkeypatch):
+    monkeypatch.setattr(gate.shutil, "which", lambda _: None)
+
+    with pytest.raises(SystemExit, match="node is required"):
+        gate.build_help_index(REPO_ROOT / "help")
+
+
+def test_build_help_index_surfaces_a_generator_failure(monkeypatch):
+    monkeypatch.setattr(gate.shutil, "which", lambda _: "/usr/bin/node")
+    monkeypatch.setattr(
+        gate.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, stdout="", stderr="duplicate help_id\n"),
+    )
+
+    with pytest.raises(SystemExit, match="duplicate help_id"):
+        gate.build_help_index(REPO_ROOT / "help")

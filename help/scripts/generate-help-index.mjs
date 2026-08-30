@@ -165,9 +165,19 @@ export function generate(root = HELP_ROOT, outDir = join(root, 'public')) {
 
 // Only run when executed directly (`node generate-help-index.mjs`), not when
 // imported for unit testing (see generate-help-index.test.mjs).
+//
+// `--print` writes the computed index — including the duplicate and
+// locale-parity findings that are only warnings here — to stdout as JSON
+// instead of writing help-index.json. tools/check_help_contract.py consumes
+// that so the CI gate resolves help_ids through this exact scan rather than a
+// second, drift-prone reimplementation of it.
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    generate()
+    if (process.argv.includes('--print')) {
+      process.stdout.write(JSON.stringify(buildHelpIndex(HELP_ROOT)) + '\n')
+    } else {
+      generate()
+    }
   } catch (err) {
     console.error(err.message)
     process.exit(1)
