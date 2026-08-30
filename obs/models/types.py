@@ -242,6 +242,7 @@ def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
     * ``BOOLEAN``  → ``1/true/on/ein/yes/ja`` → ``True``; ``0/false/off/aus/no/nein`` → ``False``
     * ``INTEGER``  → ``int``; integral decimals and boolean literals (→ ``1``/``0``) are
       accepted, integrality being judged exactly (``1.0000000000000001`` is rejected)
+      and arbitrary precision preserved (a 400-digit literal keeps every digit)
     * ``FLOAT``    → ``float``; boolean literals map to ``1.0``/``0.0``
     * ``STRING``   → the value verbatim, never interpreted as boolean or number
     * ``DATE`` / ``TIME`` / ``DATETIME`` → ISO 8601 via ``fromisoformat``
@@ -271,8 +272,8 @@ def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
         if numeric is None:
             raise ValueError(f"Value {raw!r} is not a valid {name} literal")
         if name == "FLOAT":
-            return float(numeric)
-        if isinstance(numeric, decimal.Decimal) and numeric != numeric.to_integral_value():
+            return _to_float(raw, numeric)
+        if _has_fractional_part(numeric):
             raise ValueError(f"Value {raw!r} is not a valid INTEGER literal (fractional part would be lost)")
         return int(numeric)
 
@@ -294,52 +295,78 @@ _ISO_PARSERS: dict[str, Callable[[str], Any]] = {
 }
 
 
-def _float_representable(value: int | decimal.Decimal) -> int | decimal.Decimal | None:
-    """Return *value*, or ``None`` when ``float`` cannot hold it.
+def _to_float(raw: str, numeric: decimal.Decimal | float) -> float:
+    """Convert a parsed number to ``float`` for a FLOAT target.
 
-    ``float(huge_int)`` raises OverflowError while ``float(huge_decimal)`` merely
-    returns ``inf``, so both outcomes have to be caught here.
+    Only this path needs the range guard: ``float(huge_int)`` raises OverflowError
+    while ``float(huge_decimal)`` merely returns ``inf``, and both would reach the
+    MQTT topic as the invalid JSON literal ``Infinity``. INTEGER deliberately does
+    **not** go through here — a Python ``int`` is arbitrary-precision and both the
+    WriteRouter and the JSON serializer carry it fine, so a 400-digit INTEGER value
+    must survive even though no ``float`` could hold it.
     """
     try:
-        as_float = float(value)
+        as_float = float(numeric)
     except OverflowError:
-        return None
-    return value if math.isfinite(as_float) else None
+        raise ValueError(f"Value {raw!r} is out of range for a FLOAT literal") from None
+    if not math.isfinite(as_float):
+        raise ValueError(f"Value {raw!r} is out of range for a FLOAT literal")
+    return as_float
 
 
-def _parse_number(stripped: str, lowered: str) -> int | decimal.Decimal | None:
-    """Parse *stripped* as int/Decimal, mapping boolean literals to 1/0.
+def _has_fractional_part(numeric: decimal.Decimal | float) -> bool:
+    """Would converting *numeric* to ``int`` lose anything?
 
-    The non-integral branch parses to :class:`~decimal.Decimal` rather than
-    ``float`` so that the INTEGER caller can decide integrality on the value the
-    user actually typed: binary ``float`` silently rounds ``1.0000000000000001``
-    to ``1.0`` and ``9007199254740993.0`` to ``...992``, which would turn a lossy
-    conversion into an apparently exact one. ``Decimal`` accepts every spelling
-    ``float`` does (underscores, non-ASCII digits, exponents), so nothing that
-    parsed before stops parsing now.
+    ``Decimal`` is compared against its own integral value so the check stays exact
+    for literals binary ``float`` would have rounded (``1.0000000000000001``); the
+    ``float`` case only arises for the exotic spellings ``Decimal`` cannot encode.
+    """
+    if isinstance(numeric, decimal.Decimal):
+        return numeric != numeric.to_integral_value()
+    if isinstance(numeric, float):
+        return numeric != int(numeric)
+    return False
 
-    ``nan`` / ``inf`` are rejected, as is anything ``float`` cannot represent —
-    an exponent that overflows it (``1e999``) and, just as much, a plain integer
-    spelling too long for it (400 digits). They cannot be converted to INTEGER
-    (``int(inf)`` raises OverflowError) and serialize to the invalid JSON
-    literals ``NaN`` / ``Infinity`` on the MQTT value topic. The integer branch
-    has to be filtered too, not only the decimal one: ``int()`` is
-    arbitrary-precision and happily parses a 400-digit literal that the FLOAT
-    caller then cannot convert, raising ``OverflowError`` past every ``except
-    ValueError`` between here and the scheduler.
+
+def _parse_number(stripped: str, lowered: str) -> int | decimal.Decimal | float | None:
+    """Parse *stripped* as a number, mapping boolean literals to 1/0.
+
+    Three parsers in descending exactness, because each covers spellings the next
+    one does not:
+
+    1. ``int()`` — exact and arbitrary-precision, so a 400-digit INTEGER value
+       keeps every digit.
+    2. ``Decimal()`` — exact for fractional literals, which lets the INTEGER caller
+       judge integrality on what the user actually typed: binary ``float`` rounds
+       ``1.0000000000000001`` to ``1.0`` and ``9007199254740993.0`` to ``...992``,
+       turning a lossy conversion into an apparently exact one.
+    3. ``float()`` — the fallback for the exotic spellings ``Decimal`` rejects. Its
+       exponent field is bounded, so ``0e99999999999999999999`` raises
+       ``InvalidOperation`` there while ``float()`` reads the exactly representable
+       ``0.0`` the schedule point has always published.
+
+    Only genuinely non-numeric results are rejected here: ``nan`` and ``inf`` in
+    every spelling, which would reach the MQTT value topic as the invalid JSON
+    literals ``NaN`` / ``Infinity``. A value that is merely too large for ``float``
+    is **not** rejected at this level — that is the FLOAT caller's concern, see
+    :func:`_to_float`.
     """
     try:
-        as_int = int(stripped)
+        return int(stripped)
     except ValueError:
         pass
-    else:
-        return _float_representable(as_int)
     try:
         parsed = decimal.Decimal(stripped)
     except decimal.InvalidOperation:
         pass
     else:
-        return _float_representable(parsed) if parsed.is_finite() else None
+        return parsed if parsed.is_finite() else None
+    try:
+        as_float = float(stripped)
+    except ValueError:
+        pass
+    else:
+        return as_float if math.isfinite(as_float) else None
     if lowered in TRUE_LITERALS:
         return 1
     if lowered in FALSE_LITERALS:

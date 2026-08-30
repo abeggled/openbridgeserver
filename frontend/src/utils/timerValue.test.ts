@@ -118,6 +118,15 @@ describe('validateTimerValue', () => {
     expect(validateTimerValue('1.0000000000000001', 'FLOAT')).toBeNull()
   })
 
+  // Codex review round 3, PR #1155: a Python int is arbitrary-precision, so these
+  // are valid INTEGER values even though `Number()` overflows to Infinity.
+  it.each(['1e999', '9'.repeat(400), '-' + '9'.repeat(400), '0e' + '9'.repeat(20)])(
+    'accepts %s for INTEGER, which a Python int carries exactly',
+    (raw) => {
+      expect(validateTimerValue(raw, 'INTEGER')).toBeNull()
+    },
+  )
+
   it.each(['0', '1', '50.5', '-3.25', 'ein', 'off'])('accepts %s for FLOAT', (raw) => {
     expect(validateTimerValue(raw, 'FLOAT')).toBeNull()
   })

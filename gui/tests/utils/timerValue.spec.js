@@ -125,6 +125,13 @@ describe('validateTimerValue — INTEGER', () => {
   })
 })
 
+  it.each(['1e999', '9'.repeat(400), '-' + '9'.repeat(400), '0e' + '9'.repeat(20)])(
+    'accepts %s for INTEGER, which a Python int carries exactly',
+    (raw) => {
+      expect(validateTimerValue(raw, 'INTEGER')).toBeNull()
+    },
+  )
+
 describe('validateTimerValue — FLOAT', () => {
   it.each(['0', '1', '50.5', '-3.25', 'ein', 'off'])('accepts %s', (raw) => {
     expect(validateTimerValue(raw, 'FLOAT')).toBeNull()
@@ -141,7 +148,10 @@ describe('validateTimerValue — FLOAT', () => {
     expect(validateTimerValue(raw, 'FLOAT')).toBe('adapters.bindingForm.ztOutputValueErrorFloat')
   })
 
-  it.each(['inf', 'Infinity', 'nan', '1e999', '0x10'])('rejects %s for INTEGER too', (raw) => {
+  // `1e999` is deliberately absent: it is exactly 10**999 and therefore a valid
+  // INTEGER (Python ints are arbitrary-precision) — it is only out of range for a
+  // *float*, so it stays in the FLOAT list above. Codex review round 3, PR #1155.
+  it.each(['inf', 'Infinity', 'nan', '0x10'])('rejects %s for INTEGER too', (raw) => {
     expect(validateTimerValue(raw, 'INTEGER')).toBe('adapters.bindingForm.ztOutputValueErrorInteger')
   })
 

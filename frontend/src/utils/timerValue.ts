@@ -195,11 +195,17 @@ export function validateTimerValue(raw: unknown, dataType: string | null | undef
         ? null
         : ERROR_KEYS.boolean
     case 'integer': {
-      const n = parseNumber(trimmed, lowered)
-      if (n === null) return ERROR_KEYS.integer
-      // A boolean literal already mapped to 1/0 and is integral by construction;
-      // a decimal literal is judged on its text, see `isIntegralDecimal`.
-      return DECIMAL_RE.test(trimmed) && !isIntegralDecimal(trimmed) ? ERROR_KEYS.integer : null
+      // Magnitude is irrelevant for INTEGER: a Python `int` is arbitrary-precision,
+      // so a 400-digit literal (or `1e999`) is a perfectly good value even though
+      // `Number()` overflows to Infinity here — going through `parseNumber` would
+      // reject it and block saving a binding the API happily accepts. Only
+      // integrality is checked, and on the text, see `isIntegralDecimal`. A boolean
+      // literal maps to 1/0 and is integral by construction; anything else is not a
+      // number at all.
+      if (DECIMAL_RE.test(trimmed)) return isIntegralDecimal(trimmed) ? null : ERROR_KEYS.integer
+      return TIMER_TRUE_LITERALS.includes(lowered) || TIMER_FALSE_LITERALS.includes(lowered)
+        ? null
+        : ERROR_KEYS.integer
     }
     case 'float':
       return parseNumber(trimmed, lowered) === null ? ERROR_KEYS.float : null

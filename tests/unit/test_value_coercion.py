@@ -8,6 +8,7 @@ Zeitschaltuhr adapter and the binding save validation.
 from __future__ import annotations
 
 import datetime
+import decimal
 
 import pytest
 
@@ -181,9 +182,14 @@ class TestCoerceTextValueNumeric:
         with pytest.raises(ValueError, match="FLOAT"):
             coerce_text_value_for_type(raw, "FLOAT")
 
-    @pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "nan", "NaN", "1e999"])
+    @pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "nan", "NaN"])
     def test_integer_rejects_non_finite_values(self, raw):
-        """int(inf) raises OverflowError, which callers do not catch — reject as ValueError."""
+        """int(inf) raises OverflowError, which callers do not catch — reject as ValueError.
+
+        ``1e999`` is deliberately absent: it is exactly 10**999 and therefore a perfectly
+        good INTEGER, merely out of range for a *float* — see
+        :meth:`test_integer_keeps_arbitrary_precision`.
+        """
         with pytest.raises(ValueError, match="INTEGER"):
             coerce_text_value_for_type(raw, "INTEGER")
 
@@ -209,27 +215,43 @@ class TestCoerceTextValueNumeric:
         """``int(float('9007199254740993.0'))`` loses the last digit; Decimal does not."""
         assert coerce_text_value_for_type(raw, "INTEGER") == expected
 
-    @pytest.mark.parametrize("data_type", ["INTEGER", "FLOAT"])
-    def test_integer_spelling_too_long_for_float_is_rejected(self, data_type):
+    @pytest.mark.parametrize("raw", ["9" * 400, "-" + "9" * 400, "1e999"])
+    def test_float_rejects_literals_out_of_its_range(self, raw):
         """Codex review on PR #1155 — ``int()`` is arbitrary-precision, ``float()`` is not.
 
-        A 400-digit literal parsed straight to ``int`` reached ``float(numeric)`` on the
-        FLOAT path and raised OverflowError, which is not a ValueError: it escaped both
-        the API's 422 handler and the scheduler's mismatch path, so the binding raised on
-        every firing instead of being reported once.
+        A 400-digit literal parsed straight to ``int`` reached ``float(numeric)`` and
+        raised OverflowError, which is not a ValueError: it escaped both the API's 422
+        handler and the scheduler's mismatch path, so the binding raised on every firing
+        instead of being reported once.
         """
-        with pytest.raises(ValueError, match=data_type):
-            coerce_text_value_for_type("9" * 400, data_type)
+        with pytest.raises(ValueError, match="FLOAT"):
+            coerce_text_value_for_type(raw, "FLOAT")
 
-    @pytest.mark.parametrize("raw", ["9" * 100, "-" + "9" * 100])
-    def test_long_but_float_representable_integers_are_still_accepted(self, raw):
-        assert coerce_text_value_for_type(raw, "INTEGER") == int(raw)
+    @pytest.mark.parametrize("raw", ["9" * 400, "-" + "9" * 400, "9" * 100, "1e999"])
+    def test_integer_keeps_arbitrary_precision(self, raw):
+        """Codex review round 3 — only FLOAT needs the range guard.
+
+        A Python ``int`` has no upper bound and both the WriteRouter and the JSON
+        serializer carry it, so an INTEGER schedule point must keep publishing a value
+        no ``float`` could hold. Guarding it here was an over-correction of the fix
+        above and silently disabled such a schedule point.
+        """
+        assert coerce_text_value_for_type(raw, "INTEGER") == int(decimal.Decimal(raw))
+
+    @pytest.mark.parametrize("data_type", ["FLOAT", "INTEGER"])
+    def test_zero_with_an_exponent_decimal_cannot_encode_is_still_zero(self, data_type):
+        """Codex review round 3 — ``Decimal``'s exponent field is bounded.
+
+        ``Decimal('0e99999999999999999999')`` raises InvalidOperation while ``float()``
+        reads the exactly representable ``0.0``; falling through to the ValueError would
+        have disabled a schedule point over a value that is simply zero.
+        """
+        assert coerce_text_value_for_type("0e" + "9" * 20, data_type) == 0
 
     def test_no_non_value_error_escapes_for_oversized_literals(self):
         """The callers catch ValueError only — OverflowError would be a 500."""
-        for data_type in ("INTEGER", "FLOAT"):
-            with pytest.raises(ValueError):
-                coerce_text_value_for_type("-" + "9" * 400, data_type)
+        with pytest.raises(ValueError):
+            coerce_text_value_for_type("-" + "9" * 400, "FLOAT")
 
 
 class TestCoerceTextValueString:
