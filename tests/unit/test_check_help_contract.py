@@ -295,6 +295,21 @@ def test_parse_routes_rejects_an_unterminated_array():
         gate.parse_routes("const routes = [ { name: 'X' },\n")
 
 
+def test_parse_routes_ignores_a_similarly_named_array_declared_earlier():
+    """`const routesBackup = [...]` is not the router table."""
+    source = (
+        "const routesBackup = [\n  { path: '/old', name: 'Backup' },\n]\n\n"
+        "const routes = [\n  { path: '/', name: 'Dashboard', meta: { helpId: 'dashboard' } },\n]\n"
+    )
+
+    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("Dashboard", "dashboard")]
+
+
+def test_parse_routes_reports_a_missing_declaration():
+    with pytest.raises(ValueError, match="no declaration matching"):
+        gate.parse_routes("const other = []\n")
+
+
 def test_parse_routes_matches_the_real_router():
     source = (REPO_ROOT / "gui" / "src" / "router" / "index.js").read_text(encoding="utf-8")
 
@@ -665,6 +680,15 @@ def test_collect_help_references_reads_script_with_any_valid_end_tag(tmp_path, e
     (source / "View.vue").write_text(f"<script setup>\nconst m = {{ helpId: 'logs-level' }}\n{end_tag}\n", encoding="utf-8")
 
     assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_ignores_a_custom_element_named_like_script(tmp_path):
+    """`<script-editor>` is an ordinary custom element, not an SFC script block."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text("<template>\n  <script-editor>Set helpId: 'gone' here</script-editor>\n</template>\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
 
 
 def test_collect_help_references_does_not_treat_a_similar_tag_as_the_end(tmp_path):

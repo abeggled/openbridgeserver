@@ -268,6 +268,7 @@ _ANY_NAME_PROPERTY_RE = _js_property("name", r"")
 _SHORTHAND_NAME_RE = re.compile(r"(?<![\w$.])name\s*(?=[,}])")
 # `WidgetRegistry . register (` is the same call after a formatter touches it.
 _WIDGET_REGISTER_RE = re.compile(r"\bWidgetRegistry\s*\.\s*register\s*\(")
+_ROUTES_DECLARATION_RE = re.compile(r"\b(?:const|let|var)\s+routes\s*=")
 
 # Split before an uppercase letter that starts a new word, so acronyms stay
 # whole: ValueDisplay -> value-display, QrCode -> qr-code, RTR -> rtr,
@@ -510,10 +511,17 @@ def _balanced_array_after(text: str, start: int) -> str | None:
     return None
 
 
-def _array_body(source: str, declaration: str) -> tuple[str, int]:
-    """Return ``declaration``'s array-literal body and the offset it starts at."""
-    start = source.index(declaration) + len(declaration)
-    open_bracket = source.index("[", start)
+def _array_body(source: str, declaration: re.Pattern) -> tuple[str, int]:
+    """Return the array-literal body ``declaration`` introduces, and its offset.
+
+    Matched as a whole identifier: a plain substring search would accept
+    `const routesBackup = [...]` declared earlier in the file and enumerate
+    that array instead of the router's own.
+    """
+    found = declaration.search(source)
+    if found is None:
+        raise ValueError(f"no declaration matching {declaration.pattern!r}")
+    open_bracket = source.index("[", found.end())
     depth = 0
     for index in range(open_bracket, len(source)):
         if source[index] == "[":
@@ -522,7 +530,7 @@ def _array_body(source: str, declaration: str) -> tuple[str, int]:
             depth -= 1
             if depth == 0:
                 return source[open_bracket + 1 : index], open_bracket + 1
-    raise ValueError(f"unterminated array literal after {declaration!r}")
+    raise ValueError(f"unterminated array literal after {declaration.pattern!r}")
 
 
 def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[Surface]:
@@ -541,7 +549,7 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
     # property (or unbalance the braces); values come from `source` at the
     # same offsets.
     masked = _blank_string_contents(source)
-    body, body_offset = _array_body(masked, "const routes")
+    body, body_offset = _array_body(masked, _ROUTES_DECLARATION_RE)
     try:
         records = list(_iter_route_records(body, body_offset))
     except _UnreadableRoute as unreadable:
@@ -709,7 +717,10 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
 # `</script\s*>` missed `</script\t\n bar>` (CodeQL js/bad-tag-filter) — and a
 # missed end tag means the block is not recognised at all, so declarations
 # inside it would go unseen and a dead help button would pass.
-_SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>(.*?)</script(?=[\s/>])[^>]*>", re.DOTALL | re.IGNORECASE)
+# Both tags need a real HTML delimiter after the name: `\b` also matches
+# `<script-editor>`, a perfectly ordinary custom element, which would then be
+# read as an SFC script block all the way to the next real `</script>`.
+_SCRIPT_BLOCK_RE = re.compile(r"<script(?=[\s/>])[^>]*>(.*?)</script(?=[\s/>])[^>]*>", re.DOTALL | re.IGNORECASE)
 
 
 def _blank_outside_script(source: str) -> str:
