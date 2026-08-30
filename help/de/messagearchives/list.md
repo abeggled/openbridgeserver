@@ -2,7 +2,7 @@
 title: Meldungsarchive
 ---
 
-# Meldungsarchive
+# Meldungsarchive {#messagearchives}
 
 Meldungsarchive speichern strukturierte Ereignismeldungen (System, Sicherheit,
 Benachrichtigungen, Automatisierungen, Adapter-Diagnosen u. a.) getrennt von der

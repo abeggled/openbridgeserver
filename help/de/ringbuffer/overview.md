@@ -2,7 +2,7 @@
 title: Monitor
 ---
 
-# Monitor
+# Monitor {#ringbuffer}
 
 Der Monitor zeigt Wertänderungen live an, sobald sie im System eintreffen, und hält eine
 konfigurierbar große Historie davon im Ringbuffer vor. Anders als die Objekt-Historie

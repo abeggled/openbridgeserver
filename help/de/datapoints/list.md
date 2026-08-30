@@ -2,7 +2,7 @@
 title: Objekte
 ---
 
-# Objekte
+# Objekte {#datapoints}
 
 Ein Objekt (DataPoint) ist die zentrale Dateneinheit von open bridge server — jeder Sensor-
 oder Aktorwert, jede von einem Adapter oder der Logik verwaltete Größe wird als Objekt
@@ -44,3 +44,28 @@ Suche, Typ, Adapter, Tag, Qualität und Hierarchie-Auswahl in einem Schritt zur�
   Werte oder Historie) und Löschen (entfernt auch alle Verknüpfungen des Objekts).
 
 Die Liste lädt beim Scrollen automatisch weitere Einträge nach.
+
+## Objekt-Detail {#datapoints-detail}
+
+Ein Klick auf den Namen in der Tabelle öffnet die Detailseite eines Objekts. Sie fasst
+zusammen, was das System über dieses eine Objekt weiss, und ist gleichzeitig der Ort, an dem
+seine Verknüpfungen gepflegt werden:
+
+- **Aktueller Wert** — der zuletzt bekannte Wert, live aktualisiert, mit Zeitstempel,
+  MQTT-Topic und (falls gesetzt) MQTT-Alias. Darunter erlaubt **Wert schreiben** das
+  direkte Setzen eines Werts — bei BOOLEAN über zwei Schaltflächen, sonst über ein
+  Eingabefeld. Der Bereich bleibt gesperrt, solange keine schreibbare Verknüpfung
+  existiert.
+- **Eigenschaften** — Name, Datentyp, Einheit, Tags sowie die Schalter **Wert speichern**
+  (Wert überlebt einen Neustart) und **Historisierung** (Werte werden langfristig
+  aufgezeichnet, siehe **Einstellungen → Historie DB**). „Bearbeiten" öffnet dieselbe Maske
+  wie in der Objektliste, „Historie →" springt mit dem Objekt als Filter in die Historie.
+- **Hierarchie-Zuordnungen** — die Knoten der Objekt-Hierarchie, denen das Objekt zugeordnet
+  ist; Zuordnungen lassen sich hier direkt hinzufügen und entfernen.
+- **Adapter Verknüpfungen** — alle Bindings zu Adapter-Instanzen, jeweils mit Richtung
+  (Lesen, Schreiben, Lesen/Schreiben) und protokollspezifischen Angaben (bei KNX z. B.
+  Gruppenadresse und Rückmelde-GA). Neue Verknüpfungen werden hier angelegt, bestehende
+  bearbeitet, deaktiviert oder gelöscht.
+- **Logik Verknüpfungen** — die Logikblätter, die dieses Objekt lesen oder beschreiben, mit
+  Sprung in das jeweilige Blatt. Rein informativ: bearbeitet wird die Verwendung im
+  Logikmodul selbst.

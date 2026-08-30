@@ -2,7 +2,7 @@
 title: Logikmodul
 ---
 
-# Logikmodul
+# Logikmodul {#logic}
 
 Das Logikmodul ist ein visueller Graph-Editor für eigene Automatisierungen: Funktionsblöcke
 („Objekt lesen", „Objekt schreiben", logische Verknüpfungen, Mathematik, Zeitsteuerung,
