@@ -296,9 +296,9 @@
       />
 
       <input v-else-if="valueKind === 'date'" v-model="textValue" type="date" class="input" data-testid="zt-value-date" />
-      <input v-else-if="valueKind === 'time'" v-model="textValue" type="time" step="1" class="input" data-testid="zt-value-time" />
+      <input v-else-if="valueKind === 'time' && !needsTextFallback" v-model="textValue" type="time" step="1" class="input" data-testid="zt-value-time" />
       <input
-        v-else-if="valueKind === 'datetime'"
+        v-else-if="valueKind === 'datetime' && !needsTextFallback"
         v-model="textValue"
         type="datetime-local"
         step="1"
@@ -316,9 +316,10 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   timerValueAsBool,
+  timerValueFitsPicker,
   timerValueHintKey,
   timerValueInputKind,
   timerValueStep,
@@ -376,6 +377,17 @@ watch(
   },
   { immediate: true },
 )
+
+// Ein Altwert, den ein nativer Picker nicht halten kann (UTC-Offset, Sekunden-
+// bruchteile, blosses Datum als Zeitstempel), bekommt stattdessen ein Textfeld —
+// sonst stünde das Feld leer da und der gespeicherte Wert wäre beim nächsten
+// Speichern weg. Bewusst nur beim Wechsel des Objekttyps neu bestimmt und nicht
+// bei jedem Tastendruck: sonst tauscht das Löschen des Offsets das Textfeld
+// mitten im Tippen gegen einen Picker und der Fokus geht verloren.
+const needsTextFallback = ref(!timerValueFitsPicker(props.cfg.value, props.dpDataType))
+watch(valueKind, () => {
+  needsTextFallback.value = !timerValueFitsPicker(props.cfg.value, props.dpDataType)
+})
 
 // `<input type="number">` hands Vue a Number — but the backend schema declares
 // `value: str`, so the config must keep a string here.

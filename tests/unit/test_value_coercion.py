@@ -209,6 +209,28 @@ class TestCoerceTextValueNumeric:
         """``int(float('9007199254740993.0'))`` loses the last digit; Decimal does not."""
         assert coerce_text_value_for_type(raw, "INTEGER") == expected
 
+    @pytest.mark.parametrize("data_type", ["INTEGER", "FLOAT"])
+    def test_integer_spelling_too_long_for_float_is_rejected(self, data_type):
+        """Codex review on PR #1155 — ``int()`` is arbitrary-precision, ``float()`` is not.
+
+        A 400-digit literal parsed straight to ``int`` reached ``float(numeric)`` on the
+        FLOAT path and raised OverflowError, which is not a ValueError: it escaped both
+        the API's 422 handler and the scheduler's mismatch path, so the binding raised on
+        every firing instead of being reported once.
+        """
+        with pytest.raises(ValueError, match=data_type):
+            coerce_text_value_for_type("9" * 400, data_type)
+
+    @pytest.mark.parametrize("raw", ["9" * 100, "-" + "9" * 100])
+    def test_long_but_float_representable_integers_are_still_accepted(self, raw):
+        assert coerce_text_value_for_type(raw, "INTEGER") == int(raw)
+
+    def test_no_non_value_error_escapes_for_oversized_literals(self):
+        """The callers catch ValueError only — OverflowError would be a 500."""
+        for data_type in ("INTEGER", "FLOAT"):
+            with pytest.raises(ValueError):
+                coerce_text_value_for_type("-" + "9" * 400, data_type)
+
 
 class TestCoerceTextValueString:
     @pytest.mark.parametrize("raw", ["on", "off", "1", "0", "true", "ein", "50", ""])
@@ -228,6 +250,17 @@ class TestCoerceTextValueTemporal:
 
     def test_time_without_seconds(self):
         assert coerce_text_value_for_type("08:00", "TIME") == datetime.time(8, 0)
+
+    @pytest.mark.parametrize("raw", ["08:00:00+23:59", "08:00:00+00:60", "08:00:00+2359", "08:00:00Z"])
+    def test_time_accepts_offsets_inside_the_iso_range(self, raw):
+        """The limit is the offset *total*: `+00:60` is a valid one-hour offset."""
+        assert coerce_text_value_for_type(raw, "TIME") is not None
+
+    @pytest.mark.parametrize("raw", ["08:00:00+24:00", "08:00:00+23:60", "08:00:00-24:00", "08:00:00+99:00"])
+    def test_time_rejects_offsets_outside_the_iso_range(self, raw):
+        """An offset must be strictly inside ±24 h — both frontends mirror this."""
+        with pytest.raises(ValueError, match="TIME"):
+            coerce_text_value_for_type(raw, "TIME")
 
     def test_datetime(self):
         assert coerce_text_value_for_type("2026-12-24T08:00:00", "DATETIME") == datetime.datetime.fromisoformat("2026-12-24T08:00:00")

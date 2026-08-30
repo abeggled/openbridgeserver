@@ -294,6 +294,19 @@ _ISO_PARSERS: dict[str, Callable[[str], Any]] = {
 }
 
 
+def _float_representable(value: int | decimal.Decimal) -> int | decimal.Decimal | None:
+    """Return *value*, or ``None`` when ``float`` cannot hold it.
+
+    ``float(huge_int)`` raises OverflowError while ``float(huge_decimal)`` merely
+    returns ``inf``, so both outcomes have to be caught here.
+    """
+    try:
+        as_float = float(value)
+    except OverflowError:
+        return None
+    return value if math.isfinite(as_float) else None
+
+
 def _parse_number(stripped: str, lowered: str) -> int | decimal.Decimal | None:
     """Parse *stripped* as int/Decimal, mapping boolean literals to 1/0.
 
@@ -305,21 +318,28 @@ def _parse_number(stripped: str, lowered: str) -> int | decimal.Decimal | None:
     ``float`` does (underscores, non-ASCII digits, exponents), so nothing that
     parsed before stops parsing now.
 
-    ``nan`` / ``inf`` are rejected, as is anything that overflows ``float`` such
-    as ``1e999``: they cannot be converted to INTEGER (``int(inf)`` raises
-    OverflowError) and serialize to the invalid JSON literals ``NaN`` /
-    ``Infinity`` on the MQTT value topic.
+    ``nan`` / ``inf`` are rejected, as is anything ``float`` cannot represent —
+    an exponent that overflows it (``1e999``) and, just as much, a plain integer
+    spelling too long for it (400 digits). They cannot be converted to INTEGER
+    (``int(inf)`` raises OverflowError) and serialize to the invalid JSON
+    literals ``NaN`` / ``Infinity`` on the MQTT value topic. The integer branch
+    has to be filtered too, not only the decimal one: ``int()`` is
+    arbitrary-precision and happily parses a 400-digit literal that the FLOAT
+    caller then cannot convert, raising ``OverflowError`` past every ``except
+    ValueError`` between here and the scheduler.
     """
     try:
-        return int(stripped)
+        as_int = int(stripped)
     except ValueError:
         pass
+    else:
+        return _float_representable(as_int)
     try:
         parsed = decimal.Decimal(stripped)
     except decimal.InvalidOperation:
         pass
     else:
-        return parsed if parsed.is_finite() and math.isfinite(float(parsed)) else None
+        return _float_representable(parsed) if parsed.is_finite() else None
     if lowered in TRUE_LITERALS:
         return 1
     if lowered in FALSE_LITERALS:

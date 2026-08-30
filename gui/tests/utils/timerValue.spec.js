@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   timerValueAsBool,
+  timerValueFitsPicker,
   timerValueHintKey,
   timerValueInputKind,
   timerValueStep,
@@ -269,5 +270,62 @@ describe('validateTimerValue — parity with the backend', () => {
 
   it('exercises a meaningful number of cases', () => {
     expect(fixture.values.length * fixture.types.length).toBeGreaterThan(500)
+  })
+})
+
+describe('validateTimerValue — UTC offsets (Codex review, PR #1155)', () => {
+  // `time.fromisoformat()` checks the offset *total*, not its two components:
+  // `+00:60` is a valid one-hour offset, `+23:60` is exactly 24 h and is not.
+  it.each(['08:00:00+23:59', '08:00:00+00:60', '08:00:00+2359', '08:00:00Z', '08:00:00-23:59'])(
+    'accepts %s, which the API accepts too',
+    (raw) => {
+      expect(validateTimerValue(raw, 'TIME')).toBeNull()
+    },
+  )
+
+  it.each(['08:00:00+24:00', '08:00:00+23:60', '08:00:00-24:00', '08:00:00+99:00'])(
+    'rejects %s, which the API answers with 422',
+    (raw) => {
+      expect(validateTimerValue(raw, 'TIME')).toBe('adapters.bindingForm.ztOutputValueErrorTime')
+    },
+  )
+
+  it('applies the same offset limit to the time half of a datetime', () => {
+    expect(validateTimerValue('2026-12-24T08:00:00+23:59', 'DATETIME')).toBeNull()
+    expect(validateTimerValue('2026-12-24T08:00:00+24:00', 'DATETIME')).toBe('adapters.bindingForm.ztOutputValueErrorDatetime')
+  })
+})
+
+describe('timerValueFitsPicker', () => {
+  it.each([
+    ['08:00', 'TIME'],
+    ['08:00:00', 'TIME'],
+    ['', 'TIME'],
+    ['2026-12-24T08:00', 'DATETIME'],
+    ['2026-12-24T08:00:00', 'DATETIME'],
+    ['2026-12-24', 'DATE'],
+    ['50', 'FLOAT'],
+    ['on', 'STRING'],
+  ])('%s is representable in the native %s control', (raw, dataType) => {
+    expect(timerValueFitsPicker(raw, dataType)).toBe(true)
+  })
+
+  // Values the validator still accepts for legacy configs but a native control
+  // sanitizes to an empty field — they must fall back to a text input.
+  it.each([
+    ['08:00:00+02:00', 'TIME'],
+    ['08:00:00Z', 'TIME'],
+    ['08:00:00.5', 'TIME'],
+    ['2026-12-24T08:00:00+02:00', 'DATETIME'],
+    ['2026-12-24 08:00', 'DATETIME'],
+    ['2026-12-24t08:00', 'DATETIME'],
+    ['2026-12-24', 'DATETIME'],
+  ])('%s is NOT representable in the native %s control', (raw, dataType) => {
+    expect(timerValueFitsPicker(raw, dataType)).toBe(false)
+  })
+
+  it('treats null/undefined as empty, i.e. fitting', () => {
+    expect(timerValueFitsPicker(null, 'TIME')).toBe(true)
+    expect(timerValueFitsPicker(undefined, 'DATETIME')).toBe(true)
   })
 })

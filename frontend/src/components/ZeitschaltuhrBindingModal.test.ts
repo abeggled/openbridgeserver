@@ -94,6 +94,32 @@ describe('ZeitschaltuhrBindingModal — typed switching value', () => {
     expect(w.find('[data-testid="zst-value-error"]').exists()).toBe(false)
   })
 
+  // Codex review on PR #1155: a native `time`/`datetime-local` control cannot hold a
+  // UTC offset (or fractional seconds, or a bare date used as a datetime). The browser
+  // sanitizes it to an empty field, so the stored value would look unset and be wiped
+  // on the next save — those legacy literals get a text field instead.
+  it.each([
+    ['TIME', '08:00:00+02:00', 'zst-value-time'],
+    ['TIME', '08:00:00Z', 'zst-value-time'],
+    ['DATETIME', '2026-12-24T08:00:00+02:00', 'zst-value-datetime'],
+    ['DATETIME', '2026-12-24', 'zst-value-datetime'],
+  ])('falls back to a text field for the %s value %s', async (dataType, value, pickerTestid) => {
+    const w = await mountModal(dataType, value)
+    expect(w.find(`[data-testid="${pickerTestid}"]`).exists()).toBe(false)
+    const text = w.find('[data-testid="zst-value-text"]')
+    expect(text.exists()).toBe(true)
+    expect((text.element as HTMLInputElement).value).toBe(value)
+  })
+
+  it.each([
+    ['08:00:00+24:00', 'TIME'],
+    ['08:00:00+23:60', 'TIME'],
+  ])('blocks saving %s, an offset the API rejects', async (value, dataType) => {
+    const w = await mountModal(dataType, value)
+    expect(w.find('[data-testid="zst-value-error"]').exists()).toBe(true)
+    expect(w.get('[data-testid="zst-save-btn"]').attributes('disabled')).toBeDefined()
+  })
+
   it('shows the object type and unit next to the label', async () => {
     const w = await mountModal('FLOAT', '50', '%')
     expect(w.get('[data-testid="zst-value-type"]').text()).toBe('FLOAT · %')

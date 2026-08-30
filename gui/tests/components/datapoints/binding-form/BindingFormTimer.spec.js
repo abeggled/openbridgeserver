@@ -283,6 +283,48 @@ describe('BindingFormTimer — typed output value input', () => {
     expect(w.find(`[data-testid="${testid}"]`).exists()).toBe(true)
   })
 
+  // Codex review on PR #1155: a native `time`/`datetime-local` control cannot hold a
+  // UTC offset (or fractional seconds, or a bare date used as a datetime). The browser
+  // sanitizes it to an empty field, so the stored value would look unset and be wiped
+  // on the next save — those legacy literals get a text field instead.
+  it.each([
+    ['TIME', '08:00:00+02:00', 'zt-value-time'],
+    ['TIME', '08:00:00Z', 'zt-value-time'],
+    ['TIME', '08:00:00.5', 'zt-value-time'],
+    ['DATETIME', '2026-12-24T08:00:00+02:00', 'zt-value-datetime'],
+    ['DATETIME', '2026-12-24', 'zt-value-datetime'],
+  ])('falls back to a text field for the %s value %s', (dataType, value, pickerTestid) => {
+    const w = mk({ value }, { dpDataType: dataType })
+    expect(w.find(`[data-testid="${pickerTestid}"]`).exists()).toBe(false)
+    const text = w.find('[data-testid="zt-value-text"]')
+    expect(text.exists()).toBe(true)
+    expect(text.element.value).toBe(value)
+  })
+
+  it.each([
+    ['TIME', '08:00:00', 'zt-value-time'],
+    ['DATETIME', '2026-12-24T08:00:00', 'zt-value-datetime'],
+  ])('keeps the native picker for the representable %s value %s', (dataType, value, pickerTestid) => {
+    const w = mk({ value }, { dpDataType: dataType })
+    expect(w.find(`[data-testid="${pickerTestid}"]`).exists()).toBe(true)
+  })
+
+  it('does not swap the control while the value is being edited', async () => {
+    // Deleting the offset must not turn the text field into a picker mid-typing.
+    const w = mk({ value: '08:00:00+02:00' }, { dpDataType: 'TIME' })
+    await w.find('[data-testid="zt-value-text"]').setValue('08:00:00')
+    expect(w.find('[data-testid="zt-value-text"]').exists()).toBe(true)
+    expect(w.find('[data-testid="zt-value-time"]').exists()).toBe(false)
+  })
+
+  it('re-evaluates the control when the target object type changes', async () => {
+    const w = mk({ value: '08:00:00+02:00' }, { dpDataType: 'TIME' })
+    expect(w.find('[data-testid="zt-value-text"]').exists()).toBe(true)
+    await w.setProps({ dpDataType: 'STRING' })
+    await w.setProps({ dpDataType: 'TIME' })
+    expect(w.find('[data-testid="zt-value-text"]').exists()).toBe(true)
+  })
+
   it('shows the data type next to the label, with the unit when present', () => {
     expect(mk({}, { dpDataType: 'FLOAT' }).find('[data-testid="zt-value-type"]').text()).toBe('FLOAT')
     expect(mk({}, { dpDataType: 'FLOAT', dpUnit: '%' }).find('[data-testid="zt-value-type"]').text()).toBe('FLOAT · %')

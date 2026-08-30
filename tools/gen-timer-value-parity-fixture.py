@@ -29,6 +29,8 @@ VALUES = [
     "0x10", "0b101", "0o17", "inf", "-inf", "Infinity", "nan", "NaN", "1e999", "-1e999",
     # decimals whose integrality binary float would misjudge (Codex review, #1155)
     "1.0000000000000001", "9007199254740993.0", "1.5e1", "1.55e1", "5.", "1e-3", "1000e-3",
+    # integer spellings float cannot hold — int() parses them, float() overflows (#1155)
+    "9" * 400, "9" * 100, "-" + "9" * 400,
     # dates, including impossible calendar dates
     "2026-12-24", "2026-02-30", "2026-13-01", "2026-04-31", "2026-00-10", "2026-01-00",
     "2024-02-29", "2026-02-29", "2000-02-29", "1900-02-29", "24.12.2026", "2026-1-1",
@@ -37,10 +39,14 @@ VALUES = [
     # times, including out-of-range components and offset/fraction suffixes
     "08:00", "08:00:00", "8:00", "25:00", "08:60", "08:00:60", "23:59:59", "00:00",
     "08:00:00.5", "08:00:00+02:00", "08:00:00Z", "08:00:00z", "08:00:00+0200", "morgens",
+    # UTC offsets — valid iff the *total* is strictly inside ±24 h (#1155)
+    "08:00:00+23:59", "08:00:00+24:00", "08:00:00+23:60", "08:00:00+00:60",
+    "08:00:00-24:00", "08:00:00+99:00", "08:00:00+2359",
     # datetimes, including separator variants and a bare date
     "2026-12-24T08:00", "2026-12-24 08:00", "2026-12-24t08:00", "2026-12-24T08:00:00+02:00",
     "2026-12-24T08:00:00Z", "2026-12-24T08:00:00z", "2026-12-24T25:00", "2026-02-30T08:00",
     "2026-12-24T", "2026-12-24T08:00:00.123456", "T08:00", "0000-12-24T08:00", "0000-12-24",
+    "2026-12-24T08:00:00+24:00", "2026-12-24T08:00:00+23:59",
 ]  # fmt: skip
 
 TYPES = ["BOOLEAN", "INTEGER", "FLOAT", "STRING", "DATE", "TIME", "DATETIME", "UNKNOWN"]

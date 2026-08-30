@@ -19,9 +19,15 @@ const DECIMAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 // uppercase-only and the time half of a datetime is optional, both matching
 // CPython. The separator accepts `T`, `t` and a space, likewise per CPython.
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-const TIME_RE = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/
+const TIME_RE = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):?(\d{2}))?$/
 const DATETIME_RE = /^(\d{4}-\d{2}-\d{2})(?:[Tt ](.+))?$/
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+// What a native `time` / `datetime-local` control round-trips, see
+// `timerValueFitsPicker()`. Deliberately narrower than the validators above:
+// the browser normalizes the value, so a lowercase `t` or a space separator
+// does not survive either.
+const PICKER_TIME_RE = /^\d{2}:\d{2}(?::\d{2})?$/
+const PICKER_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/
 
 const ERROR_KEYS = {
   boolean:  'adapters.bindingForm.ztOutputValueErrorBoolean',
@@ -124,7 +130,12 @@ function isValidTime(value) {
   const m = TIME_RE.exec(value)
   if (!m) return false
   if (Number(m[1]) > 23 || Number(m[2]) > 59) return false
-  return m[3] === undefined || Number(m[3]) <= 59
+  if (m[3] !== undefined && Number(m[3]) > 59) return false
+  // A UTC offset has to stay strictly inside ±24 h, which is what
+  // `time.fromisoformat()` enforces — and it checks the *total*, not the two
+  // components: `+00:60` is a valid one-hour offset while `+23:60` is not,
+  // both of which a per-component range check would get wrong.
+  return m[4] === undefined || Number(m[4]) * 60 + Number(m[5]) < 24 * 60
 }
 
 function isValidDateTime(value) {
@@ -133,6 +144,28 @@ function isValidDateTime(value) {
   // A bare date is a valid datetime — `datetime.fromisoformat('2026-12-24')`
   // yields midnight, so rejecting it here would block a value the API accepts.
   return m[2] === undefined || isValidTime(m[2])
+}
+
+/**
+ * Can a native date/time picker hold this literal as-is?
+ *
+ * `<input type="time">` / `type="datetime-local"` only accept `HH:MM[:SS]` (with a
+ * `T`-separated date for the latter). Everything else this validator still accepts
+ * for legacy configs — a UTC offset, a `Z`, fractional seconds, a bare date used as
+ * a datetime — is sanitized away by the browser, leaving an **empty** control: the
+ * stored value would look unset and be wiped on the next save. Those literals get a
+ * plain text field instead, which shows what is actually stored.
+ *
+ * An empty value fits: a fresh schedule point should get the picker.
+ */
+export function timerValueFitsPicker(raw, dataType) {
+  const trimmed = String(raw ?? '').trim()
+  if (trimmed === '') return true
+  switch (timerValueInputKind(dataType)) {
+    case 'time':     return PICKER_TIME_RE.test(trimmed)
+    case 'datetime': return PICKER_DATETIME_RE.test(trimmed)
+    default:         return true
+  }
 }
 
 /**

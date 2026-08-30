@@ -8,6 +8,7 @@ import { datapoints as dpApi, adapters as adapterApi } from '@/api/client'
 import type { HolidayEntry } from '@/api/client'
 import {
   timerValueAsBool,
+  timerValueFitsPicker,
   timerValueHintKey,
   timerValueInputKind,
   timerValueStep,
@@ -101,16 +102,29 @@ const boolValue = computed({
 // Ein BOOLEAN-Ziel bietet nur zwei Optionen an — ein Altwert wie "50" liesse
 // sich sonst nicht auflösen: das Select zeigt bereits "Aus", der Wert bleibt
 // aber ungültig und blockiert das Speichern. Einmalig auf das normalisieren,
-// was angezeigt wird.
+// was angezeigt wird — und das ist immer "Aus": ein für BOOLEAN ungültiger Wert
+// liegt per Definition nicht in den True-Literalen, `timerValueAsBool()` liefert
+// für ihn also false, genau wie das Select darunter.
 watch(
   [valueKind, () => cfg.value],
   ([kind, value]) => {
     if (kind === 'boolean' && validateTimerValue(value, dpDataType.value) !== null) {
-      cfg.value = timerValueAsBool(value) ? 'true' : 'false'
+      cfg.value = 'false'
     }
   },
   { immediate: true },
 )
+
+// Ein Altwert, den ein nativer Picker nicht halten kann (UTC-Offset, Sekunden-
+// bruchteile, blosses Datum als Zeitstempel), bekommt stattdessen ein Textfeld —
+// sonst stünde das Feld leer da und der gespeicherte Wert wäre beim nächsten
+// Speichern weg. Bewusst nur beim Wechsel des Objekttyps neu bestimmt und nicht
+// bei jedem Tastendruck: sonst tauscht das Löschen des Offsets das Textfeld
+// mitten im Tippen gegen einen Picker und der Fokus geht verloren.
+const needsTextFallback = ref(!timerValueFitsPicker(cfg.value, dpDataType.value))
+watch(valueKind, () => {
+  needsTextFallback.value = !timerValueFitsPicker(cfg.value, dpDataType.value)
+})
 
 // `<input type="number">` hands Vue a Number — but the backend schema declares
 // `value: str`, so the config must keep a string here.
@@ -665,9 +679,9 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
               />
 
               <input v-else-if="valueKind === 'date'" v-model="textValue" type="date" :class="iCls" data-testid="zst-value-date" />
-              <input v-else-if="valueKind === 'time'" v-model="textValue" type="time" step="1" :class="iCls" data-testid="zst-value-time" />
+              <input v-else-if="valueKind === 'time' && !needsTextFallback" v-model="textValue" type="time" step="1" :class="iCls" data-testid="zst-value-time" />
               <input
-                v-else-if="valueKind === 'datetime'"
+                v-else-if="valueKind === 'datetime' && !needsTextFallback"
                 v-model="textValue"
                 type="datetime-local"
                 step="1"
