@@ -109,8 +109,20 @@ export function stripFencedCode(text) {
     .join('\n')
 }
 
+/**
+ * Blank out HTML comments, keeping newlines so line positions hold. Same
+ * reason as stripFencedCode: markdown-it drops a commented-out heading
+ * entirely, so an anchor parked in one owns no DOM id and a help_id taken
+ * from it would resolve to a fragment no element answers to. Applied after
+ * the fences are blanked, so a stray `-->` inside a code block cannot end a
+ * comment that never started.
+ */
+export function stripHtmlComments(text) {
+  return text.replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\n]/g, ''))
+}
+
 function extractHelpIds(absPath) {
-  const text = stripFencedCode(readFileSync(absPath, 'utf-8'))
+  const text = stripHtmlComments(stripFencedCode(readFileSync(absPath, 'utf-8')))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
     ids.push(match[1])

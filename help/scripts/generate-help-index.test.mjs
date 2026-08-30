@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode } from './generate-help-index.mjs'
+import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments } from './generate-help-index.mjs'
 
 // ── Pure URL-mapping helpers ────────────────────────────────────────────────
 
@@ -197,6 +197,46 @@ test('stripFencedCode leaves an inline-code line alone', () => {
   const stripped = stripFencedCode(text)
 
   assert.match(stripped, /## B \{#b\}/)
+})
+
+test('an anchor-shaped heading inside an HTML comment is not indexed', () => {
+  // markdown-it drops the comment entirely, so no element owns that id.
+  const root = mkdtempSync(join(tmpdir(), 'help-comment-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['# Title {#real-anchor}', '', '<!--', '## Internal note {#only-in-comment}', '-->', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('real-anchor' in helpIds)
+    assert.ok(!('only-in-comment' in helpIds), 'an anchor inside an HTML comment must not become a help_id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripHtmlComments blanks single- and multi-line comments and keeps line positions', () => {
+  const text = ['# A {#a}', '<!-- ## B {#b} -->', '<!--', '## C {#c}', '-->', '## D {#d}'].join('\n')
+
+  const stripped = stripHtmlComments(text)
+
+  assert.equal(stripped.split('\n').length, 6)
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.doesNotMatch(stripped, /\{#c\}/)
+  assert.match(stripped, /## D \{#d\}/)
+})
+
+test('a --> inside a fenced block does not end a comment that never started', () => {
+  const text = ['```html', '<!-- example -->', '```', '## A {#a}'].join('\n')
+
+  const stripped = stripHtmlComments(stripFencedCode(text))
+
+  assert.match(stripped, /## A \{#a\}/)
 })
 
 test('the same help_id in two different locales is not a duplicate and is reported complete', () => {

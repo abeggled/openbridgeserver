@@ -88,7 +88,7 @@ _DERIVED_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
 # the static attribute this gate can resolve. Both quote styles are valid Vue
 # template syntax and both must be seen: an unread reference is a dead help
 # button the gate would wave through.
-_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id=(['\"])(.*?)\1")
+_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(['\"])(.*?)\1")
 # Object-literal form, used by route meta and by prop defaults. Deliberately
 # narrow: it matches a property literally named `helpId`, so a lookup table
 # keyed by something else (`and: 'logic-block-and'`) is NOT collected here.
@@ -97,6 +97,19 @@ _STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id=(['\"])(.*?)\1")
 # string constant from a help_id. A non-literal value (`helpId: props.helpId`)
 # has no quotes and is skipped by construction.
 _HELP_ID_LITERAL_RE = re.compile(r"\bhelpId:\s*['\"]([^'\"]*)['\"]")
+
+# Commented-out code is not a reference: a `helpId` literal a developer parked
+# in a comment is ignored by the build, so failing the gate on it would block a
+# push over something that cannot render a button at all. Line comments are
+# matched only where `//` cannot be a URL scheme or a protocol-relative path,
+# because deleting the rest of such a line could hide a *real* reference next
+# to it — a false negative being the worse of the two errors here.
+_SOURCE_COMMENT_RE = re.compile(
+    r"<!--.*?-->"  # template/HTML comment
+    r"|/\*.*?\*/"  # block comment
+    r"|(?<![:\w\"'])//[^\n]*",  # line comment
+    re.DOTALL,
+)
 
 _REFERENCE_DIRS = (
     ("gui/src", (".vue", ".js")),
@@ -327,6 +340,11 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
     ]
 
 
+def _blank_comments(source: str) -> str:
+    """Blank out comments, preserving newlines so reported lines stay right."""
+    return _SOURCE_COMMENT_RE.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), source)
+
+
 def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Reference]:
     """Collect every statically resolvable help_id reference in the frontends."""
     references: list[Reference] = []
@@ -339,7 +357,7 @@ def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Refer
                 continue
             if "node_modules" in path.parts:
                 continue
-            source = path.read_text(encoding="utf-8")
+            source = _blank_comments(path.read_text(encoding="utf-8"))
             location = path.relative_to(repo_root).as_posix()
             for pattern, group in ((_STATIC_HELP_ATTR_RE, 2), (_HELP_ID_LITERAL_RE, 1)):
                 for match in pattern.finditer(source):

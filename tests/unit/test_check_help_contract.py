@@ -381,6 +381,56 @@ def test_collect_help_references_reads_a_single_quoted_static_attribute(tmp_path
     assert [reference.help_id for reference in references] == ["logs-level"]
 
 
+def test_collect_help_references_accepts_whitespace_around_the_equals_sign(tmp_path):
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text('<template>\n  <HelpButton help-id = "logs-level" />\n</template>\n', encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
+
+
+@pytest.mark.parametrize(
+    "commented",
+    [
+        "// Removed example: { helpId: 'gone' }",
+        "/* helpId: 'gone' */",
+        "/*\n  helpId: 'gone'\n*/",
+        '<!-- <HelpButton help-id="gone" /> -->',
+        '<!--\n  <HelpButton help-id="gone" />\n-->',
+    ],
+)
+def test_collect_help_references_ignores_a_commented_out_reference(tmp_path, commented):
+    """The build ignores it, so it cannot be a dead button — nor a gate failure."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text(f"<template>\n  {commented}\n</template>\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
+
+
+def test_collect_help_references_keeps_a_reference_next_to_a_url(tmp_path):
+    """`//` in a URL must not swallow the rest of the line and hide a reference."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text(
+        '<template>\n  <a href="https://example.com/x"><HelpButton help-id="logs-level" /></a>\n'
+        '  <a href="//cdn.example.com/y"><HelpButton help-id="logs-table" /></a>\n</template>\n',
+        encoding="utf-8",
+    )
+
+    references = gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))
+
+    assert sorted(ref.help_id for ref in references) == ["logs-level", "logs-table"]
+
+
+def test_collect_help_references_reports_the_line_after_blanking_comments(tmp_path):
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text('<template>\n  <!--\n    old\n  -->\n  <HelpButton help-id="logs-level" />\n</template>\n', encoding="utf-8")
+
+    assert [ref.location for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["gui/src/View.vue:5"]
+
+
 def test_collect_help_references_skips_a_bound_attribute_and_a_non_literal_prop(tmp_path):
     source = tmp_path / "gui" / "src"
     source.mkdir(parents=True)
