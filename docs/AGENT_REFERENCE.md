@@ -312,17 +312,20 @@ If Weblate (or a human translator) changes or drops the `{#settings-general}` pa
 |---|---|---|
 | Admin route | `gui/src/router/index.js` (`routes[]`, named routes only) | `route.meta.helpId` |
 | Visu widget type | `frontend/src/widgets/*/index.ts` (`WidgetRegistry.register`) | `widget-<kebab-case type>` |
+| Logic function block | `obs.logic.registry.BUILTIN_NODE_TYPES` (excluding `hidden_from_palette`) | `logic-block-<kebab-case type>` |
 | Skin | `<obs-visu-skins>/packages/skins/*/manifest.json` | `skin-<kebab-case name>` |
 
-Routes declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`. Widgets and skins have no runtime consumer for such a field yet, so their id follows a convention instead.
+Routes declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`. The other three follow a convention. For Logic blocks that convention is shared with the GUI: `NodePalette.vue` derives a block's help_id as `` `logic-block-${type.replaceAll('_', '-')}` `` and renders a button for every block it offers, which is only safe because this gate guarantees the id resolves — so **adding a Logic function block without a help section fails CI**. The gate additionally rejects a node type that is not lowercase snake_case, which is what makes the GUI's transformation and its own provably agree.
+
+`hidden_from_palette` blocks are excluded by rule rather than by allowlist: the palette is the only place a block can be picked from, so one it never offers is not a surface anyone can land on (today, the two legacy notification blocks).
 
 On top of coverage the gate enforces two things the generator does not: every `help_id` literally referenced from `gui/src` or `frontend/src` must exist in the index (no broken help links — the dynamic `:help-id="expr"` form is out of reach and is skipped), and a `help_id` present in one locale but not another fails instead of warning.
 
 Skins live in the separate `obs-visu-skins` repository. Without `--skins-dir` (or `OBS_VISU_SKINS_DIR`) pointing at a checkout, the gate reports that surface as *not checked* rather than passing it silently; CI does not check skins today.
 
-Deliberately undocumented surfaces belong in `tools/help-contract-allowlist.txt` as `<route|widget|skin>:<name>  # reason`, mirroring `tools/i18n-allowlist.txt`. The reason is mandatory, and the list is validated back against reality: an entry for a surface that no longer exists — or for one that meanwhile *is* documented — fails too, so it cannot rot into a blanket exemption. The Visu widget types are currently listed there as tracked debt; each entry disappears as its `{#widget-<type>}` section is written.
+Deliberately undocumented surfaces belong in `tools/help-contract-allowlist.txt` as `<route|widget|logic-block|skin>:<name>  # reason`, mirroring `tools/i18n-allowlist.txt`. The reason is mandatory, and the list is validated back against reality: an entry for a surface that no longer exists — or for one that meanwhile *is* documented — fails too, so it cannot rot into a blanket exemption. The Visu widget types are currently listed there as tracked debt; each entry disappears as its `{#widget-<type>}` section is written.
 
-Run it before pushing anything that adds a route, a widget type, or help content:
+Run it before pushing anything that adds a route, a widget type, a Logic function block, or help content:
 
 ```bash
 python tools/check_help_contract.py

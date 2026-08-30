@@ -55,7 +55,7 @@
             >
               <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ background: nt.color }"></span>
               <span class="text-xs text-slate-700 dark:text-slate-200 flex-1 min-w-0 truncate">{{ $te('logic.nodeTypes.' + nt.type) ? $t('logic.nodeTypes.' + nt.type) : nt.label }}</span>
-              <HelpButton v-if="NODE_HELP_IDS[nt.type]" :help-id="NODE_HELP_IDS[nt.type]" compact class="flex-shrink-0" />
+              <HelpButton :help-id="helpIdForNodeType(nt.type)" compact class="flex-shrink-0" />
             </div>
           </div>
         </div>
@@ -80,56 +80,15 @@ const { t } = useI18n()
 
 const CATEGORY_IDS = ['logic', 'datapoint', 'math', 'string', 'timer', 'astro', 'notification', 'integration', 'script', 'ai']
 
-// Per-block-type help — documented one category at a time (see
-// help/de/logic/blocks-<category>.md); a type with no entry here simply
-// gets no help button yet rather than one pointing at nonexistent content.
-const NODE_HELP_IDS = {
-  and: 'logic-block-and',
-  or: 'logic-block-or',
-  xor: 'logic-block-xor',
-  not: 'logic-block-not',
-  gate: 'logic-block-gate',
-  memory: 'logic-block-memory',
-  change_filter: 'logic-block-change-filter',
-  compare: 'logic-block-compare',
-  hysteresis: 'logic-block-hysteresis',
-  merge: 'logic-block-merge',
-  decision: 'logic-block-decision',
-  value_mapping: 'logic-block-value-mapping',
-  const_value: 'logic-block-const-value',
-  datapoint_read: 'logic-block-datapoint-read',
-  datapoint_write: 'logic-block-datapoint-write',
-  math_formula: 'logic-block-math-formula',
-  math_map: 'logic-block-math-map',
-  clamp: 'logic-block-clamp',
-  random_value: 'logic-block-random-value',
-  statistics: 'logic-block-statistics',
-  avg_multi: 'logic-block-avg-multi',
-  min_max_tracker: 'logic-block-min-max-tracker',
-  consumption_counter: 'logic-block-consumption-counter',
-  heating_circuit: 'logic-block-heating-circuit',
-  string_concat: 'logic-block-string-concat',
-  string_replace: 'logic-block-string-replace',
-  comment: 'logic-block-comment',
-  timer_cron: 'logic-block-timer-cron',
-  datetime: 'logic-block-datetime',
-  timer_delay: 'logic-block-timer-delay',
-  timer_pulse: 'logic-block-timer-pulse',
-  operating_hours: 'logic-block-operating-hours',
-  value_sequence: 'logic-block-value-sequence',
-  astro_sun: 'logic-block-astro-sun',
-  notify_message: 'logic-block-notify-message',
-  message_archive: 'logic-block-message-archive',
-  wake_on_lan: 'logic-block-wake-on-lan',
-  host_check: 'logic-block-host-check',
-  json_extractor: 'logic-block-json-extractor',
-  xml_extractor: 'logic-block-xml-extractor',
-  substring_extractor: 'logic-block-substring-extractor',
-  ical: 'logic-block-ical',
-  api_client: 'logic-block-api-client',
-  python_script: 'logic-block-python-script',
-  ai_logic: 'logic-block-ai-logic',
-}
+// Per-block-type help. The help_id is derived from the node type rather than
+// held in a hand-maintained map: tools/check_help_contract.py enumerates the
+// same node types from obs.logic.registry and fails CI when one of them has no
+// `## … {#logic-block-<type>}` section, so every block the palette can offer is
+// guaranteed to have help. A map would have to be kept in sync by hand — and a
+// missing or mistyped entry showed up as a silently absent (or dead) button.
+// The gate also rejects a node type that is not lowercase snake_case, which is
+// what makes this transformation and the gate's own agree.
+const helpIdForNodeType = (type) => `logic-block-${type.replaceAll('_', '-')}`
 
 const categories = computed(() =>
   CATEGORY_IDS

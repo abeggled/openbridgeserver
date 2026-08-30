@@ -111,11 +111,12 @@ Zusätzlich für i18n-Änderungen (Admin GUI + Visu) gilt ein harter Diff-Gate:
 ./tools/check-i18n-hardcoded-strings.sh
 ```
 
-Für neue Admin-Routen, neue Visu-Widget-Typen und für Änderungen an `help/` gilt der
-Doku-Gate (#1183) — jede doku-pflichtige Fläche braucht eine auflösende `help_id`:
+Für neue Admin-Routen, neue Visu-Widget-Typen, neue Logik-Bausteine und für Änderungen an
+`help/` gilt der Doku-Gate (#1183) — jede doku-pflichtige Fläche braucht eine auflösende
+`help_id`:
 
 ```bash
-# Hilfe-Abdeckung der UI-Flächen (Routen, Widgets, Skins) + auflösbare help_ids
+# Hilfe-Abdeckung der UI-Flächen (Routen, Widgets, Logik-Bausteine, Skins) + auflösbare help_ids
 tools/with-venv python tools/check_help_contract.py
 ```
 
@@ -203,7 +204,8 @@ named sections there before acting; do not assume the root instruction budget co
   `Internationalisation (i18n)` section, including its hard gate and Weblate source-language rule.
 - Before changing backend startup, data flow, adapters, configuration, authentication, tests, or
   dependencies, read the applicable parts of `Architecture`.
-- Before adding an Admin route, a Visu widget type, or help content, read `Help site translations`
+- Before adding an Admin route, a Visu widget type, a Logic function block, or help content,
+  read `Help site translations`
   and `Help contract gate` — CI fails when a documentation-required surface has no resolvable
   `help_id`.
 - Before adding or changing a Logic function block, read `docs/architecture/logic-nodes.md` — it

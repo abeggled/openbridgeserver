@@ -12,16 +12,23 @@ in the code, derives the help_id each surface is expected to carry, and then
 requires that id to resolve in *every* locale of the generated help index:
 
     surface type   enumerated from                        expected help_id
-    ------------   ------------------------------------   ----------------------
+    ------------   ------------------------------------   -----------------------
     route          gui/src/router/index.js (``routes[]``)  ``route.meta.helpId``
     widget         frontend/src/widgets/*/index.ts         ``widget-<kebab type>``
+    logic block    obs.logic.registry.BUILTIN_NODE_TYPES   ``logic-block-<kebab type>``
     skin           <skins repo>/packages/skins/*/          ``skin-<kebab name>``
 
 Routes carry their id explicitly because the Admin-GUI reads it at runtime
 (``TopBar.vue`` renders the page-level help button from ``route.meta.helpId``),
-so the field is live wiring rather than gate-only metadata. Widgets and skins
-have no such runtime consumer yet, so their id follows a convention instead of
-a field that nothing would read.
+so the field is live wiring rather than gate-only metadata. The other three
+follow a convention: ``NodePalette.vue`` derives a block's help_id from its
+node type the same way this gate does, and widgets and skins have no runtime
+consumer for such a field yet.
+
+Logic blocks that are ``hidden_from_palette`` are excluded by rule, not by
+allowlist: the palette is the only place a user can pick a block from, so a
+block it never offers is not a surface anyone can land on (today those are the
+two legacy notification blocks).
 
 On top of coverage the gate closes the resolvability hole the help generator
 leaves open: every help_id literally referenced from GUI/Visu sources must
@@ -50,6 +57,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,21 +67,37 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 # is a Markdown heading anchor, so anything that cannot be one is not an id.
 _HELP_ID_RE = re.compile(r"^[A-Za-z][\w-]*$")
 
-_SURFACE_KINDS = ("route", "widget", "skin")
+_SURFACE_KINDS = ("route", "widget", "logic-block", "skin")
+
+# NodePalette.vue derives a block's help_id as `logic-block-${type.replaceAll('_', '-')}`.
+# That is identical to kebab() only while the node type is lowercase snake_case,
+# so the gate enforces the shape instead of letting the two silently disagree
+# on a camelCase type and check an id the GUI never asks for.
+_LOGIC_NODE_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # `:help-id="expr"` / `v-bind:help-id="expr"` is a dynamic binding whose value
 # is only known at runtime — the leading colon is what distinguishes it from
 # the static attribute this gate can resolve.
 _STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id=\"([^\"]*)\"")
-# Object-literal form used by lookup tables (NodePalette's NODE_HELP_IDS) and
-# by route meta. A non-literal value (`helpId: props.helpId`) has no quotes and
-# is skipped by construction.
+# Object-literal form, used by route meta and by prop defaults. Deliberately
+# narrow: it matches a property literally named `helpId`, so a lookup table
+# keyed by something else (`and: 'logic-block-and'`) is NOT collected here.
+# Such tables are covered by a surface rule instead — see the logic-block row
+# in the module docstring — because a static scan cannot tell an arbitrary
+# string constant from a help_id. A non-literal value (`helpId: props.helpId`)
+# has no quotes and is skipped by construction.
 _HELP_ID_LITERAL_RE = re.compile(r"\bhelpId:\s*['\"]([^'\"]*)['\"]")
 
 _REFERENCE_DIRS = (
     ("gui/src", (".vue", ".js")),
     ("frontend/src", (".vue", ".ts")),
 )
+
+# Vue/JS string properties are written with either quote style, and a route or
+# widget declared with the other one must not fall out of the enumeration —
+# an unseen surface is an undocumented surface the gate would never notice.
+_JS_NAME_RE = re.compile(r"\bname:\s*(['\"])(.*?)\1")
+_JS_TYPE_RE = re.compile(r"\btype:\s*(['\"])(.*?)\1")
 
 # Split before an uppercase letter that starts a new word, so acronyms stay
 # whole: ValueDisplay -> value-display, QrCode -> qr-code, RTR -> rtr,
@@ -160,14 +184,14 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
     """
     surfaces: list[Surface] = []
     for item in _split_object_literals(_array_body(source, "const routes")):
-        name_match = re.search(r"\bname:\s*'([^']*)'", item)
+        name_match = _JS_NAME_RE.search(item)
         if not name_match:
             continue
         help_id_match = _HELP_ID_LITERAL_RE.search(item)
         surfaces.append(
             Surface(
                 kind="route",
-                name=name_match.group(1),
+                name=name_match.group(2),
                 help_id=help_id_match.group(1) if help_id_match else None,
                 origin=origin,
             )
@@ -184,10 +208,10 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
         registration = source.find("WidgetRegistry.register(")
         if registration < 0:
             continue
-        type_match = re.search(r"\btype:\s*'([^']*)'", source[registration:])
+        type_match = _JS_TYPE_RE.search(source[registration:])
         if not type_match:
             continue
-        widget_type = type_match.group(1)
+        widget_type = type_match.group(2)
         try:
             origin = index_file.relative_to(root).as_posix()
         except ValueError:
@@ -204,9 +228,18 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
 
 
 def parse_skins(skins_root: Path) -> list[Surface]:
-    """Enumerate skins from ``packages/skins/*/manifest.json`` of the skins repo."""
+    """Enumerate skins from ``packages/skins/*/manifest.json`` of the skins repo.
+
+    A directory without ``packages/skins/`` is not an obs-visu-skins checkout.
+    Reporting zero skins for it would be the worst outcome: the run would look
+    like the skin surface had been checked and found complete, when in truth
+    nothing was looked at.
+    """
+    package_root = skins_root / "packages" / "skins"
+    if not package_root.is_dir():
+        raise SystemExit(f"help contract: {skins_root} is not an obs-visu-skins checkout ({package_root.relative_to(skins_root)}/ is missing)")
     surfaces: list[Surface] = []
-    for manifest_file in sorted((skins_root / "packages" / "skins").glob("*/manifest.json")):
+    for manifest_file in sorted(package_root.glob("*/manifest.json")):
         try:
             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
@@ -223,6 +256,38 @@ def parse_skins(skins_root: Path) -> list[Surface]:
             )
         )
     return surfaces
+
+
+def builtin_logic_node_types():
+    """Return the backend's built-in Logic node catalogue.
+
+    Imported lazily, with the repo root put on the path only here, so the rest
+    of this module — and its tests — stay usable without the backend's
+    dependency tree installed and without an import-time sys.path side effect.
+    """
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from obs.logic.registry import BUILTIN_NODE_TYPES
+
+    return BUILTIN_NODE_TYPES
+
+
+def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTIN_NODE_TYPES") -> list[Surface]:
+    """Enumerate the Logic function blocks the palette can offer.
+
+    ``hidden_from_palette`` blocks are skipped: NodePalette.vue filters them
+    out, so there is no place a user could meet one and press a help button.
+    """
+    return [
+        Surface(
+            kind="logic-block",
+            name=node_type.type,
+            help_id=f"logic-block-{kebab(node_type.type)}",
+            origin=origin,
+        )
+        for node_type in node_types
+        if not getattr(node_type, "hidden_from_palette", False)
+    ]
 
 
 def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Reference]:
@@ -329,6 +394,11 @@ def validate(
     documented: set[str] = set()
     seen_ids: dict[str, str] = {}
     for surface in sorted(surfaces, key=lambda item: (item.kind, item.name)):
+        if surface.kind == "logic-block" and not _LOGIC_NODE_TYPE_RE.fullmatch(surface.name):
+            errors.append(
+                f"{surface.key}: logic node type must be lowercase snake_case so NodePalette's "
+                f"derived help_id matches the one checked here ({surface.origin})"
+            )
         if surface.help_id is None:
             if surface.key not in allowed:
                 errors.append(f"{surface.key}: no help_id declared in {surface.origin} — add one, or allowlist it with a reason")
@@ -363,6 +433,7 @@ def validate(
 def collect_surfaces(repo_root: Path, skins_dir: Path | None) -> list[Surface]:
     surfaces = parse_routes((repo_root / "gui" / "src" / "router" / "index.js").read_text(encoding="utf-8"))
     surfaces += parse_widget_types(repo_root / "frontend" / "src" / "widgets", repo_root)
+    surfaces += parse_logic_block_types(builtin_logic_node_types())
     if skins_dir is not None:
         surfaces += parse_skins(skins_dir)
     return surfaces
@@ -397,7 +468,8 @@ def main(argv: list[str] | None = None) -> int:
     exempt = len(allowlist)
     print(
         f"Help contract check passed: {counts['route']} routes, {counts['widget']} widgets, "
-        f"{counts['skin']} skins ({exempt} allowlisted), {len(set(references))} help_id references resolved"
+        f"{counts['logic-block']} logic blocks, {counts['skin']} skins ({exempt} allowlisted), "
+        f"{len(set(references))} help_id references resolved"
     )
     if skins_dir is None:
         print("  note: skins not checked — pass --skins-dir/OBS_VISU_SKINS_DIR with an obs-visu-skins checkout")

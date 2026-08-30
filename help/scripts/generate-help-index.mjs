@@ -26,7 +26,7 @@
 // add its directory prefix to LOCALE_DIRS below too.
 
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HELP_ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -171,7 +171,14 @@ export function generate(root = HELP_ROOT, outDir = join(root, 'public')) {
 // instead of writing help-index.json. tools/check_help_contract.py consumes
 // that so the CI gate resolves help_ids through this exact scan rather than a
 // second, drift-prone reimplementation of it.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compared as decoded filesystem paths, not as URL text: import.meta.url
+// percent-encodes characters that process.argv[1] leaves literal, so a
+// checkout path containing a space (or any other such character) made the
+// naive `file://${argv[1]}` comparison false and silently skipped this block.
+const isDirectRun =
+  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])
+
+if (isDirectRun) {
   try {
     if (process.argv.includes('--print')) {
       process.stdout.write(JSON.stringify(buildHelpIndex(HELP_ROOT)) + '\n')

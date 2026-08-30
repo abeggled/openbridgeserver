@@ -42,6 +42,23 @@ def _widget(name: str, help_id: str) -> gate.Surface:
     return gate.Surface(kind="widget", name=name, help_id=help_id, origin=f"frontend/src/widgets/{name}/index.ts")
 
 
+def _logic_block(name: str) -> gate.Surface:
+    return gate.Surface(
+        kind="logic-block",
+        name=name,
+        help_id=f"logic-block-{gate.kebab(name)}",
+        origin="obs.logic.registry.BUILTIN_NODE_TYPES",
+    )
+
+
+class _NodeType:
+    """Stand-in for obs.logic.models.NodeTypeDef — only what the gate reads."""
+
+    def __init__(self, type: str, hidden_from_palette: bool = False) -> None:
+        self.type = type
+        self.hidden_from_palette = hidden_from_palette
+
+
 def _allow(key: str, reason: str = "because", line: int = 1) -> gate.AllowlistEntry:
     return gate.AllowlistEntry(key=key, reason=reason, line=line)
 
@@ -92,6 +109,15 @@ def test_parse_routes_reads_name_and_help_id():
     ]
 
 
+def test_parse_routes_reads_double_quoted_names_and_ids():
+    """A route written with double quotes must not fall out of the enumeration."""
+    source = 'const routes = [\n  { path: "/new", name: "NewView", meta: { helpId: "new-view" } },\n]\n'
+
+    routes = gate.parse_routes(source)
+
+    assert [(route.name, route.help_id) for route in routes] == [("NewView", "new-view")]
+
+
 def test_parse_routes_skips_the_unnamed_catch_all():
     assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
 
@@ -125,6 +151,13 @@ def test_parse_widget_types_derives_the_expected_help_id(tmp_path):
 
     assert [(surface.name, surface.help_id) for surface in surfaces] == [("ValueDisplay", "widget-value-display")]
     assert surfaces[0].origin == "widgets/ValueDisplay/index.ts"
+
+
+def test_parse_widget_types_reads_a_double_quoted_type(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Toggle", 'WidgetRegistry.register({\n  type: "Toggle",\n})\n')
+
+    assert [surface.help_id for surface in gate.parse_widget_types(widgets, tmp_path)] == ["widget-toggle"]
 
 
 def test_parse_widget_types_ignores_a_module_without_registration(tmp_path):
@@ -188,8 +221,85 @@ def test_parse_skins_requires_a_usable_name(tmp_path, manifest):
         gate.parse_skins(tmp_path)
 
 
-def test_parse_skins_is_empty_without_a_skins_package_dir(tmp_path):
+def test_parse_skins_rejects_a_directory_that_is_not_a_skins_checkout(tmp_path):
+    """Reporting zero skins here would look like a completed check of nothing."""
+    with pytest.raises(SystemExit, match="is not an obs-visu-skins checkout"):
+        gate.parse_skins(tmp_path)
+
+
+def test_parse_skins_is_empty_for_a_checkout_without_skins(tmp_path):
+    (tmp_path / "packages" / "skins").mkdir(parents=True)
+
     assert gate.parse_skins(tmp_path) == []
+
+
+# ── logic block enumeration ──────────────────────────────────────────────────
+
+
+def test_parse_logic_block_types_derives_the_expected_help_id():
+    surfaces = gate.parse_logic_block_types([_NodeType("edge_detect"), _NodeType("and")])
+
+    assert [(surface.kind, surface.name, surface.help_id) for surface in surfaces] == [
+        ("logic-block", "edge_detect", "logic-block-edge-detect"),
+        ("logic-block", "and", "logic-block-and"),
+    ]
+
+
+def test_parse_logic_block_types_skips_blocks_hidden_from_the_palette():
+    """A block the palette never offers is not a surface a user can land on."""
+    surfaces = gate.parse_logic_block_types([_NodeType("and"), _NodeType("notify_sms", hidden_from_palette=True)])
+
+    assert [surface.name for surface in surfaces] == ["and"]
+
+
+def test_parse_logic_block_types_tolerates_a_node_type_without_the_attribute():
+    class Bare:
+        type = "and"
+
+    assert [surface.name for surface in gate.parse_logic_block_types([Bare()])] == ["and"]
+
+
+def test_parse_logic_block_types_matches_the_real_registry():
+    surfaces = gate.parse_logic_block_types(gate.builtin_logic_node_types())
+
+    names = {surface.name for surface in surfaces}
+    assert {"and", "edge_detect", "python_script"} <= names
+    assert "notify_sms" not in names  # hidden_from_palette, legacy
+
+
+def test_the_derived_help_id_matches_what_nodepalette_derives():
+    """NodePalette.vue builds `logic-block-${type.replaceAll('_', '-')}`.
+
+    The gate would happily check an id the GUI never asks for if the two
+    transformations disagreed, so pin them against each other here.
+    """
+    for surface in gate.parse_logic_block_types(gate.builtin_logic_node_types()):
+        assert surface.help_id == "logic-block-" + surface.name.replace("_", "-")
+
+
+def test_validate_rejects_a_logic_node_type_that_is_not_snake_case():
+    surface = gate.Surface(
+        kind="logic-block",
+        name="edgeDetect",
+        help_id="logic-block-edge-detect",
+        origin="obs.logic.registry.BUILTIN_NODE_TYPES",
+    )
+
+    errors = gate.validate([surface], [], _index("logic-block-edge-detect"), [])
+
+    assert len(errors) == 1
+    assert "must be lowercase snake_case" in errors[0]
+
+
+def test_validate_reports_an_undocumented_logic_block():
+    errors = gate.validate([_logic_block("edge_detect")], [], _index(), [])
+
+    assert len(errors) == 1
+    assert "logic-block:edge_detect: help_id 'logic-block-edge-detect' has no help page" in errors[0]
+
+
+def test_validate_accepts_a_documented_logic_block():
+    assert gate.validate([_logic_block("edge_detect")], [], _index("logic-block-edge-detect"), []) == []
 
 
 # ── reference collection ─────────────────────────────────────────────────────
@@ -394,7 +504,7 @@ def test_validate_tolerates_an_index_without_optional_keys():
 def test_collect_surfaces_without_a_skins_checkout():
     surfaces = gate.collect_surfaces(REPO_ROOT, None)
 
-    assert {surface.kind for surface in surfaces} == {"route", "widget"}
+    assert {surface.kind for surface in surfaces} == {"route", "widget", "logic-block"}
 
 
 def test_collect_surfaces_with_a_skins_checkout(tmp_path):

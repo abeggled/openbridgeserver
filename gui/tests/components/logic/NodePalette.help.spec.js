@@ -1,8 +1,10 @@
 /**
- * Integrated help drawer wiring on NodePalette.vue — one HelpButton per
- * documented block type (see help/de/logic/blocks-logic.md and onward per
- * category). A type without an entry in NODE_HELP_IDS gets no button yet
- * rather than one pointing at nonexistent content.
+ * Integrated help drawer wiring on NodePalette.vue — one HelpButton per block
+ * type the palette offers (see help/de/logic/blocks-logic.md and onward per
+ * category). The help_id is derived from the node type rather than looked up
+ * in a hand-maintained map; tools/check_help_contract.py enumerates the same
+ * node types from obs.logic.registry and fails CI when one of them has no
+ * help section, which is what makes every derived id safe to render.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -29,9 +31,10 @@ const NODE_TYPES = [
   { type: 'api_client', label: 'API Client', category: 'integration', color: '#0e7490' },
   { type: 'python_script', label: 'Python Script', category: 'script', color: '#65a30d' },
   { type: 'ai_logic', label: 'AI Logic', category: 'ai', color: '#9333ea' },
-  // Synthetic type, not a real backend node — exercises the "no entry in
-  // NODE_HELP_IDS" branch now that every real registered type is documented.
-  { type: 'not_yet_documented', label: 'Not Yet Documented', category: 'ai', color: '#9333ea' },
+  // Multi-underscore type: the derivation has to replace every separator, not
+  // just the first (`replaceAll`, not `replace`).
+  { type: 'edge_detect', label: 'Flankenerkennung', category: 'logic', color: '#1d4ed8' },
+  { type: 'min_max_tracker', label: 'Min/Max', category: 'math', color: '#7c3aed' },
 ]
 
 function mockStorage() {
@@ -82,11 +85,20 @@ describe('NodePalette — per-block help buttons', () => {
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
   })
 
-  it('does not render a help button for a block type with no entry in NODE_HELP_IDS', () => {
+  it('renders a help button for every offered block type', () => {
     const wrapper = mountPalette()
-    // not_yet_documented is a synthetic type absent from NODE_HELP_IDS — every
-    // real registered node type is now documented (all 10 categories shipped).
-    expect(wrapper.find('[data-testid="help-button-logic-block-not-yet-documented"]').exists()).toBe(false)
+
+    for (const { type } of NODE_TYPES) {
+      const helpId = `logic-block-${type.replaceAll('_', '-')}`
+      expect(helpButton(wrapper, helpId).exists()).toBe(true)
+    }
+  })
+
+  it('replaces every underscore in the derived help_id, not just the first', () => {
+    const wrapper = mountPalette()
+
+    expect(helpButton(wrapper, 'logic-block-min-max-tracker').exists()).toBe(true)
+    expect(helpButton(wrapper, 'logic-block-edge-detect').exists()).toBe(true)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {

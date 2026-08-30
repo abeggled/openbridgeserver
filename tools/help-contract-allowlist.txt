@@ -2,7 +2,7 @@
 #
 # Enforced by tools/check_help_contract.py. Format, one entry per line:
 #
-#     <route|widget|skin>:<name>  # why this surface has no help
+#     <route|widget|logic-block|skin>:<name>  # why this surface has no help
 #
 # The reason is mandatory: the point of this list is that every gap stays
 # visible, versioned, and justified instead of silently existing. Keep it
@@ -47,6 +47,11 @@ widget:ValueDisplay  # Visu widget help not written yet (#1183 follow-up).
 widget:Wetter  # Visu widget help not written yet (#1183 follow-up).
 widget:WidgetRef  # Visu widget help not written yet (#1183 follow-up).
 widget:Zeitschaltuhr  # Visu widget help not written yet (#1183 follow-up).
+
+# ── Logic blocks ──────────────────────────────────────────────────────────
+# No exemptions: every block the palette offers is documented. Blocks that are
+# hidden_from_palette are excluded by rule, not listed here — see the module
+# docstring of tools/check_help_contract.py.
 
 # ── Skins ─────────────────────────────────────────────────────────────────
 # Skins live in the separate obs-visu-skins repository and are only checked
