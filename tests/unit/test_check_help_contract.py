@@ -146,6 +146,37 @@ def test_parse_routes_ignores_a_commented_out_route(comment):
     assert [route.name for route in gate.parse_routes(source)] == ["Dashboard"]
 
 
+def test_parse_routes_enumerates_nested_children():
+    """vue-router nests routes; each reachable one needs its own help_id."""
+    source = (
+        "const routes = [\n"
+        "  { path: '/group', children: [\n"
+        "    { path: 'one', name: 'NestedOne', meta: { helpId: 'one' } },\n"
+        "    { path: 'two', name: 'NestedTwo' },\n"
+        "  ] },\n"
+        "]\n"
+    )
+
+    routes = gate.parse_routes(source)
+
+    assert sorted((route.name, route.help_id) for route in routes) == [("NestedOne", "one"), ("NestedTwo", None)]
+
+
+def test_parse_routes_does_not_read_a_childs_name_as_the_parents():
+    source = "const routes = [\n  { path: '/group', children: [{ path: 'one', name: 'NestedOne', meta: { helpId: 'one' } }] },\n]\n"
+
+    assert [route.name for route in gate.parse_routes(source)] == ["NestedOne"]
+
+
+def test_parse_routes_does_not_read_a_nested_meta_as_the_parents():
+    """A parent without its own meta must not inherit a child's helpId."""
+    source = "const routes = [\n  { path: '/group', name: 'Group', children: [{ path: 'one', name: 'One', meta: { helpId: 'one' } }] },\n]\n"
+
+    routes = {route.name: route.help_id for route in gate.parse_routes(source)}
+
+    assert routes == {"Group": None, "One": "one"}
+
+
 def test_parse_routes_skips_the_unnamed_catch_all():
     assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
 
@@ -202,18 +233,12 @@ def test_parse_widget_types_enumerates_every_registration_in_one_module(tmp_path
     assert [surface.name for surface in surfaces] == ["Slider", "SliderPro"]
 
 
-def test_parse_widget_types_ignores_an_unterminated_registration(tmp_path):
+def test_parse_widget_types_fails_on_an_unterminated_registration(tmp_path):
     widgets = tmp_path / "widgets"
     _write_widget(widgets, "Broken", "WidgetRegistry.register({ type: 'Broken'\n")
 
-    assert gate.parse_widget_types(widgets, tmp_path) == []
-
-
-def test_parse_widget_types_ignores_a_registration_without_an_object(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Broken", "WidgetRegistry.register(definition)\n")
-
-    assert gate.parse_widget_types(widgets, tmp_path) == []
+    with pytest.raises(SystemExit, match="not a string literal"):
+        gate.parse_widget_types(widgets, tmp_path)
 
 
 def test_parse_widget_types_ignores_a_commented_out_registration(tmp_path):
@@ -237,11 +262,21 @@ def test_parse_widget_types_ignores_a_module_without_registration(tmp_path):
     assert gate.parse_widget_types(widgets, tmp_path) == []
 
 
-def test_parse_widget_types_ignores_a_registration_without_a_type(tmp_path):
+@pytest.mark.parametrize(
+    "body",
+    [
+        "WidgetRegistry.register({\n  label: 'x',\n})\n",  # no type at all
+        "WidgetRegistry.register({ type: EXTRA_TYPE })\n",  # type via a constant
+        "WidgetRegistry.register(definition)\n",  # not an object literal
+    ],
+)
+def test_parse_widget_types_fails_on_a_registration_it_cannot_read(tmp_path, body):
+    """Skipping silently would under-enumerate a widget that does get built."""
     widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Broken", "WidgetRegistry.register({\n  label: 'x',\n})\n")
+    _write_widget(widgets, "Broken", body)
 
-    assert gate.parse_widget_types(widgets, tmp_path) == []
+    with pytest.raises(SystemExit, match="not a string literal"):
+        gate.parse_widget_types(widgets, tmp_path)
 
 
 def test_parse_widget_types_falls_back_to_an_absolute_origin_outside_the_repo(tmp_path):
@@ -429,6 +464,32 @@ def test_collect_help_references_ignores_a_commented_out_reference(tmp_path, com
     (source / "View.vue").write_text(f"<template>\n  {commented}\n</template>\n", encoding="utf-8")
 
     assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "const removed = 'old'// { helpId: 'gone' }",
+        "const removed = 'old' // { helpId: 'gone' }",
+        "const removed = \"old\"/* { helpId: 'gone' } */",
+    ],
+)
+def test_collect_help_references_sees_a_comment_that_starts_right_after_a_string(tmp_path, line):
+    """`'old'// note` is a comment; only string state tells it from a URL."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "router.js").write_text(line + "\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
+
+
+def test_collect_help_references_keeps_a_help_id_inside_a_template_literal(tmp_path):
+    """A template literal is a string, not a comment host."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "map.js").write_text("const url = `a//b`\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
 
 
 def test_collect_help_references_keeps_a_reference_next_to_a_url(tmp_path):

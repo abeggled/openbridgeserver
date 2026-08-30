@@ -98,18 +98,60 @@ _STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(['\"])(.*?)\1")
 # has no quotes and is skipped by construction.
 _HELP_ID_LITERAL_RE = re.compile(r"\bhelpId:\s*['\"]([^'\"]*)['\"]")
 
-# Commented-out code is not a reference: a `helpId` literal a developer parked
-# in a comment is ignored by the build, so failing the gate on it would block a
-# push over something that cannot render a button at all. Line comments are
-# matched only where `//` cannot be a URL scheme or a protocol-relative path,
-# because deleting the rest of such a line could hide a *real* reference next
-# to it — a false negative being the worse of the two errors here.
-_SOURCE_COMMENT_RE = re.compile(
-    r"<!--.*?-->"  # template/HTML comment
-    r"|/\*.*?\*/"  # block comment
-    r"|(?<![:\w\"'])//[^\n]*",  # line comment
-    re.DOTALL,
-)
+# Commented-out code neither renders nor executes: a `helpId` literal or a
+# `WidgetRegistry.register` call parked in a comment must not be read as real.
+# Recognising those regions needs string state, not a regex — `'old'// note` is
+# a comment while `href="//cdn"` is not, and the two are indistinguishable
+# without knowing whether the scanner is inside a string.
+_STRING_DELIMITERS = frozenset("\"'`")
+
+
+def _blank_comments(source: str) -> str:
+    """Blank out comments, preserving newlines so reported lines stay right.
+
+    Handles `//`, `/* */` and `<!-- -->`, and leaves anything inside a string
+    or template literal alone. Blanked characters become spaces so every
+    offset — and therefore every reported line number — is unchanged.
+    """
+    out: list[str] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        char = source[index]
+        if char in _STRING_DELIMITERS:
+            # Copy the string verbatim, honouring backslash escapes, so a `//`
+            # or `/*` inside it is never mistaken for a comment.
+            out.append(char)
+            index += 1
+            while index < length:
+                out.append(source[index])
+                if source[index] == "\\" and index + 1 < length:
+                    out.append(source[index + 1])
+                    index += 2
+                    continue
+                if source[index] == char:
+                    index += 1
+                    break
+                index += 1
+            continue
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            end = length if end < 0 else end
+            out.append(" " * (end - index))
+            index = end
+            continue
+        for opener, closer in (("/*", "*/"), ("<!--", "-->")):
+            if source.startswith(opener, index):
+                end = source.find(closer, index + len(opener))
+                end = length if end < 0 else end + len(closer)
+                out.append("".join(" " if c != "\n" else "\n" for c in source[index:end]))
+                index = end
+                break
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
 
 _REFERENCE_DIRS = (
     ("gui/src", (".vue", ".js")),
@@ -121,17 +163,14 @@ _REFERENCE_DIRS = (
 # an unseen surface is an undocumented surface the gate would never notice.
 _JS_NAME_RE = re.compile(r"\bname:\s*(['\"])(.*?)\1")
 _JS_TYPE_RE = re.compile(r"\btype:\s*(['\"])(.*?)\1")
+_META_RE = re.compile(r"\bmeta:\s*(?=\{)")
+_ANY_TYPE_PROPERTY_RE = re.compile(r"\btype:")
 
 # Split before an uppercase letter that starts a new word, so acronyms stay
 # whole: ValueDisplay -> value-display, QrCode -> qr-code, RTR -> rtr,
 # IFrame -> iframe (the second alternative needs two leading capitals, so a
 # single-letter prefix is not mistaken for a word of its own).
 _KEBAB_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z][A-Z])(?=[A-Z][a-z])")
-
-
-def _blank_comments(source: str) -> str:
-    """Blank out comments, preserving newlines so reported lines stay right."""
-    return _SOURCE_COMMENT_RE.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), source)
 
 
 def kebab(name: str) -> str:
@@ -172,21 +211,39 @@ class AllowlistEntry:
     line: int
 
 
-def _split_object_literals(text: str) -> list[str]:
-    """Split the body of a JS array literal into its top-level ``{...}`` items."""
-    items: list[str] = []
-    depth = 0
-    start = 0
+def _iter_object_literals(text: str):
+    """Yield every balanced ``{...}`` literal in ``text``, at any nesting depth.
+
+    vue-router nests routes under ``children``, so a scan that only saw
+    top-level records would enumerate the group and miss the reachable routes
+    inside it — each of which needs its own help_id.
+    """
+    stack: list[int] = []
     for index, char in enumerate(text):
         if char == "{":
-            if depth == 0:
-                start = index
+            stack.append(index)
+        elif char == "}" and stack:
+            yield text[stack.pop() : index + 1]
+
+
+def _direct_property_matches(obj: str, pattern: re.Pattern):
+    """Yield ``pattern`` matches that sit directly in ``obj``, not in a nested one.
+
+    A parent route record contains its children's text, so an undirected
+    search would read a child's ``name``/``meta`` as the parent's own.
+    """
+    depths = [0] * (len(obj) + 1)
+    depth = 0
+    for index, char in enumerate(obj):
+        if char in "{[":
             depth += 1
-        elif char == "}":
+        depths[index] = depth
+        if char in "}]":
             depth -= 1
-            if depth == 0:
-                items.append(text[start : index + 1])
-    return items
+            depths[index] = depth
+    for match in pattern.finditer(obj):
+        if depths[match.start()] == 1:
+            yield match
 
 
 def _balanced_object_after(text: str, start: int) -> str | None:
@@ -232,15 +289,15 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
     """
     surfaces: list[Surface] = []
     source = _blank_comments(source)
-    for item in _split_object_literals(_array_body(source, "const routes")):
-        name_match = _JS_NAME_RE.search(item)
+    for item in _iter_object_literals(_array_body(source, "const routes")):
+        name_match = next(_direct_property_matches(item, _JS_NAME_RE), None)
         if not name_match:
             continue
         # Scoped to the route's own `meta` object, because that is the only
         # place TopBar.vue reads: a `helpId` sitting in `props` or any other
         # property would otherwise be accepted as the declaration while the
         # page in fact renders no help button.
-        meta_match = re.search(r"\bmeta:\s*(?=\{)", item)
+        meta_match = next(_direct_property_matches(item, _META_RE), None)
         meta = _balanced_object_after(item, meta_match.end()) if meta_match else None
         help_id_match = _HELP_ID_LITERAL_RE.search(meta) if meta else None
         surfaces.append(
@@ -275,11 +332,16 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
         # undocumented and unexempted.
         for registration in re.finditer(r"WidgetRegistry\.register\(", source):
             body = _balanced_object_after(source, registration.end())
-            if body is None:
-                continue
-            type_match = _JS_TYPE_RE.search(body)
-            if not type_match:
-                continue
+            type_match = _JS_TYPE_RE.search(body) if body is not None else None
+            if type_match is None:
+                # Silently skipping would under-enumerate: the widget is built
+                # and offered in the palette, the gate just cannot tell which
+                # one it is — so it says so instead of passing.
+                line = source.count("\n", 0, registration.start()) + 1
+                raise SystemExit(
+                    f"help contract: {origin}:{line} registers a widget whose 'type' is not a string "
+                    f"literal — the gate cannot tell which widget this is; give 'type' a literal value"
+                )
             widget_type = type_match.group(2)
             surfaces.append(
                 Surface(
