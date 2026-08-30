@@ -52,8 +52,9 @@ system knows about that one data point, and is also where its bindings are maint
 
 - **Current value** — the last known value, updated live, with timestamp, MQTT topic, and
   (if set) MQTT alias. Below it, **Write value** sets a value directly — via two buttons for
-  BOOLEAN, via an input field otherwise. The area stays disabled while no writable binding
-  exists.
+  BOOLEAN, via an input field otherwise. The area is disabled only when the data point has
+  adapter bindings and none of them writes; a data point with **no** bindings at all stays
+  writable — its value then lives only inside OBS.
 - **Properties** — name, data type, unit, tags, plus the **Persist value** (value survives a
   restart) and **Record history** (values are recorded long-term, see **Settings → History
   DB**) switches. "Edit" opens the same dialog as in the data point list; "History →" jumps

@@ -118,6 +118,25 @@ def test_parse_routes_reads_double_quoted_names_and_ids():
     assert [(route.name, route.help_id) for route in routes] == [("NewView", "new-view")]
 
 
+def test_parse_routes_ignores_a_help_id_outside_the_meta_object():
+    """TopBar reads route.meta.helpId — a helpId elsewhere declares nothing."""
+    source = "const routes = [\n  { path: '/', name: 'Dashboard', props: { helpId: 'dashboard' }, meta: {} },\n]\n"
+
+    assert [route.help_id for route in gate.parse_routes(source)] == [None]
+
+
+def test_parse_routes_reads_a_multi_property_meta_object():
+    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { public: false, helpId: 'dashboard' } },\n]\n"
+
+    assert [route.help_id for route in gate.parse_routes(source)] == ["dashboard"]
+
+
+def test_parse_routes_handles_a_nested_meta_object():
+    source = "const routes = [\n  { path: '/', name: 'X', meta: { nested: { a: 1 }, helpId: 'x' } },\n]\n"
+
+    assert [route.help_id for route in gate.parse_routes(source)] == ["x"]
+
+
 def test_parse_routes_skips_the_unnamed_catch_all():
     assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
 
@@ -158,6 +177,34 @@ def test_parse_widget_types_reads_a_double_quoted_type(tmp_path):
     _write_widget(widgets, "Toggle", 'WidgetRegistry.register({\n  type: "Toggle",\n})\n')
 
     assert [surface.help_id for surface in gate.parse_widget_types(widgets, tmp_path)] == ["widget-toggle"]
+
+
+def test_parse_widget_types_enumerates_every_registration_in_one_module(tmp_path):
+    """A second register() call is a second shippable widget type."""
+    widgets = tmp_path / "widgets"
+    _write_widget(
+        widgets,
+        "Slider",
+        "WidgetRegistry.register({ type: 'Slider', defaultConfig: { min: 0 } })\nWidgetRegistry.register({ type: 'SliderPro' })\n",
+    )
+
+    surfaces = gate.parse_widget_types(widgets, tmp_path)
+
+    assert [surface.name for surface in surfaces] == ["Slider", "SliderPro"]
+
+
+def test_parse_widget_types_ignores_an_unterminated_registration(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Broken", "WidgetRegistry.register({ type: 'Broken'\n")
+
+    assert gate.parse_widget_types(widgets, tmp_path) == []
+
+
+def test_parse_widget_types_ignores_a_registration_without_an_object(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Broken", "WidgetRegistry.register(definition)\n")
+
+    assert gate.parse_widget_types(widgets, tmp_path) == []
 
 
 def test_parse_widget_types_ignores_a_module_without_registration(tmp_path):
@@ -321,6 +368,17 @@ def test_collect_help_references_finds_static_attributes_and_literals(tmp_path):
         ("logic-block-and", "gui/src/nested/map.js:1"),
         ("logs-level", "gui/src/View.vue:2"),
     ]
+
+
+def test_collect_help_references_reads_a_single_quoted_static_attribute(tmp_path):
+    """`help-id='…'` is valid Vue syntax — an unread reference is a dead button."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text("<template>\n  <HelpButton help-id='logs-level' />\n</template>\n", encoding="utf-8")
+
+    references = gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))
+
+    assert [reference.help_id for reference in references] == ["logs-level"]
 
 
 def test_collect_help_references_skips_a_bound_attribute_and_a_non_literal_prop(tmp_path):

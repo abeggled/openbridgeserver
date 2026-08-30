@@ -77,8 +77,10 @@ _LOGIC_NODE_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # `:help-id="expr"` / `v-bind:help-id="expr"` is a dynamic binding whose value
 # is only known at runtime — the leading colon is what distinguishes it from
-# the static attribute this gate can resolve.
-_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id=\"([^\"]*)\"")
+# the static attribute this gate can resolve. Both quote styles are valid Vue
+# template syntax and both must be seen: an unread reference is a dead help
+# button the gate would wave through.
+_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id=(['\"])(.*?)\1")
 # Object-literal form, used by route meta and by prop defaults. Deliberately
 # narrow: it matches a property literally named `helpId`, so a lookup table
 # keyed by something else (`and: 'logic-block-and'`) is NOT collected here.
@@ -161,6 +163,22 @@ def _split_object_literals(text: str) -> list[str]:
     return items
 
 
+def _balanced_object_after(text: str, start: int) -> str | None:
+    """Return the ``{...}`` literal that starts at or after ``start``."""
+    open_brace = text.find("{", start)
+    if open_brace < 0:
+        return None
+    depth = 0
+    for index in range(open_brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_brace : index + 1]
+    return None
+
+
 def _array_body(source: str, declaration: str) -> str:
     """Return the text between the brackets of ``declaration``'s array literal."""
     start = source.index(declaration) + len(declaration)
@@ -187,7 +205,13 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
         name_match = _JS_NAME_RE.search(item)
         if not name_match:
             continue
-        help_id_match = _HELP_ID_LITERAL_RE.search(item)
+        # Scoped to the route's own `meta` object, because that is the only
+        # place TopBar.vue reads: a `helpId` sitting in `props` or any other
+        # property would otherwise be accepted as the declaration while the
+        # page in fact renders no help button.
+        meta_match = re.search(r"\bmeta:\s*(?=\{)", item)
+        meta = _balanced_object_after(item, meta_match.end()) if meta_match else None
+        help_id_match = _HELP_ID_LITERAL_RE.search(meta) if meta else None
         surfaces.append(
             Surface(
                 kind="route",
@@ -205,25 +229,30 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
     surfaces: list[Surface] = []
     for index_file in sorted(widgets_dir.glob("*/index.ts")):
         source = index_file.read_text(encoding="utf-8")
-        registration = source.find("WidgetRegistry.register(")
-        if registration < 0:
-            continue
-        type_match = _JS_TYPE_RE.search(source[registration:])
-        if not type_match:
-            continue
-        widget_type = type_match.group(2)
         try:
             origin = index_file.relative_to(root).as_posix()
         except ValueError:
             origin = index_file.as_posix()
-        surfaces.append(
-            Surface(
-                kind="widget",
-                name=widget_type,
-                help_id=f"widget-{kebab(widget_type)}",
-                origin=origin,
+        # Every registration in the module, not just the first: a second
+        # `WidgetRegistry.register` call produces a second buildable,
+        # palette-visible widget type, and missing it would let that type ship
+        # undocumented and unexempted.
+        for registration in re.finditer(r"WidgetRegistry\.register\(", source):
+            body = _balanced_object_after(source, registration.end())
+            if body is None:
+                continue
+            type_match = _JS_TYPE_RE.search(body)
+            if not type_match:
+                continue
+            widget_type = type_match.group(2)
+            surfaces.append(
+                Surface(
+                    kind="widget",
+                    name=widget_type,
+                    help_id=f"widget-{kebab(widget_type)}",
+                    origin=origin,
+                )
             )
-        )
     return surfaces
 
 
@@ -304,10 +333,10 @@ def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Refer
                 continue
             source = path.read_text(encoding="utf-8")
             location = path.relative_to(repo_root).as_posix()
-            for pattern in (_STATIC_HELP_ATTR_RE, _HELP_ID_LITERAL_RE):
+            for pattern, group in ((_STATIC_HELP_ATTR_RE, 2), (_HELP_ID_LITERAL_RE, 1)):
                 for match in pattern.finditer(source):
                     line = source.count("\n", 0, match.start()) + 1
-                    references.append(Reference(match.group(1), f"{location}:{line}"))
+                    references.append(Reference(match.group(group), f"{location}:{line}"))
     return references
 
 

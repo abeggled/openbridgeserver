@@ -54,8 +54,9 @@ seine Verknüpfungen gepflegt werden:
 - **Aktueller Wert** — der zuletzt bekannte Wert, live aktualisiert, mit Zeitstempel,
   MQTT-Topic und (falls gesetzt) MQTT-Alias. Darunter erlaubt **Wert schreiben** das
   direkte Setzen eines Werts — bei BOOLEAN über zwei Schaltflächen, sonst über ein
-  Eingabefeld. Der Bereich bleibt gesperrt, solange keine schreibbare Verknüpfung
-  existiert.
+  Eingabefeld. Gesperrt ist der Bereich nur dann, wenn das Objekt Adapter-Verknüpfungen
+  hat, von denen keine schreibt; ein Objekt ganz **ohne** Verknüpfungen bleibt
+  beschreibbar — der Wert lebt dann nur in OBS.
 - **Eigenschaften** — Name, Datentyp, Einheit, Tags sowie die Schalter **Wert speichern**
   (Wert überlebt einen Neustart) und **Historisierung** (Werte werden langfristig
   aufgezeichnet, siehe **Einstellungen → Historie DB**). „Bearbeiten" öffnet dieselbe Maske
