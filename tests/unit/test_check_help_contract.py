@@ -657,6 +657,24 @@ def test_collect_help_references_scans_every_supported_extension(tmp_path, suffi
     assert [ref.help_id for ref in references] == ["logs-level"]
 
 
+@pytest.mark.parametrize("end_tag", ["</script>", "</script >", "</script\t\n bar>", "</script/>"])
+def test_collect_help_references_reads_script_with_any_valid_end_tag(tmp_path, end_tag):
+    """A missed end tag means the block is not recognised and its declarations vanish."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text(f"<script setup>\nconst m = {{ helpId: 'logs-level' }}\n{end_tag}\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_does_not_treat_a_similar_tag_as_the_end(tmp_path):
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text("<script>const m = { helpId: 'gone' }</scriptx>\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
+
+
 def test_collect_help_references_ignores_a_css_custom_property(tmp_path):
     """`--panel-helpId: '…'` is a style declaration, not a help reference."""
     source = tmp_path / "gui" / "src"

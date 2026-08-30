@@ -704,7 +704,12 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
     ]
 
 
-_SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.DOTALL | re.IGNORECASE)
+# An end tag closes the block as soon as `script` is followed by whitespace or
+# `>`; anything up to the `>` is ignored by parsers but tolerated. Requiring
+# `</script\s*>` missed `</script\t\n bar>` (CodeQL js/bad-tag-filter) — and a
+# missed end tag means the block is not recognised at all, so declarations
+# inside it would go unseen and a dead help button would pass.
+_SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>(.*?)</script(?=[\s/>])[^>]*>", re.DOTALL | re.IGNORECASE)
 
 
 def _blank_outside_script(source: str) -> str:
