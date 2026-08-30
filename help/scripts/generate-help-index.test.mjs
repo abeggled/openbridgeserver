@@ -276,6 +276,26 @@ test('stripRawHtmlBlocks resumes indexing after the block ends', () => {
   assert.match(stripped, /## C \{#c\}/)
 })
 
+test('an escaped anchor is not indexed', () => {
+  // Verified against a real build: `## Title \\{#probe}` renders the suffix as
+  // visible text and gets markdown-it's auto-slug of the whole heading, so the
+  // requested fragment does not exist.
+  const root = mkdtempSync(join(tmpdir(), 'help-escaped-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## Escaped \\{#gone}', '', '## Real {#kept}', ''].join('\n'))
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('kept' in helpIds)
+    assert.ok(!('gone' in helpIds), 'an escaped anchor renders as text and owns no id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('the same help_id in two different locales is not a duplicate and is reported complete', () => {
   withFixture(
     {

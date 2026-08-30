@@ -160,6 +160,26 @@ def test_parse_routes_ignores_a_name_in_a_non_route_object():
     assert [r.name for r in gate.parse_routes(source)] == ["Dashboard"]
 
 
+def test_parse_routes_ignores_a_help_id_that_is_only_string_text():
+    """`note: "helpId: 'x'"` is text; route.meta.helpId stays undefined."""
+    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { note: \"helpId: 'dashboard'\" } },\n]\n"
+
+    assert [route.help_id for route in gate.parse_routes(source)] == [None]
+
+
+def test_parse_routes_survives_a_brace_inside_a_string():
+    """A `{` in string text must not unbalance the record matching."""
+    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { title: 'a { b', helpId: 'dashboard' } },\n]\n"
+
+    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("Dashboard", "dashboard")]
+
+
+def test_parse_routes_ignores_a_route_name_that_is_only_string_text():
+    source = "const routes = [\n  { path: '/', note: \"name: 'Fake'\", meta: { helpId: 'dashboard' } },\n]\n"
+
+    assert gate.parse_routes(source) == []
+
+
 def test_parse_routes_ignores_a_help_id_nested_inside_meta():
     """TopBar reads meta.helpId directly; a nested one declares nothing."""
     source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { analytics: { helpId: 'dashboard' } } },\n]\n"
@@ -285,6 +305,21 @@ def test_parse_widget_types_does_not_borrow_a_later_registrations_object(tmp_pat
 
     with pytest.raises(SystemExit, match="not a string literal"):
         gate.parse_widget_types(widgets, tmp_path)
+
+
+def test_parse_widget_types_ignores_a_type_that_is_only_string_text(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Slider", "WidgetRegistry.register({ label: \"type: 'Fake'\" })\n")
+
+    with pytest.raises(SystemExit, match="not a string literal"):
+        gate.parse_widget_types(widgets, tmp_path)
+
+
+def test_parse_widget_types_survives_a_brace_inside_a_string(tmp_path):
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Slider", "WidgetRegistry.register({ label: 'a { b', type: 'Slider' })\n")
+
+    assert [surface.name for surface in gate.parse_widget_types(widgets, tmp_path)] == ["Slider"]
 
 
 def test_parse_widget_types_reads_the_registrations_own_type_not_a_nested_one(tmp_path):

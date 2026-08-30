@@ -278,11 +278,16 @@ def _iter_route_records(array_body: str, base_offset: int = 0):
         yield from _iter_route_records(nested, base_offset + offset + bracket + 1)
 
 
-def _direct_property_matches(obj: str, pattern: re.Pattern):
+def _direct_property_matches(obj: str, pattern: re.Pattern, source: str | None = None):
     """Yield ``pattern`` matches that sit directly in ``obj``, not in a nested one.
 
     A parent route record contains its children's text, so an undirected
     search would read a child's ``name``/``meta`` as the parent's own.
+
+    ``obj`` is the masked view (see ``_blank_string_contents``), so a key can
+    never be matched inside string text. When ``source`` is given — the same
+    span, unmasked — the match is re-run there so the *value* is read from the
+    real literal; both have identical offsets.
     """
     depths = [0] * (len(obj) + 1)
     depth = 0
@@ -294,8 +299,63 @@ def _direct_property_matches(obj: str, pattern: re.Pattern):
             depth -= 1
             depths[index] = depth
     for match in pattern.finditer(obj):
-        if depths[match.start()] == 1:
+        if depths[match.start()] != 1:
+            continue
+        if source is None:
             yield match
+            continue
+        real = pattern.match(source, match.start())
+        if real is not None:
+            yield real
+
+
+def _blank_string_contents(source: str) -> str:
+    """Blank the *inside* of every string literal, keeping quotes and offsets.
+
+    Structure — braces, brackets, property keys — must be read from a view
+    where string text cannot pose as code: `meta: { note: "helpId: 'x'" }`
+    declares nothing, and a `{` inside a string would otherwise unbalance the
+    brace matching. Values are still read from the untouched source at the
+    same offsets, so this view is only ever used to *locate* things.
+
+    A string used as a *key* keeps its content — `'name': 'Dashboard'` is a
+    valid declaration and the key has to stay findable. A string is a key when
+    a colon follows it, which is exactly what separates the two here.
+    """
+    out: list[str] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        char = source[index]
+        if char not in _STRING_DELIMITERS:
+            out.append(char)
+            index += 1
+            continue
+        start = index
+        index += 1
+        while index < length:
+            current = source[index]
+            if current == "\\" and index + 1 < length:
+                index += 2
+                continue
+            index += 1
+            if current == char:
+                break
+        literal = source[start:index]
+        after = index
+        while after < length and source[after].isspace():
+            after += 1
+        is_key = after < length and source[after] == ":"
+        out.append(literal if is_key else _blank_inner(literal))
+    return "".join(out)
+
+
+def _blank_inner(literal: str) -> str:
+    """Replace a string literal's content with spaces, keeping quotes and newlines."""
+    if len(literal) < 2:
+        return literal
+    inner = "".join("\n" if char == "\n" else " " for char in literal[1:-1])
+    return literal[0] + inner + literal[-1]
 
 
 def _literal_start(text: str, start: int, bracket: str) -> int:
@@ -376,14 +436,19 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
     """
     surfaces: list[Surface] = []
     source = _blank_comments(source)
-    body, body_offset = _array_body(source, "const routes")
+    # Structure is read from the masked view so string text cannot pose as a
+    # property (or unbalance the braces); values come from `source` at the
+    # same offsets.
+    masked = _blank_string_contents(source)
+    body, body_offset = _array_body(masked, "const routes")
     try:
         records = list(_iter_route_records(body, body_offset))
     except _UnreadableRoute as unreadable:
         line = source.count("\n", 0, unreadable.offset) + 1
         raise SystemExit(f"help contract: {origin}:{line} {unreadable.problem}") from None
     for item, offset in records:
-        name_match = next(_direct_property_matches(item, _JS_NAME_RE), None)
+        real_item = source[offset : offset + len(item)]
+        name_match = next(_direct_property_matches(item, _JS_NAME_RE, real_item), None)
         if not name_match:
             if next(_direct_property_matches(item, _ANY_NAME_PROPERTY_RE), None) is not None:
                 # The route is named and reachable; only the gate cannot tell
@@ -401,9 +466,13 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
         # page in fact renders no help button.
         meta_match = next(_direct_property_matches(item, _META_RE), None)
         meta = _balanced_object_after(item, meta_match.end()) if meta_match else None
-        # Direct properties only: TopBar reads `route.meta.helpId`, so a
-        # helpId parked in an object nested inside meta declares nothing.
-        help_id_match = next(_direct_property_matches(meta, _HELP_ID_LITERAL_RE), None) if meta else None
+        help_id_match = None
+        if meta is not None:
+            # Direct properties only: TopBar reads `route.meta.helpId`, so a
+            # helpId parked in an object nested inside meta declares nothing.
+            meta_start = _literal_start(item, meta_match.end(), "{")
+            real_meta = real_item[meta_start : meta_start + len(meta)]
+            help_id_match = next(_direct_property_matches(meta, _HELP_ID_LITERAL_RE, real_meta), None)
         surfaces.append(
             Surface(
                 kind="route",
@@ -426,6 +495,10 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
     surfaces: list[Surface] = []
     for index_file in sorted(widgets_dir.glob("*/index.ts")):
         source = _blank_comments(index_file.read_text(encoding="utf-8"))
+        # Same two views as parse_routes: locate on the masked one so string
+        # text cannot pose as a `type` property, read the value from the real
+        # source at the same offset.
+        masked = _blank_string_contents(source)
         try:
             origin = index_file.relative_to(root).as_posix()
         except ValueError:
@@ -434,11 +507,15 @@ def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list
         # `WidgetRegistry.register` call produces a second buildable,
         # palette-visible widget type, and missing it would let that type ship
         # undocumented and unexempted.
-        for registration in _WIDGET_REGISTER_RE.finditer(source):
-            body = _balanced_object_after(source, registration.end())
+        for registration in _WIDGET_REGISTER_RE.finditer(masked):
+            body = _balanced_object_after(masked, registration.end())
             # Direct property only: `defaultConfig: { type: 'Slider' }` is the
             # widget's own config, not the type it registers under.
-            type_match = next(_direct_property_matches(body, _JS_TYPE_RE), None) if body is not None else None
+            type_match = None
+            if body is not None:
+                body_start = _literal_start(masked, registration.end(), "{")
+                real_body = source[body_start : body_start + len(body)]
+                type_match = next(_direct_property_matches(body, _JS_TYPE_RE, real_body), None)
             if type_match is None:
                 # Silently skipping would under-enumerate: the widget is built
                 # and offered in the palette, the gate just cannot tell which

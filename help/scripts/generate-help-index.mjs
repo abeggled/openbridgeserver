@@ -33,7 +33,11 @@ const HELP_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const LOCALE_DIRS = { de: 'de', en: 'en' } // dir prefix -> locale code — every locale is prefixed
 const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scripts'])
 
-const HEADING_RE = /^#{1,6}\s+.*\{#([A-Za-z][\w-]*)\}\s*$/gm
+// The `{` must not be escaped: `## Title \{#id}` renders the suffix as visible
+// heading text and gets markdown-it's auto-slug of that whole text instead
+// (verified against a real build: `\{#probe}` produced id="title-probe", not
+// "probe"), so indexing `id` would hand out a fragment nothing answers to.
+const HEADING_RE = /^#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}\s*$/gm
 
 function findMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true })
