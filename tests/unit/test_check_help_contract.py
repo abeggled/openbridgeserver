@@ -647,11 +647,43 @@ def test_collect_help_references_scans_every_supported_extension(tmp_path, suffi
     """A reference moved into a helper module must stay visible."""
     source = tmp_path / "gui" / "src"
     source.mkdir(parents=True)
-    (source / f"helpMap{suffix}").write_text("const m = { helpId: 'logs-level' }\n", encoding="utf-8")
+    body = "const m = { helpId: 'logs-level' }\n"
+    # An SFC keeps its script in a <script> block; that is where the property
+    # scan looks (see _blank_outside_script).
+    (source / f"helpMap{suffix}").write_text(f"<script setup>\n{body}</script>\n" if suffix == ".vue" else body, encoding="utf-8")
 
     references = gate.collect_help_references(tmp_path, (("gui/src", gate._SOURCE_SUFFIXES),))
 
     assert [ref.help_id for ref in references] == ["logs-level"]
+
+
+def test_collect_help_references_ignores_a_css_custom_property(tmp_path):
+    """`--panel-helpId: '…'` is a style declaration, not a help reference."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text(
+        "<template><div class=\"panel\" /></template>\n<style>\n.panel { --panel-helpId: 'gone'; }\n</style>\n", encoding="utf-8"
+    )
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
+
+
+def test_collect_help_references_ignores_property_shaped_template_prose(tmp_path):
+    """Rendered text mentioning a property declares nothing."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text("<template>\n  <p>Set helpId: 'gone' in meta</p>\n</template>\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
+
+
+def test_collect_help_references_still_reads_a_help_attribute_in_the_template(tmp_path):
+    """Restricting the property scan must not hide the template attribute."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text('<template>\n  <HelpButton help-id="logs-level" />\n</template>\n', encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
 
 
 def test_both_frontends_are_scanned_with_the_same_extensions():
@@ -683,6 +715,33 @@ def test_collect_help_references_ignores_template_literal_text(tmp_path):
     (source / "tpl.js").write_text("const t = `write helpId: 'gone' here`\n", encoding="utf-8")
 
     assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
+
+
+def test_collect_help_references_survives_a_regex_containing_a_quote(tmp_path):
+    """`/['\"]/` must not open a string and swallow the declaration after it."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "re.js").write_text("const q = /['\"]/\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_ignores_a_help_id_inside_a_regex(tmp_path):
+    """A regex is opaque: it cannot carry a declaration."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "re.js").write_text("const q = /helpId: 'gone'/\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
+
+
+def test_collect_help_references_treats_division_as_division(tmp_path):
+    """`a / b` is not a regex — the declaration after it must still be read."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "div.js").write_text("const ratio = width / height\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
 
 
 def test_collect_help_references_ignores_a_ternary_that_looks_like_a_property(tmp_path):

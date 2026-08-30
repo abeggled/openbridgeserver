@@ -135,6 +135,9 @@ def _scan_regions(source: str, start: int = 0, end: int | None = None) -> list[t
             continue
         opener = next((o for o in ("//", "/*", "<!--") if source.startswith(o, index)), None)
         if opener is None:
+            if char == "/" and _starts_regex(source, index):
+                index = _scan_regex(source, index, end, regions)
+                continue
             index += 1
             continue
         closer = {"//": "\n", "/*": "*/", "<!--": "-->"}[opener]
@@ -143,6 +146,54 @@ def _scan_regions(source: str, start: int = 0, end: int | None = None) -> list[t
         regions.append(("comment", index, stop))
         index = stop
     return regions
+
+
+# A `/` opens a regex literal only where an operand cannot already have ended.
+# `<` and `>` are deliberately absent: `</script>` in a Vue SFC would otherwise
+# look like one, and `a < /re/.test(b)` is not a shape this codebase writes.
+_REGEX_PREDECESSORS = frozenset("(,=:[!&|?{};+-*%~^")
+_REGEX_KEYWORDS = frozenset({"return", "typeof", "case", "in", "of", "new", "delete", "void", "do", "else", "yield", "await"})
+
+
+def _starts_regex(source: str, index: int) -> bool:
+    """Would a `/` at ``index`` open a regex literal rather than divide?"""
+    before = index - 1
+    while before >= 0 and source[before].isspace():
+        before -= 1
+    if before < 0:
+        return True
+    if source[before] in _REGEX_PREDECESSORS:
+        return True
+    word_end = before + 1
+    while before >= 0 and (source[before].isalnum() or source[before] in "_$"):
+        before -= 1
+    return source[before + 1 : word_end] in _REGEX_KEYWORDS
+
+
+def _scan_regex(source: str, start: int, end: int, regions: list[tuple[str, int, int]]) -> int:
+    """Record the regex literal at ``start`` as opaque; return the index after it.
+
+    Its quotes must not open a string — `/['\"]/` would otherwise swallow the
+    rest of the file as string text and mask real declarations behind it.
+    """
+    index = start + 1
+    in_class = False
+    while index < end:
+        char = source[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == "\n":
+            break  # unterminated: not a regex after all
+        if char == "[":
+            in_class = True
+        elif char == "]":
+            in_class = False
+        elif char == "/" and not in_class:
+            regions.append(("regex", start, index + 1))
+            return index + 1
+        index += 1
+    return start + 1
 
 
 def _scan_string(source: str, start: int, end: int, regions: list[tuple[str, int, int]]) -> int:
@@ -384,7 +435,7 @@ def _blank_string_contents(source: str) -> str:
     """
     out = list(source)
     for kind, start, end in _scan_regions(source):
-        if kind == "string" and not _is_key_string(source, start, end):
+        if kind == "regex" or (kind == "string" and not _is_key_string(source, start, end)):
             out[start:end] = _blank_span(source, start, end)
     return "".join(out)
 
@@ -653,6 +704,18 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
     ]
 
 
+_SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>(.*?)</script\s*>", re.DOTALL | re.IGNORECASE)
+
+
+def _blank_outside_script(source: str) -> str:
+    """Keep only an SFC's ``<script>`` bodies, blanking the rest at fixed offsets."""
+    out = list(_blank_span(source, 0, len(source)))
+    for match in _SCRIPT_BLOCK_RE.finditer(source):
+        start, end = match.span(1)
+        out[start:end] = source[start:end]
+    return "".join(out)
+
+
 def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Reference]:
     """Collect every statically resolvable help_id reference in the frontends."""
     references: list[Reference] = []
@@ -671,8 +734,17 @@ def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Refer
             # keep their content, so a real `helpId: 'x'` is still seen.
             masked = _blank_string_contents(source)
             location = path.relative_to(repo_root).as_posix()
-            for pattern, group in ((_STATIC_HELP_ATTR_RE, 2), (_HELP_ID_LITERAL_RE, 1)):
-                for located in pattern.finditer(masked):
+            # `helpId: '…'` is a JavaScript property, so it is only read from
+            # script. A CSS custom property (`--panel-helpId: …`) or prose in a
+            # template is not a declaration, and failing the gate on one would
+            # block a push over something that renders no help control. The
+            # `help-id` attribute, by contrast, belongs to the template.
+            script_only = _blank_outside_script(masked) if path.suffix == ".vue" else masked
+            for pattern, group, view in (
+                (_STATIC_HELP_ATTR_RE, 2, masked),
+                (_HELP_ID_LITERAL_RE, 1, script_only),
+            ):
+                for located in pattern.finditer(view):
                     real = pattern.match(source, located.start())
                     if real is None:
                         continue
