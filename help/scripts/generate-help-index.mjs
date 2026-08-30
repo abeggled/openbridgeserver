@@ -127,6 +127,9 @@ export function stripHtmlComments(text) {
 
 // A tag name, not an autolink: `<https://example.com>` must stay a paragraph.
 const HTML_BLOCK_START_RE = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)/
+// CommonMark "type 1": these run to their closing tag rather than to the next
+// blank line, so markdown inside them is never parsed.
+const LITERAL_BLOCK_START_RE = /^ {0,3}<(pre|script|style|textarea)(?=[\s/>]|$)/i
 
 /**
  * Blank out raw HTML blocks, keeping the line count. A heading-shaped line
@@ -140,11 +143,30 @@ const HTML_BLOCK_START_RE = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)/
  */
 export function stripRawHtmlBlocks(text) {
   let inBlock = false
+  let literalTag = null // a CommonMark "type 1" block, closed by its end tag
   return text
     .split('\n')
     .map((line) => {
-      if (!inBlock && HTML_BLOCK_START_RE.test(line)) inBlock = true
+      if (!inBlock) {
+        const literal = LITERAL_BLOCK_START_RE.exec(line)
+        if (literal) {
+          inBlock = true
+          literalTag = literal[1].toLowerCase()
+        } else if (HTML_BLOCK_START_RE.test(line)) {
+          inBlock = true
+        }
+      }
       if (!inBlock) return line
+      if (literalTag !== null) {
+        // Runs to its closing tag, blank lines included — verified against a
+        // real build: a heading inside `<pre>` renders no id even with blank
+        // lines around it.
+        if (new RegExp(`</${literalTag}\\s*>`, 'i').test(line)) {
+          inBlock = false
+          literalTag = null
+        }
+        return ''
+      }
       if (line.trim() === '') {
         inBlock = false
         return line

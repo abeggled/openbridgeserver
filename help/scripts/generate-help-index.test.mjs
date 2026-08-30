@@ -262,6 +262,22 @@ test('an anchor inside a raw HTML block is not indexed, but a blank-line-separat
   }
 })
 
+test('a type-1 HTML block stays open across blank lines until its closing tag', () => {
+  // Verified against a real build: a heading inside <pre> renders no id even
+  // with blank lines around it, unlike a <div> block which a blank line ends.
+  const stripped = stripRawHtmlBlocks(['<pre>', 'text', '', '## Inside {#gone}', '', '</pre>', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a blank line still ends an ordinary HTML block', () => {
+  const stripped = stripRawHtmlBlocks(['<div>', '## InDiv {#gone}', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
 test('stripRawHtmlBlocks leaves an autolink paragraph alone', () => {
   // `<https://example.com>` is not a tag, so it opens no HTML block.
   const stripped = stripRawHtmlBlocks(['<https://example.com>', '## E {#e}'].join('\n'))

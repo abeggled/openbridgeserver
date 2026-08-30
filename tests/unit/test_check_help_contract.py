@@ -230,6 +230,21 @@ def test_parse_routes_fails_closed_on_a_non_literal_name():
         gate.parse_routes(source)
 
 
+def test_parse_routes_fails_closed_on_a_spread_route_array():
+    """A spread can contribute named routes the scan never sees."""
+    source = "const routes = [\n  ...EXTRA_ROUTES,\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\n"
+
+    with pytest.raises(SystemExit, match="spreads a route array"):
+        gate.parse_routes(source)
+
+
+def test_parse_routes_allows_a_spread_inside_a_route_property():
+    """Only a spread *of routes* is unreadable; one inside a value is fine."""
+    source = "const routes = [\n  { path: '/', name: 'A', meta: { ...base, helpId: 'a' } },\n]\n"
+
+    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("A", "a")]
+
+
 def test_parse_routes_fails_closed_on_children_it_cannot_read():
     """A non-literal children array can hide named routes from the scan."""
     source = "const routes = [\n  { path: '/group', children: EXTERNAL_ROUTES },\n]\n"
@@ -601,6 +616,31 @@ def test_collect_help_references_sees_a_comment_that_starts_right_after_a_string
     (source / "router.js").write_text(line + "\n", encoding="utf-8")
 
     assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
+
+
+def test_collect_help_references_ignores_prose_inside_a_string(tmp_path):
+    """A sentence mentioning `helpId: '…'` neither renders nor executes."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "msg.js").write_text("const msg = \"set helpId: 'gone' in meta\"\n", encoding="utf-8")
+
+    assert gate.collect_help_references(tmp_path, (("gui/src", gate._SOURCE_SUFFIXES),)) == []
+
+
+@pytest.mark.parametrize("suffix", [".vue", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"])
+def test_collect_help_references_scans_every_supported_extension(tmp_path, suffix):
+    """A reference moved into a helper module must stay visible."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / f"helpMap{suffix}").write_text("const m = { helpId: 'logs-level' }\n", encoding="utf-8")
+
+    references = gate.collect_help_references(tmp_path, (("gui/src", gate._SOURCE_SUFFIXES),))
+
+    assert [ref.help_id for ref in references] == ["logs-level"]
+
+
+def test_both_frontends_are_scanned_with_the_same_extensions():
+    assert {suffixes for _, suffixes in gate._REFERENCE_DIRS} == {gate._SOURCE_SUFFIXES}
 
 
 def test_collect_help_references_keeps_a_help_id_inside_a_template_literal(tmp_path):

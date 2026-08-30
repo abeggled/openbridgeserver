@@ -167,9 +167,12 @@ def _blank_comments(source: str) -> str:
     return "".join(out)
 
 
+# Both frontends can hold either dialect — a reference moved into a helper
+# module must not become invisible just because of its extension.
+_SOURCE_SUFFIXES = (".vue", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
 _REFERENCE_DIRS = (
-    ("gui/src", (".vue", ".js")),
-    ("frontend/src", (".vue", ".ts")),
+    ("gui/src", _SOURCE_SUFFIXES),
+    ("frontend/src", _SOURCE_SUFFIXES),
 )
 
 # Vue/JS string properties are written with either quote style, and a route or
@@ -237,6 +240,26 @@ class _UnreadableRoute(Exception):
         self.problem = problem
 
 
+_SPREAD_RE = re.compile(r"\.\.\.")
+
+
+def _strip_nested(text: str) -> str:
+    """Blank everything inside brackets, keeping this level's text and offsets."""
+    depth = 0
+    out: list[str] = []
+    for char in text:
+        if char in "{[(":
+            depth += 1
+            out.append(char if depth == 1 else " ")
+            continue
+        if char in "}])":
+            depth -= 1
+            out.append(char if depth == 0 else " ")
+            continue
+        out.append(char if depth == 0 else ("\n" if char == "\n" else " "))
+    return "".join(out)
+
+
 def _top_level_object_literals(text: str) -> list[tuple[str, int]]:
     """Return the ``{...}`` literals sitting directly in an array body, with offsets."""
     items: list[tuple[str, int]] = []
@@ -262,6 +285,12 @@ def _iter_route_records(array_body: str, base_offset: int = 0):
     ``props`` bag, say — into a fictitious route and fail the gate over a page
     that does not exist.
     """
+    spread = _SPREAD_RE.search(_strip_nested(array_body))
+    if spread is not None:
+        # `[...EXTRA_ROUTES, { … }]` can contribute named, reachable routes the
+        # scan never sees. Enumerating only what is visible would report the
+        # rest as covered.
+        raise _UnreadableRoute(base_offset + spread.start(), "spreads a route array the gate cannot read; list the routes inline")
     for record, offset in _top_level_object_literals(array_body):
         yield record, base_offset + offset
         children = next(_direct_property_matches(record, _CHILDREN_RE), None)
@@ -613,11 +642,18 @@ def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Refer
             if "node_modules" in path.parts:
                 continue
             source = _blank_comments(path.read_text(encoding="utf-8"))
+            # Prose inside a string is neither rendered nor executed: a
+            # sentence containing `helpId: '…'` must not fail the gate. Keys
+            # keep their content, so a real `helpId: 'x'` is still seen.
+            masked = _blank_string_contents(source)
             location = path.relative_to(repo_root).as_posix()
             for pattern, group in ((_STATIC_HELP_ATTR_RE, 2), (_HELP_ID_LITERAL_RE, 1)):
-                for match in pattern.finditer(source):
-                    line = source.count("\n", 0, match.start()) + 1
-                    references.append(Reference(match.group(group), f"{location}:{line}"))
+                for located in pattern.finditer(masked):
+                    real = pattern.match(source, located.start())
+                    if real is None:
+                        continue
+                    line = source.count("\n", 0, located.start()) + 1
+                    references.append(Reference(real.group(group), f"{location}:{line}"))
     return references
 
 
