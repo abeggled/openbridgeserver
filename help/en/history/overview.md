@@ -30,6 +30,6 @@ running — only the most recently started query ever counts.
 
 The chart shows the loaded series over time, with the number of loaded points in the
 header. In **Raw** mode, a table with every individual value also appears: timestamp,
-value (including unit, if any), quality (`good`/`uncertain`), and the adapter the value
+value (including unit, if any), quality (**Good**/**Unknown**), and the adapter the value
 came from. If no value exists in the selected time range, a corresponding hint appears
 instead of an empty chart.
