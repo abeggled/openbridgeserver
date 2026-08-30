@@ -298,9 +298,22 @@ def _direct_property_matches(obj: str, pattern: re.Pattern):
             yield match
 
 
+def _literal_start(text: str, start: int, bracket: str) -> int:
+    """Index of ``bracket`` at ``start`` (whitespace skipped), or -1."""
+    index = start
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index if index < len(text) and text[index] == bracket else -1
+
+
 def _balanced_object_after(text: str, start: int) -> str | None:
-    """Return the ``{...}`` literal that starts at or after ``start``."""
-    open_brace = text.find("{", start)
+    """Return the ``{...}`` literal beginning at ``start``, or ``None``.
+
+    The bracket must be the value itself, not merely the next one somewhere
+    ahead: searching forward would happily borrow an unrelated literal from a
+    later property (or a later statement) and describe it as this value.
+    """
+    open_brace = _literal_start(text, start, "{")
     if open_brace < 0:
         return None
     depth = 0
@@ -315,8 +328,14 @@ def _balanced_object_after(text: str, start: int) -> str | None:
 
 
 def _balanced_array_after(text: str, start: int) -> str | None:
-    """Return the body of the ``[...]`` literal that starts at or after ``start``."""
-    open_bracket = text.find("[", start)
+    """Return the body of the ``[...]`` literal beginning at ``start``, or ``None``.
+
+    Anchored for the same reason as ``_balanced_object_after``: a
+    ``children: someVar`` next to a sibling property holding an array would
+    otherwise be read as that sibling's array, and the routes the real
+    ``children`` hides would never be seen.
+    """
+    open_bracket = _literal_start(text, start, "[")
     if open_bracket < 0:
         return None
     depth = 0

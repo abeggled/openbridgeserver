@@ -218,6 +218,14 @@ def test_parse_routes_fails_closed_on_children_it_cannot_read():
         gate.parse_routes(source)
 
 
+def test_parse_routes_does_not_borrow_a_sibling_array_as_children():
+    """`children: someVar` must not be read as the next array on the record."""
+    source = "const routes = [\n  { path: '/g', children: EXTERNAL, props: ['a', 'b'] },\n]\n"
+
+    with pytest.raises(SystemExit, match="'children' the gate cannot read"):
+        gate.parse_routes(source)
+
+
 def test_parse_routes_names_the_line_of_an_unreadable_declaration():
     source = "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n  { path: '/c', name: CONST },\n]\n"
 
@@ -268,6 +276,15 @@ def test_parse_widget_types_reads_a_double_quoted_type(tmp_path):
     _write_widget(widgets, "Toggle", 'WidgetRegistry.register({\n  type: "Toggle",\n})\n')
 
     assert [surface.help_id for surface in gate.parse_widget_types(widgets, tmp_path)] == ["widget-toggle"]
+
+
+def test_parse_widget_types_does_not_borrow_a_later_registrations_object(tmp_path):
+    """`register(definition)` must not adopt the next `{...}` in the file."""
+    widgets = tmp_path / "widgets"
+    _write_widget(widgets, "Slider", "WidgetRegistry.register(definition)\nWidgetRegistry.register({ type: 'Slider' })\n")
+
+    with pytest.raises(SystemExit, match="not a string literal"):
+        gate.parse_widget_types(widgets, tmp_path)
 
 
 def test_parse_widget_types_reads_the_registrations_own_type_not_a_nested_one(tmp_path):
