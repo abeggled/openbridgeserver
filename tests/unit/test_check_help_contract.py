@@ -511,10 +511,19 @@ def test_validate_rejects_a_syntactically_invalid_surface_help_id():
     assert errors == ["route:Logs: '1nope' is not a valid help_id (gui/src/router/index.js)"]
 
 
-def test_validate_reports_two_surfaces_sharing_one_help_id():
-    errors = gate.validate([_route("Logs", "logs"), _route("Alogs", "logs")], [], _index("logs"), [])
+def test_validate_allows_two_routes_to_point_at_the_same_page():
+    """Both buttons resolve — that is all the contract asks of a route."""
+    assert gate.validate([_route("Logs", "logs"), _route("LogsAlias", "logs")], [], _index("logs"), []) == []
 
-    assert errors == ["route:Logs: help_id 'logs' is already used by route:Alogs"]
+
+def test_validate_reports_a_collision_between_two_derived_help_ids():
+    """A derived id shared by two surfaces cannot tell them apart."""
+    first = gate.Surface(kind="widget", name="QrCode", help_id="widget-qr-code", origin="a")
+    second = gate.Surface(kind="widget", name="Qr_code", help_id="widget-qr-code", origin="b")
+
+    errors = gate.validate([first, second], [], _index("widget-qr-code"), [])
+
+    assert errors == ["widget:Qr_code: derived help_id 'widget-qr-code' collides with widget:QrCode"]
 
 
 def test_validate_reports_help_index_duplicates():

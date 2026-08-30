@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate } from './generate-help-index.mjs'
+import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode } from './generate-help-index.mjs'
 
 // ── Pure URL-mapping helpers ────────────────────────────────────────────────
 
@@ -134,6 +134,69 @@ test('buildHelpIndex excludes .vitepress/public/node_modules/scripts only at the
       assert.deepEqual(Object.keys(helpIds), ['settings-scripts-tips'])
     }
   )
+})
+
+// ── Fenced code is documentation, not an anchor ────────────────────────────
+
+test('an anchor-shaped heading inside a fenced block is not indexed', () => {
+  // VitePress renders it as <code> and creates no DOM id, so a help_id taken
+  // from here would resolve to a fragment no element answers to.
+  const root = mkdtempSync(join(tmpdir(), 'help-fence-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['# Title {#real-anchor}', '', 'Write an anchor like this:', '', '```md', '## Example {#only-in-code}', '```', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('real-anchor' in helpIds)
+    assert.ok(!('only-in-code' in helpIds), 'an example inside a fence must not become a help_id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripFencedCode blanks fenced blocks and keeps every line position', () => {
+  const text = ['# A {#a}', '```', '## B {#b}', '```', '## C {#c}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.equal(stripped.split('\n').length, 5)
+  assert.match(stripped, /# A \{#a\}/)
+  assert.match(stripped, /## C \{#c\}/)
+  assert.doesNotMatch(stripped, /\{#b\}/)
+})
+
+test('stripFencedCode handles tilde fences and a longer closing marker', () => {
+  const text = ['~~~js', '## B {#b}', '~~~', '````', '## D {#d}', '`````', '## E {#e}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.doesNotMatch(stripped, /\{#d\}/)
+  assert.match(stripped, /## E \{#e\}/)
+})
+
+test('stripFencedCode does not treat a shorter inner marker as the closing fence', () => {
+  const text = ['````', '```', '## B {#b}', '````', '## C {#c}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.match(stripped, /## C \{#c\}/)
+})
+
+test('stripFencedCode leaves an inline-code line alone', () => {
+  // ```js`` is inline code, not a fence: its info string contains a backtick.
+  const text = ['# A {#a}', '``` `not a fence` ```', '## B {#b}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.match(stripped, /## B \{#b\}/)
 })
 
 test('the same help_id in two different locales is not a duplicate and is reported complete', () => {

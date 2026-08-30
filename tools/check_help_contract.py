@@ -75,6 +75,14 @@ _SURFACE_KINDS = ("route", "widget", "logic-block", "skin")
 # on a camelCase type and check an id the GUI never asks for.
 _LOGIC_NODE_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
+# Kinds whose help_id is derived from the surface's own name. Two of them
+# landing on the same id means the derivation cannot tell them apart, so one
+# surface's "documented" status is really borrowed from the other. A route, by
+# contrast, declares its id by hand, and pointing two routes at one page (a
+# detail route at its list page, say) is a legitimate authoring choice — both
+# buttons resolve, which is all the contract asks for.
+_DERIVED_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
+
 # `:help-id="expr"` / `v-bind:help-id="expr"` is a dynamic binding whose value
 # is only known at runtime — the leading colon is what distinguishes it from
 # the static attribute this gate can resolve. Both quote styles are valid Vue
@@ -435,10 +443,11 @@ def validate(
         if not _HELP_ID_RE.fullmatch(surface.help_id):
             errors.append(f"{surface.key}: {surface.help_id!r} is not a valid help_id ({surface.origin})")
             continue
-        previous = seen_ids.get(surface.help_id)
-        if previous is not None:
-            errors.append(f"{surface.key}: help_id {surface.help_id!r} is already used by {previous}")
-        seen_ids[surface.help_id] = surface.key
+        if surface.kind in _DERIVED_ID_KINDS:
+            previous = seen_ids.get(surface.help_id)
+            if previous is not None:
+                errors.append(f"{surface.key}: derived help_id {surface.help_id!r} collides with {previous}")
+            seen_ids[surface.help_id] = surface.key
         if surface.help_id in help_ids:
             documented.add(surface.key)
             continue

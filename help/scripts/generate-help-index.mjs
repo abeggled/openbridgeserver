@@ -74,8 +74,43 @@ export function routePartsToUrl(routeParts) {
   return `/help/${withoutExt}.html`
 }
 
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+
+/**
+ * Blank out fenced code blocks, keeping the line count so nothing downstream
+ * shifts. An anchor-shaped heading inside a fence — a documentation example
+ * showing how to write one — is rendered by VitePress as `<code>` text and
+ * owns no DOM id, so indexing it would hand the Admin-GUI a help_id that
+ * resolves to a fragment no element answers to.
+ */
+export function stripFencedCode(text) {
+  let fence = null
+  return text
+    .split('\n')
+    .map((line) => {
+      const match = FENCE_RE.exec(line)
+      if (match) {
+        const marker = match[1]
+        const char = marker[0]
+        if (fence === null) {
+          // A backtick fence's info string may not itself contain a backtick
+          // (CommonMark) — that is inline code, not a fence.
+          if (!(char === '`' && match[2].includes('`'))) {
+            fence = { char, length: marker.length }
+            return ''
+          }
+        } else if (char === fence.char && marker.length >= fence.length && match[2].trim() === '') {
+          fence = null
+          return ''
+        }
+      }
+      return fence === null ? line : ''
+    })
+    .join('\n')
+}
+
 function extractHelpIds(absPath) {
-  const text = readFileSync(absPath, 'utf-8')
+  const text = stripFencedCode(readFileSync(absPath, 'utf-8'))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
     ids.push(match[1])
