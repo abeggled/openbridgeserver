@@ -287,7 +287,7 @@
       </select>
 
       <input
-        v-else-if="valueKind === 'integer' || valueKind === 'float'"
+        v-else-if="(valueKind === 'integer' || valueKind === 'float') && !needsTextFallback"
         v-model="textValue"
         type="number"
         :step="valueStep"
@@ -319,7 +319,7 @@
 import { computed, ref, watch } from 'vue'
 import {
   timerValueAsBool,
-  timerValueFitsPicker,
+  timerValueFitsNativeInput,
   timerValueHintKey,
   timerValueInputKind,
   timerValueStep,
@@ -384,9 +384,9 @@ watch(
 // Speichern weg. Bewusst nur beim Wechsel des Objekttyps neu bestimmt und nicht
 // bei jedem Tastendruck: sonst tauscht das Löschen des Offsets das Textfeld
 // mitten im Tippen gegen einen Picker und der Fokus geht verloren.
-const needsTextFallback = ref(!timerValueFitsPicker(props.cfg.value, props.dpDataType))
+const needsTextFallback = ref(!timerValueFitsNativeInput(props.cfg.value, props.dpDataType))
 watch(valueKind, () => {
-  needsTextFallback.value = !timerValueFitsPicker(props.cfg.value, props.dpDataType)
+  needsTextFallback.value = !timerValueFitsNativeInput(props.cfg.value, props.dpDataType)
 })
 
 // `<input type="number">` hands Vue a Number — but the backend schema declares

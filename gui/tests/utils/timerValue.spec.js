@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   timerValueAsBool,
-  timerValueFitsPicker,
+  timerValueFitsNativeInput,
   timerValueHintKey,
   timerValueInputKind,
   timerValueStep,
@@ -296,7 +296,7 @@ describe('validateTimerValue — UTC offsets (Codex review, PR #1155)', () => {
   })
 })
 
-describe('timerValueFitsPicker', () => {
+describe('timerValueFitsNativeInput', () => {
   it.each([
     ['08:00', 'TIME'],
     ['08:00:00', 'TIME'],
@@ -307,7 +307,7 @@ describe('timerValueFitsPicker', () => {
     ['50', 'FLOAT'],
     ['on', 'STRING'],
   ])('%s is representable in the native %s control', (raw, dataType) => {
-    expect(timerValueFitsPicker(raw, dataType)).toBe(true)
+    expect(timerValueFitsNativeInput(raw, dataType)).toBe(true)
   })
 
   // Values the validator still accepts for legacy configs but a native control
@@ -321,11 +321,37 @@ describe('timerValueFitsPicker', () => {
     ['2026-12-24t08:00', 'DATETIME'],
     ['2026-12-24', 'DATETIME'],
   ])('%s is NOT representable in the native %s control', (raw, dataType) => {
-    expect(timerValueFitsPicker(raw, dataType)).toBe(false)
+    expect(timerValueFitsNativeInput(raw, dataType)).toBe(false)
+  })
+
+  // Codex review round 2 on PR #1155: `<input type="number">` accepts only HTML's
+  // "valid floating-point number", so these stored literals — all of which the
+  // validator and the API accept — would render as a blank field.
+  it.each([
+    ['+1', 'FLOAT'],
+    ['+1', 'INTEGER'],
+    ['.5', 'FLOAT'],
+    ['5.', 'FLOAT'],
+    ['on', 'FLOAT'],
+    ['ein', 'INTEGER'],
+    ['1_0', 'INTEGER'],
+  ])('%s is NOT representable in the native %s control', (raw, dataType) => {
+    expect(timerValueFitsNativeInput(raw, dataType)).toBe(false)
+  })
+
+  it.each([
+    ['-3', 'INTEGER'],
+    ['50', 'INTEGER'],
+    ['007', 'INTEGER'],
+    ['21.5', 'FLOAT'],
+    ['1e3', 'FLOAT'],
+    ['1.5e2', 'FLOAT'],
+  ])('%s is representable in the native %s control', (raw, dataType) => {
+    expect(timerValueFitsNativeInput(raw, dataType)).toBe(true)
   })
 
   it('treats null/undefined as empty, i.e. fitting', () => {
-    expect(timerValueFitsPicker(null, 'TIME')).toBe(true)
-    expect(timerValueFitsPicker(undefined, 'DATETIME')).toBe(true)
+    expect(timerValueFitsNativeInput(null, 'TIME')).toBe(true)
+    expect(timerValueFitsNativeInput(undefined, 'DATETIME')).toBe(true)
   })
 })

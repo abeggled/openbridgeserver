@@ -22,12 +22,13 @@ const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
 const TIME_RE = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):?(\d{2}))?$/
 const DATETIME_RE = /^(\d{4}-\d{2}-\d{2})(?:[Tt ](.+))?$/
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-// What a native `time` / `datetime-local` control round-trips, see
-// `timerValueFitsPicker()`. Deliberately narrower than the validators above:
-// the browser normalizes the value, so a lowercase `t` or a space separator
-// does not survive either.
-const PICKER_TIME_RE = /^\d{2}:\d{2}(?::\d{2})?$/
-const PICKER_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/
+// What the native typed controls round-trip, see `timerValueFitsNativeInput()`.
+// Deliberately narrower than the validators above: the browser normalizes the
+// value, so a leading `+`, a lowercase `t` or a space separator does not survive.
+// NATIVE_NUMBER_RE is HTML's "valid floating-point number" grammar verbatim.
+const NATIVE_NUMBER_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/
+const NATIVE_TIME_RE = /^\d{2}:\d{2}(?::\d{2})?$/
+const NATIVE_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/
 
 const ERROR_KEYS = {
   boolean:  'adapters.bindingForm.ztOutputValueErrorBoolean',
@@ -147,23 +148,31 @@ function isValidDateTime(value) {
 }
 
 /**
- * Can a native date/time picker hold this literal as-is?
+ * Can the native typed control hold this literal as-is?
  *
- * `<input type="time">` / `type="datetime-local"` only accept `HH:MM[:SS]` (with a
- * `T`-separated date for the latter). Everything else this validator still accepts
- * for legacy configs — a UTC offset, a `Z`, fractional seconds, a bare date used as
- * a datetime — is sanitized away by the browser, leaving an **empty** control: the
- * stored value would look unset and be wiped on the next save. Those literals get a
- * plain text field instead, which shows what is actually stored.
+ * Every `<input>` type below runs a value sanitization algorithm and **blanks** a
+ * value it cannot represent — so a legacy literal this validator still accepts
+ * would show as an empty field, inviting the user to overwrite a perfectly good
+ * schedule value, and be wiped on the next save. Those literals get a plain text
+ * field instead, which shows what is actually stored:
  *
- * An empty value fits: a fresh schedule point should get the picker.
+ * - `number` takes only HTML's "valid floating-point number": no leading `+`, no
+ *   bare `.5` or `5.`, no underscores, and none of the boolean aliases (`on`,
+ *   `ein`) the numeric parsers still map to 1/0.
+ * - `time` / `datetime-local` take `HH:MM[:SS]` (with a `T`-separated date for the
+ *   latter) — no UTC offset, no `Z`, no fractional seconds, no bare date.
+ *
+ * `date` always fits: the validator's own shape gate is already `YYYY-MM-DD`.
+ * An empty value fits too — a fresh schedule point should get the native control.
  */
-export function timerValueFitsPicker(raw, dataType) {
+export function timerValueFitsNativeInput(raw, dataType) {
   const trimmed = String(raw ?? '').trim()
   if (trimmed === '') return true
   switch (timerValueInputKind(dataType)) {
-    case 'time':     return PICKER_TIME_RE.test(trimmed)
-    case 'datetime': return PICKER_DATETIME_RE.test(trimmed)
+    case 'integer':
+    case 'float':    return NATIVE_NUMBER_RE.test(trimmed)
+    case 'time':     return NATIVE_TIME_RE.test(trimmed)
+    case 'datetime': return NATIVE_DATETIME_RE.test(trimmed)
     default:         return true
   }
 }

@@ -301,6 +301,30 @@ describe('BindingFormTimer — typed output value input', () => {
     expect(text.element.value).toBe(value)
   })
 
+  // Codex review round 2 on PR #1155: `<input type="number">` blanks a value outside
+  // HTML's "valid floating-point number" grammar, so a stored `+1` looked unset.
+  it.each([
+    ['FLOAT', '+1'],
+    ['INTEGER', '+1'],
+    ['FLOAT', '.5'],
+    ['FLOAT', 'on'],
+  ])('falls back to a text field for the %s value %s', (dataType, value) => {
+    const w = mk({ value }, { dpDataType: dataType })
+    expect(w.find('[data-testid="zt-value-number"]').exists()).toBe(false)
+    const text = w.find('[data-testid="zt-value-text"]')
+    expect(text.exists()).toBe(true)
+    expect(text.element.value).toBe(value)
+  })
+
+  it.each([
+    ['FLOAT', '21.5'],
+    ['INTEGER', '-3'],
+    ['FLOAT', '1e3'],
+  ])('keeps the number field for the representable %s value %s', (dataType, value) => {
+    const w = mk({ value }, { dpDataType: dataType })
+    expect(w.find('[data-testid="zt-value-number"]').exists()).toBe(true)
+  })
+
   it.each([
     ['TIME', '08:00:00', 'zt-value-time'],
     ['DATETIME', '2026-12-24T08:00:00', 'zt-value-datetime'],

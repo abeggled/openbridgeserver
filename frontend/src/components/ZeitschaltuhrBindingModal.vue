@@ -8,7 +8,7 @@ import { datapoints as dpApi, adapters as adapterApi } from '@/api/client'
 import type { HolidayEntry } from '@/api/client'
 import {
   timerValueAsBool,
-  timerValueFitsPicker,
+  timerValueFitsNativeInput,
   timerValueHintKey,
   timerValueInputKind,
   timerValueStep,
@@ -121,9 +121,9 @@ watch(
 // Speichern weg. Bewusst nur beim Wechsel des Objekttyps neu bestimmt und nicht
 // bei jedem Tastendruck: sonst tauscht das Löschen des Offsets das Textfeld
 // mitten im Tippen gegen einen Picker und der Fokus geht verloren.
-const needsTextFallback = ref(!timerValueFitsPicker(cfg.value, dpDataType.value))
+const needsTextFallback = ref(!timerValueFitsNativeInput(cfg.value, dpDataType.value))
 watch(valueKind, () => {
-  needsTextFallback.value = !timerValueFitsPicker(cfg.value, dpDataType.value)
+  needsTextFallback.value = !timerValueFitsNativeInput(cfg.value, dpDataType.value)
 })
 
 // `<input type="number">` hands Vue a Number — but the backend schema declares
@@ -670,7 +670,7 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
               </select>
 
               <input
-                v-else-if="valueKind === 'integer' || valueKind === 'float'"
+                v-else-if="(valueKind === 'integer' || valueKind === 'float') && !needsTextFallback"
                 v-model="textValue"
                 type="number"
                 :step="valueStep"

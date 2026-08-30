@@ -111,6 +111,21 @@ describe('ZeitschaltuhrBindingModal — typed switching value', () => {
     expect((text.element as HTMLInputElement).value).toBe(value)
   })
 
+  // Codex review round 2 on PR #1155 — its own reproducer: a stored `+1` is a valid
+  // FLOAT literal that `<input type="number">` cannot display.
+  it.each([
+    ['FLOAT', '+1'],
+    ['INTEGER', '+1'],
+    ['FLOAT', '.5'],
+    ['FLOAT', 'on'],
+  ])('displays the %s value %s in a text field instead of a blank number field', async (dataType, value) => {
+    const w = await mountModal(dataType, value)
+    expect(w.find('[data-testid="zst-value-number"]').exists()).toBe(false)
+    const text = w.find('[data-testid="zst-value-text"]')
+    expect(text.exists()).toBe(true)
+    expect((text.element as HTMLInputElement).value).toBe(value)
+  })
+
   it.each([
     ['08:00:00+24:00', 'TIME'],
     ['08:00:00+23:60', 'TIME'],
