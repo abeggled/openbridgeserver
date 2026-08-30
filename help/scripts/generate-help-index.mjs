@@ -37,7 +37,7 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // heading text and gets markdown-it's auto-slug of that whole text instead
 // (verified against a real build: `\{#probe}` produced id="title-probe", not
 // "probe"), so indexing `id` would hand out a fragment nothing answers to.
-const HEADING_RE = /^#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}\s*$/gm
+const HEADING_RE = /^ {0,3}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}\s*$/gm
 
 function findMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true })
@@ -176,8 +176,22 @@ export function stripRawHtmlBlocks(text) {
     .join('\n')
 }
 
+const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---[^\S\r\n]*(\r?\n|$)/
+
+/**
+ * Blank a page's YAML frontmatter, keeping the line count. VitePress removes
+ * the whole block from the rendered page, so a heading-shaped line inside it
+ * (a YAML comment, say) owns no DOM id — indexing it would point a help
+ * button at a fragment that does not exist.
+ */
+export function stripFrontmatter(text) {
+  const match = FRONTMATTER_RE.exec(text)
+  if (!match) return text
+  return match[0].replace(/[^\n]/g, '') + text.slice(match[0].length)
+}
+
 function extractHelpIds(absPath) {
-  const text = stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(readFileSync(absPath, 'utf-8'))))
+  const text = stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(stripFrontmatter(readFileSync(absPath, 'utf-8')))))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
     ids.push(match[1])

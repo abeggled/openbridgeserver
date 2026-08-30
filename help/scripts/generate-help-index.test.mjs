@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments, stripRawHtmlBlocks } from './generate-help-index.mjs'
+import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments, stripRawHtmlBlocks, stripFrontmatter } from './generate-help-index.mjs'
 
 // ── Pure URL-mapping helpers ────────────────────────────────────────────────
 
@@ -290,6 +290,40 @@ test('stripRawHtmlBlocks resumes indexing after the block ends', () => {
 
   assert.doesNotMatch(stripped, /\{#b\}/)
   assert.match(stripped, /## C \{#c\}/)
+})
+
+test('a heading-shaped line in the frontmatter is not indexed, an indented heading is', () => {
+  // Both verified against a real build: the frontmatter block is removed from
+  // the page, while CommonMark allows up to three spaces before an ATX heading.
+  const root = mkdtempSync(join(tmpdir(), 'help-front-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['---', '# ## Frontmatter {#gone}', 'title: T', '---', '', '   ### Indented {#kept}', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('kept' in helpIds, 'up to three spaces before a heading is valid CommonMark')
+    assert.ok(!('gone' in helpIds), 'frontmatter is removed from the rendered page')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripFrontmatter only removes a leading block and keeps line positions', () => {
+  const text = ['---', 'title: T', '---', '## A {#a}'].join('\n')
+
+  const stripped = stripFrontmatter(text)
+
+  assert.equal(stripped.split('\n').length, 4)
+  assert.match(stripped, /## A \{#a\}/)
+  assert.doesNotMatch(stripped, /title/)
+  // A `---` later in the page is a thematic break, not frontmatter.
+  assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
 })
 
 test('an escaped anchor is not indexed', () => {

@@ -253,6 +253,14 @@ def test_parse_routes_fails_closed_on_a_spread_route_array():
         gate.parse_routes(source)
 
 
+def test_parse_routes_fails_closed_on_a_spread_inside_a_record():
+    """A record spread can override the very name and meta just approved."""
+    source = "const routes = [\n  { path: '/', name: 'A', ...override, meta: { helpId: 'a' } },\n]\n"
+
+    with pytest.raises(SystemExit, match="spreads into a route record"):
+        gate.parse_routes(source)
+
+
 def test_parse_routes_allows_a_spread_inside_a_route_property():
     """Only a spread *of routes* is unreadable; one inside a value is fine."""
     source = "const routes = [\n  { path: '/', name: 'A', meta: { ...base, helpId: 'a' } },\n]\n"
@@ -766,6 +774,37 @@ def test_collect_help_references_survives_a_regex_containing_a_quote(tmp_path):
     (source / "re.js").write_text("const q = /['\"]/\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
 
     assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_handles_a_regex_after_an_arrow(tmp_path):
+    """`() => /'/` is a regex, and its quote must not open a string."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "re.js").write_text("const q = () => /'/\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
+
+
+def test_collect_help_references_finds_a_brace_closing_a_template_expression(tmp_path):
+    """A `}` inside a string within `${…}` does not end the expression."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "tpl.js").write_text("const t = `${'}' && ({ helpId: 'logs-level' }).helpId}`\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    ['help-id="logs-level"', "help-id='logs-level'", "help-id=logs-level"],
+)
+def test_collect_help_references_reads_quoted_and_unquoted_attributes(tmp_path, attribute):
+    """An unquoted value is valid HTML and renders a live button."""
+    source = tmp_path / "gui" / "src"
+    source.mkdir(parents=True)
+    (source / "View.vue").write_text(f"<template>\n  <HelpButton {attribute} />\n</template>\n", encoding="utf-8")
+
+    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
 
 
 def test_collect_help_references_ignores_a_help_id_inside_a_regex(tmp_path):

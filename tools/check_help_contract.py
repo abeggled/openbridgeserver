@@ -95,7 +95,9 @@ _DERIVED_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
 # the static attribute this gate can resolve. Both quote styles are valid Vue
 # template syntax and both must be seen: an unread reference is a dead help
 # button the gate would wave through.
-_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(['\"])(.*?)\1")
+# An unquoted value is valid HTML/Vue when it holds none of the forbidden
+# characters, and it renders a live button — so it has to be read too.
+_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(?:(['\"])(.*?)\1|()([^\s\"'=<>`]+))")
 
 
 # Object-literal form, used by route meta and by prop defaults. Deliberately
@@ -149,9 +151,11 @@ def _scan_regions(source: str, start: int = 0, end: int | None = None) -> list[t
 
 
 # A `/` opens a regex literal only where an operand cannot already have ended.
-# `<` and `>` are deliberately absent: `</script>` in a Vue SFC would otherwise
-# look like one, and `a < /re/.test(b)` is not a shape this codebase writes.
+# A bare `<`/`>` is deliberately absent — `</script>` in a Vue SFC would look
+# like one — but `=>` is an arrow, not a comparison, and `() => /'/` is valid
+# JavaScript whose quote must not open a string.
 _REGEX_PREDECESSORS = frozenset("(,=:[!&|?{};+-*%~^")
+_ARROW_RE = re.compile(r"=>\s*$")
 _REGEX_KEYWORDS = frozenset({"return", "typeof", "case", "in", "of", "new", "delete", "void", "do", "else", "yield", "await"})
 
 
@@ -163,6 +167,8 @@ def _starts_regex(source: str, index: int) -> bool:
     if before < 0:
         return True
     if source[before] in _REGEX_PREDECESSORS:
+        return True
+    if _ARROW_RE.search(source, 0, before + 1):
         return True
     word_end = before + 1
     while before >= 0 and (source[before].isalnum() or source[before] in "_$"):
@@ -209,17 +215,12 @@ def _scan_string(source: str, start: int, end: int, regions: list[tuple[str, int
         if quote == "`" and source.startswith("${", index):
             if text_from < index:
                 regions.append(("string", text_from, index))
-            depth = 0
-            cursor = index + 1
-            while cursor < end:
-                if source[cursor] == "{":
-                    depth += 1
-                elif source[cursor] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                cursor += 1
-            regions.extend(_scan_regions(source, index + 2, min(cursor, end)))
+            # The closing brace has to be found lexically: a `}` inside a
+            # string, comment, regex or nested template within `${...}` is not
+            # the end of the expression, and stopping there would mask the
+            # executable code that follows as template text.
+            inner, cursor = _scan_template_expression(source, index + 2, end)
+            regions.extend(inner)
             index = min(cursor + 1, end)
             text_from = index
             continue
@@ -231,6 +232,37 @@ def _scan_string(source: str, start: int, end: int, regions: list[tuple[str, int
     if text_from < end:
         regions.append(("string", text_from, end))
     return end
+
+
+def _scan_template_expression(source: str, start: int, end: int) -> tuple[list[tuple[str, int, int]], int]:
+    """Scan a ``${...}`` body from ``start``; return its regions and the `}` index."""
+    regions: list[tuple[str, int, int]] = []
+    index = start
+    depth = 1
+    while index < end:
+        char = source[index]
+        if char in _STRING_DELIMITERS:
+            index = _scan_string(source, index, end, regions)
+            continue
+        opener = next((o for o in ("//", "/*") if source.startswith(o, index)), None)
+        if opener is not None:
+            closer = "\n" if opener == "//" else "*/"
+            stop = source.find(closer, index + len(opener))
+            stop = end if stop < 0 or stop >= end else (stop if opener == "//" else stop + len(closer))
+            regions.append(("comment", index, stop))
+            index = stop
+            continue
+        if char == "/" and _starts_regex(source, index):
+            index = _scan_regex(source, index, end, regions)
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return regions, index
+        index += 1
+    return regions, end
 
 
 def _blank_span(source: str, start: int, end: int) -> str:
@@ -557,6 +589,13 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
         raise SystemExit(f"help contract: {origin}:{line} {unreadable.problem}") from None
     for item, offset in records:
         real_item = source[offset : offset + len(item)]
+        if next(_direct_property_matches(item, _SPREAD_RE), None) is not None:
+            # A spread inside the record can override the very `name` and
+            # `meta` the scan just approved, so what it read is not what ships.
+            raise SystemExit(
+                f"help contract: {origin}:{source.count(chr(10), 0, offset) + 1} spreads into a route record; "
+                f"the gate cannot tell what it declares — write the route's properties out"
+            )
         name_match = next(_direct_property_matches(item, _JS_NAME_RE, real_item), None)
         if not name_match:
             unreadable_name = next(_direct_property_matches(item, _ANY_NAME_PROPERTY_RE), None) or next(
@@ -756,16 +795,19 @@ def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Refer
             # block a push over something that renders no help control. The
             # `help-id` attribute, by contrast, belongs to the template.
             script_only = _blank_outside_script(masked) if path.suffix == ".vue" else masked
-            for pattern, group, view in (
-                (_STATIC_HELP_ATTR_RE, 2, masked),
-                (_HELP_ID_LITERAL_RE, 1, script_only),
+            for pattern, groups, view in (
+                (_STATIC_HELP_ATTR_RE, (2, 4), masked),
+                (_HELP_ID_LITERAL_RE, (1,), script_only),
             ):
                 for located in pattern.finditer(view):
                     real = pattern.match(source, located.start())
                     if real is None:
                         continue
+                    value = next((real.group(g) for g in groups if real.group(g) is not None), None)
+                    if value is None:
+                        continue
                     line = source.count("\n", 0, located.start()) + 1
-                    references.append(Reference(real.group(group), f"{location}:{line}"))
+                    references.append(Reference(value, f"{location}:{line}"))
     return references
 
 
