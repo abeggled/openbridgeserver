@@ -137,6 +137,15 @@ def test_parse_routes_handles_a_nested_meta_object():
     assert [route.help_id for route in gate.parse_routes(source)] == ["x"]
 
 
+@pytest.mark.parametrize("comment", ["//", "/*", "<!--"])
+def test_parse_routes_ignores_a_commented_out_route(comment):
+    """A route left in a comment is not one the app can route to."""
+    closer = {"//": "", "/*": " */", "<!--": " -->"}[comment]
+    source = f"const routes = [\n  {comment} {{ path: '/old', name: 'RemovedView' }},{closer}\n  {{ path: '/', name: 'Dashboard', meta: {{ helpId: 'dashboard' }} }},\n]\n"
+
+    assert [route.name for route in gate.parse_routes(source)] == ["Dashboard"]
+
+
 def test_parse_routes_skips_the_unnamed_catch_all():
     assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
 
@@ -205,6 +214,20 @@ def test_parse_widget_types_ignores_a_registration_without_an_object(tmp_path):
     _write_widget(widgets, "Broken", "WidgetRegistry.register(definition)\n")
 
     assert gate.parse_widget_types(widgets, tmp_path) == []
+
+
+def test_parse_widget_types_ignores_a_commented_out_registration(tmp_path):
+    """A commented-out register() call registers nothing at runtime."""
+    widgets = tmp_path / "widgets"
+    _write_widget(
+        widgets,
+        "Slider",
+        "// WidgetRegistry.register({ type: 'CommentedWidget' })\n"
+        "/* WidgetRegistry.register({ type: 'BlockCommented' }) */\n"
+        "WidgetRegistry.register({ type: 'Slider' })\n",
+    )
+
+    assert [surface.name for surface in gate.parse_widget_types(widgets, tmp_path)] == ["Slider"]
 
 
 def test_parse_widget_types_ignores_a_module_without_registration(tmp_path):

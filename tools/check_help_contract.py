@@ -129,6 +129,11 @@ _JS_TYPE_RE = re.compile(r"\btype:\s*(['\"])(.*?)\1")
 _KEBAB_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z][A-Z])(?=[A-Z][a-z])")
 
 
+def _blank_comments(source: str) -> str:
+    """Blank out comments, preserving newlines so reported lines stay right."""
+    return _SOURCE_COMMENT_RE.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), source)
+
+
 def kebab(name: str) -> str:
     """Return ``name`` as the lower-case kebab form used in expected help_ids."""
     return _KEBAB_BOUNDARY_RE.sub("-", name).replace("_", "-").replace(" ", "-").lower()
@@ -220,8 +225,13 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
 
     The catch-all redirect has no ``name`` and is not a surface a user can be
     sent to for help, so it is skipped rather than allowlisted.
+
+    Comments are blanked first: a route left behind in a comment is not a
+    surface the app can route to, so enumerating it would fail the gate over a
+    page that cannot exist.
     """
     surfaces: list[Surface] = []
+    source = _blank_comments(source)
     for item in _split_object_literals(_array_body(source, "const routes")):
         name_match = _JS_NAME_RE.search(item)
         if not name_match:
@@ -245,11 +255,16 @@ def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[S
 
 
 def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list[Surface]:
-    """Enumerate the Visu widget types from their self-registration modules."""
+    """Enumerate the Visu widget types from their self-registration modules.
+
+    Comments are blanked first: a commented-out ``WidgetRegistry.register``
+    call registers nothing at runtime, so counting it would fail the gate over
+    a widget that does not exist.
+    """
     root = repo_root or _REPO_ROOT
     surfaces: list[Surface] = []
     for index_file in sorted(widgets_dir.glob("*/index.ts")):
-        source = index_file.read_text(encoding="utf-8")
+        source = _blank_comments(index_file.read_text(encoding="utf-8"))
         try:
             origin = index_file.relative_to(root).as_posix()
         except ValueError:
@@ -338,11 +353,6 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
         for node_type in node_types
         if not getattr(node_type, "hidden_from_palette", False)
     ]
-
-
-def _blank_comments(source: str) -> str:
-    """Blank out comments, preserving newlines so reported lines stay right."""
-    return _SOURCE_COMMENT_RE.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), source)
 
 
 def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Reference]:
