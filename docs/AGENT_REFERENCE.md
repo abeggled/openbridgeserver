@@ -302,7 +302,31 @@ Every `help_id` lives *inside* the heading it belongs to, as an explicit anchor:
 ## Zeitzone, Datums- und Zeitformat {#settings-general}
 ```
 
-If Weblate (or a human translator) changes or drops the `{#settings-general}` part while translating the heading text, that locale's `help_id` silently stops resolving — the Admin-GUI's `HelpButton` for that section will show "no help available" for that language instead of erroring loudly. `help/scripts/generate-help-index.mjs` does warn (non-blocking) when a `help_id` exists in one locale but not another, which catches this *after the fact* — check that warning after pulling new translations, don't rely on it as a preventive gate. When reviewing a Weblate-translated heading, always verify the `{#...}` suffix survived unchanged.
+If Weblate (or a human translator) changes or drops the `{#settings-general}` part while translating the heading text, that locale's `help_id` stops resolving — the Admin-GUI's `HelpButton` for that section would show "no help available" for that language. `help/scripts/generate-help-index.mjs` itself only *warns* (non-blocking) about this, but the help-contract gate below turns the same finding into a CI failure, so a dropped anchor cannot reach main unnoticed. When reviewing a Weblate-translated heading, always verify the `{#...}` suffix survived unchanged.
+
+#### Help contract gate — #1183
+
+`tools/check_help_contract.py` (workflow `.github/workflows/help-contract.yml`) is the completeness gate for documentation, next to `check_authz_contract.py` for routes and `check_i18n_guard.py` for strings. It enumerates the UI surfaces that must be documented from the registries that already define them, derives the `help_id` each is expected to carry, and fails CI when that id has no help page — so a new view, widget type, or skin cannot go green without either help content or an explicit, justified exemption.
+
+| Surface | Enumerated from | Expected `help_id` |
+|---|---|---|
+| Admin route | `gui/src/router/index.js` (`routes[]`, named routes only) | `route.meta.helpId` |
+| Visu widget type | `frontend/src/widgets/*/index.ts` (`WidgetRegistry.register`) | `widget-<kebab-case type>` |
+| Skin | `<obs-visu-skins>/packages/skins/*/manifest.json` | `skin-<kebab-case name>` |
+
+Routes declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`. Widgets and skins have no runtime consumer for such a field yet, so their id follows a convention instead.
+
+On top of coverage the gate enforces two things the generator does not: every `help_id` literally referenced from `gui/src` or `frontend/src` must exist in the index (no broken help links — the dynamic `:help-id="expr"` form is out of reach and is skipped), and a `help_id` present in one locale but not another fails instead of warning.
+
+Skins live in the separate `obs-visu-skins` repository. Without `--skins-dir` (or `OBS_VISU_SKINS_DIR`) pointing at a checkout, the gate reports that surface as *not checked* rather than passing it silently; CI does not check skins today.
+
+Deliberately undocumented surfaces belong in `tools/help-contract-allowlist.txt` as `<route|widget|skin>:<name>  # reason`, mirroring `tools/i18n-allowlist.txt`. The reason is mandatory, and the list is validated back against reality: an entry for a surface that no longer exists — or for one that meanwhile *is* documented — fails too, so it cannot rot into a blanket exemption. The Visu widget types are currently listed there as tracked debt; each entry disappears as its `{#widget-<type>}` section is written.
+
+Run it before pushing anything that adds a route, a widget type, or help content:
+
+```bash
+python tools/check_help_contract.py
+```
 
 ## Architecture
 
