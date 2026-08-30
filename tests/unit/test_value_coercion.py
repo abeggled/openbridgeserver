@@ -78,13 +78,24 @@ class TestCoerceValueForType:
 
 
 class TestParseTextValueHeuristic:
-    @pytest.mark.parametrize("raw", ["1", "true", "TRUE", "on", "ein", "yes", "ja", " 1 "])
+    @pytest.mark.parametrize("raw", ["1", "true", "TRUE", "on", "ein", " 1 "])
     def test_true_literals(self, raw):
         assert parse_text_value_heuristic(raw) is True
 
-    @pytest.mark.parametrize("raw", ["0", "false", "off", "aus", "no", "nein"])
+    @pytest.mark.parametrize("raw", ["0", "false", "off", "aus"])
     def test_false_literals(self, raw):
         assert parse_text_value_heuristic(raw) is False
+
+    @pytest.mark.parametrize("raw", ["yes", "no", "ja", "nein", "YES", "Nein"])
+    def test_boolean_aliases_added_for_typed_targets_stay_strings(self, raw):
+        """Codex review on PR #1155.
+
+        ``yes``/``ja``/``no``/``nein`` are accepted for an explicitly typed BOOLEAN
+        target, but must not reinterpret an UNKNOWN datapoint: a timer that has always
+        emitted the command text stays a string, so downstream MQTT/protocol consumers
+        see the same value after the upgrade as before it.
+        """
+        assert parse_text_value_heuristic(raw) == raw.strip()
 
     def test_integer(self):
         assert parse_text_value_heuristic("50") == 50
@@ -179,6 +190,24 @@ class TestCoerceTextValueNumeric:
     def test_scientific_notation_is_accepted(self):
         assert coerce_text_value_for_type("1e3", "INTEGER") == 1000
         assert coerce_text_value_for_type("1.5e2", "FLOAT") == 150.0
+
+    @pytest.mark.parametrize("raw", ["1.0000000000000001", "1.55e1", "0.1", "1e-3"])
+    def test_integer_rejects_decimals_binary_float_would_round_to_integral(self, raw):
+        """Codex review on PR #1155 — integrality is judged on the typed text.
+
+        ``float('1.0000000000000001')`` is exactly ``1.0``, so a binary-float check
+        would call the value integral and publish ``1`` for a lossy conversion.
+        """
+        with pytest.raises(ValueError, match="fractional part"):
+            coerce_text_value_for_type(raw, "INTEGER")
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("9007199254740993.0", 9007199254740993), ("1000e-3", 1), ("1.5e1", 15), ("5.", 5)],
+    )
+    def test_integer_keeps_full_precision_of_integral_decimals(self, raw, expected):
+        """``int(float('9007199254740993.0'))`` loses the last digit; Decimal does not."""
+        assert coerce_text_value_for_type(raw, "INTEGER") == expected
 
 
 class TestCoerceTextValueString:

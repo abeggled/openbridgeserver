@@ -357,12 +357,14 @@ const boolValue = computed({
 // Ein BOOLEAN-Ziel bietet nur zwei Optionen an — ein Altwert wie "50" liesse
 // sich sonst nicht auflösen: das Select zeigt bereits "Aus", der Wert bleibt
 // aber ungültig und blockiert das Speichern. Einmalig auf das normalisieren,
-// was angezeigt wird.
+// was angezeigt wird — und das ist immer "Aus": ein für BOOLEAN ungültiger Wert
+// liegt per Definition nicht in den True-Literalen, `timerValueAsBool()` liefert
+// für ihn also false, genau wie das Select darunter.
 watch(
   [valueKind, () => props.cfg.value],
   ([kind, value]) => {
     if (kind === 'boolean' && validateTimerValue(value, props.dpDataType) !== null) {
-      props.cfg.value = timerValueAsBool(value) ? 'true' : 'false'
+      props.cfg.value = 'false'
     }
   },
   { immediate: true },

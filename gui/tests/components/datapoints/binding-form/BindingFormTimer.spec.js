@@ -317,6 +317,41 @@ describe('BindingFormTimer — typed output value input', () => {
     expect(w.find('[data-testid="zt-value-number"]').exists()).toBe(false)
     expect(w.find('[data-testid="zt-value-text"]').exists()).toBe(false)
   })
+
+  // A BOOLEAN select offers two options, so a legacy literal like '50' can never be
+  // shown: the select already reads "Aus" while the stored value stays invalid and
+  // blocks saving. The watch normalizes it once onto what is displayed.
+  it.each([
+    ['50', 'false'],
+    ['morgens', 'false'],
+    ['2026-12-24', 'false'],
+  ])('normalizes the stored value %s a BOOLEAN select cannot show to %s', (stored, expected) => {
+    const cfg = { ...mk().props('cfg'), value: stored }
+    mount(BindingFormTimer, {
+      props: {
+        cfg,
+        ztHolidays: [], ztHolidaysLoading: false, ztHolidaysError: null,
+        weekdayShorts: ['Mo'], monthShorts: ['Jan'], winMonths: [{ v: 1, l: 'Januar' }],
+        winFrom: WIN_EP(), winTo: WIN_EP(), buildWinExpr: () => '', describeWinEp: () => '',
+        dpDataType: 'BOOLEAN',
+      },
+    })
+    expect(cfg.value).toBe(expected)
+  })
+
+  it('leaves a value the BOOLEAN select can already show untouched', () => {
+    const cfg = { ...mk().props('cfg'), value: 'ein' }
+    mount(BindingFormTimer, {
+      props: {
+        cfg,
+        ztHolidays: [], ztHolidaysLoading: false, ztHolidaysError: null,
+        weekdayShorts: ['Mo'], monthShorts: ['Jan'], winMonths: [{ v: 1, l: 'Januar' }],
+        winFrom: WIN_EP(), winTo: WIN_EP(), buildWinExpr: () => '', describeWinEp: () => '',
+        dpDataType: 'BOOLEAN',
+      },
+    })
+    expect(cfg.value).toBe('ein')
+  })
 })
 
 describe('BindingFormTimer — switching value stays a string', () => {
@@ -353,6 +388,21 @@ describe('BindingFormTimer — switching value stays a string', () => {
   it('renders an empty field when the stored value is missing', () => {
     const w = mkWith(mkCfg({ value: undefined }), 'FLOAT')
     expect(w.find('[data-testid="zt-value-number"]').element.value).toBe('')
+  })
+
+  it.each([
+    ['DATE', 'zt-value-date', '2026-12-24'],
+    // The pickers hand back what the control itself holds — jsdom drops the
+    // seconds an empty `step=1` field never collected.
+    ['TIME', 'zt-value-time', '08:00'],
+    ['DATETIME', 'zt-value-datetime', '2026-12-24T08:00'],
+    ['STRING', 'zt-value-text', 'Guten Morgen'],
+  ])('writes what the %s input emits back into the config as a string', async (dataType, testid, typed) => {
+    const cfg = mkCfg({ value: '' })
+    const w = mkWith(cfg, dataType)
+    await w.find(`[data-testid="${testid}"]`).setValue(typed)
+    expect(cfg.value).toBe(typed)
+    expect(typeof cfg.value).toBe('string')
   })
 
   it('stores a typed number as a string, never as a Number', async () => {

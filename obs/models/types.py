@@ -7,6 +7,7 @@ New types (e.g. from adapters) are added via DataTypeRegistry.register().
 from __future__ import annotations
 
 import datetime
+import decimal
 import json
 import math
 from collections.abc import Callable
@@ -150,10 +151,19 @@ _register_builtin_types()
 # Value coercion helpers (shared by API and adapters — issue #1008)
 # ---------------------------------------------------------------------------
 
-#: Text literals accepted as boolean ``True`` in free-text value fields.
+#: Text literals accepted as boolean ``True`` for an explicitly typed target.
 TRUE_LITERALS: frozenset[str] = frozenset({"true", "1", "on", "ein", "yes", "ja"})
-#: Text literals accepted as boolean ``False`` in free-text value fields.
+#: Text literals accepted as boolean ``False`` for an explicitly typed target.
 FALSE_LITERALS: frozenset[str] = frozenset({"false", "0", "off", "aus", "no", "nein"})
+
+#: Literals the type-less heuristic folds into a boolean. Deliberately the pre-#1008
+#: set, without ``yes``/``ja``/``no``/``nein``: an UNKNOWN datapoint has no declared
+#: type to justify the reinterpretation, so a timer that has always sent the command
+#: text ``yes`` keeps sending the string rather than silently becoming ``True`` for
+#: its downstream MQTT/protocol consumers after an upgrade.
+HEURISTIC_TRUE_LITERALS: frozenset[str] = frozenset({"true", "1", "on", "ein"})
+#: Counterpart of :data:`HEURISTIC_TRUE_LITERALS` for boolean ``False``.
+HEURISTIC_FALSE_LITERALS: frozenset[str] = frozenset({"false", "0", "off", "aus"})
 
 
 def coerce_value_for_type(value: Any, data_type: str) -> Any:
@@ -200,13 +210,15 @@ def parse_text_value_heuristic(raw: str) -> Any:
     """Best-effort parse of a free-text value without a known target type.
 
     Order: boolean literals → int → float → the stripped string itself.
-    Used for UNKNOWN datapoints, which accept any Python type.
+    Used for UNKNOWN datapoints, which accept any Python type. Only the narrower
+    :data:`HEURISTIC_TRUE_LITERALS` / :data:`HEURISTIC_FALSE_LITERALS` are folded
+    into a boolean here — see the note on those sets.
     """
     stripped = raw.strip()
     lowered = stripped.lower()
-    if lowered in TRUE_LITERALS:
+    if lowered in HEURISTIC_TRUE_LITERALS:
         return True
-    if lowered in FALSE_LITERALS:
+    if lowered in HEURISTIC_FALSE_LITERALS:
         return False
     try:
         return int(stripped)
@@ -228,7 +240,8 @@ def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
 
     * ``UNKNOWN``  → :func:`parse_text_value_heuristic`
     * ``BOOLEAN``  → ``1/true/on/ein/yes/ja`` → ``True``; ``0/false/off/aus/no/nein`` → ``False``
-    * ``INTEGER``  → ``int``; integral floats and boolean literals (→ ``1``/``0``) are accepted
+    * ``INTEGER``  → ``int``; integral decimals and boolean literals (→ ``1``/``0``) are
+      accepted, integrality being judged exactly (``1.0000000000000001`` is rejected)
     * ``FLOAT``    → ``float``; boolean literals map to ``1.0``/``0.0``
     * ``STRING``   → the value verbatim, never interpreted as boolean or number
     * ``DATE`` / ``TIME`` / ``DATETIME`` → ISO 8601 via ``fromisoformat``
@@ -259,7 +272,7 @@ def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
             raise ValueError(f"Value {raw!r} is not a valid {name} literal")
         if name == "FLOAT":
             return float(numeric)
-        if isinstance(numeric, float) and numeric != int(numeric):
+        if isinstance(numeric, decimal.Decimal) and numeric != numeric.to_integral_value():
             raise ValueError(f"Value {raw!r} is not a valid INTEGER literal (fractional part would be lost)")
         return int(numeric)
 
@@ -281,23 +294,32 @@ _ISO_PARSERS: dict[str, Callable[[str], Any]] = {
 }
 
 
-def _parse_number(stripped: str, lowered: str) -> int | float | None:
-    """Parse *stripped* as int/float, mapping boolean literals to 1/0.
+def _parse_number(stripped: str, lowered: str) -> int | decimal.Decimal | None:
+    """Parse *stripped* as int/Decimal, mapping boolean literals to 1/0.
 
-    ``nan`` / ``inf`` are rejected: they cannot be converted to INTEGER
-    (``int(inf)`` raises OverflowError) and serialize to the invalid JSON
-    literals ``NaN`` / ``Infinity`` on the MQTT value topic.
+    The non-integral branch parses to :class:`~decimal.Decimal` rather than
+    ``float`` so that the INTEGER caller can decide integrality on the value the
+    user actually typed: binary ``float`` silently rounds ``1.0000000000000001``
+    to ``1.0`` and ``9007199254740993.0`` to ``...992``, which would turn a lossy
+    conversion into an apparently exact one. ``Decimal`` accepts every spelling
+    ``float`` does (underscores, non-ASCII digits, exponents), so nothing that
+    parsed before stops parsing now.
+
+    ``nan`` / ``inf`` are rejected, as is anything that overflows ``float`` such
+    as ``1e999``: they cannot be converted to INTEGER (``int(inf)`` raises
+    OverflowError) and serialize to the invalid JSON literals ``NaN`` /
+    ``Infinity`` on the MQTT value topic.
     """
     try:
         return int(stripped)
     except ValueError:
         pass
     try:
-        parsed = float(stripped)
-    except ValueError:
+        parsed = decimal.Decimal(stripped)
+    except decimal.InvalidOperation:
         pass
     else:
-        return parsed if math.isfinite(parsed) else None
+        return parsed if parsed.is_finite() and math.isfinite(float(parsed)) else None
     if lowered in TRUE_LITERALS:
         return 1
     if lowered in FALSE_LITERALS:

@@ -97,6 +97,26 @@ describe('validateTimerValue', () => {
     expect(validateTimerValue('abc', 'INTEGER')).toBe('zst.switchValueErrorInteger')
   })
 
+  // Codex review on PR #1155: integrality is judged on the literal text, because
+  // `Number('1.0000000000000001')` is exactly 1 and the backend (Decimal) rejects it.
+  it.each(['1.0000000000000001', '1.55e1', '1e-3', '0.1', '.5'])(
+    'rejects %s for INTEGER, which binary Number() would round to an integer',
+    (raw) => {
+      expect(validateTimerValue(raw, 'INTEGER')).toBe('zst.switchValueErrorInteger')
+    },
+  )
+
+  it.each(['9007199254740993.0', '1000e-3', '1.5e1', '1.5e2', '5.', '007', '1e3'])(
+    'accepts the integral decimal %s for INTEGER',
+    (raw) => {
+      expect(validateTimerValue(raw, 'INTEGER')).toBeNull()
+    },
+  )
+
+  it('still accepts a fractional literal as a FLOAT', () => {
+    expect(validateTimerValue('1.0000000000000001', 'FLOAT')).toBeNull()
+  })
+
   it.each(['0', '1', '50.5', '-3.25', 'ein', 'off'])('accepts %s for FLOAT', (raw) => {
     expect(validateTimerValue(raw, 'FLOAT')).toBeNull()
   })
@@ -123,6 +143,19 @@ describe('validateTimerValue', () => {
     // `datetime.fromisoformat('2026-12-24')` yields midnight — rejecting it here
     // would block a value the API accepts.
     expect(validateTimerValue('2026-12-24', 'DATETIME')).toBeNull()
+  })
+
+  // Codex review on PR #1155: `date.fromisoformat('0000-01-01')` raises because
+  // Python's MINYEAR is 1, so accepting year zero here would green-light a 422.
+  it('rejects year zero', () => {
+    expect(validateTimerValue('0000-01-01', 'DATE')).toBe('zst.switchValueErrorDate')
+    expect(validateTimerValue('0000-12-24', 'DATETIME')).toBe('zst.switchValueErrorDatetime')
+    expect(validateTimerValue('0000-12-24T08:00', 'DATETIME')).toBe('zst.switchValueErrorDatetime')
+  })
+
+  it('accepts the years at the edge of the supported range', () => {
+    expect(validateTimerValue('0001-01-01', 'DATE')).toBeNull()
+    expect(validateTimerValue('9999-12-31', 'DATE')).toBeNull()
   })
 
   it('rejects a lowercase z suffix, which CPython does not parse', () => {
