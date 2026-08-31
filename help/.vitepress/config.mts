@@ -54,7 +54,10 @@ export default defineConfig({
           },
           {
             text: 'Objekte',
-            items: [{ text: 'Objektliste', link: '/de/datapoints/list' }],
+            items: [
+              { text: 'Objektliste', link: '/de/datapoints/list' },
+              { text: 'Objekt-Detail', link: '/de/datapoints/detail' },
+            ],
           },
           {
             text: 'KNX-Geräte',
@@ -139,7 +142,10 @@ export default defineConfig({
           },
           {
             text: 'Data Points',
-            items: [{ text: 'Data Point List', link: '/en/datapoints/list' }],
+            items: [
+              { text: 'Data Point List', link: '/en/datapoints/list' },
+              { text: 'Data Point Detail', link: '/en/datapoints/detail' },
+            ],
           },
           {
             text: 'KNX Devices',

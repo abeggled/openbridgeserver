@@ -12,6 +12,7 @@
         <Badge :variant="qualityVariant(liveState?.quality ?? dp.quality)" dot>
           {{ qualityLabel(liveState?.quality ?? dp.quality) ?? '—' }}
         </Badge>
+        <HelpButton help-id="datapoints-detail" />
       </div>
     </div>
 
@@ -236,6 +237,7 @@ import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
+import HelpButton     from '@/components/ui/HelpButton.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import DataPointForm          from '@/components/datapoints/DataPointForm.vue'
 import BindingForm            from '@/components/datapoints/BindingForm.vue'
