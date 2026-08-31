@@ -120,6 +120,11 @@ Für neue Admin-Routen, neue Visu-Widget-Typen, neue Logik-Bausteine und für Ä
 tools/with-venv python tools/check_help_contract.py
 ```
 
+Der Gate parst die Frontends (`@babel/parser`, `@vue/compiler-sfc`, beide in `gui/`
+deklariert) und baut die Hilfeseite einmal, um den generierten Index gegen die
+tatsächlich gerenderten Anker zu prüfen — er braucht daher `gui/node_modules` und
+`help/node_modules`. Ohne den Build-Abgleich läuft er mit `--skip-render-check`.
+
 Für GUI-Änderungen gilt zusätzlich ein weicher Coverage-Nachzieh-Hinweis:
 
 ```bash

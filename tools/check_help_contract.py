@@ -97,215 +97,6 @@ _DERIVED_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
 # button the gate would wave through.
 # An unquoted value is valid HTML/Vue when it holds none of the forbidden
 # characters, and it renders a live button — so it has to be read too.
-_STATIC_HELP_ATTR_RE = re.compile(r"(?<![:\w-])help-id\s*=\s*(?:(['\"])(.*?)\1|()([^\s\"'=<>`]+))")
-
-
-# Object-literal form, used by route meta and by prop defaults. Deliberately
-# narrow: it matches a property literally named `helpId`, so a lookup table
-# keyed by something else (`and: 'logic-block-and'`) is NOT collected here.
-# Such tables are covered by a surface rule instead — see the logic-block row
-# in the module docstring — because a static scan cannot tell an arbitrary
-# string constant from a help_id. A non-literal value (`helpId: props.helpId`)
-# has no quotes and is skipped by construction.
-def _js_property(name: str, value: str) -> re.Pattern:
-    """A JS object property, with the key optionally quoted (`name:`, `'name':`)."""
-    return re.compile(rf"(?:\b{name}|['\"]{name}['\"])\s*:\s*{value}")
-
-
-_HELP_ID_LITERAL_RE = _js_property("helpId", r"['\"]([^'\"]*)['\"]")
-
-# Comments and string text neither render nor execute, so neither may be read
-# as code — and code must never be mistaken for either. One scanner classifies
-# the source once; both views below are built from its regions.
-_STRING_DELIMITERS = frozenset("\"'`")
-
-
-def _scan_regions(source: str, start: int = 0, end: int | None = None) -> list[tuple[str, int, int]]:
-    """Classify ``source[start:end]`` into ``code`` / ``string`` / ``comment`` spans.
-
-    A template literal's ``${...}`` is executable JavaScript, so it is scanned
-    as code rather than swallowed with the surrounding text — a real
-    ``helpId`` declaration can live in there.
-    """
-    end = len(source) if end is None else end
-    regions: list[tuple[str, int, int]] = []
-    index = start
-    while index < end:
-        char = source[index]
-        if char in _STRING_DELIMITERS:
-            index = _scan_string(source, index, end, regions)
-            continue
-        opener = next((o for o in ("//", "/*", "<!--") if source.startswith(o, index)), None)
-        if opener is None:
-            if char == "/" and _starts_regex(source, index):
-                index = _scan_regex(source, index, end, regions)
-                continue
-            index += 1
-            continue
-        closer = {"//": "\n", "/*": "*/", "<!--": "-->"}[opener]
-        stop = source.find(closer, index + len(opener))
-        stop = end if stop < 0 or stop >= end else (stop if opener == "//" else stop + len(closer))
-        regions.append(("comment", index, stop))
-        index = stop
-    return regions
-
-
-# A `/` opens a regex literal only where an operand cannot already have ended.
-# A bare `<`/`>` is deliberately absent — `</script>` in a Vue SFC would look
-# like one — but `=>` is an arrow, not a comparison, and `() => /'/` is valid
-# JavaScript whose quote must not open a string.
-_REGEX_PREDECESSORS = frozenset("(,=:[!&|?{};+-*%~^")
-_ARROW_RE = re.compile(r"=>\s*$")
-_REGEX_KEYWORDS = frozenset({"return", "typeof", "case", "in", "of", "new", "delete", "void", "do", "else", "yield", "await"})
-
-
-def _starts_regex(source: str, index: int) -> bool:
-    """Would a `/` at ``index`` open a regex literal rather than divide?"""
-    before = index - 1
-    while before >= 0 and source[before].isspace():
-        before -= 1
-    if before < 0:
-        return True
-    if source[before] in _REGEX_PREDECESSORS:
-        return True
-    if _ARROW_RE.search(source, 0, before + 1):
-        return True
-    word_end = before + 1
-    while before >= 0 and (source[before].isalnum() or source[before] in "_$"):
-        before -= 1
-    return source[before + 1 : word_end] in _REGEX_KEYWORDS
-
-
-def _scan_regex(source: str, start: int, end: int, regions: list[tuple[str, int, int]]) -> int:
-    """Record the regex literal at ``start`` as opaque; return the index after it.
-
-    Its quotes must not open a string — `/['\"]/` would otherwise swallow the
-    rest of the file as string text and mask real declarations behind it.
-    """
-    index = start + 1
-    in_class = False
-    while index < end:
-        char = source[index]
-        if char == "\\":
-            index += 2
-            continue
-        if char == "\n":
-            break  # unterminated: not a regex after all
-        if char == "[":
-            in_class = True
-        elif char == "]":
-            in_class = False
-        elif char == "/" and not in_class:
-            regions.append(("regex", start, index + 1))
-            return index + 1
-        index += 1
-    return start + 1
-
-
-def _scan_string(source: str, start: int, end: int, regions: list[tuple[str, int, int]]) -> int:
-    """Append the regions of the string literal at ``start``; return its end."""
-    quote = source[start]
-    index = start + 1
-    text_from = index
-    while index < end:
-        char = source[index]
-        if char == "\\" and index + 1 < end:
-            index += 2
-            continue
-        if quote == "`" and source.startswith("${", index):
-            if text_from < index:
-                regions.append(("string", text_from, index))
-            # The closing brace has to be found lexically: a `}` inside a
-            # string, comment, regex or nested template within `${...}` is not
-            # the end of the expression, and stopping there would mask the
-            # executable code that follows as template text.
-            inner, cursor = _scan_template_expression(source, index + 2, end)
-            regions.extend(inner)
-            index = min(cursor + 1, end)
-            text_from = index
-            continue
-        if char == quote:
-            if text_from < index:
-                regions.append(("string", text_from, index))
-            return index + 1
-        index += 1
-    if text_from < end:
-        regions.append(("string", text_from, end))
-    return end
-
-
-def _scan_template_expression(source: str, start: int, end: int) -> tuple[list[tuple[str, int, int]], int]:
-    """Scan a ``${...}`` body from ``start``; return its regions and the `}` index."""
-    regions: list[tuple[str, int, int]] = []
-    index = start
-    depth = 1
-    while index < end:
-        char = source[index]
-        if char in _STRING_DELIMITERS:
-            index = _scan_string(source, index, end, regions)
-            continue
-        opener = next((o for o in ("//", "/*") if source.startswith(o, index)), None)
-        if opener is not None:
-            closer = "\n" if opener == "//" else "*/"
-            stop = source.find(closer, index + len(opener))
-            stop = end if stop < 0 or stop >= end else (stop if opener == "//" else stop + len(closer))
-            regions.append(("comment", index, stop))
-            index = stop
-            continue
-        if char == "/" and _starts_regex(source, index):
-            index = _scan_regex(source, index, end, regions)
-            continue
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return regions, index
-        index += 1
-    return regions, end
-
-
-def _blank_span(source: str, start: int, end: int) -> str:
-    """The span with every character replaced by a space, newlines kept."""
-    return "".join("\n" if char == "\n" else " " for char in source[start:end])
-
-
-def _blank_comments(source: str) -> str:
-    """Blank out comments, preserving newlines so reported lines stay right."""
-    out = list(source)
-    for kind, start, end in _scan_regions(source):
-        if kind == "comment":
-            out[start:end] = _blank_span(source, start, end)
-    return "".join(out)
-
-
-# Both frontends can hold either dialect — a reference moved into a helper
-# module must not become invisible just because of its extension.
-_SOURCE_SUFFIXES = (".vue", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
-_REFERENCE_DIRS = (
-    ("gui/src", _SOURCE_SUFFIXES),
-    ("frontend/src", _SOURCE_SUFFIXES),
-)
-
-# Vue/JS string properties are written with either quote style, and a route or
-# widget declared with the other one must not fall out of the enumeration —
-# an unseen surface is an undocumented surface the gate would never notice.
-_JS_NAME_RE = _js_property("name", r"(['\"])(.*?)\1")
-_JS_TYPE_RE = _js_property("type", r"(['\"])(.*?)\1")
-_META_RE = _js_property("meta", r"(?=\{)")
-_CHILDREN_RE = _js_property("children", r"")
-_ANY_NAME_PROPERTY_RE = _js_property("name", r"")
-# ES6 shorthand: `{ path, name }` gives the route a runtime name with no colon
-# in sight, so the colon-based pattern above never sees it.
-_SHORTHAND_NAME_RE = re.compile(r"(?<![\w$.])name\s*(?=[,}])")
-# `WidgetRegistry . register (` is the same call after a formatter touches it.
-_WIDGET_REGISTER_RE = re.compile(r"\bWidgetRegistry\s*\.\s*register\s*\(")
-_ROUTES_DECLARATION_RE = re.compile(r"\b(?:const|let|var)\s+routes\s*=")
-
-# Split before an uppercase letter that starts a new word, so acronyms stay
-# whole: ValueDisplay -> value-display, QrCode -> qr-code, RTR -> rtr,
-# IFrame -> iframe (the second alternative needs two leading capitals, so a
-# single-letter prefix is not mistaken for a word of its own).
 _KEBAB_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z][A-Z])(?=[A-Z][a-z])")
 
 
@@ -347,345 +138,68 @@ class AllowlistEntry:
     line: int
 
 
-class _UnreadableRoute(Exception):
-    """A route declaration the scan cannot read, with the offset it starts at."""
-
-    def __init__(self, offset: int, problem: str) -> None:
-        super().__init__(problem)
-        self.offset = offset
-        self.problem = problem
-
-
-_SPREAD_RE = re.compile(r"\.\.\.")
+# The frontends are read by tools/scan-help-declarations.mjs, which parses them
+# with @babel/parser and @vue/compiler-sfc. This checker used to scan them with
+# regexes and a hand-written tokenizer; review after review found the next
+# language construct it misread — quoted keys, a comment after a closing quote,
+# a regex holding a quote, `${...}` expressions, spreads, shorthand properties,
+# a CSS custom property shaped like a JS one. None of those are special cases
+# for a parser, which simply sees the syntax tree the runtime sees.
+_SCANNER = _REPO_ROOT / "tools" / "scan-help-declarations.mjs"
 
 
-def _strip_nested(text: str) -> str:
-    """Blank everything inside brackets, keeping this level's text and offsets."""
-    depth = 0
-    out: list[str] = []
-    for char in text:
-        if char in "{[(":
-            depth += 1
-            out.append(char if depth == 1 else " ")
-            continue
-        if char in "}])":
-            depth -= 1
-            out.append(char if depth == 0 else " ")
-            continue
-        out.append(char if depth == 0 else ("\n" if char == "\n" else " "))
-    return "".join(out)
-
-
-def _top_level_object_literals(text: str) -> list[tuple[str, int]]:
-    """Return the ``{...}`` literals sitting directly in an array body, with offsets."""
-    items: list[tuple[str, int]] = []
-    depth = 0
-    start = 0
-    for index, char in enumerate(text):
-        if char in "{[":
-            if depth == 0 and char == "{":
-                start = index
-            depth += 1
-        elif char in "}]":
-            depth -= 1
-            if depth == 0 and char == "}":
-                items.append((text[start : index + 1], start))
-    return items
-
-
-def _iter_route_records(array_body: str, base_offset: int = 0):
-    """Yield each route record in ``array_body``, descending through ``children``.
-
-    Only ``children`` is followed. Recursing into every nested object would
-    turn an ordinary static object that happens to carry a ``name`` — a
-    ``props`` bag, say — into a fictitious route and fail the gate over a page
-    that does not exist.
-    """
-    spread = _SPREAD_RE.search(_strip_nested(array_body))
-    if spread is not None:
-        # `[...EXTRA_ROUTES, { … }]` can contribute named, reachable routes the
-        # scan never sees. Enumerating only what is visible would report the
-        # rest as covered.
-        raise _UnreadableRoute(base_offset + spread.start(), "spreads a route array the gate cannot read; list the routes inline")
-    for record, offset in _top_level_object_literals(array_body):
-        yield record, base_offset + offset
-        children = next(_direct_property_matches(record, _CHILDREN_RE), None)
-        if children is None:
-            continue
-        bracket = record.find("[", children.end())
-        nested = _balanced_array_after(record, children.end())
-        if nested is None:
-            # A `children` that is not an array literal can hide named routes,
-            # and the gate cannot see into it — say so instead of passing.
-            # Raised as an offset so parse_routes, which holds the source, can
-            # turn it into a line number.
-            raise _UnreadableRoute(base_offset + offset, "declares 'children' the gate cannot read; give it an inline array literal")
-        yield from _iter_route_records(nested, base_offset + offset + bracket + 1)
-
-
-def _direct_property_matches(obj: str, pattern: re.Pattern, source: str | None = None):
-    """Yield ``pattern`` matches that sit directly in ``obj``, not in a nested one.
-
-    A parent route record contains its children's text, so an undirected
-    search would read a child's ``name``/``meta`` as the parent's own.
-
-    ``obj`` is the masked view (see ``_blank_string_contents``), so a key can
-    never be matched inside string text. When ``source`` is given — the same
-    span, unmasked — the match is re-run there so the *value* is read from the
-    real literal; both have identical offsets.
-    """
-    depths = [0] * (len(obj) + 1)
-    depth = 0
-    for index, char in enumerate(obj):
-        if char in "{[":
-            depth += 1
-        depths[index] = depth
-        if char in "}]":
-            depth -= 1
-            depths[index] = depth
-    for match in pattern.finditer(obj):
-        if depths[match.start()] != 1:
-            continue
-        if source is None:
-            yield match
-            continue
-        real = pattern.match(source, match.start())
-        if real is not None:
-            yield real
-
-
-def _blank_string_contents(source: str) -> str:
-    """Blank the *inside* of every string literal, keeping quotes and offsets.
-
-    Structure — braces, brackets, property keys — must be read from a view
-    where string text cannot pose as code: `meta: { note: "helpId: 'x'" }`
-    declares nothing, and a `{` inside a string would otherwise unbalance the
-    brace matching. Values are still read from the untouched source at the
-    same offsets, so this view only ever *locates* things.
-
-    A string used as a key keeps its content: `'name': 'Dashboard'` is a valid
-    declaration and the key has to stay findable.
-    """
-    out = list(source)
-    for kind, start, end in _scan_regions(source):
-        if kind == "regex" or (kind == "string" and not _is_key_string(source, start, end)):
-            out[start:end] = _blank_span(source, start, end)
-    return "".join(out)
-
-
-# A quoted key can only follow `{` or `,`. Anywhere else — after `?`, `(`, `=`
-# — the string is a value, and reading `true ? 'helpId' : 'x'` as a property
-# would fail the gate over an expression that declares nothing.
-_KEY_PREDECESSORS = frozenset("{,")
-
-
-def _is_key_string(source: str, start: int, end: int) -> bool:
-    """Is the string whose text spans ``start:end`` used as a property key?"""
-    before = start - 2  # step back over the opening quote
-    while before >= 0 and source[before].isspace():
-        before -= 1
-    if before >= 0 and source[before] not in _KEY_PREDECESSORS:
-        return False
-    after = end + 1  # step past the closing quote
-    while after < len(source) and source[after].isspace():
-        after += 1
-    return after < len(source) and source[after] == ":"
-
-
-def _literal_start(text: str, start: int, bracket: str) -> int:
-    """Index of ``bracket`` at ``start`` (whitespace skipped), or -1."""
-    index = start
-    while index < len(text) and text[index].isspace():
-        index += 1
-    return index if index < len(text) and text[index] == bracket else -1
-
-
-def _balanced_object_after(text: str, start: int) -> str | None:
-    """Return the ``{...}`` literal beginning at ``start``, or ``None``.
-
-    The bracket must be the value itself, not merely the next one somewhere
-    ahead: searching forward would happily borrow an unrelated literal from a
-    later property (or a later statement) and describe it as this value.
-    """
-    open_brace = _literal_start(text, start, "{")
-    if open_brace < 0:
-        return None
-    depth = 0
-    for index in range(open_brace, len(text)):
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[open_brace : index + 1]
-    return None
-
-
-def _balanced_array_after(text: str, start: int) -> str | None:
-    """Return the body of the ``[...]`` literal beginning at ``start``, or ``None``.
-
-    Anchored for the same reason as ``_balanced_object_after``: a
-    ``children: someVar`` next to a sibling property holding an array would
-    otherwise be read as that sibling's array, and the routes the real
-    ``children`` hides would never be seen.
-    """
-    open_bracket = _literal_start(text, start, "[")
-    if open_bracket < 0:
-        return None
-    depth = 0
-    for index in range(open_bracket, len(text)):
-        if text[index] == "[":
-            depth += 1
-        elif text[index] == "]":
-            depth -= 1
-            if depth == 0:
-                return text[open_bracket + 1 : index]
-    return None
-
-
-def _array_body(source: str, declaration: re.Pattern) -> tuple[str, int]:
-    """Return the array-literal body ``declaration`` introduces, and its offset.
-
-    Matched as a whole identifier: a plain substring search would accept
-    `const routesBackup = [...]` declared earlier in the file and enumerate
-    that array instead of the router's own.
-    """
-    found = declaration.search(source)
-    if found is None:
-        raise ValueError(f"no declaration matching {declaration.pattern!r}")
-    open_bracket = source.index("[", found.end())
-    depth = 0
-    for index in range(open_bracket, len(source)):
-        if source[index] == "[":
-            depth += 1
-        elif source[index] == "]":
-            depth -= 1
-            if depth == 0:
-                return source[open_bracket + 1 : index], open_bracket + 1
-    raise ValueError(f"unterminated array literal after {declaration.pattern!r}")
-
-
-def parse_routes(source: str, origin: str = "gui/src/router/index.js") -> list[Surface]:
-    """Enumerate the named Admin-GUI routes and the help_id each declares.
-
-    The catch-all redirect has no ``name`` and is not a surface a user can be
-    sent to for help, so it is skipped rather than allowlisted.
-
-    Comments are blanked first: a route left behind in a comment is not a
-    surface the app can route to, so enumerating it would fail the gate over a
-    page that cannot exist.
-    """
-    surfaces: list[Surface] = []
-    source = _blank_comments(source)
-    # Structure is read from the masked view so string text cannot pose as a
-    # property (or unbalance the braces); values come from `source` at the
-    # same offsets.
-    masked = _blank_string_contents(source)
-    body, body_offset = _array_body(masked, _ROUTES_DECLARATION_RE)
-    try:
-        records = list(_iter_route_records(body, body_offset))
-    except _UnreadableRoute as unreadable:
-        line = source.count("\n", 0, unreadable.offset) + 1
-        raise SystemExit(f"help contract: {origin}:{line} {unreadable.problem}") from None
-    for item, offset in records:
-        real_item = source[offset : offset + len(item)]
-        if next(_direct_property_matches(item, _SPREAD_RE), None) is not None:
-            # A spread inside the record can override the very `name` and
-            # `meta` the scan just approved, so what it read is not what ships.
-            raise SystemExit(
-                f"help contract: {origin}:{source.count(chr(10), 0, offset) + 1} spreads into a route record; "
-                f"the gate cannot tell what it declares — write the route's properties out"
-            )
-        name_match = next(_direct_property_matches(item, _JS_NAME_RE, real_item), None)
-        if not name_match:
-            unreadable_name = next(_direct_property_matches(item, _ANY_NAME_PROPERTY_RE), None) or next(
-                _direct_property_matches(item, _SHORTHAND_NAME_RE), None
-            )
-            if unreadable_name is not None:
-                # The route is named and reachable; only the gate cannot tell
-                # what it is called. Skipping would let it ship undocumented,
-                # so it fails closed instead.
-                line = source.count("\n", 0, offset) + 1
-                raise SystemExit(
-                    f"help contract: {origin}:{line} declares a route whose 'name' is not a string "
-                    f"literal — the gate cannot tell which route this is; give 'name' a literal value"
-                )
-            continue
-        # Scoped to the route's own `meta` object, because that is the only
-        # place TopBar.vue reads: a `helpId` sitting in `props` or any other
-        # property would otherwise be accepted as the declaration while the
-        # page in fact renders no help button.
-        meta_match = next(_direct_property_matches(item, _META_RE), None)
-        meta = _balanced_object_after(item, meta_match.end()) if meta_match else None
-        help_id_match = None
-        if meta is not None:
-            # Direct properties only: TopBar reads `route.meta.helpId`, so a
-            # helpId parked in an object nested inside meta declares nothing.
-            meta_start = _literal_start(item, meta_match.end(), "{")
-            real_meta = real_item[meta_start : meta_start + len(meta)]
-            help_id_match = next(_direct_property_matches(meta, _HELP_ID_LITERAL_RE, real_meta), None)
-        surfaces.append(
-            Surface(
-                kind="route",
-                name=name_match.group(2),
-                help_id=help_id_match.group(1) if help_id_match else None,
-                origin=origin,
-            )
-        )
-    return surfaces
-
-
-def parse_widget_types(widgets_dir: Path, repo_root: Path | None = None) -> list[Surface]:
-    """Enumerate the Visu widget types from their self-registration modules.
-
-    Comments are blanked first: a commented-out ``WidgetRegistry.register``
-    call registers nothing at runtime, so counting it would fail the gate over
-    a widget that does not exist.
-    """
+def scan_declarations(repo_root: Path | None = None) -> dict:
+    """Return the parsed routes, widget types, references and unreadable spots."""
     root = repo_root or _REPO_ROOT
-    surfaces: list[Surface] = []
-    for index_file in sorted(widgets_dir.glob("*/index.ts")):
-        source = _blank_comments(index_file.read_text(encoding="utf-8"))
-        # Same two views as parse_routes: locate on the masked one so string
-        # text cannot pose as a `type` property, read the value from the real
-        # source at the same offset.
-        masked = _blank_string_contents(source)
-        try:
-            origin = index_file.relative_to(root).as_posix()
-        except ValueError:
-            origin = index_file.as_posix()
-        # Every registration in the module, not just the first: a second
-        # `WidgetRegistry.register` call produces a second buildable,
-        # palette-visible widget type, and missing it would let that type ship
-        # undocumented and unexempted.
-        for registration in _WIDGET_REGISTER_RE.finditer(masked):
-            body = _balanced_object_after(masked, registration.end())
-            # Direct property only: `defaultConfig: { type: 'Slider' }` is the
-            # widget's own config, not the type it registers under.
-            type_match = None
-            if body is not None:
-                body_start = _literal_start(masked, registration.end(), "{")
-                real_body = source[body_start : body_start + len(body)]
-                type_match = next(_direct_property_matches(body, _JS_TYPE_RE, real_body), None)
-            if type_match is None:
-                # Silently skipping would under-enumerate: the widget is built
-                # and offered in the palette, the gate just cannot tell which
-                # one it is — so it says so instead of passing.
-                line = source.count("\n", 0, registration.start()) + 1
-                raise SystemExit(
-                    f"help contract: {origin}:{line} registers a widget whose 'type' is not a string "
-                    f"literal — the gate cannot tell which widget this is; give 'type' a literal value"
-                )
-            widget_type = type_match.group(2)
-            surfaces.append(
-                Surface(
-                    kind="widget",
-                    name=widget_type,
-                    help_id=f"widget-{kebab(widget_type)}",
-                    origin=origin,
-                )
-            )
-    return surfaces
+    return _run_node(root / "tools" / "scan-help-declarations.mjs", root)
+
+
+def _run_node(script: Path, cwd: Path, *args: str) -> dict:
+    """Run a Node helper that prints JSON on stdout."""
+    if shutil.which("node") is None:
+        raise SystemExit(f"help contract: node is required to run {script.name}")
+    result = subprocess.run(
+        ["node", str(script), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(cwd),
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"help contract: {script.name} failed:\n{result.stderr.strip()}")
+    return json.loads(result.stdout)
+
+
+def routes_from(scan: dict) -> list[Surface]:
+    """Turn the scanner's routes into surfaces."""
+    return [Surface(kind="route", name=route["name"], help_id=route["helpId"], origin=f"{route['file']}:{route['line']}") for route in scan["routes"]]
+
+
+def widgets_from(scan: dict) -> list[Surface]:
+    """Turn the scanner's widget registrations into surfaces."""
+    return [
+        Surface(
+            kind="widget",
+            name=widget["type"],
+            help_id=f"widget-{kebab(widget['type'])}",
+            origin=f"{widget['file']}:{widget['line']}",
+        )
+        for widget in scan["widgets"]
+    ]
+
+
+def references_from(scan: dict) -> list[Reference]:
+    """Turn the scanner's help_id references into references."""
+    return [Reference(reference["helpId"], f"{reference['file']}:{reference['line']}") for reference in scan["references"]]
+
+
+def unreadable_errors(scan: dict) -> list[str]:
+    """Report every declaration the parse could not resolve.
+
+    Never skipped: the surface ships either way, and only the checker is left
+    guessing — which is the one outcome a coverage gate must not produce.
+    """
+    return [f"{spot['file']}:{spot['line']} {spot['problem']}" for spot in scan["unreadable"]]
 
 
 def parse_skins(skins_root: Path) -> list[Surface]:
@@ -762,55 +276,6 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
 _SCRIPT_BLOCK_RE = re.compile(r"<script(?=[\s/>])[^>]*>(.*?)</script(?=[\s/>])[^>]*>", re.DOTALL | re.IGNORECASE)
 
 
-def _blank_outside_script(source: str) -> str:
-    """Keep only an SFC's ``<script>`` bodies, blanking the rest at fixed offsets."""
-    out = list(_blank_span(source, 0, len(source)))
-    for match in _SCRIPT_BLOCK_RE.finditer(source):
-        start, end = match.span(1)
-        out[start:end] = source[start:end]
-    return "".join(out)
-
-
-def collect_help_references(repo_root: Path, dirs=_REFERENCE_DIRS) -> list[Reference]:
-    """Collect every statically resolvable help_id reference in the frontends."""
-    references: list[Reference] = []
-    for relative_dir, suffixes in dirs:
-        base = repo_root / relative_dir
-        if not base.is_dir():
-            continue
-        for path in sorted(base.rglob("*")):
-            if not path.is_file() or path.suffix not in suffixes:
-                continue
-            if "node_modules" in path.parts:
-                continue
-            source = _blank_comments(path.read_text(encoding="utf-8"))
-            # Prose inside a string is neither rendered nor executed: a
-            # sentence containing `helpId: '…'` must not fail the gate. Keys
-            # keep their content, so a real `helpId: 'x'` is still seen.
-            masked = _blank_string_contents(source)
-            location = path.relative_to(repo_root).as_posix()
-            # `helpId: '…'` is a JavaScript property, so it is only read from
-            # script. A CSS custom property (`--panel-helpId: …`) or prose in a
-            # template is not a declaration, and failing the gate on one would
-            # block a push over something that renders no help control. The
-            # `help-id` attribute, by contrast, belongs to the template.
-            script_only = _blank_outside_script(masked) if path.suffix == ".vue" else masked
-            for pattern, groups, view in (
-                (_STATIC_HELP_ATTR_RE, (2, 4), masked),
-                (_HELP_ID_LITERAL_RE, (1,), script_only),
-            ):
-                for located in pattern.finditer(view):
-                    real = pattern.match(source, located.start())
-                    if real is None:
-                        continue
-                    value = next((real.group(g) for g in groups if real.group(g) is not None), None)
-                    if value is None:
-                        continue
-                    line = source.count("\n", 0, located.start()) + 1
-                    references.append(Reference(value, f"{location}:{line}"))
-    return references
-
-
 def load_allowlist(text: str) -> tuple[list[AllowlistEntry], list[str]]:
     """Parse the allowlist file. Returns ``(entries, errors)``.
 
@@ -850,18 +315,38 @@ def build_help_index(help_root: Path) -> dict:
     implementation of that scan would be free to drift from the one the
     published help site is actually built with.
     """
-    script = help_root / "scripts" / "generate-help-index.mjs"
-    if shutil.which("node") is None:
-        raise SystemExit("help contract: node is required to build the help index (see help/package.json)")
-    result = subprocess.run(
-        ["node", str(script), "--print"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(f"help contract: generate-help-index.mjs failed:\n{result.stderr.strip()}")
-    return json.loads(result.stdout)
+    return _run_node(help_root / "scripts" / "generate-help-index.mjs", help_root.parent, "--print")
+
+
+def rendered_help_ids(repo_root: Path | None = None) -> dict:
+    """Return, per rendered page, the heading ids VitePress actually emitted."""
+    root = repo_root or _REPO_ROOT
+    return _run_node(root / "tools" / "rendered-help-ids.mjs", root)
+
+
+def index_matches_render(index: dict, rendered: dict) -> list[str]:
+    """Check every indexed help_id against the page that really renders it.
+
+    The index comes from a text scan of the Markdown, and every rule that scan
+    needs — fenced code, comments, raw HTML blocks, escaped braces,
+    frontmatter, indented headings — is a rule about what VitePress renders.
+    Comparing against the render is what makes the two provably agree, instead
+    of the scan reimplementing a Markdown parser and drifting from it one
+    construct at a time.
+    """
+    errors: list[str] = []
+    for help_id, by_locale in sorted((index.get("helpIds") or {}).items()):
+        for locale, url in sorted(by_locale.items()):
+            page, _, fragment = url.partition("#")
+            path = page.removeprefix("/help/")
+            if path.endswith("/"):
+                path += "index.html"
+            ids = rendered.get(path)
+            if ids is None:
+                errors.append(f"help index: {help_id!r} ({locale}) points at {page}, which the help build does not produce")
+            elif fragment not in ids:
+                errors.append(f"help index: {help_id!r} ({locale}) is indexed but {page} renders no element with that id")
+    return errors
 
 
 def validate(
@@ -931,9 +416,8 @@ def validate(
     return errors
 
 
-def collect_surfaces(repo_root: Path, skins_dir: Path | None) -> list[Surface]:
-    surfaces = parse_routes((repo_root / "gui" / "src" / "router" / "index.js").read_text(encoding="utf-8"))
-    surfaces += parse_widget_types(repo_root / "frontend" / "src" / "widgets", repo_root)
+def collect_surfaces(scan: dict, skins_dir: Path | None) -> list[Surface]:
+    surfaces = routes_from(scan) + widgets_from(scan)
     surfaces += parse_logic_block_types(builtin_logic_node_types())
     if skins_dir is not None:
         surfaces += parse_skins(skins_dir)
@@ -947,17 +431,26 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("OBS_VISU_SKINS_DIR"),
         help="checkout of the obs-visu-skins repository; without it the skin surface is not checked",
     )
+    parser.add_argument(
+        "--skip-render-check",
+        action="store_true",
+        help="skip comparing the help index against a real VitePress build (needs help/node_modules)",
+    )
     args = parser.parse_args(argv)
     skins_dir = Path(args.skins_dir).resolve() if args.skins_dir else None
     if skins_dir is not None and not skins_dir.is_dir():
         print(f"Help contract check failed:\n  - --skins-dir {skins_dir} does not exist")
         return 1
 
-    surfaces = collect_surfaces(_REPO_ROOT, skins_dir)
-    references = collect_help_references(_REPO_ROOT)
+    scan = scan_declarations(_REPO_ROOT)
+    surfaces = collect_surfaces(scan, skins_dir)
+    references = references_from(scan)
     index = build_help_index(_REPO_ROOT / "help")
     allowlist, errors = load_allowlist((_REPO_ROOT / "tools" / "help-contract-allowlist.txt").read_text(encoding="utf-8"))
+    errors += unreadable_errors(scan)
     errors += validate(surfaces, references, index, allowlist, skins_checked=skins_dir is not None)
+    if not args.skip_render_check:
+        errors += index_matches_render(index, rendered_help_ids(_REPO_ROOT))
 
     if errors:
         print("Help contract check failed:")

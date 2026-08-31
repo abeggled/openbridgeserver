@@ -30,14 +30,26 @@ jobs:
           python-version: "3.14"
           cache: pip
 
-      # The gate resolves help_ids through help/scripts/generate-help-index.mjs
-      # itself rather than reimplementing its anchor scan — see the module
-      # docstring of tools/check_help_contract.py. The generator has no runtime
-      # dependencies, so no npm install is needed here.
+      # The gate parses the frontends with @babel/parser and @vue/compiler-sfc
+      # (declared by gui/) and compares the generated help index against a real
+      # VitePress build (help/). Both are real parses rather than
+      # reimplementations — see the module docstring of check_help_contract.py.
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            gui/package-lock.json
+            help/package-lock.json
+
+      - name: Install GUI dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Install help site dependencies
+        working-directory: help
+        run: npm ci
 
       - name: Install requirements
         run: |
@@ -54,3 +66,6 @@ jobs:
 
       - name: Run help index generator tests
         run: node --test help/scripts/generate-help-index.test.mjs
+
+      - name: Run declaration scanner tests
+        run: node --test tools/scan-help-declarations.test.mjs

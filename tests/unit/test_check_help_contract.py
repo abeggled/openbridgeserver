@@ -99,377 +99,6 @@ export default createRouter({ routes })
 """
 
 
-def test_parse_routes_reads_name_and_help_id():
-    routes = gate.parse_routes(ROUTER_SOURCE)
-
-    assert [(route.name, route.help_id) for route in routes] == [
-        ("Login", None),
-        ("Dashboard", "dashboard"),
-        ("Logs", "logs"),
-    ]
-
-
-def test_parse_routes_reads_double_quoted_names_and_ids():
-    """A route written with double quotes must not fall out of the enumeration."""
-    source = 'const routes = [\n  { path: "/new", name: "NewView", meta: { helpId: "new-view" } },\n]\n'
-
-    routes = gate.parse_routes(source)
-
-    assert [(route.name, route.help_id) for route in routes] == [("NewView", "new-view")]
-
-
-def test_parse_routes_ignores_a_help_id_outside_the_meta_object():
-    """TopBar reads route.meta.helpId — a helpId elsewhere declares nothing."""
-    source = "const routes = [\n  { path: '/', name: 'Dashboard', props: { helpId: 'dashboard' }, meta: {} },\n]\n"
-
-    assert [route.help_id for route in gate.parse_routes(source)] == [None]
-
-
-def test_parse_routes_reads_a_multi_property_meta_object():
-    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { public: false, helpId: 'dashboard' } },\n]\n"
-
-    assert [route.help_id for route in gate.parse_routes(source)] == ["dashboard"]
-
-
-def test_parse_routes_handles_a_nested_meta_object():
-    source = "const routes = [\n  { path: '/', name: 'X', meta: { nested: { a: 1 }, helpId: 'x' } },\n]\n"
-
-    assert [route.help_id for route in gate.parse_routes(source)] == ["x"]
-
-
-@pytest.mark.parametrize("comment", ["//", "/*", "<!--"])
-def test_parse_routes_ignores_a_commented_out_route(comment):
-    """A route left in a comment is not one the app can route to."""
-    closer = {"//": "", "/*": " */", "<!--": " -->"}[comment]
-    source = f"const routes = [\n  {comment} {{ path: '/old', name: 'RemovedView' }},{closer}\n  {{ path: '/', name: 'Dashboard', meta: {{ helpId: 'dashboard' }} }},\n]\n"
-
-    assert [route.name for route in gate.parse_routes(source)] == ["Dashboard"]
-
-
-@pytest.mark.parametrize("key", ["name", "'name'", '"name"'])
-def test_parse_routes_accepts_a_quoted_property_key(key):
-    source = f"const routes = [\n  {{ path: '/', {key}: 'Dashboard', meta: {{ helpId: 'dashboard' }} }},\n]\n"
-
-    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("Dashboard", "dashboard")]
-
-
-def test_parse_routes_ignores_a_name_in_a_non_route_object():
-    """A static `props` bag carrying a `name` is not a route."""
-    source = "const routes = [\n  { path: '/', name: 'Dashboard', props: { name: 'not-a-route' }, meta: { helpId: 'dashboard' } },\n]\n"
-
-    assert [r.name for r in gate.parse_routes(source)] == ["Dashboard"]
-
-
-def test_parse_routes_ignores_a_help_id_that_is_only_string_text():
-    """`note: "helpId: 'x'"` is text; route.meta.helpId stays undefined."""
-    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { note: \"helpId: 'dashboard'\" } },\n]\n"
-
-    assert [route.help_id for route in gate.parse_routes(source)] == [None]
-
-
-def test_parse_routes_survives_a_brace_inside_a_string():
-    """A `{` in string text must not unbalance the record matching."""
-    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { title: 'a { b', helpId: 'dashboard' } },\n]\n"
-
-    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("Dashboard", "dashboard")]
-
-
-def test_parse_routes_ignores_a_route_name_that_is_only_string_text():
-    source = "const routes = [\n  { path: '/', note: \"name: 'Fake'\", meta: { helpId: 'dashboard' } },\n]\n"
-
-    assert gate.parse_routes(source) == []
-
-
-def test_parse_routes_ignores_a_help_id_nested_inside_meta():
-    """TopBar reads meta.helpId directly; a nested one declares nothing."""
-    source = "const routes = [\n  { path: '/', name: 'Dashboard', meta: { analytics: { helpId: 'dashboard' } } },\n]\n"
-
-    assert [r.help_id for r in gate.parse_routes(source)] == [None]
-
-
-def test_parse_routes_enumerates_nested_children():
-    """vue-router nests routes; each reachable one needs its own help_id."""
-    source = (
-        "const routes = [\n"
-        "  { path: '/group', children: [\n"
-        "    { path: 'one', name: 'NestedOne', meta: { helpId: 'one' } },\n"
-        "    { path: 'two', name: 'NestedTwo' },\n"
-        "  ] },\n"
-        "]\n"
-    )
-
-    routes = gate.parse_routes(source)
-
-    assert sorted((route.name, route.help_id) for route in routes) == [("NestedOne", "one"), ("NestedTwo", None)]
-
-
-def test_parse_routes_does_not_read_a_childs_name_as_the_parents():
-    source = "const routes = [\n  { path: '/group', children: [{ path: 'one', name: 'NestedOne', meta: { helpId: 'one' } }] },\n]\n"
-
-    assert [route.name for route in gate.parse_routes(source)] == ["NestedOne"]
-
-
-def test_parse_routes_does_not_read_a_nested_meta_as_the_parents():
-    """A parent without its own meta must not inherit a child's helpId."""
-    source = "const routes = [\n  { path: '/group', name: 'Group', children: [{ path: 'one', name: 'One', meta: { helpId: 'one' } }] },\n]\n"
-
-    routes = {route.name: route.help_id for route in gate.parse_routes(source)}
-
-    assert routes == {"Group": None, "One": "one"}
-
-
-def test_parse_routes_skips_the_unnamed_catch_all():
-    assert all(route.name for route in gate.parse_routes(ROUTER_SOURCE))
-
-
-def test_parse_routes_fails_closed_on_a_non_literal_name():
-    """The route is reachable; only the gate cannot tell what it is called."""
-    source = "const routes = [\n  { path: '/c', name: EXTRA_ROUTE_NAME, component: X },\n]\n"
-
-    with pytest.raises(SystemExit, match="'name' is not a string literal"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_fails_closed_on_a_shorthand_name():
-    """`{ path, name }` names the route at runtime; the scan cannot read it."""
-    source = "const routes = [\n  { path: '/s', name, component: c },\n]\n"
-
-    with pytest.raises(SystemExit, match="'name' is not a string literal"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_is_not_confused_by_a_property_ending_in_name():
-    """`componentName: X` is not a shorthand `name`."""
-    source = "const routes = [\n  { path: '/', componentName: X, name: 'A', meta: { helpId: 'a' } },\n]\n"
-
-    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("A", "a")]
-
-
-def test_parse_routes_fails_closed_on_a_spread_route_array():
-    """A spread can contribute named routes the scan never sees."""
-    source = "const routes = [\n  ...EXTRA_ROUTES,\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\n"
-
-    with pytest.raises(SystemExit, match="spreads a route array"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_fails_closed_on_a_spread_inside_a_record():
-    """A record spread can override the very name and meta just approved."""
-    source = "const routes = [\n  { path: '/', name: 'A', ...override, meta: { helpId: 'a' } },\n]\n"
-
-    with pytest.raises(SystemExit, match="spreads into a route record"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_allows_a_spread_inside_a_route_property():
-    """Only a spread *of routes* is unreadable; one inside a value is fine."""
-    source = "const routes = [\n  { path: '/', name: 'A', meta: { ...base, helpId: 'a' } },\n]\n"
-
-    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("A", "a")]
-
-
-def test_parse_routes_fails_closed_on_children_it_cannot_read():
-    """A non-literal children array can hide named routes from the scan."""
-    source = "const routes = [\n  { path: '/group', children: EXTERNAL_ROUTES },\n]\n"
-
-    with pytest.raises(SystemExit, match="'children' the gate cannot read"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_does_not_borrow_a_sibling_array_as_children():
-    """`children: someVar` must not be read as the next array on the record."""
-    source = "const routes = [\n  { path: '/g', children: EXTERNAL, props: ['a', 'b'] },\n]\n"
-
-    with pytest.raises(SystemExit, match="'children' the gate cannot read"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_names_the_line_of_an_unreadable_declaration():
-    source = "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n  { path: '/c', name: CONST },\n]\n"
-
-    with pytest.raises(SystemExit, match=r"index\.js:3"):
-        gate.parse_routes(source)
-
-
-def test_parse_routes_still_accepts_an_unnamed_record():
-    """The catch-all redirect and a pure layout group carry no name."""
-    source = "const routes = [\n  { path: '/:pathMatch(.*)*', redirect: '/' },\n  { path: '/g', children: [{ path: 'a', name: 'A', meta: { helpId: 'a' } }] },\n]\n"
-
-    assert [route.name for route in gate.parse_routes(source)] == ["A"]
-
-
-def test_parse_routes_rejects_an_unterminated_array():
-    with pytest.raises(ValueError, match="unterminated array literal"):
-        gate.parse_routes("const routes = [ { name: 'X' },\n")
-
-
-def test_parse_routes_ignores_a_similarly_named_array_declared_earlier():
-    """`const routesBackup = [...]` is not the router table."""
-    source = (
-        "const routesBackup = [\n  { path: '/old', name: 'Backup' },\n]\n\n"
-        "const routes = [\n  { path: '/', name: 'Dashboard', meta: { helpId: 'dashboard' } },\n]\n"
-    )
-
-    assert [(r.name, r.help_id) for r in gate.parse_routes(source)] == [("Dashboard", "dashboard")]
-
-
-def test_parse_routes_reports_a_missing_declaration():
-    with pytest.raises(ValueError, match="no declaration matching"):
-        gate.parse_routes("const other = []\n")
-
-
-def test_parse_routes_matches_the_real_router():
-    source = (REPO_ROOT / "gui" / "src" / "router" / "index.js").read_text(encoding="utf-8")
-
-    names = {route.name for route in gate.parse_routes(source)}
-
-    assert {"Dashboard", "Settings", "Logic"} <= names
-
-
-# ── widget enumeration ───────────────────────────────────────────────────────
-
-
-def _write_widget(widgets_dir: Path, name: str, body: str) -> None:
-    (widgets_dir / name).mkdir(parents=True)
-    (widgets_dir / name / "index.ts").write_text(body, encoding="utf-8")
-
-
-def test_parse_widget_types_derives_the_expected_help_id(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "ValueDisplay", "WidgetRegistry.register({\n  type: 'ValueDisplay',\n  label: 'x',\n})\n")
-
-    surfaces = gate.parse_widget_types(widgets, tmp_path)
-
-    assert [(surface.name, surface.help_id) for surface in surfaces] == [("ValueDisplay", "widget-value-display")]
-    assert surfaces[0].origin == "widgets/ValueDisplay/index.ts"
-
-
-def test_parse_widget_types_reads_a_double_quoted_type(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Toggle", 'WidgetRegistry.register({\n  type: "Toggle",\n})\n')
-
-    assert [surface.help_id for surface in gate.parse_widget_types(widgets, tmp_path)] == ["widget-toggle"]
-
-
-def test_parse_widget_types_does_not_borrow_a_later_registrations_object(tmp_path):
-    """`register(definition)` must not adopt the next `{...}` in the file."""
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Slider", "WidgetRegistry.register(definition)\nWidgetRegistry.register({ type: 'Slider' })\n")
-
-    with pytest.raises(SystemExit, match="not a string literal"):
-        gate.parse_widget_types(widgets, tmp_path)
-
-
-def test_parse_widget_types_ignores_a_type_that_is_only_string_text(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Slider", "WidgetRegistry.register({ label: \"type: 'Fake'\" })\n")
-
-    with pytest.raises(SystemExit, match="not a string literal"):
-        gate.parse_widget_types(widgets, tmp_path)
-
-
-def test_parse_widget_types_survives_a_brace_inside_a_string(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Slider", "WidgetRegistry.register({ label: 'a { b', type: 'Slider' })\n")
-
-    assert [surface.name for surface in gate.parse_widget_types(widgets, tmp_path)] == ["Slider"]
-
-
-def test_parse_widget_types_reads_the_registrations_own_type_not_a_nested_one(tmp_path):
-    """`defaultConfig: { type: … }` is the widget's config, not its type."""
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Slider", "WidgetRegistry.register({ type: EXTRA, defaultConfig: { type: 'Slider' } })\n")
-
-    with pytest.raises(SystemExit, match="not a string literal"):
-        gate.parse_widget_types(widgets, tmp_path)
-
-
-@pytest.mark.parametrize("call", ["WidgetRegistry.register(", "WidgetRegistry .register (", "WidgetRegistry\n  .register("])
-def test_parse_widget_types_tolerates_whitespace_in_the_call(tmp_path, call):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Slider", f"{call}{{ type: 'Slider' }})\n")
-
-    assert [surface.name for surface in gate.parse_widget_types(widgets, tmp_path)] == ["Slider"]
-
-
-def test_parse_widget_types_enumerates_every_registration_in_one_module(tmp_path):
-    """A second register() call is a second shippable widget type."""
-    widgets = tmp_path / "widgets"
-    _write_widget(
-        widgets,
-        "Slider",
-        "WidgetRegistry.register({ type: 'Slider', defaultConfig: { min: 0 } })\nWidgetRegistry.register({ type: 'SliderPro' })\n",
-    )
-
-    surfaces = gate.parse_widget_types(widgets, tmp_path)
-
-    assert [surface.name for surface in surfaces] == ["Slider", "SliderPro"]
-
-
-def test_parse_widget_types_fails_on_an_unterminated_registration(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Broken", "WidgetRegistry.register({ type: 'Broken'\n")
-
-    with pytest.raises(SystemExit, match="not a string literal"):
-        gate.parse_widget_types(widgets, tmp_path)
-
-
-def test_parse_widget_types_ignores_a_commented_out_registration(tmp_path):
-    """A commented-out register() call registers nothing at runtime."""
-    widgets = tmp_path / "widgets"
-    _write_widget(
-        widgets,
-        "Slider",
-        "// WidgetRegistry.register({ type: 'CommentedWidget' })\n"
-        "/* WidgetRegistry.register({ type: 'BlockCommented' }) */\n"
-        "WidgetRegistry.register({ type: 'Slider' })\n",
-    )
-
-    assert [surface.name for surface in gate.parse_widget_types(widgets, tmp_path)] == ["Slider"]
-
-
-def test_parse_widget_types_ignores_a_module_without_registration(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Helper", "export const x = { type: 'Helper' }\n")
-
-    assert gate.parse_widget_types(widgets, tmp_path) == []
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "WidgetRegistry.register({\n  label: 'x',\n})\n",  # no type at all
-        "WidgetRegistry.register({ type: EXTRA_TYPE })\n",  # type via a constant
-        "WidgetRegistry.register(definition)\n",  # not an object literal
-    ],
-)
-def test_parse_widget_types_fails_on_a_registration_it_cannot_read(tmp_path, body):
-    """Skipping silently would under-enumerate a widget that does get built."""
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Broken", body)
-
-    with pytest.raises(SystemExit, match="not a string literal"):
-        gate.parse_widget_types(widgets, tmp_path)
-
-
-def test_parse_widget_types_falls_back_to_an_absolute_origin_outside_the_repo(tmp_path):
-    widgets = tmp_path / "widgets"
-    _write_widget(widgets, "Toggle", "WidgetRegistry.register({ type: 'Toggle' })\n")
-
-    surfaces = gate.parse_widget_types(widgets, REPO_ROOT)
-
-    assert surfaces[0].origin == (widgets / "Toggle" / "index.ts").as_posix()
-
-
-def test_parse_widget_types_covers_the_real_visu_widgets():
-    surfaces = gate.parse_widget_types(REPO_ROOT / "frontend" / "src" / "widgets", REPO_ROOT)
-
-    assert {"Toggle", "Slider", "Zeitschaltuhr"} <= {surface.name for surface in surfaces}
-
-
-# ── skin enumeration ─────────────────────────────────────────────────────────
-
-
 def _write_skin(skins_root: Path, directory: str, manifest: str) -> None:
     package = skins_root / "packages" / "skins" / directory
     package.mkdir(parents=True)
@@ -581,307 +210,6 @@ def test_validate_accepts_a_documented_logic_block():
 
 
 # ── reference collection ─────────────────────────────────────────────────────
-
-
-def test_collect_help_references_finds_static_attributes_and_literals(tmp_path):
-    source = tmp_path / "gui" / "src"
-    (source / "nested").mkdir(parents=True)
-    (source / "View.vue").write_text(
-        '<template>\n  <HelpButton help-id="logs-level" />\n  <StatCard :help-id="helpId" />\n</template>\n',
-        encoding="utf-8",
-    )
-    (source / "nested" / "map.js").write_text("const m = { helpId: 'logic-block-and' }\n", encoding="utf-8")
-    (source / "ignored.txt").write_text('help-id="nope"\n', encoding="utf-8")
-
-    references = gate.collect_help_references(tmp_path, (("gui/src", (".vue", ".js")),))
-
-    assert sorted((reference.help_id, reference.location) for reference in references) == [
-        ("logic-block-and", "gui/src/nested/map.js:1"),
-        ("logs-level", "gui/src/View.vue:2"),
-    ]
-
-
-def test_collect_help_references_reads_a_single_quoted_static_attribute(tmp_path):
-    """`help-id='…'` is valid Vue syntax — an unread reference is a dead button."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text("<template>\n  <HelpButton help-id='logs-level' />\n</template>\n", encoding="utf-8")
-
-    references = gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))
-
-    assert [reference.help_id for reference in references] == ["logs-level"]
-
-
-def test_collect_help_references_accepts_whitespace_around_the_equals_sign(tmp_path):
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text('<template>\n  <HelpButton help-id = "logs-level" />\n</template>\n', encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
-
-
-@pytest.mark.parametrize(
-    "commented",
-    [
-        "// Removed example: { helpId: 'gone' }",
-        "/* helpId: 'gone' */",
-        "/*\n  helpId: 'gone'\n*/",
-        '<!-- <HelpButton help-id="gone" /> -->',
-        '<!--\n  <HelpButton help-id="gone" />\n-->',
-    ],
-)
-def test_collect_help_references_ignores_a_commented_out_reference(tmp_path, commented):
-    """The build ignores it, so it cannot be a dead button — nor a gate failure."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text(f"<template>\n  {commented}\n</template>\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        "const removed = 'old'// { helpId: 'gone' }",
-        "const removed = 'old' // { helpId: 'gone' }",
-        "const removed = \"old\"/* { helpId: 'gone' } */",
-    ],
-)
-def test_collect_help_references_sees_a_comment_that_starts_right_after_a_string(tmp_path, line):
-    """`'old'// note` is a comment; only string state tells it from a URL."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "router.js").write_text(line + "\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
-
-
-def test_collect_help_references_ignores_prose_inside_a_string(tmp_path):
-    """A sentence mentioning `helpId: '…'` neither renders nor executes."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "msg.js").write_text("const msg = \"set helpId: 'gone' in meta\"\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", gate._SOURCE_SUFFIXES),)) == []
-
-
-@pytest.mark.parametrize("suffix", [".vue", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"])
-def test_collect_help_references_scans_every_supported_extension(tmp_path, suffix):
-    """A reference moved into a helper module must stay visible."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    body = "const m = { helpId: 'logs-level' }\n"
-    # An SFC keeps its script in a <script> block; that is where the property
-    # scan looks (see _blank_outside_script).
-    (source / f"helpMap{suffix}").write_text(f"<script setup>\n{body}</script>\n" if suffix == ".vue" else body, encoding="utf-8")
-
-    references = gate.collect_help_references(tmp_path, (("gui/src", gate._SOURCE_SUFFIXES),))
-
-    assert [ref.help_id for ref in references] == ["logs-level"]
-
-
-@pytest.mark.parametrize("end_tag", ["</script>", "</script >", "</script\t\n bar>", "</script/>"])
-def test_collect_help_references_reads_script_with_any_valid_end_tag(tmp_path, end_tag):
-    """A missed end tag means the block is not recognised and its declarations vanish."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text(f"<script setup>\nconst m = {{ helpId: 'logs-level' }}\n{end_tag}\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_ignores_a_custom_element_named_like_script(tmp_path):
-    """`<script-editor>` is an ordinary custom element, not an SFC script block."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text("<template>\n  <script-editor>Set helpId: 'gone' here</script-editor>\n</template>\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
-
-
-def test_collect_help_references_does_not_treat_a_similar_tag_as_the_end(tmp_path):
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text("<script>const m = { helpId: 'gone' }</scriptx>\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
-
-
-def test_collect_help_references_ignores_a_css_custom_property(tmp_path):
-    """`--panel-helpId: '…'` is a style declaration, not a help reference."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text(
-        "<template><div class=\"panel\" /></template>\n<style>\n.panel { --panel-helpId: 'gone'; }\n</style>\n", encoding="utf-8"
-    )
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
-
-
-def test_collect_help_references_ignores_property_shaped_template_prose(tmp_path):
-    """Rendered text mentioning a property declares nothing."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text("<template>\n  <p>Set helpId: 'gone' in meta</p>\n</template>\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
-
-
-def test_collect_help_references_still_reads_a_help_attribute_in_the_template(tmp_path):
-    """Restricting the property scan must not hide the template attribute."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text('<template>\n  <HelpButton help-id="logs-level" />\n</template>\n', encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
-
-
-def test_both_frontends_are_scanned_with_the_same_extensions():
-    assert {suffixes for _, suffixes in gate._REFERENCE_DIRS} == {gate._SOURCE_SUFFIXES}
-
-
-def test_collect_help_references_keeps_a_help_id_inside_a_template_literal(tmp_path):
-    """A template literal is a string, not a comment host."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "map.js").write_text("const url = `a//b`\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_reads_a_template_expression(tmp_path):
-    """`${…}` is executable JavaScript and can hold a real declaration."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "tpl.js").write_text("const t = `a ${ { helpId: 'logs-level' } } b`\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_ignores_template_literal_text(tmp_path):
-    """The text around `${…}` is still string content, not code."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "tpl.js").write_text("const t = `write helpId: 'gone' here`\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
-
-
-def test_collect_help_references_survives_a_regex_containing_a_quote(tmp_path):
-    """`/['\"]/` must not open a string and swallow the declaration after it."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "re.js").write_text("const q = /['\"]/\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_handles_a_regex_after_an_arrow(tmp_path):
-    """`() => /'/` is a regex, and its quote must not open a string."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "re.js").write_text("const q = () => /'/\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_finds_a_brace_closing_a_template_expression(tmp_path):
-    """A `}` inside a string within `${…}` does not end the expression."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "tpl.js").write_text("const t = `${'}' && ({ helpId: 'logs-level' }).helpId}`\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
-
-
-@pytest.mark.parametrize(
-    "attribute",
-    ['help-id="logs-level"', "help-id='logs-level'", "help-id=logs-level"],
-)
-def test_collect_help_references_reads_quoted_and_unquoted_attributes(tmp_path, attribute):
-    """An unquoted value is valid HTML and renders a live button."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text(f"<template>\n  <HelpButton {attribute} />\n</template>\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_ignores_a_help_id_inside_a_regex(tmp_path):
-    """A regex is opaque: it cannot carry a declaration."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "re.js").write_text("const q = /helpId: 'gone'/\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
-
-
-def test_collect_help_references_treats_division_as_division(tmp_path):
-    """`a / b` is not a regex — the declaration after it must still be read."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "div.js").write_text("const ratio = width / height\nconst m = { helpId: 'logs-level' }\n", encoding="utf-8")
-
-    assert [ref.help_id for ref in gate.collect_help_references(tmp_path, (("gui/src", (".js",)),))] == ["logs-level"]
-
-
-def test_collect_help_references_ignores_a_ternary_that_looks_like_a_property(tmp_path):
-    """`true ? 'helpId' : 'x'` declares nothing — the colon is not a key's."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "pick.js").write_text("const pick = true ? 'helpId' : 'missing-ternary-help'\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
-
-
-def test_collect_help_references_keeps_a_reference_next_to_a_url(tmp_path):
-    """`//` in a URL must not swallow the rest of the line and hide a reference."""
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text(
-        '<template>\n  <a href="https://example.com/x"><HelpButton help-id="logs-level" /></a>\n'
-        '  <a href="//cdn.example.com/y"><HelpButton help-id="logs-table" /></a>\n</template>\n',
-        encoding="utf-8",
-    )
-
-    references = gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))
-
-    assert sorted(ref.help_id for ref in references) == ["logs-level", "logs-table"]
-
-
-def test_collect_help_references_reports_the_line_after_blanking_comments(tmp_path):
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "View.vue").write_text('<template>\n  <!--\n    old\n  -->\n  <HelpButton help-id="logs-level" />\n</template>\n', encoding="utf-8")
-
-    assert [ref.location for ref in gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),))] == ["gui/src/View.vue:5"]
-
-
-def test_collect_help_references_skips_a_bound_attribute_and_a_non_literal_prop(tmp_path):
-    source = tmp_path / "gui" / "src"
-    source.mkdir(parents=True)
-    (source / "StatCard.vue").write_text(
-        '<template>\n  <HelpButton v-bind:help-id="helpId" />\n</template>\n'
-        "<script setup>\nconst props = defineProps({ helpId: { type: String, default: null } })\n</script>\n",
-        encoding="utf-8",
-    )
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".vue",)),)) == []
-
-
-def test_collect_help_references_skips_a_missing_directory(tmp_path):
-    assert gate.collect_help_references(tmp_path, (("does/not/exist", (".vue",)),)) == []
-
-
-def test_collect_help_references_skips_node_modules(tmp_path):
-    vendored = tmp_path / "gui" / "src" / "node_modules" / "pkg"
-    vendored.mkdir(parents=True)
-    (vendored / "index.js").write_text("const m = { helpId: 'vendored' }\n", encoding="utf-8")
-
-    assert gate.collect_help_references(tmp_path, (("gui/src", (".js",)),)) == []
-
-
-# ── allowlist parsing ────────────────────────────────────────────────────────
 
 
 def test_load_allowlist_parses_entries_and_ignores_comments():
@@ -1041,11 +369,79 @@ def test_validate_tolerates_an_index_without_optional_keys():
     assert gate.validate([], [], {}, []) == []
 
 
+# ── index vs. what the site really renders ───────────────────────────────────
+
+
+def _index_of(help_id: str, page: str) -> dict:
+    return {"helpIds": {help_id: {"de": f"/help/de/{page}#{help_id}", "en": f"/help/en/{page}#{help_id}"}}}
+
+
+def test_index_matches_render_accepts_an_id_the_page_renders():
+    rendered = {"de/x.html": ["a"], "en/x.html": ["a"]}
+
+    assert gate.index_matches_render(_index_of("a", "x.html"), rendered) == []
+
+
+def test_index_matches_render_reports_an_id_no_element_owns():
+    """This is what a Markdown construct the index scan misreads looks like."""
+    rendered = {"de/x.html": [], "en/x.html": []}
+
+    errors = gate.index_matches_render(_index_of("a", "x.html"), rendered)
+
+    assert len(errors) == 2
+    assert "renders no element with that id" in errors[0]
+
+
+def test_index_matches_render_reports_a_page_the_build_does_not_produce():
+    errors = gate.index_matches_render(_index_of("a", "gone.html"), {"de/x.html": ["a"], "en/x.html": ["a"]})
+
+    assert all("which the help build does not produce" in error for error in errors)
+
+
+def test_index_matches_render_resolves_a_locale_root_to_its_index_page():
+    """`/help/de/` is served by de/index.html."""
+    rendered = {"de/index.html": ["a"], "en/index.html": ["a"]}
+
+    assert gate.index_matches_render(_index_of("a", ""), rendered) == []
+
+
+def test_index_matches_render_tolerates_an_empty_index():
+    assert gate.index_matches_render({}, {}) == []
+
+
 # ── end to end ───────────────────────────────────────────────────────────────
 
 
+_SCAN = {
+    "routes": [{"name": "Dashboard", "helpId": "dashboard", "file": "gui/src/router/index.js", "line": 9}],
+    "widgets": [{"type": "Toggle", "file": "frontend/src/widgets/Toggle/index.ts", "line": 5}],
+    "references": [{"helpId": "dashboard", "file": "gui/src/views/DashboardView.vue", "line": 3}],
+    "unreadable": [],
+}
+
+
+def test_routes_and_widgets_become_surfaces():
+    surfaces = gate.routes_from(_SCAN) + gate.widgets_from(_SCAN)
+
+    assert [(s.kind, s.name, s.help_id, s.origin) for s in surfaces] == [
+        ("route", "Dashboard", "dashboard", "gui/src/router/index.js:9"),
+        ("widget", "Toggle", "widget-toggle", "frontend/src/widgets/Toggle/index.ts:5"),
+    ]
+
+
+def test_references_carry_their_location():
+    assert [(r.help_id, r.location) for r in gate.references_from(_SCAN)] == [("dashboard", "gui/src/views/DashboardView.vue:3")]
+
+
+def test_an_unreadable_declaration_becomes_an_error():
+    """Never skipped: the surface ships either way, only the checker guesses."""
+    scan = {**_SCAN, "unreadable": [{"kind": "route", "file": "gui/src/router/index.js", "line": 22, "problem": "declares X"}]}
+
+    assert gate.unreadable_errors(scan) == ["gui/src/router/index.js:22 declares X"]
+
+
 def test_collect_surfaces_without_a_skins_checkout():
-    surfaces = gate.collect_surfaces(REPO_ROOT, None)
+    surfaces = gate.collect_surfaces(_SCAN, None)
 
     assert {surface.kind for surface in surfaces} == {"route", "widget", "logic-block"}
 
@@ -1053,9 +449,18 @@ def test_collect_surfaces_without_a_skins_checkout():
 def test_collect_surfaces_with_a_skins_checkout(tmp_path):
     _write_skin(tmp_path, "glass", json.dumps({"name": "glass"}))
 
-    surfaces = gate.collect_surfaces(REPO_ROOT, tmp_path)
+    surfaces = gate.collect_surfaces(_SCAN, tmp_path)
 
     assert [surface.key for surface in surfaces if surface.kind == "skin"] == ["skin:glass"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the scan is a Node helper")
+def test_the_scanner_reads_the_repository_itself():
+    scan = gate.scan_declarations(REPO_ROOT)
+
+    assert scan["unreadable"] == []
+    assert {route["name"] for route in scan["routes"]} >= {"Dashboard", "Settings"}
+    assert {widget["type"] for widget in scan["widgets"]} >= {"Toggle", "Zeitschaltuhr"}
 
 
 def test_main_rejects_a_missing_skins_dir(tmp_path, capsys):
