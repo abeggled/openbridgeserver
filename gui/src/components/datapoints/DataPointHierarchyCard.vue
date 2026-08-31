@@ -2,6 +2,7 @@
   <div class="card">
     <div class="card-header">
       <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('hierarchy.card.title') }}</h3>
+      <HelpButton help-id="datapoints-detail-hierarchy" />
     </div>
     <div class="card-body flex flex-col gap-4">
 
@@ -89,6 +90,7 @@ import { useI18n } from 'vue-i18n'
 import { hierarchyApi } from '@/api/client.js'
 import Spinner from '@/components/ui/Spinner.vue'
 import PathLabel from '@/components/ui/PathLabel.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 const { t } = useI18n()

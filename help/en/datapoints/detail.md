@@ -8,7 +8,7 @@ Shows a single data point in full: its live value, all properties, and every pla
 connected to — adapter bindings, Logic usage, and hierarchy assignments. Reached by clicking
 a data point's name in the **Data Points** list.
 
-## Overview {#datapoints-detail}
+## Current value {#datapoints-detail}
 
 Shows the live value (updated over the WebSocket connection), its timestamp, and the MQTT
 topic (plus alias, if set). If at least one enabled binding can accept writes, a write

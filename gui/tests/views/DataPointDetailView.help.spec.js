@@ -1,8 +1,10 @@
 /**
  * Integrated help drawer wiring on the DataPointDetailView (issue #1198):
- * the detail page header had no HelpButton at all. This spec checks the
- * button is present with the right help_id and that clicking it opens the
- * real help store, mirroring AdaptersView.help.spec.js's pattern.
+ * the detail page had no HelpButton anywhere. Each card/section got its own
+ * button (matching how every other view in the app places help per section
+ * rather than once for the whole page) — see also
+ * DataPointHierarchyCard.spec.js for the hierarchy card's button, which
+ * lives in a separate component.
  */
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -48,7 +50,7 @@ function helpButton(wrapper, helpId) {
   return wrapper.find(`[data-testid="help-button-${helpId}"]`)
 }
 
-describe('DataPointDetailView — help button', () => {
+describe('DataPointDetailView — per-section help buttons', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     apiMocks.systemApi.datatypes.mockResolvedValue({ data: [{ name: 'FLOAT' }] })
@@ -75,19 +77,29 @@ describe('DataPointDetailView — help button', () => {
     apiMocks.helpApi.index.mockResolvedValue({ data: { helpIds: {} } })
   })
 
-  it('renders a help button for the detail page in the header', async () => {
+  it.each([
+    'datapoints-detail',
+    'datapoints-detail-properties',
+    'datapoints-detail-bindings',
+    'datapoints-detail-logic',
+  ])('renders a help button for %s', async (helpId) => {
     const wrapper = mountView()
     await flushPromises()
-    expect(helpButton(wrapper, 'datapoints-detail').exists()).toBe(true)
+    expect(helpButton(wrapper, helpId).exists()).toBe(true)
   })
 
-  it('opens the help store with datapoints-detail when its button is clicked', async () => {
+  it.each([
+    'datapoints-detail',
+    'datapoints-detail-properties',
+    'datapoints-detail-bindings',
+    'datapoints-detail-logic',
+  ])('opens the help store with %s when its button is clicked', async (helpId) => {
     const wrapper = mountView()
     await flushPromises()
     const { useHelpStore } = await import('@/stores/help')
     const helpStore = useHelpStore()
-    await helpButton(wrapper, 'datapoints-detail').trigger('click')
+    await helpButton(wrapper, helpId).trigger('click')
     expect(helpStore.isOpen).toBe(true)
-    expect(helpStore.currentHelpId).toBe('datapoints-detail')
+    expect(helpStore.currentHelpId).toBe(helpId)
   })
 })

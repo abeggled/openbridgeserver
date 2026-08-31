@@ -8,7 +8,7 @@ Zeigt ein einzelnes Objekt vollständig: seinen Live-Wert, alle Eigenschaften un
 mit der es verbunden ist — Adapter-Verknüpfungen, Logik-Nutzung und Hierarchie-Zuordnungen.
 Erreichbar über einen Klick auf den Namen eines Objekts in der Liste **Objekte**.
 
-## Übersicht {#datapoints-detail}
+## Aktueller Wert {#datapoints-detail}
 
 Zeigt den Live-Wert (aktualisiert über die WebSocket-Verbindung), dessen Zeitstempel und das
 MQTT-Topic (plus Alias, falls gesetzt). Kann mindestens eine aktivierte Verknüpfung Werte

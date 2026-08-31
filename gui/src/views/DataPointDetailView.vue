@@ -12,14 +12,16 @@
         <Badge :variant="qualityVariant(liveState?.quality ?? dp.quality)" dot>
           {{ qualityLabel(liveState?.quality ?? dp.quality) ?? '—' }}
         </Badge>
-        <HelpButton help-id="datapoints-detail" />
       </div>
     </div>
 
     <div class="grid lg:grid-cols-3 gap-4">
       <!-- Current value card -->
       <div class="card p-5 flex flex-col gap-3">
-        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.currentValue') }}</div>
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.currentValue') }}</div>
+          <HelpButton help-id="datapoints-detail" />
+        </div>
         <div class="text-4xl font-bold font-mono text-blue-600 dark:text-blue-300">
           {{ displayVal }}
         </div>
@@ -73,7 +75,10 @@
 
       <!-- Properties -->
       <div class="card p-5 col-span-2">
-        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">{{ $t('datapoints.detail.properties') }}</div>
+        <div class="flex items-center justify-between mb-4">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.properties') }}</div>
+          <HelpButton help-id="datapoints-detail-properties" />
+        </div>
         <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <dt class="text-slate-500">{{ $t('datapoints.table.name') }}</dt>       <dd class="text-slate-700 dark:text-slate-200">{{ dp.name }}</dd>
           <dt class="text-slate-500">{{ $t('datapoints.detail.datatype') }}</dt>   <dd><Badge variant="info" size="xs">{{ dp.data_type }}</Badge></dd>
@@ -108,10 +113,13 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.adapterBindings') }}</h3>
-        <button @click="showBindingForm = true" class="btn-primary btn-sm" data-testid="btn-add-binding">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          {{ $t('datapoints.detail.addBinding') }}
-        </button>
+        <div class="flex items-center gap-2">
+          <HelpButton help-id="datapoints-detail-bindings" />
+          <button @click="showBindingForm = true" class="btn-primary btn-sm" data-testid="btn-add-binding">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            {{ $t('datapoints.detail.addBinding') }}
+          </button>
+        </div>
       </div>
       <div class="card-body">
         <div v-if="bindingsLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -179,6 +187,7 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.logicBindings') }}</h3>
+        <HelpButton help-id="datapoints-detail-logic" />
       </div>
       <div class="card-body">
         <div v-if="logicUsagesLoading" class="flex justify-center py-4"><Spinner /></div>
