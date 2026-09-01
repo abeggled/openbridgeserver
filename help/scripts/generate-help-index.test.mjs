@@ -326,6 +326,20 @@ test('stripFrontmatter only removes a leading block and keeps line positions', (
   assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
 })
 
+test('a closing hash sequence does not hide the anchor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-closing-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## Closing {#closing} ##', '', '## Plain {#plain}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds).sort(), ['closing', 'plain'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('an escaped anchor is not indexed', () => {
   // Verified against a real build: `## Title \\{#probe}` renders the suffix as
   // visible text and gets markdown-it's auto-slug of the whole heading, so the

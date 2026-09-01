@@ -444,6 +444,22 @@ def test_written_anchor_ids_are_keyed_by_their_rendered_page(tmp_path):
     assert gate.written_anchor_ids(tmp_path) == {"de/a.html": {"written-a", "written-b"}, "de/b.html": {"written-c"}}
 
 
+def test_written_anchor_ids_ignores_an_anchor_shaped_string_in_prose(tmp_path):
+    """A paragraph is not a heading; markdown-it may slug an unrelated one alike."""
+    (tmp_path / "de").mkdir()
+    (tmp_path / "de" / "a.md").write_text("Ein Absatz mit {#prose} als Text.\n\n## Prose\n", encoding="utf-8")
+
+    assert gate.written_anchor_ids(tmp_path) == {"de/a.html": set()}
+
+
+def test_written_anchor_ids_reads_a_closing_hash_heading(tmp_path):
+    """CommonMark allows a closing hash sequence, and VitePress keeps the id."""
+    (tmp_path / "de").mkdir()
+    (tmp_path / "de" / "a.md").write_text("## A {#written-a} ##\n", encoding="utf-8")
+
+    assert gate.written_anchor_ids(tmp_path) == {"de/a.html": {"written-a"}}
+
+
 def test_written_anchor_ids_covers_the_real_help_sources():
     written = gate.written_anchor_ids(REPO_ROOT / "help")
 

@@ -324,11 +324,16 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
     return _run_node(root / "tools" / "rendered-help-ids.mjs", root)
 
 
-# An explicit anchor is written as `{#id}` in the Markdown; nothing else in a
-# page can produce one. Used only to tell a deliberate anchor from
-# markdown-it's automatic slug, so it may over-match freely — the render
-# decides which of them is real.
-_WRITTEN_ANCHOR_RE = re.compile(r"\{#([A-Za-z][\w-]*)\}")
+# An explicit anchor is written as `{#id}` on a *heading* line; the same text
+# in a paragraph is prose, and markdown-it may well slug an unrelated heading
+# on that page to the same id. Heading detection here is deliberately loose —
+# it only decides whether an id is worth comparing, and the render decides
+# whether it is real.
+_WRITTEN_ANCHOR_RE = re.compile(
+    r"^ {0,3}#{1,6}[^\S\r\n].*?\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$"
+    r"|^ {0,3}\S.*?\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n {0,3}(?:=+|-+)[^\S\r\n]*$",
+    re.MULTILINE,
+)
 
 
 def written_anchor_ids(help_root: Path) -> dict[str, set[str]]:
@@ -343,7 +348,8 @@ def written_anchor_ids(help_root: Path) -> dict[str, set[str]]:
         if "node_modules" in path.parts:
             continue
         page = path.relative_to(help_root).with_suffix(".html").as_posix()
-        written[page] = set(_WRITTEN_ANCHOR_RE.findall(path.read_text(encoding="utf-8")))
+        found = _WRITTEN_ANCHOR_RE.findall(path.read_text(encoding="utf-8"))
+        written[page] = {atx or setext for atx, setext in found}
     return written
 
 

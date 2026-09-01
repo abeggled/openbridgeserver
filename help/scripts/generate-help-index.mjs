@@ -40,7 +40,10 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // ATX (`## Title {#id}`) and Setext (`Title {#id}` over `===`/`---`) — both
 // are headings VitePress renders with the explicit id, verified against a
 // real build.
-const HEADING_RE = /^ {0,3}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}\s*$|^ {0,3}\S.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n {0,3}(?:=+|-+)[^\S\r\n]*$/gm
+// ATX (`## Title {#id}`, optionally with CommonMark's closing hash sequence)
+// and Setext (`Title {#id}` over `===`/`---`) — both are headings VitePress
+// renders with the explicit id, verified against a real build.
+const HEADING_RE = /^ {0,3}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$|^ {0,3}\S.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n {0,3}(?:=+|-+)[^\S\r\n]*$/gm
 
 function findMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true })

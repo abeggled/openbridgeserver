@@ -41,7 +41,11 @@ const requireFromGui = createRequire(join(REPO_ROOT, 'gui', 'package.json'))
 const { parse: parseJs } = requireFromGui('@babel/parser')
 const { parse: parseSfc } = requireFromGui('@vue/compiler-sfc')
 
-const SOURCE_SUFFIXES = ['.vue', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs']
+// Vue accepts a prop under either spelling, in templates and in render
+// functions alike.
+const HELP_PROP_NAMES = ['helpId', 'help-id']
+
+const SOURCE_SUFFIXES = ['.vue', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']
 const REFERENCE_DIRS = ['gui/src', 'frontend/src']
 
 const routes = []
@@ -88,7 +92,8 @@ function walk(node, visit, parent = null) {
  * hand the surface a silent exemption.
  */
 function ownProperty(objectExpression, name) {
-  return objectExpression.properties.find((property) => propertyKey(property) === name)
+  // `findLast`: a duplicated key is legal and the last one wins at runtime.
+  return objectExpression.properties.findLast((property) => propertyKey(property) === name)
 }
 
 /** The static key of a property, or null when it cannot be resolved. */
@@ -104,6 +109,16 @@ function propertyKey(property) {
 const hasDynamicKey = (objectExpression) =>
   objectExpression.properties.some((property) => property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null)
 
+/** A getter/setter/method under one of `names` — a value only the runtime has. */
+const hasAccessor = (objectExpression, names) =>
+  objectExpression.properties.some(
+    (property) =>
+      property.type === 'ObjectMethod' &&
+      !property.computed &&
+      ((property.key.type === 'Identifier' && names.includes(property.key.name)) ||
+        (property.key.type === 'StringLiteral' && names.includes(property.key.value)))
+  )
+
 // `x as T`, `x satisfies T`, `x!` and `(x)` wrap the expression without
 // changing it; a widget definition written `{ … } satisfies WidgetDefinition`
 // is still that object.
@@ -117,7 +132,12 @@ function unwrap(node) {
 
 const stringValue = (node) => {
   const inner = unwrap(node)
-  return inner && inner.type === 'StringLiteral' ? inner.value : null
+  if (!inner) return null
+  if (inner.type === 'StringLiteral') return inner.value
+  // `name: `Dashboard`` is the same string; only an interpolation makes it
+  // something the parse cannot know.
+  if (inner.type === 'TemplateLiteral' && inner.expressions.length === 0) return inner.quasis[0].value.cooked
+  return null
 }
 const hasSpread = (objectExpression) => objectExpression.properties.some((p) => p.type === 'SpreadElement')
 
@@ -130,9 +150,11 @@ function collectRoutes(file) {
 
   // Top level only: a `const routes = []` inside some helper function is not
   // the router table, and a depth-first walk would let it replace the real one.
+  // `export const routes = [...]` is the same declaration, one node deeper.
   let declaration = null
   for (const statement of ast.program.body) {
-    const declarations = statement.type === 'VariableDeclaration' ? statement.declarations : []
+    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+    const declarations = inner && inner.type === 'VariableDeclaration' ? inner.declarations : []
     for (const candidate of declarations) {
       if (candidate.id.type === 'Identifier' && candidate.id.name === 'routes') declaration = candidate
     }
@@ -142,8 +164,23 @@ function collectRoutes(file) {
     unreadable.push({ kind: 'route', file: rel(file), line: declaration?.loc?.start.line ?? 1, problem: "has no inline `routes` array the gate can read" })
     return
   }
+  // Anything that appends to the array after it is written contributes routes
+  // this parse never sees.
+  walk(ast, (node) => {
+    if (node.type !== 'CallExpression') return
+    const callee = node.callee
+    if (callee.type !== 'MemberExpression') return
+    const object = unwrap(callee.object)
+    const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
+    if (object.type === 'Identifier' && object.name === 'routes' && ROUTE_MUTATORS.includes(method)) {
+      unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the routes array with ${method}(); the gate cannot see what it adds` })
+    }
+  })
+
   collectRouteRecords(initialiser, file)
 }
+
+const ROUTE_MUTATORS = ['push', 'unshift', 'splice', 'concat']
 
 function collectRouteRecords(arrayExpression, file) {
   for (const element of arrayExpression.elements) {
@@ -160,6 +197,10 @@ function collectRouteRecords(arrayExpression, file) {
     }
     if (hasDynamicKey(record)) {
       unreadable.push({ kind: 'route', file: rel(file), line: record.loc.start.line, problem: 'has a computed property key the gate cannot resolve' })
+      continue
+    }
+    if (hasAccessor(record, ['name', 'meta'])) {
+      unreadable.push({ kind: 'route', file: rel(file), line: record.loc.start.line, problem: 'declares `name` or `meta` through a getter, whose value only the runtime has' })
       continue
     }
     const children = ownProperty(record, 'children')
@@ -232,18 +273,23 @@ function collectWidgets(file) {
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     const callee = node.callee
-    const isRegister =
-      callee.type === 'MemberExpression' &&
-      !callee.computed &&
-      callee.property.type === 'Identifier' &&
-      callee.property.name === 'register' &&
-      callee.object.type === 'Identifier' &&
-      callee.object.name === 'WidgetRegistry'
-    if (!isRegister) return
+    if (callee.type !== 'MemberExpression') return
+    // `WidgetRegistry['register'](…)` is the same call.
+    const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
+    const object = unwrap(callee.object)
+    if (method !== 'register' || object.type !== 'Identifier' || object.name !== 'WidgetRegistry') return
 
     const definition = unwrap(node.arguments[0])
-    const type =
-      definition && definition.type === 'ObjectExpression' && !hasDynamicKey(definition) ? stringValue(ownProperty(definition, 'type')?.value) : null
+    const readable =
+      definition &&
+      definition.type === 'ObjectExpression' &&
+      !hasDynamicKey(definition) &&
+      !hasAccessor(definition, ['type']) &&
+      // A spread can carry — or replace — the type, exactly as in a route record.
+      !definition.properties.some(
+        (property, index) => property.type === 'SpreadElement' && index > definition.properties.findIndex((p) => propertyKey(p) === 'type')
+      )
+    const type = readable ? stringValue(ownProperty(definition, 'type')?.value) : null
     if (type === null) {
       unreadable.push({
         kind: 'widget',
@@ -264,6 +310,23 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   const ast = parseSource(code, file)
   if (ast === null) return
   walk(ast, (node) => {
+    // `obj.helpId = 'x'` sets the same prop as `{ helpId: 'x' }`.
+    if (node.type === 'AssignmentExpression' && node.operator === '=') {
+      const target = node.left
+      const member =
+        target.type === 'MemberExpression'
+          ? target.computed
+            ? stringValue(target.property)
+            : target.property.type === 'Identifier'
+              ? target.property.name
+              : null
+          : null
+      const assigned = stringValue(node.right)
+      if (HELP_PROP_NAMES.includes(member) && assigned !== null) {
+        references.push({ helpId: assigned, file: rel(file), line: node.loc.start.line + lineOffset })
+      }
+      return
+    }
     if (node.type !== 'ObjectProperty') return
     const key = propertyKey(node)
     const value = stringValue(node.value)
@@ -278,7 +341,9 @@ function collectScriptReferences(code, file, lineOffset = 0) {
       })
       return
     }
-    if (key !== 'helpId' || value === null) return
+    // Vue normalises `{ 'help-id': 'x' }` in a render function to the same
+    // prop as `{ helpId: 'x' }`.
+    if (!HELP_PROP_NAMES.includes(key) || value === null) return
     references.push({ helpId: value, file: rel(file), line: node.loc.start.line + lineOffset })
   })
 }
@@ -290,7 +355,7 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
       for (const prop of node.props) {
         // `type: 6` is a plain attribute; a `v-bind`/`:` binding is directive
         // type 7 and its value is only known at runtime.
-        if (prop.type === 6 && prop.name === 'help-id' && prop.value) {
+        if (prop.type === 6 && HELP_PROP_NAMES.includes(prop.name) && prop.value) {
           references.push({ helpId: prop.value.content, file: rel(file), line: prop.loc.start.line + lineOffset })
         }
       }

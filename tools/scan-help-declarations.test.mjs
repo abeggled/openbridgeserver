@@ -196,6 +196,39 @@ test('a similarly named array declared earlier is not the router table', () => {
   assert.deepEqual(names(scan(files)), ['Dashboard'])
 })
 
+test('an exported routes declaration is the router table', () => {
+  const files = { 'gui/src/router/index.js': "export const routes = [\n  { path: '/', name: 'Dashboard', meta: { helpId: 'dashboard' } },\n]\n" }
+
+  assert.deepEqual(names(scan(files)), ['Dashboard'])
+})
+
+test('a template literal without interpolation is a string value', () => {
+  const result = scan(router('  { path: `/`, name: `Dashboard`, meta: { helpId: `dashboard` } },'))
+
+  assert.deepEqual(result.routes.map((r) => [r.name, r.helpId]), [['Dashboard', 'dashboard']])
+})
+
+test('a duplicated key resolves to the last one, as it does at runtime', () => {
+  const result = scan(router("  { path: '/', name: 'A', meta: { helpId: 'first', helpId: 'second' } },"))
+
+  assert.deepEqual(result.routes.map((r) => r.helpId), ['second'])
+})
+
+test('fails closed on a getter-backed route name', () => {
+  const result = scan(router("  { path: '/', get name() { return 'A' }, meta: { helpId: 'a' } },"))
+
+  assert.deepEqual(names(result), [])
+  assert.match(problems(result)[0], /through a getter/)
+})
+
+test('fails closed when routes are appended after the initialiser', () => {
+  const files = {
+    'gui/src/router/index.js': "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\nroutes.push(...extra)\n",
+  }
+
+  assert.match(problems(scan(files))[0], /mutates the routes array with push\(\)/)
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -230,6 +263,25 @@ test('TypeScript syntax in a widget module is parsed, not choked on', () => {
   assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Slider'])
 })
 
+test('a computed register call is the same registration', () => {
+  const result = scan(widget("WidgetRegistry['register']({ type: 'Slider' })\n"))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['Slider'])
+})
+
+test('fails closed on a spread after the widget type', () => {
+  const result = scan(widget("WidgetRegistry.register({ type: 'Slider', ...overrides })\n"))
+
+  assert.deepEqual(result.widgets, [])
+  assert.match(problems(result)[0], /`type` is not a string literal/)
+})
+
+test('a spread before the widget type leaves the literal winning', () => {
+  const result = scan(widget("WidgetRegistry.register({ ...defaults, type: 'Slider' })\n"))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['Slider'])
+})
+
 // ── References ──────────────────────────────────────────────────────────────
 
 for (const [label, attribute] of [
@@ -244,6 +296,24 @@ for (const [label, attribute] of [
     assert.deepEqual(helpIds(result), ['logs-level'])
   })
 }
+
+test('a camelCase prop spelling is the same attribute', () => {
+  const result = scan(view('<template>\n  <HelpButton helpId="logs-level" />\n</template>\n'))
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
+})
+
+test('a kebab-case prop in a render function is a reference', () => {
+  const result = scan({ 'gui/src/render.js': "const vnode = h(HelpButton, { 'help-id': 'logs-level' })\n" })
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
+})
+
+test('a helpId assigned to a property is a reference', () => {
+  const result = scan({ 'gui/src/assign.js': "props.helpId = 'logs-level'\n" })
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
+})
 
 test('a bound attribute is not resolvable and is skipped', () => {
   const result = scan(view('<template>\n  <HelpButton :help-id="helpId" />\n</template>\n'))
@@ -303,7 +373,7 @@ for (const [label, code] of [
 
 test('every supported extension is scanned in both frontends', () => {
   const files = {}
-  for (const suffix of ['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs']) files[`gui/src/a${suffix}.${suffix}`] = "const m = { helpId: 'logs-level' }\n"
+  for (const suffix of ['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts']) files[`gui/src/a${suffix}.${suffix}`] = "const m = { helpId: 'logs-level' }\n"
   files['frontend/src/probe.ts'] = "const m = { helpId: 'datapoints' }\n"
 
   assert.deepEqual([...new Set(helpIds(scan(files)))].sort(), ['datapoints', 'logs-level'])
