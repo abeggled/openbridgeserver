@@ -320,6 +320,16 @@ def test_validate_allows_two_routes_to_point_at_the_same_page():
     assert gate.validate([_route("Logs", "logs"), _route("LogsAlias", "logs")], [], _index("logs"), []) == []
 
 
+def test_validate_accepts_the_same_widget_type_registered_twice():
+    """WidgetRegistry keeps one definition per type and replaces it."""
+    twice = [
+        gate.Surface(kind="widget", name="Slider", help_id="widget-slider", origin="a:1"),
+        gate.Surface(kind="widget", name="Slider", help_id="widget-slider", origin="b:2"),
+    ]
+
+    assert gate.validate(twice, [], _index("widget-slider"), []) == []
+
+
 def test_validate_reports_a_collision_between_two_derived_help_ids():
     """A derived id shared by two surfaces cannot tell them apart."""
     first = gate.Surface(kind="widget", name="QrCode", help_id="widget-qr-code", origin="a")

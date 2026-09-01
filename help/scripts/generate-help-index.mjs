@@ -46,7 +46,9 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // id, verified against a real build.
 // A blockquote or list-item prefix. Both a heading and a fence can sit
 // inside one, and CommonMark keeps their meaning there.
-const CONTAINER = String.raw` {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[^\S\r\n]+)*`
+// CommonMark makes the space after a blockquote marker optional, so `>##` is
+// the same heading as `> ##`; a list marker does require one.
+const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]+)*`
 
 const HEADING_RE = new RegExp(
   String.raw`^${CONTAINER}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$` +
@@ -110,6 +112,10 @@ export function stripFencedCode(text) {
   return text
     .split('\n')
     .map((line) => {
+      // A fence opened inside a blockquote ends with the quote: the container
+      // closes it implicitly, and VitePress resumes parsing what follows.
+      // Keeping the fence open would blank real headings outside the quote.
+      if (fence !== null && fence.quoted && !/^ {0,3}>/.test(line)) fence = null
       const match = FENCE_RE.exec(line)
       if (match) {
         const marker = match[1]
@@ -118,7 +124,7 @@ export function stripFencedCode(text) {
           // A backtick fence's info string may not itself contain a backtick
           // (CommonMark) — that is inline code, not a fence.
           if (!(char === '`' && match[2].includes('`'))) {
-            fence = { char, length: marker.length }
+            fence = { char, length: marker.length, quoted: /^ {0,3}>/.test(line) }
             return ''
           }
         } else if (char === fence.char && marker.length >= fence.length && match[2].trim() === '') {

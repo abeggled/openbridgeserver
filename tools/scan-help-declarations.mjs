@@ -205,36 +205,57 @@ const hasSpread = (objectExpression) => objectExpression.properties.some((p) => 
 
 // ── Admin routes ────────────────────────────────────────────────────────────
 
+/** The identifier `createRouter({ routes })` is handed, if it names one. */
+function routerTableName(ast) {
+  let name = null
+  walk(ast, (node) => {
+    if (node.type !== 'CallExpression') return
+    const callee = unwrap(node.callee)
+    const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
+    if (called !== 'createRouter') return
+    const options = unwrap(node.arguments[0])
+    if (!options || options.type !== 'ObjectExpression') return
+    const routes = options.properties.find((property) => propertyKey(property) === 'routes')
+    if (!routes) return
+    // `{ routes }` shorthand, or `{ routes: someTable }`.
+    const value = unwrap(routes.value)
+    if (value && value.type === 'Identifier') name = value.name
+  })
+  return name
+}
+
 function collectRoutes(file) {
   const code = readFileSync(file, 'utf-8')
   const ast = parseSource(code, file)
   if (ast === null) return
 
-  // Top level only: a `const routes = []` inside some helper function is not
-  // the router table, and a depth-first walk would let it replace the real one.
-  // `export const routes = [...]` is the same declaration, one node deeper.
+  // The table is the one `createRouter({ routes })` is given — following the
+  // name alone would read a differently named array while the router runs on
+  // something else entirely. Top level only, and `export const` counts:
+  // a declaration inside a helper is not the router's.
+  const tableName = routerTableName(ast) ?? 'routes'
   let declaration = null
   for (const statement of ast.program.body) {
     const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
     const declarations = inner && inner.type === 'VariableDeclaration' ? inner.declarations : []
     for (const candidate of declarations) {
-      if (candidate.id.type === 'Identifier' && candidate.id.name === 'routes') declaration = candidate
+      if (candidate.id.type === 'Identifier' && candidate.id.name === tableName) declaration = candidate
     }
   }
   const initialiser = unwrap(declaration?.init)
   if (declaration === null || !initialiser || initialiser.type !== 'ArrayExpression') {
-    unreadable.push({ kind: 'route', file: rel(file), line: declaration?.loc?.start.line ?? 1, problem: "has no inline `routes` array the gate can read" })
+    unreadable.push({ kind: 'route', file: rel(file), line: declaration?.loc?.start.line ?? 1, problem: `has no inline \`${tableName}\` array the gate can read` })
     return
   }
   // Anything that changes the table after it is written contributes routes
   // this parse never sees. Only the module's own `routes` counts: a helper
   // with a local one of the same name is unrelated.
-  walkOutsideShadow(ast, 'routes', (node) => {
+  walkOutsideShadow(ast, tableName, (node) => {
     if (node.type === 'AssignmentExpression') {
       const target = node.left
-      const whole = target.type === 'Identifier' && target.name === 'routes'
+      const whole = target.type === 'Identifier' && target.name === tableName
       // `routes[0] = …` swaps out a record the scan already read.
-      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && unwrap(target.object).name === 'routes'
+      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && unwrap(target.object).name === tableName
       if (whole || element) {
         unreadable.push({
           kind: 'route',
@@ -250,8 +271,8 @@ function collectRoutes(file) {
     if (callee.type !== 'MemberExpression') return
     const object = unwrap(callee.object)
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
-    if (object.type === 'Identifier' && object.name === 'routes' && ROUTE_MUTATORS.includes(method)) {
-      unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the routes array with ${method}(); the gate cannot see what it adds` })
+    if (object.type === 'Identifier' && object.name === tableName && ROUTE_MUTATORS.includes(method)) {
+      unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the ${tableName} array with ${method}(); the gate cannot see what it adds` })
     }
   })
 
@@ -352,12 +373,14 @@ function collectWidgets(file) {
 
   // `import { WidgetRegistry as WR }` registers just the same.
   const registryNames = new Set(['WidgetRegistry'])
+  const namespaceNames = new Set()
   walk(ast, (node) => {
     if (node.type !== 'ImportDeclaration') return
     for (const specifier of node.specifiers) {
       if (specifier.type === 'ImportSpecifier' && (specifier.imported.name ?? specifier.imported.value) === 'WidgetRegistry') {
         registryNames.add(specifier.local.name)
       }
+      if (specifier.type === 'ImportNamespaceSpecifier') namespaceNames.add(specifier.local.name)
     }
   })
 
@@ -370,7 +393,14 @@ function collectWidgets(file) {
     // `WidgetRegistry['register'](…)` is the same call.
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
     const object = unwrap(callee.object)
-    if (method !== 'register' || object.type !== 'Identifier' || !registryNames.has(object.name)) return
+    // `WidgetRegistry.register`, an aliased import, or a namespace import's
+    // `RegistryModule.WidgetRegistry.register` — all the same registration.
+    const isRegistry =
+      (object.type === 'Identifier' && registryNames.has(object.name)) ||
+      (object.type === 'MemberExpression' &&
+        namespaceNames.has(unwrap(object.object).name) &&
+        (object.computed ? stringValue(object.property) : object.property.name) === 'WidgetRegistry')
+    if (method !== 'register' || !isRegistry) return
 
     const definition = unwrap(node.arguments[0])
     const readable =
@@ -428,6 +458,15 @@ function collectScriptReferences(code, file, lineOffset = 0) {
         line: node.loc.start.line + lineOffset,
         problem: 'declares a help id through a getter, whose value only the runtime has',
       })
+      return
+    }
+    // `class X { helpId = 'a' }` supplies the same prop from an instance.
+    if (node.type === 'ClassProperty' || node.type === 'ClassPrivateProperty' || node.type === 'PropertyDefinition') {
+      const fieldName = node.computed ? staticKeyValue(unwrap(node.key), constants) : node.key.type === 'Identifier' ? node.key.name : null
+      const fieldValue = stringValue(node.value)
+      if (HELP_PROP_NAMES.includes(fieldName) && fieldValue !== null) {
+        references.push({ helpId: fieldValue, file: rel(file), line: node.loc.start.line + lineOffset })
+      }
       return
     }
     if (node.type !== 'ObjectProperty') return

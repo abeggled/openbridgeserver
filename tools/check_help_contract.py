@@ -329,7 +329,8 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
 # on that page to the same id. Heading detection here is deliberately loose —
 # it only decides whether an id is worth comparing, and the render decides
 # whether it is real.
-_CONTAINER = r" {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[^\S\r\n]+)*"
+# CommonMark makes the space after a blockquote marker optional.
+_CONTAINER = r" {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]+)*"
 _WRITTEN_ANCHOR_RE = re.compile(
     rf"^{_CONTAINER}#{{1,6}}[^\S\r\n].*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*#*[^\S\r\n]*$"
     rf"|^{_CONTAINER}\S.*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*\r?\n{_CONTAINER}(?:=+|-+)[^\S\r\n]*$",
@@ -454,7 +455,10 @@ def validate(
             continue
         if surface.kind in _DERIVED_ID_KINDS:
             previous = seen_ids.get(surface.help_id)
-            if previous is not None:
+            # A repeated registration of the *same* type is not a collision:
+            # WidgetRegistry keeps one definition per type and deliberately
+            # replaces it, so both lines describe a single surface.
+            if previous is not None and previous != surface.key:
                 errors.append(f"{surface.key}: derived help_id {surface.help_id!r} collides with {previous}")
             seen_ids[surface.help_id] = surface.key
         if surface.help_id in help_ids:

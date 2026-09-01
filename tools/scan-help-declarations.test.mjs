@@ -277,6 +277,21 @@ test('fails closed on a getter under a computed key the parse cannot resolve', (
   assert.match(problems(result)[0], /computed property key the gate cannot resolve/)
 })
 
+test('the table handed to createRouter is the one that counts', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const routes = [{ path: '/', name: 'Decoy' }]\nconst realTable = [{ path: '/r', name: 'Real', meta: { helpId: 'a' } }]\nexport default createRouter({ history: h, routes: realTable })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['Real'])
+})
+
+test('a plain `routes` table is still read when createRouter names nothing else', () => {
+  const files = { 'gui/src/router/index.js': "const routes = [{ path: '/', name: 'A', meta: { helpId: 'a' } }]\nexport default createRouter({ routes })\n" }
+
+  assert.deepEqual(names(scan(files)), ['A'])
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -340,6 +355,12 @@ test('a parameter shadowing WidgetRegistry is a different binding', () => {
   const body = "import { WidgetRegistry } from '../registry'\nfunction make(WidgetRegistry) { WidgetRegistry.register({ type: 'Shadowed' }) }\nWidgetRegistry.register({ type: 'Real' })\n"
 
   assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
+})
+
+test('a namespace import registers just the same', () => {
+  const body = "import * as RegistryModule from '../registry'\nRegistryModule.WidgetRegistry.register({ type: 'Namespaced' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Namespaced'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────
@@ -458,6 +479,12 @@ test('an ordinary method named helpId is not a help reference', () => {
 
   assert.deepEqual(helpIds(result), [])
   assert.deepEqual(problems(result), [])
+})
+
+test('a help id stored in a class field is a reference', () => {
+  const result = scan({ 'gui/src/probe.js': "class ReviewHelp { helpId = 'logs-level' }\n" })
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
 })
 
 test('every supported extension is scanned in both frontends', () => {

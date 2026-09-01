@@ -326,6 +326,27 @@ test('stripFrontmatter only removes a leading block and keeps line positions', (
   assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
 })
 
+test('a blockquote marker without a space still marks a heading', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-nospace-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), '>## No space {#nospace}\n')
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['nospace'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a fence opened in a blockquote ends with the quote, not at the next marker', () => {
+  // VitePress resumes parsing after the quote, so a heading below it is real.
+  const stripped = stripFencedCode(['> ```md', '> unclosed', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
 test('a fenced block inside a blockquote still hides its heading', () => {
   const stripped = stripFencedCode(['> ```md', '> ## Quoted fenced {#gone}', '> ```', '', '## Real {#kept}'].join('\n'))
 
