@@ -26,6 +26,17 @@ def _load_module():
 gate = _load_module()
 
 
+# The Node helpers need the frontends' parsers and the help site's VitePress.
+# The dedicated help-contract workflow installs both and runs these; the
+# general test workflow does not install any frontend dependency, so skip
+# there rather than fail on a missing node_modules.
+_NODE = shutil.which("node") is not None
+_PARSERS = (REPO_ROOT / "gui" / "node_modules" / "@babel" / "parser").is_dir()
+_HELP_DEPS = (REPO_ROOT / "help" / "node_modules").is_dir()
+needs_scanner = pytest.mark.skipif(not (_NODE and _PARSERS), reason="needs node and gui/node_modules (@babel/parser)")
+needs_help_build = pytest.mark.skipif(not (_NODE and _PARSERS and _HELP_DEPS), reason="needs node, gui/node_modules and help/node_modules")
+
+
 def _index(*help_ids: str, duplicates=None, incomplete=None) -> dict:
     return {
         "helpIds": {help_id: {"de": f"/help/de/x.html#{help_id}", "en": f"/help/en/x.html#{help_id}"} for help_id in help_ids},
@@ -494,7 +505,7 @@ def test_written_anchor_ids_relies_on_the_caller_to_strip_unrendered_regions():
     assert gate.written_anchor_ids({"de/a.html": "\n\n## Fenced {#f}\n\n"}) == {"de/a.html": {"f"}}
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="the strippers are a Node helper")
+@needs_scanner
 def test_written_anchor_ids_covers_the_real_help_sources():
     written = gate.written_anchor_ids(gate.stripped_help_sources(REPO_ROOT))
 
@@ -551,7 +562,7 @@ def test_collect_surfaces_with_a_skins_checkout(tmp_path):
     assert [surface.key for surface in surfaces if surface.kind == "skin"] == ["skin:glass"]
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="the scan is a Node helper")
+@needs_scanner
 def test_the_scanner_reads_the_repository_itself():
     scan = gate.scan_declarations(REPO_ROOT)
 
@@ -565,13 +576,13 @@ def test_main_rejects_a_missing_skins_dir(tmp_path, capsys):
     assert "does not exist" in capsys.readouterr().out
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="the help index is built by generate-help-index.mjs")
+@needs_help_build
 def test_the_repository_satisfies_its_own_help_contract(capsys):
     assert gate.main([]) == 0
     assert "Help contract check passed" in capsys.readouterr().out
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="the help index is built by generate-help-index.mjs")
+@needs_scanner
 def test_build_help_index_matches_the_generated_index():
     index = gate.build_help_index(REPO_ROOT / "help")
 
