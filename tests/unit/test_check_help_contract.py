@@ -436,32 +436,44 @@ def test_render_covers_index_reports_each_id_once():
     assert len(gate.render_covers_index({"helpIds": {}}, rendered, written)) == 1
 
 
-def test_written_anchor_ids_are_keyed_by_their_rendered_page(tmp_path):
-    (tmp_path / "de").mkdir()
-    (tmp_path / "de" / "a.md").write_text("## A {#written-a}\n\nB {#written-b}\n===\n", encoding="utf-8")
-    (tmp_path / "de" / "b.md").write_text("## C {#written-c}\n", encoding="utf-8")
+def test_written_anchor_ids_are_keyed_by_their_rendered_page():
+    sources = {"de/a.html": "## A {#written-a}\n\nB {#written-b}\n===\n", "de/b.html": "## C {#written-c}\n"}
 
-    assert gate.written_anchor_ids(tmp_path) == {"de/a.html": {"written-a", "written-b"}, "de/b.html": {"written-c"}}
+    assert gate.written_anchor_ids(sources) == {"de/a.html": {"written-a", "written-b"}, "de/b.html": {"written-c"}}
 
 
-def test_written_anchor_ids_ignores_an_anchor_shaped_string_in_prose(tmp_path):
+def test_written_anchor_ids_ignores_an_anchor_shaped_string_in_prose():
     """A paragraph is not a heading; markdown-it may slug an unrelated one alike."""
-    (tmp_path / "de").mkdir()
-    (tmp_path / "de" / "a.md").write_text("Ein Absatz mit {#prose} als Text.\n\n## Prose\n", encoding="utf-8")
-
-    assert gate.written_anchor_ids(tmp_path) == {"de/a.html": set()}
+    assert gate.written_anchor_ids({"de/a.html": "Ein Absatz mit {#prose} als Text.\n\n## Prose\n"}) == {"de/a.html": set()}
 
 
-def test_written_anchor_ids_reads_a_closing_hash_heading(tmp_path):
+def test_written_anchor_ids_reads_a_closing_hash_heading():
     """CommonMark allows a closing hash sequence, and VitePress keeps the id."""
-    (tmp_path / "de").mkdir()
-    (tmp_path / "de" / "a.md").write_text("## A {#written-a} ##\n", encoding="utf-8")
-
-    assert gate.written_anchor_ids(tmp_path) == {"de/a.html": {"written-a"}}
+    assert gate.written_anchor_ids({"de/a.html": "## A {#written-a} ##\n"}) == {"de/a.html": {"written-a"}}
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("> ## Quoted {#q}\n", {"q"}),
+        ("- ## Listed {#l}\n", {"l"}),
+        ("1. ## Numbered {#n}\n", {"n"}),
+        ("> Setext {#s}\n> =======\n", {"s"}),
+    ],
+)
+def test_written_anchor_ids_reads_headings_inside_containers(source, expected):
+    """VitePress renders these with their id — verified against a real build."""
+    assert gate.written_anchor_ids({"de/a.html": source}) == {"de/a.html": expected}
+
+
+def test_written_anchor_ids_relies_on_the_caller_to_strip_unrendered_regions():
+    """`--stripped` blanks fenced code, so nothing here has to know about it."""
+    assert gate.written_anchor_ids({"de/a.html": "\n\n## Fenced {#f}\n\n"}) == {"de/a.html": {"f"}}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="the strippers are a Node helper")
 def test_written_anchor_ids_covers_the_real_help_sources():
-    written = gate.written_anchor_ids(REPO_ROOT / "help")
+    written = gate.written_anchor_ids(gate.stripped_help_sources(REPO_ROOT))
 
     assert "dashboard" in written["de/dashboard/overview.html"]
     assert "logic-block-edge-detect" in written["en/logic/blocks-logic.html"]

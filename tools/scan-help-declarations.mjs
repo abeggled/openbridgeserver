@@ -70,6 +70,38 @@ function parseSource(code, file) {
   }
 }
 
+/** Does this function body declare `name` itself, shadowing the outer one? */
+function declaresBinding(fn, name) {
+  const body = fn.body && fn.body.type === 'BlockStatement' ? fn.body.body : []
+  const params = (fn.params ?? []).some((param) => param.type === 'Identifier' && param.name === name)
+  return (
+    params ||
+    body.some(
+      (statement) =>
+        (statement.type === 'VariableDeclaration' && statement.declarations.some((d) => d.id.type === 'Identifier' && d.id.name === name)) ||
+        (statement.type === 'FunctionDeclaration' && statement.id?.name === name)
+    )
+  )
+}
+
+const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod']
+
+/** Walk the AST, skipping any function that shadows `name` with its own binding. */
+function walkOutsideShadow(node, name, visit) {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const child of node) walkOutsideShadow(child, name, visit)
+    return
+  }
+  if (typeof node.type !== 'string') return
+  if (FUNCTION_TYPES.includes(node.type) && declaresBinding(node, name)) return
+  visit(node)
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
+    walkOutsideShadow(node[key], name, visit)
+  }
+}
+
 /** Walk every node of a Babel AST, depth first. */
 function walk(node, visit, parent = null) {
   if (node === null || typeof node !== 'object') return
@@ -98,26 +130,32 @@ function ownProperty(objectExpression, name) {
 
 /** The static key of a property, or null when it cannot be resolved. */
 function propertyKey(property) {
-  if (property.type !== 'ObjectProperty') return null
+  if (property.type !== 'ObjectProperty' && property.type !== 'ObjectMethod') return null
   const key = unwrap(property.key)
-  if (property.computed) return key.type === 'StringLiteral' ? key.value : null
+  const literal = staticKeyValue(key)
+  if (property.computed) return literal
   if (key.type === 'Identifier') return key.name
-  return key.type === 'StringLiteral' ? key.value : null
+  return literal
+}
+
+/** A key written as a literal — `'name'` or `` `name` `` — or null. */
+function staticKeyValue(key) {
+  if (key.type === 'StringLiteral') return key.value
+  if (key.type === 'TemplateLiteral' && key.expressions.length === 0) return key.quasis[0].value.cooked
+  return null
 }
 
 /** A computed key whose value only the runtime knows. */
 const hasDynamicKey = (objectExpression) =>
   objectExpression.properties.some((property) => property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null)
 
-/** A getter/setter/method under one of `names` — a value only the runtime has. */
+/** A getter/setter/method under one of `names` — a value only the runtime has.
+ *
+ * A computed key counts as well when it resolves to a literal: `get ['name']()`
+ * is the same accessor.
+ */
 const hasAccessor = (objectExpression, names) =>
-  objectExpression.properties.some(
-    (property) =>
-      property.type === 'ObjectMethod' &&
-      !property.computed &&
-      ((property.key.type === 'Identifier' && names.includes(property.key.name)) ||
-        (property.key.type === 'StringLiteral' && names.includes(property.key.value)))
-  )
+  objectExpression.properties.some((property) => property.type === 'ObjectMethod' && names.includes(propertyKey(property)))
 
 // `x as T`, `x satisfies T`, `x!` and `(x)` wrap the expression without
 // changing it; a widget definition written `{ … } satisfies WidgetDefinition`
@@ -164,9 +202,14 @@ function collectRoutes(file) {
     unreadable.push({ kind: 'route', file: rel(file), line: declaration?.loc?.start.line ?? 1, problem: "has no inline `routes` array the gate can read" })
     return
   }
-  // Anything that appends to the array after it is written contributes routes
-  // this parse never sees.
-  walk(ast, (node) => {
+  // Anything that changes the table after it is written contributes routes
+  // this parse never sees. Only the module's own `routes` counts: a helper
+  // with a local one of the same name is unrelated.
+  walkOutsideShadow(ast, 'routes', (node) => {
+    if (node.type === 'AssignmentExpression' && node.left.type === 'Identifier' && node.left.name === 'routes') {
+      unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: 'reassigns the routes table; the gate cannot see what replaces it' })
+      return
+    }
     if (node.type !== 'CallExpression') return
     const callee = node.callee
     if (callee.type !== 'MemberExpression') return
@@ -180,7 +223,9 @@ function collectRoutes(file) {
   collectRouteRecords(initialiser, file)
 }
 
-const ROUTE_MUTATORS = ['push', 'unshift', 'splice', 'concat']
+// `concat` returns a new array and leaves the table alone; flagging it
+// would fail a push over code that changes nothing.
+const ROUTE_MUTATORS = ['push', 'unshift', 'splice', 'pop', 'shift', 'fill', 'copyWithin', 'sort', 'reverse']
 
 function collectRouteRecords(arrayExpression, file) {
   for (const element of arrayExpression.elements) {
@@ -270,6 +315,17 @@ function collectWidgets(file) {
   const ast = parseSource(code, file)
   if (ast === null) return
 
+  // `import { WidgetRegistry as WR }` registers just the same.
+  const registryNames = new Set(['WidgetRegistry'])
+  walk(ast, (node) => {
+    if (node.type !== 'ImportDeclaration') return
+    for (const specifier of node.specifiers) {
+      if (specifier.type === 'ImportSpecifier' && (specifier.imported.name ?? specifier.imported.value) === 'WidgetRegistry') {
+        registryNames.add(specifier.local.name)
+      }
+    }
+  })
+
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     const callee = node.callee
@@ -277,7 +333,7 @@ function collectWidgets(file) {
     // `WidgetRegistry['register'](…)` is the same call.
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
     const object = unwrap(callee.object)
-    if (method !== 'register' || object.type !== 'Identifier' || object.name !== 'WidgetRegistry') return
+    if (method !== 'register' || object.type !== 'Identifier' || !registryNames.has(object.name)) return
 
     const definition = unwrap(node.arguments[0])
     const readable =
@@ -325,6 +381,16 @@ function collectScriptReferences(code, file, lineOffset = 0) {
       if (HELP_PROP_NAMES.includes(member) && assigned !== null) {
         references.push({ helpId: assigned, file: rel(file), line: node.loc.start.line + lineOffset })
       }
+      return
+    }
+    if (node.type === 'ObjectMethod' && HELP_PROP_NAMES.includes(propertyKey(node))) {
+      // A getter returns a live help id the parse cannot evaluate.
+      unreadable.push({
+        kind: 'reference',
+        file: rel(file),
+        line: node.loc.start.line + lineOffset,
+        problem: 'declares a help id through a getter, whose value only the runtime has',
+      })
       return
     }
     if (node.type !== 'ObjectProperty') return

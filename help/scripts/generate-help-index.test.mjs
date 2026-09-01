@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments, stripRawHtmlBlocks, stripFrontmatter } from './generate-help-index.mjs'
+import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments, stripRawHtmlBlocks, stripFrontmatter, strippedSource } from './generate-help-index.mjs'
 
 // ── Pure URL-mapping helpers ────────────────────────────────────────────────
 
@@ -324,6 +324,30 @@ test('stripFrontmatter only removes a leading block and keeps line positions', (
   assert.doesNotMatch(stripped, /title/)
   // A `---` later in the page is a thematic break, not frontmatter.
   assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
+})
+
+test('a heading inside a blockquote or list item is indexed', () => {
+  // Verified against a real build: VitePress renders both with their id.
+  const root = mkdtempSync(join(tmpdir(), 'help-container-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['> ## Quoted {#quoted}', '', '- ## Listed {#listed}', '', '## Plain {#plain}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds).sort(), ['listed', 'plain', 'quoted'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('strippedSource blanks every region the site does not render', () => {
+  const text = ['---', 'title: T', '---', '## A {#a}', '```', '## B {#b}', '```', '<!-- ## C {#c} -->', '<div>', '## D {#d}', '</div>'].join('\n')
+
+  const stripped = strippedSource(text)
+
+  assert.match(stripped, /## A \{#a\}/)
+  for (const gone of [/\{#b\}/, /\{#c\}/, /\{#d\}/, /title: T/]) assert.doesNotMatch(stripped, gone)
 })
 
 test('a closing hash sequence does not hide the anchor', () => {

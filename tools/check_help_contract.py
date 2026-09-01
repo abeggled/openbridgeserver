@@ -329,28 +329,34 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
 # on that page to the same id. Heading detection here is deliberately loose —
 # it only decides whether an id is worth comparing, and the render decides
 # whether it is real.
+_CONTAINER = r" {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[^\S\r\n]+)*"
 _WRITTEN_ANCHOR_RE = re.compile(
-    r"^ {0,3}#{1,6}[^\S\r\n].*?\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$"
-    r"|^ {0,3}\S.*?\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n {0,3}(?:=+|-+)[^\S\r\n]*$",
+    rf"^{_CONTAINER}#{{1,6}}[^\S\r\n].*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*#*[^\S\r\n]*$"
+    rf"|^{_CONTAINER}\S.*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*\r?\n{_CONTAINER}(?:=+|-+)[^\S\r\n]*$",
     re.MULTILINE,
 )
 
 
-def written_anchor_ids(help_root: Path) -> dict[str, set[str]]:
+def written_anchor_ids(sources: dict[str, str]) -> dict[str, set[str]]:
     """The ids written as explicit anchors, per rendered page they belong to.
 
+    ``sources`` are the pages with every non-rendered region already blanked
+    (``generate-help-index.mjs --stripped``), so an anchor inside fenced code
+    or a comment is not mistaken for a heading here. What counts as a *heading*
+    is decided by this module's own pattern rather than the generator's, which
+    is what lets the reverse check catch a heading form the generator misses.
+
     Keyed the way ``rendered-help-ids.mjs`` keys its pages, so the two can be
-    compared page by page. A global set would pair an anchor-shaped string on
+    compared page by page: a global set would pair an anchor-shaped string on
     one page with an unrelated automatic heading slug on another.
     """
-    written: dict[str, set[str]] = {}
-    for path in sorted(help_root.rglob("*.md")):
-        if "node_modules" in path.parts:
-            continue
-        page = path.relative_to(help_root).with_suffix(".html").as_posix()
-        found = _WRITTEN_ANCHOR_RE.findall(path.read_text(encoding="utf-8"))
-        written[page] = {atx or setext for atx, setext in found}
-    return written
+    return {page: {atx or setext for atx, setext in _WRITTEN_ANCHOR_RE.findall(text)} for page, text in sources.items()}
+
+
+def stripped_help_sources(repo_root: Path | None = None) -> dict[str, str]:
+    """Each help page with the regions the site does not render blanked out."""
+    root = repo_root or _REPO_ROOT
+    return _run_node(root / "help" / "scripts" / "generate-help-index.mjs", root, "--stripped")
 
 
 def render_covers_index(index: dict, rendered: dict, written: dict[str, set[str]]) -> list[str]:
@@ -507,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_render_check:
         rendered = rendered_help_ids(_REPO_ROOT)
         errors += index_matches_render(index, rendered)
-        errors += render_covers_index(index, rendered, written_anchor_ids(_REPO_ROOT / "help"))
+        errors += render_covers_index(index, rendered, written_anchor_ids(stripped_help_sources(_REPO_ROOT)))
 
     if errors:
         print("Help contract check failed:")

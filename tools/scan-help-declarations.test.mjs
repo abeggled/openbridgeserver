@@ -229,6 +229,41 @@ test('fails closed when routes are appended after the initialiser', () => {
   assert.match(problems(scan(files))[0], /mutates the routes array with push\(\)/)
 })
 
+test('a template literal used as a key resolves like a quoted one', () => {
+  const result = scan(router('  { path: `/`, [`name`]: `TplKey`, meta: { [`helpId`]: `a` } },'))
+
+  assert.deepEqual(result.routes.map((r) => [r.name, r.helpId]), [['TplKey', 'a']])
+})
+
+test('fails closed on a computed getter-backed name', () => {
+  const result = scan(router("  { path: '/', get ['name']() { return 'G' }, meta: { helpId: 'a' } },"))
+
+  assert.deepEqual(names(result), [])
+  assert.match(problems(result)[0], /through a getter/)
+})
+
+test('a helper with its own routes variable is not the router table', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\nfunction helper() { const routes = []; routes.push(1); return routes }\n",
+  }
+
+  assert.deepEqual(problems(scan(files)), [])
+  assert.deepEqual(names(scan(files)), ['A'])
+})
+
+test('concat leaves the table alone and is not a mutation', () => {
+  const files = { 'gui/src/router/index.js': "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\nconst merged = routes.concat(extra)\n" }
+
+  assert.deepEqual(problems(scan(files)), [])
+})
+
+test('fails closed when the routes table is reassigned', () => {
+  const files = { 'gui/src/router/index.js': "let routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\nroutes = other\n" }
+
+  assert.match(problems(scan(files))[0], /reassigns the routes table/)
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -280,6 +315,12 @@ test('a spread before the widget type leaves the literal winning', () => {
   const result = scan(widget("WidgetRegistry.register({ ...defaults, type: 'Slider' })\n"))
 
   assert.deepEqual(result.widgets.map((w) => w.type), ['Slider'])
+})
+
+test('an aliased WidgetRegistry import registers just the same', () => {
+  const result = scan(widget("import { WidgetRegistry as WR } from '../registry'\nWR.register({ type: 'Aliased' })\n"))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['Aliased'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────
@@ -370,6 +411,13 @@ for (const [label, code] of [
     assert.deepEqual(helpIds(scan({ 'gui/src/probe.js': `${code}\n` })), ['logs-level'])
   })
 }
+
+test('fails closed on a getter-backed help reference', () => {
+  const result = scan({ 'gui/src/probe.js': "const m = { get helpId() { return 'gone' } }\n" })
+
+  assert.deepEqual(helpIds(result), [])
+  assert.match(problems(result)[0], /through a getter/)
+})
 
 test('every supported extension is scanned in both frontends', () => {
   const files = {}

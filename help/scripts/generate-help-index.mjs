@@ -41,9 +41,15 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // are headings VitePress renders with the explicit id, verified against a
 // real build.
 // ATX (`## Title {#id}`, optionally with CommonMark's closing hash sequence)
-// and Setext (`Title {#id}` over `===`/`---`) — both are headings VitePress
-// renders with the explicit id, verified against a real build.
-const HEADING_RE = /^ {0,3}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$|^ {0,3}\S.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n {0,3}(?:=+|-+)[^\S\r\n]*$/gm
+// and Setext (`Title {#id}` over `===`/`---`), each optionally inside a
+// blockquote or list item — all of these VitePress renders with the explicit
+// id, verified against a real build.
+const CONTAINER = String.raw` {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[^\S\r\n]+)*`
+const HEADING_RE = new RegExp(
+  String.raw`^${CONTAINER}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$` +
+    String.raw`|^${CONTAINER}\S.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n${CONTAINER}(?:=+|-+)[^\S\r\n]*$`,
+  'gm'
+)
 
 function findMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true })
@@ -196,8 +202,28 @@ export function stripFrontmatter(text) {
   return match[0].replace(/[^\n]/g, '') + text.slice(match[0].length)
 }
 
+/**
+ * A page's Markdown with every region the site does not render blanked out.
+ * Shared with tools/check_help_contract.py so both agree on what counts as
+ * present at all — its reverse check applies its *own* heading detection to
+ * this, which is what keeps it able to catch a heading form HEADING_RE misses.
+ */
+export function strippedSource(text) {
+  return stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(stripFrontmatter(text))))
+}
+
+/** Every page's stripped source, keyed like the rendered pages. */
+export function strippedSources(root = HELP_ROOT) {
+  const sources = {}
+  for (const absPath of findMarkdownFiles(root).sort()) {
+    const page = relative(root, absPath).split(sep).join('/').replace(/\.md$/, '.html')
+    sources[page] = strippedSource(readFileSync(absPath, 'utf-8'))
+  }
+  return sources
+}
+
 function extractHelpIds(absPath) {
-  const text = stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(stripFrontmatter(readFileSync(absPath, 'utf-8')))))
+  const text = strippedSource(readFileSync(absPath, 'utf-8'))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
     ids.push(match[1] ?? match[2])
@@ -304,6 +330,8 @@ if (isDirectRun) {
   try {
     if (process.argv.includes('--print')) {
       process.stdout.write(JSON.stringify(buildHelpIndex(HELP_ROOT)) + '\n')
+    } else if (process.argv.includes('--stripped')) {
+      process.stdout.write(JSON.stringify(strippedSources(HELP_ROOT)) + '\n')
     } else {
       generate()
     }
