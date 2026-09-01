@@ -218,6 +218,9 @@
 
     <!-- Edit Objekt Modal -->
     <Modal v-model="showEdit" :title="$t('datapoints.form.editTitle')">
+      <template #header-actions>
+        <HelpButton help-id="datapoints-form" />
+      </template>
       <DataPointForm :initial="dp" :datatypes="dpStore.datatypes" :save-handler="onEditSave" @cancel="showEdit = false" />
     </Modal>
 
