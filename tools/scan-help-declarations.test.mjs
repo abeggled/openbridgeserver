@@ -383,6 +383,15 @@ test('a route added through addRoute is a live route', () => {
   assert.deepEqual(scan(files).routes.map((r) => [r.name, r.helpId]).sort(), [['Added', null], ['Base', 'a']])
 })
 
+test('addRoute on an unrelated object is not a route', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const routes = [{ path: '/', name: 'Base', meta: { helpId: 'a' } }]\nconst router = createRouter({ routes })\nconst preview = { addRoute(r) {} }\npreview.addRoute({ path: '/x', name: 'NotLive' })\nrouter.addRoute({ path: '/y', name: 'Live' })\nexport default router\n",
+  }
+
+  assert.deepEqual(names(scan(files)).sort(), ['Base', 'Live'])
+})
+
 test('fails closed on an addRoute the gate cannot read', () => {
   const files = { 'gui/src/router/index.js': "const routes = []\ncreateRouter({ routes }).addRoute(extra)\n" }
 
@@ -546,6 +555,24 @@ test('an import cycle between widget modules terminates', () => {
   }
 
   assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Main'])
+})
+
+test('a type-only edge is erased and not followed', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "export type { T } from './type-only'\nWidgetRegistry.register({ type: 'Main' })\n",
+    'frontend/src/widgets/A/type-only.ts': "WidgetRegistry.register({ type: 'TypeOnly' })\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Main'])
+})
+
+test('a dynamically imported module executes and is followed', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "void import('./dynamic')\nWidgetRegistry.register({ type: 'Main' })\n",
+    'frontend/src/widgets/A/dynamic.ts': "WidgetRegistry.register({ type: 'Dynamic' })\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type).sort(), ['Dynamic', 'Main'])
 })
 
 test('a stylesheet the entry imports is not parsed as a module', () => {

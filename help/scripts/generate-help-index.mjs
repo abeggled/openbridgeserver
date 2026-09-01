@@ -58,7 +58,7 @@ const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]
 // `\\{#id}` is a backslash followed by a live anchor.
 const UNESCAPED = String.raw`(?<!\\)(?:\\\\)*`
 const HEADING_RE = new RegExp(
-  String.raw`^${CONTAINER}#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}(?:[^\S\r\n]+#*)?[^\S\r\n]*$` +
+  String.raw`^(?:${CONTAINER}|[^\S\r\n]*)#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}(?:[^\S\r\n]+#*)?[^\S\r\n]*$` +
     String.raw`|^${CONTAINER}\S.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n(?:${CONTAINER}|[^\S\r\n]*)(?:=+|-+)[^\S\r\n]*$`,
   'gm'
 )
@@ -154,7 +154,9 @@ function continuesContainer(line, chain) {
       rest = rest.slice(quote[0].length)
       continue
     }
-    if (/^\s*/.exec(rest)[0].length < container.indent - (line.length - rest.length)) return false
+    // Columns, not characters: a tab advances to the next multiple of four,
+    // so a tabbed continuation still sits inside the list.
+    if (columnWidth(line.slice(0, line.length - rest.length)) + columnWidth(/^[^\S\r\n]*/.exec(rest)[0]) < container.indent) return false
   }
   return true
 }
@@ -238,6 +240,12 @@ const HTML_BLOCK_TAGS = [
   'address','article','aside','base','basefont','blockquote','body','caption','center','col','colgroup','dd','details','dialog','dir','div','dl','dt','fieldset','figcaption','figure','footer','form','frame','frameset','h1','h2','h3','h4','h5','h6','head','header','hr','html','iframe','legend','li','link','main','menu','menuitem','nav','noframes','ol','optgroup','option','p','param','search','section','summary','table','tbody','td','tfoot','th','thead','title','tr','track','ul',
 ]
 const HTML_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<\/?(?:${HTML_BLOCK_TAGS.join('|')})(?=[\s/>]|$)`, 'i')
+// CommonMark condition 7: a *complete* tag alone on its line opens a block for
+// any element, including a custom one like `<x-review>`. An inline tag with
+// text after it does not, which is what keeps `<span>x</span>` a paragraph.
+const HTML_CUSTOM_BLOCK_START_RE = new RegExp(
+  String.raw`^${CONTAINER}<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?\/?>[^\S\r\n]*$`
+)
 // CommonMark "type 1": these run to their closing tag rather than to the next
 // blank line, so markdown inside them is never parsed.
 const LITERAL_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<(pre|script|style|textarea)(?=[\s/>]|$)`, 'i')
@@ -271,7 +279,7 @@ export function stripRawHtmlBlocks(text) {
           inBlock = true
           literalTag = literal[1].toLowerCase()
           container = containerOf(line)
-        } else if (HTML_BLOCK_START_RE.test(line)) {
+        } else if (HTML_BLOCK_START_RE.test(line) || HTML_CUSTOM_BLOCK_START_RE.test(line)) {
           inBlock = true
           container = containerOf(line)
         }
@@ -340,6 +348,36 @@ export function strippedSources(root = HELP_ROOT) {
 
 const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER}`)
 
+/**
+ * The content column each line may be indented to, given the list items open
+ * at that point. A heading may sit up to three columns past it; further in it
+ * is an indented code block.
+ *
+ * Line-by-line block context, which a single regex cannot carry: `    ## x` is
+ * code at the top level but a heading inside two nested list items.
+ */
+function contentColumnByLine(text) {
+  const columns = []
+  const open = []
+  for (const line of text.split('\n')) {
+    const indent = columnWidth(/^[^\S\r\n]*/.exec(line)[0])
+    if (line.trim() !== '') {
+      while (open.length > 0 && indent < open[open.length - 1]) open.pop()
+    }
+    columns.push(open.length > 0 ? open[open.length - 1] : 0)
+    const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? ''
+    if (prefix.trim() !== '') open.push(columnWidth(prefix))
+  }
+  return columns
+}
+
+/** Column of a match's start within `text`, and the line it sits on. */
+function lineOfOffset(text, offset) {
+  let line = 0
+  for (let index = 0; index < offset; index += 1) if (text[index] === '\n') line += 1
+  return line
+}
+
 function underlineIsIndentedLegally(matched) {
   const [heading, underline] = matched.split(/\r?\n/)
   const headingPrefix = CONTAINER_PREFIX_RE.exec(heading)?.[0] ?? ''
@@ -366,11 +404,18 @@ function columnWidth(text) {
 function extractHelpIds(absPath) {
   const text = strippedSource(readFileSync(absPath, 'utf-8'))
   const ids = []
+  const contentColumns = contentColumnByLine(text)
   for (const match of text.matchAll(HEADING_RE)) {
-    // A Setext underline may be indented up to three spaces past the content
+    // A Setext underline may be indented up to three columns past the content
     // column its heading sits at; beyond that CommonMark makes it code, and
     // VitePress renders no heading (verified against a real build).
     if (match[2] !== undefined && !underlineIsIndentedLegally(match[0])) continue
+    // The same bound for an ATX heading, measured against the list items open
+    // at its line: `    ## x` is code at the top level, a heading two items in.
+    if (match[1] !== undefined) {
+      const indent = columnWidth(/^[^\S\r\n]*/.exec(match[0])[0])
+      if (indent > contentColumns[lineOfOffset(text, match.index)] + 3) continue
+    }
     ids.push(match[1] ?? match[2])
   }
   return ids

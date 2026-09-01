@@ -314,7 +314,7 @@ function routerTableName(ast) {
     else if (value && value.type === 'ArrayExpression') inlineTable = value
     else if (value) overriddenTable = node
   })
-  return { name, overriddenTable, optionsName, inlineTable, creationOffset }
+  return { name, overriddenTable, optionsName, inlineTable, creationOffset, routerFactoryNames }
 }
 
 function collectRoutes(file) {
@@ -326,7 +326,7 @@ function collectRoutes(file) {
   // name alone would read a differently named array while the router runs on
   // something else entirely. Top level only, and `export const` counts:
   // a declaration inside a helper is not the router's.
-  const { name: routerName, overriddenTable, optionsName, inlineTable, creationOffset } = routerTableName(ast)
+  const { name: routerName, overriddenTable, optionsName, inlineTable, creationOffset, routerFactoryNames } = routerTableName(ast)
   if (optionsName !== null) {
     // `options.routes = other` after the fact replaces the table the scan read.
     let mutated = null
@@ -358,6 +358,19 @@ function collectRoutes(file) {
     })
     return
   }
+  // The bindings that hold a router this module creates.
+  const routerNames = new Set()
+  for (const statement of ast.program.body) {
+    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+    if (!inner || inner.type !== 'VariableDeclaration') continue
+    for (const declarator of inner.declarations) {
+      const init = unwrap(declarator.init)
+      const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
+      const called = callee?.type === 'Identifier' ? callee.name : callee?.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
+      if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called)) routerNames.add(declarator.id.name)
+    }
+  }
+
   // `router.addRoute(...)` adds a live route after construction. A literal
   // record is read like any other; anything else fails closed.
   walk(ast, (node) => {
@@ -366,6 +379,14 @@ function collectRoutes(file) {
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
     if (method !== 'addRoute') return
+    // Only on the router this module builds: an unrelated object with an
+    // `addRoute` method registers nothing with Vue Router.
+    const receiver = unwrap(callee.object)
+    const onRouter =
+      (receiver.type === 'Identifier' && routerNames.has(receiver.name)) ||
+      ((receiver.type === 'CallExpression' || receiver.type === 'OptionalCallExpression') &&
+        routerFactoryNames.has(unwrap(receiver.callee).type === 'Identifier' ? unwrap(receiver.callee).name : null))
+    if (!onRouter) return
     const record = unwrap(node.arguments[node.arguments.length - 1])
     if (record && record.type === 'ObjectExpression') collectRouteRecords({ elements: [record] }, file)
     else {
@@ -549,8 +570,19 @@ function collectWidgets(file, seen = new Set()) {
   // A registration may live in a helper the entry imports; the widget ships
   // either way, so the import graph inside the widget's own directory is
   // followed. Anything outside it (`@/…`, a package) is not this widget's.
+  // `import('./helper')` executes the module just as a static import does.
+  walk(ast, (node) => {
+    if (node.type !== 'Import' && !(node.type === 'CallExpression' && node.callee.type === 'Import')) return
+    const specifier = node.type === 'CallExpression' ? stringValue(node.arguments[0]) : null
+    if (specifier === null || !specifier.startsWith('.')) return
+    const target = resolveLocalModule(dirname(file), specifier)
+    if (target !== null && CODE_SUFFIXES.some((suffix) => target.endsWith(suffix))) collectWidgets(target, seen)
+  })
+
   for (const statement of ast.program.body) {
     if (statement.type !== 'ImportDeclaration' && statement.type !== 'ExportAllDeclaration' && statement.type !== 'ExportNamedDeclaration') continue
+    // A type-only edge is erased from the bundle, so nothing behind it runs.
+    if (statement.importKind === 'type' || statement.exportKind === 'type') continue
     const source = statement.source?.value
     if (!source || !source.startsWith('.')) continue
     const target = resolveLocalModule(dirname(file), source)

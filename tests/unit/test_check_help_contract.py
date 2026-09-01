@@ -477,6 +477,11 @@ def test_written_anchor_ids_reads_a_closing_hash_heading():
         # Three spaces past the content column is still a heading; five is code.
         ("Normal {#o}\n   ---\n", {"o"}),
         ("Over {#x}\n     ---\n", set()),
+        # An ATX heading is bounded by the list items open at its line.
+        ("- outer\n  - inner\n    ## Nested {#i}\n", {"i"}),
+        ("    ## Code {#c}\n", set()),
+        # A paragraph at column zero closes the list, so what follows is code.
+        ("- outer\n  - inner\n    ## In {#j}\n\nCloses.\n\n    ## Out {#k}\n", {"j"}),
     ],
 )
 def test_written_anchor_ids_reads_headings_inside_containers(source, expected):

@@ -334,7 +334,7 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
 # more the rest indents a code block rather than the item's content.
 _CONTAINER = r" {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]{1,4}(?![^\S\r\n]))*"
 _WRITTEN_ANCHOR_RE = re.compile(
-    rf"^{_CONTAINER}#{{1,6}}[^\S\r\n].*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*#*[^\S\r\n]*$"
+    rf"^(?:{_CONTAINER}|[^\S\r\n]*)#{{1,6}}[^\S\r\n].*?\{{#([A-Za-z][\w-]*)\}}(?:[^\S\r\n]+#*)?[^\S\r\n]*$"
     rf"|^{_CONTAINER}\S.*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*\r?\n(?:{_CONTAINER}|[^\S\r\n]*)(?:=+|-+)[^\S\r\n]*$",
     re.MULTILINE,
 )
@@ -371,14 +371,39 @@ def written_anchor_ids(sources: dict[str, str]) -> dict[str, set[str]]:
     compared page by page: a global set would pair an anchor-shaped string on
     one page with an unrelated automatic heading slug on another.
     """
-    return {
-        page: {
-            match.group(1) or match.group(2)
-            for match in _WRITTEN_ANCHOR_RE.finditer(text)
-            if match.group(1) or _underline_is_indented_legally(match.group(0))
-        }
-        for page, text in sources.items()
-    }
+    return {page: _anchors_in(text) for page, text in sources.items()}
+
+
+def _anchors_in(text: str) -> set[str]:
+    """The heading-borne anchors of one page, bounded the way the generator bounds them."""
+    columns = _content_column_by_line(text)
+    found: set[str] = set()
+    for match in _WRITTEN_ANCHOR_RE.finditer(text):
+        atx, setext = match.groups()
+        if setext:
+            if _underline_is_indented_legally(match.group(0)):
+                found.add(setext)
+            continue
+        indent = _column_width(re.match(r"[^\S\r\n]*", match.group(0)).group(0))
+        if indent <= columns[text.count("\n", 0, match.start())] + 3:
+            found.add(atx)
+    return found
+
+
+def _content_column_by_line(text: str) -> list[int]:
+    """Mirrors contentColumnByLine in generate-help-index.mjs."""
+    columns: list[int] = []
+    open_items: list[int] = []
+    for line in text.split("\n"):
+        indent = _column_width(re.match(r"[^\S\r\n]*", line).group(0))
+        if line.strip():
+            while open_items and indent < open_items[-1]:
+                open_items.pop()
+        columns.append(open_items[-1] if open_items else 0)
+        prefix = _CONTAINER_PREFIX_RE.match(line).group(0)
+        if prefix.strip():
+            open_items.append(_column_width(prefix))
+    return columns
 
 
 def stripped_help_sources(repo_root: Path | None = None) -> dict[str, str]:

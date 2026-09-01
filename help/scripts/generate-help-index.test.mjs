@@ -448,6 +448,41 @@ test('a nested Setext underline sits at the continuation indent', () => {
   }
 })
 
+test('an ATX heading is bounded by the list items open at its line', () => {
+  // Verified against a real build: `    ## x` renders as code at the top
+  // level and as a heading two list items in.
+  const root = mkdtempSync(join(tmpdir(), 'help-atx-indent-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      // The paragraph at column zero closes the list, so the indented heading
+      // after it is a code block again.
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['- outer', '  - inner', '    ## Nested {#kept}', '', 'Closes the list.', '', '    ## Code {#gone}', ''].join('\n')
+      )
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a complete custom tag alone on its line opens a raw HTML block', () => {
+  // CommonMark condition 7, verified against a real build.
+  const stripped = stripRawHtmlBlocks(['<x-review>', '## Custom {#gone}', '</x-review>', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a tabbed continuation stays inside its list fence', () => {
+  const stripped = stripFencedCode(['- ```md', '\tcontinuation', '  ## Hidden {#gone}', '  ```'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+})
+
 test('a heading inside a blockquote or list item is indexed', () => {
   // Verified against a real build: VitePress renders both with their id.
   const root = mkdtempSync(join(tmpdir(), 'help-container-'))
