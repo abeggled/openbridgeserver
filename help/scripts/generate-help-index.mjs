@@ -196,8 +196,36 @@ export function stripFencedCode(text) {
  * the fences are blanked, so a stray `-->` inside a code block cannot end a
  * comment that never started.
  */
-export function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\n]/g, ''))
+export function stripHtmlComments(text, protectedRanges = []) {
+  const inside = (index) => protectedRanges.some(([from, to]) => index >= from && index < to)
+  return text.replace(/<!--[\s\S]*?-->/g, (match, offset) =>
+    // An opener inside fenced code is inert text, not the start of a comment:
+    // pairing it with a `-->` after the fence would erase the real Markdown
+    // between them.
+    inside(offset) ? match : match.replace(/[^\n]/g, '')
+  )
+}
+
+/** The character ranges fenced code occupies, for protecting them from other passes. */
+export function fencedRanges(text) {
+  // Derived from stripFencedCode itself, so both agree on where a fence begins
+  // and ends: a line the stripper blanks is a line inside a fence.
+  const ranges = []
+  const blanked = stripFencedCode(text).split('\n')
+  const original = text.split('\n')
+  let cursor = 0
+  let start = null
+  for (let index = 0; index < original.length; index += 1) {
+    const isFenced = blanked[index] === '' && original[index] !== ''
+    if (isFenced && start === null) start = cursor
+    if (!isFenced && start !== null) {
+      ranges.push([start, cursor])
+      start = null
+    }
+    cursor += original[index].length + 1
+  }
+  if (start !== null) ranges.push([start, cursor])
+  return ranges
 }
 
 // A tag name, not an autolink: `<https://example.com>` must stay a paragraph.
@@ -282,9 +310,13 @@ export function stripFrontmatter(text) {
  * this, which is what keeps it able to catch a heading form HEADING_RE misses.
  */
 export function strippedSource(text) {
-  // Comments go first: a ``` inside `<!-- … -->` is commented-out text, not a
-  // fence, and letting it open one would blank the real Markdown after it.
-  return stripRawHtmlBlocks(stripFencedCode(stripHtmlComments(stripFrontmatter(text))))
+  // Neither pass may run first unconditionally: a ``` inside `<!-- … -->` is
+  // commented-out text, and a `<!--` inside fenced code is inert. Comments are
+  // stripped first, but skipping any opener that lies inside a fence — so both
+  // hold at once.
+  const withoutFrontmatter = stripFrontmatter(text)
+  const withoutComments = stripHtmlComments(withoutFrontmatter, fencedRanges(withoutFrontmatter))
+  return stripRawHtmlBlocks(stripFencedCode(withoutComments))
 }
 
 /** Every page's stripped source, keyed like the rendered pages. */

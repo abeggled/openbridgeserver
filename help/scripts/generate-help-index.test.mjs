@@ -402,6 +402,13 @@ test('a heading inside a blockquote or list item is indexed', () => {
   }
 })
 
+test('a comment opener inside a fence stays inert', () => {
+  // Pairing it with a `-->` after the fence would erase the heading between.
+  const stripped = strippedSource(['```html', '<!-- opener', '```', '## Between {#kept}', '-->'].join('\n'))
+
+  assert.match(stripped, /## Between \{#kept\}/)
+})
+
 test('a fence marker inside a comment does not open a fence', () => {
   const stripped = strippedSource(['<!--', '```md', '-->', '', '## After {#kept}'].join('\n'))
 

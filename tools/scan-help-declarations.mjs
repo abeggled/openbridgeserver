@@ -46,6 +46,8 @@ const { parse: parseSfc } = requireFromGui('@vue/compiler-sfc')
 const HELP_PROP_NAMES = ['helpId', 'help-id']
 
 // Vite's resolve order for an extensionless import.
+const TEST_MODULE_RE = /\.(test|spec)\.[^.]+$/
+
 const WIDGET_ENTRY_SUFFIXES = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx']
 
 const SOURCE_SUFFIXES = ['.vue', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']
@@ -260,6 +262,7 @@ function routerTableName(ast) {
   let name = null
   let overriddenTable = null
   let optionsName = null
+  let inlineTable = null
   const objectConstants = objectBindings(ast)
   // `import { createRouter as make }` builds the router just the same.
   const routerFactoryNames = importedAliases(ast, 'createRouter')
@@ -289,11 +292,13 @@ function routerTableName(ast) {
     }
     const routes = routesIndex < 0 ? null : options.properties[routesIndex]
     if (!routes) return
-    // `{ routes }` shorthand, or `{ routes: someTable }`.
+    // `{ routes }` shorthand, `{ routes: someTable }`, or the array inline.
     const value = unwrap(routes.value)
     if (value && value.type === 'Identifier') name = value.name
+    else if (value && value.type === 'ArrayExpression') inlineTable = value
+    else if (value) overriddenTable = node
   })
-  return { name, overriddenTable, optionsName }
+  return { name, overriddenTable, optionsName, inlineTable }
 }
 
 function collectRoutes(file) {
@@ -305,7 +310,7 @@ function collectRoutes(file) {
   // name alone would read a differently named array while the router runs on
   // something else entirely. Top level only, and `export const` counts:
   // a declaration inside a helper is not the router's.
-  const { name: routerName, overriddenTable, optionsName } = routerTableName(ast)
+  const { name: routerName, overriddenTable, optionsName, inlineTable } = routerTableName(ast)
   if (optionsName !== null) {
     // `options.routes = other` after the fact replaces the table the scan read.
     let mutated = null
@@ -332,6 +337,11 @@ function collectRoutes(file) {
       line: overriddenTable.loc.start.line,
       problem: 'hands createRouter options whose `routes` can be replaced after it; the gate cannot tell which table ships',
     })
+    return
+  }
+  if (inlineTable !== null) {
+    // The array is right there; no binding to follow.
+    collectRouteRecords(inlineTable, file)
     return
   }
   const tableName = routerName ?? 'routes'
@@ -473,14 +483,21 @@ function collectWidgets(file) {
   if (ast === null) return
 
   // `import { WidgetRegistry as WR }` registers just the same.
-  const registryNames = new Set(['WidgetRegistry'])
+  // Only the names the import actually introduces. Seeding the canonical
+  // spelling unconditionally would make a top-level local object called
+  // `WidgetRegistry` count as the live registry.
+  const registryNames = importedAliases(ast, 'WidgetRegistry')
+  for (const statement of ast.program.body) {
+    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+    if (!inner || inner.type !== 'VariableDeclaration') continue
+    for (const declarator of inner.declarations) {
+      if (declarator.id.type === 'Identifier') registryNames.delete(declarator.id.name)
+    }
+  }
   const namespaceNames = new Set()
   walk(ast, (node) => {
     if (node.type !== 'ImportDeclaration') return
     for (const specifier of node.specifiers) {
-      if (specifier.type === 'ImportSpecifier' && (specifier.imported.name ?? specifier.imported.value) === 'WidgetRegistry') {
-        registryNames.add(specifier.local.name)
-      }
       if (specifier.type === 'ImportNamespaceSpecifier') namespaceNames.add(specifier.local.name)
     }
   })
@@ -653,7 +670,9 @@ function* sourceFiles(dir) {
     if (entry.name === 'node_modules') continue
     const full = join(dir, entry.name)
     if (entry.isDirectory()) yield* sourceFiles(full)
-    else if (SOURCE_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) yield full
+    // A co-located test is never bundled, so a help-shaped fixture in one is
+    // not a live reference.
+    else if (SOURCE_SUFFIXES.some((suffix) => entry.name.endsWith(suffix)) && !TEST_MODULE_RE.test(entry.name)) yield full
   }
 }
 

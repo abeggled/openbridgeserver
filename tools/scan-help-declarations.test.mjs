@@ -346,6 +346,15 @@ test('fails closed when the options object routes are assigned afterwards', () =
   assert.match(problems(scan(files))[0], /router options `routes` after they are written/)
 })
 
+test('an inline routes array is the table, not a similarly named declaration', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const routes = [{ path: '/decoy', name: 'Decoy' }]\nexport default createRouter({ routes: [{ path: '/', name: 'Inline', meta: { helpId: 'a' } }] })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['Inline'])
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -458,6 +467,13 @@ test('an optional namespace registration is the same call', () => {
 test('a block-scoped shadow is a different binding', () => {
   const body =
     "import { WidgetRegistry } from '../registry'\n{ const WidgetRegistry = fake; WidgetRegistry.register({ type: 'BlockShadowed' }) }\nWidgetRegistry.register({ type: 'Real' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
+})
+
+test('a top-level local named WidgetRegistry is not the imported registry', () => {
+  const body =
+    "import { WidgetRegistry as WR } from '../registry'\nconst WidgetRegistry = { register() {} }\nWidgetRegistry.register({ type: 'LocalFake' })\nWR.register({ type: 'Real' })\n"
 
   assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
 })
@@ -606,6 +622,16 @@ test('every supported extension is scanned in both frontends', () => {
   files['frontend/src/probe.ts'] = "const m = { helpId: 'datapoints' }\n"
 
   assert.deepEqual([...new Set(helpIds(scan(files)))].sort(), ['datapoints', 'logs-level'])
+})
+
+test('a co-located test module is not scanned', () => {
+  // Its fixtures are never bundled, so a help-shaped one is not a live button.
+  const files = {
+    'frontend/src/probe.test.ts': "const m = { helpId: 'fixture-only' }\n",
+    'frontend/src/probe.ts': "const m = { helpId: 'real-ref' }\n",
+  }
+
+  assert.deepEqual(helpIds(scan(files)), ['real-ref'])
 })
 
 test('node_modules is not scanned', () => {
