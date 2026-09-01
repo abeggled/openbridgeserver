@@ -44,7 +44,10 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // and Setext (`Title {#id}` over `===`/`---`), each optionally inside a
 // blockquote or list item — all of these VitePress renders with the explicit
 // id, verified against a real build.
+// A blockquote or list-item prefix. Both a heading and a fence can sit
+// inside one, and CommonMark keeps their meaning there.
 const CONTAINER = String.raw` {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[^\S\r\n]+)*`
+
 const HEADING_RE = new RegExp(
   String.raw`^${CONTAINER}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$` +
     String.raw`|^${CONTAINER}\S.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n${CONTAINER}(?:=+|-+)[^\S\r\n]*$`,
@@ -90,7 +93,10 @@ export function routePartsToUrl(routeParts) {
   return `/help/${withoutExt}.html`
 }
 
-const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+// A fence can sit inside a blockquote or list item just as a heading can; the
+// same container prefix has to be allowed, or the heading regex would index a
+// line the fence keeps as code.
+const FENCE_RE = new RegExp(String.raw`^${CONTAINER}(\`{3,}|~{3,})(.*)$`)
 
 /**
  * Blank out fenced code blocks, keeping the line count so nothing downstream

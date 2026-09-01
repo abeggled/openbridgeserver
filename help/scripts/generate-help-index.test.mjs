@@ -326,6 +326,13 @@ test('stripFrontmatter only removes a leading block and keeps line positions', (
   assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
 })
 
+test('a fenced block inside a blockquote still hides its heading', () => {
+  const stripped = stripFencedCode(['> ```md', '> ## Quoted fenced {#gone}', '> ```', '', '## Real {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## Real \{#kept\}/)
+})
+
 test('a heading inside a blockquote or list item is indexed', () => {
   // Verified against a real build: VitePress renders both with their id.
   const root = mkdtempSync(join(tmpdir(), 'help-container-'))

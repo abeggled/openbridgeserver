@@ -129,25 +129,49 @@ function ownProperty(objectExpression, name) {
 }
 
 /** The static key of a property, or null when it cannot be resolved. */
-function propertyKey(property) {
+function propertyKey(property, constants) {
   if (property.type !== 'ObjectProperty' && property.type !== 'ObjectMethod') return null
   const key = unwrap(property.key)
-  const literal = staticKeyValue(key)
+  const literal = staticKeyValue(key, constants)
   if (property.computed) return literal
   if (key.type === 'Identifier') return key.name
   return literal
 }
 
+/** Module-level `const NAME = 'literal'` bindings, for resolving computed keys.
+ *
+ * `obj[key] = 'x'` is how ordinary code writes into a map, so a computed key
+ * the parse cannot resolve is skipped rather than failed on — refusing to
+ * read `busy[a.id] = 'test'` would fail the gate over code that has nothing
+ * to do with help. Resolving the constant instead catches the case that
+ * matters — `const k = 'helpId'; props[k] = '…'` — without that cost.
+ */
+function stringConstants(ast) {
+  const constants = new Map()
+  for (const statement of ast.program.body) {
+    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+    if (!inner || inner.type !== 'VariableDeclaration' || inner.kind !== 'const') continue
+    for (const declarator of inner.declarations) {
+      const value = stringValue(declarator.init)
+      if (declarator.id.type === 'Identifier' && value !== null) constants.set(declarator.id.name, value)
+    }
+  }
+  return constants
+}
+
 /** A key written as a literal — `'name'` or `` `name` `` — or null. */
-function staticKeyValue(key) {
+function staticKeyValue(key, constants) {
   if (key.type === 'StringLiteral') return key.value
   if (key.type === 'TemplateLiteral' && key.expressions.length === 0) return key.quasis[0].value.cooked
+  if (key.type === 'Identifier' && constants) return constants.get(key.name) ?? null
   return null
 }
 
 /** A computed key whose value only the runtime knows. */
 const hasDynamicKey = (objectExpression) =>
-  objectExpression.properties.some((property) => property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null)
+  objectExpression.properties.some(
+    (property) => (property.type === 'ObjectProperty' || property.type === 'ObjectMethod') && property.computed && propertyKey(property) === null
+  )
 
 /** A getter/setter/method under one of `names` — a value only the runtime has.
  *
@@ -206,9 +230,20 @@ function collectRoutes(file) {
   // this parse never sees. Only the module's own `routes` counts: a helper
   // with a local one of the same name is unrelated.
   walkOutsideShadow(ast, 'routes', (node) => {
-    if (node.type === 'AssignmentExpression' && node.left.type === 'Identifier' && node.left.name === 'routes') {
-      unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: 'reassigns the routes table; the gate cannot see what replaces it' })
-      return
+    if (node.type === 'AssignmentExpression') {
+      const target = node.left
+      const whole = target.type === 'Identifier' && target.name === 'routes'
+      // `routes[0] = …` swaps out a record the scan already read.
+      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && unwrap(target.object).name === 'routes'
+      if (whole || element) {
+        unreadable.push({
+          kind: 'route',
+          file: rel(file),
+          line: node.loc.start.line,
+          problem: whole ? 'reassigns the routes table; the gate cannot see what replaces it' : 'assigns into the routes table; the gate cannot see what replaces the record',
+        })
+        return
+      }
     }
     if (node.type !== 'CallExpression') return
     const callee = node.callee
@@ -326,7 +361,9 @@ function collectWidgets(file) {
     }
   })
 
-  walk(ast, (node) => {
+  // A parameter or local of the same name is a different binding; the walk
+  // skips any function that shadows it.
+  walkOutsideShadow(ast, 'WidgetRegistry', (node) => {
     if (node.type !== 'CallExpression') return
     const callee = node.callee
     if (callee.type !== 'MemberExpression') return
@@ -365,26 +402,26 @@ function collectWidgets(file) {
 function collectScriptReferences(code, file, lineOffset = 0) {
   const ast = parseSource(code, file)
   if (ast === null) return
+  const constants = stringConstants(ast)
   walk(ast, (node) => {
     // `obj.helpId = 'x'` sets the same prop as `{ helpId: 'x' }`.
     if (node.type === 'AssignmentExpression' && node.operator === '=') {
       const target = node.left
-      const member =
-        target.type === 'MemberExpression'
-          ? target.computed
-            ? stringValue(target.property)
-            : target.property.type === 'Identifier'
-              ? target.property.name
-              : null
-          : null
       const assigned = stringValue(node.right)
-      if (HELP_PROP_NAMES.includes(member) && assigned !== null) {
+      if (target.type !== 'MemberExpression' || assigned === null) return
+      const member = target.computed
+        ? staticKeyValue(unwrap(target.property), constants)
+        : target.property.type === 'Identifier'
+          ? target.property.name
+          : null
+      if (HELP_PROP_NAMES.includes(member)) {
         references.push({ helpId: assigned, file: rel(file), line: node.loc.start.line + lineOffset })
       }
       return
     }
-    if (node.type === 'ObjectMethod' && HELP_PROP_NAMES.includes(propertyKey(node))) {
-      // A getter returns a live help id the parse cannot evaluate.
+    if (node.type === 'ObjectMethod' && node.kind === 'get' && HELP_PROP_NAMES.includes(propertyKey(node, constants))) {
+      // Only a getter hides a value: an ordinary `helpId() {}` utility method
+      // evaluates to a function and references no help id at all.
       unreadable.push({
         kind: 'reference',
         file: rel(file),
@@ -394,7 +431,7 @@ function collectScriptReferences(code, file, lineOffset = 0) {
       return
     }
     if (node.type !== 'ObjectProperty') return
-    const key = propertyKey(node)
+    const key = propertyKey(node, constants)
     const value = stringValue(node.value)
     if (key === null && node.computed && value !== null) {
       // The key may well be `helpId` at runtime, and then this is a live

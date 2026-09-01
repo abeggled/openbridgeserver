@@ -264,6 +264,19 @@ test('fails closed when the routes table is reassigned', () => {
   assert.match(problems(scan(files))[0], /reassigns the routes table/)
 })
 
+test('fails closed when the routes table is assigned into by index', () => {
+  const files = { 'gui/src/router/index.js': "const routes = [\n  { path: '/', name: 'A', meta: { helpId: 'a' } },\n]\nroutes[0] = other\n" }
+
+  assert.match(problems(scan(files))[0], /assigns into the routes table/)
+})
+
+test('fails closed on a getter under a computed key the parse cannot resolve', () => {
+  const result = scan(router('  { path: `/`, get [runtimeKey]() { return `G` }, meta: { helpId: `a` } },'))
+
+  assert.deepEqual(names(result), [])
+  assert.match(problems(result)[0], /computed property key the gate cannot resolve/)
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -321,6 +334,12 @@ test('an aliased WidgetRegistry import registers just the same', () => {
   const result = scan(widget("import { WidgetRegistry as WR } from '../registry'\nWR.register({ type: 'Aliased' })\n"))
 
   assert.deepEqual(result.widgets.map((w) => w.type), ['Aliased'])
+})
+
+test('a parameter shadowing WidgetRegistry is a different binding', () => {
+  const body = "import { WidgetRegistry } from '../registry'\nfunction make(WidgetRegistry) { WidgetRegistry.register({ type: 'Shadowed' }) }\nWidgetRegistry.register({ type: 'Real' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────
@@ -417,6 +436,28 @@ test('fails closed on a getter-backed help reference', () => {
 
   assert.deepEqual(helpIds(result), [])
   assert.match(problems(result)[0], /through a getter/)
+})
+
+test('a computed key resolves through a module-level constant', () => {
+  const body = "const reviewKey = 'helpId'\nconst props = {}\nprops[reviewKey] = 'logs-level'\n"
+
+  assert.deepEqual(helpIds(scan({ 'gui/src/probe.js': body })), ['logs-level'])
+})
+
+test('an ordinary keyed write is not a help reference and does not fail the gate', () => {
+  // `busy[a.id] = 'test'` is how normal code writes into a map; refusing to
+  // read it would fail the gate over code with nothing to do with help.
+  const result = scan({ 'gui/src/probe.js': "const busy = {}\nbusy[a.id] = 'test'\n" })
+
+  assert.deepEqual(helpIds(result), [])
+  assert.deepEqual(problems(result), [])
+})
+
+test('an ordinary method named helpId is not a help reference', () => {
+  const result = scan({ 'gui/src/probe.js': 'const m = { helpId() { return 1 } }\n' })
+
+  assert.deepEqual(helpIds(result), [])
+  assert.deepEqual(problems(result), [])
 })
 
 test('every supported extension is scanned in both frontends', () => {
