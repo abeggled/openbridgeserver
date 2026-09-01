@@ -89,6 +89,22 @@ function declaresBinding(fn, name) {
 
 const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod']
 
+/** Walk, skipping any function that shadows one of `names` with its own binding. */
+function walkShadowAware(node, names, visit) {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const child of node) walkShadowAware(child, names, visit)
+    return
+  }
+  if (typeof node.type !== 'string') return
+  if (FUNCTION_TYPES.includes(node.type) && [...names].some((name) => declaresBinding(node, name))) return
+  visit(node)
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
+    walkShadowAware(node[key], names, visit)
+  }
+}
+
 /** Walk the AST, skipping any function that shadows `name` with its own binding. */
 function walkOutsideShadow(node, name, visit) {
   if (node === null || typeof node !== 'object') return
@@ -132,8 +148,10 @@ function ownProperty(objectExpression, name) {
 }
 
 /** The static key of a property, or null when it cannot be resolved. */
+const KEYED_NODES = ['ObjectProperty', 'ObjectMethod', 'ClassMethod', 'ClassProperty', 'PropertyDefinition']
+
 function propertyKey(property, constants) {
-  if (property.type !== 'ObjectProperty' && property.type !== 'ObjectMethod') return null
+  if (!KEYED_NODES.includes(property.type)) return null
   const key = unwrap(property.key)
   const literal = staticKeyValue(key, constants)
   if (property.computed) return literal
@@ -208,16 +226,34 @@ const hasSpread = (objectExpression) => objectExpression.properties.some((p) => 
 
 // ── Admin routes ────────────────────────────────────────────────────────────
 
+/** Module-level `const NAME = { … }` bindings, for following an options object. */
+function objectBindings(ast) {
+  const bindings = new Map()
+  for (const statement of ast.program.body) {
+    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+    if (!inner || inner.type !== 'VariableDeclaration') continue
+    for (const declarator of inner.declarations) {
+      const value = unwrap(declarator.init)
+      if (declarator.id.type === 'Identifier' && value && value.type === 'ObjectExpression') bindings.set(declarator.id.name, value)
+    }
+  }
+  return bindings
+}
+
 /** The identifier `createRouter({ routes })` is handed, if it names one. */
 function routerTableName(ast) {
   let name = null
   let overriddenTable = null
+  const objectConstants = objectBindings(ast)
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     const callee = unwrap(node.callee)
     const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
     if (called !== 'createRouter') return
-    const options = unwrap(node.arguments[0])
+    // `createRouter(options)` with `const options = { routes }` names the
+    // table just as directly as the inline form.
+    const argument = unwrap(node.arguments[0])
+    const options = argument && argument.type === 'Identifier' ? objectConstants.get(argument.name) : argument
     if (!options || options.type !== 'ObjectExpression') return
     // A duplicated option resolves to the last one at runtime.
     const routesIndex = options.properties.findLastIndex((property) => propertyKey(property) === 'routes')
@@ -293,9 +329,9 @@ function collectRoutes(file) {
         return
       }
     }
-    if (node.type !== 'CallExpression') return
+    if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return
     const callee = node.callee
-    if (callee.type !== 'MemberExpression') return
+    if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     const object = unwrap(callee.object)
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
     if (object.type === 'Identifier' && object.name === tableName && ROUTE_MUTATORS.includes(method)) {
@@ -413,10 +449,12 @@ function collectWidgets(file) {
 
   // A parameter or local of the same name is a different binding; the walk
   // skips any function that shadows it.
-  walkOutsideShadow(ast, 'WidgetRegistry', (node) => {
-    if (node.type !== 'CallExpression') return
+  // Every local name the registry is known by has to be shadow-checked, not
+  // just the canonical spelling.
+  walkShadowAware(ast, registryNames, (node) => {
+    if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return
     const callee = node.callee
-    if (callee.type !== 'MemberExpression') return
+    if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     // `WidgetRegistry['register'](…)` is the same call.
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
     const object = unwrap(callee.object)
@@ -488,6 +526,15 @@ function collectScriptReferences(code, file, lineOffset = 0) {
       return
     }
     // `class X { helpId = 'a' }` supplies the same prop from an instance.
+    if (node.type === 'ClassMethod' && node.kind === 'get' && HELP_PROP_NAMES.includes(propertyKey(node, constants))) {
+      unreadable.push({
+        kind: 'reference',
+        file: rel(file),
+        line: node.loc.start.line + lineOffset,
+        problem: 'declares a help id through a class getter, whose value only the runtime has',
+      })
+      return
+    }
     if (node.type === 'ClassProperty' || node.type === 'ClassPrivateProperty' || node.type === 'PropertyDefinition') {
       const fieldName = node.computed ? staticKeyValue(unwrap(node.key), constants) : node.key.type === 'Identifier' ? node.key.name : null
       const fieldValue = stringValue(node.value)

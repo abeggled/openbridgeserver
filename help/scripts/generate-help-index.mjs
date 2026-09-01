@@ -112,19 +112,49 @@ const FENCE_RE = new RegExp(String.raw`^${CONTAINER}(\`{3,}|~{3,})(.*)$`)
  * owns no DOM id, so indexing it would hand the Admin-GUI a help_id that
  * resolves to a fragment no element answers to.
  */
-/** How a line is contained: a blockquote, a list item's indent, or nothing. */
+/** The chain of containers a line opens: `> - ` is a quote holding a list. */
 function containerOf(line) {
-  if (/^ {0,3}>/.test(line)) return { kind: 'quote' }
-  const item = /^( {0,3})(?:[-*+]|\d{1,9}[.)])([^\S\r\n]+)/.exec(line)
-  if (item) return { kind: 'list', indent: item[1].length + item[0].length - item[1].length }
-  return null
+  const chain = []
+  let rest = line
+  let column = 0
+  for (;;) {
+    const quote = /^( {0,3})>([^\S\r\n]?)/.exec(rest)
+    if (quote) {
+      chain.push({ kind: 'quote' })
+      column += quote[0].length
+      rest = rest.slice(quote[0].length)
+      continue
+    }
+    const item = /^( {0,3})(?:[-*+]|\d{1,9}[.)])([^\S\r\n]+)/.exec(rest)
+    if (item) {
+      chain.push({ kind: 'list', indent: column + item[0].length })
+      column += item[0].length
+      rest = rest.slice(item[0].length)
+      continue
+    }
+    break
+  }
+  return chain.length > 0 ? chain : null
 }
 
-/** Does `line` still belong to `container`? A blank line does not end either. */
-function continuesContainer(line, container) {
+/** Does `line` still belong to every container in `chain`?
+ *
+ * A blank line ends neither; anything else has to satisfy each level, so a
+ * fence opened in `> - ` closes as soon as the quote *or* the item does.
+ */
+function continuesContainer(line, chain) {
   if (line.trim() === '') return true
-  if (container.kind === 'quote') return /^ {0,3}>/.test(line)
-  return /^\s*/.exec(line)[0].length >= container.indent
+  let rest = line
+  for (const container of chain) {
+    if (container.kind === 'quote') {
+      const quote = /^ {0,3}>[^\S\r\n]?/.exec(rest)
+      if (!quote) return false
+      rest = rest.slice(quote[0].length)
+      continue
+    }
+    if (/^\s*/.exec(rest)[0].length < container.indent - (line.length - rest.length)) return false
+  }
+  return true
 }
 
 export function stripFencedCode(text) {

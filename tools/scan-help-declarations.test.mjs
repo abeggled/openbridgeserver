@@ -318,6 +318,15 @@ test('a spread before the routes option leaves it winning', () => {
   assert.deepEqual(names(scan(files)), ['A'])
 })
 
+test('createRouter options handed through an identifier still name the table', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const table = [{ path: '/', name: 'ViaOptions', meta: { helpId: 'a' } }]\nconst options = { history: h, routes: table }\nexport default createRouter(options)\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['ViaOptions'])
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -407,6 +416,18 @@ test('only the entry module the resolver loads is read', () => {
   }
 
   assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Wins'])
+})
+
+test('a parameter shadowing an aliased registry is a different binding', () => {
+  const body = "import { WidgetRegistry as WR } from '../registry'\nfunction make(WR) { WR.register({ type: 'Shadowed' }) }\nWR.register({ type: 'Real' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
+})
+
+test('an optional registration call is the same call', () => {
+  const body = "import { WidgetRegistry } from '../registry'\nWidgetRegistry?.register({ type: 'Optional' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Optional'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────
@@ -531,6 +552,20 @@ test('a help id stored in a class field is a reference', () => {
   const result = scan({ 'gui/src/probe.js': "class ReviewHelp { helpId = 'logs-level' }\n" })
 
   assert.deepEqual(helpIds(result), ['logs-level'])
+})
+
+test('a class getter hides its help id and fails closed', () => {
+  const result = scan({ 'gui/src/probe.js': "class R { get helpId() { return 'gone' } }\n" })
+
+  assert.deepEqual(helpIds(result), [])
+  assert.match(problems(result)[0], /through a class getter/)
+})
+
+test('an ordinary class method named helpId is quiet', () => {
+  const result = scan({ 'gui/src/probe.js': 'class R { helpId() { return 1 } }\n' })
+
+  assert.deepEqual(helpIds(result), [])
+  assert.deepEqual(problems(result), [])
 })
 
 test('every supported extension is scanned in both frontends', () => {

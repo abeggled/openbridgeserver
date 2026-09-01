@@ -326,6 +326,19 @@ test('stripFrontmatter only removes a leading block and keeps line positions', (
   assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
 })
 
+test('a fence in nested containers closes when the outermost one does', () => {
+  const stripped = stripFencedCode(['> - ```md', '>   unclosed', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a properly closed fence in nested containers still hides its heading', () => {
+  const stripped = stripFencedCode(['> - ```md', '>   ## Fenced {#gone}', '>   ```', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
 test('a fence opened in a list item ends when the item does', () => {
   const stripped = stripFencedCode(['- ```md', '  unclosed', '', '## After {#kept}'].join('\n'))
 
