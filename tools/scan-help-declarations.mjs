@@ -492,10 +492,46 @@ function collectRouteRecords(arrayExpression, file) {
 
 // ── Visu widget types ───────────────────────────────────────────────────────
 
-function collectWidgets(file) {
-  const code = readFileSync(file, 'utf-8')
+/** An SFC's script blocks joined, or null when it cannot be parsed. */
+function sfcScript(file, source) {
+  try {
+    const { descriptor } = parseSfc(source, { filename: file })
+    return [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join('\n')
+  } catch (error) {
+    unreadable.push({ kind: 'parse', file: rel(file), line: 1, problem: `cannot be parsed as a single-file component: ${error.message}` })
+    return null
+  }
+}
+
+/** Resolve a relative import the way the bundler does, or null. */
+function resolveLocalModule(fromDir, specifier) {
+  const base = resolve(fromDir, specifier)
+  const suffixes = [...WIDGET_ENTRY_SUFFIXES, '.vue']
+  const candidates = [base, ...suffixes.map((suffix) => base + suffix), ...suffixes.map((suffix) => join(base, `index${suffix}`))]
+  return candidates.find((candidate) => statSync(candidate, { throwIfNoEntry: false })?.isFile()) ?? null
+}
+
+function collectWidgets(file, seen = new Set()) {
+  if (seen.has(file)) return
+  seen.add(file)
+  const source = readFileSync(file, 'utf-8')
+  // A component the entry imports is an SFC, not a script: its registration —
+  // if it has one — lives in its <script> block.
+  const code = file.endsWith('.vue') ? sfcScript(file, source) : source
+  if (code === null) return
   const ast = parseSource(code, file)
   if (ast === null) return
+
+  // A registration may live in a helper the entry imports; the widget ships
+  // either way, so the import graph inside the widget's own directory is
+  // followed. Anything outside it (`@/…`, a package) is not this widget's.
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ImportDeclaration' && statement.type !== 'ExportAllDeclaration' && statement.type !== 'ExportNamedDeclaration') continue
+    const source = statement.source?.value
+    if (!source || !source.startsWith('.')) continue
+    const target = resolveLocalModule(dirname(file), source)
+    if (target !== null) collectWidgets(target, seen)
+  }
 
   // `import { WidgetRegistry as WR }` registers just the same.
   // Only the names the import actually introduces. Seeding the canonical

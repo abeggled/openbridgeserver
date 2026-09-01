@@ -503,6 +503,36 @@ test('a WidgetRegistry imported from an unrelated module is a different object',
   assert.deepEqual(scan(widget(body)).widgets, [])
 })
 
+test('a registration in a module the entry imports is found', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "import './extra'\nWidgetRegistry.register({ type: 'Main' })\n",
+    'frontend/src/widgets/A/extra.ts': "WidgetRegistry.register({ type: 'FromHelper' })\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type).sort(), ['FromHelper', 'Main'])
+})
+
+test('an imported component is read as an SFC, not as a script', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "import Widget from './Widget.vue'\nWidgetRegistry.register({ type: 'Main' })\n",
+    'frontend/src/widgets/A/Widget.vue': "<template><div /></template>\n<script setup>WidgetRegistry.register({ type: 'FromSfc' })</script>\n",
+  }
+
+  const result = scan(files)
+
+  assert.deepEqual(result.widgets.map((w) => w.type).sort(), ['FromSfc', 'Main'])
+  assert.deepEqual(problems(result), [])
+})
+
+test('an import cycle between widget modules terminates', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "import './extra'\nWidgetRegistry.register({ type: 'Main' })\n",
+    'frontend/src/widgets/A/extra.ts': "import './index'\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Main'])
+})
+
 // ── References ──────────────────────────────────────────────────────────────
 
 for (const [label, attribute] of [
