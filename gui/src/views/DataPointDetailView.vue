@@ -208,6 +208,9 @@
 
     <!-- Edit Objekt Modal -->
     <Modal v-model="showEdit" :title="$t('datapoints.form.editTitle')">
+      <template #header-actions>
+        <HelpButton help-id="datapoints-form" />
+      </template>
       <DataPointForm :initial="dp" :datatypes="dpStore.datatypes" :save-handler="onEditSave" @cancel="showEdit = false" />
     </Modal>
 
@@ -236,6 +239,7 @@ import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
+import HelpButton     from '@/components/ui/HelpButton.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import DataPointForm          from '@/components/datapoints/DataPointForm.vue'
 import BindingForm            from '@/components/datapoints/BindingForm.vue'

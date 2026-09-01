@@ -66,3 +66,23 @@ system knows about that one data point, and is also where its bindings are maint
   GA). New bindings are created here, existing ones edited, disabled, or deleted.
 - **Logic bindings** — the logic sheets that read or write this data point, with a jump into
   the sheet. Informational only: the usage itself is edited in the Logic module.
+
+## Create / edit form {#datapoints-form}
+
+Opens from "New" on this page, or "Edit" on a data point's detail page or table row. Both
+modes share the same fields; only the title differs.
+
+- **Name** — required, freely chosen.
+- **Data type** — the value type (e.g. FLOAT, BOOL, STRING); determines how written values
+  are validated and displayed.
+- **Unit** — optional, picked from a categorized list (temperature, electricity, …) or
+  entered as free text via "Other".
+- **Tags** — optional, comma-separated; used for filtering and hierarchy views.
+- **MQTT alias** — an optional second MQTT topic the value is also published under, in
+  addition to the data point's own topic.
+- **Persist value** — keep the last value so it's immediately available again after a
+  restart, instead of starting empty.
+- **Record history** — store value changes in the history database so they appear on the
+  **History** page.
+- **Allow external write** — lets any MQTT client that can reach the broker set this value,
+  not just OBS's own adapters and Logic.
