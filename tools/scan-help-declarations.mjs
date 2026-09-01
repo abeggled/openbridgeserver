@@ -74,9 +74,9 @@ function parseSource(code, file) {
 }
 
 /** Does this function body declare `name` itself, shadowing the outer one? */
-function declaresBinding(fn, name) {
-  const body = fn.body && fn.body.type === 'BlockStatement' ? fn.body.body : []
-  const params = (fn.params ?? []).some((param) => param.type === 'Identifier' && param.name === name)
+function declaresBinding(scope, name) {
+  const body = scope.type === 'BlockStatement' ? scope.body : scope.body && scope.body.type === 'BlockStatement' ? scope.body.body : []
+  const params = (scope.params ?? []).some((param) => param.type === 'Identifier' && param.name === name)
   return (
     params ||
     body.some(
@@ -87,7 +87,8 @@ function declaresBinding(fn, name) {
   )
 }
 
-const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod']
+// A bare block scopes `let`/`const` just as a function body does.
+const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod', 'BlockStatement']
 
 /** Walk, skipping any function that shadows one of `names` with its own binding. */
 function walkShadowAware(node, names, visit) {
@@ -226,6 +227,20 @@ const hasSpread = (objectExpression) => objectExpression.properties.some((p) => 
 
 // ── Admin routes ────────────────────────────────────────────────────────────
 
+/** Every local name an imported binding is known by, including the original. */
+function importedAliases(ast, imported) {
+  const names = new Set([imported])
+  walk(ast, (node) => {
+    if (node.type !== 'ImportDeclaration') return
+    for (const specifier of node.specifiers) {
+      if (specifier.type === 'ImportSpecifier' && (specifier.imported.name ?? specifier.imported.value) === imported) {
+        names.add(specifier.local.name)
+      }
+    }
+  })
+  return names
+}
+
 /** Module-level `const NAME = { … }` bindings, for following an options object. */
 function objectBindings(ast) {
   const bindings = new Map()
@@ -244,15 +259,19 @@ function objectBindings(ast) {
 function routerTableName(ast) {
   let name = null
   let overriddenTable = null
+  let optionsName = null
   const objectConstants = objectBindings(ast)
+  // `import { createRouter as make }` builds the router just the same.
+  const routerFactoryNames = importedAliases(ast, 'createRouter')
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     const callee = unwrap(node.callee)
     const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
-    if (called !== 'createRouter') return
+    if (!routerFactoryNames.has(called)) return
     // `createRouter(options)` with `const options = { routes }` names the
     // table just as directly as the inline form.
     const argument = unwrap(node.arguments[0])
+    if (argument && argument.type === 'Identifier') optionsName = argument.name
     const options = argument && argument.type === 'Identifier' ? objectConstants.get(argument.name) : argument
     if (!options || options.type !== 'ObjectExpression') return
     // A duplicated option resolves to the last one at runtime.
@@ -274,7 +293,7 @@ function routerTableName(ast) {
     const value = unwrap(routes.value)
     if (value && value.type === 'Identifier') name = value.name
   })
-  return { name, overriddenTable }
+  return { name, overriddenTable, optionsName }
 }
 
 function collectRoutes(file) {
@@ -286,7 +305,26 @@ function collectRoutes(file) {
   // name alone would read a differently named array while the router runs on
   // something else entirely. Top level only, and `export const` counts:
   // a declaration inside a helper is not the router's.
-  const { name: routerName, overriddenTable } = routerTableName(ast)
+  const { name: routerName, overriddenTable, optionsName } = routerTableName(ast)
+  if (optionsName !== null) {
+    // `options.routes = other` after the fact replaces the table the scan read.
+    let mutated = null
+    walkOutsideShadow(ast, optionsName, (node) => {
+      if (node.type !== 'AssignmentExpression' || node.left.type !== 'MemberExpression') return
+      const object = unwrap(node.left.object)
+      const property = node.left.computed ? stringValue(node.left.property) : node.left.property.name
+      if (object.type === 'Identifier' && object.name === optionsName && property === 'routes') mutated = node
+    })
+    if (mutated !== null) {
+      unreadable.push({
+        kind: 'route',
+        file: rel(file),
+        line: mutated.loc.start.line,
+        problem: 'assigns the router options `routes` after they are written; the gate cannot tell which table ships',
+      })
+      return
+    }
+  }
   if (overriddenTable !== null) {
     unreadable.push({
       kind: 'route',
@@ -462,7 +500,7 @@ function collectWidgets(file) {
     // `RegistryModule.WidgetRegistry.register` — all the same registration.
     const isRegistry =
       (object.type === 'Identifier' && registryNames.has(object.name)) ||
-      (object.type === 'MemberExpression' &&
+      ((object.type === 'MemberExpression' || object.type === 'OptionalMemberExpression') &&
         namespaceNames.has(unwrap(object.object).name) &&
         (object.computed ? stringValue(object.property) : object.property.name) === 'WidgetRegistry')
     if (method !== 'register' || !isRegistry) return

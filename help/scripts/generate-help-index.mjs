@@ -282,7 +282,9 @@ export function stripFrontmatter(text) {
  * this, which is what keeps it able to catch a heading form HEADING_RE misses.
  */
 export function strippedSource(text) {
-  return stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(stripFrontmatter(text))))
+  // Comments go first: a ``` inside `<!-- … -->` is commented-out text, not a
+  // fence, and letting it open one would blank the real Markdown after it.
+  return stripRawHtmlBlocks(stripFencedCode(stripHtmlComments(stripFrontmatter(text))))
 }
 
 /** Every page's stripped source, keyed like the rendered pages. */

@@ -327,6 +327,25 @@ test('createRouter options handed through an identifier still name the table', (
   assert.deepEqual(names(scan(files)), ['ViaOptions'])
 })
 
+test('an aliased createRouter import still names the table', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "import { createRouter as make } from 'vue-router'\nconst table = [{ path: '/', name: 'Aliased', meta: { helpId: 'a' } }]\nexport default make({ routes: table })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['Aliased'])
+})
+
+test('fails closed when the options object routes are assigned afterwards', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const table = [{ path: '/', name: 'A', meta: { helpId: 'a' } }]\nconst options = { routes: table }\noptions.routes = other\nexport default createRouter(options)\n",
+  }
+
+  assert.deepEqual(names(scan(files)), [])
+  assert.match(problems(scan(files))[0], /router options `routes` after they are written/)
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -428,6 +447,19 @@ test('an optional registration call is the same call', () => {
   const body = "import { WidgetRegistry } from '../registry'\nWidgetRegistry?.register({ type: 'Optional' })\n"
 
   assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Optional'])
+})
+
+test('an optional namespace registration is the same call', () => {
+  const body = "import * as R from '../registry'\nR?.WidgetRegistry?.register({ type: 'OptionalNs' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['OptionalNs'])
+})
+
+test('a block-scoped shadow is a different binding', () => {
+  const body =
+    "import { WidgetRegistry } from '../registry'\n{ const WidgetRegistry = fake; WidgetRegistry.register({ type: 'BlockShadowed' }) }\nWidgetRegistry.register({ type: 'Real' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────

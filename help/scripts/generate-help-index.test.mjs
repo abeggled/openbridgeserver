@@ -402,6 +402,19 @@ test('a heading inside a blockquote or list item is indexed', () => {
   }
 })
 
+test('a fence marker inside a comment does not open a fence', () => {
+  const stripped = strippedSource(['<!--', '```md', '-->', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('an unclosed comment inside a fence does not swallow the rest', () => {
+  // stripHtmlComments needs a closing `-->`, so an unterminated one is inert.
+  const stripped = strippedSource(['```html', '<!-- unclosed', '```', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
 test('strippedSource blanks every region the site does not render', () => {
   const text = ['---', 'title: T', '---', '## A {#a}', '```', '## B {#b}', '```', '<!-- ## C {#c} -->', '<div>', '## D {#d}', '</div>'].join('\n')
 
