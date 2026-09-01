@@ -44,3 +44,24 @@ Suche, Typ, Adapter, Tag, Qualität und Hierarchie-Auswahl in einem Schritt zur�
   Werte oder Historie) und Löschen (entfernt auch alle Verknüpfungen des Objekts).
 
 Die Liste lädt beim Scrollen automatisch weitere Einträge nach.
+
+## Anlegen/Bearbeiten-Formular {#datapoints-form}
+
+Öffnet sich über „Neu" auf dieser Seite oder über „Bearbeiten" auf der Objekt-Detailseite
+bzw. in der Tabellenzeile. Beide Modi teilen sich dieselben Felder, nur der Titel
+unterscheidet sich.
+
+- **Name** — Pflichtfeld, frei wählbar.
+- **Datentyp** — der Werttyp (z. B. FLOAT, BOOL, STRING); bestimmt, wie geschriebene Werte
+  validiert und dargestellt werden.
+- **Einheit** — optional, aus einer kategorisierten Liste (Temperatur, Elektrizität, …)
+  oder als Freitext über „Andere".
+- **Tags** — optional, kommagetrennt; werden für Filter und Hierarchie-Ansichten genutzt.
+- **MQTT Alias** — ein optionales zweites MQTT-Topic, unter dem der Wert zusätzlich zum
+  eigenen Topic des Objekts veröffentlicht wird.
+- **Wert dauerhaft speichern** — behält den letzten Wert, sodass er nach einem Neustart
+  sofort wieder verfügbar ist, statt leer zu starten.
+- **Historie aufzeichnen** — speichert Wertänderungen in der Historie-Datenbank, sodass sie
+  auf der Seite **Historie** erscheinen.
+- **Externes Schreiben erlauben** — erlaubt jedem MQTT-Client mit Zugriff auf den Broker,
+  diesen Wert zu setzen — nicht nur den eigenen Adaptern und der Logik von OBS.

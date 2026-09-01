@@ -415,6 +415,9 @@
 
     <!-- Create / Edit Modal -->
     <Modal v-model="showForm" :title="editTarget ? $t('datapoints.form.editTitle') : $t('datapoints.createModal')">
+      <template #header-actions>
+        <HelpButton help-id="datapoints-form" />
+      </template>
       <DataPointForm :initial="editTarget" :datatypes="store.datatypes" :save-handler="onSave" @cancel="showForm = false" />
     </Modal>
 

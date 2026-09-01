@@ -203,6 +203,36 @@ describe('Modal — leaves room for an open help drawer (issue feedback: a dialo
   })
 })
 
+describe('Modal — header-actions slot (issue #1197)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('renders header-actions slot content next to the title, before the close button', () => {
+    const wrapper = mount(Modal, {
+      props: { modelValue: true, title: 'Test Modal' },
+      slots: {
+        default: '<div data-testid="modal-body">body</div>',
+        'header-actions': '<button data-testid="help-btn">help</button>',
+      },
+      attachTo: document.body,
+    })
+    const helpBtn = document.querySelector('[data-testid="help-btn"]')
+    expect(helpBtn).toBeTruthy()
+    // header-actions must precede the close button so the layout matches
+    // the rest of the app's header-icon-row pattern (e.g. AdaptersView).
+    const closeBtn = document.querySelector('.btn-icon')
+    expect(helpBtn.compareDocumentPosition(closeBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('renders no extra content when header-actions is not provided', () => {
+    mountModal()
+    // Exactly one .btn-icon (the close button) — no stray slot output.
+    expect(document.querySelectorAll('.btn-icon').length).toBe(1)
+  })
+})
+
 describe('Modal — dismissible=false', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
