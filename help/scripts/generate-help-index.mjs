@@ -37,7 +37,10 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // heading text and gets markdown-it's auto-slug of that whole text instead
 // (verified against a real build: `\{#probe}` produced id="title-probe", not
 // "probe"), so indexing `id` would hand out a fragment nothing answers to.
-const HEADING_RE = /^ {0,3}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}\s*$/gm
+// ATX (`## Title {#id}`) and Setext (`Title {#id}` over `===`/`---`) — both
+// are headings VitePress renders with the explicit id, verified against a
+// real build.
+const HEADING_RE = /^ {0,3}#{1,6}\s+.*(?<!\\)\{#([A-Za-z][\w-]*)\}\s*$|^ {0,3}\S.*(?<!\\)\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n {0,3}(?:=+|-+)[^\S\r\n]*$/gm
 
 function findMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true })
@@ -194,7 +197,7 @@ function extractHelpIds(absPath) {
   const text = stripRawHtmlBlocks(stripHtmlComments(stripFencedCode(stripFrontmatter(readFileSync(absPath, 'utf-8')))))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
-    ids.push(match[1])
+    ids.push(match[1] ?? match[2])
   }
   return ids
 }

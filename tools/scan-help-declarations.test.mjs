@@ -15,7 +15,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
-const SCANNER = resolve(new URL('scan-help-declarations.mjs', import.meta.url).pathname)
+import { fileURLToPath } from 'node:url'
+
+const SCANNER = resolve(fileURLToPath(new URL('scan-help-declarations.mjs', import.meta.url)))
 
 /** Run the scanner over a throwaway tree of `{ 'path/to/file': contents }`. */
 function scan(files) {
@@ -96,6 +98,32 @@ for (const [label, body] of [
     assert.match(problems(result)[0], /`name` is not a string literal/)
   })
 }
+
+test('a computed but static key declares just as well', () => {
+  const result = scan(router("  { path: '/', ['name']: 'ComputedName', ['meta']: { ['helpId']: 'dashboard' } },"))
+
+  assert.deepEqual(result.routes.map((r) => [r.name, r.helpId]), [['ComputedName', 'dashboard']])
+})
+
+test('fails closed on a computed key only the runtime knows', () => {
+  const result = scan(router("  { path: '/', [KEY]: 'X', name: 'A', meta: { helpId: 'a' } },"))
+
+  assert.deepEqual(names(result), [])
+  assert.match(problems(result)[0], /computed property key the gate cannot resolve/)
+})
+
+test('fails closed on a widget registration with a computed key', () => {
+  const result = scan(widget("WidgetRegistry.register({ [KEY]: 1, type: 'Slider' })\n"))
+
+  assert.deepEqual(result.widgets, [])
+  assert.match(problems(result)[0], /`type` is not a string literal/)
+})
+
+test('a computed helpId key is still a reference', () => {
+  const result = scan({ 'gui/src/probe.js': "const m = { ['helpId']: 'logs-level' }\n" })
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
+})
 
 test('fails closed on a spread in the route array', () => {
   const result = scan(router('  ...EXTRA_ROUTES,'))

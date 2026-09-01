@@ -324,6 +324,46 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
     return _run_node(root / "tools" / "rendered-help-ids.mjs", root)
 
 
+# An explicit anchor is written as `{#id}` in the Markdown; nothing else in a
+# page can produce one. Used only to tell a deliberate anchor from
+# markdown-it's automatic slug, so it may over-match freely — the render
+# decides which of them is real.
+_WRITTEN_ANCHOR_RE = re.compile(r"\{#([A-Za-z][\w-]*)\}")
+
+
+def written_anchor_ids(help_root: Path) -> set[str]:
+    """Every id written as an explicit anchor anywhere under ``help/``."""
+    written: set[str] = set()
+    for path in sorted(help_root.rglob("*.md")):
+        if "node_modules" in path.parts:
+            continue
+        written.update(_WRITTEN_ANCHOR_RE.findall(path.read_text(encoding="utf-8")))
+    return written
+
+
+def render_covers_index(index: dict, rendered: dict, written: set[str]) -> list[str]:
+    """Report anchors the site renders that the index never learned about.
+
+    ``index_matches_render`` checks the other direction — that everything
+    indexed really resolves. Without this one, a heading form the index scan
+    does not recognise stays invisible: the anchor renders, the page works,
+    and the gate calls the surface undocumented. An id counts as deliberate
+    when it is both written as `{#id}` in the sources and rendered as a
+    heading, which needs neither a Markdown parser nor markdown-it's slug
+    rules.
+    """
+    indexed = set(index.get("helpIds") or {})
+    missing: dict[str, str] = {}
+    for page, ids in sorted(rendered.items()):
+        for help_id in ids:
+            if help_id in written and help_id not in indexed:
+                missing.setdefault(help_id, page)
+    return [
+        f"help index: {help_id!r} is written as an anchor and rendered in {page}, but the index does not list it"
+        for help_id, page in sorted(missing.items())
+    ]
+
+
 def index_matches_render(index: dict, rendered: dict) -> list[str]:
     """Check every indexed help_id against the page that really renders it.
 
@@ -450,7 +490,9 @@ def main(argv: list[str] | None = None) -> int:
     errors += unreadable_errors(scan)
     errors += validate(surfaces, references, index, allowlist, skins_checked=skins_dir is not None)
     if not args.skip_render_check:
-        errors += index_matches_render(index, rendered_help_ids(_REPO_ROOT))
+        rendered = rendered_help_ids(_REPO_ROOT)
+        errors += index_matches_render(index, rendered)
+        errors += render_covers_index(index, rendered, written_anchor_ids(_REPO_ROOT / "help"))
 
     if errors:
         print("Help contract check failed:")

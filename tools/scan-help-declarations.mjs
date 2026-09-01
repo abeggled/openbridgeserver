@@ -26,8 +26,11 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
-const REPO_ROOT = resolve(new URL('..', import.meta.url).pathname)
+// fileURLToPath, not `.pathname`: a checkout path containing a space stays
+// percent-encoded in the URL and the resolved path would not exist.
+const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 // `--root` lets the tests point the scan at a fixture tree; everything else
 // resolves relative to it exactly as it does for the repository itself.
 const rootArgument = process.argv.indexOf('--root')
@@ -78,16 +81,28 @@ function walk(node, visit, parent = null) {
   }
 }
 
-/** The property named `name`, directly on an object expression. */
+/** The property named `name`, directly on an object expression.
+ *
+ * A computed key is accepted when it is a string literal — `{ ['name']: … }`
+ * is the same property to Vue Router as `{ name: … }`, and skipping it would
+ * hand the surface a silent exemption.
+ */
 function ownProperty(objectExpression, name) {
-  return objectExpression.properties.find(
-    (property) =>
-      property.type === 'ObjectProperty' &&
-      !property.computed &&
-      ((property.key.type === 'Identifier' && property.key.name === name) ||
-        (property.key.type === 'StringLiteral' && property.key.value === name))
-  )
+  return objectExpression.properties.find((property) => propertyKey(property) === name)
 }
+
+/** The static key of a property, or null when it cannot be resolved. */
+function propertyKey(property) {
+  if (property.type !== 'ObjectProperty') return null
+  const key = unwrap(property.key)
+  if (property.computed) return key.type === 'StringLiteral' ? key.value : null
+  if (key.type === 'Identifier') return key.name
+  return key.type === 'StringLiteral' ? key.value : null
+}
+
+/** A computed key whose value only the runtime knows. */
+const hasDynamicKey = (objectExpression) =>
+  objectExpression.properties.some((property) => property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null)
 
 // `x as T`, `x satisfies T`, `x!` and `(x)` wrap the expression without
 // changing it; a widget definition written `{ … } satisfies WidgetDefinition`
@@ -136,6 +151,10 @@ function collectRouteRecords(arrayExpression, file) {
     }
     if (hasSpread(record)) {
       unreadable.push({ kind: 'route', file: rel(file), line: element.loc.start.line, problem: 'spreads into a route record, so what the gate reads is not what ships' })
+      continue
+    }
+    if (hasDynamicKey(record)) {
+      unreadable.push({ kind: 'route', file: rel(file), line: record.loc.start.line, problem: 'has a computed property key the gate cannot resolve' })
       continue
     }
     const children = ownProperty(record, 'children')
@@ -196,7 +215,8 @@ function collectWidgets(file) {
     if (!isRegister) return
 
     const definition = unwrap(node.arguments[0])
-    const type = definition && definition.type === 'ObjectExpression' ? stringValue(ownProperty(definition, 'type')?.value) : null
+    const type =
+      definition && definition.type === 'ObjectExpression' && !hasDynamicKey(definition) ? stringValue(ownProperty(definition, 'type')?.value) : null
     if (type === null) {
       unreadable.push({
         kind: 'widget',
@@ -217,9 +237,7 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   const ast = parseSource(code, file)
   if (ast === null) return
   walk(ast, (node) => {
-    if (node.type !== 'ObjectProperty' || node.computed) return
-    const key = node.key.type === 'Identifier' ? node.key.name : node.key.type === 'StringLiteral' ? node.key.value : null
-    if (key !== 'helpId') return
+    if (propertyKey(node) !== 'helpId') return
     const value = stringValue(node.value)
     if (value !== null) references.push({ helpId: value, file: rel(file), line: node.loc.start.line + lineOffset })
   })

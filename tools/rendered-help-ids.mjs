@@ -18,8 +18,11 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
-const REPO_ROOT = resolve(new URL('..', import.meta.url).pathname)
+// fileURLToPath, not `.pathname`: a checkout path containing a space stays
+// percent-encoded in the URL and the resolved path would not exist.
+const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const HELP_ROOT = join(REPO_ROOT, 'help')
 const HEADING_ID_RE = /<h[1-6][^>]*\sid="([^"]+)"/g
 

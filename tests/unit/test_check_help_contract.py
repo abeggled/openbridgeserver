@@ -405,6 +405,42 @@ def test_index_matches_render_resolves_a_locale_root_to_its_index_page():
     assert gate.index_matches_render(_index_of("a", ""), rendered) == []
 
 
+def test_render_covers_index_reports_a_rendered_anchor_the_index_missed():
+    """The other direction: a heading form the index scan does not recognise."""
+    errors = gate.render_covers_index({"helpIds": {}}, {"de/index.html": ["setext"]}, {"setext"})
+
+    assert errors == ["help index: 'setext' is written as an anchor and rendered in de/index.html, but the index does not list it"]
+
+
+def test_render_covers_index_ignores_an_automatic_slug():
+    """Only an id written as `{#id}` is a deliberate anchor."""
+    assert gate.render_covers_index({"helpIds": {}}, {"de/index.html": ["some-heading-text"]}, {"setext"}) == []
+
+
+def test_render_covers_index_accepts_an_indexed_anchor():
+    assert gate.render_covers_index({"helpIds": {"setext": {}}}, {"de/index.html": ["setext"]}, {"setext"}) == []
+
+
+def test_render_covers_index_reports_each_id_once():
+    rendered = {"de/index.html": ["setext"], "en/index.html": ["setext"]}
+
+    assert len(gate.render_covers_index({"helpIds": {}}, rendered, {"setext"})) == 1
+
+
+def test_written_anchor_ids_reads_every_markdown_source(tmp_path):
+    (tmp_path / "de").mkdir()
+    (tmp_path / "de" / "a.md").write_text("## A {#written-a}\n\nB {#written-b}\n===\n", encoding="utf-8")
+    (tmp_path / "de" / "ignored.txt").write_text("{#not-markdown}\n", encoding="utf-8")
+
+    assert gate.written_anchor_ids(tmp_path) == {"written-a", "written-b"}
+
+
+def test_written_anchor_ids_covers_the_real_help_sources():
+    written = gate.written_anchor_ids(REPO_ROOT / "help")
+
+    assert {"dashboard", "settings", "logic-block-edge-detect"} <= written
+
+
 def test_index_matches_render_tolerates_an_empty_index():
     assert gate.index_matches_render({}, {}) == []
 
