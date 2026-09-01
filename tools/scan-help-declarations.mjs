@@ -45,6 +45,9 @@ const { parse: parseSfc } = requireFromGui('@vue/compiler-sfc')
 // functions alike.
 const HELP_PROP_NAMES = ['helpId', 'help-id']
 
+// Vite's resolve order for an extensionless import.
+const WIDGET_ENTRY_SUFFIXES = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx']
+
 const SOURCE_SUFFIXES = ['.vue', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']
 const REFERENCE_DIRS = ['gui/src', 'frontend/src']
 
@@ -208,6 +211,7 @@ const hasSpread = (objectExpression) => objectExpression.properties.some((p) => 
 /** The identifier `createRouter({ routes })` is handed, if it names one. */
 function routerTableName(ast) {
   let name = null
+  let overriddenTable = null
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     const callee = unwrap(node.callee)
@@ -216,13 +220,25 @@ function routerTableName(ast) {
     const options = unwrap(node.arguments[0])
     if (!options || options.type !== 'ObjectExpression') return
     // A duplicated option resolves to the last one at runtime.
-    const routes = options.properties.findLast((property) => propertyKey(property) === 'routes')
+    const routesIndex = options.properties.findLastIndex((property) => propertyKey(property) === 'routes')
+    // A spread after it can replace the table wholesale, and so can a computed
+    // key the parse cannot read.
+    const overridden = options.properties.some(
+      (property, index) =>
+        index > routesIndex &&
+        (property.type === 'SpreadElement' || (property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null))
+    )
+    if (overridden) {
+      overriddenTable = node
+      return
+    }
+    const routes = routesIndex < 0 ? null : options.properties[routesIndex]
     if (!routes) return
     // `{ routes }` shorthand, or `{ routes: someTable }`.
     const value = unwrap(routes.value)
     if (value && value.type === 'Identifier') name = value.name
   })
-  return name
+  return { name, overriddenTable }
 }
 
 function collectRoutes(file) {
@@ -234,7 +250,17 @@ function collectRoutes(file) {
   // name alone would read a differently named array while the router runs on
   // something else entirely. Top level only, and `export const` counts:
   // a declaration inside a helper is not the router's.
-  const tableName = routerTableName(ast) ?? 'routes'
+  const { name: routerName, overriddenTable } = routerTableName(ast)
+  if (overriddenTable !== null) {
+    unreadable.push({
+      kind: 'route',
+      file: rel(file),
+      line: overriddenTable.loc.start.line,
+      problem: 'hands createRouter options whose `routes` can be replaced after it; the gate cannot tell which table ships',
+    })
+    return
+  }
+  const tableName = routerName ?? 'routes'
   let declaration = null
   for (const statement of ast.program.body) {
     const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
@@ -553,14 +579,13 @@ const widgetsDir = join(SCAN_ROOT, 'frontend', 'src', 'widgets')
 if (statSync(widgetsDir, { throwIfNoEntry: false })) {
   for (const entry of readdirSync(widgetsDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue
-    // The module is `index.ts` today, but any dialect the build accepts
-    // registers just as well — reading only one of them would miss a widget
-    // that ships.
-    for (const suffix of SOURCE_SUFFIXES) {
-      if (suffix === '.vue') continue
-      const indexFile = join(widgetsDir, entry.name, `index${suffix}`)
-      if (statSync(indexFile, { throwIfNoEntry: false })) collectWidgets(indexFile)
-    }
+    // Exactly one module ships: an extensionless import resolves to the first
+    // extension in this order, so reading the others would invent widgets
+    // from files the build never loads.
+    const resolved = WIDGET_ENTRY_SUFFIXES.map((suffix) => join(widgetsDir, entry.name, `index${suffix}`)).find((file) =>
+      statSync(file, { throwIfNoEntry: false })
+    )
+    if (resolved) collectWidgets(resolved)
   }
 }
 

@@ -301,6 +301,23 @@ test('a duplicated routes option resolves to the last one', () => {
   assert.deepEqual(names(scan(files)), ['Second'])
 })
 
+test('fails closed when a spread can replace the routes option', () => {
+  const files = {
+    'gui/src/router/index.js': "const routes = [{ path: '/', name: 'A', meta: { helpId: 'a' } }]\nexport default createRouter({ routes, ...overrides })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), [])
+  assert.match(problems(scan(files))[0], /`routes` can be replaced after it/)
+})
+
+test('a spread before the routes option leaves it winning', () => {
+  const files = {
+    'gui/src/router/index.js': "const routes = [{ path: '/', name: 'A', meta: { helpId: 'a' } }]\nexport default createRouter({ ...defaults, routes })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['A'])
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -379,6 +396,17 @@ test('a widget module in any supported dialect is read', () => {
   }
 
   assert.deepEqual(scan(files).widgets.map((w) => w.type).sort(), ['FromJs', 'FromTsx'])
+})
+
+test('only the entry module the resolver loads is read', () => {
+  // An extensionless import takes one file; reading the others would invent
+  // widgets from modules the build never loads.
+  const files = {
+    'frontend/src/widgets/A/index.js': "WidgetRegistry.register({ type: 'Wins' })\n",
+    'frontend/src/widgets/A/index.ts': "WidgetRegistry.register({ type: 'Loses' })\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Wins'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────

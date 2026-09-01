@@ -412,6 +412,43 @@ test('a closing hash sequence does not hide the anchor', () => {
   }
 })
 
+test('an empty ATX marker does not swallow the next line', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-empty-atx-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), '##\nProse with {#gone} inside.\n')
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('escape parity decides whether an anchor is active', () => {
+  // `\\{#id}` is escaped text; `\\\\{#id}` is a backslash plus a live anchor.
+  const root = mkdtempSync(join(tmpdir(), 'help-parity-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## One \\{#gone}', '', '## Two \\\\{#kept}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a raw HTML block ends when its container does', () => {
+  for (const opener of ['> <div>', '- <div>']) {
+    const stripped = stripRawHtmlBlocks([opener, '## After {#kept}'].join('\n'))
+
+    assert.match(stripped, /## After \{#kept\}/)
+  }
+})
+
 test('an escaped anchor is not indexed', () => {
   // Verified against a real build: `## Title \\{#probe}` renders the suffix as
   // visible text and gets markdown-it's auto-slug of the whole heading, so the
