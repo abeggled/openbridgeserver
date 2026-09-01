@@ -365,8 +365,11 @@ function contentColumnByLine(text) {
       while (open.length > 0 && indent < open[open.length - 1]) open.pop()
     }
     columns.push(open.length > 0 ? open[open.length - 1] : 0)
+    // Only a list item opens a content column: a blockquote's content is
+    // marked by repeating `>`, not by indentation, so counting it here would
+    // let an indented code block below a quote pass as a heading.
     const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? ''
-    if (prefix.trim() !== '') open.push(columnWidth(prefix))
+    if (/[-*+]|\d[.)]/.test(prefix)) open.push(columnWidth(prefix))
   }
   return columns
 }

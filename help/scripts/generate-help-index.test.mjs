@@ -448,6 +448,20 @@ test('a nested Setext underline sits at the continuation indent', () => {
   }
 })
 
+test('a blockquote does not open a content column for indented code', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-quote-column-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['> quoted', '', '    ## Code {#gone}', '', '> ## Quoted {#kept}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('an ATX heading is bounded by the list items open at its line', () => {
   // Verified against a real build: `    ## x` renders as code at the top
   // level and as a heading two list items in.

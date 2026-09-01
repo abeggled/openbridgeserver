@@ -400,8 +400,10 @@ def _content_column_by_line(text: str) -> list[int]:
             while open_items and indent < open_items[-1]:
                 open_items.pop()
         columns.append(open_items[-1] if open_items else 0)
+        # Only a list item opens a content column; a blockquote marks its
+        # content by repeating `>` rather than by indentation.
         prefix = _CONTAINER_PREFIX_RE.match(line).group(0)
-        if prefix.strip():
+        if re.search(r"[-*+]|\d[.)]", prefix):
             open_items.append(_column_width(prefix))
     return columns
 

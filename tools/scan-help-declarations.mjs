@@ -367,7 +367,10 @@ function collectRoutes(file) {
       const init = unwrap(declarator.init)
       const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
       const called = callee?.type === 'Identifier' ? callee.name : callee?.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
-      if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called)) routerNames.add(declarator.id.name)
+      // Only the first router the module builds — the one whose table the scan
+      // read. A later auxiliary router's additions are not the production
+      // router's routes.
+      if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called) && routerNames.size === 0) routerNames.add(declarator.id.name)
     }
   }
 
@@ -583,6 +586,10 @@ function collectWidgets(file, seen = new Set()) {
     if (statement.type !== 'ImportDeclaration' && statement.type !== 'ExportAllDeclaration' && statement.type !== 'ExportNamedDeclaration') continue
     // A type-only edge is erased from the bundle, so nothing behind it runs.
     if (statement.importKind === 'type' || statement.exportKind === 'type') continue
+    // `import { type X }` marks the specifier rather than the statement; when
+    // every specifier is type-only the edge is erased just the same.
+    const specifiers = statement.specifiers ?? []
+    if (specifiers.length > 0 && specifiers.every((specifier) => specifier.importKind === 'type' || specifier.exportKind === 'type')) continue
     const source = statement.source?.value
     if (!source || !source.startsWith('.')) continue
     const target = resolveLocalModule(dirname(file), source)
@@ -612,7 +619,9 @@ function collectWidgets(file, seen = new Set()) {
   walk(ast, (node) => {
     if (node.type !== 'ImportDeclaration') return
     for (const specifier of node.specifiers) {
-      if (specifier.type === 'ImportNamespaceSpecifier') namespaceNames.add(specifier.local.name)
+      // Only a namespace of the registry module; `import * as utils` from
+      // elsewhere exposes a different object.
+      if (specifier.type === 'ImportNamespaceSpecifier' && REGISTRY_MODULE_RE.test(node.source.value)) namespaceNames.add(specifier.local.name)
     }
   })
 
@@ -755,6 +764,12 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
         if (prop.type === 6 && HELP_PROP_NAMES.includes(prop.name) && prop.value) {
           references.push({ helpId: prop.value.content, file: rel(file), line: prop.loc.start.line + lineOffset })
         }
+        // `:help-id="'logs-level'"` is a binding whose expression is a literal,
+        // so the target is known after all.
+        if (prop.type === 7 && prop.name === 'bind' && HELP_PROP_NAMES.includes(prop.arg?.content) && prop.exp?.content) {
+          const literal = /^\s*(['"])(.*)\1\s*$/.exec(prop.exp.content)
+          if (literal) references.push({ helpId: literal[2], file: rel(file), line: prop.loc.start.line + lineOffset })
+        }
       }
     }
     for (const child of node.children ?? []) if (typeof child === 'object') visit(child)
@@ -798,7 +813,18 @@ function collectReferences(file) {
   if (descriptor.template?.ast) collectTemplateReferences(descriptor.template.ast, file, 0)
   else if (descriptor.template?.src) collectExternalTemplate(descriptor.template.src, file)
   for (const block of [descriptor.script, descriptor.scriptSetup]) {
-    if (block) collectScriptReferences(block.content, file, block.loc.start.line - 1)
+    if (!block) continue
+    if (block.src) {
+      // An external script is the component's script all the same.
+      const target = resolveLocalModule(dirname(file), block.src)
+      if (target === null) {
+        unreadable.push({ kind: 'parse', file: rel(file), line: 1, problem: `references a script at ${block.src} the gate cannot read` })
+      } else {
+        collectScriptReferences(readFileSync(target, 'utf-8'), target)
+      }
+      continue
+    }
+    collectScriptReferences(block.content, file, block.loc.start.line - 1)
   }
 }
 

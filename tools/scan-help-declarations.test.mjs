@@ -392,6 +392,15 @@ test('addRoute on an unrelated object is not a route', () => {
   assert.deepEqual(names(scan(files)).sort(), ['Base', 'Live'])
 })
 
+test('addRoute on an auxiliary router is not a production route', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const routes = [{ path: '/', name: 'Base', meta: { helpId: 'a' } }]\nconst router = createRouter({ routes })\nconst aux = createRouter({ routes: [] })\naux.addRoute({ path: '/x', name: 'AuxOnly' })\nrouter.addRoute({ path: '/y', name: 'Live' })\nexport default router\n",
+  }
+
+  assert.deepEqual(names(scan(files)).sort(), ['Base', 'Live'])
+})
+
 test('fails closed on an addRoute the gate cannot read', () => {
   const files = { 'gui/src/router/index.js': "const routes = []\ncreateRouter({ routes }).addRoute(extra)\n" }
 
@@ -566,6 +575,21 @@ test('a type-only edge is erased and not followed', () => {
   assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Main'])
 })
 
+test('a specifier-level type import is erased and not followed', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "import { type T } from './type-only'\nWidgetRegistry.register({ type: 'Main' })\n",
+    'frontend/src/widgets/A/type-only.ts': "WidgetRegistry.register({ type: 'TypeOnly' })\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Main'])
+})
+
+test('a namespace import from an unrelated module is not the registry', () => {
+  const body = "import * as utils from '@/utils/helpers'\nutils.WidgetRegistry.register({ type: 'NotRegistry' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets, [])
+})
+
 test('a dynamically imported module executes and is followed', () => {
   const files = {
     'frontend/src/widgets/A/index.ts': "void import('./dynamic')\nWidgetRegistry.register({ type: 'Main' })\n",
@@ -626,6 +650,21 @@ test('a helpId assigned to a property is a reference', () => {
   const result = scan({ 'gui/src/assign.js': "props.helpId = 'logs-level'\n" })
 
   assert.deepEqual(helpIds(result), ['logs-level'])
+})
+
+test('a bound attribute whose expression is a literal is resolvable', () => {
+  const result = scan(view('<template>\n  <HelpButton :help-id="\'logs-level\'" />\n</template>\n'))
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
+})
+
+test('an external SFC script is the component\'s script', () => {
+  const files = {
+    'gui/src/views/P.vue': '<template><div /></template>\n<script src="./logic.js"></script>\n',
+    'gui/src/views/logic.js': "const m = { helpId: 'logs-level' }\n",
+  }
+
+  assert.deepEqual([...new Set(helpIds(scan(files)))], ['logs-level'])
 })
 
 test('a bound attribute is not resolvable and is skipped', () => {
