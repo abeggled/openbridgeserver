@@ -149,6 +149,45 @@ test('a spread inside a route value stays legal', () => {
   assert.deepEqual(result.routes.map((r) => [r.name, r.helpId]), [['A', 'a']])
 })
 
+test('a `routes` inside a helper function is not the router table', () => {
+  const files = {
+    'gui/src/router/index.js': "const routes = [\n  { path: '/', name: 'Dashboard', meta: { helpId: 'dashboard' } },\n]\nfunction helper() {\n  const routes = []\n  return routes\n}\nexport default routes\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['Dashboard'])
+})
+
+test('a spread before the helpId leaves the literal winning', () => {
+  const result = scan(router("  { path: '/', name: 'A', meta: { ...base, helpId: 'a' } },"))
+
+  assert.deepEqual(result.routes.map((r) => [r.name, r.helpId]), [['A', 'a']])
+})
+
+for (const [label, meta] of [
+  ['a spread after the helpId', "{ helpId: 'a', ...base }"],
+  ['a computed key after the helpId', "{ helpId: 'a', [k]: 1 }"],
+  ['no literal helpId at all', '{ ...base }'],
+]) {
+  test(`fails closed on meta with ${label}`, () => {
+    const result = scan(router(`  { path: '/', name: 'A', meta: ${meta} },`))
+
+    assert.deepEqual(names(result), [])
+    assert.match(problems(result)[0], /`meta`/)
+  })
+}
+
+test('fails closed on a string assigned through a dynamic key', () => {
+  // The key may be `helpId` at runtime, and then this is a live button.
+  const result = scan({ 'gui/src/probe.js': "const m = { [reviewKey]: 'missing-dynamic-computed-help' }\n" })
+
+  assert.deepEqual(helpIds(result), [])
+  assert.match(problems(result)[0], /computed key the gate cannot resolve/)
+})
+
+test('a dynamic key with a non-string value is not a help reference', () => {
+  assert.deepEqual(problems(scan({ 'gui/src/probe.js': 'const m = { [key]: 42 }\n' })), [])
+})
+
 test('a similarly named array declared earlier is not the router table', () => {
   const files = {
     'gui/src/router/index.js': "const routesBackup = [{ path: '/o', name: 'Backup' }]\nconst routes = [\n  { path: '/', name: 'Dashboard', meta: { helpId: 'dashboard' } },\n]\n",

@@ -128,10 +128,15 @@ function collectRoutes(file) {
   const ast = parseSource(code, file)
   if (ast === null) return
 
+  // Top level only: a `const routes = []` inside some helper function is not
+  // the router table, and a depth-first walk would let it replace the real one.
   let declaration = null
-  walk(ast, (node) => {
-    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.id.name === 'routes') declaration = node
-  })
+  for (const statement of ast.program.body) {
+    const declarations = statement.type === 'VariableDeclaration' ? statement.declarations : []
+    for (const candidate of declarations) {
+      if (candidate.id.type === 'Identifier' && candidate.id.name === 'routes') declaration = candidate
+    }
+  }
   const initialiser = unwrap(declaration?.init)
   if (declaration === null || !initialiser || initialiser.type !== 'ArrayExpression') {
     unreadable.push({ kind: 'route', file: rel(file), line: declaration?.loc?.start.line ?? 1, problem: "has no inline `routes` array the gate can read" })
@@ -182,6 +187,28 @@ function collectRouteRecords(arrayExpression, file) {
     const metaValue = meta ? unwrap(meta.value) : null
     let helpId = null
     if (metaValue && metaValue.type === 'ObjectExpression') {
+      // Order decides: `{ ...base, helpId: 'a' }` is the ordinary way to
+      // extend defaults and the literal wins, while anything unreadable *after*
+      // the literal — a spread, a computed key — can replace it, and a meta
+      // with no literal at all may be supplying one from somewhere unseen.
+      const helpIdIndex = metaValue.properties.findIndex((property) => propertyKey(property) === 'helpId')
+      const overrides = metaValue.properties.some(
+        (property, index) =>
+          index > helpIdIndex &&
+          (property.type === 'SpreadElement' || (property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null))
+      )
+      if (overrides) {
+        unreadable.push({
+          kind: 'route',
+          file: rel(file),
+          line: metaValue.loc.start.line,
+          problem:
+            helpIdIndex < 0
+              ? 'has a `meta` that may supply a helpId the gate cannot see'
+              : 'has a `meta` whose helpId can be overridden after it, so it is not necessarily what ships',
+        })
+        continue
+      }
       const helpIdProperty = ownProperty(metaValue, 'helpId')
       if (helpIdProperty) {
         helpId = stringValue(helpIdProperty.value)
@@ -237,9 +264,22 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   const ast = parseSource(code, file)
   if (ast === null) return
   walk(ast, (node) => {
-    if (propertyKey(node) !== 'helpId') return
+    if (node.type !== 'ObjectProperty') return
+    const key = propertyKey(node)
     const value = stringValue(node.value)
-    if (value !== null) references.push({ helpId: value, file: rel(file), line: node.loc.start.line + lineOffset })
+    if (key === null && node.computed && value !== null) {
+      // The key may well be `helpId` at runtime, and then this is a live
+      // button whose target the gate never checked.
+      unreadable.push({
+        kind: 'reference',
+        file: rel(file),
+        line: node.loc.start.line + lineOffset,
+        problem: 'assigns a string through a computed key the gate cannot resolve; it may be a helpId',
+      })
+      return
+    }
+    if (key !== 'helpId' || value === null) return
+    references.push({ helpId: value, file: rel(file), line: node.loc.start.line + lineOffset })
   })
 }
 

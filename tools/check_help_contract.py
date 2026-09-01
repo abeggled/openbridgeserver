@@ -331,17 +331,23 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
 _WRITTEN_ANCHOR_RE = re.compile(r"\{#([A-Za-z][\w-]*)\}")
 
 
-def written_anchor_ids(help_root: Path) -> set[str]:
-    """Every id written as an explicit anchor anywhere under ``help/``."""
-    written: set[str] = set()
+def written_anchor_ids(help_root: Path) -> dict[str, set[str]]:
+    """The ids written as explicit anchors, per rendered page they belong to.
+
+    Keyed the way ``rendered-help-ids.mjs`` keys its pages, so the two can be
+    compared page by page. A global set would pair an anchor-shaped string on
+    one page with an unrelated automatic heading slug on another.
+    """
+    written: dict[str, set[str]] = {}
     for path in sorted(help_root.rglob("*.md")):
         if "node_modules" in path.parts:
             continue
-        written.update(_WRITTEN_ANCHOR_RE.findall(path.read_text(encoding="utf-8")))
+        page = path.relative_to(help_root).with_suffix(".html").as_posix()
+        written[page] = set(_WRITTEN_ANCHOR_RE.findall(path.read_text(encoding="utf-8")))
     return written
 
 
-def render_covers_index(index: dict, rendered: dict, written: set[str]) -> list[str]:
+def render_covers_index(index: dict, rendered: dict, written: dict[str, set[str]]) -> list[str]:
     """Report anchors the site renders that the index never learned about.
 
     ``index_matches_render`` checks the other direction — that everything
@@ -355,8 +361,11 @@ def render_covers_index(index: dict, rendered: dict, written: set[str]) -> list[
     indexed = set(index.get("helpIds") or {})
     missing: dict[str, str] = {}
     for page, ids in sorted(rendered.items()):
+        # Only the anchors written on *this* page: an id rendered here is a
+        # deliberate anchor only if this page's own source asks for it.
+        on_page = written.get(page, set())
         for help_id in ids:
-            if help_id in written and help_id not in indexed:
+            if help_id in on_page and help_id not in indexed:
                 missing.setdefault(help_id, page)
     return [
         f"help index: {help_id!r} is written as an anchor and rendered in {page}, but the index does not list it"

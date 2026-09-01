@@ -407,38 +407,48 @@ def test_index_matches_render_resolves_a_locale_root_to_its_index_page():
 
 def test_render_covers_index_reports_a_rendered_anchor_the_index_missed():
     """The other direction: a heading form the index scan does not recognise."""
-    errors = gate.render_covers_index({"helpIds": {}}, {"de/index.html": ["setext"]}, {"setext"})
+    errors = gate.render_covers_index({"helpIds": {}}, {"de/index.html": ["setext"]}, {"de/index.html": {"setext"}})
 
     assert errors == ["help index: 'setext' is written as an anchor and rendered in de/index.html, but the index does not list it"]
 
 
 def test_render_covers_index_ignores_an_automatic_slug():
-    """Only an id written as `{#id}` is a deliberate anchor."""
-    assert gate.render_covers_index({"helpIds": {}}, {"de/index.html": ["some-heading-text"]}, {"setext"}) == []
+    """Only an id written as `{#id}` on that same page is a deliberate anchor."""
+    assert gate.render_covers_index({"helpIds": {}}, {"de/index.html": ["some-heading-text"]}, {"de/index.html": {"setext"}}) == []
+
+
+def test_render_covers_index_does_not_pair_pages_with_each_other():
+    """An anchor written on one page must not meet a slug rendered on another."""
+    rendered = {"de/adapters.html": ["review-cross-page"]}
+    written = {"de/dashboard.html": {"review-cross-page"}}
+
+    assert gate.render_covers_index({"helpIds": {}}, rendered, written) == []
 
 
 def test_render_covers_index_accepts_an_indexed_anchor():
-    assert gate.render_covers_index({"helpIds": {"setext": {}}}, {"de/index.html": ["setext"]}, {"setext"}) == []
+    assert gate.render_covers_index({"helpIds": {"setext": {}}}, {"de/index.html": ["setext"]}, {"de/index.html": {"setext"}}) == []
 
 
 def test_render_covers_index_reports_each_id_once():
     rendered = {"de/index.html": ["setext"], "en/index.html": ["setext"]}
+    written = {"de/index.html": {"setext"}, "en/index.html": {"setext"}}
 
-    assert len(gate.render_covers_index({"helpIds": {}}, rendered, {"setext"})) == 1
+    assert len(gate.render_covers_index({"helpIds": {}}, rendered, written)) == 1
 
 
-def test_written_anchor_ids_reads_every_markdown_source(tmp_path):
+def test_written_anchor_ids_are_keyed_by_their_rendered_page(tmp_path):
     (tmp_path / "de").mkdir()
     (tmp_path / "de" / "a.md").write_text("## A {#written-a}\n\nB {#written-b}\n===\n", encoding="utf-8")
-    (tmp_path / "de" / "ignored.txt").write_text("{#not-markdown}\n", encoding="utf-8")
+    (tmp_path / "de" / "b.md").write_text("## C {#written-c}\n", encoding="utf-8")
 
-    assert gate.written_anchor_ids(tmp_path) == {"written-a", "written-b"}
+    assert gate.written_anchor_ids(tmp_path) == {"de/a.html": {"written-a", "written-b"}, "de/b.html": {"written-c"}}
 
 
 def test_written_anchor_ids_covers_the_real_help_sources():
     written = gate.written_anchor_ids(REPO_ROOT / "help")
 
-    assert {"dashboard", "settings", "logic-block-edge-detect"} <= written
+    assert "dashboard" in written["de/dashboard/overview.html"]
+    assert "logic-block-edge-detect" in written["en/logic/blocks-logic.html"]
 
 
 def test_index_matches_render_tolerates_an_empty_index():
