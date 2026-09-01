@@ -342,9 +342,25 @@ const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER}`)
 
 function underlineIsIndentedLegally(matched) {
   const [heading, underline] = matched.split(/\r?\n/)
-  const contentColumn = (CONTAINER_PREFIX_RE.exec(heading)?.[0] ?? '').length
-  const underlineIndent = /^[^\S\r\n]*/.exec(underline)[0].length
-  return underlineIndent <= contentColumn + 3
+  const headingPrefix = CONTAINER_PREFIX_RE.exec(heading)?.[0] ?? ''
+  // Deliberately no check that the underline repeats the heading's blockquote
+  // marker: CommonMark would call that a paragraph plus a thematic break, but
+  // VitePress renders `> Title {#id}` over an unquoted `---` *with* the id
+  // (verified against a real build), and the index has to match what ships.
+  //
+  // Measured in columns from the start of the line — a tab counts as the four
+  // it renders as — so the underline may sit at most three past the column its
+  // heading's content starts at.
+  const contentColumn = columnWidth(headingPrefix)
+  const underlineColumn = columnWidth(/^[^-=]*/.exec(underline)[0])
+  return underlineColumn <= contentColumn + 3
+}
+
+/** Width in columns, with a tab advancing to the next multiple of four. */
+function columnWidth(text) {
+  let column = 0
+  for (const character of text) column = character === '\t' ? column + 4 - (column % 4) : column + 1
+  return column
 }
 
 function extractHelpIds(absPath) {

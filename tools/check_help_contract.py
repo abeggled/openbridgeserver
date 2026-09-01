@@ -343,11 +343,19 @@ _WRITTEN_ANCHOR_RE = re.compile(
 _CONTAINER_PREFIX_RE = re.compile(rf"^{_CONTAINER}")
 
 
+def _column_width(text: str) -> int:
+    """Width in columns, with a tab advancing to the next multiple of four."""
+    column = 0
+    for character in text:
+        column = column + 4 - (column % 4) if character == "\t" else column + 1
+    return column
+
+
 def _underline_is_indented_legally(matched: str) -> bool:
-    """Mirrors generate-help-index.mjs: at most three spaces past the content column."""
+    """Mirrors generate-help-index.mjs: at most three columns past the content column."""
     heading, _, underline = matched.partition("\n")
-    content_column = len(_CONTAINER_PREFIX_RE.match(heading).group(0))
-    return len(underline) - len(underline.lstrip(" \t")) <= content_column + 3
+    content_column = _column_width(_CONTAINER_PREFIX_RE.match(heading).group(0))
+    return _column_width(re.match(r"[^-=]*", underline).group(0)) <= content_column + 3
 
 
 def written_anchor_ids(sources: dict[str, str]) -> dict[str, set[str]]:

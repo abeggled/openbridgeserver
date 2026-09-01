@@ -374,6 +374,21 @@ test('an options mutation after the router is built cannot change it', () => {
   assert.deepEqual(problems(scan(files)), [])
 })
 
+test('a route added through addRoute is a live route', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const routes = [{ path: '/', name: 'Base', meta: { helpId: 'a' } }]\nconst router = createRouter({ routes })\nrouter.addRoute({ path: '/late', name: 'Added' })\nexport default router\n",
+  }
+
+  assert.deepEqual(scan(files).routes.map((r) => [r.name, r.helpId]).sort(), [['Added', null], ['Base', 'a']])
+})
+
+test('fails closed on an addRoute the gate cannot read', () => {
+  const files = { 'gui/src/router/index.js': "const routes = []\ncreateRouter({ routes }).addRoute(extra)\n" }
+
+  assert.match(problems(scan(files))[0], /adds a route the gate cannot read/)
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -531,6 +546,18 @@ test('an import cycle between widget modules terminates', () => {
   }
 
   assert.deepEqual(scan(files).widgets.map((w) => w.type), ['Main'])
+})
+
+test('a stylesheet the entry imports is not parsed as a module', () => {
+  const files = {
+    'frontend/src/widgets/A/index.ts': "import './style.css'\nWidgetRegistry.register({ type: 'Styled' })\n",
+    'frontend/src/widgets/A/style.css': '.a { color: red }\n',
+  }
+
+  const result = scan(files)
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['Styled'])
+  assert.deepEqual(problems(result), [])
 })
 
 // ── References ──────────────────────────────────────────────────────────────

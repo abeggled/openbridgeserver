@@ -49,6 +49,8 @@ const HELP_PROP_NAMES = ['helpId', 'help-id']
 // The widget registry module, however it is spelled in an import path.
 const REGISTRY_MODULE_RE = /(^|\/)registry(\.[a-z]+)?$/
 
+const CODE_SUFFIXES = ['.vue', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts']
+
 const ASSIGNING_OPERATORS = ['=', '||=', '??=', '&&=']
 
 const TEST_MODULE_RE = /\.(test|spec)\.[^.]+$/
@@ -356,6 +358,26 @@ function collectRoutes(file) {
     })
     return
   }
+  // `router.addRoute(...)` adds a live route after construction. A literal
+  // record is read like any other; anything else fails closed.
+  walk(ast, (node) => {
+    if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return
+    const callee = node.callee
+    if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
+    const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
+    if (method !== 'addRoute') return
+    const record = unwrap(node.arguments[node.arguments.length - 1])
+    if (record && record.type === 'ObjectExpression') collectRouteRecords({ elements: [record] }, file)
+    else {
+      unreadable.push({
+        kind: 'route',
+        file: rel(file),
+        line: node.loc.start.line,
+        problem: 'adds a route the gate cannot read; pass an inline record to addRoute()',
+      })
+    }
+  })
+
   if (inlineTable !== null) {
     // The array is right there; no binding to follow.
     collectRouteRecords(inlineTable, file)
@@ -532,7 +554,9 @@ function collectWidgets(file, seen = new Set()) {
     const source = statement.source?.value
     if (!source || !source.startsWith('.')) continue
     const target = resolveLocalModule(dirname(file), source)
-    if (target !== null) collectWidgets(target, seen)
+    // A stylesheet or other asset the entry imports is not a module that can
+    // register anything, and Babel cannot read it.
+    if (target !== null && CODE_SUFFIXES.some((suffix) => target.endsWith(suffix))) collectWidgets(target, seen)
   }
 
   // `import { WidgetRegistry as WR }` registers just the same.

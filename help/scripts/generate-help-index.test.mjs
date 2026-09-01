@@ -402,6 +402,23 @@ test('list padding beyond four spaces indents code, not a heading', () => {
   }
 })
 
+test('a tab-indented Setext underline is code, and a quoted heading keeps its id', () => {
+  // Both verified against a real build: the tabbed form renders no heading,
+  // while `> Title {#id}` over an unquoted `---` does render the id — which is
+  // why the index deliberately does not require the marker to be repeated.
+  const root = mkdtempSync(join(tmpdir(), 'help-tabs-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['Tabbed {#gone}', '\t\t---', '', '> Quoted {#kept}', '---', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a Setext underline indented past the content column is code', () => {
   // Verified against a real build: five spaces renders no heading, three does.
   const root = mkdtempSync(join(tmpdir(), 'help-underline-'))
