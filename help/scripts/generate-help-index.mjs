@@ -107,15 +107,31 @@ const FENCE_RE = new RegExp(String.raw`^${CONTAINER}(\`{3,}|~{3,})(.*)$`)
  * owns no DOM id, so indexing it would hand the Admin-GUI a help_id that
  * resolves to a fragment no element answers to.
  */
+/** How a line is contained: a blockquote, a list item's indent, or nothing. */
+function containerOf(line) {
+  if (/^ {0,3}>/.test(line)) return { kind: 'quote' }
+  const item = /^( {0,3})(?:[-*+]|\d{1,9}[.)])([^\S\r\n]+)/.exec(line)
+  if (item) return { kind: 'list', indent: item[1].length + item[0].length - item[1].length }
+  return null
+}
+
+/** Does `line` still belong to `container`? A blank line does not end either. */
+function continuesContainer(line, container) {
+  if (line.trim() === '') return true
+  if (container.kind === 'quote') return /^ {0,3}>/.test(line)
+  return /^\s*/.exec(line)[0].length >= container.indent
+}
+
 export function stripFencedCode(text) {
   let fence = null
   return text
     .split('\n')
     .map((line) => {
-      // A fence opened inside a blockquote ends with the quote: the container
-      // closes it implicitly, and VitePress resumes parsing what follows.
-      // Keeping the fence open would blank real headings outside the quote.
-      if (fence !== null && fence.quoted && !/^ {0,3}>/.test(line)) fence = null
+      // A fence opened inside a container ends with that container: a
+      // blockquote closes it at the first unquoted line, a list item at the
+      // first line indented less than its content. VitePress resumes parsing
+      // there, so keeping the fence open would blank real headings below it.
+      if (fence !== null && fence.container !== null && !continuesContainer(line, fence.container)) fence = null
       const match = FENCE_RE.exec(line)
       if (match) {
         const marker = match[1]
@@ -124,7 +140,7 @@ export function stripFencedCode(text) {
           // A backtick fence's info string may not itself contain a backtick
           // (CommonMark) — that is inline code, not a fence.
           if (!(char === '`' && match[2].includes('`'))) {
-            fence = { char, length: marker.length, quoted: /^ {0,3}>/.test(line) }
+            fence = { char, length: marker.length, container: containerOf(line) }
             return ''
           }
         } else if (char === fence.char && marker.length >= fence.length && match[2].trim() === '') {
@@ -150,10 +166,10 @@ export function stripHtmlComments(text) {
 }
 
 // A tag name, not an autolink: `<https://example.com>` must stay a paragraph.
-const HTML_BLOCK_START_RE = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)/
+const HTML_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)`)
 // CommonMark "type 1": these run to their closing tag rather than to the next
 // blank line, so markdown inside them is never parsed.
-const LITERAL_BLOCK_START_RE = /^ {0,3}<(pre|script|style|textarea)(?=[\s/>]|$)/i
+const LITERAL_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<(pre|script|style|textarea)(?=[\s/>]|$)`, 'i')
 
 /**
  * Blank out raw HTML blocks, keeping the line count. A heading-shaped line

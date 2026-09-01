@@ -215,7 +215,8 @@ function routerTableName(ast) {
     if (called !== 'createRouter') return
     const options = unwrap(node.arguments[0])
     if (!options || options.type !== 'ObjectExpression') return
-    const routes = options.properties.find((property) => propertyKey(property) === 'routes')
+    // A duplicated option resolves to the last one at runtime.
+    const routes = options.properties.findLast((property) => propertyKey(property) === 'routes')
     if (!routes) return
     // `{ routes }` shorthand, or `{ routes: someTable }`.
     const value = unwrap(routes.value)
@@ -551,8 +552,15 @@ if (statSync(routerFile, { throwIfNoEntry: false })) collectRoutes(routerFile)
 const widgetsDir = join(SCAN_ROOT, 'frontend', 'src', 'widgets')
 if (statSync(widgetsDir, { throwIfNoEntry: false })) {
   for (const entry of readdirSync(widgetsDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    const indexFile = join(widgetsDir, entry.name, 'index.ts')
-    if (entry.isDirectory() && statSync(indexFile, { throwIfNoEntry: false })) collectWidgets(indexFile)
+    if (!entry.isDirectory()) continue
+    // The module is `index.ts` today, but any dialect the build accepts
+    // registers just as well — reading only one of them would miss a widget
+    // that ships.
+    for (const suffix of SOURCE_SUFFIXES) {
+      if (suffix === '.vue') continue
+      const indexFile = join(widgetsDir, entry.name, `index${suffix}`)
+      if (statSync(indexFile, { throwIfNoEntry: false })) collectWidgets(indexFile)
+    }
   }
 }
 

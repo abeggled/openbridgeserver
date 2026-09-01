@@ -326,6 +326,26 @@ test('stripFrontmatter only removes a leading block and keeps line positions', (
   assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
 })
 
+test('a fence opened in a list item ends when the item does', () => {
+  const stripped = stripFencedCode(['- ```md', '  unclosed', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a raw HTML block inside a container hides its heading', () => {
+  // Verified against a real build: neither the list nor the quote form renders
+  // the heading's id.
+  for (const lines of [
+    ['- <div>', '  ## InHtml {#gone}', '  </div>', '', '## After {#kept}'],
+    ['> <div>', '> ## InHtml {#gone}', '> </div>', '', '## After {#kept}'],
+  ]) {
+    const stripped = stripRawHtmlBlocks(lines.join('\n'))
+
+    assert.doesNotMatch(stripped, /\{#gone\}/)
+    assert.match(stripped, /## After \{#kept\}/)
+  }
+})
+
 test('a blockquote marker without a space still marks a heading', () => {
   const root = mkdtempSync(join(tmpdir(), 'help-nospace-'))
   try {

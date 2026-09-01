@@ -292,6 +292,15 @@ test('a plain `routes` table is still read when createRouter names nothing else'
   assert.deepEqual(names(scan(files)), ['A'])
 })
 
+test('a duplicated routes option resolves to the last one', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const first = [{ path: '/1', name: 'First' }]\nconst second = [{ path: '/2', name: 'Second', meta: { helpId: 'a' } }]\nexport default createRouter({ routes: first, routes: second })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['Second'])
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -361,6 +370,15 @@ test('a namespace import registers just the same', () => {
   const body = "import * as RegistryModule from '../registry'\nRegistryModule.WidgetRegistry.register({ type: 'Namespaced' })\n"
 
   assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Namespaced'])
+})
+
+test('a widget module in any supported dialect is read', () => {
+  const files = {
+    'frontend/src/widgets/A/index.js': "WidgetRegistry.register({ type: 'FromJs' })\n",
+    'frontend/src/widgets/B/index.tsx': "WidgetRegistry.register({ type: 'FromTsx' })\n",
+  }
+
+  assert.deepEqual(scan(files).widgets.map((w) => w.type).sort(), ['FromJs', 'FromTsx'])
 })
 
 // ── References ──────────────────────────────────────────────────────────────
