@@ -431,6 +431,33 @@ test('strippedSource blanks every region the site does not render', () => {
   for (const gone of [/\{#b\}/, /\{#c\}/, /\{#d\}/, /title: T/]) assert.doesNotMatch(stripped, gone)
 })
 
+test('closing hashes need whitespace before them to be a closing sequence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-hash-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## Adjacent {#gone}##', '', '## Spaced {#kept} ##', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a BOM before the frontmatter does not expose it', () => {
+  const stripped = stripFrontmatter('\uFEFF---\ntitle: T\n---\n## A {#a}\n')
+
+  assert.doesNotMatch(stripped, /title: T/)
+  assert.match(stripped, /## A \{#a\}/)
+})
+
+test('an inline tag does not open a raw HTML block', () => {
+  const stripped = stripRawHtmlBlocks(['<span>x</span>', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
 test('a closing hash sequence does not hide the anchor', () => {
   const root = mkdtempSync(join(tmpdir(), 'help-closing-'))
   try {

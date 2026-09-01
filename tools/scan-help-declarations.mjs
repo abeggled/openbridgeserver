@@ -24,7 +24,7 @@
 // and only the checker is left guessing.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
@@ -46,6 +46,9 @@ const { parse: parseSfc } = requireFromGui('@vue/compiler-sfc')
 const HELP_PROP_NAMES = ['helpId', 'help-id']
 
 // Vite's resolve order for an extensionless import.
+// The widget registry module, however it is spelled in an import path.
+const REGISTRY_MODULE_RE = /(^|\/)registry(\.[a-z]+)?$/
+
 const TEST_MODULE_RE = /\.(test|spec)\.[^.]+$/
 
 const WIDGET_ENTRY_SUFFIXES = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx']
@@ -230,10 +233,13 @@ const hasSpread = (objectExpression) => objectExpression.properties.some((p) => 
 // ── Admin routes ────────────────────────────────────────────────────────────
 
 /** Every local name an imported binding is known by, including the original. */
-function importedAliases(ast, imported) {
-  const names = new Set([imported])
+function importedAliases(ast, imported, fromModule = null) {
+  const names = new Set()
   walk(ast, (node) => {
     if (node.type !== 'ImportDeclaration') return
+    // An unrelated module exporting the same name is a different thing; a
+    // no-op registry imported from elsewhere must not invent a surface.
+    if (fromModule !== null && !fromModule.test(node.source.value)) return
     for (const specifier of node.specifiers) {
       if (specifier.type === 'ImportSpecifier' && (specifier.imported.name ?? specifier.imported.value) === imported) {
         names.add(specifier.local.name)
@@ -263,9 +269,10 @@ function routerTableName(ast) {
   let overriddenTable = null
   let optionsName = null
   let inlineTable = null
+  let creationOffset = Infinity
   const objectConstants = objectBindings(ast)
   // `import { createRouter as make }` builds the router just the same.
-  const routerFactoryNames = importedAliases(ast, 'createRouter')
+  const routerFactoryNames = new Set(['createRouter', ...importedAliases(ast, 'createRouter')])
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     const callee = unwrap(node.callee)
@@ -274,10 +281,12 @@ function routerTableName(ast) {
     // `createRouter(options)` with `const options = { routes }` names the
     // table just as directly as the inline form.
     const argument = unwrap(node.arguments[0])
+    if (name !== null || inlineTable !== null || overriddenTable !== null) return
     if (argument && argument.type === 'Identifier') optionsName = argument.name
     const options = argument && argument.type === 'Identifier' ? objectConstants.get(argument.name) : argument
     if (!options || options.type !== 'ObjectExpression') return
     // A duplicated option resolves to the last one at runtime.
+    creationOffset = node.start
     const routesIndex = options.properties.findLastIndex((property) => propertyKey(property) === 'routes')
     // A spread after it can replace the table wholesale, and so can a computed
     // key the parse cannot read.
@@ -294,11 +303,14 @@ function routerTableName(ast) {
     if (!routes) return
     // `{ routes }` shorthand, `{ routes: someTable }`, or the array inline.
     const value = unwrap(routes.value)
+    // The first call wins: a module that builds an auxiliary router later must
+    // not hide the production one's table behind it.
+    if (name !== null || inlineTable !== null || overriddenTable !== null) return
     if (value && value.type === 'Identifier') name = value.name
     else if (value && value.type === 'ArrayExpression') inlineTable = value
     else if (value) overriddenTable = node
   })
-  return { name, overriddenTable, optionsName, inlineTable }
+  return { name, overriddenTable, optionsName, inlineTable, creationOffset }
 }
 
 function collectRoutes(file) {
@@ -310,7 +322,7 @@ function collectRoutes(file) {
   // name alone would read a differently named array while the router runs on
   // something else entirely. Top level only, and `export const` counts:
   // a declaration inside a helper is not the router's.
-  const { name: routerName, overriddenTable, optionsName, inlineTable } = routerTableName(ast)
+  const { name: routerName, overriddenTable, optionsName, inlineTable, creationOffset } = routerTableName(ast)
   if (optionsName !== null) {
     // `options.routes = other` after the fact replaces the table the scan read.
     let mutated = null
@@ -318,6 +330,9 @@ function collectRoutes(file) {
       if (node.type !== 'AssignmentExpression' || node.left.type !== 'MemberExpression') return
       const object = unwrap(node.left.object)
       const property = node.left.computed ? stringValue(node.left.property) : node.left.property.name
+      // Only before the router is built: afterwards Vue Router has its matcher
+      // and the assignment cannot change the live routes.
+      if (node.start > creationOffset) return
       if (object.type === 'Identifier' && object.name === optionsName && property === 'routes') mutated = node
     })
     if (mutated !== null) {
@@ -486,7 +501,12 @@ function collectWidgets(file) {
   // Only the names the import actually introduces. Seeding the canonical
   // spelling unconditionally would make a top-level local object called
   // `WidgetRegistry` count as the live registry.
-  const registryNames = importedAliases(ast, 'WidgetRegistry')
+  // Names the registry module introduces. If the module imports the registry
+  // from somewhere *else*, that is a different object and does not count; only
+  // when nothing claims the name at all does the bare spelling stand in, for a
+  // module that reaches the registry without an import.
+  const registryNames = importedAliases(ast, 'WidgetRegistry', REGISTRY_MODULE_RE)
+  if (registryNames.size === 0 && importedAliases(ast, 'WidgetRegistry').size === 0) registryNames.add('WidgetRegistry')
   for (const statement of ast.program.body) {
     const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
     if (!inner || inner.type !== 'VariableDeclaration') continue
@@ -553,6 +573,11 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   const ast = parseSource(code, file)
   if (ast === null) return
   const constants = stringConstants(ast)
+  const objectOf = new Map()
+  walk(ast, (node) => {
+    if (node.type !== 'ObjectExpression') return
+    for (const property of node.properties) objectOf.set(property, node)
+  })
   walk(ast, (node) => {
     // `obj.helpId = 'x'` sets the same prop as `{ helpId: 'x' }`.
     if (node.type === 'AssignmentExpression' && node.operator === '=') {
@@ -615,6 +640,11 @@ function collectScriptReferences(code, file, lineOffset = 0) {
     // Vue normalises `{ 'help-id': 'x' }` in a render function to the same
     // prop as `{ helpId: 'x' }`.
     if (!HELP_PROP_NAMES.includes(key) || value === null) return
+    // A duplicate earlier in the same object is replaced at runtime, so its
+    // literal can never reach a button — failing on it would block a push over
+    // dead code.
+    const container = objectOf.get(node)
+    if (container && container.properties.findLast((property) => HELP_PROP_NAMES.includes(propertyKey(property, constants))) !== node) return
     references.push({ helpId: value, file: rel(file), line: node.loc.start.line + lineOffset })
   })
 }
@@ -636,6 +666,24 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
   visit(templateAst)
 }
 
+/** `<template src="./x.html">` renders that file's markup, so it is scanned too. */
+function collectExternalTemplate(src, file) {
+  const resolved = resolve(dirname(file), src)
+  let markup
+  try {
+    markup = readFileSync(resolved, 'utf-8')
+  } catch {
+    unreadable.push({ kind: 'parse', file: rel(file), line: 1, problem: `references a template at ${src} the gate cannot read` })
+    return
+  }
+  try {
+    const { descriptor } = parseSfc(`<template>\n${markup}\n</template>\n`, { filename: resolved })
+    if (descriptor.template?.ast) collectTemplateReferences(descriptor.template.ast, resolved, -1)
+  } catch (error) {
+    unreadable.push({ kind: 'parse', file: rel(resolved), line: 1, problem: `cannot be parsed as a template: ${error.message}` })
+  }
+}
+
 function collectReferences(file) {
   const code = readFileSync(file, 'utf-8')
   if (!file.endsWith('.vue')) {
@@ -652,6 +700,7 @@ function collectReferences(file) {
   // Only <template> and <script> — a <style> block's CSS custom property may
   // be named like a JS property but declares nothing.
   if (descriptor.template?.ast) collectTemplateReferences(descriptor.template.ast, file, 0)
+  else if (descriptor.template?.src) collectExternalTemplate(descriptor.template.src, file)
   for (const block of [descriptor.script, descriptor.scriptSetup]) {
     if (block) collectScriptReferences(block.content, file, block.loc.start.line - 1)
   }

@@ -56,7 +56,7 @@ const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]
 // `\\{#id}` is a backslash followed by a live anchor.
 const UNESCAPED = String.raw`(?<!\\)(?:\\\\)*`
 const HEADING_RE = new RegExp(
-  String.raw`^${CONTAINER}#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}[^\S\r\n]*#*[^\S\r\n]*$` +
+  String.raw`^${CONTAINER}#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}(?:[^\S\r\n]+#*)?[^\S\r\n]*$` +
     String.raw`|^${CONTAINER}\S.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n${CONTAINER}(?:=+|-+)[^\S\r\n]*$`,
   'gm'
 )
@@ -229,7 +229,13 @@ export function fencedRanges(text) {
 }
 
 // A tag name, not an autolink: `<https://example.com>` must stay a paragraph.
-const HTML_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)`)
+// CommonMark's block-tag list (condition 6). An *inline* tag — `<span>`,
+// `<a>`, `<b>` — starts a paragraph, not an HTML block, and a heading on the
+// next line is still rendered.
+const HTML_BLOCK_TAGS = [
+  'address','article','aside','base','basefont','blockquote','body','caption','center','col','colgroup','dd','details','dialog','dir','div','dl','dt','fieldset','figcaption','figure','footer','form','frame','frameset','h1','h2','h3','h4','h5','h6','head','header','hr','html','iframe','legend','li','link','main','menu','menuitem','nav','noframes','ol','optgroup','option','p','param','search','section','summary','table','tbody','td','tfoot','th','thead','title','tr','track','ul',
+]
+const HTML_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<\/?(?:${HTML_BLOCK_TAGS.join('|')})(?=[\s/>]|$)`, 'i')
 // CommonMark "type 1": these run to their closing tag rather than to the next
 // blank line, so markdown inside them is never parsed.
 const LITERAL_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<(pre|script|style|textarea)(?=[\s/>]|$)`, 'i')
@@ -289,7 +295,8 @@ export function stripRawHtmlBlocks(text) {
     .join('\n')
 }
 
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---[^\S\r\n]*(\r?\n|$)/
+// VitePress strips a leading BOM before parsing, so one may precede the `---`.
+const FRONTMATTER_RE = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---[^\S\r\n]*(\r?\n|$)/
 
 /**
  * Blank a page's YAML frontmatter, keeping the line count. VitePress removes

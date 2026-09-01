@@ -355,6 +355,25 @@ test('an inline routes array is the table, not a similarly named declaration', (
   assert.deepEqual(names(scan(files)), ['Inline'])
 })
 
+test('the first createRouter call is the production router', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const main = [{ path: '/', name: 'Main', meta: { helpId: 'a' } }]\nexport default createRouter({ routes: main })\nconst aux = [{ path: '/x', name: 'Aux' }]\nexport const other = createRouter({ routes: aux })\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['Main'])
+})
+
+test('an options mutation after the router is built cannot change it', () => {
+  const files = {
+    'gui/src/router/index.js':
+      "const table = [{ path: '/', name: 'A', meta: { helpId: 'a' } }]\nconst options = { routes: table }\nexport default createRouter(options)\noptions.routes = later\n",
+  }
+
+  assert.deepEqual(names(scan(files)), ['A'])
+  assert.deepEqual(problems(scan(files)), [])
+})
+
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
 test('every registration in a module is enumerated', () => {
@@ -476,6 +495,12 @@ test('a top-level local named WidgetRegistry is not the imported registry', () =
     "import { WidgetRegistry as WR } from '../registry'\nconst WidgetRegistry = { register() {} }\nWidgetRegistry.register({ type: 'LocalFake' })\nWR.register({ type: 'Real' })\n"
 
   assert.deepEqual(scan(widget(body)).widgets.map((w) => w.type), ['Real'])
+})
+
+test('a WidgetRegistry imported from an unrelated module is a different object', () => {
+  const body = "import { WidgetRegistry } from '@/some/other/module'\nWidgetRegistry.register({ type: 'Unrelated' })\n"
+
+  assert.deepEqual(scan(widget(body)).widgets, [])
 })
 
 // ── References ──────────────────────────────────────────────────────────────
@@ -632,6 +657,27 @@ test('a co-located test module is not scanned', () => {
   }
 
   assert.deepEqual(helpIds(scan(files)), ['real-ref'])
+})
+
+test('an earlier duplicate helpId is replaced and is not a reference', () => {
+  const result = scan({ 'gui/src/probe.js': "const m = { helpId: 'dead', helpId: 'logs-level' }\n" })
+
+  assert.deepEqual(helpIds(result), ['logs-level'])
+})
+
+test('an external SFC template is followed', () => {
+  const files = {
+    'gui/src/views/Probe.vue': '<template src="./Probe.html"></template>\n<script setup>const a = 1</script>\n',
+    'gui/src/views/Probe.html': '<div><HelpButton help-id="logs-level" /></div>\n',
+  }
+
+  assert.deepEqual(helpIds(scan(files)), ['logs-level'])
+})
+
+test('an external template that cannot be read fails closed', () => {
+  const files = { 'gui/src/views/Probe.vue': '<template src="./Missing.html"></template>\n' }
+
+  assert.match(problems(scan(files))[0], /template at \.\/Missing\.html the gate cannot read/)
 })
 
 test('node_modules is not scanned', () => {
