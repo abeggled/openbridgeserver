@@ -560,6 +560,14 @@ test('a kebab-case prop in a render function is a reference', () => {
   assert.deepEqual(helpIds(result), ['logs-level'])
 })
 
+for (const operator of ['||=', '??=', '&&=']) {
+  test(`a helpId assigned with ${operator} is a reference`, () => {
+    const result = scan({ 'gui/src/probe.js': `props.helpId ${operator} 'logs-level'\n` })
+
+    assert.deepEqual(helpIds(result), ['logs-level'])
+  })
+}
+
 test('a helpId assigned to a property is a reference', () => {
   const result = scan({ 'gui/src/assign.js': "props.helpId = 'logs-level'\n" })
 

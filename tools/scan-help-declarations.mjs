@@ -49,6 +49,8 @@ const HELP_PROP_NAMES = ['helpId', 'help-id']
 // The widget registry module, however it is spelled in an import path.
 const REGISTRY_MODULE_RE = /(^|\/)registry(\.[a-z]+)?$/
 
+const ASSIGNING_OPERATORS = ['=', '||=', '??=', '&&=']
+
 const TEST_MODULE_RE = /\.(test|spec)\.[^.]+$/
 
 const WIDGET_ENTRY_SUFFIXES = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx']
@@ -616,7 +618,9 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   })
   walk(ast, (node) => {
     // `obj.helpId = 'x'` sets the same prop as `{ helpId: 'x' }`.
-    if (node.type === 'AssignmentExpression' && node.operator === '=') {
+    // `=`, and the logical forms that assign when the target is unset or set:
+    // each puts the literal on the prop.
+    if (node.type === 'AssignmentExpression' && ASSIGNING_OPERATORS.includes(node.operator)) {
       const target = node.left
       const assigned = stringValue(node.right)
       if (target.type !== 'MemberExpression' || assigned === null) return

@@ -338,10 +338,23 @@ export function strippedSources(root = HELP_ROOT) {
   return sources
 }
 
+const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER}`)
+
+function underlineIsIndentedLegally(matched) {
+  const [heading, underline] = matched.split(/\r?\n/)
+  const contentColumn = (CONTAINER_PREFIX_RE.exec(heading)?.[0] ?? '').length
+  const underlineIndent = /^[^\S\r\n]*/.exec(underline)[0].length
+  return underlineIndent <= contentColumn + 3
+}
+
 function extractHelpIds(absPath) {
   const text = strippedSource(readFileSync(absPath, 'utf-8'))
   const ids = []
   for (const match of text.matchAll(HEADING_RE)) {
+    // A Setext underline may be indented up to three spaces past the content
+    // column its heading sits at; beyond that CommonMark makes it code, and
+    // VitePress renders no heading (verified against a real build).
+    if (match[2] !== undefined && !underlineIsIndentedLegally(match[0])) continue
     ids.push(match[1] ?? match[2])
   }
   return ids

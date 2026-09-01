@@ -340,6 +340,16 @@ _WRITTEN_ANCHOR_RE = re.compile(
 )
 
 
+_CONTAINER_PREFIX_RE = re.compile(rf"^{_CONTAINER}")
+
+
+def _underline_is_indented_legally(matched: str) -> bool:
+    """Mirrors generate-help-index.mjs: at most three spaces past the content column."""
+    heading, _, underline = matched.partition("\n")
+    content_column = len(_CONTAINER_PREFIX_RE.match(heading).group(0))
+    return len(underline) - len(underline.lstrip(" \t")) <= content_column + 3
+
+
 def written_anchor_ids(sources: dict[str, str]) -> dict[str, set[str]]:
     """The ids written as explicit anchors, per rendered page they belong to.
 
@@ -353,7 +363,14 @@ def written_anchor_ids(sources: dict[str, str]) -> dict[str, set[str]]:
     compared page by page: a global set would pair an anchor-shaped string on
     one page with an unrelated automatic heading slug on another.
     """
-    return {page: {atx or setext for atx, setext in _WRITTEN_ANCHOR_RE.findall(text)} for page, text in sources.items()}
+    return {
+        page: {
+            match.group(1) or match.group(2)
+            for match in _WRITTEN_ANCHOR_RE.finditer(text)
+            if match.group(1) or _underline_is_indented_legally(match.group(0))
+        }
+        for page, text in sources.items()
+    }
 
 
 def stripped_help_sources(repo_root: Path | None = None) -> dict[str, str]:

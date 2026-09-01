@@ -474,6 +474,9 @@ def test_written_anchor_ids_reads_a_closing_hash_heading():
         ("-    ## Four {#f}\n", {"f"}),
         # A nested Setext underline sits at the continuation indent.
         ("- - Nested {#d}\n    ---\n", {"d"}),
+        # Three spaces past the content column is still a heading; five is code.
+        ("Normal {#o}\n   ---\n", {"o"}),
+        ("Over {#x}\n     ---\n", set()),
     ],
 )
 def test_written_anchor_ids_reads_headings_inside_containers(source, expected):

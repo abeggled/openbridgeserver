@@ -402,6 +402,21 @@ test('list padding beyond four spaces indents code, not a heading', () => {
   }
 })
 
+test('a Setext underline indented past the content column is code', () => {
+  // Verified against a real build: five spaces renders no heading, three does.
+  const root = mkdtempSync(join(tmpdir(), 'help-underline-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['Over {#gone}', '     ---', '', 'Normal {#kept}', '   ---', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a nested Setext underline sits at the continuation indent', () => {
   const root = mkdtempSync(join(tmpdir(), 'help-nested-setext-'))
   try {
