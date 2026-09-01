@@ -47,8 +47,10 @@ const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scr
 // A blockquote or list-item prefix. Both a heading and a fence can sit
 // inside one, and CommonMark keeps their meaning there.
 // CommonMark makes the space after a blockquote marker optional, so `>##` is
-// the same heading as `> ##`; a list marker does require one.
-const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]+)*`
+// the same heading as `> ##`. A list marker takes one to four spaces: with
+// five or more, only the first belongs to the marker and the rest indent an
+// code block, so `-     ## x` is code and not a heading.
+const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]{1,4}(?![^\S\r\n]))*`
 
 // `[^\S\r\n]` rather than `\s`: the space after the hashes has to be on the
 // heading's own line, or an empty `##` would swallow the next line's prose.
@@ -57,7 +59,7 @@ const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]
 const UNESCAPED = String.raw`(?<!\\)(?:\\\\)*`
 const HEADING_RE = new RegExp(
   String.raw`^${CONTAINER}#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}(?:[^\S\r\n]+#*)?[^\S\r\n]*$` +
-    String.raw`|^${CONTAINER}\S.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n${CONTAINER}(?:=+|-+)[^\S\r\n]*$`,
+    String.raw`|^${CONTAINER}\S.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n(?:${CONTAINER}|[^\S\r\n]*)(?:=+|-+)[^\S\r\n]*$`,
   'gm'
 )
 

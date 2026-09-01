@@ -387,6 +387,35 @@ test('a fenced block inside a blockquote still hides its heading', () => {
   assert.match(stripped, /## Real \{#kept\}/)
 })
 
+test('list padding beyond four spaces indents code, not a heading', () => {
+  // Verified against a real build: `-     ## x {#id}` renders no id.
+  const root = mkdtempSync(join(tmpdir(), 'help-padding-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['-     ## Padded {#gone}', '', '-    ## Four {#kept}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a nested Setext underline sits at the continuation indent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-nested-setext-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['- - Nested {#kept}', '    ---------------', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a heading inside a blockquote or list item is indexed', () => {
   // Verified against a real build: VitePress renders both with their id.
   const root = mkdtempSync(join(tmpdir(), 'help-container-'))

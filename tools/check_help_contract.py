@@ -329,11 +329,13 @@ def rendered_help_ids(repo_root: Path | None = None) -> dict:
 # on that page to the same id. Heading detection here is deliberately loose —
 # it only decides whether an id is worth comparing, and the render decides
 # whether it is real.
-# CommonMark makes the space after a blockquote marker optional.
-_CONTAINER = r" {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]+)*"
+# Mirrors CONTAINER in generate-help-index.mjs: the space after a blockquote
+# marker is optional, and a list marker takes one to four spaces — with five or
+# more the rest indents a code block rather than the item's content.
+_CONTAINER = r" {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]{1,4}(?![^\S\r\n]))*"
 _WRITTEN_ANCHOR_RE = re.compile(
     rf"^{_CONTAINER}#{{1,6}}[^\S\r\n].*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*#*[^\S\r\n]*$"
-    rf"|^{_CONTAINER}\S.*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*\r?\n{_CONTAINER}(?:=+|-+)[^\S\r\n]*$",
+    rf"|^{_CONTAINER}\S.*?\{{#([A-Za-z][\w-]*)\}}[^\S\r\n]*\r?\n(?:{_CONTAINER}|[^\S\r\n]*)(?:=+|-+)[^\S\r\n]*$",
     re.MULTILINE,
 )
 

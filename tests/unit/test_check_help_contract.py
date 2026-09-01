@@ -469,6 +469,11 @@ def test_written_anchor_ids_reads_a_closing_hash_heading():
         ("- ## Listed {#l}\n", {"l"}),
         ("1. ## Numbered {#n}\n", {"n"}),
         ("> Setext {#s}\n> =======\n", {"s"}),
+        # Five spaces after the marker indent a code block, not the item's text.
+        ("-     ## Padded {#p}\n", set()),
+        ("-    ## Four {#f}\n", {"f"}),
+        # A nested Setext underline sits at the continuation indent.
+        ("- - Nested {#d}\n    ---\n", {"d"}),
     ],
 )
 def test_written_anchor_ids_reads_headings_inside_containers(source, expected):
