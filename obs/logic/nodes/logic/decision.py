@@ -17,10 +17,10 @@ NODE_TYPE = NodeTypeDef(
             "type": "array",
             "label": "Bedingungen",
             "description": (
-                "Ordered list of independent conditions, each tested against the 'value' "
-                "input. The first field that matches its rule fires its own trigger output "
-                "— unlike value_mapping there is no 'first match wins', every matching "
-                "condition fires."
+                "Independent conditions, each tested against the 'value' input every tick. "
+                "Each condition's own 'handle' output fires (once) when its rule matches — "
+                "unlike value_mapping, order does not matter and any number of conditions "
+                "can match and fire in the same tick."
             ),
             "items": {
                 "type": "object",
