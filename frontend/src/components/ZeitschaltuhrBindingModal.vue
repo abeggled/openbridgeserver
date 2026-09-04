@@ -2,10 +2,18 @@
 /**
  * ZeitschaltuhrBindingModal — Inline-Editor für eine Zeitschaltuhr-Verknüpfung.
  */
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { datapoints as dpApi, adapters as adapterApi } from '@/api/client'
 import type { HolidayEntry } from '@/api/client'
+import {
+  timerValueAsBool,
+  timerValueFitsNativeInput,
+  timerValueHintKey,
+  timerValueInputKind,
+  timerValueStep,
+  validateTimerValue,
+} from '@/utils/timerValue'
 
 const props = defineProps<{
   datapointId: string
@@ -76,6 +84,57 @@ const DEFAULT_CFG: ZstCfg = {
 }
 
 const cfg = reactive<ZstCfg>({ ...DEFAULT_CFG })
+
+// ── Ausgabewert: typgerechtes Eingabefeld (Issue #1008) ──────────────────────
+const dpDataType = ref('UNKNOWN')
+const dpUnit     = ref('')
+
+const valueKind    = computed(() => timerValueInputKind(dpDataType.value))
+const valueStep    = computed(() => timerValueStep(dpDataType.value))
+const valueHintKey = computed(() => timerValueHintKey(dpDataType.value))
+const valueError   = computed(() => validateTimerValue(cfg.value, dpDataType.value))
+
+const boolValue = computed({
+  get: () => timerValueAsBool(cfg.value),
+  set: (v: boolean) => { cfg.value = v ? 'true' : 'false' },
+})
+
+// Ein BOOLEAN-Ziel bietet nur zwei Optionen an — ein Altwert wie "50" liesse
+// sich sonst nicht auflösen: das Select zeigt bereits "Aus", der Wert bleibt
+// aber ungültig und blockiert das Speichern. Einmalig auf das normalisieren,
+// was angezeigt wird — und das ist immer "Aus": ein für BOOLEAN ungültiger Wert
+// liegt per Definition nicht in den True-Literalen, `timerValueAsBool()` liefert
+// für ihn also false, genau wie das Select darunter.
+watch(
+  [valueKind, () => cfg.value],
+  ([kind, value]) => {
+    if (kind === 'boolean' && validateTimerValue(value, dpDataType.value) !== null) {
+      cfg.value = 'false'
+    }
+  },
+  { immediate: true },
+)
+
+// Ein Altwert, den ein nativer Picker nicht halten kann (UTC-Offset, Sekunden-
+// bruchteile, blosses Datum als Zeitstempel), bekommt stattdessen ein Textfeld —
+// sonst stünde das Feld leer da und der gespeicherte Wert wäre beim nächsten
+// Speichern weg. Bewusst nur beim Wechsel des Objekttyps neu bestimmt und nicht
+// bei jedem Tastendruck: sonst tauscht das Löschen des Offsets das Textfeld
+// mitten im Tippen gegen einen Picker und der Fokus geht verloren.
+const needsTextFallback = ref(!timerValueFitsNativeInput(cfg.value, dpDataType.value))
+watch(valueKind, () => {
+  needsTextFallback.value = !timerValueFitsNativeInput(cfg.value, dpDataType.value)
+})
+
+// `<input type="number">` hands Vue a Number — but the backend schema declares
+// `value: str`, so the config must keep a string here.
+const textValue = computed({
+  get: () => String(cfg.value ?? ''),
+  set: (v: string | number | null) => { cfg.value = v == null ? '' : String(v) },
+})
+
+/** Speichern blockieren, solange der Schaltwert nicht zum Objekttyp passt. */
+const saveBlocked = computed(() => cfg.timer_type !== 'meta' && valueError.value !== null)
 
 // ── Holiday list ──────────────────────────────────────────────────────────────
 
@@ -219,7 +278,14 @@ async function loadBinding() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const bindings = await dpApi.listBindings(props.datapointId)
+    const [bindings, dp] = await Promise.all([
+      dpApi.listBindings(props.datapointId),
+      dpApi.get(props.datapointId).catch(() => null),
+    ])
+    if (dp) {
+      dpDataType.value = dp.data_type || 'UNKNOWN'
+      dpUnit.value     = dp.unit || ''
+    }
     const b = bindings.find((b) => b.id === props.bindingId && b.adapter_instance_id === props.instanceId)
     if (!b) { errorMsg.value = t('zst.bindingNotFound'); return }
     bindingEnabled.value = b.enabled
@@ -590,10 +656,43 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
 
             <!-- Ausgabewert -->
             <hr class="border-gray-200 dark:border-gray-700" />
-            <div class="w-40">
-              <label :class="lCls">{{ $t('zst.switchValue') }}</label>
-              <input v-model="cfg.value" type="text" :class="iCls" placeholder="1" />
-              <p :class="hCls">{{ $t('zst.switchValueHint') }}</p>
+            <div class="w-56">
+              <label :class="lCls">
+                {{ $t('zst.switchValue') }}
+                <span class="text-gray-400 dark:text-gray-500" data-testid="zst-value-type">
+                  {{ dpDataType }}<template v-if="dpUnit"> · {{ dpUnit }}</template>
+                </span>
+              </label>
+
+              <select v-if="valueKind === 'boolean'" v-model="boolValue" :class="iCls" data-testid="zst-value-boolean">
+                <option :value="true">{{ $t('zst.switchValueOn') }}</option>
+                <option :value="false">{{ $t('zst.switchValueOff') }}</option>
+              </select>
+
+              <input
+                v-else-if="(valueKind === 'integer' || valueKind === 'float') && !needsTextFallback"
+                v-model="textValue"
+                type="number"
+                :step="valueStep"
+                :class="iCls"
+                data-testid="zst-value-number"
+              />
+
+              <input v-else-if="valueKind === 'date'" v-model="textValue" type="date" :class="iCls" data-testid="zst-value-date" />
+              <input v-else-if="valueKind === 'time' && !needsTextFallback" v-model="textValue" type="time" step="1" :class="iCls" data-testid="zst-value-time" />
+              <input
+                v-else-if="valueKind === 'datetime' && !needsTextFallback"
+                v-model="textValue"
+                type="datetime-local"
+                step="1"
+                :class="iCls"
+                data-testid="zst-value-datetime"
+              />
+
+              <input v-else v-model="textValue" type="text" :class="iCls" placeholder="1" data-testid="zst-value-text" />
+
+              <p v-if="valueError" class="text-xs text-red-500 dark:text-red-400 mt-0.5" data-testid="zst-value-error">{{ $t(valueError) }}</p>
+              <p :class="hCls">{{ $t(valueHintKey) }}</p>
             </div>
 
           </template><!-- /timer_type !== meta -->
@@ -608,7 +707,8 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
         <button class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded" @click="emit('close')">{{ $t('common.cancel') }}</button>
         <button
           class="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-50"
-          :disabled="saving || loading || !!errorMsg"
+          data-testid="zst-save-btn"
+          :disabled="saving || loading || !!errorMsg || saveBlocked"
           @click="save"
         >{{ saving ? $t('common.save') + ' …' : $t('common.save') }}</button>
       </div>

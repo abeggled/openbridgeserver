@@ -1,5 +1,8 @@
 <template>
-  <div class="section-header">{{ $t('adapters.bindingForm.ztSection') }}</div>
+  <div class="section-header flex items-center justify-between gap-2">
+    <span>{{ $t('adapters.bindingForm.ztSection') }}</span>
+    <HelpButton help-id="adapters-zeitschaltuhr" compact />
+  </div>
 
   <!-- Typ -->
   <div class="grid grid-cols-2 gap-4">
@@ -268,19 +271,66 @@
     </template>
 
     <!-- Ausgabewert -->
-    <div class="optional-divider">{{ $t('adapters.bindingForm.ztOutputDivider') }}</div>
-    <div class="form-group" style="max-width:200px">
-      <label class="label">{{ $t('adapters.bindingForm.ztOutputValueLabel') }}</label>
-      <input v-model="cfg.value" class="input" placeholder="1" />
-      <p class="hint">{{ $t('adapters.bindingForm.ztOutputValueHint') }}</p>
+    <div class="optional-divider flex items-center justify-between gap-2">
+      <span>{{ $t('adapters.bindingForm.ztOutputDivider') }}</span>
+      <HelpButton help-id="adapters-zeitschaltuhr-value" compact />
+    </div>
+    <div class="form-group" style="max-width:260px">
+      <label class="label">
+        {{ $t('adapters.bindingForm.ztOutputValueLabel') }}
+        <span class="optional" data-testid="zt-value-type">{{ dpDataType }}<template v-if="dpUnit"> · {{ dpUnit }}</template></span>
+      </label>
+
+      <select v-if="valueKind === 'boolean'" v-model="boolValue" class="input" data-testid="zt-value-boolean">
+        <option :value="true">{{ $t('adapters.bindingForm.ztOutputValueOn') }}</option>
+        <option :value="false">{{ $t('adapters.bindingForm.ztOutputValueOff') }}</option>
+      </select>
+
+      <input
+        v-else-if="(valueKind === 'integer' || valueKind === 'float') && !needsTextFallback"
+        v-model="textValue"
+        type="number"
+        :step="valueStep"
+        class="input"
+        data-testid="zt-value-number"
+      />
+
+      <input v-else-if="valueKind === 'date'" v-model="textValue" type="date" class="input" data-testid="zt-value-date" />
+      <input v-else-if="valueKind === 'time' && !needsTextFallback" v-model="textValue" type="time" step="1" class="input" data-testid="zt-value-time" />
+      <input
+        v-else-if="valueKind === 'datetime' && !needsTextFallback"
+        v-model="textValue"
+        type="datetime-local"
+        step="1"
+        class="input"
+        data-testid="zt-value-datetime"
+      />
+
+      <input v-else v-model="textValue" class="input" placeholder="1" data-testid="zt-value-text" />
+
+      <p v-if="valueError" class="text-xs text-red-500 dark:text-red-400 mt-1" data-testid="zt-value-error">{{ $t(valueError) }}</p>
+      <p class="hint">{{ $t(valueHintKey) }}</p>
     </div>
 
   </template><!-- /timer_type !== meta -->
 </template>
 
 <script setup>
-defineProps({
+import { computed, ref, watch } from 'vue'
+import {
+  timerValueAsBool,
+  timerValueFitsNativeInput,
+  timerValueHintKey,
+  timerValueInputKind,
+  timerValueStep,
+  validateTimerValue,
+} from '@/utils/timerValue'
+import HelpButton from '@/components/ui/HelpButton.vue'
+
+const props = defineProps({
   cfg: { type: Object, required: true },
+  dpDataType: { type: String, default: 'UNKNOWN' },
+  dpUnit: { type: String, default: '' },
   ztHolidays: { type: Array, required: true },
   ztHolidaysLoading: { type: Boolean, required: true },
   ztHolidaysError: { type: [String, null], default: null },
@@ -300,4 +350,49 @@ defineEmits([
   'zt-toggle-month',
   'win-type-change',
 ])
+
+// ── Ausgabewert: typgerechtes Eingabefeld (Issue #1008) ─────────────────────
+const valueKind    = computed(() => timerValueInputKind(props.dpDataType))
+const valueStep    = computed(() => timerValueStep(props.dpDataType))
+const valueHintKey = computed(() => timerValueHintKey(props.dpDataType))
+const valueError   = computed(() => validateTimerValue(props.cfg.value, props.dpDataType))
+
+const boolValue = computed({
+  get: () => timerValueAsBool(props.cfg.value),
+  set: (v) => { props.cfg.value = v ? 'true' : 'false' },
+})
+
+// Ein BOOLEAN-Ziel bietet nur zwei Optionen an — ein Altwert wie "50" liesse
+// sich sonst nicht auflösen: das Select zeigt bereits "Aus", der Wert bleibt
+// aber ungültig und blockiert das Speichern. Einmalig auf das normalisieren,
+// was angezeigt wird — und das ist immer "Aus": ein für BOOLEAN ungültiger Wert
+// liegt per Definition nicht in den True-Literalen, `timerValueAsBool()` liefert
+// für ihn also false, genau wie das Select darunter.
+watch(
+  [valueKind, () => props.cfg.value],
+  ([kind, value]) => {
+    if (kind === 'boolean' && validateTimerValue(value, props.dpDataType) !== null) {
+      props.cfg.value = 'false'
+    }
+  },
+  { immediate: true },
+)
+
+// Ein Altwert, den ein nativer Picker nicht halten kann (UTC-Offset, Sekunden-
+// bruchteile, blosses Datum als Zeitstempel), bekommt stattdessen ein Textfeld —
+// sonst stünde das Feld leer da und der gespeicherte Wert wäre beim nächsten
+// Speichern weg. Bewusst nur beim Wechsel des Objekttyps neu bestimmt und nicht
+// bei jedem Tastendruck: sonst tauscht das Löschen des Offsets das Textfeld
+// mitten im Tippen gegen einen Picker und der Fokus geht verloren.
+const needsTextFallback = ref(!timerValueFitsNativeInput(props.cfg.value, props.dpDataType))
+watch(valueKind, () => {
+  needsTextFallback.value = !timerValueFitsNativeInput(props.cfg.value, props.dpDataType)
+})
+
+// `<input type="number">` hands Vue a Number — but the backend schema declares
+// `value: str`, so the config must keep a string here.
+const textValue = computed({
+  get: () => String(props.cfg.value ?? ''),
+  set: (v) => { props.cfg.value = v == null ? '' : String(v) },
+})
 </script>

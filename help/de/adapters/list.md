@@ -59,3 +59,50 @@ Im aufgeklappten Zustand einer Instanz:
 
 „Aktiviert" schaltet die Instanz komplett aus, ohne sie zu löschen — eine deaktivierte
 Instanz behält ihre Konfiguration und Bindings, verbindet sich aber nicht.
+
+## Zeitschaltuhr {#adapters-zeitschaltuhr}
+
+Die Zeitschaltuhr ist eine reine **Quelle**: sie schreibt zu definierten Zeitpunkten in
+Objekte, liest aber nie aus ihnen. Eine Verknüpfung ist dabei genau **ein Schaltpunkt** —
+für mehrere Schaltzeiten am selben Objekt legt man mehrere Verknüpfungen an.
+
+| Schaltuhr-Typ | Schaltet |
+|---|---|
+| Tagesschaltuhr | täglich bzw. an ausgewählten Wochentagen |
+| Jahresschaltuhr | in ausgewählten Monaten (keine Auswahl = alle), wahlweise an einem festen Tag im Monat |
+| Feiertagsschaltuhr | an ausgewählten Feiertagen (keine Auswahl = alle Feiertage) |
+| Metadaten | kein Schaltpunkt — publiziert den Feiertags- bzw. Ferienstatus automatisch |
+
+Der Schaltzeitpunkt ist entweder eine feste Uhrzeit oder an den Sonnenstand gekoppelt
+(Sonnenaufgang, Sonnenuntergang, Sonnenhöchststand oder ein Sonnenhöhenwinkel), jeweils mit
+einem Offset in Minuten. Zusätzlich kann ein Schaltpunkt getaktet wiederholen — stündlich
+zur angegebenen Minute oder minütlich. Feiertage und Ferien lassen sich pro Schaltpunkt
+ignorieren, überspringen, exklusiv schalten oder wie ein Sonntag behandeln.
+
+### Schalt-Wert {#adapters-zeitschaltuhr-value}
+
+Der **Schalt-Wert** wird gegen den Typ des verknüpften Objekts ausgewertet — eine
+Zeitschaltuhr bedient damit jeden Objekttyp, nicht nur Ein/Aus:
+
+| Objekttyp | Eingabefeld | Akzeptierte Werte |
+|---|---|---|
+| Ja/Nein | Ein/Aus-Auswahl | `1`/`0`, `true`/`false`, `on`/`off`, `ein`/`aus` |
+| Ganzzahl | Zahlenfeld | Ganzzahl, z. B. `50` |
+| Dezimalzahl | Zahlenfeld mit Einheit | Dezimalzahl, z. B. `21.5` |
+| Text | Textfeld | wörtlich übernommen — auch `1`, `0`, `on` oder `ein` |
+| Datum | Datumsauswahl | ISO 8601, z. B. `2026-12-24` |
+| Uhrzeit | Zeitauswahl | ISO 8601, z. B. `08:00:00` |
+| Zeitstempel | Datum-/Zeitauswahl | ISO 8601, z. B. `2026-12-24T08:00:00` |
+| unbekannt | Textfeld | Heuristik: Ja/Nein-Literal → Ganzzahl → Dezimalzahl → Text |
+
+Das Eingabefeld richtet sich also nach dem Objekt: ein Rollladen-Objekt vom Typ Dezimalzahl
+bekommt ein Zahlenfeld mit seiner Einheit, ein Ja/Nein-Objekt eine Ein/Aus-Auswahl.
+
+Passt der Wert nicht zum Objekttyp, erscheint der Fehler direkt unter dem Feld und **das
+Speichern wird abgelehnt**. Der Fehler fällt damit beim Anlegen auf statt erst Stunden
+später beim Schalten. Lässt sich ein bereits gespeicherter Wert zur Schaltzeit dennoch nicht
+umwandeln — etwa weil der Objekttyp nachträglich geändert wurde —, protokolliert OBS eine
+Warnung, hinterlegt am Objekt die Diagnose `type_mismatch` und überspringt den Schaltvorgang.
+
+Metadaten-Verknüpfungen haben keinen Schalt-Wert: sie publizieren den Feiertags- bzw.
+Ferienstatus selbst.
