@@ -38,7 +38,7 @@ const SCAN_ROOT = rootArgument < 0 ? REPO_ROOT : resolve(process.argv[rootArgume
 // Resolved from the repository's gui/, which declares both parsers as
 // devDependencies — a fixture tree has no node_modules of its own.
 const requireFromGui = createRequire(join(REPO_ROOT, 'gui', 'package.json'))
-const { parse: parseJs } = requireFromGui('@babel/parser')
+const { parse: parseJs, parseExpression } = requireFromGui('@babel/parser')
 const { parse: parseSfc } = requireFromGui('@vue/compiler-sfc')
 
 // Vue accepts a prop under either spelling, in templates and in render
@@ -61,6 +61,8 @@ const SOURCE_SUFFIXES = ['.vue', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '
 const REFERENCE_DIRS = ['gui/src', 'frontend/src']
 
 const routes = []
+// Names taken back out with `router.removeRoute(...)` before the router ships.
+const removedRouteNames = new Set()
 const widgets = []
 const references = []
 const unreadable = []
@@ -381,7 +383,7 @@ function collectRoutes(file) {
     const callee = node.callee
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
-    if (method !== 'addRoute') return
+    if (method !== 'addRoute' && method !== 'removeRoute') return
     // Only on the router this module builds: an unrelated object with an
     // `addRoute` method registers nothing with Vue Router.
     const receiver = unwrap(callee.object)
@@ -390,6 +392,23 @@ function collectRoutes(file) {
       ((receiver.type === 'CallExpression' || receiver.type === 'OptionalCallExpression') &&
         routerFactoryNames.has(unwrap(receiver.callee).type === 'Identifier' ? unwrap(receiver.callee).name : null))
     if (!onRouter) return
+    // `router.removeRoute('Name')` takes a statically declared route back out;
+    // it is no longer reachable, so requiring help for it would be asking for
+    // documentation of a page nobody can open.
+    if (method === 'removeRoute') {
+      const target = unwrap(node.arguments[0])
+      const name = target ? stringValue(target) : null
+      if (name !== null) removedRouteNames.add(name)
+      else {
+        unreadable.push({
+          kind: 'route',
+          file: rel(file),
+          line: node.loc.start.line,
+          problem: 'removes a route the gate cannot identify; pass a literal name to removeRoute()',
+        })
+      }
+      return
+    }
     const record = unwrap(node.arguments[node.arguments.length - 1])
     if (record && record.type === 'ObjectExpression') collectRouteRecords({ elements: [record] }, file)
     else {
@@ -765,16 +784,39 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
           references.push({ helpId: prop.value.content, file: rel(file), line: prop.loc.start.line + lineOffset })
         }
         // `:help-id="'logs-level'"` is a binding whose expression is a literal,
-        // so the target is known after all.
+        // so the target is known after all. Parsed rather than quote-matched:
+        // a regex anchored on the outer quotes reads `'dash' + 'board'` as one
+        // literal named `dash' + 'board`, and misses a template literal.
         if (prop.type === 7 && prop.name === 'bind' && HELP_PROP_NAMES.includes(prop.arg?.content) && prop.exp?.content) {
-          const literal = /^\s*(['"])(.*)\1\s*$/.exec(prop.exp.content)
-          if (literal) references.push({ helpId: literal[2], file: rel(file), line: prop.loc.start.line + lineOffset })
+          const literal = staticExpressionValue(prop.exp.content)
+          if (literal !== null) references.push({ helpId: literal, file: rel(file), line: prop.loc.start.line + lineOffset })
         }
       }
     }
     for (const child of node.children ?? []) if (typeof child === 'object') visit(child)
   }
   visit(templateAst)
+}
+
+/** The value of a template binding when it is a compile-time constant string.
+ *
+ * Returns null for anything else — a variable, a concatenation, an interpolated
+ * template — because those targets are only known at runtime and the gate
+ * cannot resolve them. A syntactically invalid expression is not this scanner's
+ * to report: the Vue compiler already fails the build on it.
+ */
+function staticExpressionValue(source) {
+  let node
+  try {
+    node = parseExpression(source, { plugins: ['typescript'] })
+  } catch {
+    return null
+  }
+  if (node.type === 'StringLiteral') return node.value
+  if (node.type === 'TemplateLiteral' && node.expressions.length === 0 && node.quasis.length === 1) {
+    return node.quasis[0].value.cooked
+  }
+  return null
 }
 
 /** `<template src="./x.html">` renders that file's markup, so it is scanned too. */
@@ -866,4 +908,8 @@ if (statSync(widgetsDir, { throwIfNoEntry: false })) {
 
 for (const dir of REFERENCE_DIRS) for (const file of sourceFiles(join(SCAN_ROOT, dir))) collectReferences(file)
 
-process.stdout.write(JSON.stringify({ routes, widgets, references, unreadable }) + '\n')
+// A removed route is not a surface: it is gone from the matcher before the
+// router is exported, so nobody can reach it and there is nothing to document.
+const liveRoutes = routes.filter((route) => !removedRouteNames.has(route.name))
+
+process.stdout.write(JSON.stringify({ routes: liveRoutes, widgets, references, unreadable }) + '\n')

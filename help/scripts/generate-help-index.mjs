@@ -57,10 +57,17 @@ const CONTAINER = String.raw` {0,3}(?:>[^\S\r\n]*|(?:[-*+]|\d{1,9}[.)])[^\S\r\n]
 // `(?<!\\)(?:\\\\)*` counts escape parity — `\{#id}` is escaped text, while
 // `\\{#id}` is a backslash followed by a live anchor.
 const UNESCAPED = String.raw`(?<!\\)(?:\\\\)*`
+// The id class mirrors the Python validator's `^[A-Za-z][\w-]*$`, but JS `\w`
+// is ASCII-only while Python's is Unicode-aware — so `{#widget-tür}` passed
+// validation and was then missing from the index, and the reverse render check
+// rejected a heading VitePress does emit (verified against a real build:
+// `<h2 id="widget-tür">`). Spelled out with Unicode property escapes, which
+// need the `u` flag.
+const HELP_ID = String.raw`[A-Za-z][\p{L}\p{N}\p{M}_-]*`
 const HEADING_RE = new RegExp(
-  String.raw`^(?:${CONTAINER}|[^\S\r\n]*)#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}(?:[^\S\r\n]+#*)?[^\S\r\n]*$` +
-    String.raw`|^${CONTAINER}\S.*${UNESCAPED}\{#([A-Za-z][\w-]*)\}[^\S\r\n]*\r?\n(?:${CONTAINER}|[^\S\r\n]*)(?:=+|-+)[^\S\r\n]*$`,
-  'gm'
+  String.raw`^(?:${CONTAINER}|[^\S\r\n]*)#{1,6}[^\S\r\n]+.*${UNESCAPED}\{#(${HELP_ID})\}(?:[^\S\r\n]+#*)?[^\S\r\n]*$` +
+    String.raw`|^${CONTAINER}\S.*${UNESCAPED}\{#(${HELP_ID})\}[^\S\r\n]*\r?\n(?:${CONTAINER}|[^\S\r\n]*)(?:=+|-+)[^\S\r\n]*$`,
+  'gmu'
 )
 
 function findMarkdownFiles(dir, base = dir) {
@@ -249,6 +256,16 @@ const HTML_CUSTOM_BLOCK_START_RE = new RegExp(
 // CommonMark "type 1": these run to their closing tag rather than to the next
 // blank line, so markdown inside them is never parsed.
 const LITERAL_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<(pre|script|style|textarea)(?=[\s/>]|$)`, 'i')
+// CommonMark conditions 3, 4 and 5: a processing instruction, a declaration
+// (`<!REVIEW`, `<!DOCTYPE`) and a CDATA section. Like type 1 they run to their
+// own terminator rather than to the next blank line — verified against a real
+// build: a heading inside `<!REVIEW … >` renders no id. Each entry pairs the
+// opener with the string that closes it.
+const DELIMITED_BLOCK_STARTS = [
+  [new RegExp(String.raw`^${CONTAINER}<\?`), '?>'],
+  [new RegExp(String.raw`^${CONTAINER}<!\[CDATA\[`), ']]>'],
+  [new RegExp(String.raw`^${CONTAINER}<![A-Za-z]`), '>'],
+]
 
 /**
  * Blank out raw HTML blocks, keeping the line count. A heading-shaped line
@@ -263,6 +280,7 @@ const LITERAL_BLOCK_START_RE = new RegExp(String.raw`^${CONTAINER}<(pre|script|s
 export function stripRawHtmlBlocks(text) {
   let inBlock = false
   let literalTag = null // a CommonMark "type 1" block, closed by its end tag
+  let terminator = null // a type 3/4/5 block, closed by a fixed string
   let container = null
   return text
     .split('\n')
@@ -271,6 +289,7 @@ export function stripRawHtmlBlocks(text) {
       if (inBlock && container !== null && !continuesContainer(line, container)) {
         inBlock = false
         literalTag = null
+        terminator = null
         container = null
       }
       if (!inBlock) {
@@ -282,9 +301,25 @@ export function stripRawHtmlBlocks(text) {
         } else if (HTML_BLOCK_START_RE.test(line) || HTML_CUSTOM_BLOCK_START_RE.test(line)) {
           inBlock = true
           container = containerOf(line)
+        } else {
+          for (const [start, closes] of DELIMITED_BLOCK_STARTS) {
+            if (start.test(line)) {
+              inBlock = true
+              terminator = closes
+              container = containerOf(line)
+              break
+            }
+          }
         }
       }
       if (!inBlock) return line
+      if (terminator !== null) {
+        if (line.includes(terminator)) {
+          inBlock = false
+          terminator = null
+        }
+        return ''
+      }
       if (literalTag !== null) {
         // Runs to its closing tag, blank lines included — verified against a
         // real build: a heading inside `<pre>` renders no id even with blank

@@ -723,3 +723,25 @@ test('generate() throws instead of calling process.exit() when duplicates exist'
     }
   )
 })
+
+test('a heading inside an HTML declaration block is stripped', () => {
+  // CommonMark condition 4: `<!REVIEW` runs raw until the next `>`. Verified
+  // against a real VitePress build — it renders no id for the heading.
+  const stripped = stripRawHtmlBlocks('# Page {#page}\n\n<!REVIEW\n## Hidden {#hidden}\n>\n')
+
+  assert.ok(stripped.includes('# Page {#page}'))
+  assert.ok(!stripped.includes('{#hidden}'), stripped)
+})
+
+test('an explicit anchor containing non-ASCII letters survives stripping and matches', () => {
+  // JS `\w` is ASCII-only while the Python validator's is not, so `{#widget-tür}`
+  // passed validation and was then missing from the index. VitePress renders
+  // `<h2 id="widget-tür">` — verified against a real build.
+  withFixture(
+    { 'de/x.md': '## Tür Widget {#widget-tür}\n', 'en/x.md': '## Door Widget {#widget-tür}\n' },
+    (root) => {
+      const { helpIds } = buildHelpIndex(root)
+      assert.ok(helpIds['widget-tür'], Object.keys(helpIds).join(', '))
+    }
+  )
+})

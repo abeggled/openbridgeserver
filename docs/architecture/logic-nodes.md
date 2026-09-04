@@ -229,7 +229,9 @@ today, so it is deliberately left as an explicit table.
      `_stateful_relay_correction_ids` so the manager's correction pass reaches it.
 5. **Add focused tests** in `tests/unit/logic/nodes/<category>/test_<block>.py`, mirroring the
    source layout, plus execution tests for the dispatcher branch.
-6. **Write its help section and declare its id** — add `## <Label> {#<help-id>}` to
+6. Frontend, translations and the block table in `README.md` / `README.de.md` follow the normal GUI
+   and i18n rules.
+7. **Write its help section and declare its id** — add `## <Label> {#<help-id>}` to
    `help/{de,en}/logic/blocks-<category>.md` and set the matching `help_id="…"` on the node type
    definition. `NodePalette.vue` renders a help button from that declared value, and
    `tools/check_help_contract.py` fails CI when a palette-visible block declares no id or points at a

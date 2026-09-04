@@ -829,3 +829,46 @@ test('a file that cannot be parsed is reported, not silently skipped', () => {
   assert.equal(result.unreadable.length, 1)
   assert.match(result.unreadable[0].problem, /cannot be parsed/)
 })
+
+// ── review round: removeRoute and nonliteral bound expressions ───────────────
+
+test('a route removed with removeRoute() before export is not a surface', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [
+  { path: '/kept', name: 'Kept', component: X, meta: { helpId: 'kept' } },
+  { path: '/gone', name: 'Gone', component: X },
+]
+const router = createRouter({ history: createWebHistory(), routes })
+router.removeRoute('Gone')
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result), ['Kept'])
+})
+
+test('a removeRoute() whose target is not a literal fails closed', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/x', name: 'X', component: X, meta: { helpId: 'x' } }]
+const router = createRouter({ history: createWebHistory(), routes })
+router.removeRoute(whichever)
+export default router
+`,
+  })
+
+  assert.ok(problems(result).some((problem) => problem.includes('cannot identify')), problems(result).join(' | '))
+})
+
+test('a bound help-id that is a concatenation is not read as a literal', () => {
+  // `:help-id="'dash' + 'board'"` renders `dashboard`, but a regex anchored on
+  // the outer quotes reported the id `dash' + 'board`.
+  assert.deepEqual(helpIds(scan(view(`<template><HelpButton :help-id="'dash' + 'board'" /></template>`))), [])
+})
+
+test('a bound help-id given as a template literal is read', () => {
+  assert.deepEqual(helpIds(scan(view('<template><HelpButton :help-id="`from-template`" /></template>'))), ['from-template'])
+})
