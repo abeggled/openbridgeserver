@@ -978,3 +978,14 @@ test('a literal dynamic directive argument names the same prop', () => {
 
   assert.deepEqual(helpIds(result), ['dyn-arg'])
 })
+
+test('an external template referenced through the @ alias is scanned', () => {
+  // `<template src="@/…">` is resolved by Vite like an import, not relative to
+  // the component.
+  const result = scan({
+    'gui/src/components/A.vue': `<template src="@/components/a.html"></template>`,
+    'gui/src/components/a.html': `<HelpButton help-id="from-alias-template" />`,
+  })
+
+  assert.deepEqual(helpIds(result), ['from-alias-template'])
+})

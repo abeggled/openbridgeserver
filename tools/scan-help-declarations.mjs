@@ -881,7 +881,14 @@ function staticExpressionValue(source) {
 
 /** `<template src="./x.html">` renders that file's markup, so it is scanned too. */
 function collectExternalTemplate(src, file) {
-  const resolved = resolve(dirname(file), src)
+  // `@` is a path here too: `<template src="@/…">` is resolved by Vite the
+  // same way an import is, so resolving it relative to the component pointed
+  // at a file that does not exist.
+  const resolved = src.startsWith('@/') ? resolveAliased(dirname(file), src) : resolve(dirname(file), src)
+  if (resolved === null) {
+    unreadable.push({ kind: 'parse', file: rel(file), line: 1, problem: `references a template at ${src} the gate cannot resolve` })
+    return
+  }
   let markup
   try {
     markup = readFileSync(resolved, 'utf-8')
