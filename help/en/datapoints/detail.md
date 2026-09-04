@@ -13,9 +13,10 @@ a data point's name in the **Data Points** list.
 Shows the live value (updated over the WebSocket connection), its timestamp, and the MQTT
 topic (plus alias, if set). A write control appears — a true/false toggle for BOOLEAN data
 points, otherwise a text field — as soon as at least one enabled binding can accept
-writes. A data point with **no** bindings at all stays writable too; its value then lives
-only in OBS. The area is disabled only when the data point has bindings and none of them
-writes. Writing goes through the same path as any other write source.
+writes. The area is disabled only when at least one such binding exists and none of them
+writes. Disabled bindings and those of the message adapter do not count: a data point that
+has only those — or no bindings at all — stays writable, and its value then lives only in
+OBS. Writing goes through the same path as any other write source.
 
 ## Properties {#datapoints-detail-properties}
 

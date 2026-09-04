@@ -13,9 +13,10 @@ Erreichbar über einen Klick auf den Namen eines Objekts in der Liste **Objekte*
 Zeigt den Live-Wert (aktualisiert über die WebSocket-Verbindung), dessen Zeitstempel und das
 MQTT-Topic (plus Alias, falls gesetzt). Ein Schreib-Element erscheint — ein Wahr/Falsch-
 Umschalter bei BOOLEAN-Objekten, sonst ein Textfeld —, sobald mindestens eine aktivierte
-Verknüpfung Werte entgegennehmen kann. Ein Objekt ganz **ohne** Verknüpfungen bleibt
-ebenfalls beschreibbar; der Wert lebt dann nur in OBS. Gesperrt ist der Bereich nur dann,
-wenn das Objekt Verknüpfungen hat, von denen keine schreibt. Das Schreiben läuft über
+Verknüpfung Werte entgegennehmen kann. Gesperrt ist der Bereich nur dann, wenn es
+mindestens eine solche Verknüpfung gibt und keine davon schreibt. Nicht mitgezählt werden
+dabei deaktivierte Verknüpfungen und die des Meldungs-Adapters: hat ein Objekt nur solche
+— oder gar keine Verknüpfungen —, bleibt es beschreibbar, und der Wert lebt dann nur in OBS. Das Schreiben läuft über
 denselben Weg wie jede andere Schreibquelle.
 
 ## Eigenschaften {#datapoints-detail-properties}

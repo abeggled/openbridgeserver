@@ -671,6 +671,25 @@ function collectWidgets(file, seen = new Set()) {
       if (declarator.id.type === 'Identifier') registryNames.delete(declarator.id.name)
     }
   }
+  // `const alias = WidgetRegistry` holds the same singleton, so a registration
+  // through it is live. Missing that was a false negative — an undocumented
+  // widget would have shipped. Repeated until nothing new is found, so a chain
+  // of aliases is followed too.
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const statement of ast.program.body) {
+      const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+      if (!inner || inner.type !== 'VariableDeclaration') continue
+      for (const declarator of inner.declarations) {
+        const init = unwrap(declarator.init)
+        if (declarator.id.type !== 'Identifier' || init?.type !== 'Identifier') continue
+        if (registryNames.has(init.name) && !registryNames.has(declarator.id.name)) {
+          registryNames.add(declarator.id.name)
+          changed = true
+        }
+      }
+    }
+  }
   const namespaceNames = new Set()
   walk(ast, (node) => {
     if (node.type !== 'ImportDeclaration') return
@@ -824,7 +843,11 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
         // so the target is known after all. Parsed rather than quote-matched:
         // a regex anchored on the outer quotes reads `'dash' + 'board'` as one
         // literal named `dash' + 'board`, and misses a template literal.
-        if (prop.type === 7 && prop.name === 'bind' && HELP_PROP_NAMES.includes(prop.arg?.content) && prop.exp?.content) {
+        // `v-bind:['help-id']="…"` names the same prop: the argument is marked
+        // dynamic but its expression is a literal, so it is known here.
+        const argName =
+          prop.type === 7 && prop.arg?.isStatic === false ? staticExpressionValue(prop.arg.content) : (prop.arg?.content ?? null)
+        if (prop.type === 7 && prop.name === 'bind' && HELP_PROP_NAMES.includes(argName) && prop.exp?.content) {
           const literal = staticExpressionValue(prop.exp.content)
           if (literal !== null) references.push({ helpId: literal, file: rel(file), line: prop.loc.start.line + lineOffset })
         }

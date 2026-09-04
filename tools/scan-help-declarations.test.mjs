@@ -948,3 +948,33 @@ export default router
 
   assert.deepEqual(names(result).sort(), ['Kept', 'ViaAlias'])
 })
+
+test('a registration through a local alias of WidgetRegistry is enumerated', () => {
+  // `const alias = WidgetRegistry` holds the same singleton — missing it let an
+  // undocumented widget ship.
+  const result = scan(widget(`
+import { WidgetRegistry } from '@/widgets/registry'
+const alias = WidgetRegistry
+alias.register({ type: 'ViaRegistryAlias' })
+`))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['ViaRegistryAlias'])
+})
+
+test('a chain of registry aliases is followed', () => {
+  const result = scan(widget(`
+import { WidgetRegistry } from '@/widgets/registry'
+const first = WidgetRegistry
+const second = first
+second.register({ type: 'ViaChain' })
+`))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['ViaChain'])
+})
+
+test('a literal dynamic directive argument names the same prop', () => {
+  // `v-bind:['help-id']="'x'"` renders the same live help-id prop.
+  const result = scan(view(`<template><HelpButton v-bind:['help-id']="'dyn-arg'" /></template>`))
+
+  assert.deepEqual(helpIds(result), ['dyn-arg'])
+})
