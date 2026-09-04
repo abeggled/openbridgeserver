@@ -122,19 +122,58 @@ function walkShadowAware(node, names, visit) {
 }
 
 /** Walk the AST, skipping any function that shadows `name` with its own binding. */
-function walkOutsideShadow(node, name, visit) {
+function walkOutsideShadow(node, names, visit) {
+  const live = names instanceof Set ? names : new Set([names])
+  if (live.size === 0) return
   if (node === null || typeof node !== 'object') return
   if (Array.isArray(node)) {
-    for (const child of node) walkOutsideShadow(child, name, visit)
+    for (const child of node) walkOutsideShadow(child, live, visit)
     return
   }
   if (typeof node.type !== 'string') return
-  if (FUNCTION_TYPES.includes(node.type) && declaresBinding(node, name)) return
-  visit(node)
+  // A function that binds *some* of these names hides only those: the rest are
+  // still the module's own. Returning outright here meant one shadowed alias
+  // switched off the check for the real table too.
+  let inner = live
+  if (FUNCTION_TYPES.includes(node.type)) {
+    inner = new Set([...live].filter((candidate) => !declaresBinding(node, candidate)))
+    if (inner.size === 0) return
+  }
+  visit(node, inner)
   for (const key of Object.keys(node)) {
     if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
-    walkOutsideShadow(node[key], name, visit)
+    walkOutsideShadow(node[key], inner, visit)
   }
+}
+
+/** True when this node runs as part of the module body, not inside a function.
+ *
+ * The scan records the ancestors it descends through, so this is a lookup
+ * rather than a second traversal.
+ */
+function atModuleTopLevel(node) {
+  return !functionScopedNodes.has(node)
+}
+
+const functionScopedNodes = new WeakSet()
+
+/** Mark every node that sits inside a function, so removals can skip them. */
+function markFunctionScopes(ast) {
+  const mark = (node, inside) => {
+    if (node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (const child of node) mark(child, inside)
+      return
+    }
+    if (typeof node.type !== 'string') return
+    if (inside) functionScopedNodes.add(node)
+    const deeper = inside || FUNCTION_TYPES.includes(node.type)
+    for (const key of Object.keys(node)) {
+      if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
+      mark(node[key], deeper)
+    }
+  }
+  mark(ast, false)
 }
 
 /** Walk every node of a Babel AST, depth first. */
@@ -386,6 +425,8 @@ function collectRoutes(file) {
     }
   }
 
+  markFunctionScopes(ast)
+
   // `router.addRoute(...)` adds a live route after construction. A literal
   // record is read like any other; anything else fails closed.
   walk(ast, (node) => {
@@ -406,6 +447,11 @@ function collectRoutes(file) {
     // it is no longer reachable, so requiring help for it would be asking for
     // documentation of a page nobody can open.
     if (method === 'removeRoute') {
+      // Only a removal the module actually runs counts. Inside a function it
+      // may never execute, and this walk reduces the surface set — honouring
+      // it there could hide a live route, unlike the widget scan where the
+      // same uncertainty only ever adds one.
+      if (!atModuleTopLevel(node)) return
       const target = unwrap(node.arguments[0])
       const name = target ? stringValue(target) : null
       if (name !== null) routeRemovals.push({ name, at: node.start })
@@ -474,12 +520,12 @@ function collectRoutes(file) {
     }
   }
 
-  walkOutsideShadow(ast, tableName, (node) => {
+  walkOutsideShadow(ast, tableNames, (node, live) => {
     if (node.type === 'AssignmentExpression') {
       const target = node.left
-      const whole = target.type === 'Identifier' && tableNames.has(target.name)
+      const whole = target.type === 'Identifier' && live.has(target.name)
       // `routes[0] = …` swaps out a record the scan already read.
-      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && tableNames.has(unwrap(target.object).name)
+      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && live.has(unwrap(target.object).name)
       if (whole || element) {
         unreadable.push({
           kind: 'route',
@@ -495,8 +541,22 @@ function collectRoutes(file) {
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     const object = unwrap(callee.object)
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
-    if (object.type === 'Identifier' && tableNames.has(object.name) && ROUTE_MUTATORS.includes(method)) {
+    if (object.type === 'Identifier' && live.has(object.name) && ROUTE_MUTATORS.includes(method)) {
       unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the ${tableName} array with ${method}(); the gate cannot see what it adds` })
+      return
+    }
+    // `Reflect.set(routes, …)` and friends take the table as an argument
+    // rather than a receiver, so the check above never sees them.
+    if (object.type === 'Identifier' && INDIRECT_MUTATORS[object.name]?.includes(method)) {
+      const subject = unwrap(node.arguments[0])
+      if (subject?.type === 'Identifier' && live.has(subject.name)) {
+        unreadable.push({
+          kind: 'route',
+          file: rel(file),
+          line: node.loc.start.line,
+          problem: `mutates the ${tableName} array through ${object.name}.${method}(); the gate cannot see what it adds`,
+        })
+      }
     }
   })
 
@@ -507,7 +567,27 @@ function collectRoutes(file) {
 // would fail a push over code that changes nothing.
 const ROUTE_MUTATORS = ['push', 'unshift', 'splice', 'pop', 'shift', 'fill', 'copyWithin', 'sort', 'reverse']
 
-function collectRouteRecords(arrayExpression, file) {
+// Calls that change their *first argument* instead of a receiver.
+const INDIRECT_MUTATORS = {
+  Reflect: ['set', 'defineProperty', 'deleteProperty'],
+  Object: ['assign', 'defineProperty', 'defineProperties'],
+}
+
+/** A record's own literal `meta.helpId`, or null — used for the child chain. */
+function helpIdOf(record) {
+  const meta = ownProperty(record, 'meta')
+  const metaValue = meta ? unwrap(meta.value) : null
+  if (!metaValue || metaValue.type !== 'ObjectExpression') return null
+  const property = metaValue.properties.find((candidate) => propertyKey(candidate) === 'helpId')
+  return property ? stringValue(property.value) : null
+}
+
+// `inheritedHelpId` is the parent chain's helpId: Vue Router exposes
+// `route.meta` as every matched record's metadata merged, so a child that
+// declares none inherits the parent's — and TopBar renders the parent's button
+// on the child's page. Requiring the child to repeat it would reject a
+// perfectly documented route.
+function collectRouteRecords(arrayExpression, file, inheritedHelpId = null) {
   for (const element of arrayExpression.elements) {
     if (element === null) continue
     const record = unwrap(element)
@@ -533,7 +613,7 @@ function collectRouteRecords(arrayExpression, file) {
       if (unwrap(children.value).type !== 'ArrayExpression') {
         unreadable.push({ kind: 'route', file: rel(file), line: children.loc.start.line, problem: "declares `children` the gate cannot read; give it an inline array" })
       } else {
-        collectRouteRecords(unwrap(children.value), file)
+        collectRouteRecords(unwrap(children.value), file, helpIdOf(record) ?? inheritedHelpId)
       }
     }
     const nameProperty = ownProperty(record, 'name')
@@ -555,7 +635,7 @@ function collectRouteRecords(arrayExpression, file) {
     }
     const meta = ownProperty(record, 'meta')
     const metaValue = meta ? unwrap(meta.value) : null
-    let helpId = null
+    let helpId = inheritedHelpId
     if (metaValue && metaValue.type === 'ObjectExpression') {
       // Order decides: `{ ...base, helpId: 'a' }` is the ordinary way to
       // extend defaults and the literal wins, while anything unreadable *after*
@@ -772,6 +852,14 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   const ast = parseSource(code, file)
   if (ast === null) return
   const constants = stringConstants(ast)
+  // Bindings that hold the help store: `const helpStore = useHelpStore()`.
+  const helpStoreNames = new Set()
+  walk(ast, (node) => {
+    if (node.type !== 'VariableDeclarator' || node.id.type !== 'Identifier') return
+    const init = unwrap(node.init)
+    const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
+    if (callee?.type === 'Identifier' && callee.name === 'useHelpStore') helpStoreNames.add(node.id.name)
+  })
   const objectOf = new Map()
   walk(ast, (node) => {
     if (node.type !== 'ObjectExpression') return
@@ -824,6 +912,21 @@ function collectScriptReferences(code, file, lineOffset = 0) {
       }
       return
     }
+    // `helpStore.open('x')` is the drawer's direct runtime entry point — the
+    // same target a HelpButton ends up passing — so a literal there is a live
+    // reference the gate has to resolve. HelpButton itself calls it with an
+    // expression, which stays out of scope like any other runtime value.
+    if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
+      const callee = node.callee
+      const method =
+        (callee.type === 'MemberExpression' || callee.type === 'OptionalMemberExpression') &&
+        (callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null)
+      if (method === 'open' && helpStoreNames.has(unwrap(callee.object).name)) {
+        const literal = node.arguments.length > 0 ? stringValue(unwrap(node.arguments[0])) : null
+        if (literal !== null) references.push({ helpId: literal, file: rel(file), line: node.loc.start.line + lineOffset })
+      }
+      return
+    }
     if (node.type !== 'ObjectProperty') return
     const key = propertyKey(node, constants)
     const value = stringValue(node.value)
@@ -836,6 +939,17 @@ function collectScriptReferences(code, file, lineOffset = 0) {
         line: node.loc.start.line + lineOffset,
         problem: 'assigns a string through a computed key the gate cannot resolve; it may be a helpId',
       })
+      return
+    }
+    // `defineProps({ helpId: { default: 'x' } })` renders that literal whenever
+    // the parent passes nothing, so it is a live target like any other.
+    if (HELP_PROP_NAMES.includes(key) && value === null) {
+      const options = unwrap(node.value)
+      if (options?.type === 'ObjectExpression') {
+        const fallback = options.properties.find((property) => propertyKey(property, constants) === 'default')
+        const literal = fallback ? stringValue(unwrap(fallback.value)) : null
+        if (literal !== null) references.push({ helpId: literal, file: rel(file), line: node.loc.start.line + lineOffset })
+      }
       return
     }
     // Vue normalises `{ 'help-id': 'x' }` in a render function to the same

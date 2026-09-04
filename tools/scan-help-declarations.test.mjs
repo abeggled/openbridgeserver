@@ -1006,3 +1006,100 @@ export default router
 
   assert.ok(problems(result).some((problem) => problem.includes('mutates')), problems(result).join(' | '))
 })
+
+test('a removeRoute inside a function does not hide a live route', () => {
+  // The function may never run, and this direction *reduces* the surface set:
+  // honouring it there could hide a route that ships.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Live', component: X }]
+const router = createRouter({ history: createWebHistory(), routes })
+function cleanup() { router.removeRoute('Live') }
+export { cleanup }
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result), ['Live'])
+})
+
+test('a function parameter shadowing a routes alias is not the live table', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Kept', component: X, meta: { helpId: 'kept' } }]
+const alias = routes
+function buildPreview(alias) { alias.push({ path: '/p', name: 'Preview', component: X }) }
+buildPreview([])
+const router = createRouter({ history: createWebHistory(), routes })
+export default router
+`,
+  })
+
+  assert.deepEqual(problems(result), [])
+})
+
+test('a literal passed to helpStore.open is a reference', () => {
+  // The store's open() is the drawer's direct runtime entry point.
+  const result = scan(view(`<template><button @click="go">x</button></template>
+<script setup>
+import { useHelpStore } from '@/stores/help'
+const helpStore = useHelpStore()
+function go() { helpStore.open('opened-directly') }
+</script>`))
+
+  assert.deepEqual(helpIds(result), ['opened-directly'])
+})
+
+test('helpStore.open with a runtime expression is not a reference', () => {
+  const result = scan(view(`<template><button @click="go">x</button></template>
+<script setup>
+import { useHelpStore } from '@/stores/help'
+const helpStore = useHelpStore()
+const props = defineProps({ helpId: String })
+function go() { helpStore.open(props.helpId) }
+</script>`))
+
+  assert.deepEqual(helpIds(result), [])
+})
+
+test('a child route inherits its parent meta.helpId', () => {
+  // Vue Router merges the matched records' meta, so the child's page shows the
+  // parent's help button; requiring the child to repeat the id rejected a
+  // route that is properly documented.
+  const result = scan(router(`{ path: '/parent', component: X, meta: { helpId: 'parent-page' },
+  children: [{ path: 'child', name: 'Child', component: X }] },`))
+
+  assert.deepEqual(result.routes.map((route) => [route.name, route.helpId]), [['Child', 'parent-page']])
+})
+
+test('a child route may override the inherited helpId', () => {
+  const result = scan(router(`{ path: '/parent', component: X, meta: { helpId: 'parent-page' },
+  children: [{ path: 'child', name: 'Child', component: X, meta: { helpId: 'child-page' } }] },`))
+
+  assert.deepEqual(result.routes.map((route) => [route.name, route.helpId]), [['Child', 'child-page']])
+})
+
+test('Reflect.set on the routes table fails closed', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Kept', component: X, meta: { helpId: 'kept' } }]
+Reflect.set(routes, routes.length, { path: '/b', name: 'Sneaky', component: X })
+const router = createRouter({ history: createWebHistory(), routes })
+export default router
+`,
+  })
+
+  assert.ok(problems(result).some((problem) => problem.includes('Reflect.set')), problems(result).join(' | '))
+})
+
+test('a literal prop default for helpId is a reference', () => {
+  const result = scan(view(`<template><HelpButton :help-id="props.helpId" /></template>
+<script setup>
+const props = defineProps({ helpId: { type: String, default: 'from-prop-default' } })
+</script>`))
+
+  assert.deepEqual(helpIds(result), ['from-prop-default'])
+})
