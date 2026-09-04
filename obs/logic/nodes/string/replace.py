@@ -21,10 +21,29 @@ NODE_TYPE = NodeTypeDef(
         # One empty rule so a freshly dropped block already shows an editable
         # row. Mirrored by _defaultReplaceRules() in NodeConfigPanel.vue.
         "rules": {
-            "type": "string",
-            "default": '[{"search":"","replace":"","mode":"plain","case_sensitive":true,"replace_all":true}]',
+            "type": "array",
             "label": "Regeln",
+            "description": "Ordered search/replace rules, each applied to the previous rule's result.",
+            "items": {
+                "type": "object",
+                "required": ["search"],
+                "properties": {
+                    "search": {"type": "string", "description": "Search term; a rule with no search term is skipped."},
+                    "replace": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["plain", "regex"], "default": "plain"},
+                    "case_sensitive": {"type": "boolean", "default": True},
+                    "replace_all": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "False replaces only the first occurrence.",
+                    },
+                },
+            },
+            "default": [
+                {"search": "", "replace": "", "mode": "plain", "case_sensitive": True, "replace_all": True},
+            ],
         },
     },
     color="#0891b2",
+    help_id="logic-block-string-replace",
 )

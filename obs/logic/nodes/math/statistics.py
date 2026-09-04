@@ -25,4 +25,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#7c3aed",
+    help_id="logic-block-statistics",
 )

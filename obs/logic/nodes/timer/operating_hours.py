@@ -23,4 +23,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#b45309",
+    help_id="logic-block-operating-hours",
 )

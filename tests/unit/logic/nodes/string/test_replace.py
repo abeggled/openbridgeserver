@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from obs.logic.nodes.string.replace import NODE_TYPE
 
 
@@ -15,7 +13,7 @@ def test_string_replace_declares_one_text_input_and_one_result_output():
 
 
 def test_string_replace_defaults_to_one_empty_plain_rule():
-    rules = json.loads(NODE_TYPE.config_schema["rules"]["default"])
+    rules = NODE_TYPE.config_schema["rules"]["default"]
 
     assert rules == [
         {"search": "", "replace": "", "mode": "plain", "case_sensitive": True, "replace_all": True},

@@ -618,6 +618,50 @@ def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
 
 @router.get("/node-types", response_model=list[NodeTypeDef])
 async def get_node_types(_user: str = Depends(get_current_user)) -> list[NodeTypeDef]:
+    """List every built-in Logic function block, for building a `flow_data` graph.
+
+    Each `NodeTypeDef` is the complete, authoritative contract for one block — this is the
+    single source of truth also used by the Logic editor, so nothing here goes stale.
+
+    **Ports and `flow_data` wiring.** A `LogicGraph`'s `flow_data` is `{nodes: [...], edges:
+    [...]}`. Each node has `id`, `type` (one of the `type` values in this catalogue), `position`
+    (`{x, y}`, cosmetic only), and `data` (the node's `config_schema` values, plus a `label`
+    string). Each edge has `id`, `source`/`target` (node ids) and `sourceHandle`/`targetHandle`
+    (port ids from that node type's `outputs`/`inputs`). A port's `type` is `"value"` (carries a
+    value every tick it has one) or `"trigger"` (carries a one-shot pulse, no persistent value).
+
+    **Execution semantics not visible elsewhere in this API:**
+    - A node's per-tick result is a dict keyed by output port id. A key **absent** from that dict
+      means "nothing produced this tick" — a trigger that did not fire, or a value withheld by the
+      block itself (e.g. `change_filter` only sets `changed` when the input actually changed).
+      This is different from the key being present with value `null`/`None`, which means a value
+      arrived but was empty/unset.
+    - `memory` is the **only** node allowed to close a feedback loop within one graph (it outputs
+      the previous tick's stored value) — any other cycle is rejected, see `POST /graphs/validate`.
+
+    **Resolving `help_id` to full prose documentation** (English and German, one paragraph per
+    block with the exact intended behaviour): `GET /help/help-index.json`, then
+    `.helpIds[<help_id>].en` (or `.de`) is a ready-to-fetch URL under `/help/...`. Not every type
+    has a `help_id` yet (`null` if undocumented).
+
+    **Minimal `flow_data` example** — a `compare` block driving a `datapoint_write`:
+    ```json
+    {
+      "nodes": [
+        {"id": "n1", "type": "datapoint_read", "position": {"x": 0, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}},
+        {"id": "n2", "type": "compare", "position": {"x": 200, "y": 0},
+         "data": {"operator": ">", "operand": 20}},
+        {"id": "n3", "type": "datapoint_write", "position": {"x": 400, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}}
+      ],
+      "edges": [
+        {"id": "e1", "source": "n1", "target": "n2", "sourceHandle": "value", "targetHandle": "in1"},
+        {"id": "e2", "source": "n2", "target": "n3", "sourceHandle": "out", "targetHandle": "value"}
+      ]
+    }
+    ```
+    """
     return list_node_types()
 
 
@@ -626,6 +670,15 @@ async def validate_graph(
     body: FlowData,
     _user: str = Depends(get_current_user),
 ) -> dict:
+    """Check `flow_data` for graph-topology problems before saving it.
+
+    Today this checks exactly two things: graph cycles not broken by a `memory` node, and timer
+    duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`). It does **not** validate
+    node `data` against each type's `config_schema` (types, enums, or the nested shape of fields
+    like `decision.conditions`) — a `{"status": "ok"}` response does not guarantee the graph will
+    execute as intended. `POST`/`PUT /graphs` accept and persist a structurally invalid node config
+    the same way; the mistake only shows up at run time.
+    """
     return {"status": "ok", "warnings": topology_warnings(body)}
 
 
@@ -648,6 +701,7 @@ async def create_graph(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Create a Logic graph. See `GET /node-types` for the `flow_data` authoring contract."""
     _validate_timer_durations(body.flow_data)
     principal = _principal_from_mutation_dependency(_user)
     delegated = await _require_logic_graph_creation(
@@ -703,6 +757,7 @@ async def update_graph_full(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Replace a Logic graph's `flow_data` (full save). See `GET /node-types` for the authoring contract."""
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
