@@ -45,28 +45,6 @@ and hierarchy selection in one step.
 
 The list loads further entries automatically as you scroll.
 
-## Data point detail {#datapoints-detail}
-
-Clicking the name in the table opens a data point's detail page. It summarises everything the
-system knows about that one data point, and is also where its bindings are maintained:
-
-- **Current value** — the last known value, updated live, with timestamp, MQTT topic, and
-  (if set) MQTT alias. Below it, **Write value** sets a value directly — via two buttons for
-  BOOLEAN, via an input field otherwise. The area is disabled only when the data point has
-  adapter bindings and none of them writes; a data point with **no** bindings at all stays
-  writable — its value then lives only inside OBS.
-- **Properties** — name, data type, unit, tags, plus the **Persist value** (value survives a
-  restart) and **Record history** (values are recorded long-term, see **Settings → History
-  DB**) switches. "Edit" opens the same dialog as in the data point list; "History →" jumps
-  to History with this data point pre-filtered.
-- **Hierarchy assignments** — the hierarchy nodes the data point is assigned to; assignments
-  can be added and removed right here.
-- **Adapter bindings** — all bindings to adapter instances, each with its direction (read,
-  write, read/write) and protocol-specific details (for KNX, e.g. group address and status
-  GA). New bindings are created here, existing ones edited, disabled, or deleted.
-- **Logic bindings** — the logic sheets that read or write this data point, with a jump into
-  the sheet. Informational only: the usage itself is edited in the Logic module.
-
 ## Create / edit form {#datapoints-form}
 
 Opens from "New" on this page, or "Edit" on a data point's detail page or table row. Both

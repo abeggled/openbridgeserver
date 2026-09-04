@@ -55,7 +55,7 @@
             >
               <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ background: nt.color }"></span>
               <span class="text-xs text-slate-700 dark:text-slate-200 flex-1 min-w-0 truncate">{{ $te('logic.nodeTypes.' + nt.type) ? $t('logic.nodeTypes.' + nt.type) : nt.label }}</span>
-              <HelpButton :help-id="helpIdForNodeType(nt.type)" compact class="flex-shrink-0" />
+              <HelpButton v-if="nt.help_id" :help-id="nt.help_id" compact class="flex-shrink-0" />
             </div>
           </div>
         </div>
@@ -79,16 +79,6 @@ const emit = defineEmits(['drag-start', 'toggle'])
 const { t } = useI18n()
 
 const CATEGORY_IDS = ['logic', 'datapoint', 'math', 'string', 'timer', 'astro', 'notification', 'integration', 'script', 'ai']
-
-// Per-block-type help. The help_id is derived from the node type rather than
-// held in a hand-maintained map: tools/check_help_contract.py enumerates the
-// same node types from obs.logic.registry and fails CI when one of them has no
-// `## … {#logic-block-<type>}` section, so every block the palette can offer is
-// guaranteed to have help. A map would have to be kept in sync by hand — and a
-// missing or mistyped entry showed up as a silently absent (or dead) button.
-// The gate also rejects a node type that is not lowercase snake_case, which is
-// what makes this transformation and the gate's own agree.
-const helpIdForNodeType = (type) => `logic-block-${type.replaceAll('_', '-')}`
 
 const categories = computed(() =>
   CATEGORY_IDS

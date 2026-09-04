@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
-
 from obs.logic.nodes.logic.value_mapping import NODE_TYPE
 
 
 def test_value_mapping_default_rules_do_not_persist_localized_names():
-    rules = json.loads(NODE_TYPE.config_schema["rules"]["default"])
+    rules = NODE_TYPE.config_schema["rules"]["default"]
 
     assert rules == [
         {"operator": "eq", "result": ""},

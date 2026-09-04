@@ -19,4 +19,5 @@ NODE_TYPE = NodeTypeDef(
         "out_max": {"type": "number", "default": 1},
     },
     color="#7c3aed",
+    help_id="logic-block-math-map",
 )

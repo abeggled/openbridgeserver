@@ -53,11 +53,11 @@ def _widget(name: str, help_id: str) -> gate.Surface:
     return gate.Surface(kind="widget", name=name, help_id=help_id, origin=f"frontend/src/widgets/{name}/index.ts")
 
 
-def _logic_block(name: str) -> gate.Surface:
+def _logic_block(name: str, help_id: str | None = None) -> gate.Surface:
     return gate.Surface(
         kind="logic-block",
         name=name,
-        help_id=f"logic-block-{gate.kebab(name)}",
+        help_id=help_id if help_id is not None else f"logic-block-{gate.kebab(name)}",
         origin="obs.logic.registry.BUILTIN_NODE_TYPES",
     )
 
@@ -65,9 +65,10 @@ def _logic_block(name: str) -> gate.Surface:
 class _NodeType:
     """Stand-in for obs.logic.models.NodeTypeDef — only what the gate reads."""
 
-    def __init__(self, type: str, hidden_from_palette: bool = False) -> None:
+    def __init__(self, type: str, hidden_from_palette: bool = False, help_id: str | None = None) -> None:
         self.type = type
         self.hidden_from_palette = hidden_from_palette
+        self.help_id = help_id
 
 
 def _allow(key: str, reason: str = "because", line: int = 1) -> gate.AllowlistEntry:
@@ -154,13 +155,31 @@ def test_parse_skins_is_empty_for_a_checkout_without_skins(tmp_path):
 # ── logic block enumeration ──────────────────────────────────────────────────
 
 
-def test_parse_logic_block_types_derives_the_expected_help_id():
-    surfaces = gate.parse_logic_block_types([_NodeType("edge_detect"), _NodeType("and")])
+def test_parse_logic_block_types_reads_the_declared_help_id():
+    """The backend declares the id; it is not computable from the type name.
+
+    `scale` is documented as `logic-block-math-map` and `gate` as
+    `logic-block-gate` — some ids carry their category, some do not, and one
+    differs from its type outright, which is why deriving them was wrong.
+    """
+    surfaces = gate.parse_logic_block_types([_NodeType("scale", help_id="logic-block-math-map"), _NodeType("gate", help_id="logic-block-gate")])
 
     assert [(surface.kind, surface.name, surface.help_id) for surface in surfaces] == [
-        ("logic-block", "edge_detect", "logic-block-edge-detect"),
-        ("logic-block", "and", "logic-block-and"),
+        ("logic-block", "scale", "logic-block-math-map"),
+        ("logic-block", "gate", "logic-block-gate"),
     ]
+
+
+def test_parse_logic_block_types_reports_a_block_that_declares_no_help_id():
+    """NodePalette renders no button for it, so the user meets no dead link —
+    but the block ships undocumented, which is the gap this gate names."""
+    surfaces = gate.parse_logic_block_types([_NodeType("undocumented")])
+
+    assert [(surface.name, surface.help_id) for surface in surfaces] == [("undocumented", None)]
+
+    errors = gate.validate(surfaces, [], _index(), [])
+    assert len(errors) == 1
+    assert "no help_id declared" in errors[0]
 
 
 def test_parse_logic_block_types_skips_blocks_hidden_from_the_palette():
@@ -185,28 +204,12 @@ def test_parse_logic_block_types_matches_the_real_registry():
     assert "notify_sms" not in names  # hidden_from_palette, legacy
 
 
-def test_the_derived_help_id_matches_what_nodepalette_derives():
-    """NodePalette.vue builds `logic-block-${type.replaceAll('_', '-')}`.
-
-    The gate would happily check an id the GUI never asks for if the two
-    transformations disagreed, so pin them against each other here.
-    """
+def test_every_palette_visible_block_declares_the_id_the_gui_renders():
+    """NodePalette.vue renders `nt.help_id` straight from the node type
+    definition, so the gate must check that same declared value — checking a
+    computed one would verify an id the GUI never asks for."""
     for surface in gate.parse_logic_block_types(gate.builtin_logic_node_types()):
-        assert surface.help_id == "logic-block-" + surface.name.replace("_", "-")
-
-
-def test_validate_rejects_a_logic_node_type_that_is_not_snake_case():
-    surface = gate.Surface(
-        kind="logic-block",
-        name="edgeDetect",
-        help_id="logic-block-edge-detect",
-        origin="obs.logic.registry.BUILTIN_NODE_TYPES",
-    )
-
-    errors = gate.validate([surface], [], _index("logic-block-edge-detect"), [])
-
-    assert len(errors) == 1
-    assert "must be lowercase snake_case" in errors[0]
+        assert surface.help_id, f"{surface.name} is offered by the palette but declares no help_id"
 
 
 def test_validate_reports_an_undocumented_logic_block():

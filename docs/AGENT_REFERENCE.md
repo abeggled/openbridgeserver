@@ -312,10 +312,10 @@ If Weblate (or a human translator) changes or drops the `{#settings-general}` pa
 |---|---|---|
 | Admin route | `gui/src/router/index.js` (`routes[]`, named routes only) | `route.meta.helpId` |
 | Visu widget type | `frontend/src/widgets/*/index.ts` (`WidgetRegistry.register`) | `widget-<kebab-case type>` |
-| Logic function block | `obs.logic.registry.BUILTIN_NODE_TYPES` (excluding `hidden_from_palette`) | `logic-block-<kebab-case type>` |
+| Logic function block | `obs.logic.registry.BUILTIN_NODE_TYPES` (excluding `hidden_from_palette`) | `NodeTypeDef.help_id` |
 | Skin | `<obs-visu-skins>/packages/skins/*/manifest.json` | `skin-<kebab-case name>` |
 
-Routes declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`. The other three follow a convention. For Logic blocks that convention is shared with the GUI: `NodePalette.vue` derives a block's help_id as `` `logic-block-${type.replaceAll('_', '-')}` `` and renders a button for every block it offers, which is only safe because this gate guarantees the id resolves — so **adding a Logic function block without a help section fails CI**. The gate additionally rejects a node type that is not lowercase snake_case, which is what makes the GUI's transformation and its own provably agree.
+Routes and Logic blocks declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`, and `NodePalette.vue` renders a block's button from `nt.help_id`, served by the backend as part of the node type definition (`obs/logic/models.py::NodeTypeDef.help_id`). These ids are not computable from the type name — `scale` is documented as `logic-block-math-map`, `gate` as `logic-block-gate` — so the gate reads the declared value and checks that. A palette-visible block that declares none renders no button, so no user meets a dead link, but it ships undocumented: the gate reports it, and it needs either a help section or an allowlist entry with a reason. **Adding a Logic function block without a help section fails CI.** Widgets and skins, which have no such declaration, still follow the naming convention in the table.
 
 `hidden_from_palette` blocks are excluded by rule rather than by allowlist: the palette is the only place a block can be picked from, so one it never offers is not a surface anyone can land on (today, the two legacy notification blocks).
 

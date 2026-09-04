@@ -1,10 +1,11 @@
 /**
- * Integrated help drawer wiring on NodePalette.vue — one HelpButton per block
- * type the palette offers (see help/de/logic/blocks-logic.md and onward per
- * category). The help_id is derived from the node type rather than looked up
- * in a hand-maintained map; tools/check_help_contract.py enumerates the same
- * node types from obs.logic.registry and fails CI when one of them has no
- * help section, which is what makes every derived id safe to render.
+ * Integrated help drawer wiring on NodePalette.vue — one HelpButton per
+ * documented block type. `help_id` is served by the backend as part of each
+ * node type's definition (`GET /api/v1/logic/node-types`, see
+ * `obs/logic/models.py::NodeTypeDef.help_id`) and points at the matching
+ * anchor in help/de/logic/blocks-*.md and onward per category. A type whose
+ * definition carries no `help_id` gets no button yet rather than one
+ * pointing at nonexistent content.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -12,29 +13,29 @@ import { createPinia, setActivePinia } from 'pinia'
 import NodePalette from '@/components/logic/NodePalette.vue'
 
 const NODE_TYPES = [
-  { type: 'and',             label: 'AND',           category: 'logic',     color: '#4ade80' },
-  { type: 'or',              label: 'OR',            category: 'logic',     color: '#4ade80' },
-  { type: 'datapoint_read',  label: 'Objekt lesen',  category: 'datapoint', color: '#0f766e' },
-  { type: 'datapoint_write', label: 'Objekt schreiben', category: 'datapoint', color: '#0f766e' },
-  { type: 'math_formula',  label: 'Formel',  category: 'math',   color: '#7c3aed' },
-  { type: 'string_concat', label: 'String Verketten', category: 'string', color: '#0891b2' },
-  { type: 'timer_delay',   label: 'Verzögerung', category: 'timer', color: '#b45309' },
-  { type: 'astro_sun',     label: 'Astro Sonne', category: 'astro', color: '#f59e0b' },
-  { type: 'notify_message', label: 'Benachrichtigung', category: 'notification', color: '#dc2626' },
-  { type: 'message_archive', label: 'Meldungsarchiv', category: 'notification', color: '#2563eb' },
-  { type: 'wake_on_lan', label: 'Wake on LAN', category: 'integration', color: '#0369a1' },
-  { type: 'host_check', label: 'Host Check (Ping)', category: 'integration', color: '#0369a1' },
-  { type: 'json_extractor', label: 'JSON Extractor', category: 'integration', color: '#0369a1' },
-  { type: 'xml_extractor', label: 'XML Extractor', category: 'integration', color: '#0369a1' },
-  { type: 'substring_extractor', label: 'Substring / RegEx', category: 'integration', color: '#0369a1' },
-  { type: 'ical', label: 'iCalendar', category: 'integration', color: '#0369a1' },
-  { type: 'api_client', label: 'API Client', category: 'integration', color: '#0e7490' },
-  { type: 'python_script', label: 'Python Script', category: 'script', color: '#65a30d' },
-  { type: 'ai_logic', label: 'AI Logic', category: 'ai', color: '#9333ea' },
-  // Multi-underscore type: the derivation has to replace every separator, not
-  // just the first (`replaceAll`, not `replace`).
-  { type: 'edge_detect', label: 'Flankenerkennung', category: 'logic', color: '#1d4ed8' },
-  { type: 'min_max_tracker', label: 'Min/Max', category: 'math', color: '#7c3aed' },
+  { type: 'and',             label: 'AND',           category: 'logic',     color: '#4ade80', help_id: 'logic-block-and' },
+  { type: 'or',              label: 'OR',            category: 'logic',     color: '#4ade80', help_id: 'logic-block-or' },
+  { type: 'datapoint_read',  label: 'Objekt lesen',  category: 'datapoint', color: '#0f766e', help_id: 'logic-block-datapoint-read' },
+  { type: 'datapoint_write', label: 'Objekt schreiben', category: 'datapoint', color: '#0f766e', help_id: 'logic-block-datapoint-write' },
+  { type: 'math_formula',  label: 'Formel',  category: 'math',   color: '#7c3aed', help_id: 'logic-block-math-formula' },
+  { type: 'string_concat', label: 'String Verketten', category: 'string', color: '#0891b2', help_id: 'logic-block-string-concat' },
+  { type: 'timer_delay',   label: 'Verzögerung', category: 'timer', color: '#b45309', help_id: 'logic-block-timer-delay' },
+  { type: 'astro_sun',     label: 'Astro Sonne', category: 'astro', color: '#f59e0b', help_id: 'logic-block-astro-sun' },
+  { type: 'notify_message', label: 'Benachrichtigung', category: 'notification', color: '#dc2626', help_id: 'logic-block-notify-message' },
+  { type: 'message_archive', label: 'Meldungsarchiv', category: 'notification', color: '#2563eb', help_id: 'logic-block-message-archive' },
+  { type: 'wake_on_lan', label: 'Wake on LAN', category: 'integration', color: '#0369a1', help_id: 'logic-block-wake-on-lan' },
+  { type: 'host_check', label: 'Host Check (Ping)', category: 'integration', color: '#0369a1', help_id: 'logic-block-host-check' },
+  { type: 'json_extractor', label: 'JSON Extractor', category: 'integration', color: '#0369a1', help_id: 'logic-block-json-extractor' },
+  { type: 'xml_extractor', label: 'XML Extractor', category: 'integration', color: '#0369a1', help_id: 'logic-block-xml-extractor' },
+  { type: 'substring_extractor', label: 'Substring / RegEx', category: 'integration', color: '#0369a1', help_id: 'logic-block-substring-extractor' },
+  { type: 'ical', label: 'iCalendar', category: 'integration', color: '#0369a1', help_id: 'logic-block-ical' },
+  { type: 'api_client', label: 'API Client', category: 'integration', color: '#0e7490', help_id: 'logic-block-api-client' },
+  { type: 'python_script', label: 'Python Script', category: 'script', color: '#65a30d', help_id: 'logic-block-python-script' },
+  { type: 'ai_logic', label: 'AI Logic', category: 'ai', color: '#9333ea', help_id: 'logic-block-ai-logic' },
+  // Synthetic type, not a real backend node — exercises the "no help_id on
+  // the node type definition" branch. edge_detect/notify_pushover/notify_sms
+  // are the real-world equivalent today (see issue #1200 for edge_detect).
+  { type: 'not_yet_documented', label: 'Not Yet Documented', category: 'ai', color: '#9333ea' },
 ]
 
 function mockStorage() {
@@ -85,20 +86,11 @@ describe('NodePalette — per-block help buttons', () => {
     expect(helpButton(wrapper, helpId).exists()).toBe(true)
   })
 
-  it('renders a help button for every offered block type', () => {
+  it('does not render a help button for a block type whose definition carries no help_id', () => {
     const wrapper = mountPalette()
-
-    for (const { type } of NODE_TYPES) {
-      const helpId = `logic-block-${type.replaceAll('_', '-')}`
-      expect(helpButton(wrapper, helpId).exists()).toBe(true)
-    }
-  })
-
-  it('replaces every underscore in the derived help_id, not just the first', () => {
-    const wrapper = mountPalette()
-
-    expect(helpButton(wrapper, 'logic-block-min-max-tracker').exists()).toBe(true)
-    expect(helpButton(wrapper, 'logic-block-edge-detect').exists()).toBe(true)
+    // not_yet_documented is a synthetic type with no help_id — every real
+    // registered node type is now documented (all 10 categories shipped).
+    expect(wrapper.find('[data-testid="help-button-logic-block-not-yet-documented"]').exists()).toBe(false)
   })
 
   it('uses the compact HelpButton size so a documented row does not tower over undocumented ones (issue feedback)', () => {

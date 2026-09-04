@@ -229,14 +229,11 @@ today, so it is deliberately left as an explicit table.
      `_stateful_relay_correction_ids` so the manager's correction pass reaches it.
 5. **Add focused tests** in `tests/unit/logic/nodes/<category>/test_<block>.py`, mirroring the
    source layout, plus execution tests for the dispatcher branch.
-6. **Write its help section** — `## <Label> {#logic-block-<type with `_` as `-`>}` in
-   `help/de/logic/blocks-<category>.md` **and** `help/en/logic/blocks-<category>.md`.
-   `NodePalette.vue` derives that id from the node type and renders a help button for every block
-   it offers, and `tools/check_help_contract.py` fails CI when the section is missing — so this
-   step is not optional for a palette-visible block (see `Help contract gate` in
-   `docs/AGENT_REFERENCE.md`). A `hidden_from_palette` block is exempt by rule.
-7. Frontend, translations and the block table in `README.md` / `README.de.md` follow the normal GUI
-   and i18n rules.
+6. **Write its help section and declare its id** — add `## <Label> {#<help-id>}` to
+   `help/{de,en}/logic/blocks-<category>.md` and set the matching `help_id="…"` on the node type
+   definition. `NodePalette.vue` renders a help button from that declared value, and
+   `tools/check_help_contract.py` fails CI when a palette-visible block declares no id or points at a
+   section that does not exist. A block without `help_id` gets no button rather than a dead one.
 
 Beyond the capability classification (step 3) and the dispatcher branch (step 4) — both of which are
 part of implementing the block, not of defining the catalogue — no shared file is involved: the

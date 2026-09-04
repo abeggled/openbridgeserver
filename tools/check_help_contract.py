@@ -15,7 +15,7 @@ requires that id to resolve in *every* locale of the generated help index:
     ------------   ------------------------------------   -----------------------
     route          gui/src/router/index.js (``routes[]``)  ``route.meta.helpId``
     widget         frontend/src/widgets/*/index.ts         ``widget-<kebab type>``
-    logic block    obs.logic.registry.BUILTIN_NODE_TYPES   ``logic-block-<kebab type>``
+    logic block    obs.logic.registry.BUILTIN_NODE_TYPES   ``NodeTypeDef.help_id``
     skin           <skins repo>/packages/skins/*/          ``skin-<kebab name>``
 
 Routes carry their id explicitly because the Admin-GUI reads it at runtime
@@ -76,19 +76,13 @@ _HELP_ID_RE = re.compile(r"^[A-Za-z][\w-]*$")
 
 _SURFACE_KINDS = ("route", "widget", "logic-block", "skin")
 
-# NodePalette.vue derives a block's help_id as `logic-block-${type.replaceAll('_', '-')}`.
-# That is identical to kebab() only while the node type is lowercase snake_case,
-# so the gate enforces the shape instead of letting the two silently disagree
-# on a camelCase type and check an id the GUI never asks for.
-_LOGIC_NODE_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-
 # Kinds whose help_id is derived from the surface's own name. Two of them
 # landing on the same id means the derivation cannot tell them apart, so one
 # surface's "documented" status is really borrowed from the other. A route, by
 # contrast, declares its id by hand, and pointing two routes at one page (a
 # detail route at its list page, say) is a legitimate authoring choice — both
 # buttons resolve, which is all the contract asks for.
-_DERIVED_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
+_DERIVED_ID_KINDS = frozenset({"widget", "skin"})
 
 # `:help-id="expr"` / `v-bind:help-id="expr"` is a dynamic binding whose value
 # is only known at runtime — the leading colon is what distinguishes it from
@@ -252,17 +246,32 @@ def parse_logic_block_types(node_types, origin: str = "obs.logic.registry.BUILTI
 
     ``hidden_from_palette`` blocks are skipped: NodePalette.vue filters them
     out, so there is no place a user could meet one and press a help button.
+
+    The help_id is read from the node type definition, never derived from the
+    type name. The backend declares it (``NodeTypeDef.help_id``) and the ids
+    genuinely cannot be computed: ``scale`` is documented as
+    ``logic-block-math-map`` and ``gate`` as ``logic-block-gate`` — some carry
+    their category, some do not, and one differs from its type name outright.
+
+    A palette-visible block whose definition declares no help_id yields a
+    surface with ``help_id=None``. NodePalette.vue renders no button for it
+    (``v-if="nt.help_id"``), so nothing is broken for the user — but the block
+    ships without help, which is the gap this gate exists to name. It is
+    reported like any other missing page and can be allowlisted with a reason.
     """
-    return [
-        Surface(
-            kind="logic-block",
-            name=node_type.type,
-            help_id=f"logic-block-{kebab(node_type.type)}",
-            origin=origin,
+    surfaces = []
+    for node_type in node_types:
+        if getattr(node_type, "hidden_from_palette", False):
+            continue
+        surfaces.append(
+            Surface(
+                kind="logic-block",
+                name=node_type.type,
+                help_id=getattr(node_type, "help_id", None) or None,
+                origin=origin,
+            )
         )
-        for node_type in node_types
-        if not getattr(node_type, "hidden_from_palette", False)
-    ]
+    return surfaces
 
 
 # An end tag closes the block as soon as `script` is followed by whitespace or
@@ -495,11 +504,6 @@ def validate(
     documented: set[str] = set()
     seen_ids: dict[str, str] = {}
     for surface in sorted(surfaces, key=lambda item: (item.kind, item.name)):
-        if surface.kind == "logic-block" and not _LOGIC_NODE_TYPE_RE.fullmatch(surface.name):
-            errors.append(
-                f"{surface.key}: logic node type must be lowercase snake_case so NodePalette's "
-                f"derived help_id matches the one checked here ({surface.origin})"
-            )
         if surface.help_id is None:
             if surface.key not in allowed:
                 errors.append(f"{surface.key}: no help_id declared in {surface.origin} — add one, or allowlist it with a reason")

@@ -57,3 +57,4 @@ widget:Zeitschaltuhr  # Visu widget help not written yet (#1183 follow-up).
 # Skins live in the separate obs-visu-skins repository and are only checked
 # when --skins-dir / OBS_VISU_SKINS_DIR points at a checkout of it. No
 # exemptions so far.
+
