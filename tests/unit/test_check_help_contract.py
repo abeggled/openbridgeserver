@@ -212,6 +212,28 @@ def test_every_palette_visible_block_declares_the_id_the_gui_renders():
         assert surface.help_id, f"{surface.name} is offered by the palette but declares no help_id"
 
 
+def test_validate_rejects_two_logic_blocks_sharing_one_help_id():
+    """The palette renders one button per block pointing at that block's own
+    section, so a shared id means one block's help is really the other's."""
+    surfaces = [
+        _logic_block("edge_detect", help_id="logic-block-change-filter"),
+        _logic_block("change_filter", help_id="logic-block-change-filter"),
+    ]
+
+    errors = gate.validate(surfaces, [], _index("logic-block-change-filter"), [])
+
+    assert len(errors) == 1
+    assert "collides with" in errors[0]
+
+
+def test_validate_allows_two_routes_to_share_one_help_id():
+    """A detail route pointing at its list page is legitimate: both buttons
+    resolve, which is all the contract asks for."""
+    surfaces = [_route("List", "things"), _route("Detail", "things")]
+
+    assert gate.validate(surfaces, [], _index("things"), []) == []
+
+
 def test_validate_reports_an_undocumented_logic_block():
     errors = gate.validate([_logic_block("edge_detect")], [], _index(), [])
 
@@ -351,7 +373,7 @@ def test_validate_reports_a_collision_between_two_derived_help_ids():
 
     errors = gate.validate([first, second], [], _index("widget-qr-code"), [])
 
-    assert errors == ["widget:Qr_code: derived help_id 'widget-qr-code' collides with widget:QrCode"]
+    assert errors == ["widget:Qr_code: help_id 'widget-qr-code' collides with widget:QrCode"]
 
 
 def test_validate_reports_help_index_duplicates():

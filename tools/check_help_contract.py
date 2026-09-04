@@ -76,13 +76,18 @@ _HELP_ID_RE = re.compile(r"^[A-Za-z][\w-]*$")
 
 _SURFACE_KINDS = ("route", "widget", "logic-block", "skin")
 
-# Kinds whose help_id is derived from the surface's own name. Two of them
-# landing on the same id means the derivation cannot tell them apart, so one
-# surface's "documented" status is really borrowed from the other. A route, by
-# contrast, declares its id by hand, and pointing two routes at one page (a
-# detail route at its list page, say) is a legitimate authoring choice — both
-# buttons resolve, which is all the contract asks for.
-_DERIVED_ID_KINDS = frozenset({"widget", "skin"})
+# Kinds where two surfaces sharing one id means one of them is not really
+# documented: its "documented" status is borrowed from the other, and its help
+# button opens the other surface's section. For widgets and skins the id is
+# derived from the name, so a collision also means the derivation cannot tell
+# them apart. Logic blocks declare their id, but the palette renders one button
+# per block pointing at that block's own section, so a shared id is the same
+# mistake — this is what the earlier derivation enforced implicitly.
+#
+# Routes are the exception: pointing two routes at one page (a detail route at
+# its list page, say) is a legitimate authoring choice, and both buttons
+# resolve, which is all the contract asks for.
+_UNIQUE_ID_KINDS = frozenset({"widget", "logic-block", "skin"})
 
 # `:help-id="expr"` / `v-bind:help-id="expr"` is a dynamic binding whose value
 # is only known at runtime — the leading colon is what distinguishes it from
@@ -511,13 +516,13 @@ def validate(
         if not _HELP_ID_RE.fullmatch(surface.help_id):
             errors.append(f"{surface.key}: {surface.help_id!r} is not a valid help_id ({surface.origin})")
             continue
-        if surface.kind in _DERIVED_ID_KINDS:
+        if surface.kind in _UNIQUE_ID_KINDS:
             previous = seen_ids.get(surface.help_id)
             # A repeated registration of the *same* type is not a collision:
             # WidgetRegistry keeps one definition per type and deliberately
             # replaces it, so both lines describe a single surface.
             if previous is not None and previous != surface.key:
-                errors.append(f"{surface.key}: derived help_id {surface.help_id!r} collides with {previous}")
+                errors.append(f"{surface.key}: help_id {surface.help_id!r} collides with {previous}")
             seen_ids[surface.help_id] = surface.key
         if surface.help_id in help_ids:
             documented.add(surface.key)

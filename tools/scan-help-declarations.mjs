@@ -377,6 +377,12 @@ function collectRoutes(file) {
       // read. A later auxiliary router's additions are not the production
       // router's routes.
       if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called) && routerNames.size === 0) routerNames.add(declarator.id.name)
+      // `const alias = router` is the same object: an `addRoute` on it reaches
+      // the production router, so missing this was a false negative — the one
+      // direction a coverage gate must not fail in.
+      if (declarator.id.type === 'Identifier' && init?.type === 'Identifier' && routerNames.has(init.name)) {
+        routerNames.add(declarator.id.name)
+      }
     }
   }
 

@@ -931,3 +931,20 @@ export default router
 
   assert.deepEqual(result.routes.map((route) => [route.name, route.helpId]), [['Same', 'same']])
 })
+
+test('addRoute on an alias of the production router is seen', () => {
+  // `const alias = router` is the same object — missing it was a false
+  // negative, the one direction a coverage gate must not fail in.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Kept', component: X, meta: { helpId: 'kept' } }]
+const router = createRouter({ history: createWebHistory(), routes })
+const alias = router
+alias.addRoute({ path: '/b', name: 'ViaAlias', component: X })
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result).sort(), ['Kept', 'ViaAlias'])
+})
