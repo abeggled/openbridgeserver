@@ -989,3 +989,20 @@ test('an external template referenced through the @ alias is scanned', () => {
 
   assert.deepEqual(helpIds(result), ['from-alias-template'])
 })
+
+test('a mutation through an alias of the routes table fails closed', () => {
+  // `const alias = routes` is the same array — a push through it changes what
+  // createRouter receives, so ignoring it let an undocumented route ship.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Kept', component: X, meta: { helpId: 'kept' } }]
+const alias = routes
+alias.push({ path: '/b', name: 'ViaTableAlias', component: X })
+const router = createRouter({ history: createWebHistory(), routes })
+export default router
+`,
+  })
+
+  assert.ok(problems(result).some((problem) => problem.includes('mutates')), problems(result).join(' | '))
+})

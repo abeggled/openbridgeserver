@@ -453,12 +453,33 @@ function collectRoutes(file) {
   // Anything that changes the table after it is written contributes routes
   // this parse never sees. Only the module's own `routes` counts: a helper
   // with a local one of the same name is unrelated.
+  // `const alias = routes` points at the same array, so a push through it
+  // changes the table `createRouter` receives. Watching only the original
+  // binding was a false negative: an undocumented route shipped while the gate
+  // reported success. Chains of aliases are followed.
+  const tableNames = new Set([tableName])
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const statement of ast.program.body) {
+      const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+      if (!inner || inner.type !== 'VariableDeclaration') continue
+      for (const declarator of inner.declarations) {
+        const init = unwrap(declarator.init)
+        if (declarator.id.type !== 'Identifier' || init?.type !== 'Identifier') continue
+        if (tableNames.has(init.name) && !tableNames.has(declarator.id.name)) {
+          tableNames.add(declarator.id.name)
+          changed = true
+        }
+      }
+    }
+  }
+
   walkOutsideShadow(ast, tableName, (node) => {
     if (node.type === 'AssignmentExpression') {
       const target = node.left
-      const whole = target.type === 'Identifier' && target.name === tableName
+      const whole = target.type === 'Identifier' && tableNames.has(target.name)
       // `routes[0] = …` swaps out a record the scan already read.
-      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && unwrap(target.object).name === tableName
+      const element = target.type === 'MemberExpression' && unwrap(target.object).type === 'Identifier' && tableNames.has(unwrap(target.object).name)
       if (whole || element) {
         unreadable.push({
           kind: 'route',
@@ -474,7 +495,7 @@ function collectRoutes(file) {
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     const object = unwrap(callee.object)
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
-    if (object.type === 'Identifier' && object.name === tableName && ROUTE_MUTATORS.includes(method)) {
+    if (object.type === 'Identifier' && tableNames.has(object.name) && ROUTE_MUTATORS.includes(method)) {
       unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the ${tableName} array with ${method}(); the gate cannot see what it adds` })
     }
   })
