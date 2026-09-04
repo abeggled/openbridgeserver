@@ -62,7 +62,11 @@ const REFERENCE_DIRS = ['gui/src', 'frontend/src']
 
 const routes = []
 // Names taken back out with `router.removeRoute(...)` before the router ships.
-const removedRouteNames = new Set()
+// Each entry is the source offset of a `removeRoute(name)` call. A record is
+// only cancelled by a removal that comes *after* it: `removeRoute('X')`
+// followed by `addRoute({ name: 'X' })` re-registers a live route, and a set
+// of names alone would have dropped it.
+const routeRemovals = []
 const widgets = []
 const references = []
 const unreadable = []
@@ -398,7 +402,7 @@ function collectRoutes(file) {
     if (method === 'removeRoute') {
       const target = unwrap(node.arguments[0])
       const name = target ? stringValue(target) : null
-      if (name !== null) removedRouteNames.add(name)
+      if (name !== null) routeRemovals.push({ name, at: node.start })
       else {
         unreadable.push({
           kind: 'route',
@@ -553,7 +557,7 @@ function collectRouteRecords(arrayExpression, file) {
         }
       }
     }
-    routes.push({ name, helpId, file: rel(file), line: record.loc.start.line })
+    routes.push({ name, helpId, file: rel(file), line: record.loc.start.line, at: record.start })
   }
 }
 
@@ -570,9 +574,32 @@ function sfcScript(file, source) {
   }
 }
 
-/** Resolve a relative import the way the bundler does, or null. */
+/** `@/x` resolves against the `src` of whichever frontend the file lives in. */
+function resolveAliased(fromDir, specifier) {
+  for (const app of ['frontend', 'gui']) {
+    const src = join(SCAN_ROOT, app, 'src')
+    if (fromDir === src || fromDir.startsWith(src + '/')) return join(src, specifier.slice(2))
+  }
+  return null
+}
+
+/** True for an import the bundler resolves inside this repository.
+ *
+ * `@` is the alias both frontends configure for their own `src` (see
+ * `frontend/vite.config.ts` and `gui/vite.config.js`), and it is the ordinary
+ * way modules here refer to each other — a widget entry pulling a registration
+ * helper in through `@/widgets/…` is not exotic. Treating only `./…` as local
+ * meant those edges were never followed, so a registration behind one was
+ * invisible to the gate.
+ */
+function isLocalSpecifier(specifier) {
+  return specifier.startsWith('.') || specifier.startsWith('@/')
+}
+
+/** Resolve a repository-local import the way the bundler does, or null. */
 function resolveLocalModule(fromDir, specifier) {
-  const base = resolve(fromDir, specifier)
+  const base = specifier.startsWith('@/') ? resolveAliased(fromDir, specifier) : resolve(fromDir, specifier)
+  if (base === null) return null
   const suffixes = [...WIDGET_ENTRY_SUFFIXES, '.vue']
   const candidates = [base, ...suffixes.map((suffix) => base + suffix), ...suffixes.map((suffix) => join(base, `index${suffix}`))]
   return candidates.find((candidate) => statSync(candidate, { throwIfNoEntry: false })?.isFile()) ?? null
@@ -596,7 +623,7 @@ function collectWidgets(file, seen = new Set()) {
   walk(ast, (node) => {
     if (node.type !== 'Import' && !(node.type === 'CallExpression' && node.callee.type === 'Import')) return
     const specifier = node.type === 'CallExpression' ? stringValue(node.arguments[0]) : null
-    if (specifier === null || !specifier.startsWith('.')) return
+    if (specifier === null || !isLocalSpecifier(specifier)) return
     const target = resolveLocalModule(dirname(file), specifier)
     if (target !== null && CODE_SUFFIXES.some((suffix) => target.endsWith(suffix))) collectWidgets(target, seen)
   })
@@ -610,7 +637,7 @@ function collectWidgets(file, seen = new Set()) {
     const specifiers = statement.specifiers ?? []
     if (specifiers.length > 0 && specifiers.every((specifier) => specifier.importKind === 'type' || specifier.exportKind === 'type')) continue
     const source = statement.source?.value
-    if (!source || !source.startsWith('.')) continue
+    if (!source || !isLocalSpecifier(source)) continue
     const target = resolveLocalModule(dirname(file), source)
     // A stylesheet or other asset the entry imports is not a module that can
     // register anything, and Babel cannot read it.
@@ -910,6 +937,9 @@ for (const dir of REFERENCE_DIRS) for (const file of sourceFiles(join(SCAN_ROOT,
 
 // A removed route is not a surface: it is gone from the matcher before the
 // router is exported, so nobody can reach it and there is nothing to document.
-const liveRoutes = routes.filter((route) => !removedRouteNames.has(route.name))
+// Only a removal that follows the registration cancels it — order decides.
+const liveRoutes = routes
+  .filter((route) => !routeRemovals.some((removal) => removal.name === route.name && removal.at > route.at))
+  .map(({ at, ...route }) => route)
 
 process.stdout.write(JSON.stringify({ routes: liveRoutes, widgets, references, unreadable }) + '\n')

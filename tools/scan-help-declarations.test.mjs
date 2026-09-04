@@ -872,3 +872,33 @@ test('a bound help-id that is a concatenation is not read as a literal', () => {
 test('a bound help-id given as a template literal is read', () => {
   assert.deepEqual(helpIds(scan(view('<template><HelpButton :help-id="`from-template`" /></template>'))), ['from-template'])
 })
+
+test('a route removed and then registered again stays a surface', () => {
+  // Order decides: a name-only filter dropped the live re-registration.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Kept', component: X, meta: { helpId: 'kept' } }]
+const router = createRouter({ history: createWebHistory(), routes })
+router.removeRoute('Temp')
+router.addRoute({ path: '/t', name: 'Temp', component: X })
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result).sort(), ['Kept', 'Temp'])
+})
+
+test('a widget registration reached through the @ alias is enumerated', () => {
+  // `@` is both frontends' alias for their own src, and the ordinary way
+  // modules here import each other — following only `./…` missed the edge.
+  const result = scan({
+    'frontend/src/widgets/Probe/index.ts': `import '@/widgets/Probe/helper'`,
+    'frontend/src/widgets/Probe/helper.ts': `
+import { WidgetRegistry } from '@/widgets/registry'
+WidgetRegistry.register({ type: 'ViaAlias' })
+`,
+  })
+
+  assert.deepEqual(result.widgets.map((widget) => widget.type), ['ViaAlias'])
+})
