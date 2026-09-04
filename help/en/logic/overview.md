@@ -2,7 +2,7 @@
 title: Logic Module
 ---
 
-# Logic Module
+# Logic Module {#logic}
 
 The Logic Module is a visual graph editor for custom automations: function blocks ("Read
 object", "Write object", logical operators, math, scheduling, text processing, and more)

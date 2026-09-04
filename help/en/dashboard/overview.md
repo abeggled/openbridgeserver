@@ -2,7 +2,7 @@
 title: Overview
 ---
 
-# Overview
+# Overview {#dashboard}
 
 The Overview is the Admin-GUI's landing page and shows the current system status at a
 glance. Live Values and WS Status update live over the WebSocket connection; the other

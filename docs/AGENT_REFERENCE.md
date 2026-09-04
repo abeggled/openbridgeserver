@@ -302,7 +302,40 @@ Every `help_id` lives *inside* the heading it belongs to, as an explicit anchor:
 ## Zeitzone, Datums- und Zeitformat {#settings-general}
 ```
 
-If Weblate (or a human translator) changes or drops the `{#settings-general}` part while translating the heading text, that locale's `help_id` silently stops resolving — the Admin-GUI's `HelpButton` for that section will show "no help available" for that language instead of erroring loudly. `help/scripts/generate-help-index.mjs` does warn (non-blocking) when a `help_id` exists in one locale but not another, which catches this *after the fact* — check that warning after pulling new translations, don't rely on it as a preventive gate. When reviewing a Weblate-translated heading, always verify the `{#...}` suffix survived unchanged.
+If Weblate (or a human translator) changes or drops the `{#settings-general}` part while translating the heading text, that locale's `help_id` stops resolving — the Admin-GUI's `HelpButton` for that section would show "no help available" for that language. `help/scripts/generate-help-index.mjs` itself only *warns* (non-blocking) about this, but the help-contract gate below turns the same finding into a CI failure, so a dropped anchor cannot reach main unnoticed. When reviewing a Weblate-translated heading, always verify the `{#...}` suffix survived unchanged.
+
+#### Help contract gate — #1183
+
+`tools/check_help_contract.py` (workflow `.github/workflows/help-contract.yml`) is the completeness gate for documentation, next to `check_authz_contract.py` for routes and `check_i18n_guard.py` for strings. It enumerates the UI surfaces that must be documented from the registries that already define them, derives the `help_id` each is expected to carry, and fails CI when that id has no help page — so a new view, widget type, or skin cannot go green without either help content or an explicit, justified exemption.
+
+| Surface | Enumerated from | Expected `help_id` |
+|---|---|---|
+| Admin route | `gui/src/router/index.js` (`routes[]`, named routes only) | `route.meta.helpId` |
+| Visu widget type | `frontend/src/widgets/*/index.ts` (`WidgetRegistry.register`) | `widget-<kebab-case type>` |
+| Logic function block | `obs.logic.registry.BUILTIN_NODE_TYPES` (excluding `hidden_from_palette`) | `NodeTypeDef.help_id` |
+| Skin | `<obs-visu-skins>/packages/skins/*/manifest.json` | `skin-<kebab-case name>` |
+
+Routes and Logic blocks declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`, and `NodePalette.vue` renders a block's button from `nt.help_id`, served by the backend as part of the node type definition (`obs/logic/models.py::NodeTypeDef.help_id`). These ids are not computable from the type name — `scale` is documented as `logic-block-math-map`, `gate` as `logic-block-gate` — so the gate reads the declared value and checks that. A palette-visible block that declares none renders no button, so no user meets a dead link, but it ships undocumented: the gate reports it, and it needs either a help section or an allowlist entry with a reason. **Adding a Logic function block without a help section fails CI.** Widgets and skins, which have no such declaration, still follow the naming convention in the table.
+
+`hidden_from_palette` blocks are excluded by rule rather than by allowlist: the palette is the only place a block can be picked from, so one it never offers is not a surface anyone can land on (today, the two legacy notification blocks).
+
+On top of coverage the gate enforces two things the generator does not: every `help_id` literally referenced from `gui/src` or `frontend/src` must exist in the index (no broken help links — the dynamic `:help-id="expr"` form is out of reach and is skipped), and a `help_id` present in one locale but not another fails instead of warning.
+
+**Everything the gate reads, it reads from a real parse.** `tools/scan-help-declarations.mjs` parses the frontends with `@babel/parser` (JavaScript and TypeScript) and `@vue/compiler-sfc` (single-file components), and `tools/rendered-help-ids.mjs` builds the help site and reports the heading ids VitePress actually emitted, which the gate compares against the generated `help-index.json`. Neither reimplements a language: an earlier version scanned both with regexes, and review after review found the next construct it misread — quoted property keys, a comment after a closing quote, a regex holding a quote, `${…}` expressions, spreads, shorthand properties, a CSS custom property shaped like a JS one; on the Markdown side fenced code, HTML comments, raw HTML blocks, escaped braces, frontmatter, indented headings. A parser has no special cases for those, and a build has no opinion about them at all.
+
+Where a declaration cannot be resolved to a literal — a route `name`, a `children` array, or a widget registration's `type` given by a constant — the gate **fails closed** with the file and line rather than skipping it. A skipped declaration is the one outcome a coverage gate must never produce: the surface ships and the run reports success.
+
+The help build writes to a temporary directory, never to `help_dist/` — three integration tests in `tests/integration/test_visu_static_files.py` assert that directory is absent, so a stray build breaks them. (That is also why `cd help && npm run build`, used for local preview, should be followed by `rm -rf help_dist`.)
+
+Skins live in the separate `obs-visu-skins` repository. Without `--skins-dir` (or `OBS_VISU_SKINS_DIR`) pointing at a checkout, the gate reports that surface as *not checked* rather than passing it silently; CI does not check skins today.
+
+Deliberately undocumented surfaces belong in `tools/help-contract-allowlist.txt` as `<route|widget|logic-block|skin>:<name>  # reason`, mirroring `tools/i18n-allowlist.txt`. The reason is mandatory, and the list is validated back against reality: an entry for a surface that no longer exists — or for one that meanwhile *is* documented — fails too, so it cannot rot into a blanket exemption. The Visu widget types are currently listed there as tracked debt; each entry disappears as its `{#widget-<type>}` section is written.
+
+Run it before pushing anything that adds a route, a widget type, a Logic function block, or help content:
+
+```bash
+python tools/check_help_contract.py
+```
 
 ## Architecture
 

@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate } from './generate-help-index.mjs'
+import { localeAndRoutePath, routePartsToUrl, buildHelpIndex, generate, stripFencedCode, stripHtmlComments, stripRawHtmlBlocks, stripFrontmatter, strippedSource } from './generate-help-index.mjs'
 
 // ── Pure URL-mapping helpers ────────────────────────────────────────────────
 
@@ -136,6 +136,509 @@ test('buildHelpIndex excludes .vitepress/public/node_modules/scripts only at the
   )
 })
 
+// ── Fenced code is documentation, not an anchor ────────────────────────────
+
+test('an anchor-shaped heading inside a fenced block is not indexed', () => {
+  // VitePress renders it as <code> and creates no DOM id, so a help_id taken
+  // from here would resolve to a fragment no element answers to.
+  const root = mkdtempSync(join(tmpdir(), 'help-fence-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['# Title {#real-anchor}', '', 'Write an anchor like this:', '', '```md', '## Example {#only-in-code}', '```', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('real-anchor' in helpIds)
+    assert.ok(!('only-in-code' in helpIds), 'an example inside a fence must not become a help_id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripFencedCode blanks fenced blocks and keeps every line position', () => {
+  const text = ['# A {#a}', '```', '## B {#b}', '```', '## C {#c}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.equal(stripped.split('\n').length, 5)
+  assert.match(stripped, /# A \{#a\}/)
+  assert.match(stripped, /## C \{#c\}/)
+  assert.doesNotMatch(stripped, /\{#b\}/)
+})
+
+test('stripFencedCode handles tilde fences and a longer closing marker', () => {
+  const text = ['~~~js', '## B {#b}', '~~~', '````', '## D {#d}', '`````', '## E {#e}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.doesNotMatch(stripped, /\{#d\}/)
+  assert.match(stripped, /## E \{#e\}/)
+})
+
+test('stripFencedCode does not treat a shorter inner marker as the closing fence', () => {
+  const text = ['````', '```', '## B {#b}', '````', '## C {#c}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.match(stripped, /## C \{#c\}/)
+})
+
+test('stripFencedCode leaves an inline-code line alone', () => {
+  // ```js`` is inline code, not a fence: its info string contains a backtick.
+  const text = ['# A {#a}', '``` `not a fence` ```', '## B {#b}'].join('\n')
+
+  const stripped = stripFencedCode(text)
+
+  assert.match(stripped, /## B \{#b\}/)
+})
+
+test('an anchor-shaped heading inside an HTML comment is not indexed', () => {
+  // markdown-it drops the comment entirely, so no element owns that id.
+  const root = mkdtempSync(join(tmpdir(), 'help-comment-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['# Title {#real-anchor}', '', '<!--', '## Internal note {#only-in-comment}', '-->', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('real-anchor' in helpIds)
+    assert.ok(!('only-in-comment' in helpIds), 'an anchor inside an HTML comment must not become a help_id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripHtmlComments blanks single- and multi-line comments and keeps line positions', () => {
+  const text = ['# A {#a}', '<!-- ## B {#b} -->', '<!--', '## C {#c}', '-->', '## D {#d}'].join('\n')
+
+  const stripped = stripHtmlComments(text)
+
+  assert.equal(stripped.split('\n').length, 6)
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.doesNotMatch(stripped, /\{#c\}/)
+  assert.match(stripped, /## D \{#d\}/)
+})
+
+test('a --> inside a fenced block does not end a comment that never started', () => {
+  const text = ['```html', '<!-- example -->', '```', '## A {#a}'].join('\n')
+
+  const stripped = stripHtmlComments(stripFencedCode(text))
+
+  assert.match(stripped, /## A \{#a\}/)
+})
+
+test('an anchor inside a raw HTML block is not indexed, but a blank-line-separated one is', () => {
+  // Verified against a real VitePress build: `<div>\n## X {#id}\n</div>`
+  // renders no id, while the same heading surrounded by blank lines does.
+  const root = mkdtempSync(join(tmpdir(), 'help-rawhtml-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['# T {#real-anchor}', '', '<div class="tip">', '## Inside {#only-in-html}', '</div>', '', '<div>', '', '## Separated {#separated}', '', '</div>', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('real-anchor' in helpIds)
+    assert.ok('separated' in helpIds, 'a heading separated by blank lines is rendered and must stay indexed')
+    assert.ok(!('only-in-html' in helpIds), 'a heading inside a raw HTML block owns no DOM id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a type-1 HTML block stays open across blank lines until its closing tag', () => {
+  // Verified against a real build: a heading inside <pre> renders no id even
+  // with blank lines around it, unlike a <div> block which a blank line ends.
+  const stripped = stripRawHtmlBlocks(['<pre>', 'text', '', '## Inside {#gone}', '', '</pre>', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a blank line still ends an ordinary HTML block', () => {
+  const stripped = stripRawHtmlBlocks(['<div>', '## InDiv {#gone}', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('stripRawHtmlBlocks leaves an autolink paragraph alone', () => {
+  // `<https://example.com>` is not a tag, so it opens no HTML block.
+  const stripped = stripRawHtmlBlocks(['<https://example.com>', '## E {#e}'].join('\n'))
+
+  assert.match(stripped, /## E \{#e\}/)
+})
+
+test('stripRawHtmlBlocks resumes indexing after the block ends', () => {
+  const stripped = stripRawHtmlBlocks(['<div>', '## B {#b}', '</div>', '', '## C {#c}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#b\}/)
+  assert.match(stripped, /## C \{#c\}/)
+})
+
+test('a heading-shaped line in the frontmatter is not indexed, an indented heading is', () => {
+  // Both verified against a real build: the frontmatter block is removed from
+  // the page, while CommonMark allows up to three spaces before an ATX heading.
+  const root = mkdtempSync(join(tmpdir(), 'help-front-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['---', '# ## Frontmatter {#gone}', 'title: T', '---', '', '   ### Indented {#kept}', ''].join('\n')
+      )
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('kept' in helpIds, 'up to three spaces before a heading is valid CommonMark')
+    assert.ok(!('gone' in helpIds), 'frontmatter is removed from the rendered page')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripFrontmatter only removes a leading block and keeps line positions', () => {
+  const text = ['---', 'title: T', '---', '## A {#a}'].join('\n')
+
+  const stripped = stripFrontmatter(text)
+
+  assert.equal(stripped.split('\n').length, 4)
+  assert.match(stripped, /## A \{#a\}/)
+  assert.doesNotMatch(stripped, /title/)
+  // A `---` later in the page is a thematic break, not frontmatter.
+  assert.match(stripFrontmatter('## A {#a}\n\n---\n\n## B {#b}'), /## A \{#a\}/)
+})
+
+test('a fence in nested containers closes when the outermost one does', () => {
+  const stripped = stripFencedCode(['> - ```md', '>   unclosed', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a properly closed fence in nested containers still hides its heading', () => {
+  const stripped = stripFencedCode(['> - ```md', '>   ## Fenced {#gone}', '>   ```', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a fence opened in a list item ends when the item does', () => {
+  const stripped = stripFencedCode(['- ```md', '  unclosed', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a raw HTML block inside a container hides its heading', () => {
+  // Verified against a real build: neither the list nor the quote form renders
+  // the heading's id.
+  for (const lines of [
+    ['- <div>', '  ## InHtml {#gone}', '  </div>', '', '## After {#kept}'],
+    ['> <div>', '> ## InHtml {#gone}', '> </div>', '', '## After {#kept}'],
+  ]) {
+    const stripped = stripRawHtmlBlocks(lines.join('\n'))
+
+    assert.doesNotMatch(stripped, /\{#gone\}/)
+    assert.match(stripped, /## After \{#kept\}/)
+  }
+})
+
+test('a blockquote marker without a space still marks a heading', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-nospace-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), '>## No space {#nospace}\n')
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['nospace'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a fence opened in a blockquote ends with the quote, not at the next marker', () => {
+  // VitePress resumes parsing after the quote, so a heading below it is real.
+  const stripped = stripFencedCode(['> ```md', '> unclosed', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a fenced block inside a blockquote still hides its heading', () => {
+  const stripped = stripFencedCode(['> ```md', '> ## Quoted fenced {#gone}', '> ```', '', '## Real {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## Real \{#kept\}/)
+})
+
+test('list padding beyond four spaces indents code, not a heading', () => {
+  // Verified against a real build: `-     ## x {#id}` renders no id.
+  const root = mkdtempSync(join(tmpdir(), 'help-padding-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['-     ## Padded {#gone}', '', '-    ## Four {#kept}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a tab-indented Setext underline is code, and a quoted heading keeps its id', () => {
+  // Both verified against a real build: the tabbed form renders no heading,
+  // while `> Title {#id}` over an unquoted `---` does render the id — which is
+  // why the index deliberately does not require the marker to be repeated.
+  const root = mkdtempSync(join(tmpdir(), 'help-tabs-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['Tabbed {#gone}', '\t\t---', '', '> Quoted {#kept}', '---', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a Setext underline indented past the content column is code', () => {
+  // Verified against a real build: five spaces renders no heading, three does.
+  const root = mkdtempSync(join(tmpdir(), 'help-underline-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['Over {#gone}', '     ---', '', 'Normal {#kept}', '   ---', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a nested Setext underline sits at the continuation indent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-nested-setext-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['- - Nested {#kept}', '    ---------------', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a blockquote does not open a content column for indented code', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-quote-column-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['> quoted', '', '    ## Code {#gone}', '', '> ## Quoted {#kept}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an ATX heading is bounded by the list items open at its line', () => {
+  // Verified against a real build: `    ## x` renders as code at the top
+  // level and as a heading two list items in.
+  const root = mkdtempSync(join(tmpdir(), 'help-atx-indent-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      // The paragraph at column zero closes the list, so the indented heading
+      // after it is a code block again.
+      writeFileSync(
+        join(root, locale, 'index.md'),
+        ['- outer', '  - inner', '    ## Nested {#kept}', '', 'Closes the list.', '', '    ## Code {#gone}', ''].join('\n')
+      )
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a complete custom tag alone on its line opens a raw HTML block', () => {
+  // CommonMark condition 7, verified against a real build.
+  const stripped = stripRawHtmlBlocks(['<x-review>', '## Custom {#gone}', '</x-review>', '', '## After {#kept}'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a tabbed continuation stays inside its list fence', () => {
+  const stripped = stripFencedCode(['- ```md', '\tcontinuation', '  ## Hidden {#gone}', '  ```'].join('\n'))
+
+  assert.doesNotMatch(stripped, /\{#gone\}/)
+})
+
+test('a heading inside a blockquote or list item is indexed', () => {
+  // Verified against a real build: VitePress renders both with their id.
+  const root = mkdtempSync(join(tmpdir(), 'help-container-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['> ## Quoted {#quoted}', '', '- ## Listed {#listed}', '', '## Plain {#plain}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds).sort(), ['listed', 'plain', 'quoted'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a comment opener inside a fence stays inert', () => {
+  // Pairing it with a `-->` after the fence would erase the heading between.
+  const stripped = strippedSource(['```html', '<!-- opener', '```', '## Between {#kept}', '-->'].join('\n'))
+
+  assert.match(stripped, /## Between \{#kept\}/)
+})
+
+test('a fence marker inside a comment does not open a fence', () => {
+  const stripped = strippedSource(['<!--', '```md', '-->', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('an unclosed comment inside a fence does not swallow the rest', () => {
+  // stripHtmlComments needs a closing `-->`, so an unterminated one is inert.
+  const stripped = strippedSource(['```html', '<!-- unclosed', '```', '', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('strippedSource blanks every region the site does not render', () => {
+  const text = ['---', 'title: T', '---', '## A {#a}', '```', '## B {#b}', '```', '<!-- ## C {#c} -->', '<div>', '## D {#d}', '</div>'].join('\n')
+
+  const stripped = strippedSource(text)
+
+  assert.match(stripped, /## A \{#a\}/)
+  for (const gone of [/\{#b\}/, /\{#c\}/, /\{#d\}/, /title: T/]) assert.doesNotMatch(stripped, gone)
+})
+
+test('closing hashes need whitespace before them to be a closing sequence', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-hash-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## Adjacent {#gone}##', '', '## Spaced {#kept} ##', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a BOM before the frontmatter does not expose it', () => {
+  const stripped = stripFrontmatter('\uFEFF---\ntitle: T\n---\n## A {#a}\n')
+
+  assert.doesNotMatch(stripped, /title: T/)
+  assert.match(stripped, /## A \{#a\}/)
+})
+
+test('an inline tag does not open a raw HTML block', () => {
+  const stripped = stripRawHtmlBlocks(['<span>x</span>', '## After {#kept}'].join('\n'))
+
+  assert.match(stripped, /## After \{#kept\}/)
+})
+
+test('a closing hash sequence does not hide the anchor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-closing-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## Closing {#closing} ##', '', '## Plain {#plain}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds).sort(), ['closing', 'plain'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an empty ATX marker does not swallow the next line', () => {
+  const root = mkdtempSync(join(tmpdir(), 'help-empty-atx-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), '##\nProse with {#gone} inside.\n')
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('escape parity decides whether an anchor is active', () => {
+  // `\\{#id}` is escaped text; `\\\\{#id}` is a backslash plus a live anchor.
+  const root = mkdtempSync(join(tmpdir(), 'help-parity-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## One \\{#gone}', '', '## Two \\\\{#kept}', ''].join('\n'))
+    }
+
+    assert.deepEqual(Object.keys(buildHelpIndex(root).helpIds), ['kept'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a raw HTML block ends when its container does', () => {
+  for (const opener of ['> <div>', '- <div>']) {
+    const stripped = stripRawHtmlBlocks([opener, '## After {#kept}'].join('\n'))
+
+    assert.match(stripped, /## After \{#kept\}/)
+  }
+})
+
+test('an escaped anchor is not indexed', () => {
+  // Verified against a real build: `## Title \\{#probe}` renders the suffix as
+  // visible text and gets markdown-it's auto-slug of the whole heading, so the
+  // requested fragment does not exist.
+  const root = mkdtempSync(join(tmpdir(), 'help-escaped-'))
+  try {
+    for (const locale of ['de', 'en']) {
+      mkdirSync(join(root, locale), { recursive: true })
+      writeFileSync(join(root, locale, 'index.md'), ['## Escaped \\{#gone}', '', '## Real {#kept}', ''].join('\n'))
+    }
+
+    const { helpIds } = buildHelpIndex(root)
+
+    assert.ok('kept' in helpIds)
+    assert.ok(!('gone' in helpIds), 'an escaped anchor renders as text and owns no id')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('the same help_id in two different locales is not a duplicate and is reported complete', () => {
   withFixture(
     {
@@ -217,6 +720,28 @@ test('generate() throws instead of calling process.exit() when duplicates exist'
     },
     (root) => {
       assert.throws(() => generate(root, join(root, 'out')), /duplicate help_id "settings-general"/)
+    }
+  )
+})
+
+test('a heading inside an HTML declaration block is stripped', () => {
+  // CommonMark condition 4: `<!REVIEW` runs raw until the next `>`. Verified
+  // against a real VitePress build — it renders no id for the heading.
+  const stripped = stripRawHtmlBlocks('# Page {#page}\n\n<!REVIEW\n## Hidden {#hidden}\n>\n')
+
+  assert.ok(stripped.includes('# Page {#page}'))
+  assert.ok(!stripped.includes('{#hidden}'), stripped)
+})
+
+test('an explicit anchor containing non-ASCII letters survives stripping and matches', () => {
+  // JS `\w` is ASCII-only while the Python validator's is not, so `{#widget-tür}`
+  // passed validation and was then missing from the index. VitePress renders
+  // `<h2 id="widget-tür">` — verified against a real build.
+  withFixture(
+    { 'de/x.md': '## Tür Widget {#widget-tür}\n', 'en/x.md': '## Door Widget {#widget-tür}\n' },
+    (root) => {
+      const { helpIds } = buildHelpIndex(root)
+      assert.ok(helpIds['widget-tür'], Object.keys(helpIds).join(', '))
     }
   )
 })

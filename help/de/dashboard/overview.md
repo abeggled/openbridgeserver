@@ -2,7 +2,7 @@
 title: Übersicht
 ---
 
-# Übersicht
+# Übersicht {#dashboard}
 
 Die Übersicht ist die Startseite des Admin-GUI und zeigt den aktuellen System-Status auf
 einen Blick. Die Live-Werte und der WS-Status aktualisieren sich live über die

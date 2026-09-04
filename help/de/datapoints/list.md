@@ -2,7 +2,7 @@
 title: Objekte
 ---
 
-# Objekte
+# Objekte {#datapoints}
 
 Ein Objekt (DataPoint) ist die zentrale Dateneinheit von open bridge server — jeder Sensor-
 oder Aktorwert, jede von einem Adapter oder der Logik verwaltete Größe wird als Objekt

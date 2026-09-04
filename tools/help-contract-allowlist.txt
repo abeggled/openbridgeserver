@@ -1,0 +1,60 @@
+# Help contract allowlist — surfaces that may ship without help content.
+#
+# Enforced by tools/check_help_contract.py. Format, one entry per line:
+#
+#     <route|widget|logic-block|skin>:<name>  # why this surface has no help
+#
+# The reason is mandatory: the point of this list is that every gap stays
+# visible, versioned, and justified instead of silently existing. Keep it
+# tight — an entry is a promise that the surface genuinely needs no help,
+# or a tracked debt, not a way around writing documentation.
+#
+# The list is checked back against reality. An entry for a surface that no
+# longer exists, or for one that meanwhile *is* documented, fails the gate
+# too, so removing content or writing it always forces the list to be
+# updated with it.
+
+# ── Routes ────────────────────────────────────────────────────────────────
+route:Login  # Public pre-auth screen: username and password only, nothing to explain.
+
+# ── Visu widgets ──────────────────────────────────────────────────────────
+# Tracked debt, not a permanent exemption: the help site (#896) covers the
+# Admin-GUI, and no widget documentation has been written yet. Every entry
+# below is removed as soon as its `## … {#widget-<type>}` section lands under
+# help/<locale>/visu/. New widget types are deliberately NOT pre-allowlisted —
+# adding one without help fails the gate, which is the point of this contract.
+widget:ButtonGroup  # Visu widget help not written yet (#1183 follow-up).
+widget:Chart  # Visu widget help not written yet (#1183 follow-up).
+widget:Energiefluss  # Visu widget help not written yet (#1183 follow-up).
+widget:Fenster  # Visu widget help not written yet (#1183 follow-up).
+widget:Grundriss  # Visu widget help not written yet (#1183 follow-up).
+widget:HorizontalBar  # Visu widget help not written yet (#1183 follow-up).
+widget:IFrame  # Visu widget help not written yet (#1183 follow-up).
+widget:Info  # Visu widget help not written yet (#1183 follow-up).
+widget:Kamera  # Visu widget help not written yet (#1183 follow-up).
+widget:Licht  # Visu widget help not written yet (#1183 follow-up).
+widget:Link  # Visu widget help not written yet (#1183 follow-up).
+widget:MessageArchive  # Visu widget help not written yet (#1183 follow-up).
+widget:QrCode  # Visu widget help not written yet (#1183 follow-up).
+widget:RTR  # Visu widget help not written yet (#1183 follow-up).
+widget:Rolladen  # Visu widget help not written yet (#1183 follow-up).
+widget:Slider  # Visu widget help not written yet (#1183 follow-up).
+widget:Stufenschalter  # Visu widget help not written yet (#1183 follow-up).
+widget:Text  # Visu widget help not written yet (#1183 follow-up).
+widget:Toggle  # Visu widget help not written yet (#1183 follow-up).
+widget:Uhr  # Visu widget help not written yet (#1183 follow-up).
+widget:ValueDisplay  # Visu widget help not written yet (#1183 follow-up).
+widget:Wetter  # Visu widget help not written yet (#1183 follow-up).
+widget:WidgetRef  # Visu widget help not written yet (#1183 follow-up).
+widget:Zeitschaltuhr  # Visu widget help not written yet (#1183 follow-up).
+
+# ── Logic blocks ──────────────────────────────────────────────────────────
+# No exemptions: every block the palette offers is documented. Blocks that are
+# hidden_from_palette are excluded by rule, not listed here — see the module
+# docstring of tools/check_help_contract.py.
+
+# ── Skins ─────────────────────────────────────────────────────────────────
+# Skins live in the separate obs-visu-skins repository and are only checked
+# when --skins-dir / OBS_VISU_SKINS_DIR points at a checkout of it. No
+# exemptions so far.
+

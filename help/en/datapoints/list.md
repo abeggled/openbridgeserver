@@ -2,7 +2,7 @@
 title: Data Points
 ---
 
-# Data Points
+# Data Points {#datapoints}
 
 A data point is open bridge server's central data unit — every sensor or actuator value,
 every quantity managed by an adapter or by Logic, is represented as a data point. This list

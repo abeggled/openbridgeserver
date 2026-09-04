@@ -51,6 +51,27 @@ from the last value received — repeated identical values don't trigger again (
 "SendByChange"). Useful for not re-triggering downstream actions (e.g. notifications) on every
 identical update.
 
+## Edge Detection {#logic-block-edge-detect}
+
+Evaluates the input as a boolean and reacts only to a **change** of level, not to the value
+itself. A rising edge (false → true) pulses **Trigger rising**, a falling one (true → false)
+**Trigger falling**. Without an edge nothing is sent on **Output** — the last value is not
+repeated.
+
+Per direction, "Rising edge"/"Falling edge" decides what should happen:
+
+- **Trigger + value** — the trigger pulses and that direction's configured value goes to
+  **Output**. "Data type" determines how the two values are entered (Boolean, Number, Text).
+- **Trigger only** — the trigger pulses, **Output** stays silent.
+- **Off** — that direction stays completely silent. The level is still tracked, so the next edge
+  in the opposite direction is still recognised.
+
+The **first** value after a start or reset deliberately produces no edge: it only establishes the
+baseline level. The **Reset** input discards the remembered level — the next value re-establishes
+it, again without an edge. If a reset and a value arrive in the same run, the reset wins.
+"Restore state on restart" determines whether the remembered level survives a server restart;
+without it, the block starts again with no baseline level after a restart.
+
 ## Compare {#logic-block-compare}
 
 Compares the input against a configured operand using a selectable operator (`>`, `<`, `=`, `>=`,

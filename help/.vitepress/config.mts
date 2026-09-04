@@ -102,6 +102,7 @@ export default defineConfig({
           {
             text: 'Einstellungen',
             items: [
+              { text: 'Einstellungen', link: '/de/settings/' },
               { text: 'Allgemeine Einstellungen', link: '/de/settings/general' },
               { text: 'Passwort ändern', link: '/de/settings/password' },
               { text: 'Benutzer', link: '/de/settings/users' },
@@ -190,6 +191,7 @@ export default defineConfig({
           {
             text: 'Settings',
             items: [
+              { text: 'Settings', link: '/en/settings/' },
               { text: 'General Settings', link: '/en/settings/general' },
               { text: 'Change Password', link: '/en/settings/password' },
               { text: 'Users', link: '/en/settings/users' },
