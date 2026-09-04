@@ -512,6 +512,10 @@ function collectRouteRecords(arrayExpression, file) {
     const nameProperty = ownProperty(record, 'name')
     const shorthand = record.properties.find((p) => p.type === 'ObjectProperty' && p.shorthand && p.key.type === 'Identifier' && p.key.name === 'name')
     if (!nameProperty) continue
+    // A record that only redirects renders nothing: the user lands on the
+    // destination, which is documented in its own right. Asking for help on
+    // the redirect would demand a page for a route nobody ever sees.
+    if (ownProperty(record, 'redirect') && !ownProperty(record, 'component') && !ownProperty(record, 'components')) continue
     const name = stringValue(nameProperty.value)
     if (name === null) {
       unreadable.push({
@@ -938,8 +942,18 @@ for (const dir of REFERENCE_DIRS) for (const file of sourceFiles(join(SCAN_ROOT,
 // A removed route is not a surface: it is gone from the matcher before the
 // router is exported, so nobody can reach it and there is nothing to document.
 // Only a removal that follows the registration cancels it — order decides.
-const liveRoutes = routes
+// Vue Router keeps one record per name: registering a name again drops the
+// earlier matcher, so only the last registration is reachable. Validating the
+// superseded one would report a route nobody can open.
+const lastByName = new Map()
+for (const route of routes) {
+  const previous = lastByName.get(route.name)
+  if (previous === undefined || route.at > previous.at) lastByName.set(route.name, route)
+}
+
+const liveRoutes = [...lastByName.values()]
   .filter((route) => !routeRemovals.some((removal) => removal.name === route.name && removal.at > route.at))
+  .sort((a, b) => a.at - b.at)
   .map(({ at, ...route }) => route)
 
 process.stdout.write(JSON.stringify({ routes: liveRoutes, widgets, references, unreadable }) + '\n')

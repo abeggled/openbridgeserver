@@ -902,3 +902,32 @@ WidgetRegistry.register({ type: 'ViaAlias' })
 
   assert.deepEqual(result.widgets.map((widget) => widget.type), ['ViaAlias'])
 })
+
+test('a named route that only redirects is not a documentation surface', () => {
+  // The user lands on the destination, which is documented in its own right.
+  const result = scan(router(`{ path: '/old', name: 'Legacy', redirect: '/new' },
+{ path: '/new', name: 'Current', component: X, meta: { helpId: 'current' } },`))
+
+  assert.deepEqual(names(result), ['Current'])
+})
+
+test('a redirect that also renders a component still needs help', () => {
+  const result = scan(router(`{ path: '/x', name: 'Both', redirect: '/y', component: X },`))
+
+  assert.deepEqual(names(result), ['Both'])
+})
+
+test('registering a name again supersedes the earlier record', () => {
+  // Vue Router keeps one matcher per name, so only the last one is reachable.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Same', component: X }]
+const router = createRouter({ history: createWebHistory(), routes })
+router.addRoute({ path: '/b', name: 'Same', component: X, meta: { helpId: 'same' } })
+export default router
+`,
+  })
+
+  assert.deepEqual(result.routes.map((route) => [route.name, route.helpId]), [['Same', 'same']])
+})
