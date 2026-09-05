@@ -33,7 +33,7 @@ from obs.api.authz_service import filter_authorized_datapoints, load_role_grants
 from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
-from obs.logic.graph_analysis import topology_warnings
+from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
 from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
@@ -670,16 +670,28 @@ async def validate_graph(
     body: FlowData,
     _user: str = Depends(get_current_user),
 ) -> dict:
-    """Check `flow_data` for graph-topology problems before saving it.
+    """Check `flow_data` for problems before saving it — advisory, does not persist anything.
 
-    Today this checks exactly two things: graph cycles not broken by a `memory` node, and timer
-    duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`). It does **not** validate
-    node `data` against each type's `config_schema` (types, enums, or the nested shape of fields
-    like `decision.conditions`) — a `{"status": "ok"}` response does not guarantee the graph will
-    execute as intended. `POST`/`PUT /graphs` accept and persist a structurally invalid node config
-    the same way; the mistake only shows up at run time.
+    Two independent checks, both returned as one flat `warnings` list (`{node_id, code, message}`):
+    - **Graph-cycle topology**: a cycle not broken by a `memory` node (see `GET /node-types`'s
+      "Memory is the only node allowed to close a feedback loop"). Codes: `graph_cycle`,
+      `graph_cycle_blocked`.
+    - **Config-schema conformance**: each node's `data` checked against its type's `config_schema`
+      from `GET /node-types` — unknown node types, values that don't match a declared `type` or
+      `enum`, and (for `type: array` fields such as `decision.conditions`) malformed JSON or a
+      missing required item field. Codes: `unknown_node_type`, `config_schema_type_mismatch`,
+      `config_schema_enum_invalid`, `config_schema_malformed_json`,
+      `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
+      whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
+      (it falls back to the schema default).
+
+    `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
+    `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
+    with cycles or invalid config the same way regardless of whether this was called first, except
+    for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
+    endpoints reject outright (422) at save time — independently of this endpoint.
     """
-    return {"status": "ok", "warnings": topology_warnings(body)}
+    return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
 
 @router.get("/graphs", response_model=list[LogicGraphOut])
