@@ -126,6 +126,53 @@ async def test_validate_graph_allows_feedback_through_memory(client, auth_header
     assert resp.json()["warnings"] == []
 
 
+async def test_validate_graph_reports_invalid_enum_value(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "cmp", "type": "compare", "position": {"x": 0, "y": 0}, "data": {"operator": "greater_than"}},
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["warnings"] == [
+        {
+            "node_id": "cmp",
+            "code": "config_schema_enum_invalid",
+            "message": "operator: 'greater_than' is not one of ['>', '<', '=', '>=', '<=', '!='].",
+        }
+    ]
+
+
+async def test_validate_graph_reports_unknown_node_type_and_nested_config_schema_issues(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "ghost", "type": "totally_made_up", "position": {"x": 0, "y": 0}, "data": {}},
+            {
+                "id": "dec",
+                "type": "decision",
+                "position": {"x": 200, "y": 0},
+                "data": {"conditions": [{"operator": "greater_than"}]},
+            },
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    codes = {(w["node_id"], w["code"]) for w in resp.json()["warnings"]}
+    assert codes == {
+        ("ghost", "unknown_node_type"),
+        ("dec", "config_schema_missing_required_field"),
+        ("dec", "config_schema_enum_invalid"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # POST /logic/graphs
 # ---------------------------------------------------------------------------
