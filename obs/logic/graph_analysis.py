@@ -17,6 +17,54 @@ _MISSING_NODE_TYPE = "missing_node"
 
 _NUMERIC_SCHEMA_TYPES = {"number", "integer"}
 
+# Some enum-declared config fields accept additional runtime spellings beyond the schema's
+# canonical `enum` values — genuine synonyms GraphExecutor treats identically to a canonical
+# value, not typos that silently fall back to a different (wrong) default. Duplicated here
+# rather than imported from executor.py — executor.py already imports from this module, so the
+# reverse import would be circular. Kept honest by
+# tests/unit/logic/test_config_schema_warnings.py, which recomputes these unions from executor.py's
+# actual op-sets, mirroring the `_DURATION_FIELDS` precedent in obs/logic/validation.py.
+_COMPARE_OPERATOR_ALIASES: frozenset[str] = frozenset({">", "gt", "<", "lt", "=", "==", "eq", ">=", "gte", "<=", "lte", "!=", "ne"})
+_CONDITION_OPERATOR_ALIASES: frozenset[str] = frozenset(
+    {
+        "range",
+        "between",
+        "regex",
+        "regexp",
+        "contains",
+        "starts_with",
+        "startswith",
+        "begins_with",
+        "ends_with",
+        "endswith",
+        "text",
+        "text_eq",
+        "equals_text",
+        "=",
+        "==",
+        "eq",
+        "!=",
+        "ne",
+        ">",
+        "gt",
+        "<",
+        "lt",
+        ">=",
+        "gte",
+        "<=",
+        "lte",
+    }
+)
+
+# Keyed by the schema's own canonical enum values, so both `compare` and the shared
+# decision/value_mapping operator schema resolve to their respective alias supersets.
+_ENUM_ALIAS_SUPERSETS: dict[frozenset[str], frozenset[str]] = {
+    frozenset({">", "<", "=", ">=", "<=", "!="}): _COMPARE_OPERATOR_ALIASES,
+    frozenset(
+        {"eq", "ne", "gt", "lt", "gte", "lte", "range", "text_eq", "contains", "starts_with", "ends_with", "regex"}
+    ): _CONDITION_OPERATOR_ALIASES,
+}
+
 
 @dataclass(frozen=True)
 class TopologicalSortResult:
@@ -144,11 +192,30 @@ def _is_numeric(value: Any) -> bool:
     return False
 
 
+def _matches_enum(value: Any, enum_values: list[Any]) -> bool:
+    """True if ``value`` is accepted for a field declaring ``enum_values``.
+
+    Beyond an exact match: many enum-style config fields are read case/whitespace-normalized at
+    execution time (e.g. `GraphExecutor` lowers `compare.operator`/`string_replace.rules[].mode`,
+    `LogicManager` uppercases `api_client.method`) — checked here as a generic case-insensitive
+    comparison against the canonical values. A handful of fields additionally accept genuine
+    synonyms beyond their canonical spelling (`_ENUM_ALIAS_SUPERSETS`), which is checked instead of
+    the canonical set when the field has an entry there.
+    """
+    if value in enum_values:
+        return True
+    if not isinstance(value, str):
+        return False
+    candidates = _ENUM_ALIAS_SUPERSETS.get(frozenset(enum_values), enum_values)
+    normalized = value.strip().lower()
+    return any(isinstance(candidate, str) and candidate.strip().lower() == normalized for candidate in candidates)
+
+
 def _field_warnings(node_id: str, key: str, value: Any, schema: dict[str, Any]) -> list[dict[str, str]]:
     if value is None:
         return []
     if "enum" in schema:
-        if value in schema["enum"]:
+        if _matches_enum(value, schema["enum"]):
             return []
         return [_schema_warning(node_id, "config_schema_enum_invalid", f"{key}: {value!r} is not one of {schema['enum']}.")]
     field_type = schema.get("type")

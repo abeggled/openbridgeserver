@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from obs.logic.graph_analysis import config_schema_warnings
+from obs.logic import executor as executor_module
+from obs.logic.graph_analysis import (
+    _COMPARE_OPERATOR_ALIASES,
+    _CONDITION_OPERATOR_ALIASES,
+    config_schema_warnings,
+)
 from obs.logic.models import FlowData, LogicNode
 from obs.logic.registry import BUILTIN_NODE_TYPES
 
@@ -34,6 +39,53 @@ def test_absent_key_is_never_flagged():
 def test_enum_valid_and_invalid():
     assert _codes(_flow("compare", {"operator": ">"})) == []
     assert _codes(_flow("compare", {"operator": "greater_than"})) == ["config_schema_enum_invalid"]
+
+
+def test_enum_accepts_genuine_executor_aliases_not_just_the_canonical_spelling():
+    # "gt" is a real GraphExecutor._COMPARE_OPS alias for ">", not a typo — must not be flagged
+    # (review finding on PR #1216: flagging it would contradict a graph that runs correctly).
+    assert _codes(_flow("compare", {"operator": "gt"})) == []
+    # Same story for decision/value_mapping's shared operator vocabulary: "between" is a real
+    # _RANGE_OPS alias for "range".
+    assert _codes(_flow("decision", {"conditions": [{"handle": "out_1", "operator": "between"}]})) == []
+
+
+def test_enum_check_is_case_and_whitespace_insensitive():
+    # GraphExecutor normalizes compare.operator/conditions[].operator via .strip().lower(), and
+    # api_client.method via .upper() — either direction must compare equal here.
+    assert _codes(_flow("compare", {"operator": " GT "})) == []
+    assert _codes(_flow("api_client", {"method": "get"})) == []
+
+
+def test_enum_check_rejects_a_non_string_value_outright():
+    # A non-string can never match case/whitespace-normalized or aliased, so it short-circuits
+    # to "invalid" without attempting to .strip()/.lower() it.
+    assert _codes(_flow("compare", {"operator": 5})) == ["config_schema_enum_invalid"]
+
+
+def test_enum_check_rejects_a_value_not_covered_by_any_alias_or_canonical_spelling():
+    # "method" has no registered alias superset — falls back to case-insensitive comparison
+    # against its own canonical enum, and still correctly rejects a genuinely wrong value.
+    assert _codes(_flow("api_client", {"method": "FETCH"})) == ["config_schema_enum_invalid"]
+
+
+def test_compare_operator_alias_superset_matches_executors_actual_compare_ops():
+    assert _COMPARE_OPERATOR_ALIASES == frozenset(executor_module._COMPARE_OPS)
+
+
+def test_condition_operator_alias_superset_matches_executors_actual_op_sets():
+    expected = (
+        frozenset(executor_module._RANGE_OPS)
+        | frozenset(executor_module._REGEX_OPS)
+        | frozenset(executor_module._CONTAINS_OPS)
+        | frozenset(executor_module._STARTS_WITH_OPS)
+        | frozenset(executor_module._ENDS_WITH_OPS)
+        | frozenset(executor_module._TEXT_COMPARE_OPS)
+        | frozenset(executor_module._COMPARE_OPS)
+        | {"=", "==", "eq", "!=", "ne"}
+    )
+
+    assert _CONDITION_OPERATOR_ALIASES == expected
 
 
 def test_numeric_field_accepts_real_numbers_bool_numeric_strings_and_the_empty_string_sentinel():
