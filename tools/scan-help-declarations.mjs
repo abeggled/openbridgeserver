@@ -103,7 +103,15 @@ function declaresBinding(scope, name) {
 }
 
 // A bare block scopes `let`/`const` just as a function body does.
+// Scopes for the purpose of *shadowing*: a block introduces bindings of its
+// own, so it belongs here.
 const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod', 'BlockStatement']
+
+// Scopes for the purpose of *execution*: only a real function defers its body.
+// A plain block runs where it stands, and reusing the shadowing list here made
+// every top-level block look deferred — which silently defeated the `finally`
+// rule below.
+const DEFERRED_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod']
 
 
 /** Walk the AST, skipping any function that shadows `name` with its own binding. */
@@ -160,10 +168,13 @@ function markFunctionScopes(ast) {
     if (inside) functionScopedNodes.add(node)
     // A branch or loop body may not run either, and a removal that reduces the
     // surface set must only count where it certainly executes.
-    const deeper = inside || FUNCTION_TYPES.includes(node.type) || CONDITIONAL_TYPES.includes(node.type)
+    const deeper = inside || DEFERRED_TYPES.includes(node.type) || CONDITIONAL_TYPES.includes(node.type)
     for (const key of Object.keys(node)) {
       if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
-      mark(node[key], deeper)
+      // `finally` always runs, so a removal there is as certain as one at the
+      // top level; only the `try` and `catch` halves are conditional.
+      const certain = node.type === 'TryStatement' && key === 'finalizer'
+      mark(node[key], certain ? inside : deeper)
     }
   }
   mark(ast, false)
@@ -523,6 +534,14 @@ function collectRoutes(file) {
       if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called)) builtRouters.push(declarator.id.name)
     }
   }
+  // `let router; router = createRouter(...)` builds it just as directly.
+  walk(ast, (node) => {
+    if (node.type !== 'AssignmentExpression' || node.operator !== '=' || node.left.type !== 'Identifier') return
+    const init = unwrap(node.right)
+    const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
+    const called = callee?.type === 'Identifier' ? callee.name : callee?.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
+    if (routerFactoryNames.has(called)) builtRouters.push(node.left.name)
+  })
   // The router this module ships is the one it exports — not simply the first
   // it builds. A preview or test router constructed earlier used to win, and
   // `addRoute` on the real router was then ignored: an undocumented live route
@@ -648,6 +667,21 @@ function collectRoutes(file) {
       unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the ${tableName} array with ${method}(); the gate cannot see what it adds` })
       return
     }
+    // `Array.prototype.push.call(routes, …)` mutates the table through the
+    // prototype; the receiver is the method, not the array.
+    if ((method === 'call' || method === 'apply') && (object.type === 'MemberExpression' || object.type === 'OptionalMemberExpression')) {
+      const mutator = object.computed ? stringValue(object.property) : object.property.type === 'Identifier' ? object.property.name : null
+      const subject = unwrap(node.arguments[0])
+      if (ROUTE_MUTATORS.includes(mutator) && subject?.type === 'Identifier' && live.has(subject.name)) {
+        unreadable.push({
+          kind: 'route',
+          file: rel(file),
+          line: node.loc.start.line,
+          problem: `mutates the ${tableName} array through ${mutator}.${method}(); the gate cannot see what it adds`,
+        })
+        return
+      }
+    }
     // `Reflect.set(routes, …)` and friends take the table as an argument
     // rather than a receiver, so the check above never sees them.
     if (object.type === 'Identifier' && INDIRECT_MUTATORS[object.name]?.includes(method)) {
@@ -681,8 +715,18 @@ function helpIdOf(record) {
   const meta = ownProperty(record, 'meta')
   const metaValue = meta ? unwrap(meta.value) : null
   if (!metaValue || metaValue.type !== 'ObjectExpression') return null
-  const property = metaValue.properties.find((candidate) => propertyKey(candidate) === 'helpId')
-  return property ? stringValue(property.value) : null
+  const index = metaValue.properties.findIndex((candidate) => propertyKey(candidate) === 'helpId')
+  if (index < 0) return null
+  // Anything unreadable after the literal can replace it, exactly as in the
+  // record's own validation. An unnamed parent is never validated itself, so
+  // without this check a child inherited an id that need not ship.
+  const overridden = metaValue.properties.some(
+    (property, position) =>
+      position > index &&
+      (property.type === 'SpreadElement' || (property.type === 'ObjectProperty' && property.computed && propertyKey(property) === null))
+  )
+  if (overridden) return null
+  return stringValue(metaValue.properties[index].value)
 }
 
 // `inheritedHelpId` is the parent chain's helpId: Vue Router exposes
@@ -839,6 +883,62 @@ function isLocalSpecifier(specifier) {
   return specifier.startsWith('.') || specifier.startsWith('@/')
 }
 
+/** Whether an `import.meta.glob` options object asks for eager loading. */
+function isEagerGlob(options) {
+  const object = unwrap(options)
+  if (object?.type !== 'ObjectExpression') return false
+  const eager = object.properties.find((property) => propertyKey(property) === 'eager')
+  return eager !== undefined && unwrap(eager.value)?.value === true
+}
+
+/** The literal patterns of a glob call, which may be one string or an array. */
+function globPatterns(argument) {
+  const node = unwrap(argument)
+  if (!node) return []
+  if (node.type === 'ArrayExpression') return node.elements.map((element) => stringValue(unwrap(element))).filter((value) => value !== null)
+  const single = stringValue(node)
+  return single === null ? [] : [single]
+}
+
+/** Files a relative glob matches, for the simple `*` and `**` forms Vite uses. */
+function expandGlob(fromDir, pattern) {
+  if (!pattern.startsWith('.')) return []
+  const parts = pattern.split('/')
+  let directories = [fromDir]
+  const matches = []
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]
+    const last = index === parts.length - 1
+    if (part === '.' || part === '') continue
+    const next = []
+    for (const directory of directories) {
+      if (part === '..') {
+        next.push(dirname(directory))
+        continue
+      }
+      let entries
+      try {
+        entries = readdirSync(directory, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      if (part === '**') {
+        next.push(directory, ...entries.filter((entry) => entry.isDirectory()).map((entry) => join(directory, entry.name)))
+        continue
+      }
+      const test = new RegExp(`^${part.split('*').map((piece) => piece.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`)
+      for (const entry of entries) {
+        if (!test.test(entry.name)) continue
+        const full = join(directory, entry.name)
+        if (last && entry.isFile() && CODE_SUFFIXES.some((suffix) => full.endsWith(suffix))) matches.push(full)
+        else if (!last && entry.isDirectory()) next.push(full)
+      }
+    }
+    directories = next
+  }
+  return matches
+}
+
 /** Resolve a repository-local import the way the bundler does, or null. */
 function resolveLocalModule(fromDir, specifier) {
   const base = specifier.startsWith('@/') ? resolveAliased(fromDir, specifier) : resolve(fromDir, specifier)
@@ -869,6 +969,19 @@ function collectWidgets(file, seen = new Set()) {
     if (specifier === null || !isLocalSpecifier(specifier)) return
     const target = resolveLocalModule(dirname(file), specifier)
     if (target !== null && CODE_SUFFIXES.some((suffix) => target.endsWith(suffix))) collectWidgets(target, seen)
+  })
+
+  // `import.meta.glob('./x/*.ts', { eager: true })` executes every match at
+  // startup, so those modules ship exactly like a static import.
+  walk(ast, (node) => {
+    if (node.type !== 'CallExpression') return
+    const callee = node.callee
+    if (callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'glob') return
+    if (callee.object.type !== 'MetaProperty') return
+    if (!isEagerGlob(node.arguments[1])) return
+    for (const pattern of globPatterns(node.arguments[0])) {
+      for (const target of expandGlob(dirname(file), pattern)) collectWidgets(target, seen)
+    }
   })
 
   for (const statement of ast.program.body) {
@@ -932,7 +1045,10 @@ function collectWidgets(file, seen = new Set()) {
   // just the canonical spelling.
   // One shadowed alias used to switch the check off for every other name in
   // the same function; `walkOutsideShadow` hides only the names actually bound.
-  walkOutsideShadow(ast, registryNames, (node, live) => {
+  // Both sets are walked together so shadowing applies to namespace bindings
+  // too: consulting the global set there let a shadowing parameter count as
+  // the imported namespace.
+  walkOutsideShadow(ast, new Set([...registryNames, ...namespaceNames]), (node, live) => {
     if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return
     const callee = node.callee
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
@@ -945,6 +1061,7 @@ function collectWidgets(file, seen = new Set()) {
       (object.type === 'Identifier' && live.has(object.name)) ||
       ((object.type === 'MemberExpression' || object.type === 'OptionalMemberExpression') &&
         namespaceNames.has(unwrap(object.object).name) &&
+        live.has(unwrap(object.object).name) &&
         (object.computed ? stringValue(object.property) : object.property.name) === 'WidgetRegistry')
     if (method !== 'register' || !isRegistry) return
 

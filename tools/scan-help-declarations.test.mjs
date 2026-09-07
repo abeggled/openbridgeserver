@@ -1313,3 +1313,90 @@ helper({})
 
   assert.deepEqual(result.widgets.map((w) => w.type), ['StillSeen'])
 })
+
+test('a removeRoute in a finally block counts as certain', () => {
+  // `finally` always runs; classifying the whole try statement as conditional
+  // made an unconditional removal look uncertain.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Gone', component: X }]
+const router = createRouter({ history: createWebHistory(), routes })
+try { void 0 } finally { router.removeRoute('Gone') }
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result), [])
+})
+
+test('a parameter shadowing a registry namespace is not the imported one', () => {
+  const result = scan(widget(`
+import * as RegistryModule from '@/widgets/registry'
+void RegistryModule
+function preview(RegistryModule) { RegistryModule.WidgetRegistry.register({ type: 'NotLive' }) }
+preview({ WidgetRegistry: { register() {} } })
+`))
+
+  assert.deepEqual(result.widgets, [])
+})
+
+test('a prototype-invoked mutator on the routes table fails closed', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+Array.prototype.push.call(routes, { path: '/b', name: 'Sneaky', component: X })
+const router = createRouter({ history: createWebHistory(), routes })
+export default router
+`,
+  })
+
+  assert.ok(problems(result).some((problem) => problem.includes('push.call')), problems(result).join(' | '))
+})
+
+test('a child does not inherit a parent helpId a later spread can replace', () => {
+  const result = scan(router(`{ path: '/parent', component: X, meta: { helpId: 'dashboard', ...runtimeMeta },
+  children: [{ path: 'child', name: 'Child', component: X }] },`))
+
+  assert.deepEqual(result.routes.map((route) => [route.name, route.helpId]), [['Child', null]])
+})
+
+test('a router built by assignment is tracked', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+let router
+router = createRouter({ history: createWebHistory(), routes })
+router.addRoute({ path: '/b', name: 'Assigned', component: X })
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result).sort(), ['A', 'Assigned'])
+})
+
+test('an eager import.meta.glob module is enumerated', () => {
+  const result = scan({
+    'frontend/src/widgets/Probe/index.ts': `import.meta.glob('./parts/*.ts', { eager: true })`,
+    'frontend/src/widgets/Probe/parts/one.ts': `
+import { WidgetRegistry } from '@/widgets/registry'
+WidgetRegistry.register({ type: 'ViaGlob' })
+`,
+  })
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['ViaGlob'])
+})
+
+test('a lazy import.meta.glob is not followed', () => {
+  const result = scan({
+    'frontend/src/widgets/Probe/index.ts': `import.meta.glob('./parts/*.ts')`,
+    'frontend/src/widgets/Probe/parts/one.ts': `
+import { WidgetRegistry } from '@/widgets/registry'
+WidgetRegistry.register({ type: 'NeverLoaded' })
+`,
+  })
+
+  assert.deepEqual(result.widgets, [])
+})

@@ -283,6 +283,7 @@ export function stripRawHtmlBlocks(text, fenced = []) {
   let terminator = null // a type 3/4/5 block, closed by a fixed string
   let container = null
   let offset = 0
+  let previousWasText = false
   return text
     .split('\n')
     .map((line) => {
@@ -292,6 +293,12 @@ export function stripRawHtmlBlocks(text, fenced = []) {
       // without either winning outright.
       const lineStart = offset
       offset += line.length + 1
+      // CommonMark condition 7 — a complete custom tag alone on its line — does
+      // not interrupt a paragraph, unlike the block-tag list of condition 6.
+      // Treating it as a block there erased a heading VitePress renders
+      // (checked against a build).
+      const inParagraph = previousWasText
+      previousWasText = line.trim() !== '' && !inBlock
       const insideFence = fenced.some(([from, to]) => lineStart >= from && lineStart < to)
       // Leaving the container ends the block, exactly as it ends a fence.
       if (inBlock && container !== null && !continuesContainer(line, container)) {
@@ -307,7 +314,7 @@ export function stripRawHtmlBlocks(text, fenced = []) {
           inBlock = true
           literalTag = literal[1].toLowerCase()
           container = containerOf(line)
-        } else if (HTML_BLOCK_START_RE.test(line) || HTML_CUSTOM_BLOCK_START_RE.test(line)) {
+        } else if (HTML_BLOCK_START_RE.test(line) || (HTML_CUSTOM_BLOCK_START_RE.test(line) && !inParagraph)) {
           inBlock = true
           container = containerOf(line)
         } else {
