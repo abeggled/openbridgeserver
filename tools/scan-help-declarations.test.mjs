@@ -1226,3 +1226,25 @@ alias.WidgetRegistry.register({ type: 'ViaNamespaceAlias' })
 
   assert.deepEqual(result.widgets.map((w) => w.type), ['ViaNamespaceAlias'])
 })
+
+test('an alias of a namespace member registers the same singleton', () => {
+  // `const alias = RegistryModule.WidgetRegistry` holds the imported registry;
+  // following only `const alias = RegistryModule` left this one invisible.
+  const result = scan(widget(`
+import * as RegistryModule from '@/widgets/registry'
+const alias = RegistryModule.WidgetRegistry
+alias.register({ type: 'ViaNamespaceMember' })
+`))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['ViaNamespaceMember'])
+})
+
+test('an alias of an unrelated namespace member is not the registry', () => {
+  const result = scan(widget(`
+import * as Other from '@/utils/other'
+const alias = Other.WidgetRegistry
+alias.register({ type: 'NotTheRegistry' })
+`))
+
+  assert.deepEqual(result.widgets, [])
+})

@@ -223,7 +223,7 @@ function defaultExportedName(ast) {
  * what stops the next one from being missed. Repeated until nothing new
  * appears, so chains of aliases are followed.
  */
-function addAliases(ast, names) {
+function addAliases(ast, names, member = null) {
   for (let changed = true; changed; ) {
     changed = false
     for (const statement of ast.program.body) {
@@ -231,8 +231,9 @@ function addAliases(ast, names) {
       if (!inner || inner.type !== 'VariableDeclaration') continue
       for (const declarator of inner.declarations) {
         const init = unwrap(declarator.init)
-        if (declarator.id.type !== 'Identifier' || init?.type !== 'Identifier') continue
-        if (names.has(init.name) && !names.has(declarator.id.name)) {
+        if (declarator.id.type !== 'Identifier' || names.has(declarator.id.name)) continue
+        const source = aliasSource(init, names, member)
+        if (source) {
           names.add(declarator.id.name)
           changed = true
         }
@@ -240,6 +241,23 @@ function addAliases(ast, names) {
     }
   }
   return names
+}
+
+/** Whether an initialiser reaches one of the tracked bindings.
+ *
+ * `const alias = tracked` always counts. With `member` given, a namespace's
+ * export counts too — `const alias = RegistryModule.WidgetRegistry` holds the
+ * same singleton as importing it directly, and following only the plain form
+ * left that alias invisible.
+ */
+function aliasSource(init, names, member) {
+  if (!init) return false
+  if (init.type === 'Identifier') return names.has(init.name)
+  if (member === null) return false
+  if (init.type !== 'MemberExpression' && init.type !== 'OptionalMemberExpression') return false
+  const property = init.computed ? stringValue(init.property) : init.property.type === 'Identifier' ? init.property.name : null
+  const object = unwrap(init.object)
+  return property === member && object.type === 'Identifier' && names.has(object.name)
 }
 
 /** Walk every node of a Babel AST, depth first. */
@@ -864,8 +882,12 @@ function collectWidgets(file, seen = new Set()) {
     }
   })
   // An alias of the namespace is the same module object, exactly as for the
-  // registry binding itself.
+  // registry binding itself — and an alias of its `WidgetRegistry` export is
+  // the same singleton, so it joins the registry names.
   addAliases(ast, namespaceNames)
+  for (const name of addAliases(ast, new Set(namespaceNames), 'WidgetRegistry')) {
+    if (!namespaceNames.has(name)) registryNames.add(name)
+  }
 
   // A parameter or local of the same name is a different binding; the walk
   // skips any function that shadows it.
