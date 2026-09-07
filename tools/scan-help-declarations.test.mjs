@@ -1400,3 +1400,47 @@ WidgetRegistry.register({ type: 'NeverLoaded' })
 
   assert.deepEqual(result.widgets, [])
 })
+
+test('an exported router built by assignment selects its own table', () => {
+  // Both halves — the table and addRoute — come from one selection now; they
+  // had drifted apart three times, each time on one side only.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const aux = [{ path: '/x', name: 'Aux' }]
+const preview = createRouter({ history: createWebHistory(), routes: aux })
+const main = [{ path: '/', name: 'Main', component: X, meta: { helpId: 'a' } }]
+let router
+router = createRouter({ history: createWebHistory(), routes: main })
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result), ['Main'])
+})
+
+test('a ** glob reaches modules more than one level down', () => {
+  const result = scan({
+    'frontend/src/widgets/Probe/index.ts': `import.meta.glob('./parts/**/*.ts', { eager: true })`,
+    'frontend/src/widgets/Probe/parts/level/inner/deep.ts': `
+import { WidgetRegistry } from '@/widgets/registry'
+WidgetRegistry.register({ type: 'DeepGlob' })
+`,
+  })
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['DeepGlob'])
+})
+
+test('Object.assign into the router options fails closed', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/', name: 'A', component: X, meta: { helpId: 'a' } }]
+const options = { history: createWebHistory(), routes }
+Object.assign(options, { routes: elsewhere })
+export default createRouter(options)
+`,
+  })
+
+  assert.ok(problems(result).some((problem) => problem.includes('merges into the router options')), problems(result).join(' | '))
+})

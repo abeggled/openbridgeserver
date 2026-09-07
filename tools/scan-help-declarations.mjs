@@ -203,25 +203,45 @@ function resolveAliasTarget(ast, name) {
 }
 
 /** The `createRouter(...)` call whose result the module default-exports. */
-function exportedRouterCall(ast, routerFactoryNames) {
-  let exported = defaultExportedName(ast)
-  if (exported === null) return null
-  // `const app = router; export default app` exports the same router, so the
-  // alias is followed back to the binding that was actually built.
-  exported = resolveAliasTarget(ast, exported)
+function routerBindings(ast, routerFactoryNames) {
+  const built = new Map()
+  const record = (name, call) => {
+    // `let router` records the name with no call; the assignment that follows
+    // must still be able to fill it in.
+    if (name && (!built.has(name) || built.get(name) === null)) built.set(name, call)
+  }
+  const factoryCall = (node) => {
+    const value = unwrap(node)
+    if (!value || (value.type !== 'CallExpression' && value.type !== 'OptionalCallExpression')) return null
+    const callee = unwrap(value.callee)
+    const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
+    return routerFactoryNames.has(called) ? value : null
+  }
   for (const statement of ast.program.body) {
     const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
     if (!inner || inner.type !== 'VariableDeclaration') continue
     for (const declarator of inner.declarations) {
-      if (declarator.id.type !== 'Identifier' || declarator.id.name !== exported) continue
-      const init = unwrap(declarator.init)
-      if (init?.type !== 'CallExpression') continue
-      const callee = unwrap(init.callee)
-      const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
-      if (routerFactoryNames.has(called)) return init
+      if (declarator.id.type === 'Identifier') record(declarator.id.name, factoryCall(declarator.init))
     }
   }
-  return null
+  // `let router; router = createRouter(...)` builds it just as directly.
+  walk(ast, (node) => {
+    if (node.type !== 'AssignmentExpression' || node.operator !== '=' || node.left.type !== 'Identifier') return
+    record(node.left.name, factoryCall(node.right))
+  })
+  const names = [...built].filter(([, call]) => call !== null).map(([name]) => name)
+  // `export default createRouter({ … })` ships the router without ever naming
+  // it. There is no binding for `addRoute` to be called on, but the table it
+  // receives is still the one that ships.
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ExportDefaultDeclaration') continue
+    const call = factoryCall(statement.declaration)
+    if (call !== null) return { names, selected: null, call }
+  }
+  const exportedName = defaultExportedName(ast)
+  const exported = exportedName === null ? null : resolveAliasTarget(ast, exportedName)
+  const selected = exported !== null && names.includes(exported) ? exported : (names[0] ?? null)
+  return { names, selected, call: selected === null ? null : built.get(selected) }
 }
 
 /** The identifier a module default-exports, or null. */
@@ -438,7 +458,7 @@ function routerTableName(ast) {
   // The table to read is the one given to the router this module exports. It
   // used to be whichever router was built first, so a preview router declared
   // above the real one hid the production table.
-  const preferredCall = exportedRouterCall(ast, routerFactoryNames)
+  const preferredCall = routerBindings(ast, routerFactoryNames).call
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
     if (preferredCall !== null && node !== preferredCall) return
@@ -511,6 +531,28 @@ function collectRoutes(file) {
       })
       return
     }
+    // `Object.assign(options, { routes: … })` replaces the table without an
+    // assignment expression, so the check above never sees it.
+    let merged = null
+    walkOutsideShadow(ast, optionsName, (node) => {
+      if (merged !== null) return
+      if (node.type !== 'CallExpression') return
+      const callee = node.callee
+      if (callee.type !== 'MemberExpression' || callee.computed) return
+      const object = unwrap(callee.object)
+      if (object.type !== 'Identifier' || !INDIRECT_MUTATORS[object.name]?.includes(callee.property.name)) return
+      const subject = unwrap(node.arguments[0])
+      if (subject?.type === 'Identifier' && subject.name === optionsName && node.start < creationOffset) merged = node
+    })
+    if (merged !== null) {
+      unreadable.push({
+        kind: 'route',
+        file: rel(file),
+        line: merged.loc.start.line,
+        problem: 'merges into the router options before they are used; the gate cannot tell which table ships',
+      })
+      return
+    }
   }
   if (overriddenTable !== null) {
     unreadable.push({
@@ -521,40 +563,14 @@ function collectRoutes(file) {
     })
     return
   }
-  // The bindings that hold a router this module creates.
+  // The binding that holds the router this module ships. Determined once, by
+  // the same function the table selection uses — these two had drifted apart
+  // three times, each time letting an auxiliary router win on one side only.
   const routerNames = new Set()
-  const builtRouters = []
-  for (const statement of ast.program.body) {
-    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
-    if (!inner || inner.type !== 'VariableDeclaration') continue
-    for (const declarator of inner.declarations) {
-      const init = unwrap(declarator.init)
-      const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
-      const called = callee?.type === 'Identifier' ? callee.name : callee?.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
-      if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called)) builtRouters.push(declarator.id.name)
-    }
-  }
-  // `let router; router = createRouter(...)` builds it just as directly.
-  walk(ast, (node) => {
-    if (node.type !== 'AssignmentExpression' || node.operator !== '=' || node.left.type !== 'Identifier') return
-    const init = unwrap(node.right)
-    const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
-    const called = callee?.type === 'Identifier' ? callee.name : callee?.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
-    if (routerFactoryNames.has(called)) builtRouters.push(node.left.name)
-  })
-  // The router this module ships is the one it exports — not simply the first
-  // it builds. A preview or test router constructed earlier used to win, and
-  // `addRoute` on the real router was then ignored: an undocumented live route
-  // passed. Only when nothing is exported does the first one stand in.
-  // Resolved through aliases for the same reason the table selection is: the
-  // two must name the same router or they contradict each other.
-  const exportedName = defaultExportedName(ast)
-  const exported = exportedName === null ? null : resolveAliasTarget(ast, exportedName)
-  if (exported !== null && builtRouters.includes(exported)) routerNames.add(exported)
-  else if (builtRouters.length > 0) routerNames.add(builtRouters[0])
+  const { selected } = routerBindings(ast, routerFactoryNames)
+  if (selected !== null) routerNames.add(selected)
   // `const alias = router` is the same object: an `addRoute` on it reaches the
-  // production router, so missing this was a false negative — the one direction
-  // a coverage gate must not fail in.
+  // production router, so missing this was a false negative.
   addAliases(ast, routerNames)
 
   markFunctionScopes(ast)
@@ -923,7 +939,20 @@ function expandGlob(fromDir, pattern) {
         continue
       }
       if (part === '**') {
-        next.push(directory, ...entries.filter((entry) => entry.isDirectory()).map((entry) => join(directory, entry.name)))
+        // Every descendant, not just the immediate children: Vite executes the
+        // whole subtree, so stopping one level down hid deeper registrations.
+        const pending = [directory]
+        while (pending.length > 0) {
+          const current = pending.pop()
+          next.push(current)
+          let children
+          try {
+            children = readdirSync(current, { withFileTypes: true })
+          } catch {
+            continue
+          }
+          for (const child of children) if (child.isDirectory()) pending.push(join(current, child.name))
+        }
         continue
       }
       const test = new RegExp(`^${part.split('*').map((piece) => piece.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`)

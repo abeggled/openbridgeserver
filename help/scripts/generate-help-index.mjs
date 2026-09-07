@@ -22,15 +22,45 @@
 // ...) and is served at that same prefixed URL; there is no unprefixed
 // "root" locale. This mirrors gui/frontend's Weblate setup, where German is
 // a normal (if usually already-complete) target language rather than the
-// translation source — English is. When adding a new locale in config.mts,
-// add its directory prefix to LOCALE_DIRS below too.
+// translation source — English is. The locales themselves are read from
+// config.mts, which is what VitePress builds from: a hand-kept second list
+// could fall behind it, and every page would then be missing in the new locale
+// while the contract still reported success.
 
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HELP_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const LOCALE_DIRS = { de: 'de', en: 'en' } // dir prefix -> locale code — every locale is prefixed
+// dir prefix -> locale code, read from the VitePress configuration. `root` is
+// the source-language entry there and has no directory of its own.
+const LOCALE_DIRS = configuredLocales()
+
+function configuredLocales() {
+  const source = readFileSync(join(HELP_ROOT, '.vitepress', 'config.mts'), 'utf-8')
+  const start = source.indexOf('locales:')
+  if (start < 0) throw new Error('help/.vitepress/config.mts declares no `locales`, so the contract cannot tell which languages must exist')
+  // The keys one level inside the `locales` object, in declaration order.
+  let depth = 0
+  const codes = []
+  for (let index = source.indexOf('{', start); index < source.length; index += 1) {
+    const character = source[index]
+    if (character === '{') depth += 1
+    else if (character === '}') {
+      depth -= 1
+      if (depth === 0) break
+    } else if (depth === 1) {
+      const key = /^\s*([A-Za-z][\w-]*)\s*:/.exec(source.slice(index))
+      if (key) {
+        codes.push(key[1])
+        index += key[0].length - 1
+      }
+    }
+  }
+  const locales = Object.fromEntries(codes.filter((code) => code !== 'root').map((code) => [code, code]))
+  if (Object.keys(locales).length === 0) throw new Error('help/.vitepress/config.mts declares no prefixed locales')
+  return locales
+}
 const EXCLUDED_TOP_LEVEL = new Set(['.vitepress', 'public', 'node_modules', 'scripts'])
 
 // The `{` must not be escaped: `## Title \{#id}` renders the suffix as visible
@@ -93,8 +123,8 @@ export function localeAndRoutePath(relPath) {
   if (!(localeDir in LOCALE_DIRS)) {
     throw new Error(
       `generate-help-index: "${relPath}" is not under a recognized locale directory ` +
-      `(${Object.keys(LOCALE_DIRS).join(', ')}) — move it under one of those, or add ` +
-      `its directory to LOCALE_DIRS if this is a new locale.`
+      `(${Object.keys(LOCALE_DIRS).join(', ')}) — move it under one of those, or declare ` +
+      `the new locale in help/.vitepress/config.mts.`
     )
   }
   return { locale: LOCALE_DIRS[localeDir], routeParts: parts }
