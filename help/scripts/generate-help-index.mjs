@@ -277,14 +277,22 @@ const DELIMITED_BLOCK_STARTS = [
  * The block ends at the first blank line, which is what lets the separated
  * form keep working.
  */
-export function stripRawHtmlBlocks(text) {
+export function stripRawHtmlBlocks(text, fenced = []) {
   let inBlock = false
   let literalTag = null // a CommonMark "type 1" block, closed by its end tag
   let terminator = null // a type 3/4/5 block, closed by a fixed string
   let container = null
+  let offset = 0
   return text
     .split('\n')
     .map((line) => {
+      // A tag inside fenced code is example text and opens nothing. `fenced`
+      // is measured on the source before this pass, which is what lets the two
+      // strippers disagree about a `<div>` in a fence and a ``` in a `<div>`
+      // without either winning outright.
+      const lineStart = offset
+      offset += line.length + 1
+      const insideFence = fenced.some(([from, to]) => lineStart >= from && lineStart < to)
       // Leaving the container ends the block, exactly as it ends a fence.
       if (inBlock && container !== null && !continuesContainer(line, container)) {
         inBlock = false
@@ -293,6 +301,7 @@ export function stripRawHtmlBlocks(text) {
         container = null
       }
       if (!inBlock) {
+        if (insideFence) return line
         const literal = LITERAL_BLOCK_START_RE.exec(line)
         if (literal) {
           inBlock = true
@@ -368,7 +377,11 @@ export function strippedSource(text) {
   // hold at once.
   const withoutFrontmatter = stripFrontmatter(text)
   const withoutComments = stripHtmlComments(withoutFrontmatter, fencedRanges(withoutFrontmatter))
-  return stripRawHtmlBlocks(stripFencedCode(withoutComments))
+  // Raw HTML first, for the same reason: a ``` inside `<div>…</div>` is part of
+  // the raw block and opens no fence, so stripping fences first left one open
+  // and erased a real heading below the block. Openers inside an actual fence
+  // are skipped, so a `<div>` in a code example still opens nothing.
+  return stripFencedCode(stripRawHtmlBlocks(withoutComments, fencedRanges(withoutComments)))
 }
 
 /** Every page's stripped source, keyed like the rendered pages. */

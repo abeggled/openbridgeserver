@@ -745,3 +745,27 @@ test('an explicit anchor containing non-ASCII letters survives stripping and mat
     }
   )
 })
+
+function indexedIds(markdown) {
+  let ids
+  withFixture({ 'de/probe.md': markdown, 'en/probe.md': markdown }, (root) => {
+    ids = Object.keys(buildHelpIndex(root).helpIds)
+  })
+  return ids
+}
+
+test('a fence marker inside a raw HTML block opens no fence', () => {
+  // Verified against a real build: VitePress renders the heading below.
+  // Stripping fences first left this ``` open and erased it.
+  assert.deepEqual(indexedIds('<div>\n```\n</div>\n\n## Visible {#after-raw-fence}\n'), ['after-raw-fence'])
+})
+
+test('an HTML tag inside fenced code opens no raw block', () => {
+  // The other direction, which the reordering must not break: the `<div>` is
+  // example text, so the heading after the fence is still a heading.
+  assert.deepEqual(indexedIds('```\n<div>\n```\n\n## Visible {#after-fenced-div}\n'), ['after-fenced-div'])
+})
+
+test('a heading inside a raw HTML block is still not indexed', () => {
+  assert.deepEqual(indexedIds('<div>\n## Hidden {#inside-raw}\n</div>\n\n## Visible {#after-raw}\n'), ['after-raw'])
+})
