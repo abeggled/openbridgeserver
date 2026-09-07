@@ -1201,3 +1201,28 @@ test('a child whose own meta cannot be read does not inherit the parent id', () 
   assert.ok(problems(result).some((problem) => problem.includes('cannot read')), problems(result).join(' | '))
   assert.deepEqual(names(result), [])
 })
+
+test('a router exported as `export { router as default }` is the selected one', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+const preview = createRouter({ history: createWebHistory(), routes: [] })
+const router = createRouter({ history: createWebHistory(), routes })
+router.addRoute({ path: '/b', name: 'OnExported', component: X })
+export { router as default }
+`,
+  })
+
+  assert.deepEqual(names(result).sort(), ['A', 'OnExported'])
+})
+
+test('an alias of a namespace-imported registry still registers', () => {
+  const result = scan(widget(`
+import * as RegistryModule from '@/widgets/registry'
+const alias = RegistryModule
+alias.WidgetRegistry.register({ type: 'ViaNamespaceAlias' })
+`))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['ViaNamespaceAlias'])
+})

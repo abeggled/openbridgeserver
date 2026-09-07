@@ -198,9 +198,18 @@ function exportedRouterCall(ast, routerFactoryNames) {
 /** The identifier a module default-exports, or null. */
 function defaultExportedName(ast) {
   for (const statement of ast.program.body) {
-    if (statement.type !== 'ExportDefaultDeclaration') continue
-    const value = unwrap(statement.declaration)
-    if (value?.type === 'Identifier') return value.name
+    if (statement.type === 'ExportDefaultDeclaration') {
+      const value = unwrap(statement.declaration)
+      if (value?.type === 'Identifier') return value.name
+      continue
+    }
+    // `export { router as default }` names it just as directly.
+    if (statement.type !== 'ExportNamedDeclaration' || statement.source) continue
+    for (const specifier of statement.specifiers ?? []) {
+      if (specifier.type !== 'ExportSpecifier') continue
+      const exportedName = specifier.exported.type === 'Identifier' ? specifier.exported.name : specifier.exported.value
+      if (exportedName === 'default' && specifier.local.type === 'Identifier') return specifier.local.name
+    }
   }
   return null
 }
@@ -854,6 +863,9 @@ function collectWidgets(file, seen = new Set()) {
       if (specifier.type === 'ImportNamespaceSpecifier' && REGISTRY_MODULE_RE.test(node.source.value)) namespaceNames.add(specifier.local.name)
     }
   })
+  // An alias of the namespace is the same module object, exactly as for the
+  // registry binding itself.
+  addAliases(ast, namespaceNames)
 
   // A parameter or local of the same name is a different binding; the walk
   // skips any function that shadows it.
