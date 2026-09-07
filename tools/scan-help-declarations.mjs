@@ -176,6 +176,35 @@ function markFunctionScopes(ast) {
   mark(ast, false)
 }
 
+/** The `createRouter(...)` call whose result the module default-exports. */
+function exportedRouterCall(ast, routerFactoryNames) {
+  const exported = defaultExportedName(ast)
+  if (exported === null) return null
+  for (const statement of ast.program.body) {
+    const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+    if (!inner || inner.type !== 'VariableDeclaration') continue
+    for (const declarator of inner.declarations) {
+      if (declarator.id.type !== 'Identifier' || declarator.id.name !== exported) continue
+      const init = unwrap(declarator.init)
+      if (init?.type !== 'CallExpression') continue
+      const callee = unwrap(init.callee)
+      const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
+      if (routerFactoryNames.has(called)) return init
+    }
+  }
+  return null
+}
+
+/** The identifier a module default-exports, or null. */
+function defaultExportedName(ast) {
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ExportDefaultDeclaration') continue
+    const value = unwrap(statement.declaration)
+    if (value?.type === 'Identifier') return value.name
+  }
+  return null
+}
+
 /** Grow a set of bindings by every top-level `const other = tracked` alias.
  *
  * Four things in this scanner are identified by the binding that holds them —
@@ -350,8 +379,13 @@ function routerTableName(ast) {
   const objectConstants = objectBindings(ast)
   // `import { createRouter as make }` builds the router just the same.
   const routerFactoryNames = new Set(['createRouter', ...importedAliases(ast, 'createRouter')])
+  // The table to read is the one given to the router this module exports. It
+  // used to be whichever router was built first, so a preview router declared
+  // above the real one hid the production table.
+  const preferredCall = exportedRouterCall(ast, routerFactoryNames)
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return
+    if (preferredCall !== null && node !== preferredCall) return
     const callee = unwrap(node.callee)
     const called = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
     if (!routerFactoryNames.has(called)) return
@@ -433,6 +467,7 @@ function collectRoutes(file) {
   }
   // The bindings that hold a router this module creates.
   const routerNames = new Set()
+  const builtRouters = []
   for (const statement of ast.program.body) {
     const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
     if (!inner || inner.type !== 'VariableDeclaration') continue
@@ -440,18 +475,20 @@ function collectRoutes(file) {
       const init = unwrap(declarator.init)
       const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
       const called = callee?.type === 'Identifier' ? callee.name : callee?.type === 'MemberExpression' && !callee.computed ? callee.property.name : null
-      // Only the first router the module builds — the one whose table the scan
-      // read. A later auxiliary router's additions are not the production
-      // router's routes.
-      if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called) && routerNames.size === 0) routerNames.add(declarator.id.name)
-      // `const alias = router` is the same object: an `addRoute` on it reaches
-      // the production router, so missing this was a false negative — the one
-      // direction a coverage gate must not fail in.
-      if (declarator.id.type === 'Identifier' && init?.type === 'Identifier' && routerNames.has(init.name)) {
-        routerNames.add(declarator.id.name)
-      }
+      if (declarator.id.type === 'Identifier' && routerFactoryNames.has(called)) builtRouters.push(declarator.id.name)
     }
   }
+  // The router this module ships is the one it exports — not simply the first
+  // it builds. A preview or test router constructed earlier used to win, and
+  // `addRoute` on the real router was then ignored: an undocumented live route
+  // passed. Only when nothing is exported does the first one stand in.
+  const exported = defaultExportedName(ast)
+  if (exported !== null && builtRouters.includes(exported)) routerNames.add(exported)
+  else if (builtRouters.length > 0) routerNames.add(builtRouters[0])
+  // `const alias = router` is the same object: an `addRoute` on it reaches the
+  // production router, so missing this was a false negative — the one direction
+  // a coverage gate must not fail in.
+  addAliases(ast, routerNames)
 
   markFunctionScopes(ast)
 
@@ -654,6 +691,19 @@ function collectRouteRecords(arrayExpression, file, inheritedHelpId = null) {
     const meta = ownProperty(record, 'meta')
     const metaValue = meta ? unwrap(meta.value) : null
     let helpId = inheritedHelpId
+    // Inheritance only holds while the child's own meta can be read. Vue Router
+    // merges the runtime object, so a `meta` the gate cannot see may override
+    // the parent's helpId with anything — keeping the inherited value there
+    // would vouch for a target that never ships.
+    if (meta && (!metaValue || metaValue.type !== 'ObjectExpression')) {
+      unreadable.push({
+        kind: 'route',
+        file: rel(file),
+        line: meta.loc.start.line,
+        problem: 'declares a `meta` the gate cannot read, so what it contributes — including a helpId — is unknown',
+      })
+      continue
+    }
     if (metaValue && metaValue.type === 'ObjectExpression') {
       // Order decides: `{ ...base, helpId: 'a' }` is the ordinary way to
       // extend defaults and the literal wins, while anything unreadable *after*

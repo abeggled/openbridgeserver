@@ -1166,3 +1166,30 @@ function go() { alias.open('via-store-alias') }
 
   assert.deepEqual(helpIds(result), ['via-store-alias'])
 })
+
+test('addRoute on the exported router counts even when another was built first', () => {
+  // A preview router constructed earlier used to win, and additions to the real
+  // one were ignored.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+const previewRouter = createRouter({ history: createWebHistory(), routes: [] })
+const router = createRouter({ history: createWebHistory(), routes })
+router.addRoute({ path: '/b', name: 'OnExported', component: X })
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result).sort(), ['A', 'OnExported'])
+})
+
+test('a child whose own meta cannot be read does not inherit the parent id', () => {
+  // Vue Router merges the runtime object, so an unreadable child meta may
+  // override the parent's helpId with anything.
+  const result = scan(router(`{ path: '/parent', component: X, meta: { helpId: 'parent-page' },
+  children: [{ path: 'child', name: 'Child', component: X, meta: childMeta }] },`))
+
+  assert.ok(problems(result).some((problem) => problem.includes('cannot read')), problems(result).join(' | '))
+  assert.deepEqual(names(result), [])
+})
