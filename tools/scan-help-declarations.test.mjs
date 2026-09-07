@@ -1248,3 +1248,68 @@ alias.register({ type: 'NotTheRegistry' })
 
   assert.deepEqual(result.widgets, [])
 })
+
+test('a router default-exported through an alias is the selected one', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+const preview = createRouter({ history: createWebHistory(), routes: [] })
+const router = createRouter({ history: createWebHistory(), routes })
+router.addRoute({ path: '/b', name: 'OnExported', component: X })
+const app = router
+export default app
+`,
+  })
+
+  assert.deepEqual(names(result).sort(), ['A', 'OnExported'])
+})
+
+test('an aliased useHelpStore import still yields a tracked store', () => {
+  const result = scan(view(`<template><button @click="go">x</button></template>
+<script setup>
+import { useHelpStore as getHelp } from '@/stores/help'
+const help = getHelp()
+function go() { help.open('via-aliased-factory') }
+</script>`))
+
+  assert.deepEqual(helpIds(result), ['via-aliased-factory'])
+})
+
+test('a removeRoute inside a conditional does not hide a live route', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'Live', component: X }]
+const router = createRouter({ history: createWebHistory(), routes })
+if (someFlag) { router.removeRoute('Live') }
+export default router
+`,
+  })
+
+  assert.deepEqual(names(result), ['Live'])
+})
+
+test('a registration in an external SFC script is enumerated', () => {
+  const result = scan({
+    'frontend/src/widgets/Probe/index.ts': `import './Panel.vue'`,
+    'frontend/src/widgets/Probe/Panel.vue': `<template><div /></template>\n<script src="./panel.ts"></script>`,
+    'frontend/src/widgets/Probe/panel.ts': `
+import { WidgetRegistry } from '@/widgets/registry'
+WidgetRegistry.register({ type: 'ViaExternalScript' })
+`,
+  })
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['ViaExternalScript'])
+})
+
+test('a shadowed registry alias does not disable the other names', () => {
+  const result = scan(widget(`
+import { WidgetRegistry } from '@/widgets/registry'
+const alias = WidgetRegistry
+function helper(alias) { void alias; WidgetRegistry.register({ type: 'StillSeen' }) }
+helper({})
+`))
+
+  assert.deepEqual(result.widgets.map((w) => w.type), ['StillSeen'])
+})

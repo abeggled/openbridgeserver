@@ -105,21 +105,6 @@ function declaresBinding(scope, name) {
 // A bare block scopes `let`/`const` just as a function body does.
 const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod', 'BlockStatement']
 
-/** Walk, skipping any function that shadows one of `names` with its own binding. */
-function walkShadowAware(node, names, visit) {
-  if (node === null || typeof node !== 'object') return
-  if (Array.isArray(node)) {
-    for (const child of node) walkShadowAware(child, names, visit)
-    return
-  }
-  if (typeof node.type !== 'string') return
-  if (FUNCTION_TYPES.includes(node.type) && [...names].some((name) => declaresBinding(node, name))) return
-  visit(node)
-  for (const key of Object.keys(node)) {
-    if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
-    walkShadowAware(node[key], names, visit)
-  }
-}
 
 /** Walk the AST, skipping any function that shadows `name` with its own binding. */
 function walkOutsideShadow(node, names, visit) {
@@ -157,6 +142,12 @@ function atModuleTopLevel(node) {
 
 const functionScopedNodes = new WeakSet()
 
+// Statements whose body is not certain to execute.
+const CONDITIONAL_TYPES = [
+  'IfStatement','ConditionalExpression','SwitchStatement','TryStatement','ForStatement','ForInStatement',
+  'ForOfStatement','WhileStatement','DoWhileStatement','LogicalExpression',
+]
+
 /** Mark every node that sits inside a function, so removals can skip them. */
 function markFunctionScopes(ast) {
   const mark = (node, inside) => {
@@ -167,7 +158,9 @@ function markFunctionScopes(ast) {
     }
     if (typeof node.type !== 'string') return
     if (inside) functionScopedNodes.add(node)
-    const deeper = inside || FUNCTION_TYPES.includes(node.type)
+    // A branch or loop body may not run either, and a removal that reduces the
+    // surface set must only count where it certainly executes.
+    const deeper = inside || FUNCTION_TYPES.includes(node.type) || CONDITIONAL_TYPES.includes(node.type)
     for (const key of Object.keys(node)) {
       if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue
       mark(node[key], deeper)
@@ -176,10 +169,35 @@ function markFunctionScopes(ast) {
   mark(ast, false)
 }
 
+/** Follow `const a = b` back to the binding a name ultimately refers to. */
+function resolveAliasTarget(ast, name) {
+  const seen = new Set()
+  let current = name
+  for (;;) {
+    if (seen.has(current)) return current
+    seen.add(current)
+    let next = null
+    for (const statement of ast.program.body) {
+      const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+      if (!inner || inner.type !== 'VariableDeclaration') continue
+      for (const declarator of inner.declarations) {
+        if (declarator.id.type !== 'Identifier' || declarator.id.name !== current) continue
+        const init = unwrap(declarator.init)
+        if (init?.type === 'Identifier') next = init.name
+      }
+    }
+    if (next === null) return current
+    current = next
+  }
+}
+
 /** The `createRouter(...)` call whose result the module default-exports. */
 function exportedRouterCall(ast, routerFactoryNames) {
-  const exported = defaultExportedName(ast)
+  let exported = defaultExportedName(ast)
   if (exported === null) return null
+  // `const app = router; export default app` exports the same router, so the
+  // alias is followed back to the binding that was actually built.
+  exported = resolveAliasTarget(ast, exported)
   for (const statement of ast.program.body) {
     const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
     if (!inner || inner.type !== 'VariableDeclaration') continue
@@ -509,7 +527,10 @@ function collectRoutes(file) {
   // it builds. A preview or test router constructed earlier used to win, and
   // `addRoute` on the real router was then ignored: an undocumented live route
   // passed. Only when nothing is exported does the first one stand in.
-  const exported = defaultExportedName(ast)
+  // Resolved through aliases for the same reason the table selection is: the
+  // two must name the same router or they contradict each other.
+  const exportedName = defaultExportedName(ast)
+  const exported = exportedName === null ? null : resolveAliasTarget(ast, exportedName)
   if (exported !== null && builtRouters.includes(exported)) routerNames.add(exported)
   else if (builtRouters.length > 0) routerNames.add(builtRouters[0])
   // `const alias = router` is the same object: an `addRoute` on it reaches the
@@ -773,7 +794,23 @@ function collectRouteRecords(arrayExpression, file, inheritedHelpId = null) {
 function sfcScript(file, source) {
   try {
     const { descriptor } = parseSfc(source, { filename: file })
-    return [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join('\n')
+    const parts = []
+    for (const block of [descriptor.script, descriptor.scriptSetup]) {
+      if (!block) continue
+      // `<script src="./x.ts">` holds no inline content; the module it names is
+      // what the bundle executes, so a registration in there is live.
+      if (block.src) {
+        const target = resolveLocalModule(dirname(file), block.src)
+        if (target === null) {
+          unreadable.push({ kind: 'parse', file: rel(file), line: 1, problem: `references a script at ${block.src} the gate cannot read` })
+          continue
+        }
+        parts.push(readFileSync(target, 'utf-8'))
+        continue
+      }
+      if (block.content) parts.push(block.content)
+    }
+    return parts.join('\n')
   } catch (error) {
     unreadable.push({ kind: 'parse', file: rel(file), line: 1, problem: `cannot be parsed as a single-file component: ${error.message}` })
     return null
@@ -893,7 +930,9 @@ function collectWidgets(file, seen = new Set()) {
   // skips any function that shadows it.
   // Every local name the registry is known by has to be shadow-checked, not
   // just the canonical spelling.
-  walkShadowAware(ast, registryNames, (node) => {
+  // One shadowed alias used to switch the check off for every other name in
+  // the same function; `walkOutsideShadow` hides only the names actually bound.
+  walkOutsideShadow(ast, registryNames, (node, live) => {
     if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return
     const callee = node.callee
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
@@ -903,7 +942,7 @@ function collectWidgets(file, seen = new Set()) {
     // `WidgetRegistry.register`, an aliased import, or a namespace import's
     // `RegistryModule.WidgetRegistry.register` — all the same registration.
     const isRegistry =
-      (object.type === 'Identifier' && registryNames.has(object.name)) ||
+      (object.type === 'Identifier' && live.has(object.name)) ||
       ((object.type === 'MemberExpression' || object.type === 'OptionalMemberExpression') &&
         namespaceNames.has(unwrap(object.object).name) &&
         (object.computed ? stringValue(object.property) : object.property.name) === 'WidgetRegistry')
@@ -941,12 +980,14 @@ function collectScriptReferences(code, file, lineOffset = 0) {
   if (ast === null) return
   const constants = stringConstants(ast)
   // Bindings that hold the help store: `const helpStore = useHelpStore()`.
+  // `import { useHelpStore as getHelp }` builds the same store.
+  const storeFactoryNames = new Set(['useHelpStore', ...importedAliases(ast, 'useHelpStore')])
   const helpStoreNames = new Set()
   walk(ast, (node) => {
     if (node.type !== 'VariableDeclarator' || node.id.type !== 'Identifier') return
     const init = unwrap(node.init)
     const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
-    if (callee?.type === 'Identifier' && callee.name === 'useHelpStore') helpStoreNames.add(node.id.name)
+    if (callee?.type === 'Identifier' && storeFactoryNames.has(callee.name)) helpStoreNames.add(node.id.name)
   })
   addAliases(ast, helpStoreNames)
   const objectOf = new Map()
