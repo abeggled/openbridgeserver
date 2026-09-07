@@ -1,4 +1,20 @@
 # Changes
+## 2026.10.0
+### Breaking changes 🚨
+* none
+
+### New features ✨
+* none
+
+### Fixes 🐞
+* Logic Engine: The Trigger function block's cron schedule was evaluated against UTC instead of the configured application timezone, so a schedule such as "Daily at 07:00" fired at 07:00 UTC and drifted across daylight-saving transitions instead of firing at 07:00 local time. It now resolves the same configured timezone already used by the iCalendar and Host Check schedulers, falling back to `Europe/Zurich` if that setting is unresolvable. https://github.com/abeggled/openbridgeserver/issues/1201
+
+### Known Issues 🔔
+* none
+
+### Contributors ❤️
+* none
+
 ## 2026.9.0
 ### Breaking changes 🚨
 * none
