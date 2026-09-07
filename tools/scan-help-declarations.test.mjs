@@ -1142,3 +1142,27 @@ export default router
 
   assert.ok(problems(result).some((problem) => problem.includes('mutates')), problems(result).join(' | '))
 })
+
+test('a spread of a literal object in v-bind carries the help target', () => {
+  const result = scan(view(`<template><HelpButton v-bind="{ ...{ helpId: 'from-spread-bind' } }" /></template>`))
+
+  assert.deepEqual(helpIds(result), ['from-spread-bind'])
+})
+
+test('a later key in an object v-bind wins over the spread it follows', () => {
+  const result = scan(view(`<template><HelpButton v-bind="{ ...{ helpId: 'a' }, helpId: 'b' }" /></template>`))
+
+  assert.deepEqual(helpIds(result).sort(), ['a', 'b'])
+})
+
+test('an alias of the help store opens the same drawer', () => {
+  const result = scan(view(`<template><button @click="go">x</button></template>
+<script setup>
+import { useHelpStore } from '@/stores/help'
+const helpStore = useHelpStore()
+const alias = helpStore
+function go() { alias.open('via-store-alias') }
+</script>`))
+
+  assert.deepEqual(helpIds(result), ['via-store-alias'])
+})

@@ -176,6 +176,34 @@ function markFunctionScopes(ast) {
   mark(ast, false)
 }
 
+/** Grow a set of bindings by every top-level `const other = tracked` alias.
+ *
+ * Four things in this scanner are identified by the binding that holds them —
+ * the router, its route table, the widget registry and the help store — and an
+ * alias of any of them is the same object, so a call through it is live. Each
+ * case was fixed separately as it was found; keeping the rule in one place is
+ * what stops the next one from being missed. Repeated until nothing new
+ * appears, so chains of aliases are followed.
+ */
+function addAliases(ast, names) {
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const statement of ast.program.body) {
+      const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
+      if (!inner || inner.type !== 'VariableDeclaration') continue
+      for (const declarator of inner.declarations) {
+        const init = unwrap(declarator.init)
+        if (declarator.id.type !== 'Identifier' || init?.type !== 'Identifier') continue
+        if (names.has(init.name) && !names.has(declarator.id.name)) {
+          names.add(declarator.id.name)
+          changed = true
+        }
+      }
+    }
+  }
+  return names
+}
+
 /** Walk every node of a Babel AST, depth first. */
 function walk(node, visit, parent = null) {
   if (node === null || typeof node !== 'object') return
@@ -504,21 +532,7 @@ function collectRoutes(file) {
   // binding was a false negative: an undocumented route shipped while the gate
   // reported success. Chains of aliases are followed.
   const tableNames = new Set([tableName])
-  for (let changed = true; changed; ) {
-    changed = false
-    for (const statement of ast.program.body) {
-      const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
-      if (!inner || inner.type !== 'VariableDeclaration') continue
-      for (const declarator of inner.declarations) {
-        const init = unwrap(declarator.init)
-        if (declarator.id.type !== 'Identifier' || init?.type !== 'Identifier') continue
-        if (tableNames.has(init.name) && !tableNames.has(declarator.id.name)) {
-          tableNames.add(declarator.id.name)
-          changed = true
-        }
-      }
-    }
-  }
+  addAliases(ast, tableNames)
 
   walkOutsideShadow(ast, tableNames, (node, live) => {
     if (node.type === 'AssignmentExpression' && node.start < creationOffset) {
@@ -780,21 +794,7 @@ function collectWidgets(file, seen = new Set()) {
   // through it is live. Missing that was a false negative — an undocumented
   // widget would have shipped. Repeated until nothing new is found, so a chain
   // of aliases is followed too.
-  for (let changed = true; changed; ) {
-    changed = false
-    for (const statement of ast.program.body) {
-      const inner = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement
-      if (!inner || inner.type !== 'VariableDeclaration') continue
-      for (const declarator of inner.declarations) {
-        const init = unwrap(declarator.init)
-        if (declarator.id.type !== 'Identifier' || init?.type !== 'Identifier') continue
-        if (registryNames.has(init.name) && !registryNames.has(declarator.id.name)) {
-          registryNames.add(declarator.id.name)
-          changed = true
-        }
-      }
-    }
-  }
+  addAliases(ast, registryNames)
   const namespaceNames = new Set()
   walk(ast, (node) => {
     if (node.type !== 'ImportDeclaration') return
@@ -864,6 +864,7 @@ function collectScriptReferences(code, file, lineOffset = 0) {
     const callee = init && (init.type === 'CallExpression' || init.type === 'OptionalCallExpression') ? unwrap(init.callee) : null
     if (callee?.type === 'Identifier' && callee.name === 'useHelpStore') helpStoreNames.add(node.id.name)
   })
+  addAliases(ast, helpStoreNames)
   const objectOf = new Map()
   walk(ast, (node) => {
     if (node.type !== 'ObjectExpression') return
@@ -1014,9 +1015,23 @@ function staticObjectEntries(source) {
   } catch {
     return []
   }
-  if (node.type !== 'ObjectExpression') return []
+  return objectEntries(node)
+}
+
+/** The constant string entries of an object literal, spreads expanded.
+ *
+ * `{ ...{ helpId: 'x' } }` passes the same prop as writing it directly, so a
+ * spread of another literal object contributes its entries. A spread of
+ * anything else is a runtime value and contributes nothing the gate can read.
+ */
+function objectEntries(node) {
+  if (node?.type !== 'ObjectExpression') return []
   const entries = []
   for (const property of node.properties) {
+    if (property.type === 'SpreadElement') {
+      entries.push(...objectEntries(unwrap(property.argument)))
+      continue
+    }
     if (property.type !== 'ObjectProperty') continue
     const key = propertyKey(property)
     const value = stringValue(unwrap(property.value))
