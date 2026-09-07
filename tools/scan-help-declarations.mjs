@@ -521,7 +521,7 @@ function collectRoutes(file) {
   }
 
   walkOutsideShadow(ast, tableNames, (node, live) => {
-    if (node.type === 'AssignmentExpression') {
+    if (node.type === 'AssignmentExpression' && node.start < creationOffset) {
       const target = node.left
       const whole = target.type === 'Identifier' && live.has(target.name)
       // `routes[0] = …` swaps out a record the scan already read.
@@ -541,6 +541,10 @@ function collectRoutes(file) {
     if (callee.type !== 'MemberExpression' && callee.type !== 'OptionalMemberExpression') return
     const object = unwrap(callee.object)
     const method = callee.computed ? stringValue(callee.property) : callee.property.type === 'Identifier' ? callee.property.name : null
+    // Only before `createRouter` ran: it copies the records into its matcher,
+    // so a later push into the source array reaches no live route. Flagging it
+    // blocked CI over code that changes nothing.
+    if (node.start > creationOffset) return
     if (object.type === 'Identifier' && live.has(object.name) && ROUTE_MUTATORS.includes(method)) {
       unreadable.push({ kind: 'route', file: rel(file), line: node.loc.start.line, problem: `mutates the ${tableName} array with ${method}(); the gate cannot see what it adds` })
       return
@@ -974,6 +978,15 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
         if (prop.type === 6 && HELP_PROP_NAMES.includes(prop.name) && prop.value) {
           references.push({ helpId: prop.value.content, file: rel(file), line: prop.loc.start.line + lineOffset })
         }
+        // `v-bind="{ helpId: 'x' }"` carries the prop inside the object rather
+        // than in a directive argument, and Vue passes the literal through.
+        if (prop.type === 7 && prop.name === 'bind' && !prop.arg && prop.exp?.content) {
+          for (const [key, literal] of staticObjectEntries(prop.exp.content)) {
+            if (HELP_PROP_NAMES.includes(key)) {
+              references.push({ helpId: literal, file: rel(file), line: prop.loc.start.line + lineOffset })
+            }
+          }
+        }
         // `:help-id="'logs-level'"` is a binding whose expression is a literal,
         // so the target is known after all. Parsed rather than quote-matched:
         // a regex anchored on the outer quotes reads `'dash' + 'board'` as one
@@ -991,6 +1004,25 @@ function collectTemplateReferences(templateAst, file, lineOffset) {
     for (const child of node.children ?? []) if (typeof child === 'object') visit(child)
   }
   visit(templateAst)
+}
+
+/** The compile-time constant string entries of an object-literal expression. */
+function staticObjectEntries(source) {
+  let node
+  try {
+    node = parseExpression(source, { plugins: ['typescript'] })
+  } catch {
+    return []
+  }
+  if (node.type !== 'ObjectExpression') return []
+  const entries = []
+  for (const property of node.properties) {
+    if (property.type !== 'ObjectProperty') continue
+    const key = propertyKey(property)
+    const value = stringValue(unwrap(property.value))
+    if (key !== null && value !== null) entries.push([key, value])
+  }
+  return entries
 }
 
 /** The value of a template binding when it is a compile-time constant string.

@@ -1103,3 +1103,42 @@ const props = defineProps({ helpId: { type: String, default: 'from-prop-default'
 
   assert.deepEqual(helpIds(result), ['from-prop-default'])
 })
+
+test('an object-form v-bind carries the help target', () => {
+  // `v-bind="{ helpId: 'x' }"` has no directive argument, but Vue passes the
+  // literal to the component just the same.
+  const result = scan(view(`<template><HelpButton v-bind="{ helpId: 'from-object-bind' }" /></template>`))
+
+  assert.deepEqual(helpIds(result), ['from-object-bind'])
+})
+
+test('a routes mutation after createRouter is not flagged', () => {
+  // createRouter copies the records into its matcher, so a later push into the
+  // source array reaches no live route.
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+const router = createRouter({ history: createWebHistory(), routes })
+routes.push({ path: '/late', name: 'Late', component: X })
+export default router
+`,
+  })
+
+  assert.deepEqual(problems(result), [])
+  assert.deepEqual(names(result), ['A'])
+})
+
+test('a routes mutation before createRouter still fails closed', () => {
+  const result = scan({
+    'gui/src/router/index.js': `
+import { createRouter, createWebHistory } from 'vue-router'
+const routes = [{ path: '/a', name: 'A', component: X, meta: { helpId: 'a' } }]
+routes.push({ path: '/early', name: 'Early', component: X })
+const router = createRouter({ history: createWebHistory(), routes })
+export default router
+`,
+  })
+
+  assert.ok(problems(result).some((problem) => problem.includes('mutates')), problems(result).join(' | '))
+})
