@@ -196,7 +196,7 @@ async def _devices_by_group_address(group_addresses: list[str], db: Database) ->
              JOIN knx_comm_objects co ON co.device_id = d.id
              JOIN knx_co_ga_links l ON l.comm_object_id = co.id
             WHERE l.ga_address IN ({placeholders})
-            ORDER BY l.ga_address, d.individual_address, co.number, co.id""",
+            ORDER BY l.ga_address, d.individual_address, CAST(co.number AS INTEGER), co.id""",
         normalized,
     )
 
@@ -369,7 +369,7 @@ async def build_device_datapoints_context(pa: str, db: Database) -> KnxDeviceDat
            FROM knx_comm_objects co
            LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE co.device_id = ?
-           ORDER BY co.number, co.id, l.ga_address""",
+           ORDER BY CAST(co.number AS INTEGER), co.id, l.ga_address""",
         (device_row["id"],),
     )
 

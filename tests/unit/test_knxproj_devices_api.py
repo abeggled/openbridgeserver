@@ -291,6 +291,47 @@ async def test_get_knx_device_by_pa_includes_comm_objects_and_ga_links():
 
 
 @pytest.mark.asyncio
+async def test_get_knx_device_comm_objects_are_sorted_numerically():
+    """Regression for #1132: `number` is stored as TEXT, so an unqualified
+    `ORDER BY co.number` sorted lexicographically (1, 10, 11, 2, 20, ...)
+    instead of numerically."""
+    db = Database(":memory:")
+    await db.connect()
+    await db.commit()
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        """INSERT INTO knx_devices
+           (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("dev-1", "1.1.1", "Kitchen Switch", "", "Siemens", "5WG1", "APP-KITCHEN", now),
+    )
+    await db.executemany(
+        """INSERT INTO knx_comm_objects
+           (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            ("co-20", "dev-1", "20", "KO 20", "", "", "1.001", now),
+            ("co-2", "dev-1", "2", "KO 2", "", "", "1.001", now),
+            ("co-11", "dev-1", "11", "KO 11", "", "", "1.001", now),
+            ("co-1", "dev-1", "1", "KO 1", "", "", "1.001", now),
+            ("co-10", "dev-1", "10", "KO 10", "", "", "1.001", now),
+        ],
+    )
+    await db.commit()
+
+    try:
+        result = await knxproj_api.get_knx_device(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+        assert [co.number for co in result.comm_objects] == ["1", "2", "10", "11", "20"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_get_knx_devices_for_group_address():
     db = await _prepare_db()
     try:
@@ -338,6 +379,44 @@ async def test_get_knx_device_datapoints_context_groups_datapoints_by_comm_objec
 
 
 @pytest.mark.asyncio
+async def test_get_knx_device_datapoints_comm_objects_are_sorted_numerically():
+    """Regression for #1132, same fix applied to build_device_datapoints_context
+    (backs GET /knxproj/devices/{pa}/datapoints)."""
+    db = Database(":memory:")
+    await db.connect()
+    await db.commit()
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        """INSERT INTO knx_devices
+           (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("dev-1", "1.1.1", "Kitchen Switch", "", "Siemens", "5WG1", "APP-KITCHEN", now),
+    )
+    await db.executemany(
+        """INSERT INTO knx_comm_objects
+           (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            ("co-10", "dev-1", "10", "KO 10", "", "", "1.001", now),
+            ("co-1", "dev-1", "1", "KO 1", "", "", "1.001", now),
+            ("co-2", "dev-1", "2", "KO 2", "", "", "1.001", now),
+        ],
+    )
+    await db.commit()
+
+    try:
+        result = await knxproj_api.get_knx_device_datapoints(
+            pa="1.1.1",
+            _user="admin",
+            db=db,
+        )
+        assert [co.number for co in result.comm_objects] == ["1", "2", "10"]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_datapoint_knx_context_resolves_group_addresses_devices_and_comm_objects():
     db = await _prepare_db()
     try:
@@ -362,6 +441,59 @@ async def test_datapoint_knx_context_resolves_group_addresses_devices_and_comm_o
         assert by_ga["1/2/3"].devices[0].comm_objects[0].name == "Switch"
         assert by_ga["1/2/4"].roles == ["state_group_address"]
         assert by_ga["1/2/4"].devices[0].comm_objects[0].name == "Status"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_datapoint_knx_context_comm_objects_are_sorted_numerically():
+    """Regression for #1132, same fix applied to the GA-centric traceability
+    query used by build_datapoint_knx_context."""
+    db = Database(":memory:")
+    await db.connect()
+    await db.commit()
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        """INSERT INTO knx_group_addresses
+           (address, name, description, dpt, imported_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        ("1/2/3", "GA 1", "", "1.001", now),
+    )
+    await db.execute(
+        """INSERT INTO knx_devices
+           (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("dev-1", "1.1.1", "Kitchen Switch", "", "Siemens", "5WG1", "APP-KITCHEN", now),
+    )
+    await db.executemany(
+        """INSERT INTO knx_comm_objects
+           (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            ("co-10", "dev-1", "10", "KO 10", "", "", "1.001", now),
+            ("co-1", "dev-1", "1", "KO 1", "", "", "1.001", now),
+            ("co-2", "dev-1", "2", "KO 2", "", "", "1.001", now),
+        ],
+    )
+    await db.executemany(
+        "INSERT INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
+        [("co-10", "1/2/3"), ("co-1", "1/2/3"), ("co-2", "1/2/3")],
+    )
+    dp_id = "00000000-0000-0000-0000-000000000099"
+    await db.commit()
+    await _insert_datapoint_binding(
+        db,
+        dp_id=dp_id,
+        name="Kitchen Status",
+        config='{"group_address": "1/2/3"}',
+    )
+
+    try:
+        result = await build_datapoint_knx_context(dp_id=uuid.UUID(dp_id), db=db)
+        by_ga = {ga.address: ga for ga in result.group_addresses}
+        device = next(d for d in by_ga["1/2/3"].devices if d.pa == "1.1.1")
+        assert [co.number for co in device.comm_objects] == ["1", "2", "10"]
     finally:
         await db.disconnect()
 
