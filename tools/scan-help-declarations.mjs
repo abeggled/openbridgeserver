@@ -1076,18 +1076,30 @@ function staticObjectEntries(source) {
  */
 function objectEntries(node) {
   if (node?.type !== 'ObjectExpression') return []
-  const entries = []
+  // Evaluated like the object itself: a later entry replaces an earlier one of
+  // the same key, so only the surviving value is a target. Emitting both made
+  // the gate demand a page for a default that can never reach the component.
+  const resolved = new Map()
   for (const property of node.properties) {
     if (property.type === 'SpreadElement') {
-      entries.push(...objectEntries(unwrap(property.argument)))
+      const inner = unwrap(property.argument)
+      if (inner?.type === 'ObjectExpression') {
+        for (const [key, value] of objectEntries(inner)) resolved.set(key, value)
+      } else {
+        // A spread of a runtime value may set anything, so nothing before it
+        // can be vouched for any more.
+        resolved.clear()
+      }
       continue
     }
     if (property.type !== 'ObjectProperty') continue
     const key = propertyKey(property)
     const value = stringValue(unwrap(property.value))
-    if (key !== null && value !== null) entries.push([key, value])
+    if (key === null) continue
+    if (value === null) resolved.delete(key)
+    else resolved.set(key, value)
   }
-  return entries
+  return [...resolved]
 }
 
 /** The value of a template binding when it is a compile-time constant string.

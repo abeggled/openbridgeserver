@@ -1149,10 +1149,18 @@ test('a spread of a literal object in v-bind carries the help target', () => {
   assert.deepEqual(helpIds(result), ['from-spread-bind'])
 })
 
-test('a later key in an object v-bind wins over the spread it follows', () => {
+test('a later key in an object v-bind replaces the spread it follows', () => {
+  // The object is evaluated as written: only the surviving value is a target,
+  // so demanding a page for the overridden default would be wrong.
   const result = scan(view(`<template><HelpButton v-bind="{ ...{ helpId: 'a' }, helpId: 'b' }" /></template>`))
 
-  assert.deepEqual(helpIds(result).sort(), ['a', 'b'])
+  assert.deepEqual(helpIds(result), ['b'])
+})
+
+test('a runtime spread after a literal helpId withdraws it', () => {
+  const result = scan(view(`<template><HelpButton v-bind="{ helpId: 'a', ...extra }" /></template>`))
+
+  assert.deepEqual(helpIds(result), [])
 })
 
 test('an alias of the help store opens the same drawer', () => {
