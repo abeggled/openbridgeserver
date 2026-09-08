@@ -76,7 +76,8 @@ COPY --from=py-builder /install /usr/local
 WORKDIR /app
 COPY obs/ ./obs/
 COPY scripts/obs-admin /usr/local/bin/obs-admin
-RUN chmod +x /usr/local/bin/obs-admin
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/obs-admin /usr/local/bin/docker-entrypoint.sh
 # Stamp the version into the image without touching the working tree
 RUN echo "$OBS_VERSION" > ./obs/version
 
@@ -101,4 +102,9 @@ ENV OBS_DATABASE__PATH=/data/obs.db \
 
 EXPOSE 8080
 
+# The entrypoint generates the per-instance JWT secret on first start and then
+# execs whatever command it is given, so `docker compose run obs obs-admin ...`
+# keeps working unchanged. (`docker exec` bypasses the entrypoint entirely —
+# obs-admin needs no JWT secret, it only touches the SQLite file.)
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "obs"]

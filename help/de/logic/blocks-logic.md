@@ -52,6 +52,27 @@ der Wert vom zuletzt empfangenen unterscheidet — wiederholt gleiche Werte lös
 Trigger aus (entspricht Edomis „SendByChange"). Nützlich, um nachgelagerte Aktionen (z. B.
 Benachrichtigungen) nicht bei jedem identischen Update erneut auszulösen.
 
+## Flankenerkennung {#logic-block-edge-detect}
+
+Wertet den Eingang boolesch aus und reagiert nur auf den **Wechsel** des Pegels, nicht auf den
+Wert selbst. Bei einer steigenden Flanke (falsch → wahr) pulst **Trigger-Steigend**, bei
+einer fallenden (wahr → falsch) **Trigger-Fallend**. Ohne Flanke wird auf **Ausgang** nichts
+gesendet — der letzte Wert wird also nicht wiederholt.
+
+Pro Richtung legt „Steigende Flanke"/„Fallende Flanke" fest, was passieren soll:
+
+- **Trigger + Wert** — der Trigger pulst und der konfigurierte Wert dieser Richtung geht auf
+  **Ausgang**. „Datentyp" bestimmt, wie die beiden Werte eingegeben werden (Boolean, Zahl, Text).
+- **Nur Trigger** — der Trigger pulst, **Ausgang** bleibt still.
+- **Aus** — diese Richtung bleibt komplett still. Der Pegel wird trotzdem mitgeführt, die nächste
+  Flanke in der Gegenrichtung wird also weiterhin erkannt.
+
+Der **erste** Wert nach Start oder Reset erzeugt bewusst keine Flanke: er legt nur den
+Ausgangspegel fest. Der **Reset**-Eingang verwirft den gemerkten Pegel — der nächste Wert setzt
+ihn neu, wieder ohne Flanke. Trifft im selben Lauf ein Reset und ein Wert ein, gewinnt der Reset.
+„Zustand nach Neustart wiederherstellen" bestimmt, ob der gemerkte Pegel einen Server-Neustart
+übersteht; ohne ihn beginnt der Baustein nach dem Neustart wieder ohne Ausgangspegel.
+
 ## Vergleich {#logic-block-compare}
 
 Vergleicht den Eingang mit einem konfigurierten Operanden über einen wählbaren Operator

@@ -85,7 +85,11 @@ services:
       OBS_MOSQUITTO__RELOAD_PID: "1"
 
       # ── Security ────────────────────────────────────────────────────────
-      OBS_SECURITY__JWT_SECRET: ${OBS_JWT_SECRET:-changeme}
+      # Leave OBS_JWT_SECRET unset: the entrypoint then generates a random
+      # per-instance secret on the first start and persists it in the data
+      # volume (/data/secrets/jwt-secret) — same idea as the LXC template's
+      # first-boot service. Set it only to pin a secret yourself.
+      OBS_SECURITY__JWT_SECRET: ${OBS_JWT_SECRET:-}
 
       # ── Logging ─────────────────────────────────────────────────────────
       OBS_SERVER__LOG_LEVEL: ${OBS_LOG_LEVEL:-INFO}

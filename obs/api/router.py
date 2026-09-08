@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from obs.api.auth import router as auth_router
+from obs.api.setup import router as setup_router
 from obs.api.v1.adapters import router as adapters_router
 from obs.api.v1.authz import router as authz_router
 from obs.api.v1.autobackup import router as autobackup_router
@@ -40,6 +41,7 @@ router.include_router(dp_router, prefix="/datapoints")
 router.include_router(bindings_router, prefix="/datapoints")
 router.include_router(search_router, prefix="/search")
 router.include_router(security_router, prefix="/security")
+router.include_router(setup_router, prefix="/setup")
 router.include_router(adapters_router, prefix="/adapters")
 router.include_router(system_router, prefix="/system")
 router.include_router(support_router, prefix="/support")

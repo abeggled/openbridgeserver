@@ -13,6 +13,7 @@ Startup-Sequenz:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -26,11 +27,14 @@ from obs import __version__
 
 logger = logging.getLogger(__name__)
 
+# Mirrors uvicorn's own exit code for a failed application startup.
+_STARTUP_FAILED_EXIT_CODE = 3
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.adapters import registry as adapter_registry
-    from obs.api.auth import require_configured_owner
+    from obs.api.setup import announce_setup_mode
     from obs.api.v1.websocket import init_ws_manager
     from obs.config import get_settings
     from obs.core.event_bus import DataValueEvent, init_event_bus
@@ -69,7 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Failed to apply persistent log level")
         logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
-    await require_configured_owner(db)
+    await announce_setup_mode(db, settings.server.port)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
     # SIGHUP is sent after MQTT connects (see below) so Mosquitto reloads cleanly.
@@ -318,6 +322,24 @@ def create_app() -> FastAPI:
     from fastapi import Request
     from fastapi.responses import JSONResponse, RedirectResponse
 
+    @app.middleware("http")
+    async def _setup_gate(request: Request, call_next):
+        """Reduce the whole HTTP surface to the setup page while no owner exists.
+
+        OPTIONS passes through so the CORS layer can still answer preflights;
+        the request it belongs to is blocked all the same.
+        """
+        from obs.api.setup import path_is_allowed_during_setup, setup_required
+
+        if not setup_required() or request.method == "OPTIONS" or path_is_allowed_during_setup(request.url.path):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "open bridge server is not set up yet — create the first owner at /setup.", "setup_required": True},
+                status_code=503,
+            )
+        return RedirectResponse("/setup", status_code=303)
+
     def _spa_index_response(index: Path) -> FileResponse:
         return FileResponse(
             str(index),
@@ -519,4 +541,45 @@ async def main() -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        await server.serve()
+    except SystemExit as exc:
+        # Uvicorn meldet einen fehlgeschlagenen Application-Startup per
+        # sys.exit(3) *innerhalb* von serve() (uvicorn.server.Server.startup).
+        await _abort_failed_startup(exc.code if isinstance(exc.code, int) else _STARTUP_FAILED_EXIT_CODE)
+        return  # _abort_failed_startup() kehrt im Betrieb nicht zurueck.
+    if not server.started:
+        # Kein Listener, aber auch kein SystemExit — z. B. Signal waehrend des
+        # Startups. Derselbe Hänger, dieselbe Behandlung.
+        await _abort_failed_startup()
+
+
+async def _abort_failed_startup(exit_code: int = _STARTUP_FAILED_EXIT_CODE) -> None:
+    """Terminate the process when the lifespan failed instead of hanging forever.
+
+    Uvicorn returns from ``serve()`` after a failed startup, but the interpreter
+    then waits for the *non-daemon* worker threads that aiosqlite starts per
+    connection (``Thread(target=_connection_worker_thread)``).  The database is
+    opened before the fail-closed owner check, so a fresh install would keep a
+    live-but-unserving process: ``docker ps`` shows "Up … (unhealthy)" forever,
+    no restart policy fires and systemd still considers obs.service running.
+
+    Close what startup managed to open, then leave hard — a startup that failed
+    has no other resources worth unwinding, and ``os._exit`` cannot be blocked
+    by a thread that never joins.
+    """
+    try:
+        from obs.message_archive import close_message_archive_store
+
+        await close_message_archive_store()
+    except Exception:
+        logger.exception("Could not close the message archive during startup abort")
+    try:
+        from obs.db.database import get_db
+
+        await get_db().disconnect()
+    except Exception:
+        logger.exception("Could not close the database during startup abort")
+    logger.error("open bridge server startup failed — exiting (see the traceback above).")
+    logging.shutdown()
+    os._exit(exit_code)

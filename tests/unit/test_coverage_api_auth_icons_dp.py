@@ -41,7 +41,6 @@ from obs.api.auth import (
     create_refresh_token,
     decode_token,
     hash_password,
-    require_configured_owner,
 )
 from obs.api.v1.icons import (
     DeleteRequest,
@@ -370,32 +369,6 @@ class TestGetAdminUser:
         with pytest.raises(HTTPException) as exc:
             await auth_module.get_admin_user(current_user="ghost", db=db)
         assert exc.value.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# auth.py — ensure_default_user
-# ---------------------------------------------------------------------------
-
-
-class TestRequireConfiguredOwner:
-    @pytest.mark.asyncio
-    async def test_fails_closed_when_no_administrator_exists(self):
-        db = _DbStub(fetchone_result=_make_row(c=0))
-        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
-            await require_configured_owner(db)
-        assert len(db.executed) == 0
-
-    @pytest.mark.asyncio
-    async def test_fails_closed_when_admin_count_cannot_be_read(self):
-        db = _DbStub(fetchone_result=None)
-        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
-            await require_configured_owner(db)
-
-    @pytest.mark.asyncio
-    async def test_skips_when_users_exist(self):
-        db = _DbStub(fetchone_result=_make_row(c=1))
-        await require_configured_owner(db)
-        assert len(db.executed) == 0
 
 
 # ---------------------------------------------------------------------------
