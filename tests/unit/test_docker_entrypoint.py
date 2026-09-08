@@ -21,7 +21,14 @@ ENTRYPOINT = REPO_ROOT / "docker-entrypoint.sh"
 ECHO_SECRET = ["sh", "-c", 'printf %s "${OBS_SECURITY__JWT_SECRET-<unset>}"']
 
 
-def _run(data_dir: Path, secret: str | None, *, config: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    data_dir: Path,
+    secret: str | None,
+    *,
+    config: str | None = None,
+    extra_env: dict[str, str] | None = None,
+    command: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     # Der Interpreter des Testlaufs zuerst: der Entrypoint liest config.yaml mit PyYAML.
     env = {
         "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin",
@@ -33,8 +40,9 @@ def _run(data_dir: Path, secret: str | None, *, config: str | None = None) -> su
         config_file = data_dir / "config.yaml"
         config_file.write_text(config, encoding="utf-8")
         env["OBS_CONFIG"] = str(config_file)
+    env.update(extra_env or {})
     result = subprocess.run(
-        ["sh", str(ENTRYPOINT), *ECHO_SECRET],
+        ["sh", str(ENTRYPOINT), *(command or ECHO_SECRET)],
         env=env,
         capture_output=True,
         text=True,
@@ -106,6 +114,39 @@ def test_config_yaml_secret_wins_over_generation(tmp_path: Path) -> None:
 )
 def test_generates_when_the_config_defines_no_real_secret(tmp_path: Path, config: str) -> None:
     result = _run(tmp_path, None, config=config)
+
+    assert result.stdout == (tmp_path / "secrets" / "jwt-secret").read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.parametrize("legacy_name", ["OPENTWS_SECURITY__JWT_SECRET", "opentws_security__jwt_secret"])
+def test_legacy_env_secret_is_left_to_the_applications_compatibility_mapping(tmp_path: Path, legacy_name: str) -> None:
+    # obs/config.py mappt OPENTWS_* nur, solange OBS_* *nicht* gesetzt ist
+    # (_import_legacy_env_vars) — ein exportiertes generiertes Secret wuerde das
+    # Legacy-Secret des Betreibers still ignorieren und alle Tokens entwerten.
+    # Der Lookup dort ist case-insensitiv, hier deshalb auch.
+    legacy_secret = "legacy-operator-secret-with-at-least-32-chars"
+
+    result = _run(tmp_path, "", extra_env={legacy_name: legacy_secret})
+
+    assert result.stdout == "<unset>"
+    assert not (tmp_path / "secrets").exists()
+
+
+def test_legacy_env_secret_reaches_the_settings(tmp_path: Path) -> None:
+    legacy_secret = "legacy-operator-secret-with-at-least-32-chars"
+
+    result = _run(
+        tmp_path,
+        "",
+        extra_env={"OPENTWS_SECURITY__JWT_SECRET": legacy_secret, "PYTHONPATH": str(REPO_ROOT)},
+        command=["python3", "-c", "from obs.config import get_settings; print(get_settings().security.jwt_secret)"],
+    )
+
+    assert result.stdout.strip() == legacy_secret
+
+
+def test_generates_when_the_legacy_env_secret_is_a_placeholder(tmp_path: Path) -> None:
+    result = _run(tmp_path, "", extra_env={"OPENTWS_SECURITY__JWT_SECRET": "changeme"})
 
     assert result.stdout == (tmp_path / "secrets" / "jwt-secret").read_text(encoding="utf-8").strip()
 
