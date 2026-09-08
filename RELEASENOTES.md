@@ -7,7 +7,7 @@
 * none
 
 ### Fixes 🐞
-* none
+* Admin GUI/KNX: A device's communication-object list sorted by number as text instead of numerically, so e.g. KO 10 was listed between KO 1 and KO 2 once a device had ten or more objects. Every place that orders communication objects by number — the device detail view, its datapoint-traceability panel, and the group-address device list — now sorts numerically. https://github.com/abeggled/openbridgeserver/issues/1132
 
 ### Known Issues 🔔
 * none
