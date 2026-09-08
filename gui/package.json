@@ -28,7 +28,7 @@
     "vue-router": "^5.0.0"
   },
   "devDependencies": {
-    "@babel/parser": "^7.29.0",
+    "@babel/parser": "^8.0.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@vitejs/plugin-vue": "^6.0.0",
     "@vitest/coverage-v8": "^5.0.0",
