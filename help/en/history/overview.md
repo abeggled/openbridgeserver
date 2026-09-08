@@ -2,7 +2,7 @@
 title: History
 ---
 
-# History
+# History {#history}
 
 Shows historical values of a single data point as a chart and optionally as a table — for
 tracing value trends, independent of the live value on the data point detail page. The
