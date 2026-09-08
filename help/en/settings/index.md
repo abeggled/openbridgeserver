@@ -17,7 +17,7 @@ tabbed page. Which tabs are visible depends on the signed-in user's permissions 
 | [Security](./security) | Security check and security-relevant events |
 | [Support](./support) | Diagnostics package, debug mode, and remote support access |
 | [Links](./links) | Custom links in the sidebar |
-| [Hierarchy](./hierarchy) | Device structure (e.g. building, floor, room) for assigning data points |
+| [Hierarchy](./hierarchy) | Tree structures (e.g. building, floor, room) for grouping data points and Logic graphs |
 | [Data Management](./importexport) | Import and export of configuration, database, and KNX project |
 | [Icons](./icons) | Browse, import, and clean up the icon library |
 | [History DB](./history) | Database and filters of long-term history recording |

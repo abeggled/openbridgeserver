@@ -65,7 +65,11 @@
     <!-- Tree list -->
     <div v-else class="flex flex-col gap-3">
       <div v-for="tree in trees" :key="tree.id" class="card" :data-testid="`tree-${tree.id}`">
-        <div class="card-header flex items-center gap-2">
+        <div
+          :class="['card-header flex items-center gap-2', dragOverTreeId === tree.id ? 'ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-500/10' : '']"
+          @dragover.prevent="dragOverTreeId = tree.id"
+          @dragleave="dragOverTreeId === tree.id && (dragOverTreeId = null)"
+          @drop.prevent="onDropOnTree(tree, $event)">
           <svg class="w-4 h-4 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h12M3 17h8"/>
           </svg>
@@ -95,6 +99,18 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0a1 1 0 011-1h4a1 1 0 011 1m-7 0h8"/>
             </svg>
           </button>
+        </div>
+
+        <!-- Logic graphs linked directly to the tree's own top level (#1217
+             follow-up) — no visible folder represents them, shown right on
+             the card. -->
+        <div v-if="treeRootGraphs[tree.id]?.length" class="px-3 pb-2 flex flex-wrap gap-1">
+          <span v-for="graph in treeRootGraphs[tree.id]" :key="graph.link_id"
+            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-teal-50 dark:bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-500/30"
+            :data-testid="`linked-graph-tree-${tree.id}-${graph.id}`">
+            {{ graph.name }}
+            <button type="button" @click="unlinkTreeGraph(tree, graph)" :title="$t('hierarchy.unlinkLogicGraph')" class="hover:text-red-500" :data-testid="`btn-unlink-graph-tree-${tree.id}-${graph.id}`">✕</button>
+          </span>
         </div>
 
         <!-- Tree nodes (collapsible) -->
@@ -280,6 +296,44 @@ function onGraphDragStart(graph, event) {
   event.dataTransfer.effectAllowed = 'copy'
 }
 
+// ── Graphs linked directly to a tree's own top level (#1217 follow-up) ─────
+// A tree's hidden root node (tree.root_node_id) behaves like an ordinary
+// node for linking purposes — dropping on the card header itself just links
+// to that node, sparing the user from creating a same-named sub-folder.
+const treeRootGraphs = reactive({})
+const dragOverTreeId = ref(null)
+
+async function loadTreeRootGraphs(tree) {
+  if (!tree.root_node_id) return
+  try {
+    const { data } = await hierarchyApi.getNodeLogicGraphs(tree.root_node_id)
+    treeRootGraphs[tree.id] = data
+  } catch {
+    showMsg(t('hierarchy.loadLogicGraphsError'), false)
+  }
+}
+
+async function onDropOnTree(tree, event) {
+  dragOverTreeId.value = null
+  const graphId = event.dataTransfer.getData(LOGIC_GRAPH_DRAG_MIME)
+  if (!graphId || !tree.root_node_id) return
+  try {
+    await hierarchyApi.createLogicGraphLink({ node_id: tree.root_node_id, graph_id: graphId })
+    await loadTreeRootGraphs(tree)
+  } catch {
+    showMsg(t('hierarchy.linkLogicGraphError'), false)
+  }
+}
+
+async function unlinkTreeGraph(tree, graph) {
+  try {
+    await hierarchyApi.deleteLogicGraphLink(tree.root_node_id, graph.id)
+    await loadTreeRootGraphs(tree)
+  } catch {
+    showMsg(t('hierarchy.unlinkLogicGraphError'), false)
+  }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
 
 const loading     = ref(false)
@@ -331,6 +385,7 @@ async function loadTrees() {
   try {
     const { data } = await hierarchyApi.listTrees()
     trees.value = data
+    await Promise.all(data.map(loadTreeRootGraphs))
   } catch {
     showMsg(t('hierarchy.errorLoading'), false)
   } finally {

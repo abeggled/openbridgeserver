@@ -168,3 +168,64 @@ describe('GraphPickerModal — navigation', () => {
     expect(wrapper.emitted('update:modelValue').at(-1)).toEqual([false])
   })
 })
+
+describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () => {
+  const UNASSIGNED_GRAPHS = [{ id: 'u1', name: 'Streuner', enabled: true }]
+
+  async function mountWithUnassigned(hasUnassigned = true) {
+    const browse = vi.fn().mockImplementation((params = {}) => {
+      if (params.unassigned) return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: UNASSIGNED_GRAPHS } })
+      if (!params.tree_id) return Promise.resolve({ data: { trees: TREES, subfolders: [], logic_graphs: [], has_unassigned_logic_graphs: hasUnassigned } })
+      return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: [] } })
+    })
+    return { ...(await mountModal({ browseImpl: browse })), browse }
+  }
+
+  it('shows the pseudo-folder at the root level when has_unassigned_logic_graphs is true', async () => {
+    const { wrapper } = await mountWithUnassigned(true)
+    expect(wrapper.find('[data-testid="picker-unassigned"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Nicht zugeordnet')
+  })
+
+  it('hides the pseudo-folder when has_unassigned_logic_graphs is false', async () => {
+    const { wrapper } = await mountWithUnassigned(false)
+    expect(wrapper.find('[data-testid="picker-unassigned"]').exists()).toBe(false)
+  })
+
+  it('clicking the pseudo-folder browses with unassigned=true and shows a flat graph list', async () => {
+    const { wrapper, browse } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+    expect(browse).toHaveBeenCalledWith({ unassigned: true })
+    expect(wrapper.find('[data-testid="picker-graph-u1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="crumb-unassigned"]').text()).toBe('Nicht zugeordnet')
+    // Never a further drill-down step — no tree/folder crumb alongside it.
+    expect(wrapper.find('[data-testid="crumb-tree"]').exists()).toBe(false)
+  })
+
+  it('picking a graph from the pseudo-folder selects it and closes the modal', async () => {
+    const { wrapper } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-graph-u1"]').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['u1']])
+    expect(wrapper.emitted('update:modelValue').at(-1)).toEqual([false])
+  })
+
+  it('going back to root from the pseudo-folder leaves unassigned mode', async () => {
+    const { wrapper, browse } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+
+    browse.mockClear()
+    await wrapper.find('[data-testid="crumb-root"]').trigger('click')
+    await flushPromises()
+    expect(browse).toHaveBeenCalledWith({})
+    expect(wrapper.find('[data-testid="crumb-unassigned"]').exists()).toBe(false)
+
+    browse.mockClear()
+    await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
+    await flushPromises()
+    expect(browse).toHaveBeenCalledWith({ tree_id: 't1' })  // no stray unassigned=true leaking in
+  })
+})

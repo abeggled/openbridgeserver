@@ -2548,6 +2548,7 @@
       "title": "Open Logic",
       "breadcrumbRoot": "All Hierarchies",
       "noTrees": "No hierarchies exist yet.",
+      "unassigned": "Unassigned",
       "empty": "This folder is empty.",
       "organize": "Organize logic graphs",
       "loading": "Loading …",

@@ -273,7 +273,7 @@ async def test_browse_tree_top_level_lists_root_nodes_no_graphs(client, auth_hea
     assert resp.status_code == 200
     body = resp.json()
     assert body["trees"] == []
-    assert body["logic_graphs"] == []  # graphs never attach directly to a tree, only to nodes
+    assert body["logic_graphs"] == []  # nothing linked to this tree's hidden root node yet
     assert len(body["subfolders"]) == 1
     assert body["subfolders"][0]["id"] == node["id"]
     assert body["subfolders"][0]["has_children"] is False
@@ -346,3 +346,114 @@ async def test_browse_node_from_wrong_tree_404(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Unassigned logic graphs (#1217 follow-up)
+# ---------------------------------------------------------------------------
+
+
+async def test_browse_unassigned_lists_only_unlinked_graphs(client, auth_headers):
+    tree = await _create_tree(client, auth_headers, "UnassignedTree")
+    node = await _create_node(client, auth_headers, tree["id"], "Folder")
+    linked = await _create_graph(client, auth_headers, "Linked")
+    unlinked1 = await _create_graph(client, auth_headers, "Unlinked1")
+    unlinked2 = await _create_graph(client, auth_headers, "Unlinked2")
+    await client.post("/api/v1/hierarchy/logic-graph-links", json={"node_id": node["id"], "graph_id": linked["id"]}, headers=auth_headers)
+
+    resp = await client.get("/api/v1/hierarchy/browse", params={"unassigned": "true"}, headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["trees"] == []
+    assert body["subfolders"] == []
+    graph_ids = {g["id"] for g in body["logic_graphs"]}
+    assert unlinked1["id"] in graph_ids
+    assert unlinked2["id"] in graph_ids
+    assert linked["id"] not in graph_ids
+
+
+async def test_browse_unassigned_rejects_tree_id(client, auth_headers):
+    tree = await _create_tree(client, auth_headers, "RejectTree")
+    resp = await client.get(
+        "/api/v1/hierarchy/browse",
+        params={"unassigned": "true", "tree_id": tree["id"]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_browse_top_level_reports_has_unassigned_logic_graphs(client, auth_headers):
+    graph = await _create_graph(client, auth_headers, "FreshGraph")
+
+    resp = await client.get("/api/v1/hierarchy/browse", headers=auth_headers)
+    assert resp.json()["has_unassigned_logic_graphs"] is True
+
+    tree = await _create_tree(client, auth_headers, "AssignTree")
+    node = await _create_node(client, auth_headers, tree["id"], "Folder")
+    await client.post("/api/v1/hierarchy/logic-graph-links", json={"node_id": node["id"], "graph_id": graph["id"]}, headers=auth_headers)
+
+    # This is a session-scoped DB shared across the whole test file, so other
+    # tests' unassigned graphs may still be around — proving the flag flips
+    # all the way to False means clearing every one of them first.
+    resp = await client.get("/api/v1/hierarchy/browse", params={"unassigned": "true"}, headers=auth_headers)
+    remaining = resp.json()["logic_graphs"]
+    assert graph["id"] not in {g["id"] for g in remaining}  # our own graph is gone from the unassigned list
+    if remaining:
+        for other in remaining:
+            await client.post(
+                "/api/v1/hierarchy/logic-graph-links",
+                json={"node_id": node["id"], "graph_id": other["id"]},
+                headers=auth_headers,
+            )
+
+    resp = await client.get("/api/v1/hierarchy/browse", headers=auth_headers)
+    assert resp.json()["has_unassigned_logic_graphs"] is False
+
+
+# ---------------------------------------------------------------------------
+# Linking directly at a tree's own top level (#1217 follow-up)
+# ---------------------------------------------------------------------------
+
+
+async def test_fresh_tree_allows_linking_a_graph_without_any_node(client, auth_headers):
+    tree = await _create_tree(client, auth_headers, "RootLinkTree")
+    graph = await _create_graph(client, auth_headers, "DirectGraph")
+
+    resp = await client.post(
+        "/api/v1/hierarchy/logic-graph-links",
+        json={"node_id": tree["root_node_id"], "graph_id": graph["id"]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def test_browse_tree_top_level_includes_root_linked_graphs_and_real_subfolders(client, auth_headers):
+    tree = await _create_tree(client, auth_headers, "MixedTree")
+    node = await _create_node(client, auth_headers, tree["id"], "Beschattung")
+    direct_graph = await _create_graph(client, auth_headers, "DirectlyOnTree")
+    await client.post(
+        "/api/v1/hierarchy/logic-graph-links",
+        json={"node_id": tree["root_node_id"], "graph_id": direct_graph["id"]},
+        headers=auth_headers,
+    )
+
+    resp = await client.get("/api/v1/hierarchy/browse", params={"tree_id": tree["id"]}, headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    subfolder_ids = {s["id"] for s in body["subfolders"]}
+    assert subfolder_ids == {node["id"]}  # the hidden root node itself is never listed
+    graph_ids = {g["id"] for g in body["logic_graphs"]}
+    assert graph_ids == {direct_graph["id"]}
+
+
+async def test_tree_root_node_never_listed_as_a_subfolder(client, auth_headers):
+    tree = await _create_tree(client, auth_headers, "NoRootLeakTree")
+    resp = await client.get("/api/v1/hierarchy/trees/" + tree["id"] + "/nodes", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json() == []  # get_tree_nodes must exclude the hidden root node too
+
+
+async def test_create_tree_response_includes_root_node_id(client, auth_headers):
+    tree = await _create_tree(client, auth_headers, "RootIdTree")
+    assert tree["root_node_id"]
+    assert tree["root_node_id"] != tree["id"]

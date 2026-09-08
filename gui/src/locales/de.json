@@ -2548,6 +2548,7 @@
       "title": "Logik öffnen",
       "breadcrumbRoot": "Alle Hierarchien",
       "noTrees": "Es sind noch keine Hierarchien vorhanden.",
+      "unassigned": "Nicht zugeordnet",
       "empty": "Dieser Ordner ist leer.",
       "organize": "Logiken organisieren",
       "loading": "Wird geladen …",

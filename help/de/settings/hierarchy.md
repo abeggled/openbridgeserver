@@ -6,7 +6,7 @@ title: Hierarchie
 
 Der Hierarchie-Tab findest du im Admin-GUI unter **Einstellungen → Hierarchie**.
 
-## Gerätestruktur {#settings-hierarchy}
+## Hierarchien {#settings-hierarchy}
 
 Bildet eine baumartige Struktur (Gebäude, Räume, Gewerke, Topologie …) ab, der Objekte
 zugeordnet werden können — sie dient sowohl der Navigation/Gruppierung im GUI als auch als
@@ -27,3 +27,21 @@ Knoten lassen sich manuell umbenennen, hinzufügen und wieder löschen (Löschen
 entfernt auch alle Unterknoten). Die „Anzeigestart-Ebene" bestimmt, ab welcher Ebene der
 verkürzte Pfad in Objekt-Listen angezeigt wird — der vollständige Pfad bleibt dabei stets als
 Tooltip sichtbar.
+
+## Logiken zuordnen
+
+Dieselben Hierarchien lassen sich auch verwenden, um Logiken zu gruppieren — eine Logik kann
+dabei gleichzeitig in mehreren, unabhängigen Hierarchien einsortiert sein (z. B. einer
+technischen Gliederung nach Beschattung/Licht/Steckdosen und parallel dazu einer topologischen
+nach Raum). Diese Zuordnung ist rein organisatorisch und hat keinen Einfluss auf
+Berechtigungen — Logiken behalten ihr eigenes, unabhängiges Rechte-Modell.
+
+Im Logikeditor führt der Button „Logik öffnen" zu einem Auswahldialog, der die Hierarchien
+Ebene für Ebene zum Durchklicken anbietet. Logiken ohne jede Zuordnung erscheinen dort in einem
+eigenen Ordner „Nicht zugeordnet" auf oberster Ebene.
+
+Zum Einsortieren gibt es hier in den Einstellungen eine Logik-Palette: Eine Logik von dort auf
+einen Knoten ziehen verknüpft sie dort — bestehende Verknüpfungen in anderen Ordnern oder
+Hierarchien bleiben davon unberührt. Wird eine Logik direkt auf den Titel einer Hierarchie
+(statt auf einen ihrer Unterordner) gezogen, landet sie unmittelbar auf deren oberster Ebene,
+ganz ohne dass zuvor ein Unterordner angelegt werden muss.

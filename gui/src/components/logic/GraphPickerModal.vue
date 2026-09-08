@@ -18,6 +18,10 @@
             {{ treeCrumb.name }}
           </button>
         </template>
+        <template v-if="unassignedMode">
+          <span>／</span>
+          <span class="text-slate-600 dark:text-slate-300" data-testid="crumb-unassigned">{{ $t('logic.graphPicker.unassigned') }}</span>
+        </template>
         <template v-for="(crumb, i) in nodeCrumbs" :key="crumb.id">
           <span>／</span>
           <button type="button" class="hover:text-blue-500 dark:hover:text-blue-400" @click="goToNodeCrumb(i)" :data-testid="`crumb-node-${crumb.id}`">
@@ -29,7 +33,7 @@
       <div v-if="loading" class="flex justify-center py-8"><Spinner /></div>
       <div v-else-if="errorMsg" class="text-sm text-red-400 py-4 text-center">{{ errorMsg }}</div>
       <div v-else class="flex flex-col gap-1 max-h-[60vh] overflow-y-auto">
-        <div v-if="isRootLevel && result.trees.length === 0" class="text-sm text-slate-500 py-6 text-center">
+        <div v-if="isRootLevel && result.trees.length === 0 && !result.has_unassigned_logic_graphs" class="text-sm text-slate-500 py-6 text-center">
           {{ $t('logic.graphPicker.noTrees') }}
         </div>
         <div v-else-if="!isRootLevel && result.subfolders.length === 0 && result.logic_graphs.length === 0" class="text-sm text-slate-500 py-6 text-center">
@@ -42,6 +46,14 @@
           @click="openTree(tree)" :data-testid="`picker-tree-${tree.id}`">
           <FolderIcon class="text-blue-500" />
           <span class="flex-1 truncate text-slate-700 dark:text-slate-200">{{ tree.name }}</span>
+        </button>
+
+        <!-- Pseudo-folder for unlinked graphs (root level only, #1217 follow-up) -->
+        <button v-if="isRootLevel && result.has_unassigned_logic_graphs" type="button"
+          class="flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm border border-dashed border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+          @click="openUnassigned" data-testid="picker-unassigned">
+          <FolderIcon class="text-slate-400" />
+          <span class="flex-1 truncate text-slate-500 dark:text-slate-400">{{ $t('logic.graphPicker.unassigned') }}</span>
         </button>
 
         <!-- Subfolders -->
@@ -97,24 +109,31 @@ const open = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-// ── Navigation state — three container levels: forest → tree → node ────────
-const treeCrumb  = ref(null) // { id, name } | null (null = root/forest level)
-const nodeCrumbs = ref([])   // [{ id, name }, …] ancestor chain within treeCrumb
+// ── Navigation state — forest → tree → node, plus the flat "unassigned"
+// pseudo-folder (#1217 follow-up), which is a fourth, leaf-only level of its
+// own reachable only from the forest root and never nested under a tree. ──
+const treeCrumb      = ref(null)  // { id, name } | null (null = root/forest level)
+const nodeCrumbs     = ref([])    // [{ id, name }, …] ancestor chain within treeCrumb
+const unassignedMode = ref(false) // true while browsing the "Nicht zugeordnet" pseudo-folder
 
-const isRootLevel = computed(() => treeCrumb.value === null)
+const isRootLevel = computed(() => treeCrumb.value === null && !unassignedMode.value)
 
 const loading  = ref(false)
 const errorMsg = ref('')
-const result   = ref({ trees: [], subfolders: [], logic_graphs: [] })
+const result   = ref({ trees: [], subfolders: [], logic_graphs: [], has_unassigned_logic_graphs: false })
 
 async function browse() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const params = {}
-    if (treeCrumb.value) params.tree_id = treeCrumb.value.id
-    const lastNode = nodeCrumbs.value[nodeCrumbs.value.length - 1]
-    if (lastNode) params.node_id = lastNode.id
+    let params = {}
+    if (unassignedMode.value) {
+      params = { unassigned: true }
+    } else {
+      if (treeCrumb.value) params.tree_id = treeCrumb.value.id
+      const lastNode = nodeCrumbs.value[nodeCrumbs.value.length - 1]
+      if (lastNode) params.node_id = lastNode.id
+    }
     const { data } = await hierarchyApi.browse(params)
     result.value = data
   } catch {
@@ -127,11 +146,13 @@ async function browse() {
 function goToRoot() {
   treeCrumb.value = null
   nodeCrumbs.value = []
+  unassignedMode.value = false
   browse()
 }
 function openTree(tree) {
   treeCrumb.value = { id: tree.id, name: tree.name }
   nodeCrumbs.value = []
+  unassignedMode.value = false
   browse()
 }
 function goToTree() {
@@ -144,6 +165,12 @@ function openNode(folder) {
 }
 function goToNodeCrumb(index) {
   nodeCrumbs.value = nodeCrumbs.value.slice(0, index + 1)
+  browse()
+}
+function openUnassigned() {
+  treeCrumb.value = null
+  nodeCrumbs.value = []
+  unassignedMode.value = true
   browse()
 }
 
@@ -163,6 +190,7 @@ watch(open, (v) => {
   if (v) {
     treeCrumb.value = null
     nodeCrumbs.value = []
+    unassignedMode.value = false
     browse()
   }
 }, { immediate: true })

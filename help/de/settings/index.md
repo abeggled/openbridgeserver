@@ -18,7 +18,7 @@ Administratoren.
 | [Sicherheit](./security) | Sicherheitsprüfung und sicherheitsrelevante Ereignisse |
 | [Support](./support) | Diagnosepaket, Debug-Modus und Fernwartungs-Zugang |
 | [Links](./links) | Eigene Verknüpfungen in der Seitenleiste |
-| [Hierarchie](./hierarchy) | Gerätestruktur (z. B. Gebäude, Etage, Raum) für die Objekt-Zuordnung |
+| [Hierarchie](./hierarchy) | Baumstrukturen (z. B. Gebäude, Etage, Raum) zur Gruppierung von Objekten und Logiken |
 | [Datenmanagement](./importexport) | Import und Export von Konfiguration, Datenbank und KNX-Projekt |
 | [Icons](./icons) | Icon-Bibliothek durchsuchen, importieren und aufräumen |
 | [Historie DB](./history) | Datenbank und Filter der Langzeit-Historisierung |

@@ -693,6 +693,47 @@ async def _migration_v52_external_write(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE datapoints ADD COLUMN external_write_enabled INTEGER NOT NULL DEFAULT 0")
 
 
+async def _migration_v54_hierarchy_tree_root_nodes(conn: aiosqlite.Connection) -> None:
+    """Give every hierarchy tree an implicit, hidden root node (#1217 follow-up).
+
+    A Logic graph link always points at a ``hierarchy_nodes`` row — there was
+    no way to link a graph "directly to a tree" without first creating a
+    visible child node, which is unwanted friction for a tree that is meant
+    to directly hold graphs with no further nesting (e.g. a tree named
+    "Beschattung" holding graphs straight away). Rather than loosening
+    hierarchy_logic_graph_links.node_id's NOT NULL constraint (SQLite has no
+    ALTER TABLE ... DROP NOT NULL short of a full table rebuild), every tree
+    gets exactly one ``is_tree_root=1`` node that behaves like an ordinary
+    node for linking purposes but is excluded from every *visible* folder
+    listing (get_tree_nodes/_build_tree, search_nodes) so it never appears as
+    a renamable/deletable child folder duplicating the tree's own name.
+    """
+    async with conn.execute("PRAGMA table_info(hierarchy_nodes)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+    if not columns:
+        return  # fresh DB — the CREATE TABLE below already includes the column
+    if "is_tree_root" not in columns:
+        await conn.execute("ALTER TABLE hierarchy_nodes ADD COLUMN is_tree_root INTEGER NOT NULL DEFAULT 0")
+
+    from datetime import datetime
+
+    now = datetime.now(UTC).isoformat()
+    async with conn.execute(
+        """SELECT ht.id, ht.name FROM hierarchy_trees ht
+           WHERE NOT EXISTS (
+               SELECT 1 FROM hierarchy_nodes hn WHERE hn.tree_id = ht.id AND hn.is_tree_root = 1
+           )"""
+    ) as cur:
+        trees_needing_root = await cur.fetchall()
+    for tree in trees_needing_root:
+        await conn.execute(
+            """INSERT INTO hierarchy_nodes
+                   (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+               VALUES (?,?,NULL,?,'',-1,NULL,1,?,?)""",
+            (str(uuid.uuid4()), tree["id"], tree["name"], now, now),
+        )
+
+
 _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS = """
 CREATE TABLE IF NOT EXISTS hierarchy_logic_graph_links (
     id         TEXT PRIMARY KEY,
@@ -1229,6 +1270,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (51, _MIGRATION_V51_REGIONAL_SETTINGS),
     (52, _migration_v52_external_write),
     (53, _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS),
+    (54, _migration_v54_hierarchy_tree_root_nodes),
 ]
 
 

@@ -247,6 +247,10 @@ class ExportedHierarchyNode(BaseModel):
     description: str
     node_order: int
     icon: str | None
+    is_tree_root: bool = False
+    """The tree's hidden root node (#1217 follow-up) — round-tripped through
+    export/import so a restore doesn't turn it back into a visible folder.
+    Defaults to False for older exports that predate this field."""
 
 
 class ExportedHierarchyDpLink(BaseModel):
@@ -500,6 +504,7 @@ async def export_config(
             description=r["description"],
             node_order=r["node_order"],
             icon=r["icon"],
+            is_tree_root=bool(r["is_tree_root"]),
         )
         for r in h_node_rows
     ]
@@ -1286,13 +1291,13 @@ async def import_config(
                     try:
                         await db.execute_and_commit(
                             """INSERT INTO hierarchy_nodes
-                               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                               VALUES (?,?,?,?,?,?,?,?,?)
+                               (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)
                                ON CONFLICT(id) DO UPDATE
                                SET tree_id=excluded.tree_id, parent_id=excluded.parent_id, name=excluded.name,
                                    description=excluded.description, node_order=excluded.node_order,
-                                   icon=excluded.icon, updated_at=excluded.updated_at""",
-                            (hn.id, hn.tree_id, hn.parent_id, hn.name, hn.description, hn.node_order, hn.icon, now, now),
+                                   icon=excluded.icon, is_tree_root=excluded.is_tree_root, updated_at=excluded.updated_at""",
+                            (hn.id, hn.tree_id, hn.parent_id, hn.name, hn.description, hn.node_order, hn.icon, int(hn.is_tree_root), now, now),
                         )
                         inserted_h_ids.add(hn.id)
                         result.hierarchy_upserted += 1
@@ -1303,6 +1308,27 @@ async def import_config(
                 else:
                     next_remaining_h.append(hn)
             remaining_h = next_remaining_h
+
+    # A backup taken before #1217's tree-root-node feature (or a synthetic
+    # partial import missing hierarchy_nodes) may restore hierarchy_trees rows
+    # with no is_tree_root=1 node — backfill any still missing one, same as
+    # _migration_v54_hierarchy_tree_root_nodes. Runs after the node import
+    # loop above so a root node actually included in the import is correctly
+    # recognized here and never duplicated.
+    for ht in body.hierarchy_trees:
+        existing_root = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE tree_id=? AND is_tree_root=1", (ht.id,))
+        if existing_root:
+            continue
+        try:
+            await db.execute_and_commit(
+                """INSERT INTO hierarchy_nodes
+                       (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+                   VALUES (?,?,NULL,?,'',-1,NULL,1,?,?)""",
+                (str(uuid.uuid4()), ht.id, ht.name, now, now),
+            )
+        except Exception as exc:
+            logger.exception(f"HierarchyTree {ht.id} root node backfill failed")
+            result.errors.append(f"HierarchyTree {ht.id} root node: {exc}")
 
     # --- Hierarchy DataPoint Links ---
     for link in body.hierarchy_dp_links:
