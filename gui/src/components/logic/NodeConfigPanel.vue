@@ -684,7 +684,7 @@
             class="btn-secondary btn-sm text-teal-400 disabled:opacity-40 disabled:cursor-not-allowed"
             :disabled="watchdogInputs.length >= 10"
             data-testid="watchdog-input-add"
-          >{{ $t('logic.nodeConfig.rules.add') }}</button>
+          >{{ $t('logic.nodeConfig.sensorWatchdog.add') }}</button>
         </div>
 
         <div
@@ -705,9 +705,9 @@
               @click="removeWatchdogInput(i)"
               class="text-xs text-red-400 hover:text-red-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
               :disabled="watchdogInputs.length <= 1"
-              :title="$t('logic.nodeConfig.rules.remove')"
+              :title="$t('logic.nodeConfig.sensorWatchdog.remove')"
               :data-testid="`watchdog-input-remove-${i}`"
-            >{{ $t('logic.nodeConfig.rules.removeShort') }}</button>
+            >{{ $t('logic.nodeConfig.sensorWatchdog.removeShort') }}</button>
           </div>
 
           <div class="form-group">

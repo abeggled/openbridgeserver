@@ -2051,6 +2051,9 @@
       },
       "sensorWatchdog": {
         "inputs": "Monitored Inputs",
+        "add": "+ Input",
+        "remove": "Remove input",
+        "removeShort": "−",
         "labelPlaceholder": "Display name",
         "timeoutLabel": "Timeout (seconds)",
         "faultValueLabel": "Fault Value",
