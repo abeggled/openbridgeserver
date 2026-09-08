@@ -115,8 +115,13 @@ The LXC template contains a complete Ubuntu 26.04 system with **open bridge serv
 |---|---|
 | **open bridge server** web interface + API | `http://<container-ip>:8080` |
 
-OBS deliberately ships no default credentials. The first start initializes the database and
-then stops with a setup notice. Create exactly one owner locally before restarting the service:
+OBS ships without credentials, so the first start serves nothing but its setup page: open the
+address above in a browser and set the administrator's username and password. Every other page,
+the API and the Visu stay blocked until that account exists.
+
+Do this right after installing — until the account is created, anyone who can reach the server on
+the network can create it. An installation that must never be claimable that way can create the
+owner offline instead, before the container is first reachable:
 
 ```bash
 obs-admin auth first-owner <username> --password-stdin
@@ -150,11 +155,22 @@ cd openbridgeserver
 cp .env.example .env      # optional — MQTT service password, host ports, instance name
 ```
 
-**Step 2 — Create the owner, then start**
+**Step 2 — Start the stack**
 
-OBS deliberately ships no default credentials. The first start initializes the database and then
-stops with a setup notice (exit code 3) — that is expected, not a failure. Create exactly one
-owner against the same data volume, then bring the stack up:
+```bash
+docker compose up -d
+```
+
+**Step 3 — Set the administrator password**
+
+Open `http://<host-ip>:8080` in a browser. OBS ships without credentials, so a fresh installation
+serves nothing but its setup page: enter a username and password there and the interface is ready
+— no shell, no `docker exec`, no restart. Every other page, the API and the Visu stay blocked
+until that account exists.
+
+Do this right after starting the stack — until the account is created, anyone who can reach the
+server on the network can create it. An installation that must never be claimable that way can
+create the owner offline instead, before the container is first reachable:
 
 ```bash
 docker compose up -d mosquitto
@@ -169,17 +185,11 @@ docker compose up -d
 ```
 
 `--no-deps` keeps Compose from starting the dependencies a second time; Mosquitto has to run
-already because the `obs` service shares its PID namespace.
+already because the `obs` service shares its PID namespace. Where the stack is managed outside a
+Compose file (Portainer, a plain `docker run`), the same command runs in the container itself:
+`docker exec -i <container> obs-admin auth first-owner <username> --password-stdin`.
 
-> **Stack managed outside a Compose file** (Portainer, a plain `docker run`)? `docker compose` has
-> no project to attach to there. Create the owner inside the running container and restart it:
->
-> ```bash
-> printf '%s\n' '<password>' | docker exec -i <container> obs-admin auth first-owner <username> --password-stdin
-> docker restart <container>
-> ```
-
-**Step 3 — Access**
+**Step 4 — Access**
 
 | Service | Address |
 |---|---|

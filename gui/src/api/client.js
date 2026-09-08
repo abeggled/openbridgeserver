@@ -22,6 +22,13 @@ api.interceptors.response.use(
   res => res,
   async err => {
     const original = err.config
+    // The installation has no owner (any more): the backend answers nothing but
+    // its setup page, so there is no point retrying or redirecting to /login.
+    // A full page load rebuilds the cached setup state on the way.
+    if (err.response?.status === 503 && err.response?.data?.setup_required) {
+      if (window.location.pathname !== '/setup') window.location.href = '/setup'
+      return Promise.reject(err)
+    }
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
       const refreshToken = localStorage.getItem('refresh_token')
@@ -354,4 +361,12 @@ export const logicApi = {
 // interceptors, same as the raw axios.post(...) used for token refresh above.
 export const helpApi = {
   index: () => axios.get('/help/help-index.json'),
+}
+
+// ── First-run setup (#1229) ──────────────────────────────────────────────
+// Plain axios, not the `api` instance: these run before any token exists, and
+// the 401 interceptor's redirect to /login would fight the setup guard.
+export const setupApi = {
+  status:      ()                   => axios.get('/api/v1/setup/status'),
+  createOwner: (username, password) => axios.post('/api/v1/setup/owner', { username, password }),
 }

@@ -36,6 +36,22 @@
     "submitting": "Anmelden …",
     "logoAlt": "open bridge server"
   },
+  "setup": {
+    "title": "Ersteinrichtung",
+    "intro": "Diese Installation hat noch kein Administratorkonto. Lege es jetzt an — danach ist die Oberfläche wie gewohnt erreichbar.",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "passwordRepeat": "Passwort wiederholen",
+    "passwordHint": "Mindestens {n} Zeichen.",
+    "submit": "Konto anlegen",
+    "submitting": "Konto wird angelegt …",
+    "securityNote": "Führe diesen Schritt direkt nach der Installation aus: bis das Konto existiert, kann jeder, der den Server im Netzwerk erreicht, es anlegen.",
+    "errorUsernameRequired": "Bitte einen Benutzernamen eingeben.",
+    "errorPasswordTooShort": "Das Passwort muss mindestens {n} Zeichen lang sein.",
+    "errorPasswordMismatch": "Die beiden Passwörter stimmen nicht überein.",
+    "errorAlreadyDone": "Die Einrichtung wurde bereits abgeschlossen. Lade die Seite neu und melde dich an.",
+    "errorFailed": "Das Konto konnte nicht angelegt werden. Bitte erneut versuchen."
+  },
   "dashboard": {
     "title": "Übersicht",
     "subtitle": "Systemübersicht – Live-Status",

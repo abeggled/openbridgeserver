@@ -96,10 +96,15 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 
 ### Fehlerbehebungen
 
+**Ersteinrichtung im Browser (#1229)**
+- Eine Installation ohne Eigentümer startet nicht mehr durch, sondern läuft im **Einrichtungsmodus**: Der Server startet normal und beantwortet ausschliesslich die Einrichtungsseite unter `/setup` sowie deren zwei Endpunkte (`GET /api/v1/setup/status`, `POST /api/v1/setup/owner`). Kein Login, keine API, keine Visu, kein WebSocket — bis Benutzername und Passwort des Administrators im Browser gesetzt sind. Danach ist die Installation ohne Neustart nutzbar.
+- Gilt für Docker und LXC gleichermassen. Der bisherige Weg über `obs-admin auth first-owner` bleibt erhalten, für Installationen, die nie über das Netzwerk beansprucht werden dürfen.
+- Bisher brach der Start mit `RuntimeError: No OBS owner is configured` ab und verlangte Shell-Zugriff auf den Container bzw. LXC-Gast.
+
 **Docker — Erstinstallation (#1229)**
-- Der Container erzeugt beim ersten Start ein zufälliges JWT-Secret pro Instanz und legt es im Daten-Volume ab (`/data/secrets/jwt-secret`) — dasselbe Prinzip wie `obs-first-boot.service` im LXC-Template. Bisher lief jede Compose-Installation dauerhaft auf dem Platzhalter `changeme` aus `docker-compose.yml`. Ein selbst gesetztes Secret (Env-Variable oder gemountete `config.yaml`) wird nie überschrieben.
+- Der Container erzeugt beim ersten Start ein zufälliges JWT-Secret pro Instanz und legt es im Daten-Volume ab (`/data/secrets/jwt-secret`) — dasselbe Prinzip wie `obs-first-boot.service` im LXC-Template. Bisher lief jede Compose-Installation dauerhaft auf dem Platzhalter `changeme` aus `docker-compose.yml`. Ein selbst gesetztes Secret (Env-Variable, Legacy-Variable `OPENTWS_SECURITY__JWT_SECRET` oder gemountete `config.yaml`) wird nie überschrieben.
 - Ein fehlgeschlagener Startup beendet den Prozess jetzt mit Exit-Code 3, statt den Container dauerhaft als „Up (unhealthy)" ohne Listener stehen zu lassen: uvicorn meldet den Fehler mit `sys.exit(3)` innerhalb von `serve()`, und die Nicht-Daemon-Threads der bereits geöffneten SQLite-Verbindungen hielten den Interpreter danach am Leben.
-- Die Meldung „No OBS owner is configured" nennt jetzt auch den Docker-Weg, den ersten Eigentümer anzulegen; beide READMEs haben einen Docker-Compose-Schnellstart inklusive Portainer-Variante.
+- Beide READMEs haben einen Docker-Compose-Schnellstart inklusive Portainer-Variante.
 
 **Zeitzonen — Verbrauchszähler und History-Chart (#975, #909)**
 - Verbrauchszähler setzen Tages-, Wochen-, Monats- und Jahreswerte jetzt in der konfigurierten App-Zeitzone zurück, statt in der Zeitzone des Serverprozesses.

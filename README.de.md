@@ -116,9 +116,14 @@ Das LXC-Template enthält ein vollständiges Ubuntu 26.04-System mit **open brid
 |---|---|
 | **open bridge server** Weboberfläche + API | `http://<container-ip>:8080` |
 
-OBS liefert bewusst keine Standard-Zugangsdaten aus. Der erste Start initialisiert die
-Datenbank und stoppt dann mit einem Einrichtungshinweis. Lege genau einen Eigentümer
-lokal an, bevor der Dienst neu gestartet wird:
+OBS liefert keine Zugangsdaten aus, deshalb zeigt der erste Start ausschliesslich die
+Einrichtungsseite: Öffne die Adresse oben im Browser und lege Benutzername und Passwort des
+Administrators fest. Jede andere Seite, die API und die Visu bleiben blockiert, bis dieses Konto
+existiert.
+
+Erledige das direkt nach der Installation — bis das Konto angelegt ist, kann es jeder anlegen, der
+den Server im Netzwerk erreicht. Eine Installation, die auf diesem Weg nie beanspruchbar sein
+darf, legt den Eigentümer stattdessen offline an, bevor der Dienst erreichbar ist:
 
 ```bash
 obs-admin auth first-owner <benutzername> --password-stdin
@@ -152,11 +157,22 @@ cd openbridgeserver
 cp .env.example .env      # optional — MQTT-Dienstpasswort, Host-Ports, Instanzname
 ```
 
-**Schritt 2 — Eigentümer anlegen, dann starten**
+**Schritt 2 — Stack starten**
 
-OBS liefert bewusst keine Standard-Zugangsdaten aus. Der erste Start initialisiert die Datenbank
-und stoppt dann mit einem Einrichtungshinweis (Exit-Code 3) — das ist erwartet und kein Fehler.
-Lege genau einen Eigentümer auf demselben Daten-Volume an und starte den Stack anschließend:
+```bash
+docker compose up -d
+```
+
+**Schritt 3 — Administrator-Passwort festlegen**
+
+Öffne `http://<host-ip>:8080` im Browser. OBS liefert keine Zugangsdaten aus, deshalb zeigt eine
+frische Installation ausschliesslich ihre Einrichtungsseite: Benutzername und Passwort dort
+eintragen, fertig — keine Shell, kein `docker exec`, kein Neustart. Jede andere Seite, die API und
+die Visu bleiben blockiert, bis dieses Konto existiert.
+
+Erledige das direkt nach dem Start — bis das Konto angelegt ist, kann es jeder anlegen, der den
+Server im Netzwerk erreicht. Eine Installation, die auf diesem Weg nie beanspruchbar sein darf,
+legt den Eigentümer stattdessen offline an, bevor der Container erreichbar ist:
 
 ```bash
 docker compose up -d mosquitto
@@ -171,17 +187,11 @@ docker compose up -d
 ```
 
 `--no-deps` verhindert, dass Compose die Abhängigkeiten ein zweites Mal hochzieht; Mosquitto muss
-bereits laufen, weil der `obs`-Dienst dessen PID-Namespace teilt.
+bereits laufen, weil der `obs`-Dienst dessen PID-Namespace teilt. Wird der Stack ohne
+Compose-Datei verwaltet (Portainer, ein einfaches `docker run`), läuft derselbe Befehl im
+Container selbst: `docker exec -i <container> obs-admin auth first-owner <benutzername> --password-stdin`.
 
-> **Stack ohne Compose-Datei verwaltet** (Portainer, ein einfaches `docker run`)? Dann findet
-> `docker compose` kein Projekt. Lege den Eigentümer im laufenden Container an und starte ihn neu:
->
-> ```bash
-> printf '%s\n' '<passwort>' | docker exec -i <container> obs-admin auth first-owner <benutzername> --password-stdin
-> docker restart <container>
-> ```
-
-**Schritt 3 — Zugriff**
+**Schritt 4 — Zugriff**
 
 | Dienst | Adresse |
 |---|---|

@@ -34,7 +34,7 @@ _STARTUP_FAILED_EXIT_CODE = 3
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.adapters import registry as adapter_registry
-    from obs.api.auth import require_configured_owner
+    from obs.api.setup import announce_setup_mode
     from obs.api.v1.websocket import init_ws_manager
     from obs.config import get_settings
     from obs.core.event_bus import DataValueEvent, init_event_bus
@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Failed to apply persistent log level")
         logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
-    await require_configured_owner(db)
+    await announce_setup_mode(db, settings.server.port)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
     # SIGHUP is sent after MQTT connects (see below) so Mosquitto reloads cleanly.
@@ -321,6 +321,24 @@ def create_app() -> FastAPI:
 
     from fastapi import Request
     from fastapi.responses import JSONResponse, RedirectResponse
+
+    @app.middleware("http")
+    async def _setup_gate(request: Request, call_next):
+        """Reduce the whole HTTP surface to the setup page while no owner exists.
+
+        OPTIONS passes through so the CORS layer can still answer preflights;
+        the request it belongs to is blocked all the same.
+        """
+        from obs.api.setup import path_is_allowed_during_setup, setup_required
+
+        if not setup_required() or request.method == "OPTIONS" or path_is_allowed_during_setup(request.url.path):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "open bridge server is not set up yet — create the first owner at /setup.", "setup_required": True},
+                status_code=503,
+            )
+        return RedirectResponse("/setup", status_code=303)
 
     def _spa_index_response(index: Path) -> FileResponse:
         return FileResponse(
