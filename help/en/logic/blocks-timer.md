@@ -57,3 +57,19 @@ via arrow buttons — "Blink preset" sets up a ready-made on/off sequence.
   Ignore, Restart (from the beginning), or Queue (append after the current one finishes).
 - **Cancel when condition becomes false** — only for "as long as condition is true": cancels a
   running sequence immediately once the condition is no longer met.
+
+## Sensor Watchdog {#logic-block-timer-sensor-watchdog}
+
+Monitors up to 10 inputs for missing new values. Each input has its own **Timeout** (seconds),
+**Fault Value**, and optional display name. While an input keeps receiving values regularly, it is
+passed through unchanged to its corresponding output; once no new value has arrived for longer
+than the configured timeout, that output switches to the Fault Value instead — until a value
+arrives again.
+
+The block runs its own internal periodic scheduler and detects an elapsed timeout even when
+nothing else happens anywhere else in the graph — unlike a hand-built replacement out of
+Delay/Pulse blocks, which only react to a new trigger signal and cannot "wake themselves up".
+
+The moment an input newly transitions into the fault state, **Fault Text** outputs a message like
+"No data from &lt;Name&gt;" and **Fault Trigger** fires a one-shot pulse — e.g. to drive a
+notification. When an input recovers (a new value arrives), no new trigger fires.

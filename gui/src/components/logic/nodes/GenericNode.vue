@@ -141,6 +141,16 @@ const NODE_DEFS = computed(() => ({
   consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:t('logic.portLabels.counter')}],                                          outputs: [{id:'daily',label:t('logic.portLabels.daily')},{id:'weekly',label:t('logic.portLabels.weekly')},{id:'monthly',label:t('logic.portLabels.monthly')},{id:'yearly',label:t('logic.portLabels.yearly')},{id:'prev_daily',label:t('logic.portLabels.prevDaily')},{id:'prev_weekly',label:t('logic.portLabels.prevWeekly')},{id:'prev_monthly',label:t('logic.portLabels.prevMonthly')},{id:'prev_yearly',label:t('logic.portLabels.prevYearly')}] },
   // Timer (extended)
   operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:t('logic.ports.active')},{id:'reset',label:t('logic.ports.reset')}],     outputs: [{id:'hours',      label:t('logic.ports.hours')}]       },
+  // sensor_watchdog: fully dynamic in_N/out_N (see the `def` computed below) —
+  // this base entry is only the pre-config-load fallback.
+  sensor_watchdog:    { label: t('logic.nodeTypes.sensor_watchdog'), color: '#b45309',
+    inputs: [{id:'in_1',label:t('logic.ports.in_n',{n:1})}],
+    outputs: [
+      {id:'out_1',        label:t('logic.ports.out_n',{n:1})},
+      {id:'fault_text',   label:t('logic.portLabels.faultText')},
+      {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
+    ]
+  },
   // Notification
   notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
@@ -210,6 +220,22 @@ const def = computed(() => {
       label: t('logic.ports.in_n', { n: i + 1 }),
     }))
     return { ...base, label, inputs }
+  }
+  if (props.type === 'sensor_watchdog') {
+    const rows = parseRowList(props.data?.inputs)
+    const count = Math.max(1, Math.min(10, rows.length || 1))
+    const inputs = []
+    const outputs = []
+    for (let i = 0; i < count; i++) {
+      const rowLabel = rows[i]?.label
+      inputs.push({ id: `in_${i + 1}`, label: rowLabel || t('logic.ports.in_n', { n: i + 1 }) })
+      outputs.push({ id: `out_${i + 1}`, label: rowLabel || t('logic.ports.out_n', { n: i + 1 }) })
+    }
+    outputs.push(
+      { id: 'fault_text',    label: t('logic.portLabels.faultText') },
+      { id: 'fault_trigger', label: t('logic.portLabels.faultTrigger') },
+    )
+    return { ...base, label, inputs, outputs }
   }
   if (props.type === 'ical') {
     const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
@@ -377,6 +403,10 @@ const summary = computed(() => {
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
     return t('logic.summary.inputs', { n: count })
+  }
+  if (props.type === 'sensor_watchdog') {
+    const rows = parseRowList(d.inputs)
+    return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
   }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)

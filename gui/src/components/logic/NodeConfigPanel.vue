@@ -672,6 +672,69 @@
       </div>
     </template>
 
+    <!-- ── sensor_watchdog: per-input timeout/fault-value rows ──────────── -->
+    <template v-else-if="isSensorWatchdogNode">
+      <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="flex items-center justify-between">
+          <span class="section-label">{{ $t('logic.nodeConfig.sensorWatchdog.inputs') }}</span>
+          <button
+            @click="addWatchdogInput()"
+            class="btn-secondary btn-sm text-teal-400 disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="watchdogInputs.length >= 10"
+            data-testid="watchdog-input-add"
+          >{{ $t('logic.nodeConfig.rules.add') }}</button>
+        </div>
+
+        <div
+          v-for="(entry, i) in watchdogInputs" :key="i"
+          class="rule-row"
+          :data-testid="`watchdog-input-${i}`"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400 w-5 shrink-0">{{ i + 1 }}</span>
+            <input
+              :value="entry.label"
+              @input="updateWatchdogInput(i, 'label', $event.target.value)"
+              class="input text-xs flex-1"
+              :placeholder="$t('logic.nodeConfig.sensorWatchdog.labelPlaceholder')"
+              :data-testid="`watchdog-input-label-${i}`"
+            />
+            <button
+              @click="removeWatchdogInput(i)"
+              class="text-xs text-red-400 hover:text-red-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="watchdogInputs.length <= 1"
+              :title="$t('logic.nodeConfig.rules.remove')"
+              :data-testid="`watchdog-input-remove-${i}`"
+            >{{ $t('logic.nodeConfig.rules.removeShort') }}</button>
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.sensorWatchdog.timeoutLabel') }}</label>
+            <input
+              type="number" min="1" step="any"
+              :value="entry.timeout_s ?? 60"
+              @input="updateWatchdogInput(i, 'timeout_s', $event.target.value)"
+              class="input text-xs"
+              :data-testid="`watchdog-input-timeout-${i}`"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.sensorWatchdog.faultValueLabel') }}</label>
+            <input
+              :value="entry.fault_value ?? ''"
+              @input="updateWatchdogInput(i, 'fault_value', $event.target.value)"
+              class="input text-xs"
+              :placeholder="$t('logic.nodeConfig.sensorWatchdog.faultValuePlaceholder')"
+              :data-testid="`watchdog-input-fault-value-${i}`"
+            />
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- ── decision / value_mapping ─────────────────────────────────────── -->
     <template v-else-if="isDecisionNode || isValueMappingNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1729,6 +1792,7 @@ const isExtractorNode  = computed(() =>
 const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_extractor')
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
+const isSensorWatchdogNode = computed(() => props.node?.type === 'sensor_watchdog')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
@@ -2008,6 +2072,51 @@ function moveReplaceRule(i, delta) {
   if (target < 0 || target >= rows.length) return
   ;[rows[i], rows[target]] = [rows[target], rows[i]]
   _saveReplaceRules(rows)
+}
+
+// ── sensor_watchdog: per-input timeout/fault-value rows (issue #1218) ─────
+// Own dedicated array field ("inputs"), same JSON-string persistence and
+// row-editing shape as string_replace's "rules" above — kept separate
+// rather than folded into it because the row schema (label/timeout_s/
+// fault_value) and the 1-input floor (vs. string_replace's 1) are unrelated
+// to search/replace's own fields.
+function _defaultWatchdogInput() {
+  return { label: '', timeout_s: 60, fault_value: null }
+}
+
+const watchdogInputs = computed(() => {
+  const rows = _parseRows(localData.value.inputs)
+  return rows.length ? rows : [_defaultWatchdogInput()]
+})
+
+function _cloneWatchdogInputs() {
+  return watchdogInputs.value.map(row => ({ ...row }))
+}
+
+function _saveWatchdogInputs(rows) {
+  localData.value.inputs = JSON.stringify(rows)
+  emitUpdate()
+}
+
+function addWatchdogInput() {
+  const rows = _cloneWatchdogInputs()
+  if (rows.length >= 10) return
+  rows.push(_defaultWatchdogInput())
+  _saveWatchdogInputs(rows)
+}
+
+function updateWatchdogInput(i, key, value) {
+  const rows = _cloneWatchdogInputs()
+  if (!rows[i]) return
+  rows[i][key] = key === 'timeout_s' ? Number(value) : value
+  _saveWatchdogInputs(rows)
+}
+
+function removeWatchdogInput(i) {
+  const rows = _cloneWatchdogInputs()
+  if (rows.length <= 1 || !rows[i]) return
+  rows.splice(i, 1)
+  _saveWatchdogInputs(rows)
 }
 
 // ── Extractor: preview + path helpers ─────────────────────────────────────

@@ -2478,6 +2478,55 @@ class GraphExecutor:
                     result[key] = round(sum(window_vals) / len(window_vals), 6) if window_vals else None
                 return result
 
+            case "sensor_watchdog":
+                now = _datetime.now(_UTC)
+                state = self.hysteresis_state.setdefault(node.id, {"last_seen": {}, "stale": {}})
+                last_seen = state.setdefault("last_seen", {})
+                stale = state.setdefault("stale", {})
+                watched = self._load_rule_list(d.get("inputs"))[:10] or [{}]
+
+                result: dict[str, Any] = {}
+                fault_index: int | None = None
+                fault_label = ""
+                for i, cfg in enumerate(watched, start=1):
+                    key = str(i)
+                    value = inputs.get(f"in_{i}")
+                    if value is not None:
+                        last_seen[key] = now.isoformat()
+
+                    timeout_s = max(1.0, self._to_num(cfg.get("timeout_s", 60), default=60.0))
+                    seen_iso = last_seen.get(key)
+                    if seen_iso is None:
+                        # No baseline yet — LogicManager seeds this during graph
+                        # initialization; treat an unexpected gap as "just seen"
+                        # so a freshly added input still gets its full grace
+                        # period instead of firing immediately.
+                        last_seen[key] = now.isoformat()
+                        elapsed_s = 0.0
+                    else:
+                        elapsed_s = (now - _datetime.fromisoformat(seen_iso)).total_seconds()
+
+                    is_stale_now = elapsed_s >= timeout_s
+                    was_stale = bool(stale.get(key))
+                    if is_stale_now and not was_stale and fault_index is None:
+                        fault_index = i
+                        fault_label = cfg.get("label") or f"Eingang {i}"
+                    stale[key] = is_stale_now
+
+                    # While stale, keep re-asserting the fault value every tick
+                    # (a held level, self-healing if a downstream sink lost it)
+                    # rather than only on the onset tick — the onset itself is
+                    # separately reported once via fault_text/fault_trigger below.
+                    if is_stale_now:
+                        result[f"out_{i}"] = cfg.get("fault_value")
+                    elif value is not None:
+                        result[f"out_{i}"] = value
+
+                if fault_index is not None:
+                    result["fault_text"] = f"Keine Daten von {fault_label}"
+                    result["fault_trigger"] = True
+                return result
+
             case "consumption_counter":
                 state = self.hysteresis_state.setdefault(
                     node.id,

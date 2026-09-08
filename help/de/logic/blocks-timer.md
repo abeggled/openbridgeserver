@@ -61,3 +61,21 @@ Ein/Aus-Sequenz an.
   wird: Ignorieren, Neu starten (von vorne), oder Einreihen (nach Ende der aktuellen anhängen).
 - **Abbrechen, wenn Bedingung false wird** — nur bei „Solange Bedingung wahr ist": bricht eine
   laufende Sequenz sofort ab, sobald die Bedingung nicht mehr erfüllt ist.
+
+## Sensor Watchdog {#logic-block-timer-sensor-watchdog}
+
+Überwacht bis zu 10 Eingänge auf das Ausbleiben neuer Werte. Jeder Eingang hat einen eigenen
+**Timeout** (Sekunden), **Fault-Value** und optionalen Anzeigenamen. Solange auf einem Eingang
+regelmässig ein Wert eintrifft, wird er unverändert an den zugehörigen Ausgang durchgereicht;
+bleibt ein neuer Wert länger als der konfigurierte Timeout aus, liefert der Ausgang stattdessen
+den Fault-Value — so lange, bis wieder ein Wert eintrifft.
+
+Der Baustein arbeitet über einen internen, periodischen Scheduler und erkennt einen abgelaufenen
+Timeout auch dann, wenn im restlichen Graphen kein anderes Ereignis eintritt — anders als eine
+Nachbildung aus Verzögerung/Impuls-Bausteinen, die nur auf ein neues Trigger-Signal reagieren und
+sich nicht selbst „aufwecken".
+
+Sobald ein Eingang neu in den Fault-Zustand wechselt, liefert **Fehlertext** eine Meldung wie
+„Keine Daten von &lt;Name&gt;" und **Fehler-Trigger** einen einmaligen Impuls — z. B. um eine
+Benachrichtigung auszulösen. Erholt sich ein Eingang wieder (neuer Wert trifft ein), wird kein
+erneuter Trigger ausgelöst.
