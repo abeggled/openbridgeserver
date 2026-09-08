@@ -4,11 +4,12 @@
 * none
 
 ### New features ✨
-* none
+* Logic Engine/Admin GUI: Added a Sensor Watchdog function block (Edomi-style "SensorWatchdog") that monitors up to 10 inputs for the absence of new values. Each input has its own configurable timeout, fault (replacement) value, optional label and optional repeat interval; once an input's timeout elapses without a fresh value, its output switches to the configured fault value and a shared fault-text/fault-trigger output pulses once — or repeatedly at the configured interval, while the input stays stale, if a repeat interval is set. The block runs its own autonomous scheduler independent of any other activity in the graph, so it reliably detects a timeout even when nothing else re-evaluates the sheet — a migrated sheet reproducing the same behaviour with the existing Delay/Impuls timer blocks needed 92 nodes and still could not self-wake once armed. Each monitored input requires both the source's value and its change-notification output wired in (a Read Object node's `Wert` and `Geändert` outputs) — only the change signal reliably distinguishes a genuinely new reading from the value a Read Object re-reports on every graph evaluation regardless of cause. https://github.com/abeggled/openbridgeserver/issues/1218
 
 ### Fixes 🐞
 * Admin GUI/KNX: A device's communication-object list sorted by number as text instead of numerically, so e.g. KO 10 was listed between KO 1 and KO 2 once a device had ten or more objects. Every place that orders communication objects by number — the device detail view, its datapoint-traceability panel, and the group-address device list — now sorts numerically. https://github.com/abeggled/openbridgeserver/issues/1132
 * Logic Engine: The Trigger function block's cron schedule was evaluated against UTC instead of the configured application timezone, so a schedule such as "Daily at 07:00" fired at 07:00 UTC and drifted across daylight-saving transitions instead of firing at 07:00 local time. It now resolves the same configured timezone already used by the iCalendar and Host Check schedulers, falling back to `Europe/Zurich` if that setting is unresolvable. https://github.com/abeggled/openbridgeserver/issues/1201
+* Logic Engine/Admin GUI: Function-block cards in the logic editor sized themselves to a fixed 130px regardless of content, clipping longer port labels unreadably — most noticeably the new Sensor Watchdog block's per-input labels. Cards now size themselves to their widest row and their title instead; blocks with short labels are unaffected. https://github.com/abeggled/openbridgeserver/issues/1218
 
 ### Known Issues 🔔
 * none
