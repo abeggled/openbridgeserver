@@ -21,7 +21,13 @@ const DECIMAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 // uppercase-only and the time half of a datetime is optional, both matching
 // CPython. The separator accepts `T`, `t` and a space, likewise per CPython.
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-const TIME_RE = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-](\d{2}):?(\d{2}))?$/
+const TIME_RE = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-][\d:.]+)?$/
+// A UTC offset as `time.fromisoformat()` spells it: `±HH`, the extended
+// `±HH:MM[:SS[.ffffff]]` or the basic `±HHMM[SS[.ffffff]]`. The two separator
+// styles must not be mixed — CPython rejects `+02:0030` — hence two alternatives
+// rather than one optional colon. Capture groups: hours, then minutes/seconds
+// once per style.
+const TZ_OFFSET_RE = /^(\d{2})(?::(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?|(\d{2})(?:(\d{2})(?:\.\d{1,6})?)?)?$/
 const DATETIME_RE = /^(\d{4}-\d{2}-\d{2})(?:[Tt ](.+))?$/
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 // What the native typed controls round-trip, see `timerValueFitsNativeInput()`.
@@ -125,17 +131,31 @@ function isValidDate(value: string): boolean {
   return day <= (month === 2 && leap ? 29 : DAYS_IN_MONTH[month - 1])
 }
 
+/**
+ * Shape- and range-correct UTC offset, `Z` excluded (the caller handles it).
+ *
+ * The offset has to stay strictly inside ±24 h, which is what
+ * `time.fromisoformat()` enforces — and it checks the *total*, not the single
+ * components: `+00:60` is a valid one-hour offset while `+23:60` is not, both of
+ * which a per-component range check would get wrong. Offset seconds count towards
+ * that total the same way (`+23:59:60` is already 24 h), while fractional seconds
+ * cannot push it over a whole second and are ignored here.
+ */
+function isValidOffset(offset: string): boolean {
+  const m = TZ_OFFSET_RE.exec(offset)
+  if (!m) return false
+  const minutes = m[2] ?? m[4] ?? '0'
+  const seconds = m[3] ?? m[5] ?? '0'
+  return Number(m[1]) * 3600 + Number(minutes) * 60 + Number(seconds) < 24 * 3600
+}
+
 /** Range-correct time check — the shape regex alone would pass `25:00` and `08:60`. */
 function isValidTime(value: string): boolean {
   const m = TIME_RE.exec(value)
   if (!m) return false
   if (Number(m[1]) > 23 || Number(m[2]) > 59) return false
   if (m[3] !== undefined && Number(m[3]) > 59) return false
-  // A UTC offset has to stay strictly inside ±24 h, which is what
-  // `time.fromisoformat()` enforces — and it checks the *total*, not the two
-  // components: `+00:60` is a valid one-hour offset while `+23:60` is not,
-  // both of which a per-component range check would get wrong.
-  return m[4] === undefined || Number(m[4]) * 60 + Number(m[5]) < 24 * 60
+  return m[4] === undefined || m[4] === 'Z' || isValidOffset(m[4].slice(1))
 }
 
 function isValidDateTime(value: string): boolean {

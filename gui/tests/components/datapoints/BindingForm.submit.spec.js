@@ -230,6 +230,63 @@ describe('BindingForm — ZEITSCHALTUHR create submit', () => {
     w.unmount()
   })
 
+  // Codex review on PR #1155: `buildConfig()` ersetzt einen leeren Schaltwert
+  // durch den Default "1" — geprüft werden muss der Rohwert, sonst wird ein
+  // Wert gespeichert, den niemand eingegeben hat.
+  it('blocks the submit when a typed switching value was cleared', async () => {
+    const w = await mountForm({ dpDataType: 'FLOAT' })
+    await selectInstance(w, 'zt-1')
+    await w.find('[data-testid="zt-value-number"]').setValue('')
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(true)
+    await submit(w)
+    expect(createBinding).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  // Ein leerer Schaltwert bleibt für STRING/UNKNOWN erlaubt — dort greift der
+  // Default weiterhin, weil `validateTimerValue()` diese Typen nicht prüft.
+  it('still applies the default switching value on an untyped object', async () => {
+    const w = await mountForm({ dpDataType: 'UNKNOWN' })
+    await selectInstance(w, 'zt-1')
+    await w.find('[data-testid="zt-value-text"]').setValue('')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toBe('1')
+    w.unmount()
+  })
+
+  // `<input type="number">` gibt Vue mit `v-model` eine Number — ein INTEGER-Wert
+  // jenseits von 2^53 würde dabei gerundet, obwohl das Backend beliebig genau ist.
+  it('preserves an INTEGER switching value beyond the safe-integer range', async () => {
+    const w = await mountForm({ dpDataType: 'INTEGER' })
+    await selectInstance(w, 'zt-1')
+    await w.get('[data-testid="zt-value-number"]').setValue('9007199254740993')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toBe('9007199254740993')
+    w.unmount()
+  })
+
+  // Ein gespeicherter TIME-Wert mit Offset-Sekunden ist für die API gültig —
+  // der Editor muss ihn erneut speichern können statt clientseitig zu blocken.
+  it('resaves a TIME switching value whose offset carries seconds', async () => {
+    const w = await mountForm({
+      dpDataType: 'TIME',
+      initial: {
+        id: 'b1',
+        adapter_type: 'ZEITSCHALTUHR',
+        adapter_instance_id: 'zt-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { timer_type: 'daily', time_ref: 'absolute', hour: 8, minute: 0, value: '08:00:00+02:00:30' },
+      },
+    })
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    await submit(w)
+    expect(updateBinding).toHaveBeenCalledWith('dp-1', 'b1', expect.objectContaining({
+      config: expect.objectContaining({ value: '08:00:00+02:00:30' }),
+    }))
+    w.unmount()
+  })
+
   it('does not validate the switching value for meta bindings', async () => {
     const w = await mountForm({ dpDataType: 'BOOLEAN' })
     await selectInstance(w, 'zt-1')

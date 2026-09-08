@@ -669,13 +669,17 @@ const hCls = 'text-xs text-gray-400 dark:text-gray-500 mt-0.5'
                 <option :value="false">{{ $t('zst.switchValueOff') }}</option>
               </select>
 
+              <!-- Kein `v-model`: Vue castet den Wert eines `type="number"`-Feldes
+                   zu `Number`, was ganzzahlige Werte jenseits von 2^53 rundet
+                   (INTEGER ist im Backend beliebig genau). Der Rohtext bleibt exakt. -->
               <input
                 v-else-if="(valueKind === 'integer' || valueKind === 'float') && !needsTextFallback"
-                v-model="textValue"
+                :value="textValue"
                 type="number"
                 :step="valueStep"
                 :class="iCls"
                 data-testid="zst-value-number"
+                @input="textValue = ($event.target as HTMLInputElement).value"
               />
 
               <input v-else-if="valueKind === 'date'" v-model="textValue" type="date" :class="iCls" data-testid="zst-value-date" />

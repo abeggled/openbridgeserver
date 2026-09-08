@@ -171,6 +171,37 @@ describe('ZeitschaltuhrBindingModal — typed switching value', () => {
     }))
   })
 
+  // Codex review on PR #1155: `v-model` on `<input type="number">` casts the
+  // entered text to a Number, which rounds an INTEGER beyond 2^53 — the backend
+  // stores arbitrary-precision integers, so the raw text has to survive.
+  it('preserves an INTEGER switching value beyond the safe-integer range', async () => {
+    const w = await mountModal('INTEGER', '50')
+    await w.get('[data-testid="zst-value-number"]').setValue('9007199254740993')
+    updateBindingMock.mockResolvedValue({} as never)
+
+    await w.get('[data-testid="zst-save-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(updateBindingMock).toHaveBeenCalledWith('dp-1', 'b-1', expect.objectContaining({
+      config: expect.objectContaining({ value: '9007199254740993' }),
+    }))
+  })
+
+  // A legacy TIME literal with offset seconds is valid for the API — the editor
+  // must be able to resave it instead of blocking on a client-side error.
+  it('resaves a TIME value whose offset carries seconds', async () => {
+    const w = await mountModal('TIME', '08:00:00+02:00:30')
+    expect(w.find('[data-testid="zst-value-error"]').exists()).toBe(false)
+    updateBindingMock.mockResolvedValue({} as never)
+
+    await w.get('[data-testid="zst-save-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(updateBindingMock).toHaveBeenCalledWith('dp-1', 'b-1', expect.objectContaining({
+      config: expect.objectContaining({ value: '08:00:00+02:00:30' }),
+    }))
+  })
+
   it('repairs a legacy non-boolean value on a BOOLEAN object', async () => {
     // The select only offers Ein/Aus, so "50" could never be cleared by the user.
     const w = await mountModal('BOOLEAN', '50')

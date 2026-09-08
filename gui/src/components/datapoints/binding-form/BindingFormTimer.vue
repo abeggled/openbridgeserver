@@ -286,13 +286,17 @@
         <option :value="false">{{ $t('adapters.bindingForm.ztOutputValueOff') }}</option>
       </select>
 
+      <!-- Kein `v-model`: Vue castet den Wert eines `type="number"`-Feldes zu
+           `Number`, was ganzzahlige Werte jenseits von 2^53 rundet (INTEGER ist
+           im Backend beliebig genau). Der Rohtext des Feldes bleibt exakt. -->
       <input
         v-else-if="(valueKind === 'integer' || valueKind === 'float') && !needsTextFallback"
-        v-model="textValue"
+        :value="textValue"
         type="number"
         :step="valueStep"
         class="input"
         data-testid="zt-value-number"
+        @input="textValue = $event.target.value"
       />
 
       <input v-else-if="valueKind === 'date'" v-model="textValue" type="date" class="input" data-testid="zt-value-date" />

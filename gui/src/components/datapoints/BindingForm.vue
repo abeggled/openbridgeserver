@@ -1344,7 +1344,11 @@ async function submit() {
     // Zeitschaltuhr: Schaltwert muss zum Objekttyp passen (Issue #1008) —
     // sonst antwortet die API mit 422.
     if (selectedAdapterType.value === 'ZEITSCHALTUHR' && config.timer_type !== 'meta') {
-      const valueErrorKey = validateTimerValue(config.value, props.dpDataType)
+      // Bewusst `cfg.value` und nicht `config.value`: `buildConfig()` setzt für
+      // einen leeren Wert den Default "1" ein, sodass die Prüfung sonst den
+      // Ersatzwert absegnet und ein getipptes Objekt mit einem Schaltwert
+      // gespeichert würde, den niemand eingegeben hat.
+      const valueErrorKey = validateTimerValue(cfg.value, props.dpDataType)
       if (valueErrorKey) {
         error.value = t(valueErrorKey); saving.value = false; return
       }

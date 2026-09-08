@@ -300,6 +300,30 @@ describe('validateTimerValue — UTC offsets (Codex review, PR #1155)', () => {
     },
   )
 
+  // Codex review round 4 on PR #1155: `time.fromisoformat()` also parses offset
+  // seconds and a bare `±HH`, but it rejects a mixed separator style — so must this.
+  it.each([
+    '08:00:00+02',
+    '08:00:00+02:00:30',
+    '08:00:00+020030',
+    '08:00:00+02:00:30.123456',
+    '08:00:00-02:00:30',
+  ])('accepts the offset spelling %s the API accepts', (raw) => {
+    expect(validateTimerValue(raw, 'TIME')).toBeNull()
+  })
+
+  it.each(['08:00:00+02:0030', '08:00:00+0200:30', '08:00:00+23:59:60', '08:00:00+02:00:3'])(
+    'rejects the offset spelling %s the API answers with 422',
+    (raw) => {
+      expect(validateTimerValue(raw, 'TIME')).toBe('adapters.bindingForm.ztOutputValueErrorTime')
+    },
+  )
+
+  it('carries offset seconds into the time half of a datetime', () => {
+    expect(validateTimerValue('2026-12-24T08:00:00+02:00:30', 'DATETIME')).toBeNull()
+    expect(validateTimerValue('2026-12-24T08:00:00+02:0030', 'DATETIME')).toBe('adapters.bindingForm.ztOutputValueErrorDatetime')
+  })
+
   it('applies the same offset limit to the time half of a datetime', () => {
     expect(validateTimerValue('2026-12-24T08:00:00+23:59', 'DATETIME')).toBeNull()
     expect(validateTimerValue('2026-12-24T08:00:00+24:00', 'DATETIME')).toBe('adapters.bindingForm.ztOutputValueErrorDatetime')
