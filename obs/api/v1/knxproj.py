@@ -1295,7 +1295,7 @@ async def get_knx_device(
            FROM knx_comm_objects co
            LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE co.device_id = ?
-           ORDER BY co.number, co.id, l.ga_address""",
+           ORDER BY CAST(co.number AS INTEGER), co.id, l.ga_address""",
         (device_row["id"],),
     )
 

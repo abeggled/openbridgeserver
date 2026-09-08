@@ -486,7 +486,7 @@ jobs:
             > /tmp/release_body.txt
 
           python3 <<'PYEOF' > /tmp/new_body.txt
-          import glob, os, re
+          import glob, os, re, sys
 
           def read(path):
               with open(path) as f:
@@ -503,7 +503,17 @@ jobs:
 
           entries.sort(key=lambda x: x[0])
 
+          # issue #1224: a build regression or artifact-layout change must not
+          # silently publish a release with an empty checksums section.
+          if not entries:
+              print("No *.sha256 files found under artifacts/ — refusing to continue.", file=sys.stderr)
+              sys.exit(1)
+
           marker = "<!-- LXC_INSERT -->"
+
+          if marker not in body:
+              print(f"Marker {marker!r} not found in the current release body — refusing to continue.", file=sys.stderr)
+              sys.exit(1)
 
           # Strip any previously generated block so the step is idempotent on re-runs
           body = re.sub(
@@ -523,9 +533,24 @@ jobs:
           print(body.replace(marker, section), end='')
           PYEOF
 
+          # issue #1224: the previous version of this step reported success even
+          # though the checksums never made it into the published release body —
+          # gh release edit accepted the write but the follow-up read showed the
+          # raw marker unchanged. Fail loudly instead of trusting the exit code.
+          if ! grep -qF '### Checksums (SHA-256)' /tmp/new_body.txt; then
+            echo "Generated release body is missing the Checksums section — aborting." >&2
+            exit 1
+          fi
+
           gh release edit "$RELEASE_TAG" \
             --repo "$RELEASE_REPO" \
             --notes-file /tmp/new_body.txt
+
+          PUBLISHED_BODY="$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json body -q .body)"
+          if ! grep -qF '### Checksums (SHA-256)' <<<"$PUBLISHED_BODY"; then
+            echo "Release notes on GitHub still lack the Checksums section after gh release edit — aborting." >&2
+            exit 1
+          fi
 
       - name: Resolve app bundle asset info
         id: bundle-info
