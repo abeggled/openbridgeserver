@@ -1680,6 +1680,7 @@
       "timer_cron": "Trigger",
       "datetime": "Datum/Zeit",
       "operating_hours": "Betriebsstd.",
+      "sensor_watchdog": "Sensor Watchdog",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
       "astro_sun": "Astro Sonne",
@@ -1815,6 +1816,8 @@
       "output": "Ausgang",
       "out": "Out",
       "in_n": "IN {n}",
+      "in_n_changed": "IN {n} Geändert",
+      "out_n": "OUT {n}",
       "data": "Daten",
       "text": "Text",
       "body": "Body",
@@ -2062,6 +2065,19 @@
         "replacePlaceholder": "leer = Treffer entfernen",
         "groupHint": "Gruppenverweise wie \\1 oder \\g<name> sind möglich.",
         "replaceAll": "Alle Vorkommen ersetzen"
+      },
+      "sensorWatchdog": {
+        "inputs": "Überwachte Eingänge",
+        "add": "+ Eingang",
+        "remove": "Eingang entfernen",
+        "removeShort": "−",
+        "labelPlaceholder": "Anzeigename",
+        "timeoutLabel": "Timeout (Sekunden)",
+        "faultValueLabel": "Fault-Value",
+        "faultValuePlaceholder": "Ersatzwert",
+        "repeatLabel": "Wiederholung (Sekunden)",
+        "repeatPlaceholder": "0 = keine Wiederholung",
+        "repeatHint": "Löst den Fehlertrigger zusätzlich in diesem Intervall erneut aus, solange der Eingang weiter ausbleibt. 0 = nur einmalig beim Auslösen."
       },
       "rules": {
         "add": "+ Regel",
@@ -2493,7 +2509,9 @@
       "icalTomorrow": "Morgen",
       "icalToday": "Heute",
       "reachable": "Erreichbar",
-      "latencyMs": "Latenz (ms)"
+      "latencyMs": "Latenz (ms)",
+      "faultText": "Fehlertext",
+      "faultTrigger": "Fehler-Trigger"
     },
     "nodeDescriptions": {
       "datetime": "Gibt aktuelles Datum und Uhrzeit in der konfigurierten Zeitzone und im gewählten Format aus.",
@@ -2530,6 +2548,7 @@
       "value_sequence": "Schreibt konfigurierte Werte und Pausen als Sequenz ohne die Logikausführung zu blockieren.",
       "timer_cron": "Löst automatisch nach einem Cron-Zeitplan aus (Minute Stunde Tag Monat Wochentag).",
       "operating_hours": "Zählt Betriebsstunden solange 'Aktiv' wahr ist. Reset setzt den Zähler zurück.",
+      "sensor_watchdog": "Überwacht bis zu 10 Eingänge auf das Ausbleiben neuer Werte. Bleibt ein Eingang länger als sein konfigurierter Timeout ohne neuen Wert, wird sein Ausgang durch den konfigurierten Fault-Value ersetzt und ein Fehlertext samt Trigger ausgegeben. Arbeitet autonom über einen internen Scheduler.",
       "python_script": "Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
       "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
       "notify_message": "Sendet eine Benachrichtigung über die konfigurierten Ziele eines Message-/Benachrichtigungsadapters.",

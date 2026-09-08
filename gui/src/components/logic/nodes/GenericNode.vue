@@ -13,7 +13,7 @@
          `--node-tint` (see `.logic-node-surface` in style.css) so the canvas
          raster cannot show through the block body. -->
     <div class="gn-card logic-node-surface"
-         :style="{ borderTopColor: def.color, '--node-tint': cardTint, minHeight: cardH + 'px' }">
+         :style="{ borderTopColor: def.color, '--node-tint': cardTint, minHeight: cardH + 'px', width: cardWidthPx + 'px' }">
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
         <NodeTitleEditor
@@ -141,6 +141,19 @@ const NODE_DEFS = computed(() => ({
   consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:t('logic.portLabels.counter')}],                                          outputs: [{id:'daily',label:t('logic.portLabels.daily')},{id:'weekly',label:t('logic.portLabels.weekly')},{id:'monthly',label:t('logic.portLabels.monthly')},{id:'yearly',label:t('logic.portLabels.yearly')},{id:'prev_daily',label:t('logic.portLabels.prevDaily')},{id:'prev_weekly',label:t('logic.portLabels.prevWeekly')},{id:'prev_monthly',label:t('logic.portLabels.prevMonthly')},{id:'prev_yearly',label:t('logic.portLabels.prevYearly')}] },
   // Timer (extended)
   operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:t('logic.ports.active')},{id:'reset',label:t('logic.ports.reset')}],     outputs: [{id:'hours',      label:t('logic.ports.hours')}]       },
+  // sensor_watchdog: fully dynamic in_N/out_N (see the `def` computed below) —
+  // this base entry is only the pre-config-load fallback.
+  sensor_watchdog:    { label: t('logic.nodeTypes.sensor_watchdog'), color: '#b45309',
+    inputs: [
+      {id:'in_1',        label:t('logic.ports.in_n',{n:1})},
+      {id:'in_1_changed',label:t('logic.ports.in_n_changed',{n:1})},
+    ],
+    outputs: [
+      {id:'out_1',        label:t('logic.ports.out_n',{n:1})},
+      {id:'fault_text',   label:t('logic.portLabels.faultText')},
+      {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
+    ]
+  },
   // Notification
   notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
@@ -210,6 +223,23 @@ const def = computed(() => {
       label: t('logic.ports.in_n', { n: i + 1 }),
     }))
     return { ...base, label, inputs }
+  }
+  if (props.type === 'sensor_watchdog') {
+    const rows = parseRowList(props.data?.inputs)
+    const count = Math.max(1, Math.min(10, rows.length || 1))
+    const inputs = []
+    const outputs = []
+    for (let i = 0; i < count; i++) {
+      const rowLabel = rows[i]?.label
+      inputs.push({ id: `in_${i + 1}`, label: rowLabel || t('logic.ports.in_n', { n: i + 1 }) })
+      inputs.push({ id: `in_${i + 1}_changed`, label: rowLabel ? `${rowLabel}: ${t('logic.ports.changed')}` : t('logic.ports.in_n_changed', { n: i + 1 }) })
+      outputs.push({ id: `out_${i + 1}`, label: rowLabel || t('logic.ports.out_n', { n: i + 1 }) })
+    }
+    outputs.push(
+      { id: 'fault_text',    label: t('logic.portLabels.faultText') },
+      { id: 'fault_trigger', label: t('logic.portLabels.faultTrigger') },
+    )
+    return { ...base, label, inputs, outputs }
   }
   if (props.type === 'ical') {
     const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
@@ -378,6 +408,10 @@ const summary = computed(() => {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
     return t('logic.summary.inputs', { n: count })
   }
+  if (props.type === 'sensor_watchdog') {
+    const rows = parseRowList(d.inputs)
+    return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
+  }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)
     const modes = new Set(rules.map(rule => (String(rule.mode ?? '').trim().toLowerCase() === 'regex' ? 'regex' : 'plain')))
@@ -443,6 +477,45 @@ const summaryPx = computed(() => summary.value ? SUMMARY_H : 0)
 const debugPx   = computed(() => props.data._dbg ? DEBUG_H : 0)
 const cardH     = computed(() => HEADER_H + summaryPx.value + rowCount.value * PORT_H + debugPx.value + 8)
 
+// ── Dynamic card width ──────────────────────────────────────────────────────
+// The card used to be a fixed 130px for every block, which clips longer
+// port labels (e.g. sensor_watchdog's "<label>: Geändert" input) instead of
+// wrapping or eliding them — unreadable, not just cosmetically tight. Size
+// the card to the widest row (left label + right label, since a row shows
+// both side by side) and to the title, same canvas.measureText technique as
+// the graph-name select width fix (LogicView.vue, issue #1171).
+const CARD_MIN_W = 130
+const CARD_MAX_W = 320
+const ROW_PAD    = 20  // .gn-ports-rows left+right padding (10px each)
+// canvas.measureText underestimates real DOM text layout for this font stack
+// (fallback font resolution differs between the 2D context and CSS) — pad
+// generously rather than chase an exact match, a few px of slack is cheap.
+const ROW_GAP    = 30  // breathing room between left/right labels + slack
+const TITLE_FONT = '700 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+const PORT_FONT  = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+let _measureCtx // lazily created, reused across every node instance's computations
+function measureTextPx(text, font) {
+  if (_measureCtx === undefined) {
+    _measureCtx = document.createElement('canvas').getContext('2d')
+  }
+  if (!_measureCtx) return 0
+  _measureCtx.font = font
+  return _measureCtx.measureText(text || '').width
+}
+const cardWidthPx = computed(() => {
+  const titleText = (customLabel.value || def.value.label || '').toString()
+  // .gn-title is uppercase for generated titles — measure what actually renders.
+  let widest = measureTextPx(customLabel.value ? titleText : titleText.toUpperCase(), TITLE_FONT) + 34 // header padding + delete button
+  const inputs  = def.value.inputs || []
+  const outputs = def.value.outputs || []
+  for (let r = 0; r < rowCount.value; r++) {
+    const leftPx  = inputs[r]  ? measureTextPx(inputs[r].label, PORT_FONT)  : 0
+    const rightPx = outputs[r] ? measureTextPx(outputs[r].label, PORT_FONT) : 0
+    widest = Math.max(widest, leftPx + rightPx + ROW_GAP + ROW_PAD)
+  }
+  return Math.min(CARD_MAX_W, Math.max(CARD_MIN_W, Math.ceil(widest)))
+})
+
 // port row indices (0..rowCount-1)
 const portRows  = computed(() => Array.from({ length: rowCount.value }, (_, i) => i))
 
@@ -475,7 +548,7 @@ function remove() { removeNodes([props.id]) }
 .gn-root  { position: relative; }
 
 .gn-card  {
-  width: 130px;
+  width: 130px; /* fallback until cardWidthPx's inline style applies */
   border: 1px solid var(--node-card-border);
   border-top: 3px solid #475569;
   border-radius: 8px;
@@ -530,9 +603,13 @@ function remove() { removeNodes([props.id]) }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
-.gn-port-left  { font-size: 9px; color: var(--node-port-label); }
-.gn-port-right { font-size: 9px; color: var(--node-port-label); }
+/* cardWidthPx sizes the card to fit both labels of the widest row, but an
+   extreme custom port/row label can still exceed the CARD_MAX_W cap —
+   truncate gracefully instead of wrapping or overflowing the card. */
+.gn-port-left  { font-size: 9px; color: var(--node-port-label); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gn-port-right { font-size: 9px; color: var(--node-port-label); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 
 /* Inline negation toggle */
 .gn-port-negate {

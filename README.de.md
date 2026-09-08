@@ -770,6 +770,7 @@ Entscheidung und Zuordnung teilen dieselben Bedingungsoperatoren: gleich, unglei
 | **Impuls** | Trigger | Aus | Gibt für N Sekunden „Wahr" aus, dann „Falsch". |
 | **Trigger** | — | Trigger | Löst den Graphen nach einem Zeitplan aus (Cron-Format). Konfigurierbar über Vorlagen, einen visuellen Editor (Min/Std/Tag/Mon/Wochentag) oder direkte Eingabe des Ausdrucks. |
 | **Betriebsstunden** | Aktiv, Zurücksetzen | Stunden | Zählt Betriebsstunden solange „Aktiv" wahr ist. Gespeicherter Zählerstand überlebt Neustarts. |
+| **Sensor Watchdog** | IN 1…N (1–10, konfigurierbar) | OUT 1…N, Fehlertext, Fehler-Trigger | Überwacht bis zu 10 Eingänge auf das Ausbleiben neuer Werte. Jeder Eingang hat einen eigenen Timeout und Fault-Value; bleibt ein neuer Wert länger als der Timeout aus, wechselt der Ausgang auf den Fault-Value und ein einmaliger Fehlertext/Fehler-Trigger wird ausgelöst. Arbeitet über einen eigenen internen Scheduler und erkennt den Timeout autonom, auch wenn sonst nichts im Graphen passiert. |
 
 #### Skript
 

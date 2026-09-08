@@ -773,6 +773,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False". |
 | **Trigger** | — | Trigger | Fires the graph on a schedule (cron format). Configurable via templates, a visual editor (min/hour/day/month/weekday), or direct expression entry. |
 | **Operating hours** | Active, Reset | Hours | Counts operating hours while "Active" is true. Saved counter survives restarts. |
+| **Sensor Watchdog** | IN 1…N (1–10, configurable) | OUT 1…N, Fault text, Fault trigger | Monitors up to 10 inputs for missing new values. Each input has its own timeout and fault value; once an input has gone longer than its timeout without a new value, its output switches to the fault value and a one-shot Fault text/Fault trigger fires. Runs its own internal scheduler, so a timeout is detected autonomously even if nothing else happens elsewhere in the graph. |
 
 #### Script
 
