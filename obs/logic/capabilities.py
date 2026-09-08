@@ -47,6 +47,7 @@ PURE_LOGIC_NODE_TYPES = frozenset(
         "operating_hours",
         "or",
         "random_value",
+        "sensor_watchdog",
         "statistics",
         "string_concat",
         "string_replace",
