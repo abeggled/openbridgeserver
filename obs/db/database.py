@@ -693,6 +693,21 @@ async def _migration_v52_external_write(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE datapoints ADD COLUMN external_write_enabled INTEGER NOT NULL DEFAULT 0")
 
 
+_MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS = """
+CREATE TABLE IF NOT EXISTS hierarchy_logic_graph_links (
+    id         TEXT PRIMARY KEY,
+    node_id    TEXT NOT NULL REFERENCES hierarchy_nodes(id) ON DELETE CASCADE,
+    graph_id   TEXT NOT NULL REFERENCES logic_graphs(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    UNIQUE(node_id, graph_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_logic_graph_links_node
+    ON hierarchy_logic_graph_links(node_id);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_logic_graph_links_graph
+    ON hierarchy_logic_graph_links(graph_id);
+"""
+
+
 _MIGRATION_V38 = """
 CREATE TABLE IF NOT EXISTS hierarchy_device_links (
     id         TEXT PRIMARY KEY,
@@ -1213,6 +1228,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (50, _migration_v50),
     (51, _MIGRATION_V51_REGIONAL_SETTINGS),
     (52, _migration_v52_external_write),
+    (53, _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS),
 ]
 
 

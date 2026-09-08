@@ -8,7 +8,7 @@ const TREE_NODE_STUB = {
   name: 'HierarchyNodeTree',
   template: '<div class="node-tree" />',
   props: ['nodes', 'treeId', 'depth', 'selectedNode'],
-  emits: ['add-child', 'edit', 'delete', 'reorder'],
+  emits: ['add-child', 'edit', 'delete', 'reorder', 'link-graph-error', 'unlink-graph-error', 'load-graphs-error'],
 }
 
 const TREE = { id: 'tree-1', name: 'Gebäude', description: '', display_depth: 0 }
@@ -38,6 +38,9 @@ beforeEach(() => {
       updateNode:    updateNodeMock,
       deleteNode:    deleteNodeMock,
       importFromEts: importFromEtsMock,
+    },
+    logicApi: {
+      listGraphs: vi.fn().mockResolvedValue({ data: [] }),
     },
   }))
   vi.doMock('@/components/HierarchyNodeTree.vue', () => ({ default: TREE_NODE_STUB }))

@@ -78,6 +78,7 @@ function makeGraph(id = 'graph-1', overrides = {}) {
 async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDetails = {} }) {
   vi.doMock('vue-router', () => ({
     useRoute: () => ({ query: routeQuery }),
+    useRouter: () => ({ push: vi.fn() }),
   }))
   const defaultGraph = graphs[0] ?? makeGraph()
   const logicApi = {

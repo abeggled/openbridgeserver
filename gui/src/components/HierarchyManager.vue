@@ -24,6 +24,33 @@
       {{ msg.text }}
     </div>
 
+    <!-- Logic-graph palette (#1217) — drag onto a folder below to link it there -->
+    <div class="card" data-testid="logic-graph-palette">
+      <div class="card-header">
+        <h4 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('hierarchy.logicGraphsTitle') }}</h4>
+      </div>
+      <div class="card-body pt-2 flex flex-col gap-2">
+        <p class="text-xs text-slate-500">{{ $t('hierarchy.logicGraphsHint') }}</p>
+        <div v-if="logicStore.graphs.length === 0" class="text-xs text-slate-500 py-2 text-center">
+          {{ $t('hierarchy.logicGraphsEmpty') }}
+        </div>
+        <div v-else class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+          <div
+            v-for="graph in logicStore.graphs" :key="graph.id"
+            draggable="true"
+            @dragstart="onGraphDragStart(graph, $event)"
+            class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-slate-200 dark:border-slate-600 text-xs cursor-grab active:cursor-grabbing bg-slate-50 dark:bg-slate-700/40 hover:border-blue-400 transition-colors"
+            :class="graph.enabled ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'"
+            :data-testid="`palette-graph-${graph.id}`">
+            <svg class="w-3.5 h-3.5 shrink-0 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v4a1 1 0 01-1 1H4m8-5v18m4-9h4m-4-5h4m-4 10h4"/>
+            </svg>
+            {{ graph.name }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Loading -->
     <div v-if="loading" class="flex justify-center py-8"><Spinner /></div>
 
@@ -84,6 +111,9 @@
               @edit="openEditNode"
               @delete="confirmDeleteNode"
               @reorder="({ node, siblings, index, direction }) => reorderNode(tree, node, siblings, index, direction)"
+              @link-graph-error="() => showMsg(t('hierarchy.linkLogicGraphError'), false)"
+              @unlink-graph-error="() => showMsg(t('hierarchy.unlinkLogicGraphError'), false)"
+              @load-graphs-error="() => showMsg(t('hierarchy.loadLogicGraphsError'), false)"
             />
           </div>
         </div>
@@ -236,9 +266,19 @@ import HierarchyNodeTree from '@/components/HierarchyNodeTree.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { buildDepthOptions } from '@/utils/hierarchyDepthOptions.js'
 import { useHelpStore } from '@/stores/help'
+import { useLogicStore } from '@/stores/logic'
+import { LOGIC_GRAPH_DRAG_MIME } from '@/utils/hierarchyLogicGraphDrag.js'
 
 const { t } = useI18n()
 const help = useHelpStore()
+const logicStore = useLogicStore()
+
+// Dragging a logic graph onto a node folder links it there — additive, the
+// palette entry stays (a graph can be dropped onto many folders/trees).
+function onGraphDragStart(graph, event) {
+  event.dataTransfer.setData(LOGIC_GRAPH_DRAG_MIME, graph.id)
+  event.dataTransfer.effectAllowed = 'copy'
+}
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -487,5 +527,11 @@ function showMsg(text, ok) {
   setTimeout(() => { msg.value = null }, 4000)
 }
 
-onMounted(loadTrees)
+onMounted(() => {
+  loadTrees()
+  // Settings → Hierarchy can be the first page visited in a session, so the
+  // logic store may not have fetched its graph list yet — safe/idempotent
+  // to re-fetch even if LogicView already populated it.
+  logicStore.fetchGraphs()
+})
 </script>

@@ -2543,6 +2543,15 @@
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
       "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
       "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
+    },
+    "graphPicker": {
+      "title": "Logik öffnen",
+      "breadcrumbRoot": "Alle Hierarchien",
+      "noTrees": "Es sind noch keine Hierarchien vorhanden.",
+      "empty": "Dieser Ordner ist leer.",
+      "organize": "Logiken organisieren",
+      "loading": "Wird geladen …",
+      "errorLoading": "Konnte nicht geladen werden."
     }
   },
   "authzPreflight": {
@@ -3274,7 +3283,7 @@
     "noFileSelected": "Keine Datei ausgewählt"
   },
   "hierarchy": {
-    "title": "Gerätestruktur",
+    "title": "Hierarchien",
     "deleteNode": "Ast löschen",
     "newHierarchy": "Neue Hierarchie",
     "importFromEts": "Aus ETS importieren",
@@ -3344,7 +3353,18 @@
       "trades": "Gewerke",
       "mid": "Mittelgruppen",
       "flat": "Flach (nur GA)"
-    }
+    },
+    "logicGraphsTitle": "Logiken",
+    "logicGraphsEmpty": "Keine Logiken vorhanden.",
+    "logicGraphsHint": "Logik auf einen Ordner ziehen, um sie dort einzusortieren.",
+    "unlinkLogicGraph": "Verknüpfung entfernen",
+    "linkLogicGraphError": "Logik konnte nicht verknüpft werden.",
+    "unlinkLogicGraphError": "Verknüpfung konnte nicht entfernt werden.",
+    "loadLogicGraphsError": "Verknüpfte Logiken konnten nicht geladen werden.",
+    "addChildNode": "Unterknoten hinzufügen",
+    "moveUp": "Nach oben",
+    "moveDown": "Nach unten",
+    "renameNode": "Umbenennen"
   },
   "topbar": {
     "logout": "Abmelden"
