@@ -24,6 +24,9 @@ PUBLIC_ROUTE_ALLOWLIST: Final[frozenset[RouteSignature]] = frozenset(
         ("GET", "/api/v1/system/health"),
         # Display formatting for the Visu, which is served to anonymous/PIN users (#1073).
         ("GET", "/api/v1/system/display-settings"),
+        # First-run setup (#1229): tells the Admin GUI whether the installation
+        # still has to be claimed. Reachable before any principal can exist.
+        ("GET", "/api/v1/setup/status"),
     }
 )
 
@@ -131,6 +134,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/system/adapters"): "read_live",
     ("GET", "/api/v1/system/datatypes"): "read_live",
     ("GET", "/api/v1/system/display-settings"): "public",
+    ("GET", "/api/v1/setup/status"): "public",
     ("GET", "/api/v1/system/health"): "public",
     ("GET", "/api/v1/system/history/settings"): "read_live",
     ("GET", "/api/v1/system/log-level"): "read_live",
@@ -170,6 +174,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("POST", "/api/v1/adapters/{adapter_type}/test"): "config_mutation",
     ("POST", "/api/v1/auth/apikeys"): "config_mutation",
     ("POST", "/api/v1/auth/login"): "config_mutation",
+    ("POST", "/api/v1/setup/owner"): "config_mutation",
     ("POST", "/api/v1/auth/me/change-password"): "config_mutation",
     ("POST", "/api/v1/auth/refresh"): "config_mutation",
     ("POST", "/api/v1/auth/users"): "config_mutation",

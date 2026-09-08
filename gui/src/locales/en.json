@@ -36,6 +36,22 @@
     "submitting": "Signing in …",
     "logoAlt": "open bridge server"
   },
+  "setup": {
+    "title": "Initial setup",
+    "intro": "This installation has no administrator account yet. Create it now — the interface becomes available right after.",
+    "username": "Username",
+    "password": "Password",
+    "passwordRepeat": "Repeat password",
+    "passwordHint": "At least {n} characters.",
+    "submit": "Create account",
+    "submitting": "Creating account …",
+    "securityNote": "Do this right after installing: until the account exists, anyone who can reach the server on the network can create it.",
+    "errorUsernameRequired": "Please enter a username.",
+    "errorPasswordTooShort": "The password must be at least {n} characters long.",
+    "errorPasswordMismatch": "The two passwords do not match.",
+    "errorAlreadyDone": "Setup has already been completed. Reload the page and sign in.",
+    "errorFailed": "The account could not be created. Please try again."
+  },
   "dashboard": {
     "title": "Overview",
     "subtitle": "System overview – Live status",

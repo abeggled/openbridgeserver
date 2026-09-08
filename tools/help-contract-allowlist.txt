@@ -16,6 +16,7 @@
 
 # ── Routes ────────────────────────────────────────────────────────────────
 route:Login  # Public pre-auth screen: username and password only, nothing to explain.
+route:Setup  # One-time pre-auth screen that only sets the first password; it explains itself inline.
 
 # ── Visu widgets ──────────────────────────────────────────────────────────
 # Tracked debt, not a permanent exemption: the help site (#896) covers the
