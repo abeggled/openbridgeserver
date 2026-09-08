@@ -992,9 +992,17 @@ function collectWidgets(file, seen = new Set()) {
   // either way, so the import graph inside the widget's own directory is
   // followed. Anything outside it (`@/…`, a package) is not this widget's.
   // `import('./helper')` executes the module just as a static import does.
+  // Babel 8 parses it as an `ImportExpression` carrying the module in `source`;
+  // Babel 7 as a `CallExpression` whose callee is an `Import` node and whose
+  // first argument is that module. Both spellings name the same import.
   walk(ast, (node) => {
-    if (node.type !== 'Import' && !(node.type === 'CallExpression' && node.callee.type === 'Import')) return
-    const specifier = node.type === 'CallExpression' ? stringValue(node.arguments[0]) : null
+    const source =
+      node.type === 'ImportExpression'
+        ? node.source
+        : node.type === 'CallExpression' && node.callee.type === 'Import'
+          ? node.arguments[0]
+          : null
+    const specifier = stringValue(source)
     if (specifier === null || !isLocalSpecifier(specifier)) return
     const target = resolveLocalModule(dirname(file), specifier)
     if (target !== null && CODE_SUFFIXES.some((suffix) => target.endsWith(suffix))) collectWidgets(target, seen)
