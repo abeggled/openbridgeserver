@@ -49,6 +49,20 @@ describe('fetchSetupRequired', () => {
     expect(await fetchSetupRequired()).toBe(false)
   })
 
+  it('gives up on a status call that never settles', async () => {
+    // The router guard awaits this before it resolves any route — a stalled
+    // request must not leave the app on a blank page for good.
+    vi.useFakeTimers()
+    const status = vi.fn(() => new Promise(() => {}))
+    const { fetchSetupRequired } = await loadModule(status)
+
+    const answer = fetchSetupRequired()
+    await vi.advanceTimersByTimeAsync(10000)
+
+    await expect(answer).resolves.toBe(false)
+    vi.useRealTimers()
+  })
+
   it('treats a response without the field as configured', async () => {
     const status = vi.fn().mockResolvedValue({ data: {} })
     const { fetchSetupRequired } = await loadModule(status)

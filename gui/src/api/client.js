@@ -366,7 +366,18 @@ export const helpApi = {
 // ── First-run setup (#1229) ──────────────────────────────────────────────
 // Plain axios, not the `api` instance: these run before any token exists, and
 // the 401 interceptor's redirect to /login would fight the setup guard.
+//
+// Bare axios has no timeout, unlike the `api` instance above. The router guard
+// awaits the status call before it resolves *any* route, so a request that is
+// accepted but never answered — a stalled proxy, a half-open connection —
+// would leave the app on a blank page for good. A short bound sends the user
+// on to the normal login flow instead; the claim itself gets the same 15s the
+// authenticated instance uses.
+const SETUP_STATUS_TIMEOUT_MS = 8000
+const SETUP_CLAIM_TIMEOUT_MS = 15000
+
 export const setupApi = {
-  status:      ()                   => axios.get('/api/v1/setup/status'),
-  createOwner: (username, password) => axios.post('/api/v1/setup/owner', { username, password }),
+  status:      ()                   => axios.get('/api/v1/setup/status', { timeout: SETUP_STATUS_TIMEOUT_MS }),
+  createOwner: (username, password) =>
+                                       axios.post('/api/v1/setup/owner', { username, password }, { timeout: SETUP_CLAIM_TIMEOUT_MS }),
 }

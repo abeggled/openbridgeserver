@@ -17,6 +17,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.doUnmock('@/utils/setupStatus')
+  vi.doUnmock('@/api/client')
 })
 
 async function loadRouter(setupRequired) {
@@ -72,5 +73,22 @@ describe('setup guard — configured installation', () => {
     await router.push('/datapoints')
 
     expect(router.currentRoute.value.name).toBe('DataPoints')
+  })
+})
+
+describe('setup guard — status call that never settles', () => {
+  it('still resolves navigation instead of blocking it forever', async () => {
+    // Real setup-status module, stalled transport: the guard awaits this answer
+    // before it resolves any route, so it has to give up on its own.
+    vi.useFakeTimers()
+    vi.doMock('@/api/client', () => ({ setupApi: { status: () => new Promise(() => {}) } }))
+    const { default: router } = await import('@/router')
+
+    const navigation = router.push('/login')
+    await vi.advanceTimersByTimeAsync(10000)
+    await navigation
+
+    expect(router.currentRoute.value.name).toBe('Login')
+    vi.useRealTimers()
   })
 })

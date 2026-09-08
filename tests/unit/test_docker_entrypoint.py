@@ -26,6 +26,7 @@ def _run(
     secret: str | None,
     *,
     config: str | None = None,
+    config_env: str = "OBS_CONFIG",
     extra_env: dict[str, str] | None = None,
     command: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -39,7 +40,7 @@ def _run(
     if config is not None:
         config_file = data_dir / "config.yaml"
         config_file.write_text(config, encoding="utf-8")
-        env["OBS_CONFIG"] = str(config_file)
+        env[config_env] = str(config_file)
     env.update(extra_env or {})
     result = subprocess.run(
         ["sh", str(ENTRYPOINT), *(command or ECHO_SECRET)],
@@ -149,6 +150,59 @@ def test_generates_when_the_legacy_env_secret_is_a_placeholder(tmp_path: Path) -
     result = _run(tmp_path, "", extra_env={"OPENTWS_SECURITY__JWT_SECRET": "changeme"})
 
     assert result.stdout == (tmp_path / "secrets" / "jwt-secret").read_text(encoding="utf-8").strip()
+
+
+def test_legacy_config_variable_secret_wins_over_generation(tmp_path: Path) -> None:
+    # obs/config.py resolves the YAML path via OBS_CONFIG *or* the legacy
+    # OPENTWS_CONFIG (_config_path) — ignoring the latter would override the
+    # operator's secret with a generated one and invalidate every issued token.
+    result = _run(
+        tmp_path,
+        "",
+        config="security:\n  jwt_secret: a-secret-from-the-legacy-config-path\n",
+        config_env="OPENTWS_CONFIG",
+    )
+
+    assert result.stdout == "<unset>"
+    assert not (tmp_path / "secrets").exists()
+
+
+def test_legacy_config_variable_wins_while_obs_config_holds_the_image_default(tmp_path: Path) -> None:
+    # _import_legacy_env_vars() prefers OPENTWS_CONFIG whenever OBS_CONFIG still
+    # holds the image's own /data/config.yaml default — the container always sets it.
+    result = _run(
+        tmp_path,
+        "",
+        config="security:\n  jwt_secret: a-secret-from-the-legacy-config-path\n",
+        config_env="OPENTWS_CONFIG",
+        extra_env={"OBS_CONFIG": "/data/config.yaml"},
+    )
+
+    assert result.stdout == "<unset>"
+    assert not (tmp_path / "secrets").exists()
+
+
+def test_an_explicit_obs_config_outranks_the_legacy_config_variable(tmp_path: Path) -> None:
+    own_config = tmp_path / "own.yaml"
+    own_config.write_text("server:\n  port: 8080\n", encoding="utf-8")
+
+    result = _run(
+        tmp_path,
+        "",
+        config="security:\n  jwt_secret: a-secret-from-the-legacy-config-path\n",
+        config_env="OPENTWS_CONFIG",
+        extra_env={"OBS_CONFIG": str(own_config)},
+    )
+
+    assert result.stdout == (tmp_path / "secrets" / "jwt-secret").read_text(encoding="utf-8").strip()
+
+
+def test_a_case_variant_of_the_env_secret_is_treated_as_operator_choice(tmp_path: Path) -> None:
+    # pydantic-settings reads environment variables case-insensitively.
+    result = _run(tmp_path, None, extra_env={"obs_security__jwt_secret": "an-operator-secret-in-lower-case"})
+
+    assert result.stdout == "<unset>"
+    assert not (tmp_path / "secrets").exists()
 
 
 def test_dockerfile_runs_the_entrypoint_before_the_server() -> None:

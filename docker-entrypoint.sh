@@ -11,21 +11,27 @@ set -eu
 DATA_DIR="${OBS_DATA_DIR:-/data}"
 SECRETS_DIR="$DATA_DIR/secrets"
 JWT_SECRET_FILE="$SECRETS_DIR/jwt-secret"
-CONFIG_FILE="${OBS_CONFIG:-$DATA_DIR/config.yaml}"
 
-# Any secret the operator supplied elsewhere counts as their decision: the
-# legacy OPENTWS_SECURITY__JWT_SECRET variable, which obs/config.py maps onto
-# OBS_* only while OBS_* is unset (_import_legacy_env_vars), and a secret in a
-# mounted config.yaml. Both are checked with the same case-insensitive lookup
-# and placeholder list the application uses. If PyYAML is missing or the file
-# cannot be read, the config secret counts as unset — better to generate one
-# than to silently keep running on the placeholder.
+# Any secret the operator supplied elsewhere counts as their decision, and the
+# lookup mirrors what obs/config.py does with the same environment:
+#
+#   * the legacy OPENTWS_SECURITY__JWT_SECRET variable, which _import_legacy_env_vars()
+#     maps onto OBS_* only while OBS_* is unset — hence the caller's unset below,
+#   * a case variant of OBS_SECURITY__JWT_SECRET, which pydantic-settings reads
+#     case-insensitively,
+#   * a secret in the mounted config.yaml, whose path follows _config_path():
+#     OBS_CONFIG, or OPENTWS_CONFIG when OBS_CONFIG is unset or still holds the
+#     image's own /data/config.yaml default (the docker_defaults rule).
+#
+# If PyYAML is missing or the file cannot be read, the config secret counts as
+# unset — better to generate one than to keep running on the placeholder.
 operator_defines_jwt_secret() {
     python3 -c '
 import os
 import sys
 
 PLACEHOLDERS = {"", "changeme", "change-this-to-a-random-secret-min-32-chars"}
+IMAGE_DEFAULT_CONFIG = "/data/config.yaml"
 
 
 def env_value(name):
@@ -36,18 +42,26 @@ def env_value(name):
     return ""
 
 
-secret = env_value("OPENTWS_SECURITY__JWT_SECRET")
+def config_path():
+    path = env_value("OBS_CONFIG")
+    legacy = env_value("OPENTWS_CONFIG")
+    if legacy and path in ("", IMAGE_DEFAULT_CONFIG):
+        return legacy
+    return path or sys.argv[1]
+
+
+secret = env_value("OBS_SECURITY__JWT_SECRET") or env_value("OPENTWS_SECURITY__JWT_SECRET")
 if secret in PLACEHOLDERS:
     try:
         import yaml
 
-        with open(sys.argv[1], encoding="utf-8") as fh:
+        with open(config_path(), encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         secret = (data.get("security") or {}).get("jwt_secret") or ""
     except Exception:
         secret = ""
 sys.exit(1 if secret in PLACEHOLDERS else 0)
-' "$CONFIG_FILE"
+' "$DATA_DIR/config.yaml"
 }
 
 # Values that are not an operator decision: unset, empty, or one of the

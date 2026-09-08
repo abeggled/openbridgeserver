@@ -46,13 +46,26 @@ describe('setupApi', () => {
     await setupApi.status()
     await setupApi.createOwner('owner', 'a-good-password')
 
-    expect(axiosDefault.get).toHaveBeenCalledWith('/api/v1/setup/status')
-    expect(axiosDefault.post).toHaveBeenCalledWith('/api/v1/setup/owner', {
-      username: 'owner',
-      password: 'a-good-password',
-    })
+    expect(axiosDefault.get).toHaveBeenCalledWith('/api/v1/setup/status', { timeout: expect.any(Number) })
+    expect(axiosDefault.post).toHaveBeenCalledWith(
+      '/api/v1/setup/owner',
+      { username: 'owner', password: 'a-good-password' },
+      { timeout: expect.any(Number) },
+    )
     expect(api.get).not.toHaveBeenCalled()
     expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it('bounds both calls, because bare axios has no timeout of its own', async () => {
+    // The router guard awaits the status call before it resolves any route: a
+    // request that is accepted but never answered would block navigation for good.
+    const { setupApi } = await import('@/api/client')
+
+    await setupApi.status()
+    await setupApi.createOwner('owner', 'a-good-password')
+
+    expect(axiosDefault.get.mock.calls[0][1].timeout).toBeGreaterThan(0)
+    expect(axiosDefault.post.mock.calls[0][2].timeout).toBeGreaterThan(0)
   })
 })
 
