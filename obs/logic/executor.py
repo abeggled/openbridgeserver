@@ -2480,9 +2480,10 @@ class GraphExecutor:
 
             case "sensor_watchdog":
                 now = _datetime.now(_UTC)
-                state = self.hysteresis_state.setdefault(node.id, {"last_seen": {}, "stale": {}})
+                state = self.hysteresis_state.setdefault(node.id, {"last_seen": {}, "stale": {}, "last_fault_notified": {}})
                 last_seen = state.setdefault("last_seen", {})
                 stale = state.setdefault("stale", {})
+                last_fault_notified = state.setdefault("last_fault_notified", {})
                 watched = self._load_rule_list(d.get("inputs"))[:10] or [{}]
 
                 result: dict[str, Any] = {}
@@ -2491,10 +2492,21 @@ class GraphExecutor:
                 for i, cfg in enumerate(watched, start=1):
                     key = str(i)
                     value = inputs.get(f"in_{i}")
-                    if value is not None:
+                    # A ``datapoint_read`` upstream re-supplies its current value on
+                    # *every* graph execution (event-driven, cron, this node's own
+                    # watchdog loop — see LogicManager's "seed all datapoint_read
+                    # nodes from registry"), not only when its datapoint actually
+                    # received a new telegram. "value is not None" is therefore
+                    # always true once a sensor has ever reported anything, which
+                    # would permanently defeat staleness detection. Only the
+                    # upstream's "changed" signal (wired to in_{i}_changed) means a
+                    # fresh telegram genuinely arrived this tick.
+                    changed_now = bool(inputs.get(f"in_{i}_changed"))
+                    if changed_now:
                         last_seen[key] = now.isoformat()
 
                     timeout_s = max(1.0, self._to_num(cfg.get("timeout_s", 60), default=60.0))
+                    repeat_s = max(0.0, self._to_num(cfg.get("repeat_s", 0), default=0.0))
                     seen_iso = last_seen.get(key)
                     if seen_iso is None:
                         # No baseline yet — LogicManager seeds this during graph
@@ -2508,9 +2520,15 @@ class GraphExecutor:
 
                     is_stale_now = elapsed_s >= timeout_s
                     was_stale = bool(stale.get(key))
-                    if is_stale_now and not was_stale and fault_index is None:
+                    is_onset = is_stale_now and not was_stale
+                    is_due_repeat = False
+                    if is_stale_now and was_stale and repeat_s > 0:
+                        notified_iso = last_fault_notified.get(key)
+                        is_due_repeat = notified_iso is None or (now - _datetime.fromisoformat(notified_iso)).total_seconds() >= repeat_s
+                    if (is_onset or is_due_repeat) and fault_index is None:
                         fault_index = i
                         fault_label = cfg.get("label") or f"Eingang {i}"
+                        last_fault_notified[key] = now.isoformat()
                     stale[key] = is_stale_now
 
                     # While stale, keep re-asserting the fault value every tick

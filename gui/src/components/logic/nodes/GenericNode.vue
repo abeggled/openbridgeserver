@@ -144,7 +144,10 @@ const NODE_DEFS = computed(() => ({
   // sensor_watchdog: fully dynamic in_N/out_N (see the `def` computed below) —
   // this base entry is only the pre-config-load fallback.
   sensor_watchdog:    { label: t('logic.nodeTypes.sensor_watchdog'), color: '#b45309',
-    inputs: [{id:'in_1',label:t('logic.ports.in_n',{n:1})}],
+    inputs: [
+      {id:'in_1',        label:t('logic.ports.in_n',{n:1})},
+      {id:'in_1_changed',label:t('logic.ports.in_n_changed',{n:1})},
+    ],
     outputs: [
       {id:'out_1',        label:t('logic.ports.out_n',{n:1})},
       {id:'fault_text',   label:t('logic.portLabels.faultText')},
@@ -229,6 +232,7 @@ const def = computed(() => {
     for (let i = 0; i < count; i++) {
       const rowLabel = rows[i]?.label
       inputs.push({ id: `in_${i + 1}`, label: rowLabel || t('logic.ports.in_n', { n: i + 1 }) })
+      inputs.push({ id: `in_${i + 1}_changed`, label: rowLabel ? `${rowLabel}: ${t('logic.ports.changed')}` : t('logic.ports.in_n_changed', { n: i + 1 }) })
       outputs.push({ id: `out_${i + 1}`, label: rowLabel || t('logic.ports.out_n', { n: i + 1 }) })
     }
     outputs.push(

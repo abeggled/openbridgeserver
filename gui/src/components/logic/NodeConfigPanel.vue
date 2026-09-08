@@ -731,6 +731,19 @@
               :data-testid="`watchdog-input-fault-value-${i}`"
             />
           </div>
+
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.sensorWatchdog.repeatLabel') }}</label>
+            <input
+              type="number" min="0" step="any"
+              :value="entry.repeat_s ?? 0"
+              @input="updateWatchdogInput(i, 'repeat_s', $event.target.value)"
+              class="input text-xs"
+              :placeholder="$t('logic.nodeConfig.sensorWatchdog.repeatPlaceholder')"
+              :data-testid="`watchdog-input-repeat-${i}`"
+            />
+            <p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.sensorWatchdog.repeatHint') }}</p>
+          </div>
         </div>
       </div>
     </template>
@@ -2081,7 +2094,7 @@ function moveReplaceRule(i, delta) {
 // fault_value) and the 1-input floor (vs. string_replace's 1) are unrelated
 // to search/replace's own fields.
 function _defaultWatchdogInput() {
-  return { label: '', timeout_s: 60, fault_value: null }
+  return { label: '', timeout_s: 60, fault_value: null, repeat_s: 0 }
 }
 
 const watchdogInputs = computed(() => {
@@ -2108,7 +2121,7 @@ function addWatchdogInput() {
 function updateWatchdogInput(i, key, value) {
   const rows = _cloneWatchdogInputs()
   if (!rows[i]) return
-  rows[i][key] = key === 'timeout_s' ? Number(value) : value
+  rows[i][key] = key === 'timeout_s' || key === 'repeat_s' ? Number(value) : value
   _saveWatchdogInputs(rows)
 }
 

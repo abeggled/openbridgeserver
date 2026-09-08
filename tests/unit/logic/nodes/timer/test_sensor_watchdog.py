@@ -28,9 +28,12 @@ def test_inputs_config_schema_shape():
     assert props["timeout_s"]["min"] == 1
     assert props["label"]["default"] == ""
     assert "fault_value" in props
+    assert props["repeat_s"]["default"] == 0
+    assert props["repeat_s"]["min"] == 0
 
 
 def test_default_has_exactly_one_entry():
     default = SENSOR_WATCHDOG.config_schema["inputs"]["default"]
     assert len(default) == 1
     assert default[0]["timeout_s"] == 60
+    assert default[0]["repeat_s"] == 0

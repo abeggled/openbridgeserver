@@ -1800,6 +1800,7 @@
       "output": "Ausgang",
       "out": "Out",
       "in_n": "IN {n}",
+      "in_n_changed": "IN {n} Geändert",
       "out_n": "OUT {n}",
       "data": "Daten",
       "text": "Text",
@@ -2057,7 +2058,10 @@
         "labelPlaceholder": "Anzeigename",
         "timeoutLabel": "Timeout (Sekunden)",
         "faultValueLabel": "Fault-Value",
-        "faultValuePlaceholder": "Ersatzwert"
+        "faultValuePlaceholder": "Ersatzwert",
+        "repeatLabel": "Wiederholung (Sekunden)",
+        "repeatPlaceholder": "0 = keine Wiederholung",
+        "repeatHint": "Löst den Fehlertrigger zusätzlich in diesem Intervall erneut aus, solange der Eingang weiter ausbleibt. 0 = nur einmalig beim Auslösen."
       },
       "rules": {
         "add": "+ Regel",

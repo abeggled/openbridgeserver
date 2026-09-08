@@ -1800,6 +1800,7 @@
       "output": "Output",
       "out": "Out",
       "in_n": "IN {n}",
+      "in_n_changed": "IN {n} Changed",
       "out_n": "OUT {n}",
       "data": "Data",
       "text": "Text",
@@ -2057,7 +2058,10 @@
         "labelPlaceholder": "Display name",
         "timeoutLabel": "Timeout (seconds)",
         "faultValueLabel": "Fault Value",
-        "faultValuePlaceholder": "Replacement value"
+        "faultValuePlaceholder": "Replacement value",
+        "repeatLabel": "Repeat (seconds)",
+        "repeatPlaceholder": "0 = no repeat",
+        "repeatHint": "Fires the fault trigger again at this interval while the input keeps being stale. 0 = only once on the initial fault."
       },
       "rules": {
         "add": "+ Rule",

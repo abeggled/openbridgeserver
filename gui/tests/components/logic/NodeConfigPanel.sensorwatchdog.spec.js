@@ -50,6 +50,7 @@ describe('NodeConfigPanel sensor_watchdog', () => {
     expect(w.find('[data-testid="watchdog-input-1"]').exists()).toBe(false)
     expect(w.find('[data-testid="watchdog-input-label-0"]').element.value).toBe('')
     expect(w.find('[data-testid="watchdog-input-timeout-0"]').element.value).toBe('60')
+    expect(w.find('[data-testid="watchdog-input-repeat-0"]').element.value).toBe('0')
     w.unmount()
   })
 
@@ -89,7 +90,7 @@ describe('NodeConfigPanel sensor_watchdog', () => {
     await w.find('[data-testid="watchdog-input-add"]').trigger('click')
 
     expect(lastInputs(w)).toHaveLength(4)
-    expect(lastInputs(w)[3]).toEqual({ label: '', timeout_s: 60, fault_value: null })
+    expect(lastInputs(w)[3]).toEqual({ label: '', timeout_s: 60, fault_value: null, repeat_s: 0 })
     w.unmount()
   })
 
@@ -151,6 +152,11 @@ describe('NodeConfigPanel sensor_watchdog', () => {
     faultValue.element.value = 'ZU'
     await faultValue.trigger('input')
     expect(lastInputs(w)[0].fault_value).toBe('ZU')
+
+    const repeat = w.find('[data-testid="watchdog-input-repeat-0"]')
+    repeat.element.value = '3600'
+    await repeat.trigger('input')
+    expect(lastInputs(w)[0].repeat_s).toBe(3600)
     w.unmount()
   })
 

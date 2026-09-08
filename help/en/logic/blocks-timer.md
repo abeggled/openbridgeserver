@@ -60,16 +60,29 @@ via arrow buttons — "Blink preset" sets up a ready-made on/off sequence.
 
 ## Sensor Watchdog {#logic-block-timer-sensor-watchdog}
 
-Monitors up to 10 inputs for missing new values. Each input has its own **Timeout** (seconds),
-**Fault Value**, and optional display name. While an input keeps receiving values regularly, it is
-passed through unchanged to its corresponding output; once no new value has arrived for longer
-than the configured timeout, that output switches to the Fault Value instead — until a value
-arrives again.
+Monitors up to 10 inputs for missing new telegrams. Each input has its own **Timeout** (seconds),
+**Fault Value**, optional display name, and optional **Repeat** (seconds). While an input keeps
+receiving telegrams regularly, its value is passed through unchanged to the corresponding output;
+once no new telegram has arrived for longer than the configured timeout, that output switches to
+the Fault Value instead — until a telegram arrives again.
+
+**Important when wiring this up:** both **Value** and **Changed** from the upstream Read Object
+block must be connected for each input. Only a genuine new telegram (Changed = true) resets the
+timeout — a value re-sent unchanged still counts as a sign of life (important for e.g. contact
+sensors whose value can stay the same for a long time while still actively sending). A mere
+re-evaluation of the graph (triggered by an unrelated event, or by this block's own periodic
+scheduler) does **not** count as a sign of life. If only **Value** is connected, that input reports
+one fault after the first timeout and never recovers afterwards — this is not a bug, it is the
+intended fail-stale behavior for a missing Changed connection.
 
 The block runs its own internal periodic scheduler and detects an elapsed timeout even when
 nothing else happens anywhere else in the graph — unlike a hand-built replacement out of
 Delay/Pulse blocks, which only react to a new trigger signal and cannot "wake themselves up".
 
 The moment an input newly transitions into the fault state, **Fault Text** outputs a message like
-"No data from &lt;Name&gt;" and **Fault Trigger** fires a one-shot pulse — e.g. to drive a
-notification. When an input recovers (a new value arrives), no new trigger fires.
+"No data from &lt;Name&gt;" and **Fault Trigger** fires a pulse — e.g. to drive a notification. With
+**Repeat** left at 0 (default) this happens only once, on the initial fault; with a value greater
+than 0, the trigger additionally fires again at that interval for as long as the input keeps being
+stale — e.g. check every 10s, but only re-notify hourly. When an input recovers (a new telegram
+arrives), no further trigger fires, and the repeat interval starts over the next time it goes
+stale.
