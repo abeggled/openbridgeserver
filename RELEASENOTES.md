@@ -12,9 +12,6 @@
 ### Known Issues 🔔
 * none
 
-### Contributors ❤️
-* none
-
 ## 2026.9.0
 ### Breaking changes 🚨
 * none
