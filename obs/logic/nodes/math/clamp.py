@@ -17,4 +17,5 @@ NODE_TYPE = NodeTypeDef(
         "max": {"type": "number", "default": 100, "label": "Maximum"},
     },
     color="#7c3aed",
+    help_id="logic-block-clamp",
 )

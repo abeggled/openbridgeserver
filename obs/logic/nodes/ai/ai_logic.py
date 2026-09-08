@@ -13,4 +13,5 @@ NODE_TYPE = NodeTypeDef(
     outputs=[],
     config_schema={},
     color="#7c3aed",
+    help_id="logic-block-ai-logic",
 )

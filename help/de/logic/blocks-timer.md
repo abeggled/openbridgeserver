@@ -21,6 +21,10 @@ Konfiguration bietet drei ineinandergreifende Ebenen:
 
 Alle drei Ebenen sind synchron — eine Änderung an einer Stelle aktualisiert die anderen.
 
+Der Zeitplan wird in der eingestellten Anwendungs-Zeitzone ausgewertet (**Einstellungen →
+Allgemein**), nicht in UTC — ein Trigger „Täglich um 07:00" löst also um 07:00 Ortszeit aus und
+folgt automatisch der Zeitumstellung (Sommer-/Winterzeit).
+
 ## Datum/Zeit {#logic-block-datetime}
 
 Gibt das aktuelle Datum und die aktuelle Uhrzeit in der eingestellten Anwendungs-Zeitzone aus
@@ -57,3 +61,35 @@ Ein/Aus-Sequenz an.
   wird: Ignorieren, Neu starten (von vorne), oder Einreihen (nach Ende der aktuellen anhängen).
 - **Abbrechen, wenn Bedingung false wird** — nur bei „Solange Bedingung wahr ist": bricht eine
   laufende Sequenz sofort ab, sobald die Bedingung nicht mehr erfüllt ist.
+
+## Sensor Watchdog {#logic-block-timer-sensor-watchdog}
+
+Überwacht bis zu 10 Eingänge auf das Ausbleiben neuer Telegramme. Jeder Eingang hat einen eigenen
+**Timeout** (Sekunden), **Fault-Value**, optionalen Anzeigenamen und optionale **Wiederholung**
+(Sekunden). Solange auf einem Eingang regelmässig ein Telegramm eintrifft, wird sein Wert
+unverändert an den zugehörigen Ausgang durchgereicht; bleibt ein neues Telegramm länger als der
+konfigurierte Timeout aus, liefert der Ausgang stattdessen den Fault-Value — so lange, bis wieder
+ein Telegramm eintrifft.
+
+**Wichtig beim Verdrahten:** Pro Eingang müssen sowohl **Wert** als auch **Geändert** vom
+vorgeschalteten Objekt-lesen-Block verbunden werden. Nur ein echtes neues Telegramm (Geändert =
+true) setzt den Timeout zurück — ein unverändert erneut gesendeter Wert zählt dabei ausdrücklich
+weiterhin als Lebenszeichen (wichtig z. B. für Kontaktsensoren, deren Wert lange gleich bleiben
+kann, obwohl sie aktiv senden). Ein bloßes Neu-Auswerten des Graphen (z. B. durch ein anderes
+Ereignis oder den eigenen periodischen Scheduler) zählt dagegen **nicht** als Lebenszeichen. Ist
+nur **Wert** verbunden, meldet der Eingang nach dem ersten Timeout einmalig einen Fehler und
+erholt sich danach nie wieder — kein Bug, sondern die erwartete, sicherheitshalber
+„fail-stale"-Reaktion auf die fehlende Geändert-Verbindung.
+
+Der Baustein arbeitet über einen internen, periodischen Scheduler und erkennt einen abgelaufenen
+Timeout auch dann, wenn im restlichen Graphen kein anderes Ereignis eintritt — anders als eine
+Nachbildung aus Verzögerung/Impuls-Bausteinen, die nur auf ein neues Trigger-Signal reagieren und
+sich nicht selbst „aufwecken".
+
+Sobald ein Eingang neu in den Fault-Zustand wechselt, liefert **Fehlertext** eine Meldung wie
+„Keine Daten von &lt;Name&gt;" und **Fehler-Trigger** einen Impuls — z. B. um eine Benachrichtigung
+auszulösen. Ist **Wiederholung** auf 0 (Standard) gesetzt, geschieht das nur einmalig beim
+Auslösen; mit einem Wert größer 0 löst der Trigger zusätzlich in diesem Intervall erneut aus,
+solange der Eingang weiter ausbleibt — z. B. Prüfung alle 10 s, aber nur stündlich erneut
+benachrichtigen. Erholt sich ein Eingang wieder (neues Telegramm trifft ein), wird kein weiterer
+Trigger ausgelöst und die Wiederholung beginnt beim nächsten Ausbleiben von vorne.

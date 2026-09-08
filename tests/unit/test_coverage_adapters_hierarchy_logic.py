@@ -5286,6 +5286,59 @@ class TestStartCronTasks:
         assert sleep_calls == [60, 60]
 
     @pytest.mark.asyncio
+    async def test_cron_loop_evaluates_schedule_in_configured_timezone(self):
+        """_cron_loop must resolve `now` in the configured app timezone (issue
+        #1201), not UTC — otherwise a "Daily at 07:00" trigger fires at 07:00
+        UTC instead of 07:00 local time."""
+        import asyncio
+        from zoneinfo import ZoneInfo
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr._app_config["timezone"] = "Pacific/Kiritimati"  # UTC+14 — unambiguous vs. UTC
+
+        captured_now = []
+
+        class _FakeCroniter:
+            def __init__(self, expr, now):
+                captured_now.append(now)
+
+            def get_next(self, ret_type):
+                raise asyncio.CancelledError()
+
+        with patch("croniter.croniter", _FakeCroniter):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "0 7 * * *"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert captured_now[0].tzinfo == ZoneInfo("Pacific/Kiritimati")
+
+    @pytest.mark.asyncio
+    async def test_cron_loop_falls_back_to_zurich_on_unknown_timezone(self):
+        """An unresolvable configured timezone must not crash the cron
+        scheduler — it falls back to Europe/Zurich."""
+        import asyncio
+        from zoneinfo import ZoneInfo
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr._app_config["timezone"] = "Not/ARealZone"
+
+        captured_now = []
+
+        class _FakeCroniter:
+            def __init__(self, expr, now):
+                captured_now.append(now)
+
+            def get_next(self, ret_type):
+                raise asyncio.CancelledError()
+
+        with patch("croniter.croniter", _FakeCroniter):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "0 7 * * *"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert captured_now[0].tzinfo == ZoneInfo("Europe/Zurich")
+
+    @pytest.mark.asyncio
     async def test_ical_loop_logs_and_backs_off_on_error(self):
         """_ical_loop swallows an unexpected exception from _execute_graph,
         logs it and backs off for 60s rather than letting the loop die."""
@@ -5312,6 +5365,164 @@ class TestStartCronTasks:
             {"i1": {}},
             {"i1": {}},
         ]
+
+    @pytest.mark.asyncio
+    async def test_start_cron_tasks_sensor_watchdog_node(self):
+        """sensor_watchdog nodes also get an autonomous scheduler task."""
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "w1",
+                    "type": "sensor_watchdog",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"inputs": [{"label": "A", "timeout_s": 10, "fault_value": None}]},
+                }
+            ]
+        )
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._start_cron_tasks()
+        assert ("g1", "w1") in mgr._cron_tasks
+        for task in mgr._cron_tasks.values():
+            task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_start_cron_tasks_sensor_watchdog_skips_already_running_task(self):
+        """A second _start_cron_tasks() call (e.g. from reload()) must not
+        replace a still-running watchdog task with a new one."""
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "w1",
+                    "type": "sensor_watchdog",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"inputs": [{"label": "A", "timeout_s": 10, "fault_value": None}]},
+                }
+            ]
+        )
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._start_cron_tasks()
+        first_task = mgr._cron_tasks[("g1", "w1")]
+
+        mgr._start_cron_tasks()
+
+        assert mgr._cron_tasks[("g1", "w1")] is first_task
+        for task in mgr._cron_tasks.values():
+            task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_loop_logs_and_backs_off_on_error(self):
+        """_watchdog_loop swallows an unexpected exception from _execute_graph,
+        logs it and backs off for 60s rather than letting the loop die."""
+        import asyncio
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr._execute_graph = AsyncMock(side_effect=RuntimeError("execute failed"))
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            if len(sleep_calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._watchdog_loop("g1", "w1"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert sleep_calls == [60, 60]
+
+    @pytest.mark.asyncio
+    async def test_watchdog_loop_re_evaluates_the_graph_without_any_external_event(self):
+        """The whole point of #1218: the graph must be re-triggered purely on
+        a wall-clock schedule, with an empty override — no upstream event, no
+        other node in the graph, drives this. sleep_s is derived from the
+        node's own shortest configured timeout."""
+        import asyncio
+
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "w1",
+                    "type": "sensor_watchdog",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"inputs": [{"label": "A", "timeout_s": 10, "fault_value": None}]},
+                }
+            ]
+        )
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._execute_graph = AsyncMock(return_value={})
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            if len(sleep_calls) >= 1:
+                raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._watchdog_loop("g1", "w1"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        mgr._execute_graph.assert_awaited_once_with("g1", "G1", flow, {"w1": {}})
+        assert sleep_calls == [2.0]  # min(60, max(1, 10/5))
+
+    @pytest.mark.asyncio
+    async def test_watchdog_loop_falls_back_to_default_sleep_without_valid_timeouts(self):
+        """No node found / no positive timeout configured → falls back to the
+        30s default rather than crashing on an empty min()."""
+        import asyncio
+
+        flow = _make_flow(
+            nodes=[
+                {
+                    "id": "w1",
+                    "type": "sensor_watchdog",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"inputs": []},
+                }
+            ]
+        )
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._execute_graph = AsyncMock(return_value={})
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._watchdog_loop("g1", "w1"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert sleep_calls == [30.0]
+
+    @pytest.mark.asyncio
+    async def test_watchdog_loop_skips_execution_for_disabled_graph(self):
+        """Mirrors _ical_loop: a disabled/missing graph is skipped this tick
+        (not executed), and the loop still sleeps at the default interval,
+        relying on external cancellation (stop/reload) rather than exiting."""
+        import asyncio
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", False, _make_flow())})
+        mgr._execute_graph = AsyncMock(return_value={})
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._watchdog_loop("g1", "w1"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        mgr._execute_graph.assert_not_awaited()
+        assert sleep_calls == [30.0]
 
     @pytest.mark.asyncio
     async def test_concurrent_ical_graph_executions_coalesce_fetch_outcomes(self):

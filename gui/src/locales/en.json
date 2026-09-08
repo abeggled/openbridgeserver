@@ -36,6 +36,22 @@
     "submitting": "Signing in …",
     "logoAlt": "open bridge server"
   },
+  "setup": {
+    "title": "Initial setup",
+    "intro": "This installation has no administrator account yet. Create it now — the interface becomes available right after.",
+    "username": "Username",
+    "password": "Password",
+    "passwordRepeat": "Repeat password",
+    "passwordHint": "At least {n} characters.",
+    "submit": "Create account",
+    "submitting": "Creating account …",
+    "securityNote": "Do this right after installing: until the account exists, anyone who can reach the server on the network can create it.",
+    "errorUsernameRequired": "Please enter a username.",
+    "errorPasswordTooShort": "The password must be at least {n} characters long.",
+    "errorPasswordMismatch": "The two passwords do not match.",
+    "errorAlreadyDone": "Setup has already been completed. Reload the page and sign in.",
+    "errorFailed": "The account could not be created. Please try again."
+  },
   "dashboard": {
     "title": "Overview",
     "subtitle": "System overview – Live status",
@@ -1679,6 +1695,7 @@
       "timer_cron": "Trigger",
       "datetime": "Date/Time",
       "operating_hours": "Op. Hours",
+      "sensor_watchdog": "Sensor Watchdog",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
       "astro_sun": "Astro Sun",
@@ -1814,6 +1831,8 @@
       "output": "Output",
       "out": "Out",
       "in_n": "IN {n}",
+      "in_n_changed": "IN {n} Changed",
+      "out_n": "OUT {n}",
       "data": "Data",
       "text": "Text",
       "body": "Body",
@@ -2061,6 +2080,19 @@
         "replacePlaceholder": "empty = remove match",
         "groupHint": "Group references such as \\1 or \\g<name> are supported.",
         "replaceAll": "Replace all occurrences"
+      },
+      "sensorWatchdog": {
+        "inputs": "Monitored Inputs",
+        "add": "+ Input",
+        "remove": "Remove input",
+        "removeShort": "−",
+        "labelPlaceholder": "Display name",
+        "timeoutLabel": "Timeout (seconds)",
+        "faultValueLabel": "Fault Value",
+        "faultValuePlaceholder": "Replacement value",
+        "repeatLabel": "Repeat (seconds)",
+        "repeatPlaceholder": "0 = no repeat",
+        "repeatHint": "Fires the fault trigger again at this interval while the input keeps being stale. 0 = only once on the initial fault."
       },
       "rules": {
         "add": "+ Rule",
@@ -2492,7 +2524,9 @@
       "icalTomorrow": "Tomorrow",
       "icalToday": "Today",
       "reachable": "Reachable",
-      "latencyMs": "Latency (ms)"
+      "latencyMs": "Latency (ms)",
+      "faultText": "Fault Text",
+      "faultTrigger": "Fault Trigger"
     },
     "nodeDescriptions": {
       "datetime": "Outputs the current date and time in the configured timezone and format.",
@@ -2529,6 +2563,7 @@
       "value_sequence": "Writes configured values and pauses in sequence without blocking logic execution.",
       "timer_cron": "Fires automatically on a cron schedule (minute hour day month weekday).",
       "operating_hours": "Counts operating hours while 'Active' is true. Reset clears the counter.",
+      "sensor_watchdog": "Monitors up to 10 inputs for missing new values. Once an input has gone longer than its configured timeout without a new value, its output switches to the configured fault value and a fault text plus trigger are emitted. Runs autonomously via an internal scheduler.",
       "python_script": "Executes a Python script. Available: inputs dict → return value",
       "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
       "notify_message": "Sends a notification through the configured targets of a Message/notification adapter.",

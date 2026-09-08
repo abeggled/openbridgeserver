@@ -14,4 +14,5 @@ NODE_TYPE = NodeTypeDef(
     outputs=[port("trigger", "Trigger", "trigger")],
     config_schema={"cron": {"type": "string", "default": "0 7 * * *"}},
     color="#b45309",
+    help_id="logic-block-timer-cron",
 )

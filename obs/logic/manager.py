@@ -168,6 +168,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "python_script",
         "statistics",
         "avg_multi",
+        "sensor_watchdog",
         "min_max_tracker",
         "consumption_counter",
         "heating_circuit",
@@ -1879,14 +1880,39 @@ class LogicManager:
                         node.id[:8],
                         refresh_min,
                     )
+                elif node.type == "sensor_watchdog":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    task = asyncio.create_task(
+                        self._watchdog_loop(graph_id, node.id),
+                        name=f"watchdog-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "Sensor watchdog scheduled: graph=%s (%s) node=%s",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                    )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
-        """Fires a timer_cron graph node on its cron schedule — runs indefinitely."""
+        """Fires a timer_cron graph node on its cron schedule — runs indefinitely.
+
+        The cron expression is interpreted in the configured system timezone
+        (not UTC), so e.g. "0 7 * * *" fires at 7am local time and follows
+        DST transitions like a user would expect.
+        """
         from croniter import croniter
 
         while True:
             try:
-                now = datetime.now(UTC)
+                tz_name = self._app_config.get("timezone", "Europe/Zurich")
+                try:
+                    tz = ZoneInfo(tz_name)
+                except ZoneInfoNotFoundError:
+                    tz = ZoneInfo("Europe/Zurich")
+                now = datetime.now(tz)
                 it = croniter(cron_expr, now)
                 next_dt = it.get_next(datetime)
                 wait_s = max(0.0, (next_dt - now).total_seconds())
@@ -1938,6 +1964,43 @@ class LogicManager:
                 raise
             except Exception:
                 logger.exception("iCal loop error graph=%s node=%s", graph_id[:8], node_id[:8])
+                await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _watchdog_loop(self, graph_id: str, node_id: str) -> None:
+        """Periodically re-evaluates a sensor_watchdog node so it can fire without any event.
+
+        A sensor_watchdog's staleness check is purely a function of wall-clock
+        time (see GraphExecutor's "sensor_watchdog" branch), so this loop only
+        needs to wake the graph on a schedule tight enough to notice a timeout
+        promptly — the actual detection happens inside the tick it triggers.
+        Re-reads the node's configured timeouts every iteration (not just
+        once) so an edited timeout takes effect on the next wake without a
+        graph reload.
+        """
+        _DEFAULT_SLEEP_S = 30.0
+        _MAX_SLEEP_S = 60.0
+        while True:
+            try:
+                entry = self._graphs.get(graph_id)
+                sleep_s = _DEFAULT_SLEEP_S
+                if entry and entry[1]:  # still exists and enabled
+                    g_name, _, flow = entry
+                    node = next((n for n in flow.nodes if n.id == node_id), None)
+                    if node is not None:
+                        watched = GraphExecutor._load_rule_list(node.data.get("inputs"))
+                        timeouts = [GraphExecutor._to_num(cfg.get("timeout_s"), default=0.0) for cfg in watched]
+                        timeouts = [t for t in timeouts if t > 0]
+                        if timeouts:
+                            sleep_s = min(_MAX_SLEEP_S, max(1.0, min(timeouts) / 5))
+                    await self._execute_graph(graph_id, g_name, flow, {node_id: {}})
+                    logger.debug("Sensor watchdog graph %s (%s) node %s checked", graph_id[:8], g_name, node_id[:8])
+
+                await asyncio.sleep(sleep_s)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Sensor watchdog loop error graph=%s node=%s", graph_id[:8], node_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
     # ── Event Handler ─────────────────────────────────────────────────────

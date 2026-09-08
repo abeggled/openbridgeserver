@@ -13,4 +13,5 @@ NODE_TYPE = NodeTypeDef(
     inputs=[port("in1", "IN 1")],
     outputs=[port("out", "Out")],
     color="#1d4ed8",
+    help_id="logic-block-not",
 )

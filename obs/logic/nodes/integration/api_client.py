@@ -49,6 +49,7 @@ NODE_TYPE = NodeTypeDef(
             "type": "string",
             "default": "",
             "label": "Header (JSON-Objekt, optional)",
+            "description": 'Flat JSON object of extra request headers, e.g. \'{"X-Api-Key": "..."}\'.',
         },
         "headers_secret_file": {
             "type": "string",
@@ -59,6 +60,16 @@ NODE_TYPE = NodeTypeDef(
             "type": "array",
             "default": [],
             "label": "Variablen",
+            "description": ("DataPoint-backed placeholders, substituted into url/body/headers as '###OBS<slot>###' (e.g. '###OBS1###')."),
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
         },
         "timeout_s": {"type": "number", "default": 10, "min": 1, "label": "Timeout (s)"},
         "auth_type": {
@@ -91,4 +102,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#0e7490",
+    help_id="logic-block-api-client",
 )

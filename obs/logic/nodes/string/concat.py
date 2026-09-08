@@ -23,4 +23,5 @@ NODE_TYPE = NodeTypeDef(
         "separator": {"type": "string", "default": "", "label": "Trennzeichen"},
     },
     color="#0891b2",
+    help_id="logic-block-string-concat",
 )

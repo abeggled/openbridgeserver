@@ -19,4 +19,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#be185d",
+    help_id="logic-block-python-script",
 )

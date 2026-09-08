@@ -17,4 +17,5 @@ NODE_TYPE = NodeTypeDef(
         "custom_format": {"type": "string", "default": DEFAULT_CUSTOM_FORMAT, "label": "Benutzerdefiniertes Format"},
     },
     color="#b45309",
+    help_id="logic-block-datetime",
 )

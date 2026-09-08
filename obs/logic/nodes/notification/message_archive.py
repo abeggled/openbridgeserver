@@ -34,4 +34,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#2563eb",
+    help_id="logic-block-message-archive",
 )

@@ -282,20 +282,6 @@ async def _audit_admin_denial(request: Request | None, db: Database, principal: 
 
 
 # ---------------------------------------------------------------------------
-# Startup helper
-# ---------------------------------------------------------------------------
-
-
-async def require_configured_owner(db: Database) -> None:
-    """Fail closed until an administrator has been created offline."""
-    row = await db.fetchone("SELECT COUNT(*) AS c FROM users WHERE is_admin=1")
-    if not row or row["c"] == 0:
-        raise RuntimeError(
-            "No OBS owner is configured. Stop the service and run 'obs-admin auth first-owner <username> --password-stdin' locally, then restart OBS."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
 

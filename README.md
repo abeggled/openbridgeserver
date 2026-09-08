@@ -37,20 +37,21 @@ open bridge connects different building technology protocols into a unified syst
 ## Table of Contents
 
 1. [Quick start — Proxmox LXC](#quick-start--proxmox-lxc)
-2. [Configuration](#configuration)
-3. [How does open bridge work?](#how-does-open-bridge-work)
-4. [Data points](#data-points)
-5. [Bindings](#bindings)
-6. [Search](#search)
-7. [Adapters](#adapters)
-8. [History](#history)
-9. [Change log (RingBuffer)](#change-log-ringbuffer)
-10. [Backup & Restore](#backup--restore)
-11. [System status](#system-status)
-12. [Log viewer](#log-viewer)
-13. [Live connection (WebSocket)](#live-connection-websocket)
-14. [Logic editor](#logic-editor)
-15. [Adapter configuration](#adapter-configuration)
+2. [Quick start — Docker Compose](#quick-start--docker-compose)
+3. [Configuration](#configuration)
+4. [How does open bridge work?](#how-does-open-bridge-work)
+5. [Data points](#data-points)
+6. [Bindings](#bindings)
+7. [Search](#search)
+8. [Adapters](#adapters)
+9. [History](#history)
+10. [Change log (RingBuffer)](#change-log-ringbuffer)
+11. [Backup & Restore](#backup--restore)
+12. [System status](#system-status)
+13. [Log viewer](#log-viewer)
+14. [Live connection (WebSocket)](#live-connection-websocket)
+15. [Logic editor](#logic-editor)
+16. [Adapter configuration](#adapter-configuration)
     - [KNX adapter](#knx-adapter)
     - [Modbus TCP adapter](#modbus-tcp-adapter)
     - [Modbus RTU adapter](#modbus-rtu-adapter)
@@ -62,13 +63,13 @@ open bridge connects different building technology protocols into a unified syst
     - [SNMP adapter](#snmp-adapter)
     - [Presence simulation adapter](#presence-simulation-adapter)
     - [Scheduler adapter](#scheduler-adapter)
-16. [MQTT topics](#mqtt-topics)
-17. [Data types](#data-types)
-18. [Settings](#settings)
-19. [Helper scripts](#helper-scripts)
-20. [Visualization (Visu)](#visualization-visu)
+17. [MQTT topics](#mqtt-topics)
+18. [Data types](#data-types)
+19. [Settings](#settings)
+20. [Helper scripts](#helper-scripts)
+21. [Visualization (Visu)](#visualization-visu)
     - [Floor plan and system diagram widget](#floor-plan-and-system-diagram-widget)
-21. [Development](#development)
+22. [Development](#development)
     - [Local development with PyCharm](#local-development-with-pycharm)
     - [Local Git Hooks (Pre-Push Gate)](#local-git-hooks-pre-push-gate)
 
@@ -114,8 +115,13 @@ The LXC template contains a complete Ubuntu 26.04 system with **open bridge serv
 |---|---|
 | **open bridge server** web interface + API | `http://<container-ip>:8080` |
 
-OBS deliberately ships no default credentials. The first start initializes the database and
-then stops with a setup notice. Create exactly one owner locally before restarting the service:
+OBS ships without credentials, so the first start serves nothing but its setup page: open the
+address above in a browser and set the administrator's username and password. Every other page,
+the API and the Visu stay blocked until that account exists.
+
+Do this right after installing — until the account is created, anyone who can reach the server on
+the network can create it. An installation that must never be claimable that way can create the
+owner offline instead, before the container is first reachable:
 
 ```bash
 obs-admin auth first-owner <username> --password-stdin
@@ -133,6 +139,68 @@ OBS_SECURITY__JWT_SECRET=<at-least-32-random-characters>
 # Restart the service
 systemctl restart obs
 ```
+
+---
+
+## Quick start — Docker Compose
+
+The Compose stack runs **open bridge server** together with its own Mosquitto broker. It needs
+nothing but Docker on the host.
+
+**Step 1 — Fetch the stack**
+
+```bash
+git clone https://github.com/abeggled/openbridgeserver.git
+cd openbridgeserver
+cp .env.example .env      # optional — MQTT service password, host ports, instance name
+```
+
+**Step 2 — Start the stack**
+
+```bash
+docker compose up -d
+```
+
+**Step 3 — Set the administrator password**
+
+Open `http://<host-ip>:8080` in a browser. OBS ships without credentials, so a fresh installation
+serves nothing but its setup page: enter a username and password there and the interface is ready
+— no shell, no `docker exec`, no restart. Every other page, the API and the Visu stay blocked
+until that account exists.
+
+Do this right after starting the stack — until the account is created, anyone who can reach the
+server on the network can create it. An installation that must never be claimable that way can
+create the owner offline instead, before the container is first reachable:
+
+```bash
+docker compose up -d mosquitto
+```
+
+```bash
+printf '%s\n' '<password>' | docker compose run --rm --no-deps -T obs obs-admin auth first-owner <username> --password-stdin
+```
+
+```bash
+docker compose up -d
+```
+
+`--no-deps` keeps Compose from starting the dependencies a second time; Mosquitto has to run
+already because the `obs` service shares its PID namespace. Where the stack is managed outside a
+Compose file (Portainer, a plain `docker run`), the same command runs in the container itself:
+`docker exec -i <container> obs-admin auth first-owner <username> --password-stdin`.
+
+**Step 4 — Access**
+
+| Service | Address |
+|---|---|
+| **open bridge server** web interface + API | `http://<host-ip>:8080` |
+
+**Security configuration**: the container generates a random per-instance JWT secret on its first
+start and persists it in the data volume (`/data/secrets/jwt-secret`) — nothing to configure. Set
+`OBS_JWT_SECRET` in `.env` only to pin a secret yourself; changing it later invalidates every
+issued token. The Mosquitto service account (`OBS_MQTT_USERNAME` / `OBS_MQTT_PASSWORD`) is shared
+by both containers and only reachable on the Compose network, but the published port `1883` makes
+it worth changing from the default.
 
 ---
 
@@ -705,6 +773,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False". |
 | **Trigger** | — | Trigger | Fires the graph on a schedule (cron format). Configurable via templates, a visual editor (min/hour/day/month/weekday), or direct expression entry. |
 | **Operating hours** | Active, Reset | Hours | Counts operating hours while "Active" is true. Saved counter survives restarts. |
+| **Sensor Watchdog** | IN 1…N (1–10, configurable) | OUT 1…N, Fault text, Fault trigger | Monitors up to 10 inputs for missing new values. Each input has its own timeout and fault value; once an input has gone longer than its timeout without a new value, its output switches to the fault value and a one-shot Fault text/Fault trigger fires. Runs its own internal scheduler, so a timeout is detected autonomously even if nothing else happens elsewhere in the graph. |
 
 #### Script
 
