@@ -22,6 +22,13 @@ api.interceptors.response.use(
   res => res,
   async err => {
     const original = err.config
+    // The installation has no owner (any more): the backend answers nothing but
+    // its setup page, so there is no point retrying or redirecting to /login.
+    // A full page load rebuilds the cached setup state on the way.
+    if (err.response?.status === 503 && err.response?.data?.setup_required) {
+      if (window.location.pathname !== '/setup') window.location.href = '/setup'
+      return Promise.reject(err)
+    }
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
       const refreshToken = localStorage.getItem('refresh_token')
@@ -354,4 +361,23 @@ export const logicApi = {
 // interceptors, same as the raw axios.post(...) used for token refresh above.
 export const helpApi = {
   index: () => axios.get('/help/help-index.json'),
+}
+
+// ── First-run setup (#1229) ──────────────────────────────────────────────
+// Plain axios, not the `api` instance: these run before any token exists, and
+// the 401 interceptor's redirect to /login would fight the setup guard.
+//
+// Bare axios has no timeout, unlike the `api` instance above. The router guard
+// awaits the status call before it resolves *any* route, so a request that is
+// accepted but never answered — a stalled proxy, a half-open connection —
+// would leave the app on a blank page for good. A short bound sends the user
+// on to the normal login flow instead; the claim itself gets the same 15s the
+// authenticated instance uses.
+const SETUP_STATUS_TIMEOUT_MS = 8000
+const SETUP_CLAIM_TIMEOUT_MS = 15000
+
+export const setupApi = {
+  status:      ()                   => axios.get('/api/v1/setup/status', { timeout: SETUP_STATUS_TIMEOUT_MS }),
+  createOwner: (username, password) =>
+                                       axios.post('/api/v1/setup/owner', { username, password }, { timeout: SETUP_CLAIM_TIMEOUT_MS }),
 }
