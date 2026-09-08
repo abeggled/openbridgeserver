@@ -37,20 +37,21 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
 ## Inhaltsverzeichnis
 
 1. [Schnellstart — Proxmox LXC](#schnellstart--proxmox-lxc)
-2. [Konfiguration](#konfiguration)
-3. [Wie funktioniert open bridge?](#wie-funktioniert-open-bridge)
-4. [Datenpunkte](#datenpunkte)
-5. [Verknüpfungen (Bindings)](#verknüpfungen-bindings)
-6. [Suche](#suche)
-7. [Adapter](#adapter)
-8. [Verlauf (History)](#verlauf-history)
-9. [Änderungsprotokoll (RingBuffer)](#änderungsprotokoll-ringbuffer)
-10. [Sicherung & Wiederherstellung](#sicherung--wiederherstellung)
-11. [Systemstatus](#systemstatus)
-12. [Log-Viewer](#log-viewer)
-13. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
-14. [Logik-Editor](#logik-editor)
-15. [Adapter-Konfiguration](#adapter-konfiguration)
+2. [Schnellstart — Docker Compose](#schnellstart--docker-compose)
+3. [Konfiguration](#konfiguration)
+4. [Wie funktioniert open bridge?](#wie-funktioniert-open-bridge)
+5. [Datenpunkte](#datenpunkte)
+6. [Verknüpfungen (Bindings)](#verknüpfungen-bindings)
+7. [Suche](#suche)
+8. [Adapter](#adapter)
+9. [Verlauf (History)](#verlauf-history)
+10. [Änderungsprotokoll (RingBuffer)](#änderungsprotokoll-ringbuffer)
+11. [Sicherung & Wiederherstellung](#sicherung--wiederherstellung)
+12. [Systemstatus](#systemstatus)
+13. [Log-Viewer](#log-viewer)
+14. [Live-Verbindung (WebSocket)](#live-verbindung-websocket)
+15. [Logik-Editor](#logik-editor)
+16. [Adapter-Konfiguration](#adapter-konfiguration)
     - [KNX-Adapter](#knx-adapter)
     - [Modbus-TCP-Adapter](#modbus-tcp-adapter)
     - [Modbus-RTU-Adapter](#modbus-rtu-adapter)
@@ -62,13 +63,13 @@ open bridge verbindet verschiedene Gebäudetechnik-Protokolle zu einem einheitli
     - [SNMP-Adapter](#snmp-adapter)
     - [Anwesenheitssimulation-Adapter](#anwesenheitssimulation-adapter)
     - [Zeitschaltuhr-Adapter](#zeitschaltuhr-adapter)
-16. [MQTT-Topics](#mqtt-topics)
-17. [Datentypen](#datentypen)
-18. [Einstellungen](#einstellungen)
-19. [Hilfsskripte](#hilfsskripte)
-20. [Visualisierung (Visu)](#visualisierung-visu)
+17. [MQTT-Topics](#mqtt-topics)
+18. [Datentypen](#datentypen)
+19. [Einstellungen](#einstellungen)
+20. [Hilfsskripte](#hilfsskripte)
+21. [Visualisierung (Visu)](#visualisierung-visu)
     - [Grundriss- und Anlagenschema-Widget](#grundriss--und-anlagenschema-widget)
-21. [Entwicklung](#entwicklung)
+22. [Entwicklung](#entwicklung)
     - [Lokale Entwicklung mit PyCharm](#lokale-entwicklung-mit-pycharm)
     - [Lokale Git-Hooks (Pre-Push Gate)](#lokale-git-hooks-pre-push-gate)
 
@@ -135,6 +136,64 @@ OBS_SECURITY__JWT_SECRET=<mindestens-32-zufällige-zeichen>
 # Dienst neu starten
 systemctl restart obs
 ```
+
+---
+
+## Schnellstart — Docker Compose
+
+Der Compose-Stack betreibt **open bridge server** zusammen mit einem eigenen Mosquitto-Broker.
+Auf dem Host wird nichts außer Docker benötigt.
+
+**Schritt 1 — Stack holen**
+
+```bash
+git clone https://github.com/abeggled/openbridgeserver.git
+cd openbridgeserver
+cp .env.example .env      # optional — MQTT-Dienstpasswort, Host-Ports, Instanzname
+```
+
+**Schritt 2 — Eigentümer anlegen, dann starten**
+
+OBS liefert bewusst keine Standard-Zugangsdaten aus. Der erste Start initialisiert die Datenbank
+und stoppt dann mit einem Einrichtungshinweis (Exit-Code 3) — das ist erwartet und kein Fehler.
+Lege genau einen Eigentümer auf demselben Daten-Volume an und starte den Stack anschließend:
+
+```bash
+docker compose up -d mosquitto
+```
+
+```bash
+printf '%s\n' '<passwort>' | docker compose run --rm --no-deps -T obs obs-admin auth first-owner <benutzername> --password-stdin
+```
+
+```bash
+docker compose up -d
+```
+
+`--no-deps` verhindert, dass Compose die Abhängigkeiten ein zweites Mal hochzieht; Mosquitto muss
+bereits laufen, weil der `obs`-Dienst dessen PID-Namespace teilt.
+
+> **Stack ohne Compose-Datei verwaltet** (Portainer, ein einfaches `docker run`)? Dann findet
+> `docker compose` kein Projekt. Lege den Eigentümer im laufenden Container an und starte ihn neu:
+>
+> ```bash
+> printf '%s\n' '<passwort>' | docker exec -i <container> obs-admin auth first-owner <benutzername> --password-stdin
+> docker restart <container>
+> ```
+
+**Schritt 3 — Zugriff**
+
+| Dienst | Adresse |
+|---|---|
+| **open bridge server** Weboberfläche + API | `http://<host-ip>:8080` |
+
+**Sicherheitskonfiguration**: Der Container erzeugt beim ersten Start ein zufälliges JWT-Secret pro
+Instanz und legt es im Daten-Volume ab (`/data/secrets/jwt-secret`) — hier ist nichts zu
+konfigurieren. `OBS_JWT_SECRET` in `.env` nur setzen, um ein eigenes Secret festzulegen; ein
+späterer Wechsel entwertet alle ausgegebenen Tokens. Das Mosquitto-Dienstkonto
+(`OBS_MQTT_USERNAME` / `OBS_MQTT_PASSWORD`) teilen sich beide Container und ist nur im
+Compose-Netz erreichbar — der veröffentlichte Port `1883` macht eine Änderung des Standardwerts
+trotzdem sinnvoll.
 
 ---
 

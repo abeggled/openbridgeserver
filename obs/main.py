@@ -13,6 +13,7 @@ Startup-Sequenz:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -25,6 +26,9 @@ from slowapi.errors import RateLimitExceeded
 from obs import __version__
 
 logger = logging.getLogger(__name__)
+
+# Mirrors uvicorn's own exit code for a failed application startup.
+_STARTUP_FAILED_EXIT_CODE = 3
 
 
 @asynccontextmanager
@@ -519,4 +523,45 @@ async def main() -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        await server.serve()
+    except SystemExit as exc:
+        # Uvicorn meldet einen fehlgeschlagenen Application-Startup per
+        # sys.exit(3) *innerhalb* von serve() (uvicorn.server.Server.startup).
+        await _abort_failed_startup(exc.code if isinstance(exc.code, int) else _STARTUP_FAILED_EXIT_CODE)
+        return  # _abort_failed_startup() kehrt im Betrieb nicht zurueck.
+    if not server.started:
+        # Kein Listener, aber auch kein SystemExit — z. B. Signal waehrend des
+        # Startups. Derselbe Hänger, dieselbe Behandlung.
+        await _abort_failed_startup()
+
+
+async def _abort_failed_startup(exit_code: int = _STARTUP_FAILED_EXIT_CODE) -> None:
+    """Terminate the process when the lifespan failed instead of hanging forever.
+
+    Uvicorn returns from ``serve()`` after a failed startup, but the interpreter
+    then waits for the *non-daemon* worker threads that aiosqlite starts per
+    connection (``Thread(target=_connection_worker_thread)``).  The database is
+    opened before the fail-closed owner check, so a fresh install would keep a
+    live-but-unserving process: ``docker ps`` shows "Up … (unhealthy)" forever,
+    no restart policy fires and systemd still considers obs.service running.
+
+    Close what startup managed to open, then leave hard — a startup that failed
+    has no other resources worth unwinding, and ``os._exit`` cannot be blocked
+    by a thread that never joins.
+    """
+    try:
+        from obs.message_archive import close_message_archive_store
+
+        await close_message_archive_store()
+    except Exception:
+        logger.exception("Could not close the message archive during startup abort")
+    try:
+        from obs.db.database import get_db
+
+        await get_db().disconnect()
+    except Exception:
+        logger.exception("Could not close the database during startup abort")
+    logger.error("open bridge server startup failed — exiting (see the traceback above).")
+    logging.shutdown()
+    os._exit(exit_code)

@@ -291,7 +291,10 @@ async def require_configured_owner(db: Database) -> None:
     row = await db.fetchone("SELECT COUNT(*) AS c FROM users WHERE is_admin=1")
     if not row or row["c"] == 0:
         raise RuntimeError(
-            "No OBS owner is configured. Stop the service and run 'obs-admin auth first-owner <username> --password-stdin' locally, then restart OBS."
+            "No OBS owner is configured. Create exactly one owner locally, then restart OBS. "
+            "LXC/bare metal: 'obs-admin auth first-owner <username> --password-stdin'. "
+            "Docker: 'docker compose run --rm --no-deps -T obs obs-admin auth first-owner <username> --password-stdin' "
+            "(or 'docker exec -i <container> obs-admin ...' when the stack is managed outside a compose file)."
         )
 
 

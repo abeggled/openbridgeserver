@@ -96,6 +96,11 @@ Alle wesentlichen Änderungen an open bridge server werden hier festgehalten.
 
 ### Fehlerbehebungen
 
+**Docker — Erstinstallation (#1229)**
+- Der Container erzeugt beim ersten Start ein zufälliges JWT-Secret pro Instanz und legt es im Daten-Volume ab (`/data/secrets/jwt-secret`) — dasselbe Prinzip wie `obs-first-boot.service` im LXC-Template. Bisher lief jede Compose-Installation dauerhaft auf dem Platzhalter `changeme` aus `docker-compose.yml`. Ein selbst gesetztes Secret (Env-Variable oder gemountete `config.yaml`) wird nie überschrieben.
+- Ein fehlgeschlagener Startup beendet den Prozess jetzt mit Exit-Code 3, statt den Container dauerhaft als „Up (unhealthy)" ohne Listener stehen zu lassen: uvicorn meldet den Fehler mit `sys.exit(3)` innerhalb von `serve()`, und die Nicht-Daemon-Threads der bereits geöffneten SQLite-Verbindungen hielten den Interpreter danach am Leben.
+- Die Meldung „No OBS owner is configured" nennt jetzt auch den Docker-Weg, den ersten Eigentümer anzulegen; beide READMEs haben einen Docker-Compose-Schnellstart inklusive Portainer-Variante.
+
 **Zeitzonen — Verbrauchszähler und History-Chart (#975, #909)**
 - Verbrauchszähler setzen Tages-, Wochen-, Monats- und Jahreswerte jetzt in der konfigurierten App-Zeitzone zurück, statt in der Zeitzone des Serverprozesses.
 - SQLite-Aggregations-Buckets werden als eindeutige UTC-Zeitstempel mit `Z` ausgegeben; das History-Chart interpretiert auch bereits vorhandene zeitlosen Buckets weiterhin als UTC.
