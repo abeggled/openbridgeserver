@@ -214,6 +214,10 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/auth/login"): _contract(
         PrincipalMode.AUTH_FLOW, AuthorizationMode.AUTH_FLOW, None, "session", "auth.session.login", AuditMode.SECURITY
     ),
+    # First-run setup (#1229): runs before any principal can exist, like login.
+    ("POST", "/api/v1/setup/owner"): _contract(
+        PrincipalMode.AUTH_FLOW, AuthorizationMode.AUTH_FLOW, None, "user", "auth.owner.first_created", AuditMode.SECURITY
+    ),
     ("POST", "/api/v1/auth/refresh"): _contract(
         PrincipalMode.AUTH_FLOW, AuthorizationMode.AUTH_FLOW, None, "session", "auth.session.refresh", AuditMode.SECURITY
     ),
