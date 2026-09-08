@@ -1881,12 +1881,22 @@ class LogicManager:
                     )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
-        """Fires a timer_cron graph node on its cron schedule — runs indefinitely."""
+        """Fires a timer_cron graph node on its cron schedule — runs indefinitely.
+
+        The cron expression is interpreted in the configured system timezone
+        (not UTC), so e.g. "0 7 * * *" fires at 7am local time and follows
+        DST transitions like a user would expect.
+        """
         from croniter import croniter
 
         while True:
             try:
-                now = datetime.now(UTC)
+                tz_name = self._app_config.get("timezone", "Europe/Zurich")
+                try:
+                    tz = ZoneInfo(tz_name)
+                except ZoneInfoNotFoundError:
+                    tz = ZoneInfo("Europe/Zurich")
+                now = datetime.now(tz)
                 it = croniter(cron_expr, now)
                 next_dt = it.get_next(datetime)
                 wait_s = max(0.0, (next_dt - now).total_seconds())
