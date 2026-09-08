@@ -2,7 +2,7 @@
 title: Adapter Instances
 ---
 
-# Adapter Instances
+# Adapter Instances {#adapters}
 
 Adapters connect external systems (KNX, Modbus, MQTT, 1-Wire, Home Assistant, ioBroker,
 SNMP, scheduling, presence simulation, and more) to OBS as **instances**. Each instance has

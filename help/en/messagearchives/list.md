@@ -2,7 +2,7 @@
 title: Message Archives
 ---
 
-# Message Archives
+# Message Archives {#messagearchives}
 
 Message archives store structured event messages (system, security, notifications,
 automations, adapter diagnostics, and more) separately from the running OBS database —
