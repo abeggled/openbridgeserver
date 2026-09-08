@@ -2,11 +2,68 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from typing import Any
 
 from obs.logic.models import FlowData, LogicNode
+from obs.logic.registry import get_node_type
 
 TICK_BOUNDARY_NODE_TYPES = {"memory"}
+
+# Import-time placeholder for an unresolved node type (obs/api/v1/logic.py) — an
+# already-known, intentional marker, not itself an "unknown" type to re-flag.
+_MISSING_NODE_TYPE = "missing_node"
+
+_NUMERIC_SCHEMA_TYPES = {"number", "integer"}
+
+# Some enum-declared config fields accept additional runtime spellings beyond the schema's
+# canonical `enum` values — genuine synonyms GraphExecutor treats identically to a canonical
+# value, not typos that silently fall back to a different (wrong) default. Duplicated here
+# rather than imported from executor.py — executor.py already imports from this module, so the
+# reverse import would be circular. Kept honest by
+# tests/unit/logic/test_config_schema_warnings.py, which recomputes these unions from executor.py's
+# actual op-sets, mirroring the `_DURATION_FIELDS` precedent in obs/logic/validation.py.
+_COMPARE_OPERATOR_ALIASES: frozenset[str] = frozenset({">", "gt", "<", "lt", "=", "==", "eq", ">=", "gte", "<=", "lte", "!=", "ne"})
+_CONDITION_OPERATOR_ALIASES: frozenset[str] = frozenset(
+    {
+        "range",
+        "between",
+        "regex",
+        "regexp",
+        "contains",
+        "starts_with",
+        "startswith",
+        "begins_with",
+        "ends_with",
+        "endswith",
+        "text",
+        "text_eq",
+        "equals_text",
+        "=",
+        "==",
+        "eq",
+        "!=",
+        "ne",
+        ">",
+        "gt",
+        "<",
+        "lt",
+        ">=",
+        "gte",
+        "<=",
+        "lte",
+    }
+)
+
+# Keyed by the schema's own canonical enum values, so both `compare` and the shared
+# decision/value_mapping operator schema resolve to their respective alias supersets.
+_ENUM_ALIAS_SUPERSETS: dict[frozenset[str], frozenset[str]] = {
+    frozenset({">", "<", "=", ">=", "<=", "!="}): _COMPARE_OPERATOR_ALIASES,
+    frozenset(
+        {"eq", "ne", "gt", "lt", "gte", "lte", "range", "text_eq", "contains", "starts_with", "ends_with", "regex"}
+    ): _CONDITION_OPERATOR_ALIASES,
+}
 
 
 @dataclass(frozen=True)
@@ -84,6 +141,127 @@ def topology_warnings(flow: FlowData) -> list[dict[str, str]]:
                     "message": f"Graph cycle detected upstream; node cannot be executed. Cycle nodes: {', '.join(ordered_cyclic[:5])}",
                 },
             )
+    return warnings
+
+
+def config_schema_warnings(flow: FlowData) -> list[dict[str, str]]:
+    """Check each node's ``data`` against its type's ``config_schema``.
+
+    Deliberately narrow: types, enums and array/object shape only — no cross-entity checks (e.g.
+    whether a ``datapoint_id`` actually exists). A key absent from ``data`` is never flagged (it
+    falls back to the schema default); a present ``None`` is always treated as "no value yet" and
+    skipped too. Mirrors the executor's own coercion leniency (``GraphExecutor._to_num``,
+    ``_load_rule_list``) so this reports exactly the inputs that would silently produce wrong
+    behaviour at run time, not inputs the executor already handles safely.
+    """
+    warnings: list[dict[str, str]] = []
+    for node in flow.nodes:
+        if node.type == _MISSING_NODE_TYPE:
+            continue
+        node_type = get_node_type(node.type)
+        if node_type is None:
+            warnings.append(_schema_warning(node.id, "unknown_node_type", f"Unknown node type '{node.type}'."))
+            continue
+        for key, field_schema in node_type.config_schema.items():
+            if key not in node.data:
+                continue
+            value = node.data[key]
+            if field_schema.get("type") == "array":
+                warnings.extend(_array_field_warnings(node.id, key, value, field_schema))
+            else:
+                warnings.extend(_field_warnings(node.id, key, value, field_schema))
+    return warnings
+
+
+def _schema_warning(node_id: str, code: str, message: str) -> dict[str, str]:
+    return {"node_id": node_id, "code": code, "message": message}
+
+
+def _is_numeric(value: Any) -> bool:
+    """Mirror ``GraphExecutor._to_num``'s coercion: bool, real number, or a numeric string."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        try:
+            float(value)
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _matches_enum(value: Any, enum_values: list[Any]) -> bool:
+    """True if ``value`` is accepted for a field declaring ``enum_values``.
+
+    Beyond an exact match: many enum-style config fields are read case/whitespace-normalized at
+    execution time (e.g. `GraphExecutor` lowers `compare.operator`/`string_replace.rules[].mode`,
+    `LogicManager` uppercases `api_client.method`) — checked here as a generic case-insensitive
+    comparison against the canonical values. A handful of fields additionally accept genuine
+    synonyms beyond their canonical spelling (`_ENUM_ALIAS_SUPERSETS`), which is checked instead of
+    the canonical set when the field has an entry there.
+    """
+    if value in enum_values:
+        return True
+    if not isinstance(value, str):
+        return False
+    candidates = _ENUM_ALIAS_SUPERSETS.get(frozenset(enum_values), enum_values)
+    normalized = value.strip().lower()
+    return any(isinstance(candidate, str) and candidate.strip().lower() == normalized for candidate in candidates)
+
+
+def _field_warnings(node_id: str, key: str, value: Any, schema: dict[str, Any]) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if "enum" in schema:
+        if _matches_enum(value, schema["enum"]):
+            return []
+        return [_schema_warning(node_id, "config_schema_enum_invalid", f"{key}: {value!r} is not one of {schema['enum']}.")]
+    field_type = schema.get("type")
+    if field_type in _NUMERIC_SCHEMA_TYPES:
+        if value == "" or _is_numeric(value):
+            return []
+        return [_schema_warning(node_id, "config_schema_type_mismatch", f"{key}: expected a {field_type}, got {value!r}.")]
+    if field_type == "string" and not isinstance(value, str):
+        return [_schema_warning(node_id, "config_schema_type_mismatch", f"{key}: expected a string, got {value!r}.")]
+    # "boolean" and untyped fields (e.g. decision/value_mapping's context-dependent "value"/"min"/
+    # "max") are intentionally not checked further — GraphExecutor._to_bool coerces any value, and
+    # an untyped field's legal shape is not declared, so nothing here can be flagged as invalid.
+    return []
+
+
+def _array_field_warnings(node_id: str, key: str, value: Any, schema: dict[str, Any]) -> list[dict[str, str]]:
+    items = value
+    if isinstance(items, str):
+        try:
+            items = json.loads(items) if items else []
+        except (TypeError, ValueError):
+            return [_schema_warning(node_id, "config_schema_malformed_json", f"{key}: could not parse as JSON.")]
+    if not isinstance(items, list):
+        return [_schema_warning(node_id, "config_schema_type_mismatch", f"{key}: expected an array, got {items!r}.")]
+
+    items_schema = schema.get("items")
+    if not isinstance(items_schema, dict):
+        return []
+
+    required = items_schema.get("required", [])
+    properties = items_schema.get("properties", {})
+    warnings: list[dict[str, str]] = []
+    for index, item in enumerate(items):
+        item_key = f"{key}[{index}]"
+        if not isinstance(item, dict):
+            warnings.append(_schema_warning(node_id, "config_schema_type_mismatch", f"{item_key}: expected an object, got {item!r}."))
+            continue
+        for field_name in required:
+            field_value = item.get(field_name)
+            if field_value is None or field_value == "":
+                warnings.append(
+                    _schema_warning(node_id, "config_schema_missing_required_field", f"{item_key}.{field_name}: required field is missing."),
+                )
+        for field_name, field_schema in properties.items():
+            if field_name in item:
+                warnings.extend(_field_warnings(node_id, f"{item_key}.{field_name}", item[field_name], field_schema))
     return warnings
 
 

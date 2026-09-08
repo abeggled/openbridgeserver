@@ -33,7 +33,7 @@ from obs.api.authz_service import filter_authorized_datapoints, load_role_grants
 from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
-from obs.logic.graph_analysis import topology_warnings
+from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
 from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
@@ -618,6 +618,50 @@ def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
 
 @router.get("/node-types", response_model=list[NodeTypeDef])
 async def get_node_types(_user: str = Depends(get_current_user)) -> list[NodeTypeDef]:
+    """List every built-in Logic function block, for building a `flow_data` graph.
+
+    Each `NodeTypeDef` is the complete, authoritative contract for one block — this is the
+    single source of truth also used by the Logic editor, so nothing here goes stale.
+
+    **Ports and `flow_data` wiring.** A `LogicGraph`'s `flow_data` is `{nodes: [...], edges:
+    [...]}`. Each node has `id`, `type` (one of the `type` values in this catalogue), `position`
+    (`{x, y}`, cosmetic only), and `data` (the node's `config_schema` values, plus a `label`
+    string). Each edge has `id`, `source`/`target` (node ids) and `sourceHandle`/`targetHandle`
+    (port ids from that node type's `outputs`/`inputs`). A port's `type` is `"value"` (carries a
+    value every tick it has one) or `"trigger"` (carries a one-shot pulse, no persistent value).
+
+    **Execution semantics not visible elsewhere in this API:**
+    - A node's per-tick result is a dict keyed by output port id. A key **absent** from that dict
+      means "nothing produced this tick" — a trigger that did not fire, or a value withheld by the
+      block itself (e.g. `change_filter` only sets `changed` when the input actually changed).
+      This is different from the key being present with value `null`/`None`, which means a value
+      arrived but was empty/unset.
+    - `memory` is the **only** node allowed to close a feedback loop within one graph (it outputs
+      the previous tick's stored value) — any other cycle is rejected, see `POST /graphs/validate`.
+
+    **Resolving `help_id` to full prose documentation** (English and German, one paragraph per
+    block with the exact intended behaviour): `GET /help/help-index.json`, then
+    `.helpIds[<help_id>].en` (or `.de`) is a ready-to-fetch URL under `/help/...`. Not every type
+    has a `help_id` yet (`null` if undocumented).
+
+    **Minimal `flow_data` example** — a `compare` block driving a `datapoint_write`:
+    ```json
+    {
+      "nodes": [
+        {"id": "n1", "type": "datapoint_read", "position": {"x": 0, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}},
+        {"id": "n2", "type": "compare", "position": {"x": 200, "y": 0},
+         "data": {"operator": ">", "operand": 20}},
+        {"id": "n3", "type": "datapoint_write", "position": {"x": 400, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}}
+      ],
+      "edges": [
+        {"id": "e1", "source": "n1", "target": "n2", "sourceHandle": "value", "targetHandle": "in1"},
+        {"id": "e2", "source": "n2", "target": "n3", "sourceHandle": "out", "targetHandle": "value"}
+      ]
+    }
+    ```
+    """
     return list_node_types()
 
 
@@ -626,7 +670,28 @@ async def validate_graph(
     body: FlowData,
     _user: str = Depends(get_current_user),
 ) -> dict:
-    return {"status": "ok", "warnings": topology_warnings(body)}
+    """Check `flow_data` for problems before saving it — advisory, does not persist anything.
+
+    Two independent checks, both returned as one flat `warnings` list (`{node_id, code, message}`):
+    - **Graph-cycle topology**: a cycle not broken by a `memory` node (see `GET /node-types`'s
+      "Memory is the only node allowed to close a feedback loop"). Codes: `graph_cycle`,
+      `graph_cycle_blocked`.
+    - **Config-schema conformance**: each node's `data` checked against its type's `config_schema`
+      from `GET /node-types` — unknown node types, values that don't match a declared `type` or
+      `enum`, and (for `type: array` fields such as `decision.conditions`) malformed JSON or a
+      missing required item field. Codes: `unknown_node_type`, `config_schema_type_mismatch`,
+      `config_schema_enum_invalid`, `config_schema_malformed_json`,
+      `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
+      whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
+      (it falls back to the schema default).
+
+    `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
+    `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
+    with cycles or invalid config the same way regardless of whether this was called first, except
+    for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
+    endpoints reject outright (422) at save time — independently of this endpoint.
+    """
+    return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
 
 @router.get("/graphs", response_model=list[LogicGraphOut])
@@ -648,6 +713,7 @@ async def create_graph(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Create a Logic graph. See `GET /node-types` for the `flow_data` authoring contract."""
     _validate_timer_durations(body.flow_data)
     principal = _principal_from_mutation_dependency(_user)
     delegated = await _require_logic_graph_creation(
@@ -703,6 +769,7 @@ async def update_graph_full(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Replace a Logic graph's `flow_data` (full save). See `GET /node-types` for the authoring contract."""
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:

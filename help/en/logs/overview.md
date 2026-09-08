@@ -2,7 +2,7 @@
 title: Logs
 ---
 
-# Logs
+# Logs {#logs}
 
 Shows the OBS backend's application logs live — technical diagnostic messages from the
 server process itself, not to be confused with **Message Archives** (structured event

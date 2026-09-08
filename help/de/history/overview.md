@@ -2,7 +2,7 @@
 title: Historie
 ---
 
-# Historie
+# Historie {#history}
 
 Zeigt historische Werte eines einzelnen Objekts als Diagramm und optional als Tabelle —
 zum Nachvollziehen von Wertverläufen, unabhängig vom Live-Wert auf der Objekt-Detailseite.

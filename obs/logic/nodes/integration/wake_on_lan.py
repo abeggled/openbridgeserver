@@ -30,4 +30,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#0369a1",
+    help_id="logic-block-wake-on-lan",
 )

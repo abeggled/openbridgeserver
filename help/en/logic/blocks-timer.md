@@ -21,6 +21,9 @@ three interlinked levels:
 
 All three levels stay in sync — a change at any level updates the others.
 
+The schedule is evaluated in the configured application timezone (**Settings → General**), not
+UTC — a "Daily at 07:00" trigger fires at 7am local time and follows daylight-saving transitions.
+
 ## Date/Time {#logic-block-datetime}
 
 Outputs the current date and time in the configured application timezone (**Date**, **Time**,

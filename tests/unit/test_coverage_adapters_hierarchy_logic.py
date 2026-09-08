@@ -5286,6 +5286,59 @@ class TestStartCronTasks:
         assert sleep_calls == [60, 60]
 
     @pytest.mark.asyncio
+    async def test_cron_loop_evaluates_schedule_in_configured_timezone(self):
+        """_cron_loop must resolve `now` in the configured app timezone (issue
+        #1201), not UTC — otherwise a "Daily at 07:00" trigger fires at 07:00
+        UTC instead of 07:00 local time."""
+        import asyncio
+        from zoneinfo import ZoneInfo
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr._app_config["timezone"] = "Pacific/Kiritimati"  # UTC+14 — unambiguous vs. UTC
+
+        captured_now = []
+
+        class _FakeCroniter:
+            def __init__(self, expr, now):
+                captured_now.append(now)
+
+            def get_next(self, ret_type):
+                raise asyncio.CancelledError()
+
+        with patch("croniter.croniter", _FakeCroniter):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "0 7 * * *"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert captured_now[0].tzinfo == ZoneInfo("Pacific/Kiritimati")
+
+    @pytest.mark.asyncio
+    async def test_cron_loop_falls_back_to_zurich_on_unknown_timezone(self):
+        """An unresolvable configured timezone must not crash the cron
+        scheduler — it falls back to Europe/Zurich."""
+        import asyncio
+        from zoneinfo import ZoneInfo
+
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, _make_flow())})
+        mgr._app_config["timezone"] = "Not/ARealZone"
+
+        captured_now = []
+
+        class _FakeCroniter:
+            def __init__(self, expr, now):
+                captured_now.append(now)
+
+            def get_next(self, ret_type):
+                raise asyncio.CancelledError()
+
+        with patch("croniter.croniter", _FakeCroniter):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "0 7 * * *"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert captured_now[0].tzinfo == ZoneInfo("Europe/Zurich")
+
+    @pytest.mark.asyncio
     async def test_ical_loop_logs_and_backs_off_on_error(self):
         """_ical_loop swallows an unexpected exception from _execute_graph,
         logs it and backs off for 60s rather than letting the loop die."""

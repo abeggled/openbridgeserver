@@ -21,6 +21,10 @@ Konfiguration bietet drei ineinandergreifende Ebenen:
 
 Alle drei Ebenen sind synchron — eine Änderung an einer Stelle aktualisiert die anderen.
 
+Der Zeitplan wird in der eingestellten Anwendungs-Zeitzone ausgewertet (**Einstellungen →
+Allgemein**), nicht in UTC — ein Trigger „Täglich um 07:00" löst also um 07:00 Ortszeit aus und
+folgt automatisch der Zeitumstellung (Sommer-/Winterzeit).
+
 ## Datum/Zeit {#logic-block-datetime}
 
 Gibt das aktuelle Datum und die aktuelle Uhrzeit in der eingestellten Anwendungs-Zeitzone aus

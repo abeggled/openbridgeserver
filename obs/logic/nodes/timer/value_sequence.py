@@ -20,4 +20,5 @@ NODE_TYPE = NodeTypeDef(
         "steps": {"type": "array", "default": []},
     },
     color="#b45309",
+    help_id="logic-block-value-sequence",
 )

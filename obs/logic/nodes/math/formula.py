@@ -17,4 +17,5 @@ NODE_TYPE = NodeTypeDef(
         "output_formula": {"type": "string", "default": ""},
     },
     color="#7c3aed",
+    help_id="logic-block-math-formula",
 )

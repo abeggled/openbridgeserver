@@ -20,4 +20,5 @@ NODE_TYPE = NodeTypeDef(
         "priority": {"type": "integer", "default": 0, "min": -2, "max": 1, "label": "Priorität"},
     },
     color="#e11d48",
+    help_id="logic-block-notify-message",
 )

@@ -17,4 +17,5 @@ NODE_TYPE = NodeTypeDef(
         "json_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
     },
     color="#0369a1",
+    help_id="logic-block-json-extractor",
 )

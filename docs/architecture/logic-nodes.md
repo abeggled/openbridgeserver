@@ -231,6 +231,11 @@ today, so it is deliberately left as an explicit table.
    source layout, plus execution tests for the dispatcher branch.
 6. Frontend, translations and the block table in `README.md` / `README.de.md` follow the normal GUI
    and i18n rules.
+7. **Write its help section and declare its id** — add `## <Label> {#<help-id>}` to
+   `help/{de,en}/logic/blocks-<category>.md` and set the matching `help_id="…"` on the node type
+   definition. `NodePalette.vue` renders a help button from that declared value, and
+   `tools/check_help_contract.py` fails CI when a palette-visible block declares no id or points at a
+   section that does not exist. A block without `help_id` gets no button rather than a dead one.
 
 Beyond the capability classification (step 3) and the dispatcher branch (step 4) — both of which are
 part of implementing the block, not of defining the catalogue — no shared file is involved: the

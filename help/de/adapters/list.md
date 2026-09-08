@@ -2,7 +2,7 @@
 title: Adapter-Instanzen
 ---
 
-# Adapter-Instanzen
+# Adapter-Instanzen {#adapters}
 
 Adapter binden externe Systeme (KNX, Modbus, MQTT, 1-Wire, Home Assistant, ioBroker,
 SNMP, Zeitschaltuhr, Anwesenheitssimulation und weitere) als **Instanzen** an OBS an.
