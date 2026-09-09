@@ -307,6 +307,30 @@ describe('validateTimerValue — UTC offsets (Codex review, PR #1155)', () => {
   })
 })
 
+describe('validateTimerValue — INTEGER magnitude (Codex review, PR #1155)', () => {
+  // The backend caps INTEGER at CPython's int<->str digit limit: `1e1000000` is
+  // cheap to type and takes ~19 s to materialize, so it is rejected there — and
+  // must be rejected here too, or the editor green-lights a 422.
+  it.each(['1e1000000', '1e4300', '9'.repeat(5000), `-${'9'.repeat(5000)}`, '0.5e5000'])(
+    'rejects %s, which is past the backend digit limit',
+    (raw) => {
+      expect(validateTimerValue(raw, 'INTEGER')).toBe('zst.switchValueErrorInteger')
+    },
+  )
+
+  it.each(['1e4299', '9'.repeat(4300), '9'.repeat(400), '000123'])(
+    'still accepts %s, which the backend accepts',
+    (raw) => {
+      expect(validateTimerValue(raw, 'INTEGER')).toBeNull()
+    },
+  )
+
+  // Zero carries its exponent but converts instantly — the cap must exempt it.
+  it.each(['0e5000', '0e-5000', '0'])('accepts the zero literal %s', (raw) => {
+    expect(validateTimerValue(raw, 'INTEGER')).toBeNull()
+  })
+})
+
 describe('timerValueFitsNativeInput', () => {
   it.each([
     ['08:00', 'TIME'],

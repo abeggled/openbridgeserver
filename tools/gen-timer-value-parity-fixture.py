@@ -31,6 +31,10 @@ VALUES = [
     "1.0000000000000001", "9007199254740993.0", "1.5e1", "1.55e1", "5.", "1e-3", "1000e-3",
     # integer spellings float cannot hold — int() parses them, float() overflows (#1155)
     "9" * 400, "9" * 100, "-" + "9" * 400,
+    # compact spellings of impractically large integers: cheap to write, expensive
+    # to materialize, and past CPython's int<->str digit limit (Codex review, #1155)
+    "1e1000000", "1e4300", "1e4299", "9" * 4300, "9" * 5000, "-" + "9" * 5000,
+    "0.5e5000", "0e5000", "0e-5000",
     # dates, including impossible calendar dates
     "2026-12-24", "2026-02-30", "2026-13-01", "2026-04-31", "2026-00-10", "2026-01-00",
     "2024-02-29", "2026-02-29", "2000-02-29", "1900-02-29", "24.12.2026", "2026-1-1",

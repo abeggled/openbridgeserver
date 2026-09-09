@@ -30,6 +30,9 @@ const TIME_RE = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-][\d:.]+)?$/
 const TZ_OFFSET_RE = /^(\d{2})(?::(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?|(\d{2})(?:(\d{2})(?:\.\d{1,6})?)?)?$/
 const DATETIME_RE = /^(\d{4}-\d{2}-\d{2})(?:[Tt ](.+))?$/
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+// CPython's default `sys.get_int_max_str_digits()`, which bounds the INTEGER
+// literals the backend accepts, see `integerDigitCount()`.
+const MAX_INTEGER_DIGITS = 4300
 // What the native typed controls round-trip, see `timerValueFitsNativeInput()`.
 // Deliberately narrower than the validators above: the browser normalizes the
 // value, so a leading `+`, a lowercase `t` or a space separator does not survive.
@@ -112,6 +115,27 @@ function isIntegralDecimal(trimmed: string): boolean {
   const [intPart, fracPart = ''] = mantissa.split('.')
   const pointAt = intPart.length + Number(exponent)
   return !/[1-9]/.test((intPart + fracPart).slice(Math.max(pointAt, 0)))
+}
+
+/**
+ * How many digits would the integer part of this literal have?
+ *
+ * Read off the text, never materialized: `1e1000000` is a million-and-one digit
+ * integer that costs nothing to write down and tens of seconds to build. The
+ * backend caps INTEGER at CPython's own int↔str limit for exactly that reason
+ * (see `_exceeds_integer_digit_limit()`), so this must cap it too — otherwise the
+ * editor green-lights a value the API answers with 422.
+ *
+ * Only called for text `DECIMAL_RE` has already matched. Leading zeros do not
+ * count, and an all-zero mantissa is the single digit `0`.
+ */
+function integerDigitCount(trimmed: string): number {
+  const [mantissa, exponent = '0'] = trimmed.replace(/^[+-]/, '').split(/[eE]/)
+  const [intPart, fracPart = ''] = mantissa.split('.')
+  const allDigits = intPart + fracPart
+  const significant = allDigits.replace(/^0+/, '')
+  if (significant === '') return 1
+  return intPart.length + Number(exponent) - (allDigits.length - significant.length)
 }
 
 /**
@@ -215,14 +239,18 @@ export function validateTimerValue(raw: unknown, dataType: string | null | undef
         ? null
         : ERROR_KEYS.boolean
     case 'integer': {
-      // Magnitude is irrelevant for INTEGER: a Python `int` is arbitrary-precision,
+      // Judged on the text, never on a `Number`: a Python `int` is arbitrary-precision,
       // so a 400-digit literal (or `1e999`) is a perfectly good value even though
       // `Number()` overflows to Infinity here — going through `parseNumber` would
-      // reject it and block saving a binding the API happily accepts. Only
-      // integrality is checked, and on the text, see `isIntegralDecimal`. A boolean
-      // literal maps to 1/0 and is integral by construction; anything else is not a
-      // number at all.
-      if (DECIMAL_RE.test(trimmed)) return isIntegralDecimal(trimmed) ? null : ERROR_KEYS.integer
+      // reject it and block saving a binding the API happily accepts. Checked are
+      // integrality (see `isIntegralDecimal`) and magnitude, the latter only against
+      // the digit ceiling the backend itself applies (see `integerDigitCount`). A
+      // boolean literal maps to 1/0 and is integral by construction; anything else is
+      // not a number at all.
+      if (DECIMAL_RE.test(trimmed)) {
+        if (!isIntegralDecimal(trimmed)) return ERROR_KEYS.integer
+        return integerDigitCount(trimmed) > MAX_INTEGER_DIGITS ? ERROR_KEYS.integer : null
+      }
       return TIMER_TRUE_LITERALS.includes(lowered) || TIMER_FALSE_LITERALS.includes(lowered)
         ? null
         : ERROR_KEYS.integer

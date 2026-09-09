@@ -10,6 +10,7 @@ import datetime
 import decimal
 import json
 import math
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -242,7 +243,8 @@ def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
     * ``BOOLEAN``  → ``1/true/on/ein/yes/ja`` → ``True``; ``0/false/off/aus/no/nein`` → ``False``
     * ``INTEGER``  → ``int``; integral decimals and boolean literals (→ ``1``/``0``) are
       accepted, integrality being judged exactly (``1.0000000000000001`` is rejected)
-      and arbitrary precision preserved (a 400-digit literal keeps every digit)
+      and arbitrary precision preserved (a 400-digit literal keeps every digit) up to
+      CPython's own int/str digit limit, see :func:`_exceeds_integer_digit_limit`
     * ``FLOAT``    → ``float``; boolean literals map to ``1.0``/``0.0``
     * ``STRING``   → the value verbatim, never interpreted as boolean or number
     * ``DATE`` / ``TIME`` / ``DATETIME`` → ISO 8601 via ``fromisoformat``
@@ -273,6 +275,8 @@ def coerce_text_value_for_type(raw: str, data_type: str) -> Any:
             raise ValueError(f"Value {raw!r} is not a valid {name} literal")
         if name == "FLOAT":
             return _to_float(raw, numeric)
+        if _exceeds_integer_digit_limit(numeric):
+            raise ValueError(f"Value {raw!r} is out of range for an INTEGER literal (too many digits)")
         if _has_fractional_part(numeric):
             raise ValueError(f"Value {raw!r} is not a valid INTEGER literal (fractional part would be lost)")
         return int(numeric)
@@ -312,6 +316,35 @@ def _to_float(raw: str, numeric: decimal.Decimal | float) -> float:
     if not math.isfinite(as_float):
         raise ValueError(f"Value {raw!r} is out of range for a FLOAT literal")
     return as_float
+
+
+# CPython's own ceiling on int↔str conversion. A deployment may raise it, and 0
+# disables it entirely — in which case the default is used here anyway, because
+# the guard below exists to bound work, not to mirror a permissive setting.
+_DEFAULT_INT_MAX_STR_DIGITS = 4300
+
+
+def _exceeds_integer_digit_limit(numeric: decimal.Decimal | float) -> bool:
+    """Is *numeric* too large to become an ``int`` this process can use?
+
+    Only a ``Decimal`` can arrive here oversized: ``int(str)`` enforces the very
+    same limit itself, and a finite ``float`` never reaches 310 digits. A compact
+    exponent spelling is the problem — ``Decimal("1e1000000")`` costs nothing to
+    parse but tens of seconds to materialize, all of it synchronous on the
+    scheduler's event loop, and the million-digit result could not be published
+    afterwards anyway because ``repr()`` runs into the same limit.
+
+    ``adjusted()`` is the exponent of the most significant digit, so the value has
+    ``adjusted() + 1`` digits left of the point — read off the exponent, without
+    building anything. Zero is exempt: it carries its exponent along
+    (``Decimal("0e5000").adjusted()`` is 5000) but converts to the single digit
+    ``0`` instantly. Arbitrary precision is preserved well past what the
+    Zeitschaltuhr plausibly schedules: 4300 digits by default.
+    """
+    if not isinstance(numeric, decimal.Decimal) or numeric.is_zero():
+        return False
+    limit = sys.get_int_max_str_digits() or _DEFAULT_INT_MAX_STR_DIGITS
+    return numeric.adjusted() >= limit
 
 
 def _has_fractional_part(numeric: decimal.Decimal | float) -> bool:

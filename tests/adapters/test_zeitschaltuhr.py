@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, time
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1046,6 +1047,28 @@ class TestFireBindingIncompatibleValue:
         adapter, binding, registry = _fire_adapter(data_type)
         await _fire(adapter, binding, registry, raw)
         adapter._bus.publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_oversized_integer_is_rejected_without_blocking_the_loop(self):
+        """Codex review round 4 on PR #1155 — the compact spelling of a huge integer.
+
+        ``1e1000000`` costs nothing to parse and ~19 s to materialize as an ``int``,
+        synchronously on the event loop that drives every other adapter. It has to take
+        the mismatch path promptly instead.
+        """
+        adapter, binding, registry = _fire_adapter("INTEGER")
+        started = monotonic()
+        await _fire(adapter, binding, registry, "1e1000000")
+        assert monotonic() - started < 1.0
+        adapter._bus.publish.assert_not_awaited()
+        registry.report_type_mismatch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_large_integer_below_the_limit_is_still_published(self):
+        """The guard bounds the work — a 400-digit schedule value keeps every digit."""
+        adapter, binding, registry = _fire_adapter("INTEGER")
+        await _fire(adapter, binding, registry, "9" * 400)
+        assert _published(adapter).value == int("9" * 400)
 
     @pytest.mark.asyncio
     async def test_incompatible_value_reports_type_mismatch_diagnostic(self):

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import sys
+import time
 
 import pytest
 
@@ -247,6 +249,42 @@ class TestCoerceTextValueNumeric:
         have disabled a schedule point over a value that is simply zero.
         """
         assert coerce_text_value_for_type("0e" + "9" * 20, data_type) == 0
+
+    @pytest.mark.parametrize("raw", ["1e1000000", "1e4300", "9" * 5000, "-" + "9" * 5000, "0.5e5000"])
+    def test_integer_rejects_literals_past_the_digit_limit(self, raw):
+        """Codex review round 4 — a compact exponent must not be materialized.
+
+        ``Decimal("1e1000000")`` parses instantly and takes ~19 s to convert to ``int``,
+        all of it synchronous on the scheduler's event loop, and the result could not be
+        published afterwards: ``repr()`` runs into CPython's own int/str digit limit. The
+        guard reads the magnitude off the exponent and rejects it promptly instead.
+        """
+        started = time.monotonic()
+        with pytest.raises(ValueError, match="INTEGER"):
+            coerce_text_value_for_type(raw, "INTEGER")
+        assert time.monotonic() - started < 1.0
+
+    @pytest.mark.parametrize("raw", ["1e4299", "9" * 4300, "9" * 400])
+    def test_integer_keeps_everything_below_the_digit_limit(self, raw):
+        """The guard bounds the work, it does not narrow the supported range."""
+        assert coerce_text_value_for_type(raw, "INTEGER") == int(decimal.Decimal(raw))
+
+    def test_digit_guard_holds_when_the_interpreter_limit_is_disabled(self, monkeypatch):
+        """``sys.set_int_max_str_digits(0)`` lifts CPython's limit — the guard does not.
+
+        It exists to bound the work done on the event loop, so a permissive interpreter
+        setting must not turn a schedule point into a 19-second stall.
+        """
+        monkeypatch.setattr(sys, "get_int_max_str_digits", lambda: 0)
+        with pytest.raises(ValueError, match="INTEGER"):
+            coerce_text_value_for_type("1e1000000", "INTEGER")
+        assert coerce_text_value_for_type("1e4299", "INTEGER") == int(decimal.Decimal("1e4299"))
+
+    @pytest.mark.parametrize("raw", ["0e5000", "0e-5000", "0"])
+    def test_integer_keeps_zero_whatever_its_exponent(self, raw):
+        """Zero carries its exponent — ``Decimal("0e5000").adjusted()`` is 5000 — but
+        converts to a single digit instantly, so the digit guard must exempt it."""
+        assert coerce_text_value_for_type(raw, "INTEGER") == 0
 
     def test_no_non_value_error_escapes_for_oversized_literals(self):
         """The callers catch ValueError only — OverflowError would be a 500."""
