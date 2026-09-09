@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { apiGet, apiPost, apiDelete } from '../helpers'
+import { apiGet, apiPost, apiDelete, openLogicGraph } from '../helpers'
 
 /**
  * E2E tests for issue #208:
@@ -33,7 +33,7 @@ async function createAndOpenGraph(
 
   await page.goto('/logic')
   await page.waitForLoadState('networkidle')
-  await page.selectOption('[data-testid="select-graph"]', graph.id)
+  await openLogicGraph(page, graph.id)
   await page.waitForTimeout(1_000)
 
   return graph.id

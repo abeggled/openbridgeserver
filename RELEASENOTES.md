@@ -4,7 +4,7 @@
 * none
 
 ### New features ✨
-* none
+* Logic Engine/Admin GUI: Logic sheets can now be organized using the same Hierarchy already used for DataPoints and KNX devices (Settings → Hierarchy, renamed "Hierarchies"/"Hierarchien" to reflect that it is no longer device-specific), instead of picking a graph from one flat, alphabetically-sorted dropdown. A sheet can be grouped into any number of hierarchies at once — e.g. a technical tree by function (shading/lighting/sockets) and a topological tree by room, both containing the same sheets — since the link is purely organizational and does not affect the sheet's own, independent access permissions. The Logic editor's sheet selector is now a button that opens a folder browser (breadcrumb navigation), including a "Not assigned"/"Nicht zugeordnet" entry for sheets not yet sorted into any hierarchy; an "Organize sheets" shortcut jumps straight to Settings → Hierarchy, where sheets can be dragged from a palette directly onto any folder — or onto a hierarchy's own name to file it there with no sub-folder required. https://github.com/abeggled/openbridgeserver/issues/1217
 
 ### Fixes 🐞
 * Admin GUI/KNX: A device's communication-object list sorted by number as text instead of numerically, so e.g. KO 10 was listed between KO 1 and KO 2 once a device had ten or more objects. Every place that orders communication objects by number — the device detail view, its datapoint-traceability panel, and the group-address device list — now sorts numerically. https://github.com/abeggled/openbridgeserver/issues/1132
