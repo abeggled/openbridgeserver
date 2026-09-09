@@ -220,6 +220,90 @@ describe('GenericNode — handles', () => {
   })
 })
 
+describe('GenericNode — sensor_watchdog', () => {
+  it('shows "Sensor Watchdog" label', async () => {
+    const w = await mountGN('sensor_watchdog')
+    await flushPromises()
+    expect(w.find('.gn-title').text()).toBe('Sensor Watchdog')
+  })
+
+  it('defaults to one value+changed input pair, one output plus the two fixed fault outputs when unconfigured', async () => {
+    const w = await mountGN('sensor_watchdog')
+    await flushPromises()
+    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(targets.map(h => h.attributes('data-id'))).toEqual(['in_1', 'in_1_changed'])
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['out_1', 'fault_text', 'fault_trigger'])
+  })
+
+  it('derives the port count from the length of the inputs array, not a separate count field', async () => {
+    const w = await mountGN('sensor_watchdog', {
+      inputs: [
+        { label: 'Sensor A', timeout_s: 10 },
+        { label: 'Sensor B', timeout_s: 20 },
+        { label: 'Sensor C', timeout_s: 30 },
+      ],
+    })
+    await flushPromises()
+    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
+    const sources = w.findAll('.handle').filter(h => h.attributes('data-type') === 'source')
+    expect(targets.map(h => h.attributes('data-id'))).toEqual([
+      'in_1', 'in_1_changed', 'in_2', 'in_2_changed', 'in_3', 'in_3_changed',
+    ])
+    expect(sources.map(h => h.attributes('data-id'))).toEqual(['out_1', 'out_2', 'out_3', 'fault_text', 'fault_trigger'])
+  })
+
+  it('parses a JSON-string inputs config the same as an array (persistence shape)', async () => {
+    const w = await mountGN('sensor_watchdog', {
+      inputs: JSON.stringify([{ label: 'A', timeout_s: 10 }, { label: 'B', timeout_s: 10 }]),
+    })
+    await flushPromises()
+    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
+    expect(targets.map(h => h.attributes('data-id'))).toEqual(['in_1', 'in_1_changed', 'in_2', 'in_2_changed'])
+  })
+
+  it('uses the configured per-input label for its in_N and out_N port, falling back to a generic name', async () => {
+    const w = await mountGN('sensor_watchdog', {
+      inputs: [{ label: 'Fensterkontakt', timeout_s: 10 }, { timeout_s: 10 }],
+    })
+    await flushPromises()
+    const leftLabels = w.findAll('.gn-port-left').map(p => p.text())
+    const rightLabels = w.findAll('.gn-port-right').map(p => p.text())
+    expect(leftLabels).toContain('Fensterkontakt')
+    expect(rightLabels).toContain('Fensterkontakt')
+    expect(leftLabels).toContain('IN 2')
+  })
+
+  it('labels the changed handle from the row label, falling back to a generic name', async () => {
+    const w = await mountGN('sensor_watchdog', {
+      inputs: [{ label: 'Fensterkontakt', timeout_s: 10 }, { timeout_s: 10 }],
+    })
+    await flushPromises()
+    const leftLabels = w.findAll('.gn-port-left').map(p => p.text())
+    expect(leftLabels).toContain('Fensterkontakt: Geändert')
+    expect(leftLabels).toContain('IN 2 Geändert')
+  })
+
+  it('clamps more than 10 configured inputs to 10 value+changed port pairs', async () => {
+    const w = await mountGN('sensor_watchdog', {
+      inputs: Array.from({ length: 15 }, (_, i) => ({ label: `S${i + 1}`, timeout_s: 10 })),
+    })
+    await flushPromises()
+    const targets = w.findAll('.handle').filter(h => h.attributes('data-type') === 'target')
+    expect(targets.length).toBe(20)
+    expect(targets.map(h => h.attributes('data-id'))).not.toContain('in_11')
+    expect(targets.map(h => h.attributes('data-id'))).not.toContain('in_11_changed')
+  })
+
+  it('shows the input count in the summary line', async () => {
+    const w = await mountGN('sensor_watchdog', {
+      inputs: [{ timeout_s: 10 }, { timeout_s: 10 }],
+    })
+    await flushPromises()
+    expect(w.find('.gn-summary').text()).toBe('2 Eingänge')
+  })
+})
+
 describe('GenericNode — summary', () => {
   it('shows summary for const_value', async () => {
     const w = await mountGN('const_value', { data_type: 'number', value: '42' })

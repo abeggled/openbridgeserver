@@ -434,7 +434,7 @@ const nodeTypeComponents = {
   clamp: _generic, random_value: _generic, statistics: _generic, avg_multi: _generic,
   heating_circuit: _generic, min_max_tracker: _generic, consumption_counter: _generic,
   // Timer extended
-  operating_hours: _generic,
+  operating_hours: _generic, sensor_watchdog: _generic,
   // String
   string_concat: _generic, string_replace: _generic,
   // Notification
