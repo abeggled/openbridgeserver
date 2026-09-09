@@ -650,8 +650,13 @@ async def test_create_timer_binding_rejects_incompatible_value(client, auth_head
 
 
 async def test_create_timer_binding_without_value_is_accepted(client, auth_headers):
-    """The Visu 'add schedule point' flow creates an empty config first."""
-    dp = await _create_typed_dp(client, auth_headers, "DATE")
+    """The 'add schedule point' flow may post an empty config on an untyped object.
+
+    On a DATE/TIME/DATETIME object it may not any more — the adapter's default "1"
+    would be stored and dropped at every firing, so the Visu seeds a type-appropriate
+    value instead, see `timerValueDefault()` and the temporal case below.
+    """
+    dp = await _create_typed_dp(client, auth_headers, "UNKNOWN")
     inst = await _create_zsu_instance(client, auth_headers)
 
     resp = await client.post(
@@ -731,6 +736,71 @@ async def test_update_timer_binding_without_config_skips_value_validation(client
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.parametrize("data_type", ["DATE", "TIME", "DATETIME"])
+async def test_create_timer_binding_rejects_an_omitted_value_on_a_temporal_object(client, auth_headers, data_type):
+    """Codex review on PR #1155 — the adapter's default has to hold too.
+
+    An API client that omits `value` gets the adapter's default "1" at fire time, which
+    no temporal object can hold: the schedule point would be accepted here and silently
+    dropped whenever it fires.
+    """
+    dp = await _create_typed_dp(client, auth_headers, data_type)
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert data_type in resp.json()["detail"]
+
+
+async def test_create_timer_binding_accepts_an_omitted_value_on_a_numeric_object(client, auth_headers):
+    """The default is a valid FLOAT literal, so omitting it stays legal there."""
+    dp = await _create_typed_dp(client, auth_headers, "FLOAT")
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily"},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def test_update_timer_binding_rejects_dropping_the_value_on_a_temporal_object(client, auth_headers):
+    """A config update replaces the stored config, so losing `value` re-applies the default."""
+    dp = await _create_typed_dp(client, auth_headers, "DATE")
+    inst = await _create_zsu_instance(client, auth_headers)
+
+    create_resp = await client.post(
+        f"/api/v1/datapoints/{dp['id']}/bindings",
+        json={
+            "adapter_instance_id": inst["id"],
+            "direction": "SOURCE",
+            "config": {"timer_type": "daily", "value": "2026-12-24"},
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+
+    resp = await client.patch(
+        f"/api/v1/datapoints/{dp['id']}/bindings/{create_resp.json()['id']}",
+        json={"config": {"timer_type": "daily"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
 
 
 async def test_non_timer_binding_value_is_not_validated(client, auth_headers):

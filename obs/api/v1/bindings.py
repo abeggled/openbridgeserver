@@ -272,8 +272,14 @@ def _validate_timer_output_value(adapter_type: str, config: dict[str, Any], dp_i
     Issue #1008: the switching value used to be parsed type-blind at fire time, so an
     incompatible value was only discovered (and silently dropped) hours later. Validating
     it on save surfaces the problem immediately as a 422.
+
+    An *omitted* value is not "no value": both routes store the config as sent, and the
+    adapter then fills in its own default when the schedule point fires. So the default
+    is what has to hold for the target type — otherwise a DATE/TIME/DATETIME point would
+    be accepted here and dropped at every firing, the very failure mode this guards
+    against (Codex review).
     """
-    if adapter_type != "ZEITSCHALTUHR" or "value" not in config:
+    if adapter_type != "ZEITSCHALTUHR":
         return
     if str(config.get("timer_type", "daily")) == "meta":
         return
@@ -281,10 +287,13 @@ def _validate_timer_output_value(adapter_type: str, config: dict[str, Any], dp_i
     if dp is None:
         return
 
+    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrBindingConfig
     from obs.models.types import coerce_text_value_for_type
 
+    raw = config.get("value", ZeitschaltuhrBindingConfig.model_fields["value"].default)
+
     try:
-        coerce_text_value_for_type(str(config["value"]), dp.data_type)
+        coerce_text_value_for_type(str(raw), dp.data_type)
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,

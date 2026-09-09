@@ -324,7 +324,7 @@ import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTi
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
 import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnmp.vue'
 import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
-import { validateTimerValue } from '@/utils/timerValue'
+import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -421,7 +421,10 @@ const cfg = reactive({
   date_window_enabled: false,
   date_window_from: '',
   date_window_to: '',
-  value: '1',
+  // Typgerechter Startwert: der Adapter setzt für einen fehlenden Wert "1" ein,
+  // was ein DATE/TIME/DATETIME-Objekt nicht halten kann — die API weist einen
+  // solchen Schaltpunkt beim Speichern ab (siehe `timerValueDefault()`).
+  value: timerValueDefault(props.dpDataType),
 })
 
 // MQTT source data type constants + compatibility map
@@ -660,7 +663,7 @@ watch(() => props.initial, val => {
   if (cfg.date_window_to      == null) cfg.date_window_to      = ''
   if (cfg.date_window_from) parseWinExprInto(cfg.date_window_from, winFrom)
   if (cfg.date_window_to)   parseWinExprInto(cfg.date_window_to,   winTo)
-  if (cfg.value             == null) cfg.value             = '1'
+  if (cfg.value             == null) cfg.value             = timerValueDefault(props.dpDataType)
   // ANWESENHEITSSIMULATION defaults + select sync
   if (cfg.offset_override      === undefined) cfg.offset_override      = null
   if (cfg.on_presence_override === undefined) cfg.on_presence_override = null

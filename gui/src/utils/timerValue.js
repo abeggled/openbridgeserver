@@ -71,6 +71,27 @@ export function timerValueHintKey(dataType) {
   return `adapters.bindingForm.ztOutputValueHint_${timerValueInputKind(dataType)}`
 }
 
+/**
+ * A switching value the target type accepts, for a freshly created schedule point.
+ *
+ * The stored config is what fires — an omitted value gets the adapter's own `"1"`,
+ * which no temporal object can hold, so the API rejects such a point on save
+ * instead of dropping its event at every firing. Seeding a valid literal keeps
+ * "add schedule point" a single click and the editor free of an error the user
+ * did not cause. The date is *today* in local time, the most useful starting
+ * point and the one the native picker shows anyway.
+ */
+export function timerValueDefault(dataType, now = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  switch (timerValueInputKind(dataType)) {
+    case 'date':     return today
+    case 'time':     return '00:00:00'
+    case 'datetime': return `${today}T00:00:00`
+    default:         return '1'
+  }
+}
+
 /** HTML `step` attribute for numeric inputs. */
 export function timerValueStep(dataType) {
   return timerValueInputKind(dataType) === 'integer' ? '1' : 'any'

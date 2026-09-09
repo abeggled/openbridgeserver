@@ -230,6 +230,43 @@ describe('BindingForm — ZEITSCHALTUHR create submit', () => {
     w.unmount()
   })
 
+  // Codex review on PR #1155: der bisherige Startwert "1" passt zu keinem
+  // DATE/TIME/DATETIME-Objekt — die API weist so einen Schaltpunkt jetzt ab.
+  it.each([
+    ['DATE', /^\d{4}-\d{2}-\d{2}$/],
+    ['TIME', /^00:00:00$/],
+    ['DATETIME', /^\d{4}-\d{2}-\d{2}T00:00:00$/],
+    ['FLOAT', /^1$/],
+  ])('seeds a new %s schedule point with a value that type accepts', async (dataType, shape) => {
+    const w = await mountForm({ dpDataType: dataType })
+    await selectInstance(w, 'zt-1')
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toMatch(shape)
+    w.unmount()
+  })
+
+  // Ein Altbestand mit ausdrücklich leerem `value` bekommt beim Laden denselben
+  // typgerechten Startwert — ein ganz fehlender Schlüssel behält ihn ohnehin,
+  // weil der reaktive Default bereits typgerecht gesetzt ist.
+  it('seeds a stored config whose value is null', async () => {
+    const w = await mountForm({
+      dpDataType: 'DATE',
+      initial: {
+        id: 'b1',
+        adapter_type: 'ZEITSCHALTUHR',
+        adapter_instance_id: 'zt-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { timer_type: 'daily', time_ref: 'absolute', hour: 8, minute: 0, value: null },
+      },
+    })
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    w.unmount()
+  })
+
   // Codex review on PR #1155: `buildConfig()` ersetzt einen leeren Schaltwert
   // durch den Default "1" — geprüft werden muss der Rohwert, sonst wird ein
   // Wert gespeichert, den niemand eingegeben hat.

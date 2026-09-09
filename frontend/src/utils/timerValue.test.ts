@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   timerValueAsBool,
+  timerValueDefault,
   timerValueFitsNativeInput,
   timerValueHintKey,
   timerValueInputKind,
@@ -328,6 +329,38 @@ describe('validateTimerValue — INTEGER magnitude (Codex review, PR #1155)', ()
   // Zero carries its exponent but converts instantly — the cap must exempt it.
   it.each(['0e5000', '0e-5000', '0'])('accepts the zero literal %s', (raw) => {
     expect(validateTimerValue(raw, 'INTEGER')).toBeNull()
+  })
+})
+
+describe('timerValueDefault', () => {
+  // Codex review on PR #1155: a schedule point saved without a value fires with
+  // the adapter's "1", which no temporal object can hold — the API rejects it, so
+  // a fresh point has to start from a literal its target type accepts.
+  const NOW = new Date(2026, 8, 9)
+
+  it.each([
+    ['DATE', '2026-09-09'],
+    ['TIME', '00:00:00'],
+    ['DATETIME', '2026-09-09T00:00:00'],
+    ['BOOLEAN', '1'],
+    ['INTEGER', '1'],
+    ['FLOAT', '1'],
+    ['STRING', '1'],
+    ['UNKNOWN', '1'],
+  ])('returns %s for a %s object', (dataType, expected) => {
+    expect(timerValueDefault(dataType, NOW)).toBe(expected)
+  })
+
+  it.each(['DATE', 'TIME', 'DATETIME', 'BOOLEAN', 'INTEGER', 'FLOAT', 'STRING', 'UNKNOWN'])(
+    'returns a value the %s validator accepts',
+    (dataType) => {
+      expect(validateTimerValue(timerValueDefault(dataType), dataType)).toBeNull()
+    },
+  )
+
+  it('pads month and day, and reads the local date rather than UTC', () => {
+    // 2026-01-05 00:30 local — a UTC-based date would slip to the 4th west of Greenwich.
+    expect(timerValueDefault('DATE', new Date(2026, 0, 5, 0, 30))).toBe('2026-01-05')
   })
 })
 

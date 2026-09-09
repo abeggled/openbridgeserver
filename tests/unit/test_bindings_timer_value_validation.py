@@ -35,8 +35,26 @@ class TestValidateTimerOutputValue:
     def test_other_adapter_type_is_skipped(self):
         _validate({"value": "abc"}, SimpleNamespace(data_type="FLOAT"), adapter_type="KNX")
 
-    def test_missing_value_key_is_skipped(self):
-        _validate({"timer_type": "daily"}, SimpleNamespace(data_type="DATE"))
+    def test_omitted_value_is_validated_against_the_adapter_default(self):
+        """Codex review on PR #1155 — an omitted value is not "no value".
+
+        Both routes store the config as sent and the adapter fills in its own default
+        ("1") when the point fires, so a DATE target has to be rejected here instead of
+        having the event dropped at every firing.
+        """
+        with pytest.raises(HTTPException) as exc:
+            _validate({"timer_type": "daily"}, SimpleNamespace(data_type="DATE"))
+        assert exc.value.status_code == 422
+        assert "DATE" in exc.value.detail
+
+    def test_omitted_value_passes_when_the_default_fits_the_target(self):
+        """The default is a valid BOOLEAN/numeric literal — only temporal types reject it."""
+        _validate({"timer_type": "daily"}, SimpleNamespace(data_type="BOOLEAN"))
+        _validate({"timer_type": "daily"}, SimpleNamespace(data_type="FLOAT"))
+
+    def test_omitted_value_on_a_meta_binding_is_still_skipped(self):
+        """A meta binding publishes its metadata, never the switching value."""
+        _validate({"timer_type": "meta"}, SimpleNamespace(data_type="DATE"))
 
     def test_meta_binding_is_skipped(self):
         _validate({"timer_type": "meta", "value": "abc"}, SimpleNamespace(data_type="FLOAT"))
