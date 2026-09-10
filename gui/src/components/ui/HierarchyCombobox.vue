@@ -50,6 +50,16 @@ const { t } = useI18n()
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
   placeholder: { type: String, default: null },
+  // Off by default — every existing consumer (DataPoints, KNX devices,
+  // ringbuffer filter sets) links to an actual folder node, and a tree's
+  // implicit root node (#1217 follow-up) is deliberately excluded from
+  // `GET /hierarchy/trees/{id}/nodes` everywhere so it never shows up as a
+  // folder duplicating the tree's own name. The Logic "New sheet" dialog is
+  // the first consumer that also needs the tree's own top level selectable
+  // (drag-and-drop onto a tree's header already allows the same thing in
+  // Settings → Hierarchy) — opt in per instance rather than changing the
+  // shared default.
+  includeTreeRoots: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -130,6 +140,32 @@ function flattenNested(nested) {
   return out
 }
 
+/**
+ * Represents a tree's own top level as a selectable item — same composite-id
+ * shape as a real node (`${tree.id}:${tree.root_node_id}`, see
+ * `parseHierarchyCompositeId`) so it round-trips through the exact same
+ * modelValue/link-creation path a real node would. `path`/`display_path` are
+ * the tree name alone, so it renders as just "Beschattung" — distinct from
+ * "Beschattung › Foo" — and is never mistaken for a real child folder.
+ */
+function buildTreeRootItem(tree) {
+  return {
+    id: `${tree.id}:${tree.root_node_id}`,
+    tree_id: tree.id,
+    tree_name: tree.name,
+    display_depth: normalizeHierarchyDisplayDepth(tree.display_depth),
+    display_path: [tree.name],
+    display_indent: 0,
+    displayable: true,
+    node_id: tree.root_node_id,
+    path: [],
+    full_path: [tree.name],
+    full_label: tree.name,
+    is_leaf: false,
+    label: tree.name,
+  }
+}
+
 async function load() {
   try {
     const { data: trees } = await hierarchyApi.listTrees()
@@ -140,10 +176,15 @@ async function load() {
       trees.map(async (tree) => {
         try {
           const { data: tn } = await hierarchyApi.getTreeNodes(tree.id)
+          const treeNodes = []
+          if (props.includeTreeRoots && tree.root_node_id) {
+            treeNodes.push(buildTreeRootItem(tree))
+          }
           if (Array.isArray(tn)) {
             const flat = flattenNested(tn)
-            allNodes.push(...buildPathsForTree(tree, flat))
+            treeNodes.push(...buildPathsForTree(tree, flat))
           }
+          allNodes.push(...treeNodes)
         } catch {
           /* swallow per-tree errors */
         }

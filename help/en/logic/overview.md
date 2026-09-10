@@ -11,9 +11,12 @@ independent graph with its own active/inactive state.
 
 ## Toolbar {#logic-toolbar}
 
-- **Logic sheet selector** — switches between existing graphs; disabled graphs are marked
-  accordingly.
-- **+ New** / **Save** — creates a new logic sheet or saves changes to the current one.
+- **Logic sheet selector** — opens a picker that offers the assigned hierarchies for
+  click-through, level by level; logic sheets with no assignment appear in their own
+  "Unassigned" folder. Disabled graphs are marked accordingly. The picker's "Organize
+  graphs" button leads to hierarchy management (Settings → Hierarchy).
+- **+ New** / **Save** — creates a new logic sheet (see [New logic sheet](#logic-new-sheet))
+  or saves changes to the current one.
 - **▶ Run** — checks permissions and runs the graph once, manually (only possible for
   enabled graphs).
 - **Debug** — toggles debug mode: after each run, every block shows its last computed
@@ -32,6 +35,16 @@ independent graph with its own active/inactive state.
   logic sheet from such a file — useful for backing up or transferring individual graphs
   between installations.
 - **Delete** — deletes the logic sheet irreversibly.
+
+## New logic sheet {#logic-new-sheet}
+
+The dialog for creating a new logic sheet asks for a name, an optional description, and an
+optional "Hierarchy nodes" search field (the same element used for filter sets in the
+Monitor area). It lets the new logic sheet be assigned to one or more hierarchy positions
+right when it's created — either a hierarchy's own top level (e.g. "Shading") or one of its
+sub-nodes (e.g. "Shading › Ground floor"). Left empty, the new logic sheet lands at the top
+level under "Unassigned" as usual — the assignment can always be changed later via
+Settings → Hierarchy by drag & drop.
 
 ## Canvas {#logic-canvas}
 

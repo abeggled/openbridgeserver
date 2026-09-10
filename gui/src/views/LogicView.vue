@@ -224,7 +224,10 @@
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="sm">
+    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="xl">
+      <template #header-actions>
+        <HelpButton help-id="logic-new-sheet" />
+      </template>
       <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
         <div class="form-group">
           <label class="label">{{ $t('logic.name') }}</label>
@@ -236,7 +239,7 @@
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.hierarchyNodes') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
-          <HierarchyCombobox v-model="newGraphHierarchyNodes" data-testid="new-graph-hierarchy" />
+          <HierarchyCombobox v-model="newGraphHierarchyNodes" include-tree-roots data-testid="new-graph-hierarchy" />
           <p class="text-xs text-slate-500 mt-1">{{ $t('logic.hierarchyNodesHint') }}</p>
         </div>
         <div class="flex justify-end gap-3">

@@ -194,4 +194,62 @@ describe('HierarchyCombobox', () => {
     const html = chips[0].html()
     expect(html).toContain('Küche')
   })
+
+  it('offers the tree root as its own selectable item when includeTreeRoots is set', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [], includeTreeRoots: true },
+      {
+        trees: [{ id: 1, name: 'Beschattung', root_node_id: 100 }],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    const labels = items.map((i) => i.text())
+    // The tree root ("Beschattung" alone) and its child ("Beschattung › Foo")
+    // must both be selectable — the graph can be linked to either.
+    expect(labels.some((l) => l.includes('Beschattung') && !l.includes('Foo'))).toBe(true)
+    expect(labels.some((l) => l.includes('Foo'))).toBe(true)
+
+    await wrapper.find('[data-testid="combobox-item-0"]').trigger('click')
+    const events = wrapper.emitted('update:modelValue')
+    expect(events[events.length - 1][0]).toEqual(['1:100'])
+  })
+
+  it('does not offer the tree root when includeTreeRoots is left off (default)', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [] },
+      {
+        trees: [{ id: 1, name: 'Beschattung', root_node_id: 100 }],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    expect(items.length).toBe(1)
+    expect(items[0].text()).toContain('Foo')
+  })
+
+  it('skips the synthetic root item when includeTreeRoots is set but the tree has no root_node_id', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [], includeTreeRoots: true },
+      {
+        trees: [{ id: 1, name: 'Beschattung' }],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    expect(items.length).toBe(1)
+    expect(items[0].text()).toContain('Foo')
+  })
 })
