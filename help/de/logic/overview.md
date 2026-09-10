@@ -11,10 +11,13 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
 
 ## Werkzeugleiste {#logic-toolbar}
 
-- **Logikblatt-Auswahl** — wechselt zwischen den vorhandenen Graphen; deaktivierte Graphen
-  sind entsprechend gekennzeichnet.
-- **+ Neu** / **Speichern** — legt ein neues Logikblatt an bzw. speichert Änderungen am
-  aktuellen.
+- **Logikblatt-Auswahl** — öffnet einen Auswahldialog, der die zugeordneten Hierarchien
+  Ebene für Ebene zum Durchklicken anbietet; Logikblätter ohne Zuordnung erscheinen dort in
+  einem eigenen Ordner „Nicht zugeordnet". Deaktivierte Graphen sind entsprechend
+  gekennzeichnet. Der Button „Logiken organisieren" im Dialog führt zur
+  Hierarchie-Verwaltung (Einstellungen → Hierarchie).
+- **+ Neu** / **Speichern** — legt ein neues Logikblatt an (siehe [Neues Logikblatt](#logic-new-sheet))
+  bzw. speichert Änderungen am aktuellen.
 - **▶ Ausführen** — prüft Berechtigungen und führt den Graphen einmalig manuell aus (nur
   bei aktivierten Graphen möglich).
 - **Debug** — schaltet den Debug-Modus um: nach jeder Ausführung zeigt jeder Block seine
@@ -35,6 +38,17 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
   aus einer solchen Datei ein neues Logikblatt an — nützlich zum Sichern oder Übertragen
   einzelner Graphen zwischen Installationen.
 - **Löschen** — löscht das Logikblatt unwiderruflich.
+
+## Neues Logikblatt {#logic-new-sheet}
+
+Der Dialog zum Anlegen eines neuen Logikblatts fragt Name, optionale Beschreibung sowie ein
+optionales Suchfeld „Hierarchie-Knoten" ab (dasselbe Element wie bei den Filtersets im
+Monitor-Bereich). Darüber lässt sich das neue Logikblatt direkt bei der Anlage einer oder
+mehreren Hierarchie-Positionen zuordnen — sowohl der obersten Ebene einer Hierarchie selbst
+(z. B. „Beschattung") als auch einem ihrer Unterknoten (z. B. „Beschattung › Erdgeschoss").
+Bleibt das Feld leer, landet das neue Logikblatt wie gewohnt auf oberster Ebene bei „Nicht
+zugeordnet" — die Zuordnung lässt sich jederzeit nachträglich über Einstellungen →
+Hierarchie per Drag & Drop ändern.
 
 ## Arbeitsfläche {#logic-canvas}
 

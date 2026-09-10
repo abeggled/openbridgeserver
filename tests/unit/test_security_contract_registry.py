@@ -48,7 +48,7 @@ async def _helper_audited_endpoint(_admin=Depends(get_admin_user)) -> None:
 def test_every_config_mutation_has_exactly_one_security_and_audit_contract() -> None:
     expected = {signature for signature, category in ROUTE_CLASSIFICATIONS.items() if category == "config_mutation"}
     assert set(ROUTE_SECURITY_CONTRACTS) == expected
-    assert len(ROUTE_SECURITY_CONTRACTS) == 110
+    assert len(ROUTE_SECURITY_CONTRACTS) == 113
 
 
 def test_admin_archive_and_device_mutations_declare_result_contracts() -> None:

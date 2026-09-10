@@ -234,6 +234,27 @@ export async function apiDeleteIcons(names: string[]): Promise<void> {
   await apiDeleteWithBody('/api/v1/icons/', { names })
 }
 
+/**
+ * Open a Logic graph by id in the Logic editor via the graph-picker popup
+ * (#1217 — replaced the old `<select data-testid="select-graph">` dropdown
+ * with a "open graph" button + a drill-down folder browser). Assumes the
+ * graph is unlinked from any hierarchy, which holds for every graph these
+ * E2E tests create through the API — it is therefore only reachable via the
+ * "Nicht zugeordnet" pseudo-folder at the picker's root level.
+ *
+ * Waits for the modal's backdrop to fully disappear before returning — its
+ * 150ms leave transition (`Modal.vue`) otherwise still overlays the canvas
+ * for a moment after `pick()` sets the modal closed, which is invisible to
+ * a plain click but can swallow a caller's immediately-following pointer
+ * gesture (e.g. a Shift-drag box-select) if it starts inside that window.
+ */
+export async function openLogicGraph(page: Page, graphId: string): Promise<void> {
+  await page.click('[data-testid="btn-open-graph-picker"]')
+  await page.click('[data-testid="picker-unassigned"]')
+  await page.click(`[data-testid="picker-graph-${graphId}"]`)
+  await expect(page.locator('[data-testid="graph-picker-breadcrumb"]')).toBeHidden()
+}
+
 export async function apiDeleteWithBody(path: string, body: unknown): Promise<unknown> {
   const token = await getToken()
   const res = await fetch(`${BASE_URL}${path}`, {

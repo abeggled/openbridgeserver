@@ -699,6 +699,9 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("DELETE", "/api/v1/hierarchy/nodes/{node_id}"): _admin("hierarchy_node", "hierarchy.node.deleted"),
     ("POST", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.created"),
     ("DELETE", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.deleted"),
+    ("POST", "/api/v1/hierarchy/logic-graph-links"): _admin("hierarchy_link", "hierarchy.logic_graph_link.created"),
+    ("DELETE", "/api/v1/hierarchy/logic-graph-links"): _admin("hierarchy_link", "hierarchy.logic_graph_link.deleted"),
+    ("DELETE", "/api/v1/hierarchy/logic-graph-links/{link_id}"): _admin("hierarchy_link", "hierarchy.logic_graph_link.deleted_by_id"),
     ("POST", "/api/v1/hierarchy/import-from-ets"): _admin(
         "hierarchy",
         "hierarchy.ets_imported",

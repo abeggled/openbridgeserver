@@ -5,7 +5,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { apiPost, apiDelete, apiGet } from '../helpers'
+import { apiPost, apiDelete, apiGet, openLogicGraph } from '../helpers'
 
 // ── API-Helpers ───────────────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ async function findCopyGraphId(originalName: string): Promise<string | null> {
 async function gotoLogicWithGraph(page: any, graphId: string) {
   await page.goto('/logic')
   await page.waitForLoadState('networkidle')
-  await page.selectOption('[data-testid="select-graph"]', graphId)
+  await openLogicGraph(page, graphId)
   // Warten bis loadGraph abgeschlossen (Button erscheint erst nach activeGraphId != '')
   await expect(page.locator('[data-testid="btn-duplicate"]')).toBeVisible({ timeout: 5_000 })
 }

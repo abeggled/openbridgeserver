@@ -1783,6 +1783,8 @@
     "imported": "Graph “{name}” imported",
     "errorImport": "Invalid or corrupt export file",
     "newGraphPlaceholder": "e.g. Living Room Lights",
+    "hierarchyNodes": "Hierarchy nodes",
+    "hierarchyNodesHint": "Optional — assign to one or more Logic hierarchy nodes right away. Left empty, the sheet stays unassigned as before.",
     "notSelected": "— not selected —",
     "filterBadge": "Filter / transformation active",
     "negatePort": "Negate {id}",
@@ -2562,6 +2564,20 @@
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",
       "ical": "Loads an iCal/ICS file from a URL and evaluates events. The RAW output delivers the raw calendar text. Each filter provides 4 outputs: Array (all events), Next date, Tomorrow (bool), Today (bool). Filters can be applied to Summary, Location and/or Description.",
       "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution."
+    },
+    "graphPicker": {
+      "title": "Open Logic",
+      "breadcrumbRoot": "All Hierarchies",
+      "noTrees": "No hierarchies exist yet.",
+      "unassigned": "Unassigned",
+      "empty": "This folder is empty.",
+      "organize": "Organize logic graphs",
+      "loading": "Loading …",
+      "errorLoading": "Could not load.",
+      "removeHere": "remove here",
+      "removeHereTitle": "Removes the logic sheet only from this hierarchy position. If this was its last position, the logic sheet reappears at the top under \"Unassigned\".",
+      "deleteHereTitle": "This logic sheet has no hierarchy assignment — deleting it here removes it irreversibly.",
+      "deleteConfirm": "The logic graph \"{name}\" will be deleted irreversibly."
     }
   },
   "authzPreflight": {
@@ -3293,7 +3309,7 @@
     "noFileSelected": "No file selected"
   },
   "hierarchy": {
-    "title": "Device structure",
+    "title": "Hierarchies",
     "deleteNode": "Delete branch",
     "newHierarchy": "New hierarchy",
     "importFromEts": "Import from ETS",
@@ -3363,7 +3379,18 @@
       "trades": "Trades",
       "mid": "Middle groups",
       "flat": "Flat (GA only)"
-    }
+    },
+    "logicGraphsTitle": "Logic graphs",
+    "logicGraphsEmpty": "No logic graphs yet.",
+    "logicGraphsHint": "Drag a logic graph onto a folder to file it there.",
+    "unlinkLogicGraph": "Remove link",
+    "linkLogicGraphError": "Could not link the logic graph.",
+    "unlinkLogicGraphError": "Could not remove the link.",
+    "loadLogicGraphsError": "Could not load linked logic graphs.",
+    "addChildNode": "Add child node",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "renameNode": "Rename"
   },
   "topbar": {
     "logout": "Sign out"

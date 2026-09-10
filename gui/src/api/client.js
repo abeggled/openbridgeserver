@@ -188,6 +188,20 @@ export const hierarchyApi = {
   createLink:   (data)          => api.post('/hierarchy/links', data),
   deleteLink:   (nodeId, dpId)  => api.delete('/hierarchy/links', { params: { node_id: nodeId, datapoint_id: dpId } }),
 
+  // Logic-graph links (#1217) — purely organizational, no authz inheritance
+  getNodeLogicGraphs:   (nodeId)     => api.get(`/hierarchy/nodes/${nodeId}/logic-graphs`),
+  getLogicGraphNodes:   (graphId)    => api.get(`/hierarchy/logic-graphs/${graphId}/nodes`),
+  createLogicGraphLink: (data)       => api.post('/hierarchy/logic-graph-links', data),
+  deleteLogicGraphLink: (nodeId, graphId) => api.delete('/hierarchy/logic-graph-links', { params: { node_id: nodeId, graph_id: graphId } }),
+  // By link_id rather than node_id+graph_id — used by the "open graph" picker
+  // (GraphPickerModal), which already has link_id per row from browse() and
+  // would otherwise have to resolve the node_id of whichever level it is
+  // currently showing (a tree's own root included).
+  deleteLogicGraphLinkById: (linkId) => api.delete(`/hierarchy/logic-graph-links/${linkId}`),
+
+  // Drill-down navigation for the Logic editor's "open" popup (#1217)
+  browse: (params = {}) => api.get('/hierarchy/browse', { params }),
+
   // Node search (for DP detail view)
   searchNodes:   (q = '', limit = 30) => api.get('/hierarchy/nodes/search', { params: { q, limit } }),
 

@@ -10,14 +10,15 @@
              titleSpacerClass), so the dropdown lines up with the canvas
              instead of crowding the title. -->
         <h2 :class="[titleSpacerClass, 'flex-shrink-0 overflow-hidden whitespace-nowrap text-sm font-bold text-slate-800 dark:text-slate-100']">{{ $t('logic.title') }}</h2>
-        <!-- Logikblatt selector -->
-        <select ref="graphSelectEl" v-model="activeGraphId" @change="loadGraph"
-          class="input text-xs py-1 px-2 flex-shrink-0"
-          :style="{ width: graphSelectWidthCh + 'ch', maxWidth: '280px' }"
-          data-testid="select-graph">
-          <option value="">{{ $t('logic.selectGraph') }}</option>
-          <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : $t('logic.graphDisabledSuffix') }}</option>
-        </select>
+        <!-- Logikblatt-Auswahl: Ordner-Navigation statt flacher Liste (#1217) -->
+        <button type="button" @click="showGraphPicker = true" class="btn-secondary btn-sm flex-shrink-0 max-w-[280px] truncate" data-testid="btn-open-graph-picker">
+          {{ activeGraph ? activeGraph.name : $t('logic.selectGraph') }}
+        </button>
+        <GraphPickerModal
+          v-model="showGraphPicker"
+          @select="onGraphPicked"
+          @graph-deleted="onGraphDeletedFromPicker"
+        />
         <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
         <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
@@ -224,7 +225,10 @@
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="sm">
+    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="xl">
+      <template #header-actions>
+        <HelpButton help-id="logic-new-sheet" />
+      </template>
       <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
         <div class="form-group">
           <label class="label">{{ $t('logic.name') }}</label>
@@ -233,6 +237,11 @@
         <div class="form-group">
           <label class="label">{{ $t('logic.description') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
           <input v-model="newGraphDesc" type="text" class="input" />
+        </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.hierarchyNodes') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
+          <HierarchyCombobox v-model="newGraphHierarchyNodes" include-tree-roots data-testid="new-graph-hierarchy" />
+          <p class="text-xs text-slate-500 mt-1">{{ $t('logic.hierarchyNodesHint') }}</p>
         </div>
         <div class="flex justify-end gap-3">
           <button type="button" @click="showNewGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
@@ -295,7 +304,7 @@ import '@vue-flow/node-resizer/dist/style.css'
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore }     from '@/stores/auth'
-import { logicApi }        from '@/api/client'
+import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
@@ -303,6 +312,9 @@ import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
+import GraphPickerModal    from '@/components/logic/GraphPickerModal.vue'
+import HierarchyCombobox   from '@/components/ui/HierarchyCombobox.vue'
+import { parseHierarchyCompositeId } from '@/utils/hierarchyDisplay'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
 import HelpButton          from '@/components/ui/HelpButton.vue'
@@ -451,41 +463,22 @@ const nodeTypeComponents = {
 const activeGraphId = ref('')
 const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraphId.value))
 
-// Sized to the longest visible option text (in `ch` units) so the graph-name
-// select never shrinks below what's needed to show the selected name — a flex
-// item's default min-width:auto lets a <select> collapse to just its dropdown
-// arrow under space pressure otherwise, hiding the graph name entirely.
-const graphSelectEl = ref(null)
-let _measureCtx // lazily created, reused across computations
-// 1ch is only as wide as the "0" glyph — in a proportional font a shorter
-// but wide-glyph name (e.g. many uppercase letters, CJK) can need more
-// pixels than a longer narrow-glyph one, so plain text.length undercounts
-// it and clips the option text (Codex review on PR #1172). Measuring against
-// the select's own computed font gives the real rendered width instead.
-function measureTextPx(text, font) {
-  if (_measureCtx === undefined) {
-    _measureCtx = document.createElement('canvas').getContext('2d')
-  }
-  if (!_measureCtx) return null
-  _measureCtx.font = font
-  return _measureCtx.measureText(text).width
+// Ordner-Navigation statt Dropdown (#1217): das Popup meldet die gewählte
+// Logik über ein Event statt v-model auf activeGraphId, damit derselbe Weg
+// wie bei der bisherigen <select @change="loadGraph"> genommen wird — nur
+// der Auslöser ändert sich.
+const showGraphPicker = ref(false)
+function onGraphPicked(graphId) {
+  activeGraphId.value = graphId
+  loadGraph()
 }
-
-const graphSelectWidthCh = computed(() => {
-  const texts = [
-    t('logic.selectGraph'),
-    ...store.graphs.map(g => g.name + (g.enabled ? '' : t('logic.graphDisabledSuffix'))),
-  ]
-  const el = graphSelectEl.value
-  const font = el ? getComputedStyle(el).font : ''
-  const chPx = font ? measureTextPx('0', font) : null
-  if (chPx) {
-    const widestPx = texts.reduce((max, text) => Math.max(max, measureTextPx(text, font)), 0)
-    return Math.min(Math.max(Math.ceil(widestPx / chPx), 12), 40)
-  }
-  const longest = texts.reduce((max, text) => Math.max(max, text.length), 0)
-  return Math.min(Math.max(longest, 12), 40)
-})
+// The picker's own "Löschen" (unassigned pseudo-folder) deletes the graph
+// itself — if that happened to be the one currently open here, close it too.
+function onGraphDeletedFromPicker(graphId) {
+  if (activeGraphId.value !== graphId) return
+  activeGraphId.value = ''
+  nodes.value = []; edges.value = []
+}
 
 // ── Edge options — animated only when graph is enabled ─────────────────────
 const defaultEdgeOptions = computed(() => {
@@ -1047,16 +1040,29 @@ watch(activeGraphId, () => {
 const showNewGraph  = ref(false)
 const newGraphName  = ref('')
 const newGraphDesc  = ref('')
+const newGraphHierarchyNodes = ref([]) // composite "tree_id:node_id" strings — optional, unassigned when empty
 
 function newGraph() {
   if (!auth.isAdmin) return
   newGraphName.value = ''
   newGraphDesc.value = ''
+  newGraphHierarchyNodes.value = []
   showNewGraph.value = true
 }
 async function doCreateGraph() {
   if (!auth.isAdmin) return
   const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
+  // Optional: link the new graph into the picked hierarchy node(s) right away —
+  // matches the many-to-many model #1217 already established (0, 1 or several
+  // nodes). Best-effort: a link failure must not block the graph having been
+  // created, it would just stay reachable via "Nicht zugeordnet" instead.
+  await Promise.all(
+    newGraphHierarchyNodes.value.map((compositeId) => {
+      const parsed = parseHierarchyCompositeId(compositeId)
+      if (!parsed) return null
+      return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: g.id }).catch(() => {})
+    }),
+  )
   showNewGraph.value = false
   activeGraphId.value = g.id
   nodes.value = []; edges.value = []
