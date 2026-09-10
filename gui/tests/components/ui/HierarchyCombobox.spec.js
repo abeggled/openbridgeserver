@@ -252,4 +252,49 @@ describe('HierarchyCombobox', () => {
     expect(items.length).toBe(1)
     expect(items[0].text()).toContain('Foo')
   })
+
+  it('sorts hierarchy items alphabetically regardless of per-tree fetch order', async () => {
+    const trees = [
+      { id: 1, name: 'Zeta', root_node_id: 100 },
+      { id: 2, name: 'Alpha', root_node_id: 200 },
+    ]
+    const nodesByTree = {
+      1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Baum' }],
+      2: [{ id: 21, tree_id: 2, parent_id: null, name: 'Baum' }],
+    }
+    const hierarchyApi = {
+      listTrees: vi.fn().mockResolvedValue({ data: trees }),
+      // Tree 1 ("Zeta") resolves LAST even though it's listed first, so a
+      // correct final order can only come from an explicit sort — not from
+      // Promise.all push order, which would follow resolution timing.
+      getTreeNodes: vi.fn().mockImplementation((tid) => {
+        const delay = tid === 1 ? 20 : 0
+        return new Promise((resolve) => setTimeout(() => resolve({ data: nodesByTree[tid] ?? [] }), delay))
+      }),
+    }
+    vi.doMock('@/api/client', () => ({ hierarchyApi }))
+    const mod = await import('@/components/ui/HierarchyCombobox.vue')
+    const wrapper = mount(mod.default, {
+      props: { modelValue: [], includeTreeRoots: true },
+      attachTo: document.body,
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    await flushPromises()
+
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const labels = wrapper.findAll('[data-testid^="combobox-item-"]').map((i) => i.text())
+
+    const alphaIdx = labels.findIndex((l) => l.includes('Alpha') && !l.includes('Baum'))
+    const alphaChildIdx = labels.findIndex((l) => l.includes('Alpha') && l.includes('Baum'))
+    const zetaIdx = labels.findIndex((l) => l.includes('Zeta') && !l.includes('Baum'))
+    const zetaChildIdx = labels.findIndex((l) => l.includes('Zeta') && l.includes('Baum'))
+
+    // "Alpha" (root + child) sorts entirely before "Zeta" (root + child),
+    // and each tree's own root sorts right above its own child.
+    expect(alphaIdx).toBeGreaterThanOrEqual(0)
+    expect(alphaIdx).toBeLessThan(alphaChildIdx)
+    expect(alphaChildIdx).toBeLessThan(zetaIdx)
+    expect(zetaIdx).toBeLessThan(zetaChildIdx)
+  })
 })

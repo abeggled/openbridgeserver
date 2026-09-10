@@ -190,6 +190,13 @@ async function load() {
         }
       }),
     )
+    // Trees are fetched concurrently (Promise.all), so push order reflects
+    // network timing, not tree order — sort explicitly. full_label ("Baum ›
+    // Pfad") already matches the codebase's established hierarchy sort key
+    // (see UserRightsEditor.vue's nodesWithPaths), and a parent's full_label
+    // is always a string-prefix of its children's, so this keeps a tree's
+    // own root right above its children instead of interleaving trees.
+    allNodes.sort((a, b) => a.full_label.localeCompare(b.full_label))
     nodes.value = allNodes
   } catch {
     nodes.value = []
