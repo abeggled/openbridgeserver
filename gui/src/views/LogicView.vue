@@ -17,6 +17,7 @@
         <GraphPickerModal
           v-model="showGraphPicker"
           @select="onGraphPicked"
+          @graph-deleted="onGraphDeletedFromPicker"
         />
         <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
         <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving" data-testid="btn-save">
@@ -470,6 +471,13 @@ const showGraphPicker = ref(false)
 function onGraphPicked(graphId) {
   activeGraphId.value = graphId
   loadGraph()
+}
+// The picker's own "Löschen" (unassigned pseudo-folder) deletes the graph
+// itself — if that happened to be the one currently open here, close it too.
+function onGraphDeletedFromPicker(graphId) {
+  if (activeGraphId.value !== graphId) return
+  activeGraphId.value = ''
+  nodes.value = []; edges.value = []
 }
 
 // ── Edge options — animated only when graph is enabled ─────────────────────

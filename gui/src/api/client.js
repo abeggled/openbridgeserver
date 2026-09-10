@@ -193,6 +193,11 @@ export const hierarchyApi = {
   getLogicGraphNodes:   (graphId)    => api.get(`/hierarchy/logic-graphs/${graphId}/nodes`),
   createLogicGraphLink: (data)       => api.post('/hierarchy/logic-graph-links', data),
   deleteLogicGraphLink: (nodeId, graphId) => api.delete('/hierarchy/logic-graph-links', { params: { node_id: nodeId, graph_id: graphId } }),
+  // By link_id rather than node_id+graph_id — used by the "open graph" picker
+  // (GraphPickerModal), which already has link_id per row from browse() and
+  // would otherwise have to resolve the node_id of whichever level it is
+  // currently showing (a tree's own root included).
+  deleteLogicGraphLinkById: (linkId) => api.delete(`/hierarchy/logic-graph-links/${linkId}`),
 
   // Drill-down navigation for the Logic editor's "open" popup (#1217)
   browse: (params = {}) => api.get('/hierarchy/browse', { params }),

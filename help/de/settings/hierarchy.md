@@ -40,6 +40,14 @@ Im Logikeditor führt der Button „Logik öffnen" zu einem Auswahldialog, der d
 Ebene für Ebene zum Durchklicken anbietet. Logiken ohne jede Zuordnung erscheinen dort in einem
 eigenen Ordner „Nicht zugeordnet" auf oberster Ebene.
 
+Direkt in diesem Auswahldialog lässt sich eine Zuordnung auch wieder entfernen: Jede Logik
+zeigt dort rechts einen Button „hier entfernen", der nur die Verknüpfung zur aktuell
+durchsuchten Position löst — andere Zuordnungen derselben Logik in anderen Ordnern oder
+Hierarchien bleiben unberührt. War dies die letzte Zuordnung, erscheint die Logik danach unter
+„Nicht zugeordnet". Bei Logiken, die bereits dort liegen, zeigt derselbe Button stattdessen
+„Löschen" an, da es keine Zuordnung mehr zu entfernen gibt — ein Klick darauf löscht die Logik
+nach einer Sicherheitsabfrage vollständig und unwiderruflich.
+
 Zum Einsortieren gibt es hier in den Einstellungen eine Logik-Palette: Eine Logik von dort auf
 einen Knoten ziehen verknüpft sie dort — bestehende Verknüpfungen in anderen Ordnern oder
 Hierarchien bleiben davon unberührt. Wird eine Logik direkt auf den Titel einer Hierarchie

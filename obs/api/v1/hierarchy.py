@@ -21,6 +21,7 @@ Endpoints:
   GET    /hierarchy/logic-graphs/{graph_id}/nodes → Knoten einer Logik (alle Bäume)
   POST   /hierarchy/logic-graph-links             → Logik-Knoten-Link anlegen
   DELETE /hierarchy/logic-graph-links             → Logik-Knoten-Link entfernen
+  DELETE /hierarchy/logic-graph-links/{link_id}   → Logik-Knoten-Link per ID entfernen
   GET    /hierarchy/browse                        → Drill-down-Navigation für den Logik-Öffnen-Dialog
 
   POST   /hierarchy/import-from-ets               → Baum aus ETS-GA-Struktur erzeugen
@@ -854,6 +855,27 @@ async def delete_logic_graph_link(
     await db.execute_and_commit(
         "DELETE FROM hierarchy_logic_graph_links WHERE node_id=? AND graph_id=?",
         (node_id, graph_id),
+    )
+
+
+@router.delete(
+    "/logic-graph-links/{link_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(contract_audit("DELETE", "/api/v1/hierarchy/logic-graph-links/{link_id}"))],
+)
+async def delete_logic_graph_link_by_id(
+    link_id: str,
+    _user: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> None:
+    """Remove one link by its own id — used by the Logic editor's "open" popup
+    (#1217 follow-up) to unlink a graph from the hierarchy position it is
+    currently being browsed under, without the picker having to resolve a
+    node_id for whichever level it happens to be showing (a tree's own root
+    included)."""
+    await db.execute_and_commit(
+        "DELETE FROM hierarchy_logic_graph_links WHERE id=?",
+        (link_id,),
     )
 
 

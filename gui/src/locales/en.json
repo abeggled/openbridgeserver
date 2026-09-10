@@ -2573,7 +2573,11 @@
       "empty": "This folder is empty.",
       "organize": "Organize logic graphs",
       "loading": "Loading …",
-      "errorLoading": "Could not load."
+      "errorLoading": "Could not load.",
+      "removeHere": "remove here",
+      "removeHereTitle": "Removes the logic sheet only from this hierarchy position. If this was its last position, the logic sheet reappears at the top under \"Unassigned\".",
+      "deleteHereTitle": "This logic sheet has no hierarchy assignment — deleting it here removes it irreversibly.",
+      "deleteConfirm": "The logic graph \"{name}\" will be deleted irreversibly."
     }
   },
   "authzPreflight": {

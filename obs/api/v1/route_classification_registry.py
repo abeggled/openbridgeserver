@@ -45,6 +45,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("DELETE", "/api/v1/datapoints/{dp_id}/bindings/{binding_id}"): "config_mutation",
     ("DELETE", "/api/v1/hierarchy/links"): "config_mutation",
     ("DELETE", "/api/v1/hierarchy/logic-graph-links"): "config_mutation",
+    ("DELETE", "/api/v1/hierarchy/logic-graph-links/{link_id}"): "config_mutation",
     ("DELETE", "/api/v1/hierarchy/nodes/{node_id}"): "config_mutation",
     ("DELETE", "/api/v1/hierarchy/trees/{tree_id}"): "config_mutation",
     ("DELETE", "/api/v1/icons/"): "config_mutation",

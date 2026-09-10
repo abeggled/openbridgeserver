@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 
 const pushMock = vi.fn()
 
@@ -11,6 +12,7 @@ beforeEach(() => {
   vi.resetModules()
   pushMock.mockClear()
   vi.doMock('vue-router', () => ({ useRouter: () => ({ push: pushMock }) }))
+  setActivePinia(createPinia())
 })
 
 afterEach(() => {
@@ -26,14 +28,19 @@ const N2_GRAPHS = [
   { id: 'g2', name: 'Licht Alt', enabled: false, link_id: 'l2' },
 ]
 
-async function mountModal({ browseImpl } = {}) {
+async function mountModal({ browseImpl, deleteLogicGraphLinkByIdImpl, deleteGraphImpl } = {}) {
   const browse = browseImpl || vi.fn().mockImplementation((params = {}) => {
     if (!params.tree_id) return Promise.resolve({ data: { trees: TREES, subfolders: [], logic_graphs: [] } })
     if (params.tree_id === 't1' && !params.node_id) return Promise.resolve({ data: { trees: [], subfolders: T1_ROOT, logic_graphs: [] } })
     if (params.tree_id === 't1' && params.node_id === 'n2') return Promise.resolve({ data: { trees: [], subfolders: N2_CHILDREN, logic_graphs: N2_GRAPHS } })
     return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: [] } })
   })
-  vi.doMock('@/api/client.js', () => ({ hierarchyApi: { browse } }))
+  const deleteLogicGraphLinkById = deleteLogicGraphLinkByIdImpl || vi.fn().mockResolvedValue({})
+  const deleteGraph = deleteGraphImpl || vi.fn().mockResolvedValue({})
+  // stores/logic.js (used via useLogicStore() for the unassigned-folder
+  // "Löschen" action) imports logicApi from this same module — mocked here
+  // too so that path resolves instead of hitting the real backend.
+  vi.doMock('@/api/client.js', () => ({ hierarchyApi: { browse, deleteLogicGraphLinkById }, logicApi: { deleteGraph } }))
   const { default: GraphPickerModal } = await import('@/components/logic/GraphPickerModal.vue')
   const wrapper = mount(GraphPickerModal, {
     props: { modelValue: true },
@@ -41,14 +48,18 @@ async function mountModal({ browseImpl } = {}) {
       // Modal.vue renders its content via <Teleport to="body">, which Vue
       // Test Utils' wrapper.find() cannot see even with attachTo — stub it
       // with a plain div exposing the same slots, same pattern already used
-      // for LogicView's own modals in tests/views/LogicView.*.spec.js.
+      // for LogicView's own modals in tests/views/LogicView.*.spec.js. This
+      // also stubs ConfirmDialog's own internal <Modal> use (global stubs
+      // apply wherever a component with this name renders, not just at the
+      // top level) — the footer slot is forwarded too so its Cancel/Confirm
+      // buttons render.
       stubs: {
-        Modal: { template: '<div><slot name="header-actions" /><slot /></div>' },
+        Modal: { template: '<div><slot name="header-actions" /><slot /><slot name="footer" /></div>' },
       },
     },
   })
   await flushPromises()
-  return { wrapper, browse }
+  return { wrapper, browse, deleteLogicGraphLinkById, deleteGraph }
 }
 
 describe('GraphPickerModal — navigation', () => {
@@ -169,6 +180,38 @@ describe('GraphPickerModal — navigation', () => {
   })
 })
 
+describe('GraphPickerModal — "hier entfernen" (#1217 hierarchy-position removal)', () => {
+  it('shows a remove-here button (not delete) for a graph inside a normal folder', async () => {
+    const { wrapper } = await mountModal()
+    await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-folder-n2"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="picker-graph-remove-g1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-remove-g1"]').text()).toBe('hier entfernen')
+    expect(wrapper.find('[data-testid="picker-graph-delete-g1"]').exists()).toBe(false)
+  })
+
+  it('clicking remove-here unlinks by link_id and refreshes the current listing', async () => {
+    const { wrapper, browse, deleteLogicGraphLinkById } = await mountModal()
+    await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-folder-n2"]').trigger('click')
+    await flushPromises()
+    browse.mockClear()
+
+    await wrapper.find('[data-testid="picker-graph-remove-g1"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteLogicGraphLinkById).toHaveBeenCalledWith('l1')
+    expect(browse).toHaveBeenCalledWith({ tree_id: 't1', node_id: 'n2' })
+    // Removing here is not a selection — the modal stays open.
+    expect(wrapper.emitted('select')).toBeFalsy()
+    expect(wrapper.emitted('update:modelValue')).toBeFalsy()
+  })
+})
+
 describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () => {
   const UNASSIGNED_GRAPHS = [{ id: 'u1', name: 'Streuner', enabled: true }]
 
@@ -227,5 +270,61 @@ describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () =
     await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
     await flushPromises()
     expect(browse).toHaveBeenCalledWith({ tree_id: 't1' })  // no stray unassigned=true leaking in
+  })
+
+  it('shows a delete button (not remove-here) for graphs in the unassigned folder', async () => {
+    const { wrapper } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="picker-graph-delete-u1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-delete-u1"]').text()).toBe('Löschen')
+    expect(wrapper.find('[data-testid="picker-graph-remove-u1"]').exists()).toBe(false)
+  })
+
+  it('clicking delete asks for confirmation before deleting anything', async () => {
+    const { wrapper, deleteGraph } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="picker-graph-delete-u1"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteGraph).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Streuner')
+  })
+
+  it('confirming deletes the graph, emits graph-deleted, and refreshes the listing', async () => {
+    const { wrapper, browse, deleteGraph } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+    browse.mockClear()
+
+    await wrapper.find('[data-testid="picker-graph-delete-u1"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="btn-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteGraph).toHaveBeenCalledWith('u1')
+    expect(wrapper.emitted('graph-deleted')).toEqual([['u1']])
+    expect(browse).toHaveBeenCalledWith({ unassigned: true })
+    // Deleting is not a selection — the modal stays open.
+    expect(wrapper.emitted('select')).toBeFalsy()
+  })
+
+  it('cancelling the confirmation deletes nothing', async () => {
+    const { wrapper, deleteGraph } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="picker-graph-delete-u1"]').trigger('click')
+    await flushPromises()
+    // ConfirmDialog's Cancel button — no dedicated testid, select by text.
+    const cancelBtn = wrapper.findAll('button').find((b) => b.text() === 'Abbrechen')
+    await cancelBtn.trigger('click')
+    await flushPromises()
+
+    expect(deleteGraph).not.toHaveBeenCalled()
+    expect(wrapper.emitted('graph-deleted')).toBeFalsy()
   })
 })

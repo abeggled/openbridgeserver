@@ -65,18 +65,41 @@
         </button>
 
         <!-- Logic graphs -->
-        <button v-for="graph in result.logic_graphs" :key="graph.link_id" type="button"
-          class="flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors"
-          @click="pick(graph)" :data-testid="`picker-graph-${graph.id}`">
-          <svg class="w-4 h-4 shrink-0 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v4a1 1 0 01-1 1H4m8-5v18m4-9h4m-4-5h4m-4 10h4"/>
-          </svg>
-          <span class="flex-1 truncate" :class="graph.enabled ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'">
-            {{ graph.name }}{{ graph.enabled ? '' : $t('logic.graphDisabledSuffix') }}
-          </span>
-        </button>
+        <div v-for="graph in result.logic_graphs" :key="graph.link_id ?? graph.id"
+          class="flex items-center gap-1 pr-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors">
+          <button type="button"
+            class="flex items-center gap-2 flex-1 min-w-0 px-3 py-2 rounded-lg text-left text-sm"
+            @click="pick(graph)" :data-testid="`picker-graph-${graph.id}`">
+            <svg class="w-4 h-4 shrink-0 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v4a1 1 0 01-1 1H4m8-5v18m4-9h4m-4-5h4m-4 10h4"/>
+            </svg>
+            <span class="flex-1 truncate" :class="graph.enabled ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'">
+              {{ graph.name }}{{ graph.enabled ? '' : $t('logic.graphDisabledSuffix') }}
+            </span>
+          </button>
+          <!-- Unassigned pseudo-folder: no link left to remove, so this is the
+               real, irreversible graph deletion instead — confirmed below. -->
+          <button v-if="unassignedMode" type="button"
+            class="btn-secondary btn-sm text-red-400 shrink-0"
+            :title="$t('logic.graphPicker.deleteHereTitle')"
+            @click="confirmDelete(graph)" :data-testid="`picker-graph-delete-${graph.id}`">
+            {{ $t('common.delete') }}
+          </button>
+          <button v-else type="button"
+            class="btn-secondary btn-sm shrink-0"
+            :title="$t('logic.graphPicker.removeHereTitle')"
+            @click="removeHere(graph)" :data-testid="`picker-graph-remove-${graph.id}`">
+            {{ $t('logic.graphPicker.removeHere') }}
+          </button>
+        </div>
       </div>
     </div>
+
+    <ConfirmDialog v-model="showDeleteConfirm"
+      :title="$t('logic.deleteGraph')"
+      :message="deleteMessage"
+      :confirm-label="$t('common.delete')"
+      @confirm="doDelete" />
   </Modal>
 </template>
 
@@ -86,15 +109,18 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { hierarchyApi } from '@/api/client.js'
+import { useLogicStore } from '@/stores/logic'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update:modelValue', 'select'])
+const emit = defineEmits(['update:modelValue', 'select', 'graph-deleted'])
 
 const router = useRouter()
 const { t } = useI18n()
+const logicStore = useLogicStore()
 
 // Small inline folder icon — avoids a new asset file for one shared glyph.
 const FolderIcon = {
@@ -177,6 +203,35 @@ function openUnassigned() {
 function pick(graph) {
   emit('select', graph.id)
   open.value = false
+}
+
+// Unlinks the graph from whichever hierarchy position is currently being
+// browsed (this level's node — a tree's own root included). Purely
+// organizational, same as the drag&drop unlink in Settings → Hierarchy: if
+// this was the graph's last link, it simply reappears under "Nicht
+// zugeordnet" next time the picker is opened at the root level.
+async function removeHere(graph) {
+  await hierarchyApi.deleteLogicGraphLinkById(graph.link_id)
+  await browse()
+}
+
+// Unassigned pseudo-folder: there is no link left to remove here, so the row
+// action instead deletes the graph itself — irreversible, hence confirmed.
+const showDeleteConfirm = ref(false)
+const deleteTarget = ref(null)
+const deleteMessage = computed(() =>
+  deleteTarget.value ? t('logic.graphPicker.deleteConfirm', { name: deleteTarget.value.name }) : '',
+)
+function confirmDelete(graph) {
+  deleteTarget.value = graph
+  showDeleteConfirm.value = true
+}
+async function doDelete() {
+  const id = deleteTarget.value.id
+  deleteTarget.value = null
+  await logicStore.deleteGraph(id)
+  emit('graph-deleted', id)
+  await browse()
 }
 
 function goOrganize() {

@@ -39,7 +39,7 @@ const GRAPH_B = { id: 'graph-b', name: 'Sheet B', description: '', enabled: true
 const GraphPickerModalStub = {
   name: 'GraphPickerModal',
   props: ['modelValue'],
-  emits: ['update:modelValue', 'select'],
+  emits: ['update:modelValue', 'select', 'graph-deleted'],
   template: '<div v-if="modelValue" data-testid="graph-picker-stub" />',
 }
 
@@ -92,6 +92,34 @@ describe('LogicView — graph picker button (#1217)', () => {
     await flushPromises()
 
     expect(logicApi.getGraph).toHaveBeenCalledWith('graph-b')
+    expect(wrapper.find('[data-testid="btn-open-graph-picker"]').text()).toContain('Sheet B')
+  })
+
+  it('a graph-deleted event for the currently open graph closes it', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    await wrapper.find('[data-testid="btn-open-graph-picker"]').trigger('click')
+    const picker = wrapper.findComponent(GraphPickerModalStub)
+    picker.vm.$emit('select', 'graph-b')
+    await flushPromises()
+    expect(logicApi.getGraph).toHaveBeenCalledWith('graph-b')
+
+    picker.vm.$emit('graph-deleted', 'graph-b')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="btn-open-graph-picker"]').text()).not.toContain('Sheet B')
+  })
+
+  it('a graph-deleted event for a different graph leaves the open graph untouched', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    await wrapper.find('[data-testid="btn-open-graph-picker"]').trigger('click')
+    const picker = wrapper.findComponent(GraphPickerModalStub)
+    picker.vm.$emit('select', 'graph-b')
+    await flushPromises()
+    expect(logicApi.getGraph).toHaveBeenCalledWith('graph-b')
+
+    picker.vm.$emit('graph-deleted', 'some-other-graph')
+    await flushPromises()
+
     expect(wrapper.find('[data-testid="btn-open-graph-picker"]').text()).toContain('Sheet B')
   })
 })

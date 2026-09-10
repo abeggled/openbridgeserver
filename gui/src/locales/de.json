@@ -2573,7 +2573,11 @@
       "empty": "Dieser Ordner ist leer.",
       "organize": "Logiken organisieren",
       "loading": "Wird geladen …",
-      "errorLoading": "Konnte nicht geladen werden."
+      "errorLoading": "Konnte nicht geladen werden.",
+      "removeHere": "hier entfernen",
+      "removeHereTitle": "Entfernt die Logik nur aus dieser Hierarchie-Position. Ist dies die letzte Position, erscheint die Logik danach oben bei „Nicht zugeordnet“.",
+      "deleteHereTitle": "Diese Logik ist keiner Hierarchie zugeordnet — hier löschen entfernt sie unwiderruflich.",
+      "deleteConfirm": "Der Logik-Graph „{name}“ wird unwiderruflich gelöscht."
     }
   },
   "authzPreflight": {

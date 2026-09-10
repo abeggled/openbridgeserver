@@ -5,6 +5,7 @@ Covers:
   GET    /api/v1/hierarchy/logic-graphs/{id}/nodes
   POST   /api/v1/hierarchy/logic-graph-links
   DELETE /api/v1/hierarchy/logic-graph-links
+  DELETE /api/v1/hierarchy/logic-graph-links/{link_id}
   GET    /api/v1/hierarchy/browse
 """
 
@@ -109,6 +110,59 @@ async def test_delete_logic_graph_link(client, auth_headers):
 
     resp = await client.get(f"/api/v1/hierarchy/nodes/{node['id']}/logic-graphs", headers=auth_headers)
     assert len(resp.json()) == 0
+
+
+async def test_delete_logic_graph_link_by_id(client, auth_headers):
+    tree = await _create_tree(client, auth_headers)
+    node = await _create_node(client, auth_headers, tree["id"])
+    graph = await _create_graph(client, auth_headers, "ZumLoeschenPerId")
+    resp = await client.post(
+        "/api/v1/hierarchy/logic-graph-links",
+        json={"node_id": node["id"], "graph_id": graph["id"]},
+        headers=auth_headers,
+    )
+    link_id = resp.json()["id"]
+
+    resp = await client.delete(f"/api/v1/hierarchy/logic-graph-links/{link_id}", headers=auth_headers)
+    assert resp.status_code == 204
+
+    resp = await client.get(f"/api/v1/hierarchy/nodes/{node['id']}/logic-graphs", headers=auth_headers)
+    assert len(resp.json()) == 0
+
+
+async def test_delete_logic_graph_link_by_id_unknown_is_a_noop(client, auth_headers):
+    """Matches the query-param variant's idempotent-delete semantics."""
+    resp = await client.delete("/api/v1/hierarchy/logic-graph-links/does-not-exist", headers=auth_headers)
+    assert resp.status_code == 204
+
+
+async def test_delete_logic_graph_link_by_id_only_removes_that_one_link(client, auth_headers):
+    """A graph linked into two trees keeps the other link when one is removed by id."""
+    tree_a = await _create_tree(client, auth_headers, "TreeLinkA")
+    tree_b = await _create_tree(client, auth_headers, "TreeLinkB")
+    node_a = await _create_node(client, auth_headers, tree_a["id"], "NodeA")
+    node_b = await _create_node(client, auth_headers, tree_b["id"], "NodeB")
+    graph = await _create_graph(client, auth_headers, "MultiLinked")
+
+    resp_a = await client.post(
+        "/api/v1/hierarchy/logic-graph-links",
+        json={"node_id": node_a["id"], "graph_id": graph["id"]},
+        headers=auth_headers,
+    )
+    await client.post(
+        "/api/v1/hierarchy/logic-graph-links",
+        json={"node_id": node_b["id"], "graph_id": graph["id"]},
+        headers=auth_headers,
+    )
+    link_a_id = resp_a.json()["id"]
+
+    resp = await client.delete(f"/api/v1/hierarchy/logic-graph-links/{link_a_id}", headers=auth_headers)
+    assert resp.status_code == 204
+
+    resp = await client.get(f"/api/v1/hierarchy/logic-graphs/{graph['id']}/nodes", headers=auth_headers)
+    refs = resp.json()
+    assert len(refs) == 1
+    assert refs[0]["node_id"] == node_b["id"]
 
 
 async def test_create_link_unknown_node_404(client, auth_headers):
