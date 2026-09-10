@@ -1783,6 +1783,8 @@
     "imported": "Graph „{name}“ importiert",
     "errorImport": "Ungültige oder fehlerhafte Export-Datei",
     "newGraphPlaceholder": "z.B. Licht Erdgeschoss",
+    "hierarchyNodes": "Hierarchie-Knoten",
+    "hierarchyNodesHint": "Optional — direkt bei der Erstellung einem oder mehreren Knoten der Logik-Hierarchie zuordnen. Ohne Auswahl bleibt die Logik wie bisher nicht zugeordnet.",
     "notSelected": "— nicht gewählt —",
     "filterBadge": "Filter / Transformation aktiv",
     "negatePort": "{id} negieren",

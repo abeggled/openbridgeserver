@@ -45,3 +45,9 @@ einen Knoten ziehen verknüpft sie dort — bestehende Verknüpfungen in anderen
 Hierarchien bleiben davon unberührt. Wird eine Logik direkt auf den Titel einer Hierarchie
 (statt auf einen ihrer Unterordner) gezogen, landet sie unmittelbar auf deren oberster Ebene,
 ganz ohne dass zuvor ein Unterordner angelegt werden muss.
+
+Alternativ lässt sich die Zuordnung auch direkt beim Anlegen einer neuen Logik vornehmen: Der
+Dialog „Neues Logikblatt" im Logikeditor enthält ein optionales Suchfeld „Hierarchie-Knoten"
+(dasselbe Element wie bei den Filtersets im Monitor-Bereich), über das ein oder mehrere Knoten
+direkt zugeordnet werden können. Bleibt das Feld leer, landet die neue Logik wie gewohnt auf
+oberster Ebene bei „Nicht zugeordnet".

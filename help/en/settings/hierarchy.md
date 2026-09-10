@@ -44,3 +44,8 @@ there onto a node links it there — existing links in other folders or hierarch
 untouched. Dropping a graph directly on a hierarchy's own title (instead of one of its
 sub-folders) links it straight to that hierarchy's top level, with no need to create a
 sub-folder first.
+
+Alternatively, the assignment can also be made right when creating a new graph: the "New
+logic sheet" dialog in the Logic editor has an optional "Hierarchy nodes" search field (the
+same element used for filter sets in the Monitor area) to assign one or more nodes directly.
+Left empty, the new graph lands at the top level under "Not assigned" as usual.

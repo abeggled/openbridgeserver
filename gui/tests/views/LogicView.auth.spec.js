@@ -110,7 +110,10 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
     exportGraph: vi.fn().mockResolvedValue({ data: { export_type: 'logic_graph', name: 'Main Graph' } }),
     importGraph: vi.fn().mockResolvedValue({ data: makeGraph('graph-imported', { name: 'Imported Graph' }) }),
   })
-  vi.doMock('@/api/client', () => ({ logicApi }))
+  const hierarchyApi = {
+    createLogicGraphLink: vi.fn().mockResolvedValue({ data: { id: 'link-1' } }),
+  }
+  vi.doMock('@/api/client', () => ({ logicApi, hierarchyApi }))
   vi.doMock('@/api/logicAuthz', () => ({ logicRunAuthzApi }))
 
   const pinia = createPinia()
@@ -138,7 +141,7 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
     attachTo: document.body,
   })
   await flushPromises()
-  return { wrapper, logicApi, logicRunAuthzApi }
+  return { wrapper, logicApi, logicRunAuthzApi, hierarchyApi }
 }
 
 describe('LogicView auth gates', () => {
@@ -219,7 +222,7 @@ describe('LogicView auth gates', () => {
   })
 
   it('lets admins create a graph', async () => {
-    const { wrapper, logicApi } = await mountLogicView({ isAdmin: true })
+    const { wrapper, logicApi, hierarchyApi } = await mountLogicView({ isAdmin: true })
 
     await wrapper.find('.btn-primary').trigger('click')
     wrapper.vm.newGraphName = 'Automation'
@@ -233,6 +236,50 @@ describe('LogicView auth gates', () => {
       flow_data: { nodes: [], edges: [] },
     })
     expect(wrapper.vm.activeGraphId).toBe('graph-new')
+    // No hierarchy node picked — stays unassigned, exactly like before #1217.
+    expect(hierarchyApi.createLogicGraphLink).not.toHaveBeenCalled()
+  })
+
+  it('links a newly created graph into every hierarchy node picked in the dialog (#1217)', async () => {
+    const { wrapper, hierarchyApi } = await mountLogicView({ isAdmin: true })
+
+    await wrapper.find('.btn-primary').trigger('click')
+    wrapper.vm.newGraphName = 'Automation'
+    // HierarchyCombobox (multi mode) emits composite "tree_id:node_id"
+    // strings — this is what doCreateGraph must parse back apart before
+    // calling the link endpoint (it is not the full item object).
+    wrapper.vm.newGraphHierarchyNodes = ['tree-a:node-a', 'tree-b:node-b']
+    await wrapper.vm.doCreateGraph()
+
+    expect(hierarchyApi.createLogicGraphLink).toHaveBeenCalledTimes(2)
+    expect(hierarchyApi.createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-a', graph_id: 'graph-new' })
+    expect(hierarchyApi.createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-b', graph_id: 'graph-new' })
+    expect(wrapper.vm.activeGraphId).toBe('graph-new')
+  })
+
+  it('ignores a malformed hierarchy composite id instead of sending a broken link request', async () => {
+    const { wrapper, hierarchyApi } = await mountLogicView({ isAdmin: true })
+
+    await wrapper.find('.btn-primary').trigger('click')
+    wrapper.vm.newGraphName = 'Automation'
+    wrapper.vm.newGraphHierarchyNodes = ['not-a-composite-id']
+    await wrapper.vm.doCreateGraph()
+
+    expect(hierarchyApi.createLogicGraphLink).not.toHaveBeenCalled()
+    expect(wrapper.vm.activeGraphId).toBe('graph-new')
+  })
+
+  it('still activates the new graph even if linking it into a hierarchy node fails', async () => {
+    const { wrapper, hierarchyApi } = await mountLogicView({ isAdmin: true })
+    hierarchyApi.createLogicGraphLink.mockRejectedValueOnce(new Error('boom'))
+
+    await wrapper.find('.btn-primary').trigger('click')
+    wrapper.vm.newGraphName = 'Automation'
+    wrapper.vm.newGraphHierarchyNodes = ['tree-a:node-a']
+    await wrapper.vm.doCreateGraph()
+
+    expect(wrapper.vm.activeGraphId).toBe('graph-new')
+    expect(wrapper.vm.showNewGraph).toBe(false)
   })
 
   it('runs a graph immediately when the preflight is fully allowed, without showing the popup', async () => {

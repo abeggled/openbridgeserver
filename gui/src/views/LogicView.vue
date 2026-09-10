@@ -234,6 +234,11 @@
           <label class="label">{{ $t('logic.description') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
           <input v-model="newGraphDesc" type="text" class="input" />
         </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.hierarchyNodes') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
+          <HierarchyCombobox v-model="newGraphHierarchyNodes" data-testid="new-graph-hierarchy" />
+          <p class="text-xs text-slate-500 mt-1">{{ $t('logic.hierarchyNodesHint') }}</p>
+        </div>
         <div class="flex justify-end gap-3">
           <button type="button" @click="showNewGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
           <button type="submit" class="btn-primary">{{ $t('logic.create') }}</button>
@@ -295,7 +300,7 @@ import '@vue-flow/node-resizer/dist/style.css'
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore }     from '@/stores/auth'
-import { logicApi }        from '@/api/client'
+import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
@@ -304,6 +309,8 @@ import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
 import GraphPickerModal    from '@/components/logic/GraphPickerModal.vue'
+import HierarchyCombobox   from '@/components/ui/HierarchyCombobox.vue'
+import { parseHierarchyCompositeId } from '@/utils/hierarchyDisplay'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
 import HelpButton          from '@/components/ui/HelpButton.vue'
@@ -1022,16 +1029,29 @@ watch(activeGraphId, () => {
 const showNewGraph  = ref(false)
 const newGraphName  = ref('')
 const newGraphDesc  = ref('')
+const newGraphHierarchyNodes = ref([]) // composite "tree_id:node_id" strings — optional, unassigned when empty
 
 function newGraph() {
   if (!auth.isAdmin) return
   newGraphName.value = ''
   newGraphDesc.value = ''
+  newGraphHierarchyNodes.value = []
   showNewGraph.value = true
 }
 async function doCreateGraph() {
   if (!auth.isAdmin) return
   const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
+  // Optional: link the new graph into the picked hierarchy node(s) right away —
+  // matches the many-to-many model #1217 already established (0, 1 or several
+  // nodes). Best-effort: a link failure must not block the graph having been
+  // created, it would just stay reachable via "Nicht zugeordnet" instead.
+  await Promise.all(
+    newGraphHierarchyNodes.value.map((compositeId) => {
+      const parsed = parseHierarchyCompositeId(compositeId)
+      if (!parsed) return null
+      return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: g.id }).catch(() => {})
+    }),
+  )
   showNewGraph.value = false
   activeGraphId.value = g.id
   nodes.value = []; edges.value = []

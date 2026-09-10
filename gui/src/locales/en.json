@@ -1783,6 +1783,8 @@
     "imported": "Graph “{name}” imported",
     "errorImport": "Invalid or corrupt export file",
     "newGraphPlaceholder": "e.g. Living Room Lights",
+    "hierarchyNodes": "Hierarchy nodes",
+    "hierarchyNodesHint": "Optional — assign to one or more Logic hierarchy nodes right away. Left empty, the sheet stays unassigned as before.",
     "notSelected": "— not selected —",
     "filterBadge": "Filter / transformation active",
     "negatePort": "Negate {id}",
