@@ -11,6 +11,7 @@ import { useI18n } from 'vue-i18n'
 import { datapoints as dpApi } from '@/api/client'
 import type { BindingOut } from '@/api/client'
 import ZeitschaltuhrBindingModal from '@/components/ZeitschaltuhrBindingModal.vue'
+import { timerValueDefault } from '@/utils/timerValue'
 
 const props = defineProps<{
   datapointId: string
@@ -31,6 +32,7 @@ const saving    = ref(false)
 const errorMsg  = ref('')
 const bindings  = ref<BindingOut[]>([])
 
+const dataType = ref('UNKNOWN')
 const editingBinding   = ref<BindingOut | null>(null)
 const pendingDeleteId  = ref<string | null>(null)
 
@@ -51,6 +53,13 @@ async function load() {
     errorMsg.value = t('zst.loadError')
   } finally {
     loading.value = false
+  }
+  // Nur für den Startwert eines neuen Schaltpunkts, siehe `addBinding()`. Ein
+  // Fehlschlag bleibt folgenlos: 'UNKNOWN' liefert denselben Wert wie bisher.
+  try {
+    dataType.value = String((await dpApi.get(props.datapointId)).data_type ?? 'UNKNOWN')
+  } catch {
+    dataType.value = 'UNKNOWN'
   }
 }
 
@@ -103,7 +112,11 @@ async function addBinding() {
     const created = await dpApi.createBinding(props.datapointId, {
       adapter_instance_id: props.instanceId,
       direction: 'SOURCE',
-      config: {},
+      // Kein leerer Config: der Adapter setzte darin "1" als Schaltwert ein, was
+      // ein DATE/TIME/DATETIME-Objekt nicht halten kann — der Schaltpunkt wäre
+      // gespeichert worden und bei jedem Auslösen still verworfen. Die API weist
+      // das inzwischen ab, also gleich einen typgerechten Startwert mitgeben.
+      config: { value: timerValueDefault(dataType.value) },
       enabled: true,
     })
     bindings.value.push(created)
@@ -283,6 +296,7 @@ const btnBase = 'px-2 py-1 rounded text-xs font-medium transition-colors disable
           v-if="mode === 'full'"
           :class="[btnBase, 'px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm']"
           :disabled="saving || loading"
+          data-testid="zsu-add-btn"
           @click="addBinding"
         >
           {{ saving ? '…' : $t('zst.addBinding') }}
