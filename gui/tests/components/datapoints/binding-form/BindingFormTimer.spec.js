@@ -18,6 +18,7 @@ function mk(cfgOverrides = {}, propOverrides = {}) {
         minute:              0,
         offset_minutes:      0,
         solar_altitude_deg:  0,
+        solar_azimuth_deg:   180,
         sun_direction:       'rising',
         every_minute:        false,
         every_hour:          false,
@@ -127,6 +128,20 @@ describe('BindingFormTimer — time_ref', () => {
     const w = mk({ time_ref: 'solar_altitude' })
     const altInput = w.findAll('input[type="number"]').find(i => i.attributes('min') === '-18')
     expect(altInput).toBeTruthy()
+  })
+
+  it('shows solar_azimuth_deg input and hides solar_altitude_deg input for solar_azimuth time_ref', () => {
+    const w = mk({ time_ref: 'solar_azimuth' })
+    const azInput = w.findAll('input[type="number"]').find(i => i.attributes('max') === '360')
+    expect(azInput).toBeTruthy()
+    const altInput = w.findAll('input[type="number"]').find(i => i.attributes('min') === '-18')
+    expect(altInput).toBeFalsy()
+  })
+
+  it('hides solar_azimuth_deg input for solar_altitude time_ref', () => {
+    const w = mk({ time_ref: 'solar_altitude' })
+    const azInput = w.findAll('input[type="number"]').find(i => i.attributes('max') === '360')
+    expect(azInput).toBeFalsy()
   })
 })
 
