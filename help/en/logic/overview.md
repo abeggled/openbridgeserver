@@ -36,7 +36,7 @@ independent graph with its own active/inactive state.
   between them) to the clipboard and pastes them back offset from the original.
   "Save" is still needed afterward to persist the change.
 - **Rename** — changes the logic sheet's name/description.
-- **Duplicate** — asks for the copy's name (prefilled with "(Copy) " + the current name),
+- **Duplicate** — asks for the copy's name (prefilled with the current name + " (Copy)"),
   then creates it as a new, independent logic sheet.
 - **Export** / **Import** — downloads the current graph as a JSON file, or creates a new
   logic sheet from such a file — useful for backing up or transferring individual graphs

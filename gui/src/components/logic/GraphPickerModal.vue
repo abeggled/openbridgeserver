@@ -1,5 +1,5 @@
 <template>
-  <Modal v-model="open" :title="$t('logic.graphPicker.title')" max-width="md">
+  <Modal v-model="open" :title="$t('logic.graphPicker.title')" max-width="3xl">
     <template #header-actions>
       <button type="button" class="btn-secondary btn-sm" @click="goOrganize" data-testid="btn-organize-graphs">
         {{ $t('logic.graphPicker.organize') }}
@@ -66,24 +66,28 @@
 
         <!-- Logic graphs — assignment to a hierarchy position now happens
              entirely here (#1233 follow-up): Settings → Hierarchy only
-             manages the tree/node structure itself. -->
+             manages the tree/node structure itself. Name + actions share one
+             row; the currently-open graph gets a small dot marker on the
+             left (in its own fixed-width slot, so unmarked rows still line
+             up) instead of a text badge on the right. -->
         <div v-for="graph in result.logic_graphs" :key="graph.link_id ?? graph.id"
-          :class="['flex flex-col gap-1 px-1 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors',
+          :class="['flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors',
             graph.id === activeGraphId ? 'ring-1 ring-blue-400 bg-blue-50/60 dark:bg-blue-500/10' : '']">
+          <span class="w-2.5 shrink-0 flex items-center justify-center">
+            <span v-if="graph.id === activeGraphId" class="w-1.5 h-1.5 rounded-full bg-blue-500"
+              :title="$t('logic.graphPicker.currentGraph')" :data-testid="`picker-graph-current-${graph.id}`" />
+          </span>
           <button type="button"
-            class="flex items-center gap-2 min-w-0 px-3 py-2 rounded-lg text-left text-sm"
+            class="flex items-center gap-2 min-w-0 flex-1 px-2 py-1.5 rounded-lg text-left text-sm"
             @click="pick(graph)" :data-testid="`picker-graph-${graph.id}`">
             <svg class="w-4 h-4 shrink-0 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v4a1 1 0 01-1 1H4m8-5v18m4-9h4m-4-5h4m-4 10h4"/>
             </svg>
-            <span class="flex-1 truncate" :class="graph.enabled ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'">
+            <span class="flex-1 min-w-0 truncate" :class="graph.enabled ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'">
               {{ graph.name }}{{ graph.enabled ? '' : $t('logic.graphDisabledSuffix') }}
             </span>
-            <span v-if="graph.id === activeGraphId" class="text-[10px] uppercase tracking-wide text-blue-500 shrink-0" :data-testid="`picker-graph-current-${graph.id}`">
-              {{ $t('logic.graphPicker.currentGraph') }}
-            </span>
           </button>
-          <div class="flex items-center gap-1 pl-9 flex-wrap">
+          <div class="flex items-center gap-1 shrink-0">
             <button type="button" class="btn-secondary btn-xs shrink-0"
               @click="openAssign(graph)" :data-testid="`picker-graph-assign-${graph.id}`">
               {{ $t('logic.graphPicker.assign') }}

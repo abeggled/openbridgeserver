@@ -39,7 +39,7 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
   Verbindungen untereinander) in die Zwischenablage und fügt sie versetzt wieder ein.
   „Speichern" ist danach nötig, um die Änderung zu übernehmen.
 - **Umbenennen** — ändert Name/Beschreibung des Logikblatts.
-- **Duplizieren** — fragt den Namen der Kopie ab (vorbelegt mit „(Kopie) " + aktuellem Namen)
+- **Duplizieren** — fragt den Namen der Kopie ab (vorbelegt mit aktuellem Namen + „ (Kopie)")
   und legt sie anschließend als neues, eigenständiges Logikblatt an.
 - **Export** / **Import** — lädt den aktuellen Graphen als JSON-Datei herunter bzw. legt
   aus einer solchen Datei ein neues Logikblatt an — nützlich zum Sichern oder Übertragen

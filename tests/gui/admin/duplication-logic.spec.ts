@@ -30,10 +30,10 @@ async function deleteGraphViaApi(id: string): Promise<void> {
 
 async function findCopyGraphId(originalName: string): Promise<string | null> {
   const graphs = await apiGet('/api/v1/logic/graphs') as Array<{ id: string; name: string }>
-  // The "Duplizieren" button opens a name-prompt modal prefilled with
-  // "(Kopie) " + the original name (#1233 follow-up) — no longer an
-  // immediate "Kopie von …" duplicate.
-  return graphs.find(g => g.name === `(Kopie) ${originalName}`)?.id ?? null
+  // The "Duplizieren" button opens a name-prompt modal prefilled with the
+  // original name + " (Kopie)" (#1233 follow-up) — no longer an immediate
+  // "Kopie von …" duplicate.
+  return graphs.find(g => g.name === `${originalName} (Kopie)`)?.id ?? null
 }
 
 // ── Hilfsfunktion: zur Logic-View navigieren und Graph laden ──────────────
@@ -72,7 +72,7 @@ test('Logic: Graph duplizieren erzeugt Kopie', async ({ page }) => {
   try {
     await gotoLogicWithGraph(page, gid)
     await page.click('[data-testid="btn-duplicate"]')
-    // Accept the prefilled "(Kopie) …" name and confirm.
+    // Accept the prefilled "… (Kopie)" name and confirm.
     await page.click('[data-testid="btn-duplicate-confirm"]')
 
     // Statusmeldung prüfen (erscheint im Status-Bar)

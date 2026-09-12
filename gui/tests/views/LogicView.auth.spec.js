@@ -481,9 +481,9 @@ describe('LogicView auth gates', () => {
     expect(logicApi.patchGraph).toHaveBeenCalledWith('graph-1', { enabled: false })
 
     wrapper.vm.openDuplicate()
-    expect(wrapper.vm.duplicateName).toBe('(Kopie) Main Graph')
+    expect(wrapper.vm.duplicateName).toBe('Main Graph (Kopie)')
     await wrapper.vm.doDuplicate()
-    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1', '(Kopie) Main Graph')
+    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1', 'Main Graph (Kopie)')
     expect(wrapper.vm.activeGraphId).toBe('graph-copy')
     expect(wrapper.vm.lastRunOutputs).toEqual({})
 

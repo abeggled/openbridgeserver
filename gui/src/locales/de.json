@@ -1623,7 +1623,7 @@
     "openSheet": "Logic-Sheet öffnen",
     "renameGraph": "Graph umbenennen",
     "duplicateGraph": "Graph duplizieren",
-    "duplicateNamePrefix": "(Kopie) ",
+    "duplicateNameSuffix": " (Kopie)",
     "exportJson": "Graph als JSON exportieren",
     "importJson": "Graph aus JSON importieren",
     "searchNodes": "Knoten suchen — z.B. Raum, Heizung …",

@@ -1,7 +1,7 @@
 /**
  * Duplicate-with-name-prompt (#1233 follow-up): "Duplizieren" no longer
  * duplicates immediately with a hardcoded "Kopie von …" name — it opens a
- * modal prefilled with "(Kopie) " + the current name, editable before
+ * modal prefilled with the current name + " (Kopie)", editable before
  * confirming.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -86,7 +86,7 @@ describe('LogicView — duplicate-with-name-prompt (#1233 follow-up)', () => {
     await wrapper.find('[data-testid="btn-duplicate"]').trigger('click')
 
     expect(logicApi.duplicateGraph).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="input-duplicate-name"]').element.value).toBe('(Kopie) Beschattung')
+    expect(wrapper.find('[data-testid="input-duplicate-name"]').element.value).toBe('Beschattung (Kopie)')
   })
 
   it('confirming with the prefilled name duplicates and switches to the copy', async () => {
@@ -96,7 +96,7 @@ describe('LogicView — duplicate-with-name-prompt (#1233 follow-up)', () => {
     await wrapper.find('[data-testid="btn-duplicate-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1', '(Kopie) Beschattung')
+    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1', 'Beschattung (Kopie)')
     expect(wrapper.vm.activeGraphId).toBe('graph-copy')
   })
 

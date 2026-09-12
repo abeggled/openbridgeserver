@@ -1623,7 +1623,7 @@
     "openSheet": "Open logic sheet",
     "renameGraph": "Rename graph",
     "duplicateGraph": "Duplicate graph",
-    "duplicateNamePrefix": "(Copy) ",
+    "duplicateNameSuffix": " (Copy)",
     "exportJson": "Export graph as JSON",
     "importJson": "Import graph from JSON",
     "searchNodes": "Search nodes — e.g. room, heating …",

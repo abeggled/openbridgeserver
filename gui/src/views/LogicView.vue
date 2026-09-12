@@ -1114,7 +1114,7 @@ const duplicateName = ref('')
 function openDuplicate() {
   if (!auth.isAdmin || !activeGraphId.value) return
   const g = store.graphs.find(g => g.id === activeGraphId.value)
-  duplicateName.value = `${t('logic.duplicateNamePrefix')}${g?.name ?? ''}`
+  duplicateName.value = `${g?.name ?? ''}${t('logic.duplicateNameSuffix')}`
   showDuplicate.value = true
 }
 
