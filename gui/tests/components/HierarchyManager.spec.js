@@ -16,7 +16,7 @@ const TREE_NODE_STUB = {
   name: 'HierarchyNodeTree',
   template: '<div class="node-tree" />',
   props: ['nodes', 'treeId', 'depth', 'selectedNode'],
-  emits: ['add-child', 'edit', 'delete', 'reorder', 'link-graph-error', 'unlink-graph-error', 'load-graphs-error'],
+  emits: ['add-child', 'edit', 'delete', 'reorder'],
 }
 
 beforeEach(() => {
@@ -44,9 +44,6 @@ beforeEach(() => {
       deleteNode:   deleteNodeMock,
       reorderNodes: reorderNodesMock,
       etsImport:    etsImportMock,
-    },
-    logicApi: {
-      listGraphs: vi.fn().mockResolvedValue({ data: [] }),
     },
   }))
   vi.doMock('@/components/HierarchyNodeTree.vue', () => ({ default: TREE_NODE_STUB }))

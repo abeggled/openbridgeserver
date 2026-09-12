@@ -13,8 +13,14 @@ independent graph with its own active/inactive state.
 
 - **Logic sheet selector** — opens a picker that offers the assigned hierarchies for
   click-through, level by level; logic sheets with no assignment appear in their own
-  "Unassigned" folder. Disabled graphs are marked accordingly. The picker's "Organize
-  graphs" button leads to hierarchy management (Settings → Hierarchy).
+  "Unassigned" folder. Disabled graphs are marked accordingly, and the currently open logic
+  sheet is highlighted. Every row offers "Assign hierarchy" (adds another hierarchy
+  position, existing ones are kept), "Remove from hierarchy" (undoes only the position
+  currently being browsed — if that was the last one, the sheet reappears under
+  "Unassigned"), and "Delete" (deletes the logic sheet completely and irreversibly, after a
+  confirmation prompt, including all of its hierarchy assignments). The picker's "Edit
+  logic hierarchy" button leads to hierarchy management (Settings → Hierarchy), which
+  manages only the tree structure itself.
 - **+ New** / **Save** — creates a new logic sheet (see [New logic sheet](#logic-new-sheet))
   or saves changes to the current one.
 - **▶ Run** — checks permissions and runs the graph once, manually (only possible for
@@ -29,8 +35,9 @@ independent graph with its own active/inactive state.
 - **Copy** / **Paste** — copies the currently selected blocks (including the connections
   between them) to the clipboard and pastes them back offset from the original.
   "Save" is still needed afterward to persist the change.
-- **Rename** / **Duplicate** — changes the logic sheet's name/description, or creates a
-  full copy as a new logic sheet.
+- **Rename** — changes the logic sheet's name/description.
+- **Duplicate** — asks for the copy's name (prefilled with "(Copy) " + the current name),
+  then creates it as a new, independent logic sheet.
 - **Export** / **Import** — downloads the current graph as a JSON file, or creates a new
   logic sheet from such a file — useful for backing up or transferring individual graphs
   between installations.
@@ -43,8 +50,8 @@ optional "Hierarchy nodes" search field (the same element used for filter sets i
 Monitor area). It lets the new logic sheet be assigned to one or more hierarchy positions
 right when it's created — either a hierarchy's own top level (e.g. "Shading") or one of its
 sub-nodes (e.g. "Shading › Ground floor"). Left empty, the new logic sheet lands at the top
-level under "Unassigned" as usual — the assignment can always be changed later via
-Settings → Hierarchy by drag & drop.
+level under "Unassigned" as usual — the assignment can always be changed later via the "Assign
+hierarchy" button in the "Open Logic" picker.
 
 ## Canvas {#logic-canvas}
 

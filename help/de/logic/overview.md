@@ -14,8 +14,14 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
 - **Logikblatt-Auswahl** — öffnet einen Auswahldialog, der die zugeordneten Hierarchien
   Ebene für Ebene zum Durchklicken anbietet; Logikblätter ohne Zuordnung erscheinen dort in
   einem eigenen Ordner „Nicht zugeordnet". Deaktivierte Graphen sind entsprechend
-  gekennzeichnet. Der Button „Logiken organisieren" im Dialog führt zur
-  Hierarchie-Verwaltung (Einstellungen → Hierarchie).
+  gekennzeichnet, das aktuell geöffnete Logikblatt ist hervorgehoben. Jede Zeile bietet dort
+  „Hierarchie zuweisen" (fügt eine weitere Hierarchie-Position hinzu, bestehende bleiben
+  erhalten), „Aus Hierarchie entfernen" (löst nur die aktuell durchsuchte Position — war dies
+  die letzte, landet das Logikblatt danach bei „Nicht zugeordnet") sowie „Löschen" (löscht das
+  Logikblatt nach Sicherheitsabfrage vollständig und unwiderruflich, inklusive aller
+  Hierarchie-Zuordnungen). Der Button „Logik-Hierarchie bearbeiten" im Dialog führt zur
+  Hierarchie-Verwaltung (Einstellungen → Hierarchie), auf der ausschließlich die
+  Baumstruktur selbst gepflegt wird.
 - **+ Neu** / **Speichern** — legt ein neues Logikblatt an (siehe [Neues Logikblatt](#logic-new-sheet))
   bzw. speichert Änderungen am aktuellen.
 - **▶ Ausführen** — prüft Berechtigungen und führt den Graphen einmalig manuell aus (nur
@@ -32,8 +38,9 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
 - **Kopieren** / **Einfügen** — kopiert die aktuell ausgewählten Blöcke (inkl. ihrer
   Verbindungen untereinander) in die Zwischenablage und fügt sie versetzt wieder ein.
   „Speichern" ist danach nötig, um die Änderung zu übernehmen.
-- **Umbenennen** / **Duplizieren** — ändert Name/Beschreibung des Logikblatts bzw. legt
-  eine vollständige Kopie als neues Logikblatt an.
+- **Umbenennen** — ändert Name/Beschreibung des Logikblatts.
+- **Duplizieren** — fragt den Namen der Kopie ab (vorbelegt mit „(Kopie) " + aktuellem Namen)
+  und legt sie anschließend als neues, eigenständiges Logikblatt an.
 - **Export** / **Import** — lädt den aktuellen Graphen als JSON-Datei herunter bzw. legt
   aus einer solchen Datei ein neues Logikblatt an — nützlich zum Sichern oder Übertragen
   einzelner Graphen zwischen Installationen.
@@ -47,8 +54,8 @@ Monitor-Bereich). Darüber lässt sich das neue Logikblatt direkt bei der Anlage
 mehreren Hierarchie-Positionen zuordnen — sowohl der obersten Ebene einer Hierarchie selbst
 (z. B. „Beschattung") als auch einem ihrer Unterknoten (z. B. „Beschattung › Erdgeschoss").
 Bleibt das Feld leer, landet das neue Logikblatt wie gewohnt auf oberster Ebene bei „Nicht
-zugeordnet" — die Zuordnung lässt sich jederzeit nachträglich über Einstellungen →
-Hierarchie per Drag & Drop ändern.
+zugeordnet" — die Zuordnung lässt sich jederzeit nachträglich über den Button „Hierarchie
+zuweisen" im Auswahldialog „Logik öffnen" ändern.
 
 ## Arbeitsfläche {#logic-canvas}
 

@@ -3,12 +3,8 @@
     <li v-for="(node, index) in nodes" :key="node.id" class="flex flex-col">
       <div
         :style="{ paddingLeft: `${depth * 16}px` }"
-        :class="['flex items-center gap-1.5 rounded-lg px-2 py-1.5 group hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors',
-          dragOverNodeId === node.id ? 'ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-500/10' : '']"
-        :data-testid="`node-${node.id}`"
-        @dragover.prevent="dragOverNodeId = node.id"
-        @dragleave="dragOverNodeId === node.id && (dragOverNodeId = null)"
-        @drop.prevent="onDrop(node, $event)">
+        class="flex items-center gap-1.5 rounded-lg px-2 py-1.5 group hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors"
+        :data-testid="`node-${node.id}`">
 
         <!-- expand toggle -->
         <button v-if="node.children?.length"
@@ -74,17 +70,6 @@
         </div>
       </div>
 
-      <!-- Linked logic graphs (#1217) — drop target above shows the ring, this
-           row shows what's already linked so the drop's effect is visible. -->
-      <div v-if="nodeGraphs[node.id]?.length" :style="{ paddingLeft: `${depth * 16 + 22}px` }" class="flex flex-wrap gap-1 pb-1">
-        <span v-for="graph in nodeGraphs[node.id]" :key="graph.link_id"
-          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-teal-50 dark:bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-500/30"
-          :data-testid="`linked-graph-${node.id}-${graph.id}`">
-          {{ graph.name }}
-          <button type="button" @click="unlinkGraph(node, graph)" :title="$t('hierarchy.unlinkLogicGraph')" class="hover:text-red-500" :data-testid="`btn-unlink-graph-${node.id}-${graph.id}`">✕</button>
-        </span>
-      </div>
-
       <!-- Recursive children -->
       <HierarchyNodeTree
         v-if="node.children?.length && expanded.has(node.id)"
@@ -96,27 +81,22 @@
         @edit="emit('edit', $event)"
         @delete="emit('delete', $event)"
         @reorder="emit('reorder', $event)"
-        @link-graph-error="emit('link-graph-error', $event)"
-        @unlink-graph-error="emit('unlink-graph-error', $event)"
-        @load-graphs-error="emit('load-graphs-error', $event)"
       />
     </li>
   </ul>
 </template>
 
 <script setup>
-import { reactive, ref, watch } from 'vue'
-import { hierarchyApi } from '@/api/client.js'
-import { LOGIC_GRAPH_DRAG_MIME } from '@/utils/hierarchyLogicGraphDrag.js'
+import { reactive } from 'vue'
 
-const props = defineProps({
+defineProps({
   nodes:        { type: Array,  default: () => [] },
   treeId:       { type: String, required: true },
   depth:        { type: Number, default: 0 },
   selectedNode: { type: String, default: null },
 })
 
-const emit = defineEmits(['add-child', 'edit', 'delete', 'reorder', 'link-graph-error', 'unlink-graph-error', 'load-graphs-error'])
+const emit = defineEmits(['add-child', 'edit', 'delete', 'reorder'])
 
 const expanded = reactive(new Set())
 
@@ -125,53 +105,6 @@ function toggleExpand(nodeId) {
     expanded.delete(nodeId)
   } else {
     expanded.add(nodeId)
-  }
-}
-
-// ── Linked logic graphs (#1217) ─────────────────────────────────────────────
-// Self-contained: this component owns both the read (which graphs are linked
-// to each visible node) and the write (drop-to-link, click-to-unlink) side of
-// this one feature, unlike the CRUD actions above which stay parent-owned —
-// there is no shared modal/coordination state to route through the parent
-// for a single-row drag target.
-const nodeGraphs   = reactive({})
-const dragOverNodeId = ref(null)
-
-async function loadNodeGraphs(nodeId) {
-  try {
-    const { data } = await hierarchyApi.getNodeLogicGraphs(nodeId)
-    nodeGraphs[nodeId] = data
-  } catch {
-    emit('load-graphs-error')
-  }
-}
-
-watch(
-  () => props.nodes,
-  (nodes) => {
-    for (const node of nodes) loadNodeGraphs(node.id)
-  },
-  { immediate: true },
-)
-
-async function onDrop(node, event) {
-  dragOverNodeId.value = null
-  const graphId = event.dataTransfer.getData(LOGIC_GRAPH_DRAG_MIME)
-  if (!graphId) return
-  try {
-    await hierarchyApi.createLogicGraphLink({ node_id: node.id, graph_id: graphId })
-    await loadNodeGraphs(node.id)
-  } catch {
-    emit('link-graph-error')
-  }
-}
-
-async function unlinkGraph(node, graph) {
-  try {
-    await hierarchyApi.deleteLogicGraphLink(node.id, graph.id)
-    await loadNodeGraphs(node.id)
-  } catch {
-    emit('unlink-graph-error')
   }
 }
 </script>

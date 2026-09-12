@@ -28,7 +28,23 @@ const N2_GRAPHS = [
   { id: 'g2', name: 'Licht Alt', enabled: false, link_id: 'l2' },
 ]
 
-async function mountModal({ browseImpl, deleteLogicGraphLinkByIdImpl, deleteGraphImpl } = {}) {
+// Fixed fake selection — real HierarchyCombobox behavior (composite
+// "tree_id:node_id" strings) is covered by its own spec; here we only need
+// something that emits a v-model update to drive the assign modal's confirm.
+// The real component forwards its own `data-testid="assign-hierarchy-combobox"`
+// attribute (set in GraphPickerModal.vue's template) onto this stub's root
+// element as a fallthrough attribute, so that's the selector tests use below.
+const HierarchyComboboxStub = {
+  name: 'HierarchyCombobox',
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  template: '<button type="button" @click="$emit(\'update:modelValue\', [\'tree-a:node-a\', \'tree-b:node-b\'])">pick</button>',
+}
+
+async function mountModal({
+  browseImpl, deleteLogicGraphLinkByIdImpl, deleteGraphImpl,
+  createLogicGraphLinkImpl, getLogicGraphNodesImpl, props = {},
+} = {}) {
   const browse = browseImpl || vi.fn().mockImplementation((params = {}) => {
     if (!params.tree_id) return Promise.resolve({ data: { trees: TREES, subfolders: [], logic_graphs: [] } })
     if (params.tree_id === 't1' && !params.node_id) return Promise.resolve({ data: { trees: [], subfolders: T1_ROOT, logic_graphs: [] } })
@@ -37,13 +53,18 @@ async function mountModal({ browseImpl, deleteLogicGraphLinkByIdImpl, deleteGrap
   })
   const deleteLogicGraphLinkById = deleteLogicGraphLinkByIdImpl || vi.fn().mockResolvedValue({})
   const deleteGraph = deleteGraphImpl || vi.fn().mockResolvedValue({})
+  const createLogicGraphLink = createLogicGraphLinkImpl || vi.fn().mockResolvedValue({ data: { id: 'new-link' } })
+  const getLogicGraphNodes = getLogicGraphNodesImpl || vi.fn().mockResolvedValue({ data: [] })
   // stores/logic.js (used via useLogicStore() for the unassigned-folder
   // "Löschen" action) imports logicApi from this same module — mocked here
   // too so that path resolves instead of hitting the real backend.
-  vi.doMock('@/api/client.js', () => ({ hierarchyApi: { browse, deleteLogicGraphLinkById }, logicApi: { deleteGraph } }))
+  vi.doMock('@/api/client.js', () => ({
+    hierarchyApi: { browse, deleteLogicGraphLinkById, createLogicGraphLink, getLogicGraphNodes },
+    logicApi: { deleteGraph },
+  }))
   const { default: GraphPickerModal } = await import('@/components/logic/GraphPickerModal.vue')
   const wrapper = mount(GraphPickerModal, {
-    props: { modelValue: true },
+    props: { modelValue: true, ...props },
     global: {
       // Modal.vue renders its content via <Teleport to="body">, which Vue
       // Test Utils' wrapper.find() cannot see even with attachTo — stub it
@@ -55,11 +76,12 @@ async function mountModal({ browseImpl, deleteLogicGraphLinkByIdImpl, deleteGrap
       // buttons render.
       stubs: {
         Modal: { template: '<div><slot name="header-actions" /><slot /><slot name="footer" /></div>' },
+        HierarchyCombobox: HierarchyComboboxStub,
       },
     },
   })
   await flushPromises()
-  return { wrapper, browse, deleteLogicGraphLinkById, deleteGraph }
+  return { wrapper, browse, deleteLogicGraphLinkById, deleteGraph, createLogicGraphLink, getLogicGraphNodes }
 }
 
 describe('GraphPickerModal — navigation', () => {
@@ -180,8 +202,8 @@ describe('GraphPickerModal — navigation', () => {
   })
 })
 
-describe('GraphPickerModal — "hier entfernen" (#1217 hierarchy-position removal)', () => {
-  it('shows a remove-here button (not delete) for a graph inside a normal folder', async () => {
+describe('GraphPickerModal — "Aus Hierarchie entfernen" (#1217 hierarchy-position removal)', () => {
+  it('shows a remove-from-hierarchy button, an assign button, and a delete button for a graph inside a normal folder', async () => {
     const { wrapper } = await mountModal()
     await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
     await flushPromises()
@@ -189,8 +211,12 @@ describe('GraphPickerModal — "hier entfernen" (#1217 hierarchy-position remova
     await flushPromises()
 
     expect(wrapper.find('[data-testid="picker-graph-remove-g1"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="picker-graph-remove-g1"]').text()).toBe('hier entfernen')
-    expect(wrapper.find('[data-testid="picker-graph-delete-g1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="picker-graph-remove-g1"]').text()).toBe('Aus Hierarchie entfernen')
+    expect(wrapper.find('[data-testid="picker-graph-assign-g1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-assign-g1"]').text()).toBe('Hierarchie zuweisen')
+    // #1233 follow-up: full deletion is now reachable from every row, not just
+    // the unassigned pseudo-folder.
+    expect(wrapper.find('[data-testid="picker-graph-delete-g1"]').exists()).toBe(true)
   })
 
   it('clicking remove-here unlinks by link_id and refreshes the current listing', async () => {
@@ -280,6 +306,7 @@ describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () =
     expect(wrapper.find('[data-testid="picker-graph-delete-u1"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="picker-graph-delete-u1"]').text()).toBe('Löschen')
     expect(wrapper.find('[data-testid="picker-graph-remove-u1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="picker-graph-assign-u1"]').exists()).toBe(true)
   })
 
   it('clicking delete asks for confirmation before deleting anything', async () => {
@@ -326,5 +353,126 @@ describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () =
 
     expect(deleteGraph).not.toHaveBeenCalled()
     expect(wrapper.emitted('graph-deleted')).toBeFalsy()
+  })
+})
+
+describe('GraphPickerModal — "Hierarchie zuweisen" (#1233 follow-up)', () => {
+  it('opens the assign modal for a row and links every selected node on confirm', async () => {
+    const { wrapper, createLogicGraphLink, browse } = await mountModal()
+    await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-folder-n2"]').trigger('click')
+    await flushPromises()
+    browse.mockClear()
+
+    await wrapper.find('[data-testid="picker-graph-assign-g1"]').trigger('click')
+    await wrapper.find('[data-testid="assign-hierarchy-combobox"]').trigger('click')
+    await wrapper.find('[data-testid="btn-assign-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-a', graph_id: 'g1' })
+    expect(createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-b', graph_id: 'g1' })
+    // The current listing is refreshed so a graph that just became assigned
+    // (e.g. from "Nicht zugeordnet") disappears from where it no longer belongs.
+    expect(browse).toHaveBeenCalledWith({ tree_id: 't1', node_id: 'n2' })
+  })
+
+  it('keeps the modal open and shows an error when a link request fails', async () => {
+    const createLogicGraphLink = vi.fn().mockRejectedValue(new Error('boom'))
+    const { wrapper } = await mountModal({ createLogicGraphLinkImpl: createLogicGraphLink })
+    await wrapper.find('[data-testid="picker-tree-t1"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-folder-n2"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="picker-graph-assign-g1"]').trigger('click')
+    await wrapper.find('[data-testid="assign-hierarchy-combobox"]').trigger('click')
+    await wrapper.find('[data-testid="btn-assign-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Die Hierarchie-Zuweisung ist fehlgeschlagen.')
+  })
+
+  it('is available on graphs in the unassigned pseudo-folder too', async () => {
+    const UNASSIGNED_GRAPHS = [{ id: 'u1', name: 'Streuner', enabled: true }]
+    const browse = vi.fn().mockImplementation((params = {}) => {
+      if (params.unassigned) return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: UNASSIGNED_GRAPHS } })
+      return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: [], has_unassigned_logic_graphs: true } })
+    })
+    const { wrapper } = await mountModal({ browseImpl: browse })
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="picker-graph-assign-u1"]').exists()).toBe(true)
+  })
+})
+
+describe('GraphPickerModal — preselect + auto-expand the active graph (#1233 follow-up)', () => {
+  it('fetches the active graph\'s first hierarchy assignment and navigates straight there, rebuilding ancestor crumbs', async () => {
+    // node_path carries the ancestor chain (root → parent, excluding the leaf
+    // itself) — here "n2" is the assigned node's own parent, so the rebuilt
+    // crumb trail must be [n2, n2a], not just the leaf.
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({
+      data: [{
+        link_id: 'l1', node_id: 'n2a', node_name: 'Wohnzimmer', tree_id: 't1', tree_name: 'Technisch',
+        node_path: [{ node_id: 'n2', node_name: 'Licht' }], is_tree_root: false,
+      }],
+    })
+    const browse = vi.fn().mockImplementation((params = {}) => {
+      if (params.tree_id === 't1' && params.node_id === 'n2a') {
+        return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: [{ id: 'g1', name: 'Licht WZ', enabled: true, link_id: 'l1' }] } })
+      }
+      return Promise.resolve({ data: { trees: [], subfolders: [], logic_graphs: [] } })
+    })
+    const { wrapper } = await mountModal({ browseImpl: browse, getLogicGraphNodesImpl: getLogicGraphNodes, props: { activeGraphId: 'g1' } })
+
+    expect(getLogicGraphNodes).toHaveBeenCalledWith('g1')
+    expect(browse).toHaveBeenCalledWith({ tree_id: 't1', node_id: 'n2a' })
+    expect(wrapper.find('[data-testid="crumb-node-n2"]').text()).toBe('Licht')
+    expect(wrapper.find('[data-testid="crumb-node-n2a"]').text()).toBe('Wohnzimmer')
+    expect(wrapper.find('[data-testid="picker-graph-current-g1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-current-g2"]').exists()).toBe(false)
+  })
+
+  it('navigates to a tree\'s own top level when the assignment is on the tree root', async () => {
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({
+      data: [{ link_id: 'l9', node_id: 'root-t1', node_name: 'Technisch', tree_id: 't1', tree_name: 'Technisch', node_path: [], is_tree_root: true }],
+    })
+    const { browse } = await mountModal({ getLogicGraphNodesImpl: getLogicGraphNodes, props: { activeGraphId: 'g9' } })
+    expect(browse).toHaveBeenCalledWith({ tree_id: 't1' })
+  })
+
+  it('navigates to "Nicht zugeordnet" when the active graph has no assignments at all', async () => {
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({ data: [] })
+    const { wrapper, browse } = await mountModal({ getLogicGraphNodesImpl: getLogicGraphNodes, props: { activeGraphId: 'g1' } })
+    expect(browse).toHaveBeenCalledWith({ unassigned: true })
+    expect(wrapper.find('[data-testid="crumb-unassigned"]').exists()).toBe(true)
+  })
+
+  it('falls back to the root level when looking up the active graph\'s assignments fails', async () => {
+    const getLogicGraphNodes = vi.fn().mockRejectedValue(new Error('boom'))
+    const { wrapper, browse } = await mountModal({ getLogicGraphNodesImpl: getLogicGraphNodes, props: { activeGraphId: 'g1' } })
+    expect(browse).toHaveBeenCalledWith({})
+    expect(wrapper.find('[data-testid="picker-tree-t1"]').exists()).toBe(true)
+  })
+
+  it('remembers the location it found the active graph at, and skips re-fetching on reopen', async () => {
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({
+      data: [{ link_id: 'l1', node_id: 'n2', node_name: 'Licht', tree_id: 't1', tree_name: 'Technisch', node_path: [], is_tree_root: false }],
+    })
+    const { wrapper, browse } = await mountModal({ getLogicGraphNodesImpl: getLogicGraphNodes, props: { activeGraphId: 'g1' } })
+    expect(getLogicGraphNodes).toHaveBeenCalledTimes(1)
+
+    browse.mockClear()
+    await wrapper.setProps({ modelValue: false })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+
+    expect(getLogicGraphNodes).toHaveBeenCalledTimes(1) // not re-fetched — used the remembered location
+    expect(browse).toHaveBeenCalledWith({ tree_id: 't1', node_id: 'n2' })
+  })
+
+  it('with no active graph, resets to the root level as before', async () => {
+    const { browse } = await mountModal()
+    expect(browse).toHaveBeenCalledWith({})
   })
 })

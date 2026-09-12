@@ -35,25 +35,6 @@ shading/lighting/sockets alongside a topological one by room). This assignment i
 organizational and has no effect on permissions — Logic graphs keep their own, independent
 permission model.
 
-In the Logic editor, the "Open graph" button leads to a picker that offers the hierarchies for
-click-through, level by level. Graphs with no assignment at all appear there in their own
-"Unassigned" folder at the top level.
-
-An assignment can also be removed right from that same picker: every graph row shows a "remove
-here" button on the right that only undoes the link to the position currently being browsed —
-any other assignments of that same graph, in other folders or hierarchies, are left untouched.
-If that was the graph's last assignment, it reappears under "Unassigned" afterward. For graphs
-already sitting there, the same button reads "Delete" instead, since there is no assignment
-left to remove — clicking it, after a confirmation prompt, deletes the graph completely and
-irreversibly.
-
-To organize graphs, this Settings page offers a logic-graph palette: dragging a graph from
-there onto a node links it there — existing links in other folders or hierarchies are left
-untouched. Dropping a graph directly on a hierarchy's own title (instead of one of its
-sub-folders) links it straight to that hierarchy's top level, with no need to create a
-sub-folder first.
-
-Alternatively, the assignment can also be made right when creating a new graph: the "New
-logic sheet" dialog in the Logic editor has an optional "Hierarchy nodes" search field (the
-same element used for filter sets in the Monitor area) to assign one or more nodes directly.
-Left empty, the new graph lands at the top level under "Not assigned" as usual.
+This page manages only the hierarchies themselves (trees and nodes); assigning a Logic graph
+to a hierarchy position happens entirely in the Logic editor, via its "Open Logic" picker
+(Logic module → toolbar).

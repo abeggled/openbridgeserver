@@ -191,7 +191,8 @@ describe('LogicView auth gates', () => {
     await wrapper.vm.saveGraph()
     await wrapper.vm.runGraph()
     await wrapper.vm.doToggleEnabled()
-    await wrapper.vm.doDuplicateGraph()
+    wrapper.vm.openDuplicate()
+    await wrapper.vm.doDuplicate()
     wrapper.vm.openRenameGraph()
     await wrapper.vm.doRenameGraph()
     wrapper.vm.confirmDeleteGraph()
@@ -479,8 +480,10 @@ describe('LogicView auth gates', () => {
     await wrapper.vm.doToggleEnabled()
     expect(logicApi.patchGraph).toHaveBeenCalledWith('graph-1', { enabled: false })
 
-    await wrapper.vm.doDuplicateGraph()
-    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1')
+    wrapper.vm.openDuplicate()
+    expect(wrapper.vm.duplicateName).toBe('(Kopie) Main Graph')
+    await wrapper.vm.doDuplicate()
+    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1', '(Kopie) Main Graph')
     expect(wrapper.vm.activeGraphId).toBe('graph-copy')
     expect(wrapper.vm.lastRunOutputs).toEqual({})
 
@@ -1299,7 +1302,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
 })
 
 describe('LogicView operation error handling', () => {
-  it('shows error status when doDuplicateGraph fails', async () => {
+  it('shows error status when doDuplicate fails', async () => {
     const graph = makeGraph('graph-1')
     const { wrapper, logicApi } = await mountLogicView({
       isAdmin: true,
@@ -1309,7 +1312,8 @@ describe('LogicView operation error handling', () => {
     })
     logicApi.duplicateGraph.mockRejectedValue({ response: { data: { detail: 'Duplicate failed' } } })
 
-    await wrapper.vm.doDuplicateGraph()
+    wrapper.vm.openDuplicate()
+    await wrapper.vm.doDuplicate()
 
     expect(wrapper.vm.statusMsg.ok).toBe(false)
   })

@@ -122,6 +122,42 @@ async def test_duplicate_graph_creates_copy(client, auth_headers):
             await _delete_graph(client, auth_headers, copy["id"])
 
 
+async def test_duplicate_graph_with_custom_name(client, auth_headers):
+    g = await _create_graph(client, auth_headers, "Original")
+    copy = None
+    try:
+        resp = await client.post(
+            f"/api/v1/logic/graphs/{g['id']}/duplicate",
+            json={"name": "(Kopie) Original"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, resp.text
+        copy = resp.json()
+        assert copy["name"] == "(Kopie) Original"
+    finally:
+        await _delete_graph(client, auth_headers, g["id"])
+        if copy:
+            await _delete_graph(client, auth_headers, copy["id"])
+
+
+async def test_duplicate_graph_with_blank_name_falls_back_to_default(client, auth_headers):
+    g = await _create_graph(client, auth_headers, "Original")
+    copy = None
+    try:
+        resp = await client.post(
+            f"/api/v1/logic/graphs/{g['id']}/duplicate",
+            json={"name": "   "},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, resp.text
+        copy = resp.json()
+        assert copy["name"] == f"Kopie von {g['name']}"
+    finally:
+        await _delete_graph(client, auth_headers, g["id"])
+        if copy:
+            await _delete_graph(client, auth_headers, copy["id"])
+
+
 async def test_central_graph_class_roundtrips_duplicate_export_and_import(client, auth_headers):
     graph = await _create_graph(client, auth_headers, "Central Graph", control_class="central_plant")
     duplicate = None

@@ -16,16 +16,17 @@
         </button>
         <GraphPickerModal
           v-model="showGraphPicker"
+          :active-graph-id="activeGraphId"
           @select="onGraphPicked"
           @graph-deleted="onGraphDeletedFromPicker"
         />
-        <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving" data-testid="btn-save">
+        <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm flex-shrink-0">{{ $t('logic.newGraphBtn') }}</button>
+        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
         <button v-if="activeGraphId" @click="requestGraphRun"
-          :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
+          :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
           :disabled="!activeGraph?.enabled || runPreflightLoading"
           :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
           data-testid="btn-run">
@@ -34,7 +35,7 @@
           {{ $t('logic.run') }}
         </button>
         <button v-if="auth.isAdmin && activeGraphId" @click="toggleDebug"
-          :class="['btn-secondary btn-sm', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
+          :class="['btn-secondary btn-sm flex-shrink-0', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
           :title="$t('logic.debugMode')" data-testid="btn-debug">
           <svg
             aria-hidden="true"
@@ -58,10 +59,10 @@
         <!-- Raster visibility is a purely local presentation preference and is
              therefore available without edit permissions (#1075); snapping and
              the grid size stay admin-only because they move blocks. -->
-        <div v-if="activeGraphId" class="flex items-center gap-1">
+        <div v-if="activeGraphId" class="flex items-center gap-1 flex-shrink-0">
           <button
             type="button"
-            :class="['btn-secondary btn-sm', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+            :class="['btn-secondary btn-sm flex-shrink-0', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
             :title="gridVisible ? $t('logic.gridHideTitle') : $t('logic.gridShowTitle')"
             :aria-pressed="gridVisible ? 'true' : 'false'"
             data-testid="btn-grid-visible"
@@ -72,7 +73,7 @@
           <template v-if="auth.isAdmin">
             <button
               type="button"
-              :class="['btn-secondary btn-sm', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+              :class="['btn-secondary btn-sm flex-shrink-0', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
               :title="$t('logic.snapToGridTitle')"
               :aria-pressed="snapToGrid ? 'true' : 'false'"
               data-testid="btn-snap-to-grid"
@@ -80,7 +81,7 @@
             >
               # {{ $t('logic.snapToGrid') }}
             </button>
-            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 flex-shrink-0 text-xs text-slate-500 dark:text-slate-400">
               <span class="sr-only">{{ $t('logic.gridSize') }}</span>
               <input
                 :value="snapGridSize"
@@ -97,33 +98,33 @@
           </template>
         </div>
         <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
-          :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
+          :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
           :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
           data-testid="btn-toggle-enabled">
           {{ activeGraph?.enabled ? $t('logic.toggleActive') : $t('logic.toggleDisabled') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="copySelection" class="btn-secondary btn-sm" :disabled="!hasSelection || graphLoading"
+        <button v-if="auth.isAdmin && activeGraphId" @click="copySelection" class="btn-secondary btn-sm flex-shrink-0" :disabled="!hasSelection || graphLoading"
           :title="$t('logic.copySelectionTitle')" data-testid="btn-copy-nodes">
           ⧉ {{ $t('logic.copySelection') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="pasteClipboard" class="btn-secondary btn-sm" :disabled="!clipboard || graphLoading"
+        <button v-if="auth.isAdmin && activeGraphId" @click="pasteClipboard" class="btn-secondary btn-sm flex-shrink-0" :disabled="!clipboard || graphLoading"
           :title="$t('logic.pasteSelectionTitle')" data-testid="btn-paste-nodes">
           📋 {{ $t('logic.pasteSelection') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
+        <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.renameGraph')" data-testid="btn-rename">
           ✏ {{ $t('logic.rename') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
+        <button v-if="auth.isAdmin && activeGraphId" @click="openDuplicate" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
           ⧉ {{ $t('logic.duplicate') }}
         </button>
-        <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" :title="$t('logic.exportJson')" data-testid="btn-export">
+        <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.exportJson')" data-testid="btn-export">
           ↓ {{ $t('logic.export') }}
         </button>
-        <label v-if="auth.isAdmin" class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
+        <label v-if="auth.isAdmin" class="btn-secondary btn-sm flex-shrink-0 cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
           ↑ {{ $t('logic.import') }}
           <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
         </label>
-        <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-secondary btn-sm text-red-400" data-testid="btn-delete">
+        <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-secondary btn-sm flex-shrink-0 text-red-400" data-testid="btn-delete">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
           </svg>
@@ -264,6 +265,20 @@
         <div class="flex justify-end gap-3">
           <button type="button" @click="showRenameGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
           <button type="submit" class="btn-primary" data-testid="btn-rename-confirm">{{ $t('common.save') }}</button>
+        </div>
+      </form>
+    </Modal>
+
+    <!-- Duplicate Graph Modal -->
+    <Modal v-model="showDuplicate" :title="$t('logic.duplicateGraph')" max-width="sm">
+      <form @submit.prevent="doDuplicate" class="flex flex-col gap-4">
+        <div class="form-group">
+          <label class="label">{{ $t('logic.name') }}</label>
+          <input v-model="duplicateName" type="text" class="input" required autofocus data-testid="input-duplicate-name" />
+        </div>
+        <div class="flex justify-end gap-3">
+          <button type="button" @click="showDuplicate = false" class="btn-secondary" data-testid="btn-duplicate-cancel">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary" data-testid="btn-duplicate-confirm">{{ $t('logic.duplicate') }}</button>
         </div>
       </form>
     </Modal>
@@ -1093,10 +1108,21 @@ async function doDeleteGraph() {
 }
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
-async function doDuplicateGraph() {
+const showDuplicate = ref(false)
+const duplicateName = ref('')
+
+function openDuplicate() {
   if (!auth.isAdmin || !activeGraphId.value) return
+  const g = store.graphs.find(g => g.id === activeGraphId.value)
+  duplicateName.value = `${t('logic.duplicateNamePrefix')}${g?.name ?? ''}`
+  showDuplicate.value = true
+}
+
+async function doDuplicate() {
+  if (!auth.isAdmin || !activeGraphId.value || !duplicateName.value.trim()) return
   try {
-    const copy = await store.duplicateGraph(activeGraphId.value)
+    const copy = await store.duplicateGraph(activeGraphId.value, duplicateName.value.trim())
+    showDuplicate.value = false
     activeGraphId.value = copy.id
     await loadGraph()
     showStatus(true, t('logic.duplicated', { name: copy.name }))

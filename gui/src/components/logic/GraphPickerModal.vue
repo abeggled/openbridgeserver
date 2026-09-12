@@ -64,11 +64,14 @@
           <span class="flex-1 truncate text-slate-700 dark:text-slate-200">{{ folder.name }}</span>
         </button>
 
-        <!-- Logic graphs -->
+        <!-- Logic graphs — assignment to a hierarchy position now happens
+             entirely here (#1233 follow-up): Settings → Hierarchy only
+             manages the tree/node structure itself. -->
         <div v-for="graph in result.logic_graphs" :key="graph.link_id ?? graph.id"
-          class="flex items-center gap-1 pr-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors">
+          :class="['flex flex-col gap-1 px-1 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors',
+            graph.id === activeGraphId ? 'ring-1 ring-blue-400 bg-blue-50/60 dark:bg-blue-500/10' : '']">
           <button type="button"
-            class="flex items-center gap-2 flex-1 min-w-0 px-3 py-2 rounded-lg text-left text-sm"
+            class="flex items-center gap-2 min-w-0 px-3 py-2 rounded-lg text-left text-sm"
             @click="pick(graph)" :data-testid="`picker-graph-${graph.id}`">
             <svg class="w-4 h-4 shrink-0 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v4a1 1 0 01-1 1H4m8-5v18m4-9h4m-4-5h4m-4 10h4"/>
@@ -76,24 +79,50 @@
             <span class="flex-1 truncate" :class="graph.enabled ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'">
               {{ graph.name }}{{ graph.enabled ? '' : $t('logic.graphDisabledSuffix') }}
             </span>
+            <span v-if="graph.id === activeGraphId" class="text-[10px] uppercase tracking-wide text-blue-500 shrink-0" :data-testid="`picker-graph-current-${graph.id}`">
+              {{ $t('logic.graphPicker.currentGraph') }}
+            </span>
           </button>
-          <!-- Unassigned pseudo-folder: no link left to remove, so this is the
-               real, irreversible graph deletion instead — confirmed below. -->
-          <button v-if="unassignedMode" type="button"
-            class="btn-secondary btn-sm text-red-400 shrink-0"
-            :title="$t('logic.graphPicker.deleteHereTitle')"
-            @click="confirmDelete(graph)" :data-testid="`picker-graph-delete-${graph.id}`">
-            {{ $t('common.delete') }}
-          </button>
-          <button v-else type="button"
-            class="btn-secondary btn-sm shrink-0"
-            :title="$t('logic.graphPicker.removeHereTitle')"
-            @click="removeHere(graph)" :data-testid="`picker-graph-remove-${graph.id}`">
-            {{ $t('logic.graphPicker.removeHere') }}
-          </button>
+          <div class="flex items-center gap-1 pl-9 flex-wrap">
+            <button type="button" class="btn-secondary btn-xs shrink-0"
+              @click="openAssign(graph)" :data-testid="`picker-graph-assign-${graph.id}`">
+              {{ $t('logic.graphPicker.assign') }}
+            </button>
+            <!-- Only a real hierarchy position (not the unassigned pseudo-folder)
+                 has a link here to remove. -->
+            <button v-if="!unassignedMode" type="button"
+              class="btn-secondary btn-xs shrink-0"
+              :title="$t('logic.graphPicker.removeHereTitle')"
+              @click="removeHere(graph)" :data-testid="`picker-graph-remove-${graph.id}`">
+              {{ $t('logic.graphPicker.removeHere') }}
+            </button>
+            <button type="button"
+              class="btn-secondary btn-xs text-red-400 shrink-0"
+              :title="unassignedMode ? $t('logic.graphPicker.deleteHereTitle') : $t('logic.graphPicker.deleteTitle')"
+              @click="confirmDelete(graph)" :data-testid="`picker-graph-delete-${graph.id}`">
+              {{ $t('common.delete') }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- Assign a hierarchy position (additive — existing assignments stay) -->
+    <Modal v-model="assignModal.open" :title="$t('logic.graphPicker.assign')" max-width="sm">
+      <div class="flex flex-col gap-4">
+        <p class="text-xs text-slate-500">{{ $t('logic.graphPicker.assignHint') }}</p>
+        <HierarchyCombobox v-model="assignModal.nodes" include-tree-roots data-testid="assign-hierarchy-combobox" />
+        <div v-if="assignModal.msg" class="text-sm text-red-400">{{ assignModal.msg }}</div>
+        <div class="flex justify-end gap-3">
+          <button type="button" @click="assignModal.open = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
+          <button type="button" class="btn-primary" :disabled="assignModal.nodes.length === 0 || assignModal.saving"
+            @click="confirmAssign" data-testid="btn-assign-confirm">
+            <Spinner v-if="assignModal.saving" size="sm" color="white" />
+            {{ $t('logic.graphPicker.assignConfirm') }}
+          </button>
+        </div>
+      </div>
+    </Modal>
 
     <ConfirmDialog v-model="showDeleteConfirm"
       :title="$t('logic.deleteGraph')"
@@ -104,17 +133,23 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, h } from 'vue'
+import { ref, reactive, computed, watch, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import HierarchyCombobox from '@/components/ui/HierarchyCombobox.vue'
 import { hierarchyApi } from '@/api/client.js'
 import { useLogicStore } from '@/stores/logic'
+import { parseHierarchyCompositeId } from '@/utils/hierarchyDisplay.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
+  // The graph currently open in the Logic editor, if any (#1233 follow-up) —
+  // used to preselect/highlight its row and to auto-navigate to the
+  // hierarchy position it was last opened from.
+  activeGraphId: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue', 'select', 'graph-deleted'])
 
@@ -148,6 +183,24 @@ const loading  = ref(false)
 const errorMsg = ref('')
 const result   = ref({ trees: [], subfolders: [], logic_graphs: [], has_unassigned_logic_graphs: false })
 
+// Remembers, per graph id, the hierarchy position last browsed while that
+// graph was visible in the current listing. This component instance stays
+// mounted across opens/closes (only Modal's own v-if toggles visibility), so
+// reopening the picker on the same active graph can jump straight back to
+// where it was found instead of resetting to the root every time (#1233
+// follow-up: "expand the hierarchy level it was opened from").
+const lastLocationByGraph = {}
+
+function currentLocation() {
+  return { treeCrumb: treeCrumb.value, nodeCrumbs: nodeCrumbs.value, unassignedMode: unassignedMode.value }
+}
+
+function applyLocation(loc) {
+  treeCrumb.value = loc.treeCrumb
+  nodeCrumbs.value = loc.nodeCrumbs
+  unassignedMode.value = loc.unassignedMode
+}
+
 async function browse() {
   loading.value = true
   errorMsg.value = ''
@@ -162,6 +215,9 @@ async function browse() {
     }
     const { data } = await hierarchyApi.browse(params)
     result.value = data
+    if (props.activeGraphId && data.logic_graphs.some((g) => g.id === props.activeGraphId)) {
+      lastLocationByGraph[props.activeGraphId] = currentLocation()
+    }
   } catch {
     errorMsg.value = t('logic.graphPicker.errorLoading')
   } finally {
@@ -200,6 +256,36 @@ function openUnassigned() {
   browse()
 }
 
+// Navigates to wherever `activeGraphId` currently lives: a remembered
+// location from earlier this session, else its first hierarchy assignment
+// (fetched once), else the "Nicht zugeordnet" pseudo-folder.
+async function locateActiveGraph() {
+  const remembered = lastLocationByGraph[props.activeGraphId]
+  if (remembered) {
+    applyLocation(remembered)
+    await browse()
+    return
+  }
+  try {
+    const { data: assignments } = await hierarchyApi.getLogicGraphNodes(props.activeGraphId)
+    const first = assignments[0]
+    if (!first) {
+      applyLocation({ treeCrumb: null, nodeCrumbs: [], unassignedMode: true })
+    } else if (first.is_tree_root) {
+      applyLocation({ treeCrumb: { id: first.tree_id, name: first.tree_name }, nodeCrumbs: [], unassignedMode: false })
+    } else {
+      const crumbs = [
+        ...first.node_path.map((seg) => ({ id: seg.node_id, name: seg.node_name })),
+        { id: first.node_id, name: first.node_name },
+      ]
+      applyLocation({ treeCrumb: { id: first.tree_id, name: first.tree_name }, nodeCrumbs: crumbs, unassignedMode: false })
+    }
+  } catch {
+    applyLocation({ treeCrumb: null, nodeCrumbs: [], unassignedMode: false })
+  }
+  await browse()
+}
+
 function pick(graph) {
   emit('select', graph.id)
   open.value = false
@@ -207,16 +293,52 @@ function pick(graph) {
 
 // Unlinks the graph from whichever hierarchy position is currently being
 // browsed (this level's node — a tree's own root included). Purely
-// organizational, same as the drag&drop unlink in Settings → Hierarchy: if
-// this was the graph's last link, it simply reappears under "Nicht
-// zugeordnet" next time the picker is opened at the root level.
+// organizational: if this was the graph's last link, it simply reappears
+// under "Nicht zugeordnet" next time the picker is opened at the root level.
 async function removeHere(graph) {
   await hierarchyApi.deleteLogicGraphLinkById(graph.link_id)
   await browse()
 }
 
-// Unassigned pseudo-folder: there is no link left to remove here, so the row
-// action instead deletes the graph itself — irreversible, hence confirmed.
+// ── Assign a hierarchy position (#1233 follow-up) ───────────────────────────
+// Replaces the drag&drop-onto-a-node assignment previously offered on the
+// Settings → Hierarchy page — every row here, assigned or not, offers this.
+// Additive: existing assignments elsewhere are never touched.
+const assignModal = reactive({ open: false, graph: null, nodes: [], saving: false, msg: null })
+
+function openAssign(graph) {
+  assignModal.graph = graph
+  assignModal.nodes = []
+  assignModal.msg = null
+  assignModal.open = true
+}
+
+async function confirmAssign() {
+  if (!assignModal.graph || assignModal.nodes.length === 0) return
+  assignModal.saving = true
+  assignModal.msg = null
+  try {
+    const results = await Promise.allSettled(
+      assignModal.nodes.map((compositeId) => {
+        const parsed = parseHierarchyCompositeId(compositeId)
+        if (!parsed) return Promise.reject(new Error('invalid_composite_id'))
+        return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: assignModal.graph.id })
+      }),
+    )
+    await browse()
+    if (results.some((r) => r.status === 'rejected')) {
+      assignModal.msg = t('logic.graphPicker.assignError')
+    } else {
+      assignModal.open = false
+    }
+  } finally {
+    assignModal.saving = false
+  }
+}
+
+// Full graph deletion — reachable from every row now, not just the
+// unassigned pseudo-folder: cascades any remaining hierarchy links via the
+// existing ON DELETE CASCADE foreign key, so no extra cleanup is needed here.
 const showDeleteConfirm = ref(false)
 const deleteTarget = ref(null)
 const deleteMessage = computed(() =>
@@ -239,14 +361,19 @@ function goOrganize() {
   router.push('/settings?tab=hierarchy')
 }
 
-// Reset to the top level every time the popup is (re)opened — immediate so a
-// component mounted already-open (e.g. tests) also browses right away.
+// Reset to the top level every time the popup is (re)opened — or, when a
+// graph is currently open in the editor, navigate straight to where it was
+// found. Immediate so a component mounted already-open (e.g. tests) also
+// browses right away.
 watch(open, (v) => {
-  if (v) {
-    treeCrumb.value = null
-    nodeCrumbs.value = []
-    unassignedMode.value = false
-    browse()
+  if (!v) return
+  if (props.activeGraphId) {
+    locateActiveGraph()
+    return
   }
+  treeCrumb.value = null
+  nodeCrumbs.value = []
+  unassignedMode.value = false
+  browse()
 }, { immediate: true })
 </script>
