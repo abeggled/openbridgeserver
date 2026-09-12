@@ -240,7 +240,18 @@ export async function apiDeleteIcons(names: string[]): Promise<void> {
  * with a "open graph" button + a drill-down folder browser). Assumes the
  * graph is unlinked from any hierarchy, which holds for every graph these
  * E2E tests create through the API — it is therefore only reachable via the
- * "Nicht zugeordnet" pseudo-folder at the picker's root level.
+ * "Nicht zugeordnet" pseudo-folder.
+ *
+ * #1233 follow-up: if a graph is *already* open in the editor when the
+ * picker is opened, it now auto-navigates straight to that graph's own
+ * hierarchy position instead of resetting to the root level — for these
+ * always-unassigned E2E graphs, that lands directly inside "Nicht
+ * zugeordnet", skipping the root folder view entirely. So the very first
+ * `openLogicGraph()` call in a test (no graph open yet) still needs the
+ * root-level "Nicht zugeordnet" folder click, but a later call while
+ * another graph is already open does not — the folder button plain isn't
+ * on screen to click. Wait for whichever of the two states shows up and
+ * only click the folder if it's actually there.
  *
  * Waits for the modal's backdrop to fully disappear before returning — its
  * 150ms leave transition (`Modal.vue`) otherwise still overlays the canvas
@@ -250,7 +261,10 @@ export async function apiDeleteIcons(names: string[]): Promise<void> {
  */
 export async function openLogicGraph(page: Page, graphId: string): Promise<void> {
   await page.click('[data-testid="btn-open-graph-picker"]')
-  await page.click('[data-testid="picker-unassigned"]')
+  await page.waitForSelector('[data-testid="picker-unassigned"], [data-testid="crumb-unassigned"]')
+  if (await page.locator('[data-testid="picker-unassigned"]').count()) {
+    await page.click('[data-testid="picker-unassigned"]')
+  }
   await page.click(`[data-testid="picker-graph-${graphId}"]`)
   await expect(page.locator('[data-testid="graph-picker-breadcrumb"]')).toBeHidden()
 }

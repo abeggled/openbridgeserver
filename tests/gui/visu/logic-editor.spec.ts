@@ -961,9 +961,15 @@ test('Logikblatt-Toggle: Button zeigt Aktiv-Status und deaktiviert das Blatt', a
     // Button must now show "Deaktiviert"
     await expect(toggleBtn).toContainText('Deaktiviert')
 
-    // Graph-picker entry must show "(deaktiviert)" suffix
+    // Graph-picker entry must show "(deaktiviert)" suffix. The graph is
+    // already open, so the picker auto-navigates straight into "Nicht
+    // zugeordnet" (#1233 follow-up) instead of showing the root folder
+    // list — only click the folder if it's actually the one shown.
     await page.click('[data-testid="btn-open-graph-picker"]')
-    await page.click('[data-testid="picker-unassigned"]')
+    await page.waitForSelector('[data-testid="picker-unassigned"], [data-testid="crumb-unassigned"]')
+    if (await page.locator('[data-testid="picker-unassigned"]').count()) {
+      await page.click('[data-testid="picker-unassigned"]')
+    }
     const option = page.locator(`[data-testid="picker-graph-${graphId}"]`)
     await expect(option).toContainText('(deaktiviert)')
     await option.click() // re-select the same (already active) graph to close the picker
