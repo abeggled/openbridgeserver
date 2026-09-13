@@ -24,7 +24,7 @@
           @click="node.children?.length && toggleExpand(node.id)"
           :class="['text-sm text-slate-700 dark:text-slate-200 flex-1 truncate select-none',
             node.children?.length ? 'cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors' : '']">
-          {{ node.name }}
+          {{ node.name }}<span v-if="node.children?.length" class="font-normal text-slate-400" :data-testid="`child-count-${node.id}`"> ({{ node.children.length }})</span>
         </span>
         <span v-if="node.description" class="text-xs text-slate-400 hidden lg:block truncate max-w-24">{{ node.description }}</span>
 

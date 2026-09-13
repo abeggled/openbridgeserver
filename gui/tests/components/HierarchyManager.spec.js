@@ -115,6 +115,30 @@ describe('HierarchyManager — tree list', () => {
   })
 })
 
+describe('HierarchyManager — child count', () => {
+  it('preloads a tree\'s nodes on mount and shows the count next to its name, before it is ever expanded', async () => {
+    listTreesMock.mockResolvedValue({ data: [{ id: 'tree-1', name: 'Gebäude', description: '', display_depth: 0 }] })
+    getTreeNodesMock.mockResolvedValue({ data: [
+      { id: 'node-1', name: 'EG', description: '', children: [] },
+      { id: 'node-2', name: 'OG', description: '', children: [] },
+    ] })
+    const w = await mountHM()
+    await flushPromises()
+
+    expect(getTreeNodesMock).toHaveBeenCalledWith('tree-1')
+    expect(w.find('[data-testid="child-count-tree-1"]').text()).toBe('(2)')
+  })
+
+  it('omits the count for a tree with no root nodes', async () => {
+    listTreesMock.mockResolvedValue({ data: [{ id: 'tree-1', name: 'Gebäude', description: '', display_depth: 0 }] })
+    getTreeNodesMock.mockResolvedValue({ data: [] })
+    const w = await mountHM()
+    await flushPromises()
+
+    expect(w.find('[data-testid="child-count-tree-1"]').exists()).toBe(false)
+  })
+})
+
 describe('HierarchyManager — expand tree', () => {
   it('clicking expand button loads tree nodes', async () => {
     listTreesMock.mockResolvedValue({ data: [{ id: 'tree-1', name: 'Test', description: '', display_depth: 0 }] })

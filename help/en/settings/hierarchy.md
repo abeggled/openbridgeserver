@@ -27,6 +27,10 @@ Nodes can be manually renamed, added, and deleted again (deleting a branch also 
 its child nodes). The "display start level" determines from which level the shortened path is
 shown in data point lists — the full path always remains visible as a tooltip.
 
+A number in parentheses after a hierarchy's or node's name shows how many child elements sit
+directly underneath it (e.g. "Shading (2)") — omitted for elements with no children. This
+always counts direct children only, not the cumulative count across all deeper levels.
+
 ## Assigning Logic graphs
 
 The same hierarchies can also be used to group Logic graphs — a graph can be sorted into

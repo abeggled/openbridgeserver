@@ -28,6 +28,11 @@ entfernt auch alle Unterknoten). Die „Anzeigestart-Ebene" bestimmt, ab welcher
 verkürzte Pfad in Objekt-Listen angezeigt wird — der vollständige Pfad bleibt dabei stets als
 Tooltip sichtbar.
 
+Hinter dem Namen einer Hierarchie bzw. eines Knotens zeigt eine Zahl in Klammern die Anzahl
+der direkt darunterliegenden Kind-Elemente an (z. B. „Beschattung (2)") — bei Elementen ohne
+Kinder entfällt die Angabe. Es wird stets nur die direkte, nicht die kumulierte Anzahl über
+alle Ebenen hinweg gezählt.
+
 ## Logiken zuordnen
 
 Dieselben Hierarchien lassen sich auch verwenden, um Logiken zu gruppieren — eine Logik kann
