@@ -5,7 +5,7 @@
       <!-- Actions scroll horizontally on narrow/laptop viewports; the status
            bar below lives outside this container so it stays visible
            instead of scrolling off with whichever action produced it. -->
-      <div class="flex items-center gap-3 overflow-x-auto min-w-0">
+      <div class="flex items-center gap-3 overflow-x-auto min-w-0 pb-1">
         <!-- Reserved to the NodePalette column's current width below (see
              titleSpacerClass), so the dropdown lines up with the canvas
              instead of crowding the title. -->

@@ -32,7 +32,11 @@
 
       <div v-if="loading" class="flex justify-center py-8"><Spinner /></div>
       <div v-else-if="errorMsg" class="text-sm text-red-400 py-4 text-center">{{ errorMsg }}</div>
-      <div v-else class="flex flex-col gap-1 max-h-[60vh] overflow-y-auto">
+      <!-- px-1: `overflow-y-auto` alone forces the browser to also clip the
+           x-axis (CSS overflow computed-value rule), which otherwise cuts
+           off the 1px active-graph ring's straight left/right edges — only
+           its rounded corners peek out. This padding gives the ring room. -->
+      <div v-else class="flex flex-col gap-1 px-1 max-h-[60vh] overflow-y-auto">
         <div v-if="isRootLevel && result.trees.length === 0 && !result.has_unassigned_logic_graphs" class="text-sm text-slate-500 py-6 text-center">
           {{ $t('logic.graphPicker.noTrees') }}
         </div>
