@@ -65,7 +65,7 @@ async function mountModal({
     hierarchyApi: { browse, deleteLogicGraphLinkById, createLogicGraphLink, getLogicGraphNodes },
     logicApi: { deleteGraph },
   }))
-  // "Alle anzeigen" reads the flat graph list straight from the store
+  // "Liste aller Logiken" reads the flat graph list straight from the store
   // (already populated by LogicView.vue's own fetchGraphs() in real usage)
   // rather than a dedicated endpoint — seed it directly here. The pinia
   // instance must be passed to mount() as a `global.plugins` entry, not just
@@ -222,7 +222,7 @@ describe('GraphPickerModal — navigation', () => {
   })
 })
 
-describe('GraphPickerModal — "Alle anzeigen" flat overview', () => {
+describe('GraphPickerModal — "Liste aller Logiken" flat overview', () => {
   const ALL_GRAPHS = [
     { id: 'g-z', name: 'Zeta', enabled: true },
     { id: 'g-a', name: 'Alpha', enabled: false },
@@ -268,7 +268,7 @@ describe('GraphPickerModal — "Alle anzeigen" flat overview', () => {
     expect(wrapper.text()).toContain('Es sind noch keine Logikblätter vorhanden.')
   })
 
-  it('going back to root leaves "Alle anzeigen" mode', async () => {
+  it('going back to root leaves "Liste aller Logiken" mode', async () => {
     const { wrapper, browse } = await mountModal({ storeGraphs: ALL_GRAPHS })
     await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
     await flushPromises()
@@ -389,7 +389,7 @@ describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () =
   it('shows the pseudo-folder at the root level when has_unassigned_logic_graphs is true', async () => {
     const { wrapper } = await mountWithUnassigned(true)
     expect(wrapper.find('[data-testid="picker-unassigned"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('Nicht zugeordnet')
+    expect(wrapper.text()).toContain('Nicht zugeordnete Logiken')
   })
 
   it('hides the pseudo-folder when has_unassigned_logic_graphs is false', async () => {
@@ -403,7 +403,7 @@ describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () =
     await flushPromises()
     expect(browse).toHaveBeenCalledWith({ unassigned: true })
     expect(wrapper.find('[data-testid="picker-graph-u1"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="crumb-unassigned"]').text()).toBe('Nicht zugeordnet')
+    expect(wrapper.find('[data-testid="crumb-unassigned"]').text()).toBe('Nicht zugeordnete Logiken')
     // Never a further drill-down step — no tree/folder crumb alongside it.
     expect(wrapper.find('[data-testid="crumb-tree"]').exists()).toBe(false)
   })
@@ -509,7 +509,7 @@ describe('GraphPickerModal — "Hierarchie zuweisen" (#1233 follow-up)', () => {
     expect(createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-a', graph_id: 'g1' })
     expect(createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-b', graph_id: 'g1' })
     // The current listing is refreshed so a graph that just became assigned
-    // (e.g. from "Nicht zugeordnet") disappears from where it no longer belongs.
+    // (e.g. from "Nicht zugeordnete Logiken") disappears from where it no longer belongs.
     expect(browse).toHaveBeenCalledWith({ tree_id: 't1', node_id: 'n2' })
   })
 
@@ -577,7 +577,7 @@ describe('GraphPickerModal — preselect + auto-expand the active graph (#1233 f
     expect(browse).toHaveBeenCalledWith({ tree_id: 't1' })
   })
 
-  it('navigates to "Nicht zugeordnet" when the active graph has no assignments at all', async () => {
+  it('navigates to "Nicht zugeordnete Logiken" when the active graph has no assignments at all', async () => {
     const getLogicGraphNodes = vi.fn().mockResolvedValue({ data: [] })
     const { wrapper, browse } = await mountModal({ getLogicGraphNodesImpl: getLogicGraphNodes, props: { activeGraphId: 'g1' } })
     expect(browse).toHaveBeenCalledWith({ unassigned: true })

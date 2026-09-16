@@ -40,8 +40,8 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
 ## Logik öffnen {#logic-graph-picker}
 
 Der Auswahldialog bietet die zugeordneten Hierarchien Ebene für Ebene zum Durchklicken an;
-Logikblätter ohne Zuordnung erscheinen dort in einem eigenen Ordner „Nicht zugeordnet". Ein
-weiterer Ordner „Alle anzeigen" listet stattdessen ausnahmslos jedes vorhandene Logikblatt
+Logikblätter ohne Zuordnung erscheinen dort in einem eigenen Ordner „Nicht zugeordnete Logiken". Ein
+weiterer Ordner „Liste aller Logiken" listet stattdessen ausnahmslos jedes vorhandene Logikblatt
 flach und alphabetisch sortiert auf — unabhängig davon, ob und wo es einsortiert ist, damit
 sich auch ohne Hierarchien-Kenntnis ein Überblick verschaffen lässt. Deaktivierte Graphen
 sind entsprechend gekennzeichnet, das aktuell geöffnete Logikblatt ist durch einen Punkt
@@ -52,8 +52,8 @@ Jede Zeile bietet:
 - **Hierarchie zuweisen** (siehe unten) — fügt eine weitere Hierarchie-Position hinzu.
 - **Aus Hierarchie entfernen** — nur beim Durchklicken einer Hierarchie verfügbar, löst die
   Logik ausschließlich von der aktuell durchsuchten Position; war dies die letzte Position,
-  erscheint die Logik danach bei „Nicht zugeordnet".
-- **Verknüpfungen** (siehe unten) — nur in „Alle anzeigen" verfügbar.
+  erscheint die Logik danach bei „Nicht zugeordnete Logiken".
+- **Verknüpfungen** (siehe unten) — nur in „Liste aller Logiken" verfügbar.
 - **Löschen** — löscht das Logikblatt nach Sicherheitsabfrage vollständig und unwiderruflich,
   inklusive aller Hierarchie-Zuordnungen.
 
@@ -72,7 +72,7 @@ Erdgeschoss") zur Auswahl an.
 
 ### Verknüpfungen {#logic-graph-picker-links}
 
-Nur in „Alle anzeigen" verfügbar — dort gibt es keine einzelne „aktuell durchsuchte" Position,
+Nur in „Liste aller Logiken" verfügbar — dort gibt es keine einzelne „aktuell durchsuchte" Position,
 von der sich mit „Aus Hierarchie entfernen" entfernen ließe. Öffnet stattdessen ein Popup, das
 alle Hierarchie-Positionen der Logik auf einen Blick zeigt (als vollständiger Pfad, z. B.
 „Beschattung › Erdgeschoss") und jede davon einzeln entfernbar macht, ohne dafür erst zur
@@ -87,7 +87,7 @@ Monitor-Bereich). Darüber lässt sich das neue Logikblatt direkt bei der Anlage
 mehreren Hierarchie-Positionen zuordnen — sowohl der obersten Ebene einer Hierarchie selbst
 (z. B. „Beschattung") als auch einem ihrer Unterknoten (z. B. „Beschattung › Erdgeschoss").
 Bleibt das Feld leer, landet das neue Logikblatt wie gewohnt auf oberster Ebene bei „Nicht
-zugeordnet" — die Zuordnung lässt sich jederzeit nachträglich über den Button „Hierarchie
+zugeordnete Logiken" — die Zuordnung lässt sich jederzeit nachträglich über den Button „Hierarchie
 zuweisen" im Auswahldialog „Logik öffnen" ändern.
 
 ## Arbeitsfläche {#logic-canvas}

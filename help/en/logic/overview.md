@@ -38,7 +38,8 @@ independent graph with its own active/inactive state.
 ## Open Logic {#logic-graph-picker}
 
 The picker offers the assigned hierarchies for click-through, level by level; logic sheets
-with no assignment appear in their own "Unassigned" folder. An additional "Show all" folder
+with no assignment appear in their own "Unassigned logic sheets" folder. An additional
+"List of all logic sheets" folder
 instead lists every existing logic sheet flat and alphabetically, regardless of whether or
 where it is assigned, so an overview is always available even without knowing the hierarchy
 structure. Disabled graphs are marked accordingly, and the currently open logic sheet is
@@ -49,8 +50,8 @@ Every row offers:
 - **Assign hierarchy** (see below) — adds another hierarchy position.
 - **Remove from hierarchy** — only available while browsing a hierarchy, undoes only the
   position currently being browsed; if that was the last one, the sheet reappears under
-  "Unassigned".
-- **Links** (see below) — only available in "Show all".
+  "Unassigned logic sheets".
+- **Links** (see below) — only available in "List of all logic sheets".
 - **Delete** — deletes the logic sheet completely and irreversibly, after a confirmation
   prompt, including all of its hierarchy assignments.
 
@@ -67,7 +68,7 @@ and its sub-nodes (e.g. "Shading › Ground floor") for selection.
 
 ### Links {#logic-graph-picker-links}
 
-Only available in "Show all" — there is no single "currently browsed" position there to
+Only available in "List of all logic sheets" — there is no single "currently browsed" position there to
 remove via "Remove from hierarchy". Opens a popup instead that lists every hierarchy
 position the sheet is assigned to at a glance (as a full path, e.g. "Shading › Ground
 floor"), each individually removable without first navigating to it. A sheet with no
@@ -80,7 +81,7 @@ optional "Hierarchy nodes" search field (the same element used for filter sets i
 Monitor area). It lets the new logic sheet be assigned to one or more hierarchy positions
 right when it's created — either a hierarchy's own top level (e.g. "Shading") or one of its
 sub-nodes (e.g. "Shading › Ground floor"). Left empty, the new logic sheet lands at the top
-level under "Unassigned" as usual — the assignment can always be changed later via the "Assign
+level under "Unassigned logic sheets" as usual — the assignment can always be changed later via the "Assign
 hierarchy" button in the "Open Logic" picker.
 
 ## Canvas {#logic-canvas}
