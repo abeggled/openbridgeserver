@@ -13,15 +13,20 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
 
 - **Logikblatt-Auswahl** — öffnet einen Auswahldialog, der die zugeordneten Hierarchien
   Ebene für Ebene zum Durchklicken anbietet; Logikblätter ohne Zuordnung erscheinen dort in
-  einem eigenen Ordner „Nicht zugeordnet". Deaktivierte Graphen sind entsprechend
-  gekennzeichnet, das aktuell geöffnete Logikblatt ist hervorgehoben. Jede Zeile bietet dort
-  „Hierarchie zuweisen" (fügt eine weitere Hierarchie-Position hinzu, bestehende bleiben
-  erhalten), „Aus Hierarchie entfernen" (löst nur die aktuell durchsuchte Position — war dies
-  die letzte, landet das Logikblatt danach bei „Nicht zugeordnet") sowie „Löschen" (löscht das
-  Logikblatt nach Sicherheitsabfrage vollständig und unwiderruflich, inklusive aller
-  Hierarchie-Zuordnungen). Der Button „Logik-Hierarchie bearbeiten" im Dialog führt zur
-  Hierarchie-Verwaltung (Einstellungen → Hierarchie), auf der ausschließlich die
-  Baumstruktur selbst gepflegt wird.
+  einem eigenen Ordner „Nicht zugeordnet". Ein zusätzlicher Ordner „Alle anzeigen" listet
+  stattdessen ausnahmslos jedes vorhandene Logikblatt flach und alphabetisch sortiert
+  auf — unabhängig davon, ob und wo es einsortiert ist. Deaktivierte Graphen sind entsprechend
+  gekennzeichnet, das aktuell geöffnete Logikblatt ist durch einen Punkt links vor dem Namen
+  markiert. Jede Zeile bietet dort „Hierarchie zuweisen" (fügt eine weitere Hierarchie-Position
+  hinzu, bestehende bleiben erhalten) sowie „Löschen" (löscht das Logikblatt nach
+  Sicherheitsabfrage vollständig und unwiderruflich, inklusive aller Hierarchie-Zuordnungen).
+  Beim Durchklicken einer Hierarchie steht zusätzlich „Aus Hierarchie entfernen" zur Verfügung
+  (löst nur die aktuell durchsuchte Position — war dies die letzte, landet das Logikblatt
+  danach bei „Nicht zugeordnet"); in „Alle anzeigen" tritt an dessen Stelle „Verknüpfungen" —
+  ein kleines Popup, das alle Hierarchie-Positionen des Logikblatts auf einen Blick zeigt und
+  jede davon einzeln entfernbar macht, ohne dafür erst zur jeweiligen Position navigieren zu
+  müssen. Der Button „Logik-Hierarchie bearbeiten" im Dialog führt zur Hierarchie-Verwaltung
+  (Einstellungen → Hierarchie), auf der ausschließlich die Baumstruktur selbst gepflegt wird.
 - **+ Neu** / **Speichern** — legt ein neues Logikblatt an (siehe [Neues Logikblatt](#logic-new-sheet))
   bzw. speichert Änderungen am aktuellen.
 - **▶ Ausführen** — prüft Berechtigungen und führt den Graphen einmalig manuell aus (nur

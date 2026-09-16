@@ -2584,7 +2584,12 @@
       "removeHereTitle": "Removes the logic sheet only from this hierarchy position. If this was its last position, the logic sheet reappears at the top under \"Unassigned\".",
       "deleteHereTitle": "This logic sheet has no hierarchy assignment — deleting it here removes it irreversibly.",
       "deleteTitle": "Deletes this logic graph irreversibly, including all of its hierarchy assignments.",
-      "deleteConfirm": "The logic graph \"{name}\" will be deleted irreversibly."
+      "deleteConfirm": "The logic graph \"{name}\" will be deleted irreversibly.",
+      "showAll": "Show all",
+      "noGraphs": "No logic sheets exist yet.",
+      "links": "Links",
+      "linksModalTitle": "Hierarchy links: {name}",
+      "linksEmpty": "This logic sheet is not currently assigned to any hierarchy position."
     }
   },
   "authzPreflight": {

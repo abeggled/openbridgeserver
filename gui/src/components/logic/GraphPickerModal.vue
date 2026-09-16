@@ -22,6 +22,10 @@
           <span>／</span>
           <span class="text-slate-600 dark:text-slate-300" data-testid="crumb-unassigned">{{ $t('logic.graphPicker.unassigned') }}</span>
         </template>
+        <template v-if="allMode">
+          <span>／</span>
+          <span class="text-slate-600 dark:text-slate-300" data-testid="crumb-all">{{ $t('logic.graphPicker.showAll') }}</span>
+        </template>
         <template v-for="(crumb, i) in nodeCrumbs" :key="crumb.id">
           <span>／</span>
           <button type="button" class="hover:text-blue-500 dark:hover:text-blue-400" @click="goToNodeCrumb(i)" :data-testid="`crumb-node-${crumb.id}`">
@@ -40,7 +44,10 @@
            cut off — top/bottom when the list fits without scrolling,
            left/right always. This padding gives the ring room on all sides. -->
       <div v-else class="flex flex-col gap-1 p-1 max-h-[60vh] overflow-y-auto">
-        <div v-if="isRootLevel && result.trees.length === 0 && !result.has_unassigned_logic_graphs" class="text-sm text-slate-500 py-6 text-center">
+        <div v-if="allMode && result.logic_graphs.length === 0" class="text-sm text-slate-500 py-6 text-center">
+          {{ $t('logic.graphPicker.noGraphs') }}
+        </div>
+        <div v-else-if="isRootLevel && result.trees.length === 0 && !result.has_unassigned_logic_graphs" class="text-sm text-slate-500 py-6 text-center">
           {{ $t('logic.graphPicker.noTrees') }}
         </div>
         <div v-else-if="!isRootLevel && result.subfolders.length === 0 && result.logic_graphs.length === 0" class="text-sm text-slate-500 py-6 text-center">
@@ -53,6 +60,17 @@
           @click="openTree(tree)" :data-testid="`picker-tree-${tree.id}`">
           <FolderIcon class="text-blue-500" />
           <span class="flex-1 truncate text-slate-700 dark:text-slate-200">{{ tree.name }}</span>
+        </button>
+
+        <!-- Pseudo-folder listing every logic graph flat, regardless of
+             hierarchy assignment (root level only) — otherwise there is no
+             way to see what logic sheets even exist without clicking
+             through every tree. -->
+        <button v-if="isRootLevel" type="button"
+          class="flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm border border-dashed border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+          @click="openAllGraphs" data-testid="picker-all-graphs">
+          <ListIcon class="text-indigo-500" />
+          <span class="flex-1 truncate text-slate-500 dark:text-slate-400">{{ $t('logic.graphPicker.showAll') }}</span>
         </button>
 
         <!-- Pseudo-folder for unlinked graphs (root level only, #1217 follow-up) -->
@@ -99,9 +117,16 @@
               @click="openAssign(graph)" :data-testid="`picker-graph-assign-${graph.id}`">
               {{ $t('logic.graphPicker.assign') }}
             </button>
-            <!-- Only a real hierarchy position (not the unassigned pseudo-folder)
-                 has a link here to remove. -->
-            <button v-if="!unassignedMode" type="button"
+            <!-- "Alle anzeigen" has no single current position to remove
+                 from, so it offers the full list of positions instead, each
+                 individually removable. -->
+            <button v-if="allMode" type="button" class="btn-secondary btn-xs shrink-0"
+              @click="openLinks(graph)" :data-testid="`picker-graph-links-${graph.id}`">
+              {{ $t('logic.graphPicker.links') }}
+            </button>
+            <!-- Only a real hierarchy position (not the unassigned pseudo-folder
+                 or the flat "Alle anzeigen" listing) has a link here to remove. -->
+            <button v-if="!unassignedMode && !allMode" type="button"
               class="btn-secondary btn-xs shrink-0"
               :title="$t('logic.graphPicker.removeHereTitle')"
               @click="removeHere(graph)" :data-testid="`picker-graph-remove-${graph.id}`">
@@ -130,6 +155,35 @@
             @click="confirmAssign" data-testid="btn-assign-confirm">
             <Spinner v-if="assignModal.saving" size="sm" color="white" />
             {{ $t('logic.graphPicker.assignConfirm') }}
+          </button>
+        </div>
+      </div>
+    </Modal>
+
+    <!-- Every hierarchy position this graph is linked to, from "Alle
+         anzeigen" — each individually removable, since there is no single
+         "current position" to unlink from like the folder-browse view has. -->
+    <Modal v-model="linksModal.open" :title="linksModalTitle" max-width="sm">
+      <div class="flex flex-col gap-3">
+        <div v-if="linksModal.loading" class="flex justify-center py-4"><Spinner /></div>
+        <div v-else-if="linksModal.links.length === 0" class="text-sm text-slate-500 py-4 text-center">
+          {{ $t('logic.graphPicker.linksEmpty') }}
+        </div>
+        <div v-else class="flex flex-col gap-1 max-h-[50vh] overflow-y-auto">
+          <div v-for="link in linksModal.links" :key="link.link_id"
+            class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-700/40">
+            <span class="flex-1 min-w-0 truncate text-sm text-slate-700 dark:text-slate-200" :title="linkPathLabel(link)">
+              {{ linkPathLabel(link) }}
+            </span>
+            <button type="button" class="btn-secondary btn-xs shrink-0"
+              @click="removeLink(link)" :data-testid="`links-modal-remove-${link.link_id}`">
+              {{ $t('common.remove') }}
+            </button>
+          </div>
+        </div>
+        <div class="flex justify-end">
+          <button type="button" @click="linksModal.open = false" class="btn-secondary" data-testid="btn-links-close">
+            {{ $t('common.close') }}
           </button>
         </div>
       </div>
@@ -176,6 +230,15 @@ const FolderIcon = {
     ]),
 }
 
+// Inline "list" icon for the "Alle anzeigen" pseudo-folder — distinct from
+// FolderIcon so it doesn't read as just another real folder.
+const ListIcon = {
+  render: () =>
+    h('svg', { class: 'w-4 h-4 shrink-0', fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
+      h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M4 6h16M4 12h16M4 18h16' }),
+    ]),
+}
+
 const open = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
@@ -187,8 +250,9 @@ const open = computed({
 const treeCrumb      = ref(null)  // { id, name } | null (null = root/forest level)
 const nodeCrumbs     = ref([])    // [{ id, name }, …] ancestor chain within treeCrumb
 const unassignedMode = ref(false) // true while browsing the "Nicht zugeordnet" pseudo-folder
+const allMode        = ref(false) // true while browsing the flat "Alle anzeigen" listing
 
-const isRootLevel = computed(() => treeCrumb.value === null && !unassignedMode.value)
+const isRootLevel = computed(() => treeCrumb.value === null && !unassignedMode.value && !allMode.value)
 
 const loading  = ref(false)
 const errorMsg = ref('')
@@ -210,12 +274,34 @@ function applyLocation(loc) {
   treeCrumb.value = loc.treeCrumb
   nodeCrumbs.value = loc.nodeCrumbs
   unassignedMode.value = loc.unassignedMode
+  // A remembered/located position is always a real folder or "Nicht
+  // zugeordnet" — never the flat "Alle anzeigen" listing (browse() never
+  // records it as a location, see the allMode branch there) — so clear any
+  // stale allMode left over from before this picker instance was last closed.
+  allMode.value = false
 }
 
 async function browse() {
   loading.value = true
   errorMsg.value = ''
   try {
+    if (allMode.value) {
+      // Flat listing of every logic graph regardless of hierarchy
+      // assignment — otherwise there is no way to see what sheets even
+      // exist without clicking through every tree. Sourced from the store
+      // (already fetched by LogicView.vue) rather than a new endpoint;
+      // sorted client-side since store mutations (create/duplicate/import)
+      // append rather than re-sort.
+      result.value = {
+        trees: [],
+        subfolders: [],
+        logic_graphs: [...logicStore.graphs]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((g) => ({ id: g.id, name: g.name, enabled: g.enabled, link_id: null })),
+        has_unassigned_logic_graphs: false,
+      }
+      return
+    }
     let params = {}
     if (unassignedMode.value) {
       params = { unassigned: true }
@@ -240,12 +326,14 @@ function goToRoot() {
   treeCrumb.value = null
   nodeCrumbs.value = []
   unassignedMode.value = false
+  allMode.value = false
   browse()
 }
 function openTree(tree) {
   treeCrumb.value = { id: tree.id, name: tree.name }
   nodeCrumbs.value = []
   unassignedMode.value = false
+  allMode.value = false
   browse()
 }
 function goToTree() {
@@ -264,6 +352,14 @@ function openUnassigned() {
   treeCrumb.value = null
   nodeCrumbs.value = []
   unassignedMode.value = true
+  allMode.value = false
+  browse()
+}
+function openAllGraphs() {
+  treeCrumb.value = null
+  nodeCrumbs.value = []
+  unassignedMode.value = false
+  allMode.value = true
   browse()
 }
 
@@ -347,6 +443,38 @@ async function confirmAssign() {
   }
 }
 
+// ── Hierarchy links overview ("Alle anzeigen" follow-up) ────────────────────
+// Shows every position a graph is linked to, each individually removable —
+// the flat listing has no single "current position" the way a folder-browse
+// row does, so "Aus Hierarchie entfernen" doesn't apply there.
+const linksModal = reactive({ open: false, graph: null, loading: false, links: [] })
+const linksModalTitle = computed(() =>
+  t('logic.graphPicker.linksModalTitle', { name: linksModal.graph?.name ?? '' }),
+)
+
+function linkPathLabel(link) {
+  if (link.is_tree_root) return link.tree_name
+  return [link.tree_name, ...link.node_path.map((seg) => seg.node_name), link.node_name].join(' › ')
+}
+
+async function openLinks(graph) {
+  linksModal.graph = graph
+  linksModal.links = []
+  linksModal.loading = true
+  linksModal.open = true
+  try {
+    const { data } = await hierarchyApi.getLogicGraphNodes(graph.id)
+    linksModal.links = data
+  } finally {
+    linksModal.loading = false
+  }
+}
+
+async function removeLink(link) {
+  await hierarchyApi.deleteLogicGraphLinkById(link.link_id)
+  linksModal.links = linksModal.links.filter((l) => l.link_id !== link.link_id)
+}
+
 // Full graph deletion — reachable from every row now, not just the
 // unassigned pseudo-folder: cascades any remaining hierarchy links via the
 // existing ON DELETE CASCADE foreign key, so no extra cleanup is needed here.
@@ -385,6 +513,7 @@ watch(open, (v) => {
   treeCrumb.value = null
   nodeCrumbs.value = []
   unassignedMode.value = false
+  allMode.value = false
   browse()
 }, { immediate: true })
 </script>

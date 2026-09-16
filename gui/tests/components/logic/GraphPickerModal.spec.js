@@ -12,7 +12,10 @@ beforeEach(() => {
   vi.resetModules()
   pushMock.mockClear()
   vi.doMock('vue-router', () => ({ useRouter: () => ({ push: pushMock }) }))
-  setActivePinia(createPinia())
+  // Pinia itself is set up per-mount in mountModal(), not here — see its
+  // comment for why setActivePinia() alone (without also installing the
+  // instance as a mount() plugin) isn't enough once vi.resetModules() is
+  // in play.
 })
 
 afterEach(() => {
@@ -43,7 +46,7 @@ const HierarchyComboboxStub = {
 
 async function mountModal({
   browseImpl, deleteLogicGraphLinkByIdImpl, deleteGraphImpl,
-  createLogicGraphLinkImpl, getLogicGraphNodesImpl, props = {},
+  createLogicGraphLinkImpl, getLogicGraphNodesImpl, props = {}, storeGraphs = [],
 } = {}) {
   const browse = browseImpl || vi.fn().mockImplementation((params = {}) => {
     if (!params.tree_id) return Promise.resolve({ data: { trees: TREES, subfolders: [], logic_graphs: [] } })
@@ -62,10 +65,27 @@ async function mountModal({
     hierarchyApi: { browse, deleteLogicGraphLinkById, createLogicGraphLink, getLogicGraphNodes },
     logicApi: { deleteGraph },
   }))
+  // "Alle anzeigen" reads the flat graph list straight from the store
+  // (already populated by LogicView.vue's own fetchGraphs() in real usage)
+  // rather than a dedicated endpoint — seed it directly here. The pinia
+  // instance must be passed to mount() as a `global.plugins` entry, not just
+  // activated via setActivePinia(): after vi.resetModules(), the component
+  // (dynamically re-imported below) resolves a fresh copy of the 'pinia'
+  // package, whose own module-level "active pinia" is unset regardless of
+  // what setActivePinia() did on this file's original, statically-imported
+  // copy — useLogicStore() inside the component would then silently create
+  // a second, empty-state store instance instead of reusing this one.
+  // Installing the plugin sidesteps that entirely via Vue's own injection.
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const { useLogicStore } = await import('@/stores/logic')
+  const logicStore = useLogicStore()
+  logicStore.graphs = storeGraphs
   const { default: GraphPickerModal } = await import('@/components/logic/GraphPickerModal.vue')
   const wrapper = mount(GraphPickerModal, {
     props: { modelValue: true, ...props },
     global: {
+      plugins: [pinia],
       // Modal.vue renders its content via <Teleport to="body">, which Vue
       // Test Utils' wrapper.find() cannot see even with attachTo — stub it
       // with a plain div exposing the same slots, same pattern already used
@@ -81,7 +101,7 @@ async function mountModal({
     },
   })
   await flushPromises()
-  return { wrapper, browse, deleteLogicGraphLinkById, deleteGraph, createLogicGraphLink, getLogicGraphNodes }
+  return { wrapper, browse, deleteLogicGraphLinkById, deleteGraph, createLogicGraphLink, getLogicGraphNodes, logicStore }
 }
 
 describe('GraphPickerModal — navigation', () => {
@@ -199,6 +219,122 @@ describe('GraphPickerModal — navigation', () => {
     await wrapper.find('[data-testid="btn-organize-graphs"]').trigger('click')
     expect(pushMock).toHaveBeenCalledWith('/settings?tab=hierarchy')
     expect(wrapper.emitted('update:modelValue').at(-1)).toEqual([false])
+  })
+})
+
+describe('GraphPickerModal — "Alle anzeigen" flat overview', () => {
+  const ALL_GRAPHS = [
+    { id: 'g-z', name: 'Zeta', enabled: true },
+    { id: 'g-a', name: 'Alpha', enabled: false },
+  ]
+
+  it('is offered at the root level and lists every graph, sorted alphabetically', async () => {
+    const { wrapper } = await mountModal({ storeGraphs: ALL_GRAPHS })
+    expect(wrapper.find('[data-testid="picker-all-graphs"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="crumb-all"]').exists()).toBe(true)
+    const names = wrapper.findAll('[data-testid="picker-graph-g-a"], [data-testid="picker-graph-g-z"]').map((r) => r.text())
+    expect(names[0]).toContain('Alpha')
+    expect(names[0]).toContain('(deaktiviert)')
+    expect(names[1]).toContain('Zeta')
+  })
+
+  it('does not call the hierarchy browse endpoint — the list comes from the graphs store', async () => {
+    const { wrapper, browse } = await mountModal({ storeGraphs: ALL_GRAPHS })
+    browse.mockClear()
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+    expect(browse).not.toHaveBeenCalled()
+  })
+
+  it('offers "Hierarchie zuweisen", "Verknüpfungen" and "Löschen" but not "Aus Hierarchie entfernen"', async () => {
+    const { wrapper } = await mountModal({ storeGraphs: ALL_GRAPHS })
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="picker-graph-assign-g-a"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-links-g-a"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-delete-g-a"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="picker-graph-remove-g-a"]').exists()).toBe(false)
+  })
+
+  it('shows a dedicated empty state when there are no graphs at all', async () => {
+    const { wrapper } = await mountModal({ storeGraphs: [] })
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Es sind noch keine Logikblätter vorhanden.')
+  })
+
+  it('going back to root leaves "Alle anzeigen" mode', async () => {
+    const { wrapper, browse } = await mountModal({ storeGraphs: ALL_GRAPHS })
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+
+    browse.mockClear()
+    await wrapper.find('[data-testid="crumb-root"]').trigger('click')
+    await flushPromises()
+    expect(browse).toHaveBeenCalledWith({})
+    expect(wrapper.find('[data-testid="crumb-all"]').exists()).toBe(false)
+  })
+})
+
+describe('GraphPickerModal — "Verknüpfungen" (view + remove every hierarchy link)', () => {
+  const ALL_GRAPHS = [{ id: 'g1', name: 'Licht WZ', enabled: true }]
+  const LINKS = [
+    { link_id: 'l1', node_id: 'n2', node_name: 'Licht', tree_id: 't1', tree_name: 'Technisch', node_path: [], is_tree_root: false },
+    { link_id: 'l2', node_id: 'root-t2', node_name: 'Topologisch', tree_id: 't2', tree_name: 'Topologisch', node_path: [], is_tree_root: true },
+  ]
+
+  it('lists every hierarchy position the graph is linked to, with a tree-root row shown as just the tree name', async () => {
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({ data: LINKS })
+    const { wrapper } = await mountModal({ storeGraphs: ALL_GRAPHS, getLogicGraphNodesImpl: getLogicGraphNodes })
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="picker-graph-links-g1"]').trigger('click')
+    await flushPromises()
+
+    expect(getLogicGraphNodes).toHaveBeenCalledWith('g1')
+    expect(wrapper.text()).toContain('Technisch › Licht')
+    expect(wrapper.find('[data-testid="links-modal-remove-l1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="links-modal-remove-l2"]').exists()).toBe(true)
+    // Tree-root link (is_tree_root: true) renders as just the tree name —
+    // not "Topologisch › Topologisch".
+    const rootRowText = wrapper.find('[data-testid="links-modal-remove-l2"]').element.parentElement.textContent
+    expect(rootRowText).toContain('Topologisch')
+    expect(rootRowText).not.toContain('›')
+  })
+
+  it('shows an empty state when the graph has no hierarchy links', async () => {
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({ data: [] })
+    const { wrapper } = await mountModal({ storeGraphs: ALL_GRAPHS, getLogicGraphNodesImpl: getLogicGraphNodes })
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-graph-links-g1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Diese Logik ist aktuell keiner Hierarchie-Position zugeordnet.')
+  })
+
+  it('removing a link deletes it by id and drops it from the list without closing the modal', async () => {
+    const getLogicGraphNodes = vi.fn().mockResolvedValue({ data: LINKS })
+    const { wrapper, deleteLogicGraphLinkById } = await mountModal({ storeGraphs: ALL_GRAPHS, getLogicGraphNodesImpl: getLogicGraphNodes })
+    await wrapper.find('[data-testid="picker-all-graphs"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="picker-graph-links-g1"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="links-modal-remove-l1"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteLogicGraphLinkById).toHaveBeenCalledWith('l1')
+    expect(wrapper.find('[data-testid="links-modal-remove-l1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="links-modal-remove-l2"]').exists()).toBe(true)
+    // Not a selection, and the links modal (nor the outer picker) closes.
+    expect(wrapper.emitted('select')).toBeFalsy()
+    expect(wrapper.find('[data-testid="btn-links-close"]').exists()).toBe(true)
   })
 })
 

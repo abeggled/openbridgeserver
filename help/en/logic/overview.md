@@ -13,14 +13,18 @@ independent graph with its own active/inactive state.
 
 - **Logic sheet selector** — opens a picker that offers the assigned hierarchies for
   click-through, level by level; logic sheets with no assignment appear in their own
-  "Unassigned" folder. Disabled graphs are marked accordingly, and the currently open logic
-  sheet is highlighted. Every row offers "Assign hierarchy" (adds another hierarchy
-  position, existing ones are kept), "Remove from hierarchy" (undoes only the position
-  currently being browsed — if that was the last one, the sheet reappears under
-  "Unassigned"), and "Delete" (deletes the logic sheet completely and irreversibly, after a
-  confirmation prompt, including all of its hierarchy assignments). The picker's "Edit
-  logic hierarchy" button leads to hierarchy management (Settings → Hierarchy), which
-  manages only the tree structure itself.
+  "Unassigned" folder. An additional "Show all" folder instead lists every existing logic
+  sheet flat and alphabetically, regardless of whether or where it is assigned. Disabled
+  graphs are marked accordingly, and the currently open logic sheet is marked with a dot to
+  the left of its name. Every row offers "Assign hierarchy" (adds another hierarchy
+  position, existing ones are kept) and "Delete" (deletes the logic sheet completely and
+  irreversibly, after a confirmation prompt, including all of its hierarchy assignments).
+  While browsing a hierarchy, rows additionally offer "Remove from hierarchy" (undoes only
+  the position currently being browsed — if that was the last one, the sheet reappears under
+  "Unassigned"); in "Show all", that is replaced by "Links" — a small popup listing every
+  hierarchy position the sheet is assigned to at a glance, each individually removable
+  without first navigating to it. The picker's "Edit logic hierarchy" button leads to
+  hierarchy management (Settings → Hierarchy), which manages only the tree structure itself.
 - **+ New** / **Save** — creates a new logic sheet (see [New logic sheet](#logic-new-sheet))
   or saves changes to the current one.
 - **▶ Run** — checks permissions and runs the graph once, manually (only possible for

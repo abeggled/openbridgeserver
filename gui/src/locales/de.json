@@ -2584,7 +2584,12 @@
       "removeHereTitle": "Entfernt die Logik nur aus dieser Hierarchie-Position. Ist dies die letzte Position, erscheint die Logik danach oben bei „Nicht zugeordnet“.",
       "deleteHereTitle": "Diese Logik ist keiner Hierarchie zugeordnet — hier löschen entfernt sie unwiderruflich.",
       "deleteTitle": "Löscht diesen Logik-Graphen unwiderruflich, inklusive aller Hierarchie-Zuordnungen.",
-      "deleteConfirm": "Der Logik-Graph „{name}“ wird unwiderruflich gelöscht."
+      "deleteConfirm": "Der Logik-Graph „{name}“ wird unwiderruflich gelöscht.",
+      "showAll": "Alle anzeigen",
+      "noGraphs": "Es sind noch keine Logikblätter vorhanden.",
+      "links": "Verknüpfungen",
+      "linksModalTitle": "Hierarchie-Verknüpfungen: {name}",
+      "linksEmpty": "Diese Logik ist aktuell keiner Hierarchie-Position zugeordnet."
     }
   },
   "authzPreflight": {
