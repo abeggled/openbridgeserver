@@ -46,20 +46,32 @@ marked with a dot to the left of its name.
 
 Every row offers:
 
-- **Assign hierarchy** — adds another hierarchy position; existing assignments are kept
-  (additive, never replaces).
+- **Assign hierarchy** (see below) — adds another hierarchy position.
 - **Remove from hierarchy** — only available while browsing a hierarchy, undoes only the
   position currently being browsed; if that was the last one, the sheet reappears under
   "Unassigned".
-- **Links** — only available in "Show all" (there is no single "currently browsed" position
-  to remove from there); opens a popup listing every hierarchy position the sheet is
-  assigned to at a glance, each individually removable without first navigating to it.
+- **Links** (see below) — only available in "Show all".
 - **Delete** — deletes the logic sheet completely and irreversibly, after a confirmation
   prompt, including all of its hierarchy assignments.
 
 The "Edit logic hierarchy" button leads to hierarchy management (Settings → Hierarchy),
 which manages only the tree structure itself (trees and nodes) — assigning individual logic
 sheets happens entirely here in this picker.
+
+### Assign hierarchy {#logic-graph-picker-assign}
+
+Adds another hierarchy position to the logic sheet — additive, existing assignments at other
+positions are left untouched (never replaces). The search field is the same element used for
+filter sets in the Monitor area; it offers both a hierarchy's own top level (e.g. "Shading")
+and its sub-nodes (e.g. "Shading › Ground floor") for selection.
+
+### Links {#logic-graph-picker-links}
+
+Only available in "Show all" — there is no single "currently browsed" position there to
+remove via "Remove from hierarchy". Opens a popup instead that lists every hierarchy
+position the sheet is assigned to at a glance (as a full path, e.g. "Shading › Ground
+floor"), each individually removable without first navigating to it. A sheet with no
+assignment at all shows a corresponding hint here.
 
 ## New logic sheet {#logic-new-sheet}
 

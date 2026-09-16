@@ -49,15 +49,11 @@ links vor dem Namen markiert.
 
 Jede Zeile bietet:
 
-- **Hierarchie zuweisen** — fügt eine weitere Hierarchie-Position hinzu; bestehende
-  Zuordnungen bleiben dabei erhalten (additiv, kein Ersetzen).
+- **Hierarchie zuweisen** (siehe unten) — fügt eine weitere Hierarchie-Position hinzu.
 - **Aus Hierarchie entfernen** — nur beim Durchklicken einer Hierarchie verfügbar, löst die
   Logik ausschließlich von der aktuell durchsuchten Position; war dies die letzte Position,
   erscheint die Logik danach bei „Nicht zugeordnet".
-- **Verknüpfungen** — nur in „Alle anzeigen" verfügbar (dort gibt es keine einzelne „aktuell
-  durchsuchte" Position, von der entfernt werden könnte); öffnet ein Popup, das alle
-  Hierarchie-Positionen der Logik auf einen Blick zeigt und jede davon einzeln entfernbar
-  macht, ohne dafür erst zur jeweiligen Position navigieren zu müssen.
+- **Verknüpfungen** (siehe unten) — nur in „Alle anzeigen" verfügbar.
 - **Löschen** — löscht das Logikblatt nach Sicherheitsabfrage vollständig und unwiderruflich,
   inklusive aller Hierarchie-Zuordnungen.
 
@@ -65,6 +61,23 @@ Der Button „Logik-Hierarchie bearbeiten" führt zur Hierarchie-Verwaltung
 (Einstellungen → Hierarchie), auf der ausschließlich die Baumstruktur selbst (Bäume und
 Knoten) gepflegt wird — die Zuordnung einzelner Logikblätter erfolgt vollständig hier in
 diesem Dialog.
+
+### Hierarchie zuweisen {#logic-graph-picker-assign}
+
+Fügt der Logik eine weitere Hierarchie-Position hinzu — additiv, bestehende Zuordnungen an
+anderen Positionen bleiben dabei unangetastet (kein Ersetzen). Das Suchfeld ist dasselbe
+Element wie bei den Filtersets im Monitor-Bereich; es bietet sowohl die oberste Ebene einer
+Hierarchie selbst (z. B. „Beschattung") als auch ihre Unterknoten (z. B. „Beschattung ›
+Erdgeschoss") zur Auswahl an.
+
+### Verknüpfungen {#logic-graph-picker-links}
+
+Nur in „Alle anzeigen" verfügbar — dort gibt es keine einzelne „aktuell durchsuchte" Position,
+von der sich mit „Aus Hierarchie entfernen" entfernen ließe. Öffnet stattdessen ein Popup, das
+alle Hierarchie-Positionen der Logik auf einen Blick zeigt (als vollständiger Pfad, z. B.
+„Beschattung › Erdgeschoss") und jede davon einzeln entfernbar macht, ohne dafür erst zur
+jeweiligen Position navigieren zu müssen. Eine Logik ohne jede Zuordnung zeigt hier einen
+entsprechenden Hinweis.
 
 ## Neues Logikblatt {#logic-new-sheet}
 

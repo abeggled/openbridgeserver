@@ -147,7 +147,7 @@
     <!-- Assign a hierarchy position (additive — existing assignments stay) -->
     <Modal v-model="assignModal.open" :title="$t('logic.graphPicker.assign')" max-width="sm">
       <template #header-actions>
-        <HelpButton help-id="logic-graph-picker" />
+        <HelpButton help-id="logic-graph-picker-assign" />
       </template>
       <div class="flex flex-col gap-4">
         <p class="text-xs text-slate-500">{{ $t('logic.graphPicker.assignHint') }}</p>
@@ -169,7 +169,7 @@
          "current position" to unlink from like the folder-browse view has. -->
     <Modal v-model="linksModal.open" :title="linksModalTitle" max-width="sm">
       <template #header-actions>
-        <HelpButton help-id="logic-graph-picker" />
+        <HelpButton help-id="logic-graph-picker-links" />
       </template>
       <div class="flex flex-col gap-3">
         <div v-if="linksModal.loading" class="flex justify-center py-4"><Spinner /></div>
