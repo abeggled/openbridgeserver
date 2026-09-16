@@ -15,7 +15,7 @@ beforeEach(() => {
   }
   Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
   Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
-  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }) }))
   vi.doMock('@vue-flow/core', () => ({
     VueFlow: { name: 'VueFlow', props: ['snapToGrid', 'snapGrid'], template: '<div data-testid="vue-flow"><slot /></div>' },
     Handle: { template: '<span />' },
@@ -296,16 +296,16 @@ describe('LogicView node copy/paste', () => {
     document.body.removeChild(input)
   })
 
-  it('Ctrl+V still works right after focusing the graph-select dropdown', async () => {
-    // Regression: SELECT must not count as an "editable" target — the
-    // graph-select dropdown is the documented way to switch sheets before
-    // pasting, and it retains focus after the change event fires.
+  it('Ctrl+V still works right after focusing the graph-picker button', async () => {
+    // Regression: BUTTON must not count as an "editable" target — the
+    // graph-picker button is the documented way to switch sheets before
+    // pasting (#1217), and it retains focus after opening/closing the popup.
     const { wrapper } = await mountLogicView()
     wrapper.vm.nodes = wrapper.vm.nodes.map(n => n.id === 'n1' ? { ...n, selected: true } : n)
     wrapper.vm.copySelection()
 
-    const select = wrapper.find('[data-testid="select-graph"]').element
-    select.focus()
+    const button = wrapper.find('[data-testid="btn-open-graph-picker"]').element
+    button.focus()
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true }))
     expect(wrapper.vm.nodes).toHaveLength(3)

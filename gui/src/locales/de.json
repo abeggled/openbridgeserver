@@ -1623,6 +1623,7 @@
     "openSheet": "Logic-Sheet öffnen",
     "renameGraph": "Graph umbenennen",
     "duplicateGraph": "Graph duplizieren",
+    "duplicateNameSuffix": " (Kopie)",
     "exportJson": "Graph als JSON exportieren",
     "importJson": "Graph aus JSON importieren",
     "searchNodes": "Knoten suchen — z.B. Raum, Heizung …",
@@ -1783,6 +1784,8 @@
     "imported": "Graph „{name}“ importiert",
     "errorImport": "Ungültige oder fehlerhafte Export-Datei",
     "newGraphPlaceholder": "z.B. Licht Erdgeschoss",
+    "hierarchyNodes": "Hierarchie-Knoten",
+    "hierarchyNodesHint": "Optional — direkt bei der Erstellung einem oder mehreren Knoten der Logik-Hierarchie zuordnen. Ohne Auswahl bleibt die Logik wie bisher nicht zugeordnet.",
     "notSelected": "— nicht gewählt —",
     "filterBadge": "Filter / Transformation aktiv",
     "negatePort": "{id} negieren",
@@ -2562,6 +2565,31 @@
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
       "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
       "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
+    },
+    "graphPicker": {
+      "title": "Logik öffnen",
+      "breadcrumbRoot": "Alle Hierarchien",
+      "noTrees": "Es sind noch keine Hierarchien vorhanden.",
+      "unassigned": "Nicht zugeordnete Logiken",
+      "empty": "Dieser Ordner ist leer.",
+      "organize": "Logik-Hierarchie bearbeiten",
+      "loading": "Wird geladen …",
+      "errorLoading": "Konnte nicht geladen werden.",
+      "assign": "Hierarchie zuweisen",
+      "assignHint": "Diese Logik einer oder mehreren Hierarchie-Positionen zuweisen — bestehende Zuordnungen bleiben erhalten.",
+      "assignConfirm": "Zuweisen",
+      "assignError": "Die Hierarchie-Zuweisung ist fehlgeschlagen.",
+      "currentGraph": "aktuell geöffnet",
+      "removeHere": "Aus Hierarchie entfernen",
+      "removeHereTitle": "Entfernt die Logik nur aus dieser Hierarchie-Position. Ist dies die letzte Position, erscheint die Logik danach oben bei „Nicht zugeordnet“.",
+      "deleteHereTitle": "Diese Logik ist keiner Hierarchie zugeordnet — hier löschen entfernt sie unwiderruflich.",
+      "deleteTitle": "Löscht diesen Logik-Graphen unwiderruflich, inklusive aller Hierarchie-Zuordnungen.",
+      "deleteConfirm": "Der Logik-Graph „{name}“ wird unwiderruflich gelöscht.",
+      "showAll": "Liste aller Logiken",
+      "noGraphs": "Es sind noch keine Logikblätter vorhanden.",
+      "links": "Verknüpfungen",
+      "linksModalTitle": "Hierarchie-Verknüpfungen: {name}",
+      "linksEmpty": "Diese Logik ist aktuell keiner Hierarchie-Position zugeordnet."
     }
   },
   "authzPreflight": {
@@ -3293,7 +3321,7 @@
     "noFileSelected": "Keine Datei ausgewählt"
   },
   "hierarchy": {
-    "title": "Gerätestruktur",
+    "title": "Hierarchien",
     "deleteNode": "Ast löschen",
     "newHierarchy": "Neue Hierarchie",
     "importFromEts": "Aus ETS importieren",
@@ -3363,7 +3391,11 @@
       "trades": "Gewerke",
       "mid": "Mittelgruppen",
       "flat": "Flach (nur GA)"
-    }
+    },
+    "addChildNode": "Unterknoten hinzufügen",
+    "moveUp": "Nach oben",
+    "moveDown": "Nach unten",
+    "renameNode": "Umbenennen"
   },
   "topbar": {
     "logout": "Abmelden"

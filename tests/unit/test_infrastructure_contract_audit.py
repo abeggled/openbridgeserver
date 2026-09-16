@@ -91,7 +91,7 @@ async def db() -> Database:
         await database.disconnect()
 
 
-def test_all_41_infrastructure_mutations_have_exactly_one_literal_audit_binding() -> None:
+def test_all_44_infrastructure_mutations_have_exactly_one_literal_audit_binding() -> None:
     live = collect_live_routes()
     infrastructure = {
         signature: route
@@ -101,12 +101,12 @@ def test_all_41_infrastructure_mutations_have_exactly_one_literal_audit_binding(
         and ROUTE_CLASSIFICATIONS[signature] == "config_mutation"
     }
 
-    assert len(infrastructure) == 41
+    assert len(infrastructure) == 44
     assert {module: sum(route.endpoint.__module__ == module for route in infrastructure.values()) for module in _INFRASTRUCTURE_MODULES} == {
         "obs.api.v1.adapters": 12,
         "obs.api.v1.bindings": 3,
         "obs.api.v1.datapoints": 4,
-        "obs.api.v1.hierarchy": 10,
+        "obs.api.v1.hierarchy": 13,
         "obs.api.v1.icons": 6,
         "obs.api.v1.knxkeyfile": 2,
         "obs.api.v1.knxproj": 4,

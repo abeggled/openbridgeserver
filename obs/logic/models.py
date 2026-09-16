@@ -65,6 +65,13 @@ class LogicGraphRun(BaseModel):
     debug: bool = False
 
 
+class LogicGraphDuplicate(BaseModel):
+    """Optional override for the duplicate's name — falls back to the ``"Kopie von {name}"``
+    default when omitted or blank."""
+
+    name: str | None = None
+
+
 class LogicGraphOut(BaseModel):
     id: str
     name: str

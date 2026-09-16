@@ -45,7 +45,7 @@
           <span
             @click="toggleTree(tree.id)"
             class="font-semibold text-sm text-slate-800 dark:text-slate-100 flex-1 cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors select-none">
-            {{ tree.name }}
+            {{ tree.name }}<span v-if="treeNodes[tree.id]?.length" class="font-normal text-slate-400" :data-testid="`child-count-${tree.id}`"> ({{ treeNodes[tree.id].length }})</span>
           </span>
           <span v-if="tree.description" class="text-xs text-slate-400 hidden sm:block">{{ formatTreeDescription(tree.description) }}</span>
           <button @click="toggleTree(tree.id)" class="btn-secondary btn-xs" :data-testid="`btn-expand-${tree.id}`">
@@ -291,6 +291,9 @@ async function loadTrees() {
   try {
     const { data } = await hierarchyApi.listTrees()
     trees.value = data
+    // Preload every tree's nodes (not just expanded ones) so the child-count
+    // badge next to a tree's name is available before it's ever expanded.
+    await Promise.all(data.map((tree) => loadTreeNodes(tree.id)))
   } catch {
     showMsg(t('hierarchy.errorLoading'), false)
   } finally {
@@ -487,5 +490,7 @@ function showMsg(text, ok) {
   setTimeout(() => { msg.value = null }, 4000)
 }
 
-onMounted(loadTrees)
+onMounted(() => {
+  loadTrees()
+})
 </script>

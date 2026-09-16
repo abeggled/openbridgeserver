@@ -39,6 +39,7 @@ from obs.logic.models import (
     FlowData,
     LogicEdge,
     LogicGraphCreate,
+    LogicGraphDuplicate,
     LogicGraphImport,
     LogicGraphOut,
     LogicGraphRun,
@@ -1146,6 +1147,7 @@ async def run_graph(
 async def duplicate_graph(
     graph_id: str,
     request: Request = None,
+    body: LogicGraphDuplicate | None = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
@@ -1182,7 +1184,7 @@ async def duplicate_graph(
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
     _validate_timer_durations(new_flow)
 
-    new_name = f"Kopie von {row['name']}"
+    new_name = body.name.strip() if body and body.name and body.name.strip() else f"Kopie von {row['name']}"
     result = await _persist_created_graph(
         db,
         principal,

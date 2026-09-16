@@ -1138,6 +1138,42 @@ async def test_import_hierarchy(client, auth_headers):
     row = await get_db().fetchone("SELECT source FROM hierarchy_trees WHERE id = ?", (tree_id,))
     assert row["source"] == "ets_import:groups"
 
+    # #1217 follow-up: an import whose hierarchy_nodes doesn't include a
+    # root node (e.g. a backup predating that feature) must still end up
+    # with exactly one is_tree_root=1 node for the tree, backfilled — a
+    # missing one broke list_trees()'s root_node_id (regression covered here).
+    roots = await get_db().fetchall("SELECT id FROM hierarchy_nodes WHERE tree_id=? AND is_tree_root=1", (tree_id,))
+    assert len(roots) == 1
+
+    list_resp = await client.get("/api/v1/hierarchy/trees", headers=auth_headers)
+    assert list_resp.status_code == 200
+    imported = next(t for t in list_resp.json() if t["id"] == tree_id)
+    assert imported["root_node_id"] == roots[0]["id"]
+
+
+async def test_import_hierarchy_root_node_round_trips_and_is_not_duplicated(client, auth_headers):
+    """Exporting a tree (with its is_tree_root node) and re-importing it must
+    not create a second root node — the explicit one in hierarchy_nodes is
+    recognized and the backfill pass is a no-op."""
+    tree_resp = await client.post("/api/v1/hierarchy/trees", json={"name": "RoundTripTree"}, headers=auth_headers)
+    assert tree_resp.status_code == 201
+    tree = tree_resp.json()
+
+    export_resp = await client.get("/api/v1/config/export", headers=auth_headers)
+    assert export_resp.status_code == 200
+    export_body = export_resp.json()
+    exported_tree_nodes = [n for n in export_body["hierarchy_nodes"] if n["tree_id"] == tree["id"]]
+    assert len(exported_tree_nodes) == 1
+    assert exported_tree_nodes[0]["is_tree_root"] is True
+    assert exported_tree_nodes[0]["id"] == tree["root_node_id"]
+
+    reimport_resp = await client.post("/api/v1/config/import", json=export_body, headers=auth_headers)
+    assert reimport_resp.status_code == 200
+
+    roots = await get_db().fetchall("SELECT id FROM hierarchy_nodes WHERE tree_id=? AND is_tree_root=1", (tree["id"],))
+    assert len(roots) == 1
+    assert roots[0]["id"] == tree["root_node_id"]  # same node, not a duplicate
+
 
 # ---------------------------------------------------------------------------
 # POST /config/import  — FA API key

@@ -59,8 +59,8 @@ export const useLogicStore = defineStore('logic', () => {
     return data
   }
 
-  async function duplicateGraph(id) {
-    const { data } = await logicApi.duplicateGraph(id)
+  async function duplicateGraph(id, name) {
+    const { data } = await logicApi.duplicateGraph(id, name)
     graphs.value.push(data)
     return data
   }

@@ -13,7 +13,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 beforeEach(() => {
   vi.resetModules()
-  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }) }))
   vi.doMock('@vue-flow/core', () => ({
     VueFlow: { name: 'VueFlow', props: ['nodes', 'edges'], template: '<div data-testid="vue-flow"><slot /></div>' },
     Handle: { template: '<span />' },

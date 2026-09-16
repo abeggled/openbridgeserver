@@ -5,26 +5,28 @@
       <!-- Actions scroll horizontally on narrow/laptop viewports; the status
            bar below lives outside this container so it stays visible
            instead of scrolling off with whichever action produced it. -->
-      <div class="flex items-center gap-3 overflow-x-auto min-w-0">
+      <div class="flex items-center gap-3 overflow-x-auto min-w-0 pb-1">
         <!-- Reserved to the NodePalette column's current width below (see
              titleSpacerClass), so the dropdown lines up with the canvas
              instead of crowding the title. -->
         <h2 :class="[titleSpacerClass, 'flex-shrink-0 overflow-hidden whitespace-nowrap text-sm font-bold text-slate-800 dark:text-slate-100']">{{ $t('logic.title') }}</h2>
-        <!-- Logikblatt selector -->
-        <select ref="graphSelectEl" v-model="activeGraphId" @change="loadGraph"
-          class="input text-xs py-1 px-2 flex-shrink-0"
-          :style="{ width: graphSelectWidthCh + 'ch', maxWidth: '280px' }"
-          data-testid="select-graph">
-          <option value="">{{ $t('logic.selectGraph') }}</option>
-          <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : $t('logic.graphDisabledSuffix') }}</option>
-        </select>
-        <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving" data-testid="btn-save">
+        <!-- Logikblatt-Auswahl: Ordner-Navigation statt flacher Liste (#1217) -->
+        <button type="button" @click="showGraphPicker = true" class="btn-secondary btn-sm flex-shrink-0 max-w-[280px] truncate" data-testid="btn-open-graph-picker">
+          {{ activeGraph ? activeGraph.name : $t('logic.selectGraph') }}
+        </button>
+        <GraphPickerModal
+          v-model="showGraphPicker"
+          :active-graph-id="activeGraphId"
+          @select="onGraphPicked"
+          @graph-deleted="onGraphDeletedFromPicker"
+        />
+        <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm flex-shrink-0">{{ $t('logic.newGraphBtn') }}</button>
+        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
         <button v-if="activeGraphId" @click="requestGraphRun"
-          :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
+          :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
           :disabled="!activeGraph?.enabled || runPreflightLoading"
           :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
           data-testid="btn-run">
@@ -33,7 +35,7 @@
           {{ $t('logic.run') }}
         </button>
         <button v-if="auth.isAdmin && activeGraphId" @click="toggleDebug"
-          :class="['btn-secondary btn-sm', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
+          :class="['btn-secondary btn-sm flex-shrink-0', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
           :title="$t('logic.debugMode')" data-testid="btn-debug">
           <svg
             aria-hidden="true"
@@ -57,10 +59,10 @@
         <!-- Raster visibility is a purely local presentation preference and is
              therefore available without edit permissions (#1075); snapping and
              the grid size stay admin-only because they move blocks. -->
-        <div v-if="activeGraphId" class="flex items-center gap-1">
+        <div v-if="activeGraphId" class="flex items-center gap-1 flex-shrink-0">
           <button
             type="button"
-            :class="['btn-secondary btn-sm', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+            :class="['btn-secondary btn-sm flex-shrink-0', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
             :title="gridVisible ? $t('logic.gridHideTitle') : $t('logic.gridShowTitle')"
             :aria-pressed="gridVisible ? 'true' : 'false'"
             data-testid="btn-grid-visible"
@@ -71,7 +73,7 @@
           <template v-if="auth.isAdmin">
             <button
               type="button"
-              :class="['btn-secondary btn-sm', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+              :class="['btn-secondary btn-sm flex-shrink-0', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
               :title="$t('logic.snapToGridTitle')"
               :aria-pressed="snapToGrid ? 'true' : 'false'"
               data-testid="btn-snap-to-grid"
@@ -79,7 +81,7 @@
             >
               # {{ $t('logic.snapToGrid') }}
             </button>
-            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 flex-shrink-0 text-xs text-slate-500 dark:text-slate-400">
               <span class="sr-only">{{ $t('logic.gridSize') }}</span>
               <input
                 :value="snapGridSize"
@@ -96,33 +98,33 @@
           </template>
         </div>
         <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
-          :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
+          :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
           :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
           data-testid="btn-toggle-enabled">
           {{ activeGraph?.enabled ? $t('logic.toggleActive') : $t('logic.toggleDisabled') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="copySelection" class="btn-secondary btn-sm" :disabled="!hasSelection || graphLoading"
+        <button v-if="auth.isAdmin && activeGraphId" @click="copySelection" class="btn-secondary btn-sm flex-shrink-0" :disabled="!hasSelection || graphLoading"
           :title="$t('logic.copySelectionTitle')" data-testid="btn-copy-nodes">
           ⧉ {{ $t('logic.copySelection') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="pasteClipboard" class="btn-secondary btn-sm" :disabled="!clipboard || graphLoading"
+        <button v-if="auth.isAdmin && activeGraphId" @click="pasteClipboard" class="btn-secondary btn-sm flex-shrink-0" :disabled="!clipboard || graphLoading"
           :title="$t('logic.pasteSelectionTitle')" data-testid="btn-paste-nodes">
           📋 {{ $t('logic.pasteSelection') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
+        <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.renameGraph')" data-testid="btn-rename">
           ✏ {{ $t('logic.rename') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
+        <button v-if="auth.isAdmin && activeGraphId" @click="openDuplicate" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
           ⧉ {{ $t('logic.duplicate') }}
         </button>
-        <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" :title="$t('logic.exportJson')" data-testid="btn-export">
+        <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.exportJson')" data-testid="btn-export">
           ↓ {{ $t('logic.export') }}
         </button>
-        <label v-if="auth.isAdmin" class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
+        <label v-if="auth.isAdmin" class="btn-secondary btn-sm flex-shrink-0 cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
           ↑ {{ $t('logic.import') }}
           <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
         </label>
-        <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-secondary btn-sm text-red-400" data-testid="btn-delete">
+        <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-secondary btn-sm flex-shrink-0 text-red-400" data-testid="btn-delete">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
           </svg>
@@ -224,7 +226,10 @@
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="sm">
+    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="xl">
+      <template #header-actions>
+        <HelpButton help-id="logic-new-sheet" />
+      </template>
       <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
         <div class="form-group">
           <label class="label">{{ $t('logic.name') }}</label>
@@ -233,6 +238,11 @@
         <div class="form-group">
           <label class="label">{{ $t('logic.description') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
           <input v-model="newGraphDesc" type="text" class="input" />
+        </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.hierarchyNodes') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
+          <HierarchyCombobox v-model="newGraphHierarchyNodes" include-tree-roots data-testid="new-graph-hierarchy" />
+          <p class="text-xs text-slate-500 mt-1">{{ $t('logic.hierarchyNodesHint') }}</p>
         </div>
         <div class="flex justify-end gap-3">
           <button type="button" @click="showNewGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
@@ -255,6 +265,20 @@
         <div class="flex justify-end gap-3">
           <button type="button" @click="showRenameGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
           <button type="submit" class="btn-primary" data-testid="btn-rename-confirm">{{ $t('common.save') }}</button>
+        </div>
+      </form>
+    </Modal>
+
+    <!-- Duplicate Graph Modal -->
+    <Modal v-model="showDuplicate" :title="$t('logic.duplicateGraph')" max-width="sm">
+      <form @submit.prevent="doDuplicate" class="flex flex-col gap-4">
+        <div class="form-group">
+          <label class="label">{{ $t('logic.name') }}</label>
+          <input v-model="duplicateName" type="text" class="input" required autofocus data-testid="input-duplicate-name" />
+        </div>
+        <div class="flex justify-end gap-3">
+          <button type="button" @click="showDuplicate = false" class="btn-secondary" data-testid="btn-duplicate-cancel">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary" data-testid="btn-duplicate-confirm">{{ $t('logic.duplicate') }}</button>
         </div>
       </form>
     </Modal>
@@ -295,7 +319,7 @@ import '@vue-flow/node-resizer/dist/style.css'
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore }     from '@/stores/auth'
-import { logicApi }        from '@/api/client'
+import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
@@ -303,6 +327,9 @@ import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
+import GraphPickerModal    from '@/components/logic/GraphPickerModal.vue'
+import HierarchyCombobox   from '@/components/ui/HierarchyCombobox.vue'
+import { parseHierarchyCompositeId } from '@/utils/hierarchyDisplay'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
 import HelpButton          from '@/components/ui/HelpButton.vue'
@@ -451,41 +478,22 @@ const nodeTypeComponents = {
 const activeGraphId = ref('')
 const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraphId.value))
 
-// Sized to the longest visible option text (in `ch` units) so the graph-name
-// select never shrinks below what's needed to show the selected name — a flex
-// item's default min-width:auto lets a <select> collapse to just its dropdown
-// arrow under space pressure otherwise, hiding the graph name entirely.
-const graphSelectEl = ref(null)
-let _measureCtx // lazily created, reused across computations
-// 1ch is only as wide as the "0" glyph — in a proportional font a shorter
-// but wide-glyph name (e.g. many uppercase letters, CJK) can need more
-// pixels than a longer narrow-glyph one, so plain text.length undercounts
-// it and clips the option text (Codex review on PR #1172). Measuring against
-// the select's own computed font gives the real rendered width instead.
-function measureTextPx(text, font) {
-  if (_measureCtx === undefined) {
-    _measureCtx = document.createElement('canvas').getContext('2d')
-  }
-  if (!_measureCtx) return null
-  _measureCtx.font = font
-  return _measureCtx.measureText(text).width
+// Ordner-Navigation statt Dropdown (#1217): das Popup meldet die gewählte
+// Logik über ein Event statt v-model auf activeGraphId, damit derselbe Weg
+// wie bei der bisherigen <select @change="loadGraph"> genommen wird — nur
+// der Auslöser ändert sich.
+const showGraphPicker = ref(false)
+function onGraphPicked(graphId) {
+  activeGraphId.value = graphId
+  loadGraph()
 }
-
-const graphSelectWidthCh = computed(() => {
-  const texts = [
-    t('logic.selectGraph'),
-    ...store.graphs.map(g => g.name + (g.enabled ? '' : t('logic.graphDisabledSuffix'))),
-  ]
-  const el = graphSelectEl.value
-  const font = el ? getComputedStyle(el).font : ''
-  const chPx = font ? measureTextPx('0', font) : null
-  if (chPx) {
-    const widestPx = texts.reduce((max, text) => Math.max(max, measureTextPx(text, font)), 0)
-    return Math.min(Math.max(Math.ceil(widestPx / chPx), 12), 40)
-  }
-  const longest = texts.reduce((max, text) => Math.max(max, text.length), 0)
-  return Math.min(Math.max(longest, 12), 40)
-})
+// The picker's own "Löschen" (unassigned pseudo-folder) deletes the graph
+// itself — if that happened to be the one currently open here, close it too.
+function onGraphDeletedFromPicker(graphId) {
+  if (activeGraphId.value !== graphId) return
+  activeGraphId.value = ''
+  nodes.value = []; edges.value = []
+}
 
 // ── Edge options — animated only when graph is enabled ─────────────────────
 const defaultEdgeOptions = computed(() => {
@@ -1047,16 +1055,29 @@ watch(activeGraphId, () => {
 const showNewGraph  = ref(false)
 const newGraphName  = ref('')
 const newGraphDesc  = ref('')
+const newGraphHierarchyNodes = ref([]) // composite "tree_id:node_id" strings — optional, unassigned when empty
 
 function newGraph() {
   if (!auth.isAdmin) return
   newGraphName.value = ''
   newGraphDesc.value = ''
+  newGraphHierarchyNodes.value = []
   showNewGraph.value = true
 }
 async function doCreateGraph() {
   if (!auth.isAdmin) return
   const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
+  // Optional: link the new graph into the picked hierarchy node(s) right away —
+  // matches the many-to-many model #1217 already established (0, 1 or several
+  // nodes). Best-effort: a link failure must not block the graph having been
+  // created, it would just stay reachable via "Nicht zugeordnet" instead.
+  await Promise.all(
+    newGraphHierarchyNodes.value.map((compositeId) => {
+      const parsed = parseHierarchyCompositeId(compositeId)
+      if (!parsed) return null
+      return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: g.id }).catch(() => {})
+    }),
+  )
   showNewGraph.value = false
   activeGraphId.value = g.id
   nodes.value = []; edges.value = []
@@ -1087,10 +1108,21 @@ async function doDeleteGraph() {
 }
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
-async function doDuplicateGraph() {
+const showDuplicate = ref(false)
+const duplicateName = ref('')
+
+function openDuplicate() {
   if (!auth.isAdmin || !activeGraphId.value) return
+  const g = store.graphs.find(g => g.id === activeGraphId.value)
+  duplicateName.value = `${g?.name ?? ''}${t('logic.duplicateNameSuffix')}`
+  showDuplicate.value = true
+}
+
+async function doDuplicate() {
+  if (!auth.isAdmin || !activeGraphId.value || !duplicateName.value.trim()) return
   try {
-    const copy = await store.duplicateGraph(activeGraphId.value)
+    const copy = await store.duplicateGraph(activeGraphId.value, duplicateName.value.trim())
+    showDuplicate.value = false
     activeGraphId.value = copy.id
     await loadGraph()
     showStatus(true, t('logic.duplicated', { name: copy.name }))
