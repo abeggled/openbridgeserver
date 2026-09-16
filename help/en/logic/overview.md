@@ -11,20 +11,8 @@ independent graph with its own active/inactive state.
 
 ## Toolbar {#logic-toolbar}
 
-- **Logic sheet selector** — opens a picker that offers the assigned hierarchies for
-  click-through, level by level; logic sheets with no assignment appear in their own
-  "Unassigned" folder. An additional "Show all" folder instead lists every existing logic
-  sheet flat and alphabetically, regardless of whether or where it is assigned. Disabled
-  graphs are marked accordingly, and the currently open logic sheet is marked with a dot to
-  the left of its name. Every row offers "Assign hierarchy" (adds another hierarchy
-  position, existing ones are kept) and "Delete" (deletes the logic sheet completely and
-  irreversibly, after a confirmation prompt, including all of its hierarchy assignments).
-  While browsing a hierarchy, rows additionally offer "Remove from hierarchy" (undoes only
-  the position currently being browsed — if that was the last one, the sheet reappears under
-  "Unassigned"); in "Show all", that is replaced by "Links" — a small popup listing every
-  hierarchy position the sheet is assigned to at a glance, each individually removable
-  without first navigating to it. The picker's "Edit logic hierarchy" button leads to
-  hierarchy management (Settings → Hierarchy), which manages only the tree structure itself.
+- **Logic sheet selector** — opens a picker for switching logic sheets and managing their
+  hierarchy assignments (see [Open Logic](#logic-graph-picker)).
 - **+ New** / **Save** — creates a new logic sheet (see [New logic sheet](#logic-new-sheet))
   or saves changes to the current one.
 - **▶ Run** — checks permissions and runs the graph once, manually (only possible for
@@ -46,6 +34,32 @@ independent graph with its own active/inactive state.
   logic sheet from such a file — useful for backing up or transferring individual graphs
   between installations.
 - **Delete** — deletes the logic sheet irreversibly.
+
+## Open Logic {#logic-graph-picker}
+
+The picker offers the assigned hierarchies for click-through, level by level; logic sheets
+with no assignment appear in their own "Unassigned" folder. An additional "Show all" folder
+instead lists every existing logic sheet flat and alphabetically, regardless of whether or
+where it is assigned, so an overview is always available even without knowing the hierarchy
+structure. Disabled graphs are marked accordingly, and the currently open logic sheet is
+marked with a dot to the left of its name.
+
+Every row offers:
+
+- **Assign hierarchy** — adds another hierarchy position; existing assignments are kept
+  (additive, never replaces).
+- **Remove from hierarchy** — only available while browsing a hierarchy, undoes only the
+  position currently being browsed; if that was the last one, the sheet reappears under
+  "Unassigned".
+- **Links** — only available in "Show all" (there is no single "currently browsed" position
+  to remove from there); opens a popup listing every hierarchy position the sheet is
+  assigned to at a glance, each individually removable without first navigating to it.
+- **Delete** — deletes the logic sheet completely and irreversibly, after a confirmation
+  prompt, including all of its hierarchy assignments.
+
+The "Edit logic hierarchy" button leads to hierarchy management (Settings → Hierarchy),
+which manages only the tree structure itself (trees and nodes) — assigning individual logic
+sheets happens entirely here in this picker.
 
 ## New logic sheet {#logic-new-sheet}
 

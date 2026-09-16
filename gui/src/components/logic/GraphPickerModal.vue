@@ -4,6 +4,7 @@
       <button type="button" class="btn-secondary btn-sm" @click="goOrganize" data-testid="btn-organize-graphs">
         {{ $t('logic.graphPicker.organize') }}
       </button>
+      <HelpButton help-id="logic-graph-picker" />
     </template>
 
     <div class="flex flex-col gap-3">
@@ -145,6 +146,9 @@
 
     <!-- Assign a hierarchy position (additive — existing assignments stay) -->
     <Modal v-model="assignModal.open" :title="$t('logic.graphPicker.assign')" max-width="sm">
+      <template #header-actions>
+        <HelpButton help-id="logic-graph-picker" />
+      </template>
       <div class="flex flex-col gap-4">
         <p class="text-xs text-slate-500">{{ $t('logic.graphPicker.assignHint') }}</p>
         <HierarchyCombobox v-model="assignModal.nodes" include-tree-roots data-testid="assign-hierarchy-combobox" />
@@ -164,6 +168,9 @@
          anzeigen" — each individually removable, since there is no single
          "current position" to unlink from like the folder-browse view has. -->
     <Modal v-model="linksModal.open" :title="linksModalTitle" max-width="sm">
+      <template #header-actions>
+        <HelpButton help-id="logic-graph-picker" />
+      </template>
       <div class="flex flex-col gap-3">
         <div v-if="linksModal.loading" class="flex justify-center py-4"><Spinner /></div>
         <div v-else-if="linksModal.links.length === 0" class="text-sm text-slate-500 py-4 text-center">
@@ -205,6 +212,7 @@ import Modal from '@/components/ui/Modal.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import HierarchyCombobox from '@/components/ui/HierarchyCombobox.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import { hierarchyApi } from '@/api/client.js'
 import { useLogicStore } from '@/stores/logic'
 import { parseHierarchyCompositeId } from '@/utils/hierarchyDisplay.js'

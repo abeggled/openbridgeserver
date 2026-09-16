@@ -11,22 +11,8 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
 
 ## Werkzeugleiste {#logic-toolbar}
 
-- **Logikblatt-Auswahl** — öffnet einen Auswahldialog, der die zugeordneten Hierarchien
-  Ebene für Ebene zum Durchklicken anbietet; Logikblätter ohne Zuordnung erscheinen dort in
-  einem eigenen Ordner „Nicht zugeordnet". Ein zusätzlicher Ordner „Alle anzeigen" listet
-  stattdessen ausnahmslos jedes vorhandene Logikblatt flach und alphabetisch sortiert
-  auf — unabhängig davon, ob und wo es einsortiert ist. Deaktivierte Graphen sind entsprechend
-  gekennzeichnet, das aktuell geöffnete Logikblatt ist durch einen Punkt links vor dem Namen
-  markiert. Jede Zeile bietet dort „Hierarchie zuweisen" (fügt eine weitere Hierarchie-Position
-  hinzu, bestehende bleiben erhalten) sowie „Löschen" (löscht das Logikblatt nach
-  Sicherheitsabfrage vollständig und unwiderruflich, inklusive aller Hierarchie-Zuordnungen).
-  Beim Durchklicken einer Hierarchie steht zusätzlich „Aus Hierarchie entfernen" zur Verfügung
-  (löst nur die aktuell durchsuchte Position — war dies die letzte, landet das Logikblatt
-  danach bei „Nicht zugeordnet"); in „Alle anzeigen" tritt an dessen Stelle „Verknüpfungen" —
-  ein kleines Popup, das alle Hierarchie-Positionen des Logikblatts auf einen Blick zeigt und
-  jede davon einzeln entfernbar macht, ohne dafür erst zur jeweiligen Position navigieren zu
-  müssen. Der Button „Logik-Hierarchie bearbeiten" im Dialog führt zur Hierarchie-Verwaltung
-  (Einstellungen → Hierarchie), auf der ausschließlich die Baumstruktur selbst gepflegt wird.
+- **Logikblatt-Auswahl** — öffnet einen Auswahldialog zum Wechseln des Logikblatts und zum
+  Verwalten seiner Hierarchie-Zuordnungen (siehe [Logik öffnen](#logic-graph-picker)).
 - **+ Neu** / **Speichern** — legt ein neues Logikblatt an (siehe [Neues Logikblatt](#logic-new-sheet))
   bzw. speichert Änderungen am aktuellen.
 - **▶ Ausführen** — prüft Berechtigungen und führt den Graphen einmalig manuell aus (nur
@@ -50,6 +36,35 @@ verbunden. Jedes **Logikblatt** ist ein eigenständiger Graph mit eigenem Aktiv/
   aus einer solchen Datei ein neues Logikblatt an — nützlich zum Sichern oder Übertragen
   einzelner Graphen zwischen Installationen.
 - **Löschen** — löscht das Logikblatt unwiderruflich.
+
+## Logik öffnen {#logic-graph-picker}
+
+Der Auswahldialog bietet die zugeordneten Hierarchien Ebene für Ebene zum Durchklicken an;
+Logikblätter ohne Zuordnung erscheinen dort in einem eigenen Ordner „Nicht zugeordnet". Ein
+weiterer Ordner „Alle anzeigen" listet stattdessen ausnahmslos jedes vorhandene Logikblatt
+flach und alphabetisch sortiert auf — unabhängig davon, ob und wo es einsortiert ist, damit
+sich auch ohne Hierarchien-Kenntnis ein Überblick verschaffen lässt. Deaktivierte Graphen
+sind entsprechend gekennzeichnet, das aktuell geöffnete Logikblatt ist durch einen Punkt
+links vor dem Namen markiert.
+
+Jede Zeile bietet:
+
+- **Hierarchie zuweisen** — fügt eine weitere Hierarchie-Position hinzu; bestehende
+  Zuordnungen bleiben dabei erhalten (additiv, kein Ersetzen).
+- **Aus Hierarchie entfernen** — nur beim Durchklicken einer Hierarchie verfügbar, löst die
+  Logik ausschließlich von der aktuell durchsuchten Position; war dies die letzte Position,
+  erscheint die Logik danach bei „Nicht zugeordnet".
+- **Verknüpfungen** — nur in „Alle anzeigen" verfügbar (dort gibt es keine einzelne „aktuell
+  durchsuchte" Position, von der entfernt werden könnte); öffnet ein Popup, das alle
+  Hierarchie-Positionen der Logik auf einen Blick zeigt und jede davon einzeln entfernbar
+  macht, ohne dafür erst zur jeweiligen Position navigieren zu müssen.
+- **Löschen** — löscht das Logikblatt nach Sicherheitsabfrage vollständig und unwiderruflich,
+  inklusive aller Hierarchie-Zuordnungen.
+
+Der Button „Logik-Hierarchie bearbeiten" führt zur Hierarchie-Verwaltung
+(Einstellungen → Hierarchie), auf der ausschließlich die Baumstruktur selbst (Bäume und
+Knoten) gepflegt wird — die Zuordnung einzelner Logikblätter erfolgt vollständig hier in
+diesem Dialog.
 
 ## Neues Logikblatt {#logic-new-sheet}
 
