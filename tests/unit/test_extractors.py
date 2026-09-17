@@ -138,6 +138,29 @@ class TestJsonExtractor:
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["value"] is True
 
+    def test_double_encoded_json_is_unwrapped(self):
+        """A JSON document serialised twice (a JSON string literal whose
+        content is itself JSON) must still be addressable by path, and the
+        preview must show the decoded document (issue #1104)."""
+        inner = {"days": [{"SUNSET": "19:33", "TX_C": 18}]}
+        payload = json.dumps(json.dumps(inner))
+        nodes = [_jnode("j1", "days[0].TX_C")]
+        out = _run(nodes, input_overrides={"j1": {"data": payload}})
+        assert out["j1"]["value"] == 18
+        assert out["j1"]["_preview"] == json.dumps(inner)
+
+    def test_double_encoded_scalar_stays_string(self):
+        """Only nested objects/arrays are unwrapped — a plain string that
+        happens to parse as a JSON scalar keeps its string identity."""
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps("42")}})
+        assert out["j1"]["_preview"] == json.dumps("42")
+
+    def test_string_with_invalid_inner_json_stays_string(self):
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps("{not json")}})
+        assert out["j1"]["_preview"] == json.dumps("{not json")
+
     def test_preview_falls_back_to_str_when_not_json_serializable(self):
         """A non-serializable data object (e.g. containing a circular
         reference) must not blow up the preview snapshot — it falls back to

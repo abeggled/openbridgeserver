@@ -2049,12 +2049,23 @@ class GraphExecutor:
                 json_path = (d.get("json_path") or "").strip()
                 json_paths_raw = (d.get("json_paths") or "").strip()
 
-                # Parse raw input to Python object
+                # Parse raw input to Python object. A JSON document that was
+                # serialised twice (e.g. a string datapoint carrying JSON that
+                # got JSON-encoded again upstream) decodes to a *string* on
+                # the first pass — unwrap one such level so the paths inside
+                # stay addressable (issue #1104).
                 if isinstance(raw, str):
                     try:
                         data_obj: Any = _json_mod.loads(raw)
                     except (ValueError, TypeError):
                         data_obj = raw
+                    if isinstance(data_obj, str):
+                        try:
+                            inner = _json_mod.loads(data_obj)
+                        except (ValueError, TypeError):
+                            inner = None
+                        if isinstance(inner, (dict, list)):
+                            data_obj = inner
                 elif raw is not None:
                     data_obj = raw
                 else:

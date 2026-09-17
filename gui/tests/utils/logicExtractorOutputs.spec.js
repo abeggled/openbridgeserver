@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractorOutputLabels, retainPreviews } from '@/utils/logicExtractorOutputs'
+import { extractorOutputLabels, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
 
 const t = (key, params) => `${key}:${params?.n}`
 
@@ -81,5 +81,29 @@ describe('retainPreviews', () => {
     retainPreviews(previous, outputs)
     expect(outputs).toEqual({ j1: { out_1: null } })
     expect(previous).toEqual({ j1: { _preview: payload } })
+  })
+})
+
+describe('parseExtractorJson', () => {
+  it('returns plain documents as-is', () => {
+    expect(parseExtractorJson('{"a":1}')).toEqual({ a: 1 })
+    expect(parseExtractorJson('[1,2]')).toEqual([1, 2])
+    expect(parseExtractorJson('7')).toBe(7)
+  })
+
+  it('unwraps one level of double-encoded JSON objects and arrays', () => {
+    const inner = { days: [{ SUNSET: '19:33' }] }
+    expect(parseExtractorJson(JSON.stringify(JSON.stringify(inner)))).toEqual(inner)
+    expect(parseExtractorJson(JSON.stringify('[1]'))).toEqual([1])
+  })
+
+  it('keeps strings whose content is not a JSON object', () => {
+    expect(parseExtractorJson(JSON.stringify('42'))).toBe('42')
+    expect(parseExtractorJson(JSON.stringify('null'))).toBe('null')
+    expect(parseExtractorJson(JSON.stringify('{not json'))).toBe('{not json')
+  })
+
+  it('throws like JSON.parse for a snapshot that is not JSON', () => {
+    expect(() => parseExtractorJson('{not json')).toThrow()
   })
 })

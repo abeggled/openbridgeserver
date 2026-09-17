@@ -1559,7 +1559,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
-import { extractorOutputLabels } from '@/utils/logicExtractorOutputs'
+import { extractorOutputLabels, parseExtractorJson } from '@/utils/logicExtractorOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -2226,7 +2226,7 @@ const extractorPaths = computed(() => {
   if (!preview) return []
   if (props.node?.type === 'json_extractor') {
     try {
-      const obj = JSON.parse(preview)
+      const obj = parseExtractorJson(preview)
       return _flattenJsonPaths(obj)
     } catch { return [] }
   } else {
@@ -2235,37 +2235,6 @@ const extractorPaths = computed(() => {
       if (doc.querySelector('parsererror')) return []
       return _collectXmlPaths(doc.documentElement)
     } catch { return [] }
-  }
-})
-
-// Live-evaluate current path against preview to show resolved value
-const extractorPreviewValue = computed(() => {
-  const preview = extractorPreview.value
-  if (!preview) return null
-  if (props.node?.type === 'json_extractor') {
-    const path = (localData.value.json_path || '').trim()
-    if (!path) return null
-    try {
-      const obj = JSON.parse(preview)
-      // Traverse dotted path (same logic as backend _json_extract)
-      const normPath = path.replace(/\[(\d+)\]/g, '.$1')
-      const parts = normPath.split('.').filter(Boolean)
-      let cur = obj
-      for (const p of parts) {
-        if (cur === null || typeof cur !== 'object') return null
-        cur = Array.isArray(cur) ? cur[Number(p)] : cur[p]
-      }
-      return cur !== undefined ? cur : null
-    } catch { return null }
-  } else {
-    const path = (localData.value.xml_path || '').trim()
-    if (!path) return null
-    try {
-      const doc = new DOMParser().parseFromString(preview, 'text/xml')
-      if (doc.querySelector('parseerror')) return null
-      const el = doc.evaluate(path, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
-      return el ? el.textContent?.trim() ?? null : null
-    } catch { return null }
   }
 })
 
@@ -2309,7 +2278,7 @@ function jsonPathPreview(i) {
   const entry = jsonPaths.value[i]
   if (!entry?.path) return null
   try {
-    const obj = JSON.parse(preview)
+    const obj = parseExtractorJson(preview)
     const normPath = entry.path.replace(/\[(\d+)\]/g, '.$1')
     const parts = normPath.split('.').filter(Boolean)
     let cur = obj

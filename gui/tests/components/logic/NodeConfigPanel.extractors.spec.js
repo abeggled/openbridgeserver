@@ -219,6 +219,32 @@ describe('NodeConfigPanel json_extractor — path picker from preview', () => {
 
 // ─── xml_extractor — basic add / remove ──────────────────────────────────────
 
+describe('NodeConfigPanel json_extractor — double-encoded preview (issue #1104)', () => {
+  it('lists the paths inside a JSON string literal that itself contains JSON', async () => {
+    const inner = { days: [{ SUNSET: '2026-09-17T19:33:00+02:00', TX_C: 18 }] }
+    const w = await mountPanel(
+      'json_extractor',
+      { json_paths: JSON.stringify([{ label: 'Wert 1', path: 'days[0].TX_C' }]) },
+      { n1: { _preview: JSON.stringify(JSON.stringify(inner)) } },
+    )
+    await flushPromises()
+    const select = w.find('[data-testid="extractor-path-select"]')
+    expect(select.exists()).toBe(true)
+    const options = select.findAll('option').map(o => o.attributes('value'))
+    expect(options).toContain('days[0].SUNSET')
+    expect(options).toContain('days[0].TX_C')
+    expect(w.text()).toContain('↳ 18')
+    w.unmount()
+  })
+
+  it('shows no picker when the string payload is not JSON', async () => {
+    const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify('just text') } })
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-path-select"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
 describe('NodeConfigPanel xml_extractor — add path', () => {
   it('clicking + adds an output row and emits update', async () => {
     const w = await mountPanel('xml_extractor', { xml_paths: '[]' })

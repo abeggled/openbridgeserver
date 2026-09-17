@@ -45,6 +45,26 @@ export function extractorOutputLabels(node, t) {
   return labels
 }
 
+/**
+ * Parse an extractor `_preview` snapshot. Mirrors the executor: a document
+ * that was JSON-encoded twice decodes to a string first — unwrap one such
+ * level so the path picker can still list the keys inside. Throws like
+ * `JSON.parse` when the snapshot itself is not JSON.
+ *
+ * @param {string} preview  `_preview` text of a json_extractor run output
+ * @returns {unknown} decoded value
+ */
+export function parseExtractorJson(preview) {
+  const obj = JSON.parse(preview)
+  if (typeof obj !== 'string') return obj
+  try {
+    const inner = JSON.parse(obj)
+    return inner !== null && typeof inner === 'object' ? inner : obj
+  } catch {
+    return obj
+  }
+}
+
 function hasPreview(nodeOut) {
   const preview = nodeOut?._preview
   return preview !== null && preview !== undefined && preview !== ''
