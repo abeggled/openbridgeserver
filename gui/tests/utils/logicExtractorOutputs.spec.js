@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractorOutputLabels, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
+import { EXTRACTOR_MAX_PATHS, extractorOutputLabels, flattenJsonPaths, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
 
 const t = (key, params) => `${key}:${params?.n}`
 
@@ -75,6 +75,15 @@ describe('retainPreviews', () => {
     expect(retainPreviews(undefined, undefined)).toEqual({})
   })
 
+  it('carries the pruned marker along with a retained preview and drops it otherwise', () => {
+    const pruned = { j1: { _preview: payload, _preview_pruned: true } }
+    expect(retainPreviews(pruned, { j1: { out_1: null, _preview: null } })).toEqual({ j1: { out_1: null, _preview: payload, _preview_pruned: true } })
+    const full = { j1: { _preview: payload } }
+    expect(retainPreviews(full, { j1: { out_1: null, _preview_pruned: true } })).toEqual({ j1: { out_1: null, _preview: payload } })
+    // A fresh (unpruned) preview wins over the retained pruned one.
+    expect(retainPreviews(pruned, { j1: { _preview: '{"a":1}' } })).toEqual({ j1: { _preview: '{"a":1}' } })
+  })
+
   it('does not mutate its inputs', () => {
     const previous = { j1: { _preview: payload } }
     const outputs = { j1: { out_1: null } }
@@ -105,5 +114,36 @@ describe('parseExtractorJson', () => {
 
   it('throws like JSON.parse for a snapshot that is not JSON', () => {
     expect(() => parseExtractorJson('{not json')).toThrow()
+  })
+})
+
+describe('flattenJsonPaths', () => {
+  it('lists every leaf of nested objects and arrays', () => {
+    expect(flattenJsonPaths({ a: [{ b: 1 }, 2], c: { d: null }, e: 'x' })).toEqual(['a[0].b', 'a[1]', 'c.d', 'e'])
+  })
+
+  it('stops descending below depth 6 and lists the container itself', () => {
+    const doc = { l1: { l2: { l3: { l4: { l5: { l6: { l7: { l8: 1 } } } } } } } }
+    expect(flattenJsonPaths(doc)).toEqual(['l1.l2.l3.l4.l5.l6.l7'])
+  })
+
+  it('returns nothing for scalar or empty documents', () => {
+    expect(flattenJsonPaths(42)).toEqual([])
+    expect(flattenJsonPaths(null)).toEqual([])
+    expect(flattenJsonPaths({})).toEqual([])
+    expect(flattenJsonPaths([])).toEqual([])
+  })
+
+  it('bounds the list at the limit without throwing on large flat arrays', () => {
+    const flat = Array.from({ length: EXTRACTOR_MAX_PATHS + 1000 }, (_, i) => i)
+    const paths = flattenJsonPaths({ flat, tail: { x: 1 } })
+    expect(paths).toHaveLength(EXTRACTOR_MAX_PATHS)
+    expect(paths.at(-1)).toBe(`flat[${EXTRACTOR_MAX_PATHS - 1}]`)
+  })
+
+  it('honours a custom limit across nesting levels', () => {
+    const doc = { a: [1, 2, 3], b: { c: [4, 5] }, d: 6 }
+    expect(flattenJsonPaths(doc, 4)).toEqual(['a[0]', 'a[1]', 'a[2]', 'b.c[0]'])
+    expect(flattenJsonPaths(doc, 0)).toEqual([])
   })
 })

@@ -65,6 +65,43 @@ export function parseExtractorJson(preview) {
   }
 }
 
+/** Upper bound for the path picker's option list (issue #1104). */
+export const EXTRACTOR_MAX_PATHS = 5000
+
+/**
+ * Flatten every leaf of a JSON value into dot/bracket notation paths
+ * (`sensors[0].temperature`), descending at most 6 levels — a deeper
+ * container is listed as a path itself.
+ *
+ * The list is bounded: a 256 KB document can hold far more leaves than a
+ * `<select>` can sensibly show, and collecting them with a spread-push
+ * would exceed the call-argument limit for large flat arrays.
+ *
+ * @param {unknown} obj      decoded document
+ * @param {number}  [limit]  maximum number of paths to collect
+ * @returns {string[]} paths, at most `limit` entries
+ */
+export function flattenJsonPaths(obj, limit = EXTRACTOR_MAX_PATHS) {
+  const paths = []
+  const walk = (value, prefix, depth) => {
+    if (paths.length >= limit) return
+    if (depth > 6 || value === null || typeof value !== 'object') {
+      if (prefix) paths.push(prefix)
+      return
+    }
+    const entries = Array.isArray(value)
+      ? value.map((item, i) => [`${prefix}[${i}]`, item])
+      : Object.entries(value).map(([k, v]) => [prefix ? `${prefix}.${k}` : k, v])
+    for (const [key, child] of entries) {
+      if (paths.length >= limit) break
+      if (child !== null && typeof child === 'object') walk(child, key, depth + 1)
+      else paths.push(key)
+    }
+  }
+  walk(obj, '', 0)
+  return paths
+}
+
 function hasPreview(nodeOut) {
   const preview = nodeOut?._preview
   return preview !== null && preview !== undefined && preview !== ''
@@ -88,7 +125,10 @@ export function retainPreviews(previous, outputs) {
   for (const [nodeId, prevOut] of Object.entries(previous || {})) {
     if (!hasPreview(prevOut) || hasPreview(merged[nodeId])) continue
     const next = merged[nodeId]
-    merged[nodeId] = { ...(next && typeof next === 'object' ? next : {}), _preview: prevOut._preview }
+    const retained = { ...(next && typeof next === 'object' ? next : {}), _preview: prevOut._preview }
+    delete retained._preview_pruned
+    if (prevOut._preview_pruned === true) retained._preview_pruned = true
+    merged[nodeId] = retained
   }
   return merged
 }

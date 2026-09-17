@@ -2140,7 +2140,9 @@
         "valueN": "Wert {n}",
         "outputsCount": "Ausgänge ({n})",
         "labelPlaceholder": "Bezeichnung",
-        "pathExample": "z.B. data.temperature"
+        "pathExample": "z.B. data.temperature",
+        "previewPruned": "Vorschau gekürzt: Das Dokument überschreitet die Vorschaugrösse, Arrays und lange Texte wurden verkürzt. Die Live-Werte je Ausgang können vom tatsächlichen Ergebnis abweichen.",
+        "pathListTruncated": "Pfadliste auf {n} Einträge gekürzt — weitere Pfade bitte direkt eingeben."
       },
       "substr": {
         "modeLabel": "Modus",

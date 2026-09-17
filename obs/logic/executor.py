@@ -33,8 +33,10 @@ _AVG_MULTI_MAX_SAMPLES = 100_000
 # json_extractor `_preview` snapshot (config-panel path picker, issue #1104):
 # the full document up to this size; larger documents are pruned
 # structurally (arrays and strings shortened) so the snapshot stays valid
-# JSON — a text cut would leave the picker without any paths at all.
-_JSON_PREVIEW_MAX_CHARS = 512_000
+# JSON — a text cut would leave the picker without any paths at all. The
+# snapshot rides along in every debug WebSocket broadcast and run response,
+# which is why the limit is not simply "unbounded".
+_JSON_PREVIEW_MAX_CHARS = 256_000
 _JSON_PREVIEW_PRUNE_LIST_ITEMS = 5
 _JSON_PREVIEW_PRUNE_STR_CHARS = 200
 
@@ -50,18 +52,23 @@ def _prune_json_preview(value: Any) -> Any:
     return value
 
 
-def _json_preview_snapshot(data_obj: Any) -> str:
-    """Serialise a json_extractor payload for the GUI path picker."""
+def _json_preview_snapshot(data_obj: Any) -> tuple[str, bool]:
+    """Serialise a json_extractor payload for the GUI path picker.
+
+    Returns ``(snapshot, pruned)`` — ``pruned`` tells the GUI that the
+    snapshot is not the complete document, so per-row live previews may
+    differ from what the block actually outputs.
+    """
     try:
         preview = json.dumps(data_obj, default=str, ensure_ascii=False)
         if len(preview) <= _JSON_PREVIEW_MAX_CHARS:
-            return preview
+            return preview, False
         pruned = json.dumps(_prune_json_preview(data_obj), default=str, ensure_ascii=False)
         if len(pruned) <= _JSON_PREVIEW_MAX_CHARS:
-            return pruned
-        return pruned[:_JSON_PREVIEW_MAX_CHARS] + "…"
+            return pruned, True
+        return pruned[:_JSON_PREVIEW_MAX_CHARS] + "…", True
     except (TypeError, ValueError, RecursionError):
-        return str(data_obj)
+        return str(data_obj), False
 
 
 class _OpaqueRecoveredStr(str):
@@ -2109,7 +2116,13 @@ class GraphExecutor:
                 # "null"), so the GUI can tell "nothing arrived this run" apart
                 # from real data and keep showing the previously received
                 # payload (issue #1104).
-                preview: str | None = _json_preview_snapshot(data_obj) if data_obj is not None else None
+                preview: str | None = None
+                preview_pruned = False
+                if data_obj is not None:
+                    preview, preview_pruned = _json_preview_snapshot(data_obj)
+                preview_ports: dict[str, Any] = {"_preview": preview}
+                if preview_pruned:
+                    preview_ports["_preview_pruned"] = True
 
                 # Multi-path mode: json_paths is a JSON array of {label, path} entries
                 if json_paths_raw:
@@ -2119,7 +2132,7 @@ class GraphExecutor:
                         path_list = []
 
                     if isinstance(path_list, list) and path_list:
-                        result: dict[str, Any] = {"_preview": preview}
+                        result: dict[str, Any] = dict(preview_ports)
                         for i, entry in enumerate(path_list):
                             p = (entry.get("path") or "").strip() if isinstance(entry, dict) else ""
                             val: Any = None
@@ -2139,7 +2152,7 @@ class GraphExecutor:
                     except (KeyError, IndexError, TypeError, ValueError):
                         value = None
 
-                return {"value": value, "_preview": preview}
+                return {"value": value, **preview_ports}
 
             case "xml_extractor":
                 import json as _json_xml

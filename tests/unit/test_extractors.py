@@ -123,11 +123,12 @@ class TestJsonExtractor:
         (issue #1104)."""
         doc = {"hours": [{"TTT_C": i, "cur_color": {"background_color": "#abcdef"}} for i in range(2000)]}
         big = json.dumps(doc)
-        assert 20_000 < len(big) < 512_000
+        assert 20_000 < len(big) < 256_000
         nodes = [_jnode("j1", "hours[1999].TTT_C")]
         out = _run(nodes, input_overrides={"j1": {"data": big}})
         assert out["j1"]["value"] == 1999
         assert json.loads(out["j1"]["_preview"]) == doc
+        assert "_preview_pruned" not in out["j1"]
 
     def test_preview_prunes_oversized_documents_to_valid_json(self):
         """Above the size limit arrays and long strings are shortened
@@ -135,10 +136,11 @@ class TestJsonExtractor:
         keys; extraction itself works on the full document."""
         doc = {"items": [{"n": i, "text": "y" * 300} for i in range(20_000)], "meta": {"id": "x" * 300}}
         big = json.dumps(doc)
-        assert len(big) > 512_000
+        assert len(big) > 256_000
         nodes = [_jnode("j1", "items[19999].n")]
         out = _run(nodes, input_overrides={"j1": {"data": big}})
         assert out["j1"]["value"] == 19_999
+        assert out["j1"]["_preview_pruned"] is True
         preview = json.loads(out["j1"]["_preview"])
         assert len(preview["items"]) == 5
         assert preview["items"][0]["n"] == 0
@@ -150,13 +152,14 @@ class TestJsonExtractor:
         the limit is cut as text (last resort, marked with an ellipsis)."""
         doc = {f"key_{i:06d}": i for i in range(60_000)}
         big = json.dumps(doc)
-        assert len(big) > 512_000
+        assert len(big) > 256_000
         nodes = [_jnode("j1", "key_000007")]
         out = _run(nodes, input_overrides={"j1": {"data": big}})
         assert out["j1"]["value"] == 7
         preview = out["j1"]["_preview"]
-        assert len(preview) == 512_001
+        assert len(preview) == 256_001
         assert preview.endswith("…")
+        assert out["j1"]["_preview_pruned"] is True
 
     def test_string_value_extraction(self):
         payload = json.dumps({"status": "online"})
@@ -265,6 +268,15 @@ class TestJsonExtractorMultiPath:
         out = _run(nodes)
         assert out["j1"]["_preview"] is None
         assert out["j1"]["out_1"] is None
+
+    def test_pruned_marker_in_multi_mode(self):
+        doc = {"items": [{"n": i, "text": "y" * 300} for i in range(15_000)]}
+        paths = [{"label": "N", "path": "items[14999].n"}]
+        nodes = [self._mnode("j1", paths)]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps(doc)}})
+        assert out["j1"]["out_1"] == 14_999
+        assert out["j1"]["_preview_pruned"] is True
+        assert len(json.loads(out["j1"]["_preview"])["items"]) == 5
 
     def test_no_value_key_in_multi_mode(self):
         payload = json.dumps({"a": 1})

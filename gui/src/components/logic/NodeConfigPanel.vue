@@ -926,7 +926,13 @@
               <option value="">{{ $t('logic.nodeConfig.extractor.pathPlaceholder') }}</option>
               <option v-for="p in extractorPaths" :key="p" :value="p">{{ p }}</option>
             </select>
+            <p v-if="extractorPaths.length >= EXTRACTOR_MAX_PATHS" class="text-xs text-amber-400/80 mt-1" data-testid="extractor-paths-truncated">
+              {{ $t('logic.nodeConfig.extractor.pathListTruncated', { n: EXTRACTOR_MAX_PATHS }) }}
+            </p>
           </div>
+          <p v-if="extractorPreviewPruned" class="text-xs text-amber-400/80" data-testid="extractor-preview-pruned">
+            {{ $t('logic.nodeConfig.extractor.previewPruned') }}
+          </p>
 
           <!-- Output rows -->
           <div class="form-group">
@@ -1559,7 +1565,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
-import { extractorOutputLabels, parseExtractorJson } from '@/utils/logicExtractorOutputs'
+import { EXTRACTOR_MAX_PATHS, extractorOutputLabels, flattenJsonPaths, parseExtractorJson } from '@/utils/logicExtractorOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -2145,34 +2151,6 @@ const extractorPreview = computed(() => {
   return props.nodeOutputs[props.node.id]?._preview ?? ''
 })
 
-// Flatten all dot-notation paths from a JSON object (max depth 6)
-function _flattenJsonPaths(obj, prefix = '', depth = 0) {
-  if (depth > 6 || obj === null || typeof obj !== 'object') {
-    return prefix ? [prefix] : []
-  }
-  const paths = []
-  if (Array.isArray(obj)) {
-    obj.forEach((item, i) => {
-      const key = `${prefix}[${i}]`
-      if (item !== null && typeof item === 'object') {
-        paths.push(..._flattenJsonPaths(item, key, depth + 1))
-      } else {
-        paths.push(key)
-      }
-    })
-  } else {
-    for (const [k, v] of Object.entries(obj)) {
-      const key = prefix ? `${prefix}.${k}` : k
-      if (v !== null && typeof v === 'object') {
-        paths.push(..._flattenJsonPaths(v, key, depth + 1))
-      } else {
-        paths.push(key)
-      }
-    }
-  }
-  return paths
-}
-
 // Collect XPath expressions from XML — simple .//tag plus positional .//tag[n]/child paths
 function _collectXmlPaths(rootEl) {
   const paths = new Set()
@@ -2221,14 +2199,28 @@ function _collectXmlPaths(rootEl) {
   return [...paths]
 }
 
+// Parsed once per received payload — the path list and every output row's
+// live preview read from this instead of re-parsing the (up to 256 KB)
+// snapshot on each render.
+const extractorParsedJson = computed(() => {
+  const preview = extractorPreview.value
+  if (!preview || props.node?.type !== 'json_extractor') return undefined
+  try { return parseExtractorJson(preview) } catch { return undefined }
+})
+
+// The backend pruned the snapshot (arrays/strings shortened) because the
+// document exceeded its size limit — row previews may then differ from the
+// block's real outputs.
+const extractorPreviewPruned = computed(() =>
+  !!props.node && props.nodeOutputs[props.node.id]?._preview_pruned === true
+)
+
 const extractorPaths = computed(() => {
   const preview = extractorPreview.value
   if (!preview) return []
   if (props.node?.type === 'json_extractor') {
-    try {
-      const obj = parseExtractorJson(preview)
-      return _flattenJsonPaths(obj)
-    } catch { return [] }
+    const obj = extractorParsedJson.value
+    return obj === undefined ? [] : flattenJsonPaths(obj, EXTRACTOR_MAX_PATHS)
   } else {
     try {
       const doc = new DOMParser().parseFromString(preview, 'text/xml')
@@ -2273,12 +2265,11 @@ function updateJsonPath(i, key, value) {
 }
 
 function jsonPathPreview(i) {
-  const preview = extractorPreview.value
-  if (!preview) return null
+  const obj = extractorParsedJson.value
+  if (obj === undefined) return null
   const entry = jsonPaths.value[i]
   if (!entry?.path) return null
   try {
-    const obj = parseExtractorJson(preview)
     const normPath = entry.path.replace(/\[(\d+)\]/g, '.$1')
     const parts = normPath.split('.').filter(Boolean)
     let cur = obj
