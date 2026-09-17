@@ -1542,6 +1542,7 @@
       v-if="debugMode && panelTab === 'debug'"
       :inputs="debugInputs"
       :outputs="debugOutputs"
+      :output-labels="debugOutputLabels"
       :metadata="debugMetadata"
       :has-overrides="hasDebugOverrides"
       @set-override="(inputId, text) => emit('set-override', inputId, text)"
@@ -1558,6 +1559,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import { extractorOutputLabels } from '@/utils/logicExtractorOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -2134,6 +2136,9 @@ function removeWatchdogInput(i) {
 
 // ── Extractor: preview + path helpers ─────────────────────────────────────
 const activeExtractorRow = ref(null)
+
+// Debug tab lists extractor outputs under their configured names (issue #1104)
+const debugOutputLabels = computed(() => extractorOutputLabels(props.node, t))
 
 const extractorPreview = computed(() => {
   if (!props.node) return ''

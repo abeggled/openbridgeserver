@@ -26,8 +26,11 @@ Parst einen JSON-String (**Daten**-Eingang) und extrahiert Werte über Schlüsse
 Punkt-Notation (z. B. `sensors.temperature`). Über **+** lassen sich mehrere benannte Ausgänge
 anlegen; jede Zeile zeigt bei zuletzt empfangenen Daten eine Live-Vorschau des extrahierten
 Werts. Eine erkannte-Pfade-Dropdown-Liste (aus den zuletzt empfangenen Daten) füllt die gerade
-aktive Ausgangszeile automatisch. Eine ältere Single-Pfad-Konfiguration wird als
-Legacy-Hinweis mit Ein-Klick-Upgrade auf mehrere Ausgänge angezeigt.
+aktive Ausgangszeile automatisch. Die Pfadauswahl bleibt erhalten, sobald einmal Daten
+angekommen sind — auch wenn eine spätere Ausführung (z. B. nach dem Hinzufügen eines Ausgangs
+über **+**) keine neuen Daten liefert. Im Debug-Modus erscheinen die Ausgänge unter ihren
+konfigurierten Namen. Eine ältere Single-Pfad-Konfiguration wird als Legacy-Hinweis mit
+Ein-Klick-Upgrade auf mehrere Ausgänge angezeigt.
 
 ## XML Extractor {#logic-block-xml-extractor}
 

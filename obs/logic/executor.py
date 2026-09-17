@@ -2060,13 +2060,18 @@ class GraphExecutor:
                 else:
                     data_obj = None
 
-                # _preview: compact JSON snapshot for config-panel path picker (max 20 KB)
-                try:
-                    preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
-                    if len(preview) > 20_000:
-                        preview = preview[:20_000] + "…"
-                except (TypeError, ValueError, RecursionError):
-                    preview = str(data_obj) if data_obj is not None else None
+                # _preview: compact JSON snapshot for config-panel path picker (max 20 KB).
+                # No payload → None (not the JSON text "null"), so the GUI can tell
+                # "nothing arrived this run" apart from real data and keep showing
+                # the previously received payload (issue #1104).
+                preview: str | None = None
+                if data_obj is not None:
+                    try:
+                        preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
+                        if len(preview) > 20_000:
+                            preview = preview[:20_000] + "…"
+                    except (TypeError, ValueError, RecursionError):
+                        preview = str(data_obj)
 
                 # Multi-path mode: json_paths is a JSON array of {label, path} entries
                 if json_paths_raw:

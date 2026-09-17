@@ -102,6 +102,14 @@ class TestJsonExtractor:
         out = _run(nodes)
         assert out["j1"]["value"] is None
 
+    def test_preview_is_none_without_data(self):
+        """An execution without a payload (e.g. untriggered upstream API
+        client) must report no preview at all — not the JSON text "null" —
+        so the GUI can keep the previously received payload (issue #1104)."""
+        nodes = [_jnode("j1", "key")]
+        out = _run(nodes)
+        assert out["j1"]["_preview"] is None
+
     def test_preview_populated(self):
         payload = json.dumps({"a": 1})
         nodes = [_jnode("j1", "a")]
@@ -182,6 +190,13 @@ class TestJsonExtractorMultiPath:
         overrides = {"j1": {"data": payload}}
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["_preview"] == payload
+
+    def test_preview_is_none_without_data(self):
+        paths = [{"label": "X", "path": "x"}]
+        nodes = [self._mnode("j1", paths)]
+        out = _run(nodes)
+        assert out["j1"]["_preview"] is None
+        assert out["j1"]["out_1"] is None
 
     def test_no_value_key_in_multi_mode(self):
         payload = json.dumps({"a": 1})

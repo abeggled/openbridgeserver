@@ -24,9 +24,11 @@ periodic checks. **Timeout** and **ping count** are configurable.
 Parses a JSON string (**Data** input) and extracts values via dot-notation key paths (e.g.
 `sensors.temperature`). Use **+** to add multiple named outputs; each row shows a live preview
 of the extracted value based on the most recently received data. A detected-paths dropdown
-(from the most recently received data) auto-fills the currently active output row. An older
-single-path configuration is shown as a legacy notice with a one-click upgrade to multiple
-outputs.
+(from the most recently received data) auto-fills the currently active output row. The path
+picker stays available once data has arrived — even when a later execution (e.g. after adding
+an output with **+**) delivers no new data. In debug mode the outputs appear under their
+configured names. An older single-path configuration is shown as a legacy notice with a
+one-click upgrade to multiple outputs.
 
 ## XML Extractor {#logic-block-xml-extractor}
 

@@ -707,6 +707,63 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.nodes[0].data._dbg).toContain('[object Object]')
   })
 
+  it('keeps the extractor preview across runs without payload and names its outputs in the debug band (issue #1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const payload = JSON.stringify({ Status: { Power: 1 } })
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'On/Off', path: 'Status.Power' }, { label: '', path: '' }]) } },
+          { id: 'g1', type: 'and', position: { x: 0, y: 0 }, data: {} },
+        ],
+        edges: [],
+      },
+    })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+
+    // Triggered run: payload arrives, the band shows the configured names.
+    wsInstance.onmessage({ data: JSON.stringify({
+      action: 'logic_run',
+      graph_id: 'graph-1',
+      outputs: { j1: { out_1: 1, out_2: null, _preview: payload }, g1: { out: true } },
+    }) })
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Wert 2=—')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('On/Off=1   Wert 2=—')
+    // Blocks without configurable output names keep the technical port id.
+    expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+
+    // Untriggered re-execution (e.g. after the auto-save that follows "+"):
+    // no payload this time — the last received one is kept for the picker.
+    wsInstance.onmessage({ data: JSON.stringify({
+      action: 'logic_run',
+      graph_id: 'graph-1',
+      outputs: { j1: { out_1: null, out_2: null, _preview: null }, g1: { _internal: 1 } },
+    }) })
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(null)
+    expect(wrapper.vm.lastRunDebugOutputs.j1._preview).toBe(null)
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=—   Wert 2=—')
+    // Only internal (_-prefixed) keys → nothing to show in the band.
+    expect(wrapper.vm.nodes[1].data._dbg).toBeUndefined()
+
+    // A manual run outside debug mode keeps it as well.
+    wrapper.vm.toggleDebug()
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { j1: { out_1: 2, out_2: null } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(2)
+  })
+
   it('ignores logic_run message for a different graph_id', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }

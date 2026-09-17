@@ -323,6 +323,7 @@ import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
+import { extractorOutputLabels, retainPreviews } from '@/utils/logicExtractorOutputs'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
@@ -763,7 +764,7 @@ const lastRunDebugOutputs = ref({})
 let debugStateGeneration = 0
 const DEBUG_TOOLTIP_MAX_CHARS = 1000
 
-function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
+function fmtDebugVal(nodeOut, { full = false, maxChars = null, portLabels = {} } = {}) {
   if (!nodeOut || typeof nodeOut !== 'object') return null
 
   function maybeClip(text) {
@@ -800,7 +801,7 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
   }
   const pairs = Object.entries(nodeOut)
     .filter(([key]) => !key.startsWith('_'))
-    .map(([key, value]) => `${key}=${fv(value)}`)
+    .map(([key, value]) => `${portLabels[key] ?? key}=${fv(value)}`)
   return pairs.length ? pairs.join('   ') : null
 }
 
@@ -815,17 +816,28 @@ const preflightApproved = ref(false)
 const preflightGraphId = ref('')
 let preflightRequestId = 0
 
+// Extractor blocks keep the last received payload (`_preview`) across runs
+// that carry none, so their path picker survives an untriggered re-execution
+// (issue #1104).
+function setLastRunOutputs(outputs) {
+  lastRunOutputs.value = retainPreviews(lastRunOutputs.value, outputs)
+}
+
 function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
-  lastRunOutputs.value = outputs
+  setLastRunOutputs(outputs)
   if (captureDebugOutputs) lastRunDebugOutputs.value = outputs
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    data: {
-      ...node.data,
-      _dbg: fmtDebugVal(outputs[node.id]) ?? undefined,
-      _dbg_title: fmtDebugVal(outputs[node.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS }) ?? undefined,
-    },
-  }))
+  nodes.value = nodes.value.map(node => {
+    // Debug band shows the configured output names, not `out_N` (issue #1104)
+    const portLabels = extractorOutputLabels(node, t)
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        _dbg: fmtDebugVal(outputs[node.id], { portLabels }) ?? undefined,
+        _dbg_title: fmtDebugVal(outputs[node.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS, portLabels }) ?? undefined,
+      },
+    }
+  })
 }
 
 function clearDebugValues() {
@@ -1031,7 +1043,7 @@ async function runGraph(graphId = activeGraphId.value) {
     // Always update lastRunOutputs (needed for extractor config panels)
     if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs, acceptsDebugResponse)
     else {
-      lastRunOutputs.value = outputs
+      setLastRunOutputs(outputs)
       clearDebugValues()
     }
     if (acceptsDebugResponse) {
