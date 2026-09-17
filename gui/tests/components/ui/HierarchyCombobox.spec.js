@@ -253,6 +253,21 @@ describe('HierarchyCombobox', () => {
     expect(items[0].text()).toContain('Foo')
   })
 
+  it('leaves the node list empty when listTrees does not resolve an array', async () => {
+    const hierarchyApi = {
+      listTrees: vi.fn().mockResolvedValue({ data: null }),
+      getTreeNodes: vi.fn(),
+    }
+    vi.doMock('@/api/client', () => ({ hierarchyApi }))
+    const mod = await import('@/components/ui/HierarchyCombobox.vue')
+    const wrapper = mount(mod.default, { props: { modelValue: [] }, attachTo: document.body })
+    await flushPromises()
+    expect(hierarchyApi.getTreeNodes).not.toHaveBeenCalled()
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid^="combobox-item-"]').length).toBe(0)
+  })
+
   it('excludes trees with a non-empty source when manualTreesOnly is set', async () => {
     const { wrapper } = await mountHierarchyCombobox(
       { modelValue: [], manualTreesOnly: true },
