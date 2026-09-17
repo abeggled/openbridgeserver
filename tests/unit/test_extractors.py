@@ -117,12 +117,46 @@ class TestJsonExtractor:
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["_preview"] == payload
 
-    def test_preview_capped_at_20kb(self):
-        big = json.dumps({"data": "x" * 30_000})
-        nodes = [_jnode("j1", "data")]
-        overrides = {"j1": {"data": big}}
-        out = _run(nodes, input_overrides=overrides)
-        assert len(out["j1"]["_preview"]) <= 20_001  # 20 KB + truncation marker
+    def test_preview_keeps_large_documents_intact(self):
+        """A 100 KB weather feed must reach the path picker in full — the
+        former 20 KB text cut produced invalid JSON and hid every path
+        (issue #1104)."""
+        doc = {"hours": [{"TTT_C": i, "cur_color": {"background_color": "#abcdef"}} for i in range(2000)]}
+        big = json.dumps(doc)
+        assert 20_000 < len(big) < 512_000
+        nodes = [_jnode("j1", "hours[1999].TTT_C")]
+        out = _run(nodes, input_overrides={"j1": {"data": big}})
+        assert out["j1"]["value"] == 1999
+        assert json.loads(out["j1"]["_preview"]) == doc
+
+    def test_preview_prunes_oversized_documents_to_valid_json(self):
+        """Above the size limit arrays and long strings are shortened
+        structurally, so the snapshot stays parseable and still lists the
+        keys; extraction itself works on the full document."""
+        doc = {"items": [{"n": i, "text": "y" * 300} for i in range(20_000)], "meta": {"id": "x" * 300}}
+        big = json.dumps(doc)
+        assert len(big) > 512_000
+        nodes = [_jnode("j1", "items[19999].n")]
+        out = _run(nodes, input_overrides={"j1": {"data": big}})
+        assert out["j1"]["value"] == 19_999
+        preview = json.loads(out["j1"]["_preview"])
+        assert len(preview["items"]) == 5
+        assert preview["items"][0]["n"] == 0
+        assert preview["items"][0]["text"] == "y" * 200 + "…"
+        assert preview["meta"]["id"] == "x" * 200 + "…"
+
+    def test_preview_falls_back_to_text_cut_when_pruning_is_not_enough(self):
+        """Dict keys are never dropped — a document with more keys than fit
+        the limit is cut as text (last resort, marked with an ellipsis)."""
+        doc = {f"key_{i:06d}": i for i in range(60_000)}
+        big = json.dumps(doc)
+        assert len(big) > 512_000
+        nodes = [_jnode("j1", "key_000007")]
+        out = _run(nodes, input_overrides={"j1": {"data": big}})
+        assert out["j1"]["value"] == 7
+        preview = out["j1"]["_preview"]
+        assert len(preview) == 512_001
+        assert preview.endswith("…")
 
     def test_string_value_extraction(self):
         payload = json.dumps({"status": "online"})
@@ -171,6 +205,17 @@ class TestJsonExtractor:
         overrides = {"j1": {"data": circular}}
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["_preview"] == str(circular)
+
+    def test_preview_prunes_tuples_like_lists(self):
+        nodes = [_jnode("j1", "")]
+        payload = {"t": tuple(range(10)), "s": ("z" * 300, 1)}
+        big_padding = {"pad": ["p" * 100] * 6000}
+        data = {**payload, **big_padding}
+        out = _run(nodes, input_overrides={"j1": {"data": data}})
+        preview = json.loads(out["j1"]["_preview"])
+        assert preview["t"] == [0, 1, 2, 3, 4]
+        assert preview["s"] == ["z" * 200 + "…", 1]
+        assert len(preview["pad"]) == 5
 
 
 class TestJsonExtractorMultiPath:

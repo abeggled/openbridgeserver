@@ -30,6 +30,39 @@ from obs.logic.models import FlowData, LogicNode
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
 
+# json_extractor `_preview` snapshot (config-panel path picker, issue #1104):
+# the full document up to this size; larger documents are pruned
+# structurally (arrays and strings shortened) so the snapshot stays valid
+# JSON — a text cut would leave the picker without any paths at all.
+_JSON_PREVIEW_MAX_CHARS = 512_000
+_JSON_PREVIEW_PRUNE_LIST_ITEMS = 5
+_JSON_PREVIEW_PRUNE_STR_CHARS = 200
+
+
+def _prune_json_preview(value: Any) -> Any:
+    """Shorten arrays and strings recursively; dict keys are kept intact."""
+    if isinstance(value, dict):
+        return {str(k): _prune_json_preview(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_prune_json_preview(v) for v in value[:_JSON_PREVIEW_PRUNE_LIST_ITEMS]]
+    if isinstance(value, str) and len(value) > _JSON_PREVIEW_PRUNE_STR_CHARS:
+        return value[:_JSON_PREVIEW_PRUNE_STR_CHARS] + "…"
+    return value
+
+
+def _json_preview_snapshot(data_obj: Any) -> str:
+    """Serialise a json_extractor payload for the GUI path picker."""
+    try:
+        preview = json.dumps(data_obj, default=str, ensure_ascii=False)
+        if len(preview) <= _JSON_PREVIEW_MAX_CHARS:
+            return preview
+        pruned = json.dumps(_prune_json_preview(data_obj), default=str, ensure_ascii=False)
+        if len(pruned) <= _JSON_PREVIEW_MAX_CHARS:
+            return pruned
+        return pruned[:_JSON_PREVIEW_MAX_CHARS] + "…"
+    except (TypeError, ValueError, RecursionError):
+        return str(data_obj)
+
 
 class _OpaqueRecoveredStr(str):
     """String restored from an ``opaque_str`` persistence tag."""
@@ -2071,18 +2104,12 @@ class GraphExecutor:
                 else:
                     data_obj = None
 
-                # _preview: compact JSON snapshot for config-panel path picker (max 20 KB).
-                # No payload → None (not the JSON text "null"), so the GUI can tell
-                # "nothing arrived this run" apart from real data and keep showing
-                # the previously received payload (issue #1104).
-                preview: str | None = None
-                if data_obj is not None:
-                    try:
-                        preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
-                        if len(preview) > 20_000:
-                            preview = preview[:20_000] + "…"
-                    except (TypeError, ValueError, RecursionError):
-                        preview = str(data_obj)
+                # _preview: JSON snapshot for the config-panel path picker (see
+                # _json_preview_snapshot). No payload → None (not the JSON text
+                # "null"), so the GUI can tell "nothing arrived this run" apart
+                # from real data and keep showing the previously received
+                # payload (issue #1104).
+                preview: str | None = _json_preview_snapshot(data_obj) if data_obj is not None else None
 
                 # Multi-path mode: json_paths is a JSON array of {label, path} entries
                 if json_paths_raw:
