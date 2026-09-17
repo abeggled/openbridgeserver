@@ -253,6 +253,49 @@ describe('HierarchyCombobox', () => {
     expect(items[0].text()).toContain('Foo')
   })
 
+  it('excludes trees with a non-empty source when manualTreesOnly is set', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [], manualTreesOnly: true },
+      {
+        trees: [
+          { id: 1, name: 'Allgemeines', source: '' },
+          { id: 2, name: 'ETS Gebäude und Räume', source: 'ets_import:groups' },
+        ],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+          2: [{ id: 21, tree_id: 2, parent_id: null, name: 'Bar' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const text = wrapper.text()
+    expect(text).toContain('Foo')
+    expect(text).not.toContain('Bar')
+    expect(text).not.toContain('ETS Gebäude und Räume')
+  })
+
+  it('includes trees with a non-empty source when manualTreesOnly is left off (default)', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [] },
+      {
+        trees: [
+          { id: 1, name: 'Allgemeines', source: '' },
+          { id: 2, name: 'ETS Gebäude und Räume', source: 'ets_import:groups' },
+        ],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+          2: [{ id: 21, tree_id: 2, parent_id: null, name: 'Bar' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const text = wrapper.text()
+    expect(text).toContain('Foo')
+    expect(text).toContain('Bar')
+  })
+
   it('sorts hierarchy items alphabetically regardless of per-tree fetch order', async () => {
     const trees = [
       { id: 1, name: 'Zeta', root_node_id: 100 },

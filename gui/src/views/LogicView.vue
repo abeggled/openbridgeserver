@@ -241,7 +241,7 @@
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.hierarchyNodes') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
-          <HierarchyCombobox v-model="newGraphHierarchyNodes" include-tree-roots data-testid="new-graph-hierarchy" />
+          <HierarchyCombobox v-model="newGraphHierarchyNodes" include-tree-roots manual-trees-only data-testid="new-graph-hierarchy" />
           <p class="text-xs text-slate-500 mt-1">{{ $t('logic.hierarchyNodesHint') }}</p>
         </div>
         <div class="flex justify-end gap-3">

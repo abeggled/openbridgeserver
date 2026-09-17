@@ -80,6 +80,11 @@ class HierarchyTree(BaseModel):
     root_node_id: str
     """The tree's hidden root node — the drop target for linking a Logic
     graph directly to the tree with no sub-folder (#1217 follow-up)."""
+    source: str
+    """Empty for a manually-created tree; "ets_import:<mode>" for a tree
+    auto-generated from an ETS import. Lets clients tell the two apart, e.g.
+    to hide auto-imported KNX-location trees from the Logic hierarchy
+    assignment picker (#1217 follow-up)."""
 
 
 class HierarchyTreeCreate(BaseModel):
@@ -248,6 +253,7 @@ def _row_to_tree(row: Any) -> HierarchyTree:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         root_node_id=row["root_node_id"],
+        source=row["source"],
     )
 
 
