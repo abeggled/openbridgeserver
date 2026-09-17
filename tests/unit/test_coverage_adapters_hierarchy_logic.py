@@ -1727,12 +1727,10 @@ class TestHierarchyHelpers:
             created_at="2024-01-01",
             updated_at="2024-01-01",
             root_node_id="r1",
-            source="ets_import:groups",
         )
         tree = _row_to_tree(row)
         assert tree.name == "My Tree"
         assert tree.display_depth == 2
-        assert tree.source == "ets_import:groups"
 
     def test_row_to_tree_null_depth(self):
         from obs.api.v1.hierarchy import _row_to_tree
@@ -1745,11 +1743,9 @@ class TestHierarchyHelpers:
             created_at="2024-01-01",
             updated_at="2024-01-01",
             root_node_id="r1",
-            source="",
         )
         tree = _row_to_tree(row)
         assert tree.display_depth == 0
-        assert tree.source == ""
 
     def test_build_tree_nested(self):
         from obs.api.v1.hierarchy import HierarchyNode, _build_tree
@@ -1812,9 +1808,7 @@ class TestListTrees:
     async def test_list_trees_returns_items(self):
         from obs.api.v1 import hierarchy as hier_api
 
-        row = _row(
-            id="t1", name="Tree1", description="", display_depth=0, created_at="2024-01-01", updated_at="2024-01-01", root_node_id="r1", source=""
-        )
+        row = _row(id="t1", name="Tree1", description="", display_depth=0, created_at="2024-01-01", updated_at="2024-01-01", root_node_id="r1")
         db = _DbStub(rows=[row])
         result = await hier_api.list_trees(db=db, _user="admin")
         assert len(result) == 1
@@ -1827,9 +1821,7 @@ class TestCreateTree:
         from obs.api.v1 import hierarchy as hier_api
         from obs.api.v1.hierarchy import HierarchyTreeCreate
 
-        row = _row(
-            id="t1", name="NewTree", description="", display_depth=0, created_at="2024-01-01", updated_at="2024-01-01", root_node_id="r1", source=""
-        )
+        row = _row(id="t1", name="NewTree", description="", display_depth=0, created_at="2024-01-01", updated_at="2024-01-01", root_node_id="r1")
         db = _DbStub(one=row)
         result = await hier_api.create_tree(body=HierarchyTreeCreate(name="NewTree"), db=db, _user="admin")
         assert result.name == "NewTree"
@@ -1852,9 +1844,7 @@ class TestUpdateTree:
         from obs.api.v1 import hierarchy as hier_api
         from obs.api.v1.hierarchy import HierarchyTreeUpdate
 
-        row = _row(
-            id="t1", name="OldName", description="", display_depth=0, created_at="2024-01-01", updated_at="2024-01-01", root_node_id="r1", source=""
-        )
+        row = _row(id="t1", name="OldName", description="", display_depth=0, created_at="2024-01-01", updated_at="2024-01-01", root_node_id="r1")
         db = _DbStub(one=row)
         result = await hier_api.update_tree(tree_id="t1", body=HierarchyTreeUpdate(name="NewName"), db=db, _user="admin")
         assert result.name == "OldName"  # stub returns the same row
