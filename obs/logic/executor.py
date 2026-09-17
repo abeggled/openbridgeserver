@@ -2112,13 +2112,14 @@ class GraphExecutor:
                     data_obj = None
 
                 # _preview: JSON snapshot for the config-panel path picker (see
-                # _json_preview_snapshot). No payload → None (not the JSON text
-                # "null"), so the GUI can tell "nothing arrived this run" apart
-                # from real data and keep showing the previously received
-                # payload (issue #1104).
+                # _json_preview_snapshot). No payload at all → None, so the GUI
+                # can tell "nothing arrived this run" apart from real data and
+                # keep showing the previously received payload (issue #1104).
+                # A *received* payload that decodes to null is real data and
+                # yields the text "null" — the GUI then clears the stale paths.
                 preview: str | None = None
                 preview_pruned = False
-                if data_obj is not None:
+                if raw is not None:
                     preview, preview_pruned = _json_preview_snapshot(data_obj)
                 preview_ports: dict[str, Any] = {"_preview": preview}
                 if preview_pruned:

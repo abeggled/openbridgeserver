@@ -110,6 +110,16 @@ class TestJsonExtractor:
         out = _run(nodes)
         assert out["j1"]["_preview"] is None
 
+    def test_received_json_null_is_a_real_preview(self):
+        """A payload that *is* the JSON document `null` is data, not an
+        absent input: the preview carries the text "null" so the GUI drops
+        the previously received paths instead of keeping them."""
+        nodes = [_jnode("j1", "key")]
+        out = _run(nodes, input_overrides={"j1": {"data": "null"}})
+        assert out["j1"]["value"] is None
+        assert out["j1"]["_preview"] == "null"
+        assert "_preview_pruned" not in out["j1"]
+
     def test_preview_populated(self):
         payload = json.dumps({"a": 1})
         nodes = [_jnode("j1", "a")]
@@ -267,6 +277,13 @@ class TestJsonExtractorMultiPath:
         nodes = [self._mnode("j1", paths)]
         out = _run(nodes)
         assert out["j1"]["_preview"] is None
+        assert out["j1"]["out_1"] is None
+
+    def test_received_json_null_is_a_real_preview(self):
+        paths = [{"label": "X", "path": "x"}]
+        nodes = [self._mnode("j1", paths)]
+        out = _run(nodes, input_overrides={"j1": {"data": "null"}})
+        assert out["j1"]["_preview"] == "null"
         assert out["j1"]["out_1"] is None
 
     def test_pruned_marker_in_multi_mode(self):

@@ -237,6 +237,13 @@ describe('NodeConfigPanel json_extractor — double-encoded preview (issue #1104
     w.unmount()
   })
 
+  it('shows no picker for a received JSON null document', async () => {
+    const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: 'null' } })
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-path-select"]').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('shows no picker when the snapshot itself is not parseable', async () => {
     const w = await mountPanel('json_extractor', { json_paths: '[{"label":"A","path":"a"}]' }, { n1: { _preview: '{not json' } })
     await flushPromises()

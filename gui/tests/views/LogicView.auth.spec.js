@@ -742,6 +742,22 @@ describe('LogicView WebSocket', () => {
     // Blocks without configurable output names keep the technical port id.
     expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
 
+    // The translated fallback name follows a locale switch immediately.
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Value 2=—')
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Wert 2=—')
+
+    // Once the bands are cleared, a locale switch must not resurrect them.
+    wrapper.vm.clearDebugValues()
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+
     // Untriggered re-execution (e.g. after the auto-save that follows "+"):
     // no payload this time — the last received one is kept for the picker.
     wsInstance.onmessage({ data: JSON.stringify({
@@ -762,6 +778,11 @@ describe('LogicView WebSocket', () => {
     await wrapper.vm.runGraph()
     expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
     expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(2)
+
+    // A *received* JSON null is real data and replaces the retained payload.
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { j1: { out_1: null, out_2: null, _preview: 'null' } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe('null')
   })
 
   it('ignores logic_run message for a different graph_id', async () => {

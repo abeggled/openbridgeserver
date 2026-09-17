@@ -343,7 +343,7 @@ import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
-const { t }    = useI18n()
+const { t, locale } = useI18n()
 const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
@@ -823,9 +823,18 @@ function setLastRunOutputs(outputs) {
   lastRunOutputs.value = retainPreviews(lastRunOutputs.value, outputs)
 }
 
+// Outputs the canvas debug bands were last rendered from — the band text is
+// baked into node.data, so a locale change re-renders it from here.
+let _debugBandOutputs = null
+
 function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
   setLastRunOutputs(outputs)
   if (captureDebugOutputs) lastRunDebugOutputs.value = outputs
+  _debugBandOutputs = outputs
+  renderDebugBands(outputs)
+}
+
+function renderDebugBands(outputs) {
   nodes.value = nodes.value.map(node => {
     // Debug band shows the configured output names, not `out_N` (issue #1104)
     const portLabels = extractorOutputLabels(node, t)
@@ -841,12 +850,19 @@ function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
 }
 
 function clearDebugValues() {
+  _debugBandOutputs = null
   nodes.value = nodes.value.map(node => {
     // eslint-disable-next-line no-unused-vars
     const { _dbg, _dbg_title, ...data } = node.data
     return { ...node, data }
   })
 }
+
+// Translated parts of the band (fallback output names, error texts) follow
+// the active locale without waiting for the next execution.
+watch(locale, () => {
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
+})
 
 function countGraphDiagnostics(outputs) {
   return Object.values(outputs || {}).filter(out =>
