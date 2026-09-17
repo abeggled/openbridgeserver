@@ -206,6 +206,23 @@ describe('BindingForm — ZEITSCHALTUHR create submit', () => {
     expect(createBinding.mock.calls[0][1].direction).toBe('SOURCE')
     w.unmount()
   })
+
+  it('calls createBinding with solar_azimuth_deg and sun_direction when time_ref is solar_azimuth', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'zt-1')
+    const timeRefSelect = w.findAll('select').find(s => s.findAll('option').some(o => o.element.value === 'solar_azimuth'))
+    await timeRefSelect.setValue('solar_azimuth')
+    await submit(w)
+    expect(createBinding).toHaveBeenCalledWith('dp-1', expect.objectContaining({
+      adapter_instance_id: 'zt-1',
+      config:              expect.objectContaining({
+        time_ref:          'solar_azimuth',
+        solar_azimuth_deg: 180.0,
+        sun_direction:     'rising',
+      }),
+    }))
+    w.unmount()
+  })
 })
 
 // ─── ANWESENHEITSSIMULATION submit ────────────────────────────────────────────

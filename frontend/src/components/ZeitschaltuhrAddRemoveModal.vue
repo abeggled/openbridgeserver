@@ -149,6 +149,7 @@ function bindingLabel(b: BindingOut): string {
   else if (ref === 'sunset')         timeStr = t('zst.labelSunset')
   else if (ref === 'solar_noon')     timeStr = t('zst.labelSolarNoon')
   else if (ref === 'solar_altitude') timeStr = t('zst.labelSolar', { deg: c.solar_altitude_deg ?? '?' })
+  else if (ref === 'solar_azimuth')  timeStr = t('zst.labelAzimuth', { deg: c.solar_azimuth_deg ?? '?' })
 
   const typeStr = type === 'meta' ? t('zst.labelMeta') : type === 'annual' ? t('zst.labelAnnual') : type === 'holiday' ? t('zst.labelHoliday') : t('zst.labelDaily')
   return `${typeStr} ${timeStr} → ${val}`.trim()
