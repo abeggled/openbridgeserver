@@ -120,6 +120,28 @@ class TestJsonExtractor:
         assert out["j1"]["_preview"] == "null"
         assert "_preview_pruned" not in out["j1"]
 
+    def test_native_none_on_the_port_counts_as_no_payload(self):
+        """A *present* port carrying native None is exactly what an
+        untriggered upstream block delivers (api_client's placeholder
+        ``response: None`` arrives through the edge as a present value) —
+        the very situation issue #1104 is about. It must therefore report no
+        preview, so the GUI keeps the last received payload; only the JSON
+        text ``"null"`` counts as a received document."""
+        nodes = [_jnode("j1", "key")]
+        out = _run(nodes, input_overrides={"j1": {"data": None}})
+        assert out["j1"]["value"] is None
+        assert out["j1"]["_preview"] is None
+
+    def test_untriggered_api_client_upstream_yields_no_preview(self):
+        """End-to-end through the edge: api_client not triggered → its
+        placeholder response is None → the extractor reports no preview."""
+        nodes = [node("a1", "api_client", {"url": "http://example.invalid"}), _jnode("j1", "key")]
+        edges = [edge("a1", "j1", "response", "data")]
+        out = _run(nodes, edges)
+        assert out["a1"]["response"] is None
+        assert out["j1"]["_preview"] is None
+        assert out["j1"]["value"] is None
+
     def test_preview_populated(self):
         payload = json.dumps({"a": 1})
         nodes = [_jnode("j1", "a")]
