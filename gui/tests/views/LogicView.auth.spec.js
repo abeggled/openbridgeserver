@@ -785,6 +785,58 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.lastRunOutputs.j1._preview).toBe('null')
   })
 
+  it('does not resurrect the previous graph\'s debug bands on a locale change (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    // Imported copies keep their node ids, so both graphs share "j1".
+    const flow = { flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: '', path: 'a' }]) } }], edges: [] } }
+    const a = makeGraph('graph-1', flow)
+    const b = makeGraph('graph-2', flow)
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [a, b],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': a, 'graph-2': b },
+    })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('Wert 1=7')
+
+    wrapper.vm.activeGraphId = 'graph-2'
+    await wrapper.vm.loadGraph()
+    await flushPromises()
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+  })
+
+  it('keeps over-long configured output names out of the band and within the tooltip cap (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', {
+      flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'X'.repeat(2000), path: 'a' }, { label: 'Y'.repeat(2000), path: 'b' }]) } }], edges: [] },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7, out_2: 8 } } }) })
+
+    expect(wrapper.vm.nodes[0].data._dbg).toBe(`${'X'.repeat(24)}…=7   ${'Y'.repeat(24)}…=8`)
+    const title = wrapper.vm.nodes[0].data._dbg_title
+    expect(title.length).toBeLessThanOrEqual(1001)
+    expect(title.endsWith('…')).toBe(true)
+  })
+
   it('ignores logic_run message for a different graph_id', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }

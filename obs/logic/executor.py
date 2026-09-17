@@ -68,7 +68,12 @@ def _json_preview_snapshot(data_obj: Any) -> tuple[str, bool]:
             return pruned, True
         return pruned[:_JSON_PREVIEW_MAX_CHARS] + "…", True
     except (TypeError, ValueError, RecursionError):
-        return str(data_obj), False
+        # Not JSON-serialisable (circular, absurdly deep, …): fall back to
+        # the Python repr, bounded like everything else.
+        text = str(data_obj)
+        if len(text) <= _JSON_PREVIEW_MAX_CHARS:
+            return text, False
+        return text[:_JSON_PREVIEW_MAX_CHARS] + "…", True
 
 
 class _OpaqueRecoveredStr(str):
@@ -2097,12 +2102,12 @@ class GraphExecutor:
                 if isinstance(raw, str):
                     try:
                         data_obj: Any = _json_mod.loads(raw)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, RecursionError):
                         data_obj = raw
                     if isinstance(data_obj, str):
                         try:
                             inner = _json_mod.loads(data_obj)
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, RecursionError):
                             inner = None
                         if isinstance(inner, (dict, list)):
                             data_obj = inner

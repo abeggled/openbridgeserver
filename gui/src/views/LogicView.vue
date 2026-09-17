@@ -799,10 +799,14 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null, portLabels = {} }
   if ('response' in nodeOut && 'status' in nodeOut && 'success' in nodeOut) {
     return `response=${clipped(nodeOut.response, 80)}   status=${fv(nodeOut.status)}   success=${fv(nodeOut.success)}`
   }
+  // Configured output names are free text — keep the band compact and the
+  // tooltip within its cap regardless of how long a user made them.
   const pairs = Object.entries(nodeOut)
     .filter(([key]) => !key.startsWith('_'))
-    .map(([key, value]) => `${portLabels[key] ?? key}=${fv(value)}`)
-  return pairs.length ? pairs.join('   ') : null
+    .map(([key, value]) => `${clipped(portLabels[key] ?? key, 24)}=${fv(value)}`)
+  if (!pairs.length) return null
+  const line = pairs.join('   ')
+  return full ? maybeClip(line) : line
 }
 
 // Last run outputs — always kept (not just in debug mode) so that
@@ -1473,6 +1477,7 @@ watch(activeGraphId, (id, previousId) => {
     lastRunInputs.value = {}
     lastRunDebugOutputs.value = {}
     lastRunMetadata.value = null
+    _debugBandOutputs = null
   }
   if (id) localStorage.setItem('logic_active_graph', id)
   else localStorage.removeItem('logic_active_graph')

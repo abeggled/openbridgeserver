@@ -208,6 +208,69 @@ class TestJsonExtractor:
         out = _run(nodes, input_overrides={"j1": {"data": json.dumps("{not json")}})
         assert out["j1"]["_preview"] == json.dumps("{not json")
 
+    def test_too_deeply_nested_inner_json_does_not_fail_the_node(self):
+        """Absurd nesting raises RecursionError somewhere along the way —
+        in the second decode on some Python versions, in the snapshot's
+        json.dumps on others. Either way the block must keep producing its
+        normal outputs instead of an ``__error__``."""
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        nodes = [_jnode("j1", "a")]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps(deep)}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["value"] is None
+        assert isinstance(out["j1"]["_preview"], str) and out["j1"]["_preview"]
+
+    def test_too_deeply_nested_raw_json_does_not_fail_the_node(self):
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": deep}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["value"] is None
+        assert isinstance(out["j1"]["_preview"], str) and out["j1"]["_preview"]
+
+    def test_inner_decode_recursion_error_keeps_the_string(self, monkeypatch):
+        """Pin the branch independent of the interpreter: when the inner
+        decode raises RecursionError, the outer string is kept as data."""
+        import json as _json
+
+        real_loads = _json.loads
+        calls = {"n": 0}
+
+        def flaky_loads(text, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RecursionError("maximum recursion depth exceeded")
+            return real_loads(text, *args, **kwargs)
+
+        monkeypatch.setattr(_json, "loads", flaky_loads)
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": _json.dumps("[1, 2]")}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["_preview"] == _json.dumps("[1, 2]")
+
+    def test_raw_decode_recursion_error_keeps_the_string(self, monkeypatch):
+        import json as _json
+
+        def boom(text, *args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(_json, "loads", boom)
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": "[1]"}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["_preview"] == _json.dumps("[1]")
+
+    def test_unserialisable_fallback_preview_is_bounded(self):
+        """A non-JSON-serialisable payload falls back to its repr, but that
+        repr is capped like every other snapshot and flagged as pruned."""
+        circular: list = ["x" * 300_000]
+        circular.append(circular)
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": circular}})
+        assert len(out["j1"]["_preview"]) == 256_001
+        assert out["j1"]["_preview"].endswith("…")
+        assert out["j1"]["_preview_pruned"] is True
+
     def test_preview_falls_back_to_str_when_not_json_serializable(self):
         """A non-serializable data object (e.g. containing a circular
         reference) must not blow up the preview snapshot — it falls back to
