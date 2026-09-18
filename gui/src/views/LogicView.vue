@@ -323,6 +323,7 @@ import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
+import { extractorOutputLabels, extractorRowCount, retainPreviews } from '@/utils/logicExtractorOutputs'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
@@ -342,7 +343,7 @@ import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
 
 // ── Store ──────────────────────────────────────────────────────────────────
-const { t }    = useI18n()
+const { t, locale } = useI18n()
 const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
@@ -763,7 +764,7 @@ const lastRunDebugOutputs = ref({})
 let debugStateGeneration = 0
 const DEBUG_TOOLTIP_MAX_CHARS = 1000
 
-function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
+function fmtDebugVal(nodeOut, { full = false, maxChars = null, portLabels = {} } = {}) {
   if (!nodeOut || typeof nodeOut !== 'object') return null
 
   function maybeClip(text) {
@@ -798,10 +799,14 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
   if ('response' in nodeOut && 'status' in nodeOut && 'success' in nodeOut) {
     return `response=${clipped(nodeOut.response, 80)}   status=${fv(nodeOut.status)}   success=${fv(nodeOut.success)}`
   }
+  // Configured output names are free text — keep the band compact and the
+  // tooltip within its cap regardless of how long a user made them.
   const pairs = Object.entries(nodeOut)
     .filter(([key]) => !key.startsWith('_'))
-    .map(([key, value]) => `${key}=${fv(value)}`)
-  return pairs.length ? pairs.join('   ') : null
+    .map(([key, value]) => `${clipped(portLabels[key] ?? key, 24)}=${fv(value)}`)
+  if (!pairs.length) return null
+  const line = pairs.join('   ')
+  return full ? maybeClip(line) : line
 }
 
 // Last run outputs — always kept (not just in debug mode) so that
@@ -815,26 +820,53 @@ const preflightApproved = ref(false)
 const preflightGraphId = ref('')
 let preflightRequestId = 0
 
+// Extractor blocks keep the last received payload (`_preview`) across runs
+// that carry none, so their path picker survives an untriggered re-execution
+// (issue #1104).
+function setLastRunOutputs(outputs) {
+  lastRunOutputs.value = retainPreviews(lastRunOutputs.value, outputs)
+}
+
+// Outputs the canvas debug bands were last rendered from — the band text is
+// baked into node.data, so a locale change re-renders it from here.
+let _debugBandOutputs = null
+
 function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
-  lastRunOutputs.value = outputs
+  setLastRunOutputs(outputs)
   if (captureDebugOutputs) lastRunDebugOutputs.value = outputs
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    data: {
-      ...node.data,
-      _dbg: fmtDebugVal(outputs[node.id]) ?? undefined,
-      _dbg_title: fmtDebugVal(outputs[node.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS }) ?? undefined,
-    },
-  }))
+  _debugBandOutputs = outputs
+  renderDebugBands(outputs)
+}
+
+function renderDebugBands(outputs) {
+  nodes.value = nodes.value.map(node => {
+    // Debug band shows the configured output names, not `out_N` (issue #1104)
+    const portLabels = extractorOutputLabels(node, t)
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        _dbg: fmtDebugVal(outputs[node.id], { portLabels }) ?? undefined,
+        _dbg_title: fmtDebugVal(outputs[node.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS, portLabels }) ?? undefined,
+      },
+    }
+  })
 }
 
 function clearDebugValues() {
+  _debugBandOutputs = null
   nodes.value = nodes.value.map(node => {
     // eslint-disable-next-line no-unused-vars
     const { _dbg, _dbg_title, ...data } = node.data
     return { ...node, data }
   })
 }
+
+// Translated parts of the band (fallback output names, error texts) follow
+// the active locale without waiting for the next execution.
+watch(locale, () => {
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
+})
 
 function countGraphDiagnostics(outputs) {
   return Object.values(outputs || {}).filter(out =>
@@ -1031,7 +1063,7 @@ async function runGraph(graphId = activeGraphId.value) {
     // Always update lastRunOutputs (needed for extractor config panels)
     if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs, acceptsDebugResponse)
     else {
-      lastRunOutputs.value = outputs
+      setLastRunOutputs(outputs)
       clearDebugValues()
     }
     if (acceptsDebugResponse) {
@@ -1354,10 +1386,30 @@ function _onClipboardKeydown(event) {
 let _autoSaveTimer = null
 function onNodeDataUpdate(newData) {
   if (!auth.isAdmin || !selectedNode.value) return
+  const rowsBefore = extractorRowCount(selectedNode.value)
   nodes.value = nodes.value.map(n =>
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
   )
   selectedNode.value = { ...selectedNode.value, data: { ...selectedNode.value.data, ...newData } }
+  // Configured output names feed the debug band text — re-render it so a
+  // renamed extractor output shows up without another execution. Adding or
+  // removing a row shifts the out_N numbering, so the cached per-port
+  // values would be shown under the wrong names: drop that block's band
+  // until the next execution delivers values for the new layout.
+  if (extractorRowCount(selectedNode.value) !== rowsBefore) {
+    const id = selectedNode.value.id
+    if (_debugBandOutputs) {
+      const { [id]: _staleBand, ...rest } = _debugBandOutputs
+      _debugBandOutputs = rest
+    }
+    // The Debug values tab reads the same per-port values — they would be
+    // listed under the shifted row names just as wrongly.
+    if (id in lastRunDebugOutputs.value) {
+      const { [id]: _staleInspector, ...rest } = lastRunDebugOutputs.value
+      lastRunDebugOutputs.value = rest
+    }
+  }
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
   // Auto-save after 500 ms idle
   clearTimeout(_autoSaveTimer)
   _autoSaveTimer = setTimeout(() => saveGraph(), 500)
@@ -1445,6 +1497,7 @@ watch(activeGraphId, (id, previousId) => {
     lastRunInputs.value = {}
     lastRunDebugOutputs.value = {}
     lastRunMetadata.value = null
+    _debugBandOutputs = null
   }
   if (id) localStorage.setItem('logic_active_graph', id)
   else localStorage.removeItem('logic_active_graph')

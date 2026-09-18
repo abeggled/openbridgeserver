@@ -707,6 +707,241 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.nodes[0].data._dbg).toContain('[object Object]')
   })
 
+  it('keeps the extractor preview across runs without payload and names its outputs in the debug band (issue #1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const payload = JSON.stringify({ Status: { Power: 1 } })
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'On/Off', path: 'Status.Power' }, { label: '', path: '' }]) } },
+          { id: 'g1', type: 'and', position: { x: 0, y: 0 }, data: {} },
+        ],
+        edges: [],
+      },
+    })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+
+    // Triggered run: payload arrives, the band shows the configured names.
+    wsInstance.onmessage({ data: JSON.stringify({
+      action: 'logic_run',
+      graph_id: 'graph-1',
+      outputs: { j1: { out_1: 1, out_2: null, _preview: payload }, g1: { out: true } },
+    }) })
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Wert 2=—')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('On/Off=1   Wert 2=—')
+    // Blocks without configurable output names keep the technical port id.
+    expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+
+    // The translated fallback name follows a locale switch immediately.
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Value 2=—')
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Wert 2=—')
+
+    // Once the bands are cleared, a locale switch must not resurrect them.
+    wrapper.vm.clearDebugValues()
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+
+    // Untriggered re-execution (e.g. after the auto-save that follows "+"):
+    // no payload this time — the last received one is kept for the picker.
+    wsInstance.onmessage({ data: JSON.stringify({
+      action: 'logic_run',
+      graph_id: 'graph-1',
+      outputs: { j1: { out_1: null, out_2: null, _preview: null }, g1: { _internal: 1 } },
+    }) })
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(null)
+    expect(wrapper.vm.lastRunDebugOutputs.j1._preview).toBe(null)
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=—   Wert 2=—')
+    // Only internal (_-prefixed) keys → nothing to show in the band.
+    expect(wrapper.vm.nodes[1].data._dbg).toBeUndefined()
+
+    // A manual run outside debug mode keeps it as well.
+    wrapper.vm.toggleDebug()
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { j1: { out_1: 2, out_2: null } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(2)
+
+    // A *received* JSON null is real data and replaces the retained payload.
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { j1: { out_1: null, out_2: null, _preview: 'null' } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe('null')
+  })
+
+  it('updates a named debug band when its configured label is edited (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'Old', path: 'a' }]) } }], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('Old=7')
+
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'New', path: 'a' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('New=7')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('New=7')
+
+    // Without any run yet, an edit must not invent a band.
+    wrapper.vm.clearDebugValues()
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'Newer', path: 'a' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('drops a cached debug band when extractor rows are added or removed (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const rows = [{ label: 'A', path: 'a' }, { label: 'B', path: 'b' }]
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [
+      { id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify(rows) } },
+      { id: 'g1', type: 'and', position: { x: 0, y: 0 }, data: {} },
+    ], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 11, out_2: 22 }, g1: { out: true } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('A=11   B=22')
+
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toEqual({ out_1: 11, out_2: 22 })
+
+    // Deleting the first row shifts out_2 → out_1: the cached values no
+    // longer match the rows, so the band disappears until the next run —
+    // and so do the Debug values tab's per-port values for this block.
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B', path: 'b' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBeUndefined()
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toBeUndefined()
+    // Other blocks keep their bands and inspector values.
+    expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+    expect(wrapper.vm.lastRunDebugOutputs.g1).toEqual({ out: true })
+    // The retained preview (path picker) is untouched by the row change.
+    expect(wrapper.vm.lastRunOutputs.j1).toBeDefined()
+
+    // A later rename of the surviving row must not resurrect the stale values…
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    // …and neither must a locale switch.
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+
+    // The next execution brings band and inspector values back for the new layout.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 22 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('B2=22')
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toEqual({ out_1: 22 })
+
+    // A structural change without any run yet (no cached bands) is a no-op.
+    wrapper.vm.toggleDebug()
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }, { label: 'C', path: 'c' }, { label: 'D', path: 'd' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 1, out_2: 2, out_3: 3 } } }) })
+
+    // Adding a row drops it again.
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }, { label: 'C', path: 'c' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('clears a retained XML preview after an empty payload (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [{ id: 'x1', type: 'xml_extractor', position: { x: 0, y: 0 }, data: { xml_paths: '[]' } }], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { _preview: '<root><a>1</a></root>' } } }) })
+    // Untriggered run: nothing arrived → keep the document.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { value: null, _preview: null } } }) })
+    expect(wrapper.vm.lastRunOutputs.x1._preview).toBe('<root><a>1</a></root>')
+    // A received empty document replaces it.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { value: null, _preview: '' } } }) })
+    expect(wrapper.vm.lastRunOutputs.x1._preview).toBe('')
+  })
+
+  it('does not resurrect the previous graph\'s debug bands on a locale change (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    // Imported copies keep their node ids, so both graphs share "j1".
+    const flow = { flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: '', path: 'a' }]) } }], edges: [] } }
+    const a = makeGraph('graph-1', flow)
+    const b = makeGraph('graph-2', flow)
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [a, b],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': a, 'graph-2': b },
+    })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('Wert 1=7')
+
+    wrapper.vm.activeGraphId = 'graph-2'
+    await wrapper.vm.loadGraph()
+    await flushPromises()
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+  })
+
+  it('keeps over-long configured output names out of the band and within the tooltip cap (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', {
+      flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'X'.repeat(2000), path: 'a' }, { label: 'Y'.repeat(2000), path: 'b' }]) } }], edges: [] },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7, out_2: 8 } } }) })
+
+    expect(wrapper.vm.nodes[0].data._dbg).toBe(`${'X'.repeat(24)}…=7   ${'Y'.repeat(24)}…=8`)
+    const title = wrapper.vm.nodes[0].data._dbg_title
+    expect(title.length).toBeLessThanOrEqual(1001)
+    expect(title.endsWith('…')).toBe(true)
+  })
+
   it('ignores logic_run message for a different graph_id', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }

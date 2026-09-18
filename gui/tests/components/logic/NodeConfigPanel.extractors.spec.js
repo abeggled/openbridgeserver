@@ -219,6 +219,110 @@ describe('NodeConfigPanel json_extractor — path picker from preview', () => {
 
 // ─── xml_extractor — basic add / remove ──────────────────────────────────────
 
+describe('NodeConfigPanel json_extractor — double-encoded preview (issue #1104)', () => {
+  it('lists the paths inside a JSON string literal that itself contains JSON', async () => {
+    const inner = { days: [{ SUNSET: '2026-09-17T19:33:00+02:00', TX_C: 18 }] }
+    const w = await mountPanel(
+      'json_extractor',
+      { json_paths: JSON.stringify([{ label: 'Wert 1', path: 'days[0].TX_C' }]) },
+      { n1: { _preview: JSON.stringify(JSON.stringify(inner)) } },
+    )
+    await flushPromises()
+    const select = w.find('[data-testid="extractor-path-select"]')
+    expect(select.exists()).toBe(true)
+    const options = select.findAll('option').map(o => o.attributes('value'))
+    expect(options).toContain('days[0].SUNSET')
+    expect(options).toContain('days[0].TX_C')
+    expect(w.text()).toContain('↳ 18')
+    w.unmount()
+  })
+
+  it('shows no picker for a received JSON null document', async () => {
+    const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: 'null' } })
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-path-select"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('shows no picker when the snapshot itself is not parseable', async () => {
+    const w = await mountPanel('json_extractor', { json_paths: '[{"label":"A","path":"a"}]' }, { n1: { _preview: '{not json' } })
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-path-select"]').exists()).toBe(false)
+    expect(w.text()).not.toContain('↳')
+    w.unmount()
+  })
+
+  it('shows no picker when the string payload is not JSON', async () => {
+    const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify('just text') } })
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-path-select"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('NodeConfigPanel json_extractor — large previews (issue #1104)', () => {
+  it('shows the pruned hint when the backend shortened the snapshot', async () => {
+    const w = await mountPanel(
+      'json_extractor',
+      { json_paths: '[]' },
+      { n1: { _preview: '{"items":[{"n":0}]}', _preview_pruned: true } },
+    )
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-preview-pruned"]').exists()).toBe(true)
+    expect(w.find('[data-testid="extractor-path-select"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('shows no pruned hint for a complete snapshot', async () => {
+    const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: '{"a":1}' } })
+    await flushPromises()
+    expect(w.find('[data-testid="extractor-preview-pruned"]').exists()).toBe(false)
+    expect(w.find('[data-testid="extractor-paths-truncated"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('says so when the path list hit its cap', async () => {
+    // The real cap needs thousands of <option>s to render, which is too slow
+    // for a component test — shrink it via the util module instead.
+    const actual = await vi.importActual('@/utils/logicExtractorOutputs')
+    vi.doMock('@/utils/logicExtractorOutputs', () => ({ ...actual, EXTRACTOR_MAX_PATHS: 3 }))
+    try {
+      const doc = { a: 1, b: 2, c: 3, d: 4 }
+      const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify(doc) } })
+      await flushPromises()
+      const options = w.find('[data-testid="extractor-path-select"]').findAll('option').map(o => o.attributes('value'))
+      expect(options).toEqual(['', 'a', 'b', 'c'])
+      expect(w.find('[data-testid="extractor-paths-truncated"]').text()).toContain('3')
+      w.unmount()
+    } finally {
+      vi.doUnmock('@/utils/logicExtractorOutputs')
+    }
+  })
+
+  it('does not claim a document with exactly the cap\'s number of paths was truncated', async () => {
+    const actual = await vi.importActual('@/utils/logicExtractorOutputs')
+    vi.doMock('@/utils/logicExtractorOutputs', () => ({ ...actual, EXTRACTOR_MAX_PATHS: 3 }))
+    try {
+      const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify({ a: 1, b: 2, c: 3 }) } })
+      await flushPromises()
+      expect(w.find('[data-testid="extractor-path-select"]').findAll('option')).toHaveLength(4)
+      expect(w.find('[data-testid="extractor-paths-truncated"]').exists()).toBe(false)
+      w.unmount()
+    } finally {
+      vi.doUnmock('@/utils/logicExtractorOutputs')
+    }
+  })
+
+  it('keeps nested objects and arrays below the cap in full', async () => {
+    const doc = { a: [{ b: 1 }, 2], c: { d: null } }
+    const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify(doc) } })
+    await flushPromises()
+    const options = w.find('[data-testid="extractor-path-select"]').findAll('option').map(o => o.attributes('value'))
+    expect(options).toEqual(['', 'a[0].b', 'a[1]', 'c.d'])
+    w.unmount()
+  })
+})
+
 describe('NodeConfigPanel xml_extractor — add path', () => {
   it('clicking + adds an output row and emits update', async () => {
     const w = await mountPanel('xml_extractor', { xml_paths: '[]' })

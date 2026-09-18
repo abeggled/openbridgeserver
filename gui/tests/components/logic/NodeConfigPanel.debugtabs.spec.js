@@ -94,6 +94,29 @@ describe('NodeConfigPanel debug tabs (issue #1128)', () => {
     w.unmount()
   })
 
+  it('lists extractor outputs under their configured names in the debug tab (issue #1104)', async () => {
+    const w = await mountPanel({
+      node: { id: 'j1', type: 'json_extractor', data: { json_paths: JSON.stringify([{ label: 'On/Off', path: 'Status.Power' }, { label: '', path: 'x' }]) } },
+      nodeTypes: [{ type: 'json_extractor', label: 'JSON', description: '' }],
+      debugMode: true,
+      debugOutputs: { out_1: 1, out_2: null },
+    })
+
+    const text = w.text()
+    expect(text).toContain('On/Off')
+    expect(text).toContain('Wert 2')
+    expect(text).not.toContain('out_1')
+    expect(text).not.toContain('out_2')
+    w.unmount()
+  })
+
+  it('keeps technical output names for blocks without configurable outputs', async () => {
+    const w = await mountPanel({ debugMode: true, debugOutputs: { out: true } })
+
+    expect(w.text()).toContain('out')
+    w.unmount()
+  })
+
   it('follows debug mode being switched on and off', async () => {
     const w = await mountPanel({ debugInputs: [DEBUG_INPUT] })
 

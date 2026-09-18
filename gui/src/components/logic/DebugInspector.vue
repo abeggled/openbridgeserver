@@ -31,7 +31,7 @@
         <button v-if="outputEntries.length" class="text-xs text-blue-400" @click="copyPayload">{{ payloadCopied ? $t('logic.debugInspector.copied') : $t('logic.debugInspector.copyAll') }}</button>
       </div>
       <p v-if="!outputEntries.length" class="text-sm text-slate-500">{{ $t('logic.debugInspector.noExecution') }}</p>
-      <ValueView v-for="([key, value]) in outputEntries" :key="key" :value="value" :label="key" class="mb-3" />
+      <ValueView v-for="([key, value]) in outputEntries" :key="key" :value="value" :label="outputLabels[key] ?? key" class="mb-3" />
     </section>
 
     <section v-if="metadata" class="text-xs text-slate-500 border-t border-slate-200 dark:border-slate-700 pt-3 space-y-1">
@@ -47,7 +47,9 @@ import { computed, ref, onUnmounted } from 'vue'
 import { copyText } from '@/utils/clipboard'
 import ValueView from './DebugValueView.vue'
 
-const props = defineProps({ inputs: { type: Array, default: () => [] }, outputs: { type: Object, default: () => ({}) }, metadata: { type: Object, default: null }, hasOverrides: { type: Boolean, default: false } })
+// outputLabels maps technical port ids (out_1 …) to the names the user gave
+// the outputs, e.g. of an extractor block (issue #1104).
+const props = defineProps({ inputs: { type: Array, default: () => [] }, outputs: { type: Object, default: () => ({}) }, outputLabels: { type: Object, default: () => ({}) }, metadata: { type: Object, default: null }, hasOverrides: { type: Boolean, default: false } })
 defineEmits(['set-override', 'clear-override', 'clear-all'])
 const outputEntries = computed(() => Object.entries(props.outputs || {}))
 const payloadCopied = ref(false)
