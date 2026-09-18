@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { EXTRACTOR_MAX_PATHS, extractorOutputLabels, extractorRowCount, flattenJsonPaths, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
+import { EXTRACTOR_MAX_PATHS, collectJsonPaths, extractorOutputLabels, extractorRowCount, flattenJsonPaths, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
 
 const t = (key, params) => `${key}:${params?.n}`
 
@@ -150,6 +150,25 @@ describe('flattenJsonPaths', () => {
     const doc = { a: [1, 2, 3], b: { c: [4, 5] }, d: 6 }
     expect(flattenJsonPaths(doc, 4)).toEqual(['a[0]', 'a[1]', 'a[2]', 'b.c[0]'])
     expect(flattenJsonPaths(doc, 0)).toEqual([])
+  })
+})
+
+describe('collectJsonPaths', () => {
+  it('reports truncation only when a path beyond the limit was encountered', () => {
+    const exact = Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`k${i}`, i]))
+    expect(collectJsonPaths(exact, 4)).toEqual({ paths: ['k0', 'k1', 'k2', 'k3'], truncated: false })
+    expect(collectJsonPaths({ ...exact, k4: 4 }, 4)).toEqual({ paths: ['k0', 'k1', 'k2', 'k3'], truncated: true })
+    // A deeper container beyond the limit counts as well (it is a path itself).
+    expect(collectJsonPaths({ ...exact, deep: { x: 1 } }, 4).truncated).toBe(true)
+    // …but an empty container adds no path and therefore no truncation.
+    expect(collectJsonPaths({ ...exact, empty: {} }, 4)).toEqual({ paths: ['k0', 'k1', 'k2', 'k3'], truncated: false })
+  })
+
+  it('stops walking nested containers once truncated', () => {
+    const doc = { a: [1, 2], b: { c: { d: 1 } }, e: 5 }
+    expect(collectJsonPaths(doc, 2)).toEqual({ paths: ['a[0]', 'a[1]'], truncated: true })
+    expect(collectJsonPaths(doc, 0)).toEqual({ paths: [], truncated: true })
+    expect(collectJsonPaths(42, 0)).toEqual({ paths: [], truncated: false })
   })
 })
 

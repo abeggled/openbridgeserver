@@ -299,6 +299,20 @@ describe('NodeConfigPanel json_extractor — large previews (issue #1104)', () =
     }
   })
 
+  it('does not claim a document with exactly the cap\'s number of paths was truncated', async () => {
+    const actual = await vi.importActual('@/utils/logicExtractorOutputs')
+    vi.doMock('@/utils/logicExtractorOutputs', () => ({ ...actual, EXTRACTOR_MAX_PATHS: 3 }))
+    try {
+      const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify({ a: 1, b: 2, c: 3 }) } })
+      await flushPromises()
+      expect(w.find('[data-testid="extractor-path-select"]').findAll('option')).toHaveLength(4)
+      expect(w.find('[data-testid="extractor-paths-truncated"]').exists()).toBe(false)
+      w.unmount()
+    } finally {
+      vi.doUnmock('@/utils/logicExtractorOutputs')
+    }
+  })
+
   it('keeps nested objects and arrays below the cap in full', async () => {
     const doc = { a: [{ b: 1 }, 2], c: { d: null } }
     const w = await mountPanel('json_extractor', { json_paths: '[]' }, { n1: { _preview: JSON.stringify(doc) } })

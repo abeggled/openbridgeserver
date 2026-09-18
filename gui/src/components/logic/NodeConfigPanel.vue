@@ -926,7 +926,7 @@
               <option value="">{{ $t('logic.nodeConfig.extractor.pathPlaceholder') }}</option>
               <option v-for="p in extractorPaths" :key="p" :value="p">{{ p }}</option>
             </select>
-            <p v-if="extractorPaths.length >= EXTRACTOR_MAX_PATHS" class="text-xs text-amber-400/80 mt-1" data-testid="extractor-paths-truncated">
+            <p v-if="extractorPathsTruncated" class="text-xs text-amber-400/80 mt-1" data-testid="extractor-paths-truncated">
               {{ $t('logic.nodeConfig.extractor.pathListTruncated', { n: EXTRACTOR_MAX_PATHS }) }}
             </p>
           </div>
@@ -1565,7 +1565,7 @@ import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
-import { EXTRACTOR_MAX_PATHS, extractorOutputLabels, flattenJsonPaths, parseExtractorJson } from '@/utils/logicExtractorOutputs'
+import { EXTRACTOR_MAX_PATHS, collectJsonPaths, extractorOutputLabels, parseExtractorJson } from '@/utils/logicExtractorOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -2215,12 +2215,18 @@ const extractorPreviewPruned = computed(() =>
   !!props.node && props.nodeOutputs[props.node.id]?._preview_pruned === true
 )
 
+// JSON path scan — bounded; `truncated` drives the hint below the picker.
+const extractorJsonPathScan = computed(() => {
+  const obj = extractorParsedJson.value
+  return obj === undefined ? { paths: [], truncated: false } : collectJsonPaths(obj, EXTRACTOR_MAX_PATHS)
+})
+const extractorPathsTruncated = computed(() => extractorJsonPathScan.value.truncated)
+
 const extractorPaths = computed(() => {
   const preview = extractorPreview.value
   if (!preview) return []
   if (props.node?.type === 'json_extractor') {
-    const obj = extractorParsedJson.value
-    return obj === undefined ? [] : flattenJsonPaths(obj, EXTRACTOR_MAX_PATHS)
+    return extractorJsonPathScan.value.paths
   } else {
     try {
       const doc = new DOMParser().parseFromString(preview, 'text/xml')

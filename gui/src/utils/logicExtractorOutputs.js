@@ -88,31 +88,45 @@ export const EXTRACTOR_MAX_PATHS = 5000
  *
  * The list is bounded: a 256 KB document can hold far more leaves than a
  * `<select>` can sensibly show, and collecting them with a spread-push
- * would exceed the call-argument limit for large flat arrays.
+ * would exceed the call-argument limit for large flat arrays. `truncated`
+ * is true only when a path beyond the limit was actually encountered — a
+ * document with exactly `limit` leaves is complete.
  *
  * @param {unknown} obj      decoded document
  * @param {number}  [limit]  maximum number of paths to collect
- * @returns {string[]} paths, at most `limit` entries
+ * @returns {{ paths: string[], truncated: boolean }}
  */
-export function flattenJsonPaths(obj, limit = EXTRACTOR_MAX_PATHS) {
+export function collectJsonPaths(obj, limit = EXTRACTOR_MAX_PATHS) {
   const paths = []
+  let truncated = false
+  const push = (path) => {
+    if (paths.length >= limit) {
+      truncated = true
+      return
+    }
+    paths.push(path)
+  }
   const walk = (value, prefix, depth) => {
-    if (paths.length >= limit) return
     if (depth > 6 || value === null || typeof value !== 'object') {
-      if (prefix) paths.push(prefix)
+      if (prefix) push(prefix)
       return
     }
     const entries = Array.isArray(value)
       ? value.map((item, i) => [`${prefix}[${i}]`, item])
       : Object.entries(value).map(([k, v]) => [prefix ? `${prefix}.${k}` : k, v])
     for (const [key, child] of entries) {
-      if (paths.length >= limit) break
+      if (truncated) break
       if (child !== null && typeof child === 'object') walk(child, key, depth + 1)
-      else paths.push(key)
+      else push(key)
     }
   }
   walk(obj, '', 0)
-  return paths
+  return { paths, truncated }
+}
+
+/** Convenience wrapper around {@link collectJsonPaths} returning only the paths. */
+export function flattenJsonPaths(obj, limit = EXTRACTOR_MAX_PATHS) {
+  return collectJsonPaths(obj, limit).paths
 }
 
 // Only null/undefined mean "nothing arrived this run" — an empty string is a

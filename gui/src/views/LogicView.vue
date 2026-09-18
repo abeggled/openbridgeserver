@@ -1396,13 +1396,20 @@ function onNodeDataUpdate(newData) {
   // removing a row shifts the out_N numbering, so the cached per-port
   // values would be shown under the wrong names: drop that block's band
   // until the next execution delivers values for the new layout.
-  if (_debugBandOutputs) {
-    if (extractorRowCount(selectedNode.value) !== rowsBefore) {
-      const { [selectedNode.value.id]: _stale, ...rest } = _debugBandOutputs
+  if (extractorRowCount(selectedNode.value) !== rowsBefore) {
+    const id = selectedNode.value.id
+    if (_debugBandOutputs) {
+      const { [id]: _staleBand, ...rest } = _debugBandOutputs
       _debugBandOutputs = rest
     }
-    renderDebugBands(_debugBandOutputs)
+    // The Debug values tab reads the same per-port values — they would be
+    // listed under the shifted row names just as wrongly.
+    if (id in lastRunDebugOutputs.value) {
+      const { [id]: _staleInspector, ...rest } = lastRunDebugOutputs.value
+      lastRunDebugOutputs.value = rest
+    }
   }
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
   // Auto-save after 500 ms idle
   clearTimeout(_autoSaveTimer)
   _autoSaveTimer = setTimeout(() => saveGraph(), 500)

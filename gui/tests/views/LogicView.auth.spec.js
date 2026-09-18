@@ -824,15 +824,22 @@ describe('LogicView WebSocket', () => {
     wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 11, out_2: 22 }, g1: { out: true } } }) })
     expect(wrapper.vm.nodes[0].data._dbg).toBe('A=11   B=22')
 
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toEqual({ out_1: 11, out_2: 22 })
+
     // Deleting the first row shifts out_2 → out_1: the cached values no
-    // longer match the rows, so the band disappears until the next run.
+    // longer match the rows, so the band disappears until the next run —
+    // and so do the Debug values tab's per-port values for this block.
     wrapper.vm.selectedNode = wrapper.vm.nodes[0]
     wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B', path: 'b' }]) })
     await wrapper.vm.$nextTick()
     expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
     expect(wrapper.vm.nodes[0].data._dbg_title).toBeUndefined()
-    // Other blocks keep their bands.
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toBeUndefined()
+    // Other blocks keep their bands and inspector values.
     expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+    expect(wrapper.vm.lastRunDebugOutputs.g1).toEqual({ out: true })
+    // The retained preview (path picker) is untouched by the row change.
+    expect(wrapper.vm.lastRunOutputs.j1).toBeDefined()
 
     // A later rename of the surviving row must not resurrect the stale values…
     wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }]) })
@@ -845,9 +852,19 @@ describe('LogicView WebSocket', () => {
     wrapper.vm.$i18n.locale = 'de'
     await wrapper.vm.$nextTick()
 
-    // The next execution brings the band back for the new layout.
+    // The next execution brings band and inspector values back for the new layout.
     wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 22 } } }) })
     expect(wrapper.vm.nodes[0].data._dbg).toBe('B2=22')
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toEqual({ out_1: 22 })
+
+    // A structural change without any run yet (no cached bands) is a no-op.
+    wrapper.vm.toggleDebug()
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }, { label: 'C', path: 'c' }, { label: 'D', path: 'd' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 1, out_2: 2, out_3: 3 } } }) })
 
     // Adding a row drops it again.
     wrapper.vm.selectedNode = wrapper.vm.nodes[0]
