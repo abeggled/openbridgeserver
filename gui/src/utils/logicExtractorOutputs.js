@@ -23,6 +23,19 @@ function parseRows(raw) {
 }
 
 /**
+ * Number of configured output rows of an extractor node (0 for other node
+ * types). Adding or removing a row shifts the `out_N` numbering, so cached
+ * per-port values no longer belong to the rows they would be labelled with.
+ *
+ * @param {object|null} node
+ * @returns {number}
+ */
+export function extractorRowCount(node) {
+  const field = EXTRACTOR_ROW_FIELDS[node?.type]
+  return field ? parseRows(node.data?.[field]).length : 0
+}
+
+/**
  * Map `out_N` port ids of an extractor node to the labels the user gave its
  * output rows. Returns an empty object for every other node type.
  *

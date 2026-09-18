@@ -282,6 +282,18 @@ class TestJsonExtractor:
         assert "__error__" not in out["j1"]
         assert out["j1"]["_preview"] == _json.dumps("[1]")
 
+    def test_unrepresentable_payload_does_not_fail_the_node(self):
+        """json.dumps fails (default=str raises) and so does the repr
+        fallback — the snapshot degrades to a marker, never to __error__."""
+
+        class Boom:
+            def __str__(self) -> str:
+                raise RecursionError("maximum recursion depth exceeded while getting the repr of an object")
+
+        out = _run([_jnode("j1", "")], input_overrides={"j1": {"data": Boom()}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["_preview"] == "<unrepresentable>"
+
     def test_unserialisable_fallback_preview_is_bounded(self):
         """A non-JSON-serialisable payload falls back to its repr, but that
         repr is capped like every other snapshot and flagged as pruned."""
@@ -513,6 +525,28 @@ class TestXmlExtractorPreviewPresence:
     def test_long_non_string_input_is_capped(self):
         out = _run([_xnode("x1", "")], input_overrides={"x1": {"data": ["y" * 30_000]}})
         assert len(out["x1"]["_preview"]) == 20_000
+
+    def test_unrepresentable_non_string_input_does_not_fail_the_node(self):
+        """A value whose str() blows up (absurd nesting → RecursionError) must
+        not turn the extractor's outputs into __error__."""
+
+        class Boom:
+            def __str__(self) -> str:
+                raise RecursionError("maximum recursion depth exceeded while getting the repr of an object")
+
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": Boom()}})
+        assert "__error__" not in out["x1"]
+        assert out["x1"]["value"] is None
+        assert out["x1"]["_preview"] == "<unrepresentable>"
+
+    def test_deeply_nested_python_script_result_does_not_fail_the_node(self):
+        """End-to-end through the edge from a Python Script block."""
+        script = "result = 0\nfor i in range(10000): result = [result]"
+        nodes = [node("p1", "python_script", {"script": script}), _xnode("x1", ".//a")]
+        out = _run(nodes, [edge("p1", "x1", "result", "data")])
+        assert "__error__" not in out["x1"]
+        assert out["x1"]["value"] is None
+        assert isinstance(out["x1"]["_preview"], str)
 
     def test_multi_path_empty_string_is_a_received_document(self):
         paths = [{"label": "A", "path": ".//a"}]

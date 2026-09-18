@@ -323,7 +323,7 @@ import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
-import { extractorOutputLabels, retainPreviews } from '@/utils/logicExtractorOutputs'
+import { extractorOutputLabels, extractorRowCount, retainPreviews } from '@/utils/logicExtractorOutputs'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
@@ -1386,13 +1386,23 @@ function _onClipboardKeydown(event) {
 let _autoSaveTimer = null
 function onNodeDataUpdate(newData) {
   if (!auth.isAdmin || !selectedNode.value) return
+  const rowsBefore = extractorRowCount(selectedNode.value)
   nodes.value = nodes.value.map(n =>
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
   )
   selectedNode.value = { ...selectedNode.value, data: { ...selectedNode.value.data, ...newData } }
   // Configured output names feed the debug band text — re-render it so a
-  // renamed extractor output shows up without another execution.
-  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
+  // renamed extractor output shows up without another execution. Adding or
+  // removing a row shifts the out_N numbering, so the cached per-port
+  // values would be shown under the wrong names: drop that block's band
+  // until the next execution delivers values for the new layout.
+  if (_debugBandOutputs) {
+    if (extractorRowCount(selectedNode.value) !== rowsBefore) {
+      const { [selectedNode.value.id]: _stale, ...rest } = _debugBandOutputs
+      _debugBandOutputs = rest
+    }
+    renderDebugBands(_debugBandOutputs)
+  }
   // Auto-save after 500 ms idle
   clearTimeout(_autoSaveTimer)
   _autoSaveTimer = setTimeout(() => saveGraph(), 500)

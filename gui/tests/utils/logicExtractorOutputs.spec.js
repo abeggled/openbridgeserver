@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { EXTRACTOR_MAX_PATHS, extractorOutputLabels, flattenJsonPaths, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
+import { EXTRACTOR_MAX_PATHS, extractorOutputLabels, extractorRowCount, flattenJsonPaths, parseExtractorJson, retainPreviews } from '@/utils/logicExtractorOutputs'
 
 const t = (key, params) => `${key}:${params?.n}`
 
@@ -150,5 +150,19 @@ describe('flattenJsonPaths', () => {
     const doc = { a: [1, 2, 3], b: { c: [4, 5] }, d: 6 }
     expect(flattenJsonPaths(doc, 4)).toEqual(['a[0]', 'a[1]', 'a[2]', 'b.c[0]'])
     expect(flattenJsonPaths(doc, 0)).toEqual([])
+  })
+})
+
+describe('extractorRowCount', () => {
+  it('counts the configured rows of json and xml extractors', () => {
+    expect(extractorRowCount({ type: 'json_extractor', data: { json_paths: JSON.stringify([{ path: 'a' }, { path: 'b' }]) } })).toBe(2)
+    expect(extractorRowCount({ type: 'xml_extractor', data: { xml_paths: JSON.stringify([{ path: './/a' }]) } })).toBe(1)
+    expect(extractorRowCount({ type: 'json_extractor', data: {} })).toBe(0)
+  })
+
+  it('is 0 for other node types, missing nodes and unparsable rows', () => {
+    expect(extractorRowCount({ type: 'and', data: { json_paths: '[{}]' } })).toBe(0)
+    expect(extractorRowCount(null)).toBe(0)
+    expect(extractorRowCount({ type: 'json_extractor', data: { json_paths: '{oops' } })).toBe(0)
   })
 })

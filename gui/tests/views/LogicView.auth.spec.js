@@ -809,6 +809,53 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
   })
 
+  it('drops a cached debug band when extractor rows are added or removed (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const rows = [{ label: 'A', path: 'a' }, { label: 'B', path: 'b' }]
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [
+      { id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify(rows) } },
+      { id: 'g1', type: 'and', position: { x: 0, y: 0 }, data: {} },
+    ], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 11, out_2: 22 }, g1: { out: true } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('A=11   B=22')
+
+    // Deleting the first row shifts out_2 → out_1: the cached values no
+    // longer match the rows, so the band disappears until the next run.
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B', path: 'b' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBeUndefined()
+    // Other blocks keep their bands.
+    expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+
+    // A later rename of the surviving row must not resurrect the stale values…
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    // …and neither must a locale switch.
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+
+    // The next execution brings the band back for the new layout.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 22 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('B2=22')
+
+    // Adding a row drops it again.
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }, { label: 'C', path: 'c' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
   it('clears a retained XML preview after an empty payload (#1104)', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }

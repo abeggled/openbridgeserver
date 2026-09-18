@@ -52,6 +52,16 @@ def _prune_json_preview(value: Any) -> Any:
     return value
 
 
+def _preview_fallback_text(value: Any) -> str:
+    """``str(value)`` for a preview, or a marker when even that fails
+    (e.g. RecursionError on an absurdly nested structure) — a preview must
+    never turn the block's normal outputs into ``__error__``."""
+    try:
+        return str(value)
+    except (TypeError, ValueError, RecursionError):
+        return "<unrepresentable>"
+
+
 def _json_preview_snapshot(data_obj: Any) -> tuple[str, bool]:
     """Serialise a json_extractor payload for the GUI path picker.
 
@@ -70,7 +80,7 @@ def _json_preview_snapshot(data_obj: Any) -> tuple[str, bool]:
     except (TypeError, ValueError, RecursionError):
         # Not JSON-serialisable (circular, absurdly deep, …): fall back to
         # the Python repr, bounded like everything else.
-        text = str(data_obj)
+        text = _preview_fallback_text(data_obj)
         if len(text) <= _JSON_PREVIEW_MAX_CHARS:
             return text, False
         return text[:_JSON_PREVIEW_MAX_CHARS] + "…", True
@@ -2175,7 +2185,7 @@ class GraphExecutor:
                 # (issue #1104).
                 preview_str: str | None = None
                 if raw_xml is not None:
-                    preview_text = raw_xml if isinstance(raw_xml, str) else str(raw_xml)
+                    preview_text = raw_xml if isinstance(raw_xml, str) else _preview_fallback_text(raw_xml)
                     preview_str = preview_text[:20_000] if len(preview_text) > 20_000 else preview_text
 
                 if isinstance(raw_xml, str) and raw_xml.strip():
