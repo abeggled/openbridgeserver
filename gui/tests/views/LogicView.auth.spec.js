@@ -785,6 +785,23 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.lastRunOutputs.j1._preview).toBe('null')
   })
 
+  it('clears a retained XML preview after an empty payload (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [{ id: 'x1', type: 'xml_extractor', position: { x: 0, y: 0 }, data: { xml_paths: '[]' } }], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { _preview: '<root><a>1</a></root>' } } }) })
+    // Untriggered run: nothing arrived → keep the document.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { value: null, _preview: null } } }) })
+    expect(wrapper.vm.lastRunOutputs.x1._preview).toBe('<root><a>1</a></root>')
+    // A received empty document replaces it.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { value: null, _preview: '' } } }) })
+    expect(wrapper.vm.lastRunOutputs.x1._preview).toBe('')
+  })
+
   it('does not resurrect the previous graph\'s debug bands on a locale change (#1104)', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }

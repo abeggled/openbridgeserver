@@ -483,6 +483,45 @@ class TestXmlExtractor:
         assert out["x1"]["value"] == "hello"
 
 
+class TestXmlExtractorPreviewPresence:
+    """Absent input vs. received (possibly empty) document (issue #1104)."""
+
+    def test_no_input_yields_no_preview(self):
+        out = _run([_xnode("x1", ".//a")])
+        assert out["x1"]["_preview"] is None
+        assert out["x1"]["value"] is None
+
+    def test_present_none_counts_as_no_input(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": None}})
+        assert out["x1"]["_preview"] is None
+
+    def test_empty_string_is_a_received_document(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": ""}})
+        assert out["x1"]["_preview"] == ""
+        assert out["x1"]["value"] is None
+
+    def test_whitespace_string_is_a_received_document(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": "  \n"}})
+        assert out["x1"]["_preview"] == "  \n"
+        assert out["x1"]["value"] is None
+
+    def test_non_string_input_previews_its_text(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": 42}})
+        assert out["x1"]["_preview"] == "42"
+        assert out["x1"]["value"] is None
+
+    def test_long_non_string_input_is_capped(self):
+        out = _run([_xnode("x1", "")], input_overrides={"x1": {"data": ["y" * 30_000]}})
+        assert len(out["x1"]["_preview"]) == 20_000
+
+    def test_multi_path_empty_string_is_a_received_document(self):
+        paths = [{"label": "A", "path": ".//a"}]
+        nodes = [node("x1", "xml_extractor", {"xml_paths": json.dumps(paths)})]
+        out = _run(nodes, input_overrides={"x1": {"data": ""}})
+        assert out["x1"]["_preview"] == ""
+        assert out["x1"]["out_1"] is None
+
+
 class TestXmlExtractorMultiPath:
     """Tests for multi-output mode (xml_paths config key)."""
 

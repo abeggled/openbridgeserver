@@ -2169,10 +2169,16 @@ class GraphExecutor:
                 xml_paths_raw = (d.get("xml_paths") or "").strip()
 
                 _xml_root = None
+                # _preview mirrors json_extractor: no input at all → None (the
+                # GUI keeps the last received document); any received text —
+                # including an empty one — is a real preview and replaces it
+                # (issue #1104).
                 preview_str: str | None = None
+                if raw_xml is not None:
+                    preview_text = raw_xml if isinstance(raw_xml, str) else str(raw_xml)
+                    preview_str = preview_text[:20_000] if len(preview_text) > 20_000 else preview_text
 
                 if isinstance(raw_xml, str) and raw_xml.strip():
-                    preview_str = raw_xml[:20_000] if len(raw_xml) > 20_000 else raw_xml
                     try:
                         _xml_root = _ET.fromstring(raw_xml.strip())
                     except _ET.ParseError:

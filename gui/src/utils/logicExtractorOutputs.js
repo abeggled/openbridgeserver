@@ -102,13 +102,15 @@ export function flattenJsonPaths(obj, limit = EXTRACTOR_MAX_PATHS) {
   return paths
 }
 
+// Only null/undefined mean "nothing arrived this run" — an empty string is a
+// received (empty) document and must replace the retained one.
 function hasPreview(nodeOut) {
   const preview = nodeOut?._preview
-  return preview !== null && preview !== undefined && preview !== ''
+  return preview !== null && preview !== undefined
 }
 
 /**
- * Carry the last non-empty `_preview` of every node over into a fresh set of
+ * Carry the last received `_preview` of every node over into a fresh set of
  * run outputs.
  *
  * Every graph execution re-evaluates the whole sheet, so an extractor whose

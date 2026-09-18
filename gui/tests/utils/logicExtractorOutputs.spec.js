@@ -48,12 +48,12 @@ describe('retainPreviews', () => {
     expect(retainPreviews(previous, outputs)).toEqual({ j1: { out_1: null, out_2: null, _preview: payload } })
   })
 
-  it('treats undefined and empty-string previews as missing', () => {
+  it('treats an undefined preview as missing but an empty string as a received document', () => {
     const previous = { j1: { _preview: payload }, x1: { _preview: '<a/>' } }
-    const outputs = { j1: { out_1: 2 }, x1: { out_1: 'v', _preview: '' } }
+    const outputs = { j1: { out_1: 2 }, x1: { out_1: null, _preview: '' } }
     expect(retainPreviews(previous, outputs)).toEqual({
       j1: { out_1: 2, _preview: payload },
-      x1: { out_1: 'v', _preview: '<a/>' },
+      x1: { out_1: null, _preview: '' },
     })
   })
 
@@ -70,9 +70,14 @@ describe('retainPreviews', () => {
   })
 
   it('ignores previous nodes without a preview and tolerates missing arguments', () => {
-    const previous = { n1: { value: 1 }, n2: null, j1: { _preview: '' } }
+    const previous = { n1: { value: 1 }, n2: null, j1: { _preview: null } }
     expect(retainPreviews(previous, { n1: { value: 2 } })).toEqual({ n1: { value: 2 } })
     expect(retainPreviews(undefined, undefined)).toEqual({})
+  })
+
+  it('retains an empty received document like any other', () => {
+    const previous = { x1: { _preview: '' } }
+    expect(retainPreviews(previous, { x1: { out_1: null, _preview: null } })).toEqual({ x1: { out_1: null, _preview: '' } })
   })
 
   it('carries the pruned marker along with a retained preview and drops it otherwise', () => {
