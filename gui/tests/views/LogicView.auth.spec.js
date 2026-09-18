@@ -785,6 +785,30 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.lastRunOutputs.j1._preview).toBe('null')
   })
 
+  it('updates a named debug band when its configured label is edited (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'Old', path: 'a' }]) } }], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('Old=7')
+
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'New', path: 'a' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('New=7')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('New=7')
+
+    // Without any run yet, an edit must not invent a band.
+    wrapper.vm.clearDebugValues()
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'Newer', path: 'a' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
   it('clears a retained XML preview after an empty payload (#1104)', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }

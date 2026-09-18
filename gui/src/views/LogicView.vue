@@ -1390,6 +1390,9 @@ function onNodeDataUpdate(newData) {
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
   )
   selectedNode.value = { ...selectedNode.value, data: { ...selectedNode.value.data, ...newData } }
+  // Configured output names feed the debug band text — re-render it so a
+  // renamed extractor output shows up without another execution.
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
   // Auto-save after 500 ms idle
   clearTimeout(_autoSaveTimer)
   _autoSaveTimer = setTimeout(() => saveGraph(), 500)
