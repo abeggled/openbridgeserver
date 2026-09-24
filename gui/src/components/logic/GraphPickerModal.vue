@@ -149,7 +149,7 @@
       <template #header-actions>
         <HelpButton help-id="logic-graph-picker-assign" />
       </template>
-      <div class="flex flex-col gap-4">
+      <div class="flex flex-col gap-4 min-h-[28rem]">
         <p class="text-xs text-slate-500">{{ $t('logic.graphPicker.assignHint') }}</p>
         <HierarchyCombobox v-model="assignModal.nodes" include-tree-roots data-testid="assign-hierarchy-combobox" />
         <div v-if="assignModal.msg" class="text-sm text-red-400">{{ assignModal.msg }}</div>
