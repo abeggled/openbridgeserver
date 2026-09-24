@@ -30,6 +30,61 @@ from obs.logic.models import FlowData, LogicNode
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
 
+# json_extractor `_preview` snapshot (config-panel path picker, issue #1104):
+# the full document up to this size; larger documents are pruned
+# structurally (arrays and strings shortened) so the snapshot stays valid
+# JSON — a text cut would leave the picker without any paths at all. The
+# snapshot rides along in every debug WebSocket broadcast and run response,
+# which is why the limit is not simply "unbounded".
+_JSON_PREVIEW_MAX_CHARS = 256_000
+_JSON_PREVIEW_PRUNE_LIST_ITEMS = 5
+_JSON_PREVIEW_PRUNE_STR_CHARS = 200
+
+
+def _prune_json_preview(value: Any) -> Any:
+    """Shorten arrays and strings recursively; dict keys are kept intact."""
+    if isinstance(value, dict):
+        return {str(k): _prune_json_preview(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_prune_json_preview(v) for v in value[:_JSON_PREVIEW_PRUNE_LIST_ITEMS]]
+    if isinstance(value, str) and len(value) > _JSON_PREVIEW_PRUNE_STR_CHARS:
+        return value[:_JSON_PREVIEW_PRUNE_STR_CHARS] + "…"
+    return value
+
+
+def _preview_fallback_text(value: Any) -> str:
+    """``str(value)`` for a preview, or a marker when even that fails
+    (e.g. RecursionError on an absurdly nested structure) — a preview must
+    never turn the block's normal outputs into ``__error__``."""
+    try:
+        return str(value)
+    except (TypeError, ValueError, RecursionError):
+        return "<unrepresentable>"
+
+
+def _json_preview_snapshot(data_obj: Any) -> tuple[str, bool]:
+    """Serialise a json_extractor payload for the GUI path picker.
+
+    Returns ``(snapshot, pruned)`` — ``pruned`` tells the GUI that the
+    snapshot is not the complete document, so per-row live previews may
+    differ from what the block actually outputs.
+    """
+    try:
+        preview = json.dumps(data_obj, default=str, ensure_ascii=False)
+        if len(preview) <= _JSON_PREVIEW_MAX_CHARS:
+            return preview, False
+        pruned = json.dumps(_prune_json_preview(data_obj), default=str, ensure_ascii=False)
+        if len(pruned) <= _JSON_PREVIEW_MAX_CHARS:
+            return pruned, True
+        return pruned[:_JSON_PREVIEW_MAX_CHARS] + "…", True
+    except (TypeError, ValueError, RecursionError):
+        # Not JSON-serialisable (circular, absurdly deep, …): fall back to
+        # the Python repr, bounded like everything else.
+        text = _preview_fallback_text(data_obj)
+        if len(text) <= _JSON_PREVIEW_MAX_CHARS:
+            return text, False
+        return text[:_JSON_PREVIEW_MAX_CHARS] + "…", True
+
 
 class _OpaqueRecoveredStr(str):
     """String restored from an ``opaque_str`` persistence tag."""
@@ -2049,24 +2104,41 @@ class GraphExecutor:
                 json_path = (d.get("json_path") or "").strip()
                 json_paths_raw = (d.get("json_paths") or "").strip()
 
-                # Parse raw input to Python object
+                # Parse raw input to Python object. A JSON document that was
+                # serialised twice (e.g. a string datapoint carrying JSON that
+                # got JSON-encoded again upstream) decodes to a *string* on
+                # the first pass — unwrap one such level so the paths inside
+                # stay addressable (issue #1104).
                 if isinstance(raw, str):
                     try:
                         data_obj: Any = _json_mod.loads(raw)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, RecursionError):
                         data_obj = raw
+                    if isinstance(data_obj, str):
+                        try:
+                            inner = _json_mod.loads(data_obj)
+                        except (ValueError, TypeError, RecursionError):
+                            inner = None
+                        if isinstance(inner, (dict, list)):
+                            data_obj = inner
                 elif raw is not None:
                     data_obj = raw
                 else:
                     data_obj = None
 
-                # _preview: compact JSON snapshot for config-panel path picker (max 20 KB)
-                try:
-                    preview = _json_mod.dumps(data_obj, default=str, ensure_ascii=False)
-                    if len(preview) > 20_000:
-                        preview = preview[:20_000] + "…"
-                except (TypeError, ValueError, RecursionError):
-                    preview = str(data_obj) if data_obj is not None else None
+                # _preview: JSON snapshot for the config-panel path picker (see
+                # _json_preview_snapshot). No payload at all → None, so the GUI
+                # can tell "nothing arrived this run" apart from real data and
+                # keep showing the previously received payload (issue #1104).
+                # A *received* payload that decodes to null is real data and
+                # yields the text "null" — the GUI then clears the stale paths.
+                preview: str | None = None
+                preview_pruned = False
+                if raw is not None:
+                    preview, preview_pruned = _json_preview_snapshot(data_obj)
+                preview_ports: dict[str, Any] = {"_preview": preview}
+                if preview_pruned:
+                    preview_ports["_preview_pruned"] = True
 
                 # Multi-path mode: json_paths is a JSON array of {label, path} entries
                 if json_paths_raw:
@@ -2076,7 +2148,7 @@ class GraphExecutor:
                         path_list = []
 
                     if isinstance(path_list, list) and path_list:
-                        result: dict[str, Any] = {"_preview": preview}
+                        result: dict[str, Any] = dict(preview_ports)
                         for i, entry in enumerate(path_list):
                             p = (entry.get("path") or "").strip() if isinstance(entry, dict) else ""
                             val: Any = None
@@ -2096,7 +2168,7 @@ class GraphExecutor:
                     except (KeyError, IndexError, TypeError, ValueError):
                         value = None
 
-                return {"value": value, "_preview": preview}
+                return {"value": value, **preview_ports}
 
             case "xml_extractor":
                 import json as _json_xml
@@ -2107,10 +2179,16 @@ class GraphExecutor:
                 xml_paths_raw = (d.get("xml_paths") or "").strip()
 
                 _xml_root = None
+                # _preview mirrors json_extractor: no input at all → None (the
+                # GUI keeps the last received document); any received text —
+                # including an empty one — is a real preview and replaces it
+                # (issue #1104).
                 preview_str: str | None = None
+                if raw_xml is not None:
+                    preview_text = raw_xml if isinstance(raw_xml, str) else _preview_fallback_text(raw_xml)
+                    preview_str = preview_text[:20_000] if len(preview_text) > 20_000 else preview_text
 
                 if isinstance(raw_xml, str) and raw_xml.strip():
-                    preview_str = raw_xml[:20_000] if len(raw_xml) > 20_000 else raw_xml
                     try:
                         _xml_root = _ET.fromstring(raw_xml.strip())
                     except _ET.ParseError:

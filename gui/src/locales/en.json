@@ -2140,7 +2140,9 @@
         "valueN": "Value {n}",
         "outputsCount": "Outputs ({n})",
         "labelPlaceholder": "Label",
-        "pathExample": "e.g. data.temperature"
+        "pathExample": "e.g. data.temperature",
+        "previewPruned": "Preview pruned: the document exceeds the preview size, arrays and long strings were shortened. Per-output live values may differ from the actual result.",
+        "pathListTruncated": "Path list limited to {n} entries — type further paths directly."
       },
       "substr": {
         "modeLabel": "Mode",
