@@ -49,8 +49,12 @@ in the shared project venv, then let worktrees resolve that environment through 
 
 ### GUI Node dependencies for agents and worktrees
 
-Do not run `npm install` or `npm ci` in issue or PR worktrees. GUI dependencies are shared from the
-main worktree through a local `gui/node_modules` symlink:
+Which command applies depends on whether this checkout is a **linked worktree** beside a main
+worktree, or a **standalone checkout** (CI job, review sandbox, fresh clone). Check with
+`git worktree list`:
+
+**Linked worktree (more than one entry).** Do not run `npm install` or `npm ci` here. GUI
+dependencies are shared from the main worktree through a local `gui/node_modules` symlink:
 
 ```bash
 tools/link-worktree-node-modules
@@ -59,6 +63,22 @@ tools/link-worktree-node-modules
 The pre-push hook runs this linker automatically before GUI Vitest gates if `gui/node_modules` is
 missing. If the main worktree dependencies are missing or stale, update them in the main worktree,
 not in the issue/PR worktree.
+
+**Standalone checkout (a single entry).** There is no main worktree to share from, so the linker
+cannot help and exits 1 by design. Install directly:
+
+```bash
+cd gui && npm ci
+```
+
+This is the supported path for CI jobs, automated review sandboxes and fresh clones. The rule above
+exists to keep several local worktrees on one shared `node_modules`, not to forbid installing
+dependencies where none exist.
+
+> Why this distinction is spelled out: an automated reviewer followed the linked-worktree rule in a
+> standalone sandbox, hit `vitest: not found` (exit 127), saw the linker exit 1, and reported the
+> whole GUI surface as unreviewed partial coverage rather than installing. The commands were right,
+> the precondition was not stated.
 
 ### config.yaml — required local overrides
 
