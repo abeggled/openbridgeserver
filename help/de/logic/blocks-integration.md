@@ -9,16 +9,35 @@ Extrahieren von Werten aus strukturierten Textformaten.
 
 ## Wake on LAN {#logic-block-wake-on-lan}
 
-Sendet ein Wake-on-LAN Magic-Paket per UDP-Broadcast, sobald der **Trigger**-Eingang wahr wird.
+Sendet ein Wake-on-LAN Magic-Paket per UDP-Broadcast, wenn der **Trigger**-Eingang wahr ist.
 **MAC-Adresse**, **Broadcast-IP** und **UDP-Port** werden direkt im Konfigurations-Panel auf
 Gültigkeit geprüft (ungültige Werte werden rot markiert mit Fehlertext).
+
+Der **Auslösemodus** legt fest, wann ein wahrer Trigger auslöst:
+
+- **Bei jedem Event** (Standard für neu platzierte Bausteine): Jedes neu eingehende `true` löst
+  aus — auch ein wiederholtes `true` ohne vorheriges `false`. Ein Event auf einem anderen,
+  nicht mit dem Trigger verbundenen Datenpunkt löst dagegen nicht aus.
+- **Nur bei steigender Flanke**: Löst nur beim Wechsel von `false` auf `true` aus. Bausteine aus
+  älteren Versionen behalten dieses Verhalten, bis der Modus umgestellt wird.
+
+Impulse von Timer/Cron, Change Filter und Flankenerkennung lösen in beiden Modi jedes Mal aus.
 
 ## Host Check (Ping) {#logic-block-host-check}
 
 Pingt einen **Host**/eine IP-Adresse und liefert **Erreichbar** (Bool) sowie **Latenz (ms)**
-zurück. Löst bei einer steigenden Flanke am **Trigger**-Eingang aus — Empfehlung: mit einem
-Timer-/Cron-Baustein verbinden, um regelmässig zu prüfen. **Timeout** und **Ping-Anzahl** sind
-konfigurierbar.
+zurück, wenn der **Trigger**-Eingang wahr ist — Empfehlung: mit einem Timer-/Cron-Baustein
+verbinden, um regelmässig zu prüfen. **Timeout** und **Ping-Anzahl** sind konfigurierbar.
+
+Der **Auslösemodus** legt fest, wann ein wahrer Trigger auslöst:
+
+- **Bei jedem Event** (Standard für neu platzierte Bausteine): Jedes neu eingehende `true` löst
+  aus — auch ein wiederholtes `true` ohne vorheriges `false`. Ein Event auf einem anderen,
+  nicht mit dem Trigger verbundenen Datenpunkt löst dagegen nicht aus.
+- **Nur bei steigender Flanke**: Löst nur beim Wechsel von `false` auf `true` aus. Bausteine aus
+  älteren Versionen behalten dieses Verhalten, bis der Modus umgestellt wird.
+
+Impulse von Timer/Cron, Change Filter und Flankenerkennung lösen in beiden Modi jedes Mal aus.
 
 ## JSON Extractor {#logic-block-json-extractor}
 

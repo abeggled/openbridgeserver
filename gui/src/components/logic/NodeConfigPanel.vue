@@ -1297,6 +1297,20 @@
         <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.triggerMode.label') }}</label>
+          <select
+            :value="triggerModeValue"
+            class="input text-sm"
+            @change="onTriggerModeChange"
+            data-testid="wol-trigger-mode"
+          >
+            <option value="event">{{ $t('logic.nodeConfig.triggerMode.event') }}</option>
+            <option value="edge">{{ $t('logic.nodeConfig.triggerMode.edge') }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">{{ $t(`logic.nodeConfig.triggerMode.${triggerModeValue}Hint`) }}</p>
+        </div>
+
+        <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.wake_on_lan.mac_address') }}</label>
           <input
             v-model="localData.mac_address"
@@ -1342,6 +1356,20 @@
     <template v-else-if="isHostCheckNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.triggerMode.label') }}</label>
+          <select
+            :value="triggerModeValue"
+            class="input text-sm"
+            @change="onTriggerModeChange"
+            data-testid="hc-trigger-mode"
+          >
+            <option value="event">{{ $t('logic.nodeConfig.triggerMode.event') }}</option>
+            <option value="edge">{{ $t('logic.nodeConfig.triggerMode.edge') }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">{{ $t(`logic.nodeConfig.triggerMode.${triggerModeValue}Hint`) }}</p>
+        </div>
 
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.host_check.host') }}</label>
@@ -1818,6 +1846,13 @@ const isICalNode          = computed(() => props.node?.type === 'ical')
 const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
+// Nodes saved before issue #1274 carry no trigger_mode and keep the rising-edge
+// behaviour on the backend — show exactly that instead of the schema default.
+const triggerModeValue    = computed(() => (localData.value.trigger_mode === 'event' ? 'event' : 'edge'))
+function onTriggerModeChange(event) {
+  localData.value.trigger_mode = event.target.value
+  emitUpdate()
+}
 const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
 const isNotifyMessageNode = computed(() => props.node?.type === 'notify_message')
 const selectedMessageAdapter = computed(() => messageAdapters.value.find(instance => instance.id === localData.value.adapter_instance_id))

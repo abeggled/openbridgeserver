@@ -2481,7 +2481,14 @@
         "out_min": "Output min",
         "out_max": "Output max"
       },
-      "resizeHandle": "Drag to resize panel"
+      "resizeHandle": "Drag to resize panel",
+      "triggerMode": {
+        "label": "Trigger mode",
+        "event": "On every event",
+        "edge": "Rising edge only",
+        "eventHint": "Every incoming true on the trigger input fires – even if the value was already true before.",
+        "edgeHint": "Fires only on a change from false to true. A repeated true without a preceding false is ignored."
+      }
     },
     "portLabels": {
       "heizmode": "Heating mode",
@@ -2575,8 +2582,8 @@
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
       "message_archive": "Writes a message to a message archive. Triggered automatically when a message arrives at the input or when the trigger is true.",
-      "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true.",
-      "host_check": "Pings a host and outputs the reachability status (true/false) and latency in milliseconds. Runs on the rising edge of the trigger input. Recommended: connect to a Timer/Cron node for periodic polling.",
+      "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true – depending on the trigger mode on every incoming true event or on the rising edge only.",
+      "host_check": "Pings a host and outputs the reachability status (true/false) and latency in milliseconds. Triggered when the trigger input is true – depending on the trigger mode on every incoming true event or on the rising edge only. Recommended: connect to a Timer/Cron node for periodic polling.",
       "json_extractor": "Parses a JSON string and extracts one or more values by key paths (dot notation, e.g. sensors.temperature). Multiple outputs configurable via + in the config panel.",
       "xml_extractor": "Parses an XML string and extracts one or more values by XPath expressions (ElementTree syntax, e.g. .//temperature). Multiple outputs configurable via + in the config panel.",
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",

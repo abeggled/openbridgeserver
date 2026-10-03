@@ -136,3 +136,30 @@ describe('NodeConfigPanel wake_on_lan — port validation', () => {
     wrapper.unmount()
   })
 })
+
+describe('NodeConfigPanel trigger mode (#1274)', () => {
+  it('shows rising edge for legacy nodes saved without trigger_mode', async () => {
+    const wrapper = await mountWolPanel()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="wol-trigger-mode"]').element.value).toBe('edge')
+    expect(wrapper.text()).toContain('Löst nur beim Wechsel von false auf true aus')
+    wrapper.unmount()
+  })
+
+  it('shows event mode when configured', async () => {
+    const wrapper = await mountWolPanel({ trigger_mode: 'event' })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="wol-trigger-mode"]').element.value).toBe('event')
+    expect(wrapper.text()).toContain('Jedes eingehende true am Trigger-Eingang löst aus')
+    wrapper.unmount()
+  })
+
+  it('emits the selected trigger mode', async () => {
+    const wrapper = await mountWolPanel({ trigger_mode: 'event' })
+    await flushPromises()
+    await wrapper.find('[data-testid="wol-trigger-mode"]').setValue('edge')
+    const updates = wrapper.emitted('update')
+    expect(updates.at(-1)[0].trigger_mode).toBe('edge')
+    wrapper.unmount()
+  })
+})

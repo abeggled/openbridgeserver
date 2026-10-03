@@ -1286,6 +1286,23 @@ def _should_send_cookie(
     return not (bool(cookie_secure) and not req_is_https)
 
 
+_TRIGGER_MODE_EDGE = "edge"
+_TRIGGER_MODE_EVENT = "event"
+
+
+def _trigger_mode(node_data: dict[str, Any] | None) -> str:
+    """Trigger semantics of a wake_on_lan/host_check node (issue #1274).
+
+    "event" fires on every freshly delivered truthy trigger; "edge" only on
+    the False→True transition. Nodes saved before the option existed carry no
+    value and keep the historic rising-edge behaviour, so existing sheets do
+    not silently start re-sending on cyclic status telegrams.
+    """
+    if (node_data or {}).get("trigger_mode") == _TRIGGER_MODE_EVENT:
+        return _TRIGGER_MODE_EVENT
+    return _TRIGGER_MODE_EDGE
+
+
 def _send_wol_packet(mac: str, broadcast: str, port: int) -> None:
     """Build and send a Wake-on-LAN magic packet via UDP broadcast."""
     clean = re.sub(r"[:\-\.]", "", mac).upper()
@@ -4536,32 +4553,61 @@ class LogicManager:
         # source, not every cron/change_filter in the graph.
         fired_crons = overrides.keys() & cron_node_ids
         cron_reachable: set[str] = set(fired_crons)
+
+        def _propagate_pulse_reachability(reachable: set[str], frontier: list[str]) -> None:
+            """Extend *reachable* in place with every node a pulse travelling
+            from *frontier* reaches through pulse-carrying edges."""
+            queue = list(frontier)
+            while queue:
+                current = queue.pop()
+                # memory is an explicit tick boundary: a pulse legitimately
+                # reaches its trigger-typed "reset" port (added to the
+                # reachable set like any other trigger-typed target), but
+                # memory's "out" this pass is whatever was already committed
+                # at the end of a *previous* tick, entirely independent of
+                # the reset/in this pulse just delivered — that only takes
+                # effect via the deferred commit_memory_inputs, for the
+                # *next* tick. The pulse must not be treated as having
+                # propagated through to memory's own descendants.
+                if _node_type_by_id.get(current) == "memory":
+                    continue
+                for edge in _effective_edges:
+                    if edge.source == current and edge.target not in reachable and _edge_carries_pulse(edge):
+                        reachable.add(edge.target)
+                        queue.append(edge.target)
+
         # Seed only the targets reached via each pulsing change_filter's
         # "changed" handle — its "out" handle carries the held/passthrough
         # value, not a discrete pulse, and must not bypass rising-edge dedup.
         for _cfe in _effective_edges:
             if (_cfe.source, _cfe.sourceHandle or "out") in _initial_pulse_handles and _edge_carries_pulse(_cfe):
                 cron_reachable.add(_cfe.target)
-        if cron_reachable:
-            _cq: list[str] = list(cron_reachable)
-            while _cq:
-                _cn = _cq.pop()
-                # memory is an explicit tick boundary: a pulse legitimately
-                # reaches its trigger-typed "reset" port (added to
-                # cron_reachable above/below like any other trigger-typed
-                # target), but memory's "out" this pass is whatever was
-                # already committed at the end of a *previous* tick,
-                # entirely independent of the reset/in this pulse just
-                # delivered — that only takes effect via the deferred
-                # commit_memory_inputs, for the *next* tick. The pulse must
-                # not be treated as having propagated through to memory's
-                # own descendants.
-                if _node_type_by_id.get(_cn) == "memory":
-                    continue
-                for _ce in _effective_edges:
-                    if _ce.source == _cn and _ce.target not in cron_reachable and _edge_carries_pulse(_ce):
-                        cron_reachable.add(_ce.target)
-                        _cq.append(_ce.target)
+        _propagate_pulse_reachability(cron_reachable, list(cron_reachable))
+
+        # Trigger mode "event" (issue #1274): a Read Object whose DataPoint
+        # genuinely received a new value this tick is a discrete event source
+        # as well — every such telegram, even a repeated TRUE, must re-fire a
+        # wake_on_lan/host_check it drives. Read Objects merely re-seeded from
+        # the registry (an unrelated DataPoint's event, cron, ...) are not in
+        # `overrides` and keep being deduplicated. A run without any event
+        # overrides is an explicit manual/debug run, where — as for
+        # notifications — every input counts as freshly delivered (None).
+        event_reachable: set[str] | None = None
+        if overrides:
+            event_reachable = {
+                node_id
+                for node_id, values in overrides.items()
+                if _node_type_by_id.get(node_id) == "datapoint_read" and GraphExecutor._to_bool(values.get("changed"))
+            }
+            _propagate_pulse_reachability(event_reachable, list(event_reachable))
+
+        def _retrigger_allowed(node: Any) -> bool:
+            """May a sustained truthy trigger fire *node*'s action again?"""
+            if node.id in cron_reachable:
+                return True
+            if _trigger_mode(node.data) != _TRIGGER_MODE_EVENT:
+                return False
+            return event_reachable is None or node.id in event_reachable
 
         def _register_change_filter_pulses(node_ids: set[str]) -> None:
             # change_filter_pulse_ids/cron_reachable above only see pulses
@@ -4585,17 +4631,7 @@ class LogicManager:
                 if (_pe.source, _pe.sourceHandle or "out") in _new_pulses and _pe.target not in cron_reachable and _edge_carries_pulse(_pe):
                     cron_reachable.add(_pe.target)
                     _pq.append(_pe.target)
-            while _pq:
-                _pn = _pq.pop()
-                # Same memory tick-boundary stop as the preamble traversal
-                # above — a pulse reaching memory's "reset" must not be
-                # treated as having propagated through to its descendants.
-                if _node_type_by_id.get(_pn) == "memory":
-                    continue
-                for _pe2 in _effective_edges:
-                    if _pe2.source == _pn and _pe2.target not in cron_reachable and _edge_carries_pulse(_pe2):
-                        cron_reachable.add(_pe2.target)
-                        _pq.append(_pe2.target)
+            _propagate_pulse_reachability(cron_reachable, _pq)
 
         executed_host_check_nodes: set[str] = set()
 
@@ -4604,7 +4640,7 @@ class LogicManager:
             hyst_hc = hyst.setdefault(node.id, {})
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
             was_triggered = hyst_hc.get("hc_prev_trigger", False)
-            is_cron_triggered = node.id in cron_reachable
+            retrigger_allowed = _retrigger_allowed(node)
             if not is_triggered:
                 return False
             host = (node.data.get("host") or "").strip()
@@ -4625,7 +4661,7 @@ class LogicManager:
                 return False
             if (
                 was_triggered
-                and not is_cron_triggered
+                and not retrigger_allowed
                 and hyst_hc.get("hc_config_sig") == config_sig
                 and hyst_hc.get("hc_runtime_token") == _HOST_CHECK_RUNTIME_TOKEN
             ):
@@ -4865,13 +4901,12 @@ class LogicManager:
             hyst_wol = hyst.setdefault(node.id, {})
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
             was_triggered = hyst_wol.get("wol_prev_trigger", False)
-            # Cron-retrigger exception applies only when the firing cron node
-            # actually drives this specific WoL node (reachability check above).
-            is_cron_triggered = node.id in cron_reachable
             if not is_triggered:
                 hyst_wol["wol_prev_trigger"] = False
                 return False
-            if was_triggered and not is_cron_triggered:
+            # Retrigger exception applies only when a firing pulse/event source
+            # actually drives this specific WoL node (reachability check above).
+            if was_triggered and not _retrigger_allowed(node):
                 # Dedup skip, not a failure — but the trigger IS active this
                 # tick and "sent" is settled (no new packet this time), so a
                 # change_filter held behind this node's output must still be
@@ -5472,40 +5507,11 @@ class LogicManager:
             for node in flow.nodes:
                 if node.type != "wake_on_lan" or node.id not in post_api_hc_descendants or node.id in triggered_wol_nodes:
                     continue
-                out = outputs.get(node.id, {})
-                hyst_wol = hyst.setdefault(node.id, {})
-                is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
-                was_triggered = hyst_wol.get("wol_prev_trigger", False)
-                is_cron_triggered = node.id in cron_reachable
-                if not is_triggered:
-                    hyst_wol["wol_prev_trigger"] = False
-                    continue
-                if was_triggered and not is_cron_triggered:
-                    continue
-                mac = (node.data.get("mac_address") or "").strip()
-                if not mac:
-                    logger.warning("wake_on_lan: mac_address missing on node %s", node.id[:8])
-                    continue
-                broadcast = (node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
-                _port_raw = node.data.get("port")
-                try:
-                    if isinstance(_port_raw, float) and not _port_raw.is_integer():
-                        raise ValueError(f"fractional port {_port_raw!r} — must be a whole number")
-                    port = int(_port_raw) if _port_raw not in (None, "") else 9
-                    if not (1 <= port <= 65535):
-                        raise ValueError(f"port {port!r} out of range 1–65535")
-                    try:
-                        ipaddress.IPv4Address(broadcast)
-                    except ValueError:
-                        raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
-                    await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
-                    hyst_wol["wol_prev_trigger"] = True
-                    outputs[node.id]["sent"] = True
+                # Scratch target set: this late pass only records nodes whose
+                # packet actually went out; skipped/failed nodes stay unresolved.
+                if await _run_wake_on_lan_node(node, set()):
                     post_api_wol_nodes.add(node.id)
                     triggered_wol_nodes.add(node.id)
-                    logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
-                except Exception:
-                    logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], node.id[:8])
 
         if post_api_wol_nodes:
             _add_resolved_outputs(post_api_wol_nodes)
@@ -5931,37 +5937,9 @@ class LogicManager:
         for _fw_node in flow.nodes:
             if _fw_node.type != "wake_on_lan" or _fw_node.id in triggered_wol_nodes:
                 continue
-            _fw_out = outputs.get(_fw_node.id, {})
-            _fw_hyst = hyst.setdefault(_fw_node.id, {})
-            if not GraphExecutor._to_bool(_fw_out.get("_trigger")):
-                _fw_hyst["wol_prev_trigger"] = False
-                continue
-            if _fw_hyst.get("wol_prev_trigger") and _fw_node.id not in cron_reachable:
-                continue
-            _fw_mac = (_fw_node.data.get("mac_address") or "").strip()
-            if not _fw_mac:
-                logger.warning("wake_on_lan: mac_address missing on node %s", _fw_node.id[:8])
-                continue
-            _fw_broadcast = (_fw_node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
-            _fw_port_raw = _fw_node.data.get("port")
-            try:
-                if isinstance(_fw_port_raw, float) and not _fw_port_raw.is_integer():
-                    raise ValueError(f"fractional port {_fw_port_raw!r}")
-                _fw_port = int(_fw_port_raw) if _fw_port_raw not in (None, "") else 9
-                if not (1 <= _fw_port <= 65535):
-                    raise ValueError(f"port {_fw_port!r} out of range 1–65535")
-                try:
-                    ipaddress.IPv4Address(_fw_broadcast)
-                except ValueError:
-                    raise ValueError(f"invalid broadcast IP {_fw_broadcast!r}") from None
-                await asyncio.to_thread(_send_wol_packet, _fw_mac, _fw_broadcast, _fw_port)
-                _fw_hyst["wol_prev_trigger"] = True
-                outputs[_fw_node.id]["sent"] = True
+            if await _run_wake_on_lan_node(_fw_node, set()):
                 _final_wol_candidates.add(_fw_node.id)
                 triggered_wol_nodes.add(_fw_node.id)
-                logger.info("Graph %s: WoL sent by node %s", graph_id[:8], _fw_node.id[:8])
-            except Exception:
-                logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], _fw_node.id[:8])
         if _final_wol_candidates:
             _add_resolved_outputs(_final_wol_candidates)
             _fwol_dn_ovr: dict[str, dict[str, Any]] = {}

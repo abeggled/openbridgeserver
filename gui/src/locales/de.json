@@ -2481,7 +2481,14 @@
         "out_min": "Ausgang Min",
         "out_max": "Ausgang Max"
       },
-      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern"
+      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern",
+      "triggerMode": {
+        "label": "Auslösemodus",
+        "event": "Bei jedem Event",
+        "edge": "Nur bei steigender Flanke",
+        "eventHint": "Jedes eingehende true am Trigger-Eingang löst aus – auch wenn der Wert vorher schon true war.",
+        "edgeHint": "Löst nur beim Wechsel von false auf true aus. Ein erneutes true ohne vorheriges false wird ignoriert."
+      }
     },
     "portLabels": {
       "heizmode": "Heizmodus",
@@ -2575,8 +2582,8 @@
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "message_archive": "Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
-      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
-      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird bei steigender Flanke am Trigger-Eingang ausgeführt. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
+      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist – je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke.",
+      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird ausgelöst wenn der Trigger-Eingang true ist – je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
       "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
