@@ -226,11 +226,11 @@
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="xl">
+    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="6xl">
       <template #header-actions>
         <HelpButton help-id="logic-new-sheet" />
       </template>
-      <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
+      <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4 min-h-[34rem]">
         <div class="form-group">
           <label class="label">{{ $t('logic.name') }}</label>
           <input v-model="newGraphName" type="text" class="input" required :placeholder="$t('logic.newGraphPlaceholder')" />
