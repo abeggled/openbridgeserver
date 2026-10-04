@@ -1374,15 +1374,16 @@ A 1-Wire busmaster's device node isn't guaranteed to stay the same across reboot
 - A plain USB busmaster (e.g. DS9490) enumerates as `/dev/bus/usb/<bus>/<device>` — bus/device numbers can shift.
 - The ElabNET PBM enumerates as an FTDI serial device (`/dev/ttyUSB0`, `/dev/ttyUSB1`, …) — the trailing number depends on plug-in order.
 
-For the PBM, `/dev/serial/by-id/usb-FTDI_...` is usually already a stable path that udev creates automatically for any serial device exposing a serial number, without a custom rule (see the `ls /dev/serial/by-id/` output in step 1) — pointing `OBS_ONEWIRE__PBM_DEVICES` at that path directly is enough, and you can skip ahead to step 3. Plain USB busmasters don't get an equivalent automatic alias, so a custom udev rule is the reliable fix there. A custom rule for the PBM only pays off if you'd rather have a short, self-chosen name than the long `by-id` path.
+For the PBM, `/dev/serial/by-id/usb-FTDI_...` is usually already a stable path that udev creates automatically for any serial device exposing a serial number, without a custom rule (see the `ls /dev/serial/by-id/` output in step 1) — pointing `OBS_ONEWIRE__PBM_DEVICES` at that path directly is enough, and you can skip ahead to step 3. A plain USB busmaster needs **no** stable path at all: `owserver` (`server: usb = all`) doesn't take a device path — it scans `/dev/bus/usb` itself via libusb and finds every busmaster wherever it enumerates. Its udev rule therefore creates no symlink; it only lets root inside an unprivileged LXC open the device (step 3 explains why a symlink can't be used for the busmaster). A custom rule for the PBM only pays off if you'd rather have a short, self-chosen name than the long `by-id` path.
 
-Create the rule on the **Proxmox host** (not inside the container — Proxmox resolves the LXC passthrough mount against the host's device tree before the container starts, so the symlink must already exist there), e.g. `/etc/udev/rules.d/99-onewire.rules`:
+Create the rule on the **Proxmox host** (not inside the container — device nodes and their permissions come from the host's device tree, and Proxmox resolves a passthrough symlink there before the container starts), e.g. `/etc/udev/rules.d/99-onewire.rules`:
 
 ```
-# DS9490/DS1490F plain USB busmaster — idVendor/idProduct are fixed for this device family
-# (04fa:2490). No serial condition, since this device reports no serial number (see step 1) —
-# with more than one identical busmaster, this match alone won't tell them apart.
-SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", SYMLINK+="onewire-busmaster"
+# DS9490/DS1490F plain USB busmaster (04fa:2490) — no symlink: owserver (usb = all) scans
+# /dev/bus/usb itself (see step 3). GROUP/MODE let root inside an unprivileged LXC open the
+# device; 100000 is the host GID of the container's root group with Proxmox's default ID
+# mapping. The match covers every busmaster of this family, so several of them work as well.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", GROUP="100000", MODE="0660"
 
 # ElabNET PBM (FTDI) — ATTRS{} rather than ATTR{}, since idVendor/idProduct/serial sit
 # on the parent USB device, not on the tty device itself (see step 1). idProduct varies
@@ -1392,42 +1393,53 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", ATTRS{seria
 
 Only carry over the block(s) for hardware that's actually attached (see the `lsusb` output from step 1) — a rule for hardware that isn't present is harmless but obviously creates no symlink.
 
-Apply it without rebooting, then confirm the symlink appeared:
+Apply it without rebooting, then check the result (busmaster: the `/dev/bus/usb/<bus>/<device>` path from `lsusb`):
 
 ```bash
 udevadm control --reload-rules && udevadm trigger
-ls -l /dev/onewire-busmaster /dev/onewire-pbm
+ls -l /dev/bus/usb/001/004 /dev/onewire-pbm
 ```
 
 Example output for the devices from step 1 (both rules applied):
 
 ```
-$ ls -l /dev/onewire-busmaster /dev/onewire-pbm
-lrwxrwxrwx 1 root root 15 Jul 26 14:02 /dev/onewire-busmaster -> bus/usb/001/004
+$ ls -l /dev/bus/usb/001/004 /dev/onewire-pbm
+crw-rw---- 1 root 100000 189, 3 Jul 26 14:02 /dev/bus/usb/001/004
 lrwxrwxrwx 1 root root  7 Jul 26 14:02 /dev/onewire-pbm -> ttyUSB0
 ```
 
-If only one of the two rules applies to your hardware, `ls` reports `No such file or directory` for the other symlink — that's expected, not an error (see the note above). The symlink *target* (`ttyUSB0`, `bus/usb/001/004`, …) can also change across reboots or reconnects — the rule matches on fixed device attributes, not on the kernel-assigned name, so udev repoints the symlink to wherever the device actually lands each time. That's fine: only the symlink name itself (`/dev/onewire-pbm`) needs to stay stable, since that's what step 3 and 4 reference — never the raw device path.
+If only one of the two rules applies to your hardware, `ls` reports `No such file or directory` for the other path — that's expected, not an error (see the note above). The symlink *target* (`ttyUSB0`, `ttyUSB1`, …) can also change across reboots or reconnects — the rule matches on fixed device attributes, not on the kernel-assigned name, so udev repoints the symlink to wherever the device actually lands each time. That's fine: only the symlink name itself (`/dev/onewire-pbm`) needs to stay stable, since that's what step 3 and 4 reference — never the raw device path.
 
 #### 3. Pass the device(s) through to the container
 
-- **Proxmox LXC**: open the container → **Resources** → **Add** → **Device Passthrough**, set **Device Path** to the stable symlink from step 2 (e.g. `/dev/onewire-busmaster`), and confirm. Repeat for each device that applies (busmaster and/or PBM):
+- **Proxmox LXC, plain USB busmaster**: bind-mount the host's whole `/dev/bus/usb` into the container and allow the USB character devices (major 189). Add both lines on the host to `/etc/pve/lxc/<CTID>.conf`, in the top section — if the container has snapshots, the file contains `[snapshot]` sections further down, and lines appended at the very end land in the last snapshot instead of the active configuration:
+
+  ```
+  lxc.cgroup2.devices.allow: c 189:* rwm
+  lxc.mount.entry: /dev/bus/usb dev/bus/usb none bind,optional,create=dir
+  ```
+
+  Don't pass the busmaster through as a symlink via *Device Passthrough*: the node then only exists inside the container under the symlink name, while libusb looks for busmasters exclusively under `/dev/bus/usb/<bus>/<device>` — `owserver` fails with `LIBUSB_ERROR_NO_DEVICE` / `No valid 1-wire buses found` (https://github.com/abeggled/openbridgeserver/issues/1287). The bind mount also covers several busmasters and re-plugging without a container restart (a passed-through path is resolved only once, at container start). Restart the container (`pct reboot <CTID>`) once after adding the lines; both lines are required — the mount alone is not enough.
+
+- **Proxmox LXC, ElabNET PBM**: open the container → **Resources** → **Add** → **Device Passthrough**, set **Device Path** to the stable path from step 2 (e.g. `/dev/onewire-pbm` or the `/dev/serial/by-id/...` path), and confirm:
 
   ![Proxmox container Resources tab with two passed-through 1-Wire devices](docs/device-passthrough1.jpeg)
   ![Proxmox Device Passthrough edit dialog](docs/device-passthrough2.jpeg)
 
-  Proxmox writes the matching mount entry and cgroup device permission for you — no manual `lxc.mount.entry`/`lxc.cgroup2.devices.allow` editing, and no risk of forgetting the cgroup line (the most common mistake with the manual approach). Restart the container (`pct reboot <CTID>`) for the passthrough to take effect.
+  Proxmox writes the matching mount entry and cgroup device permission for you — no manual `lxc.mount.entry`/`lxc.cgroup2.devices.allow` editing. Restart the container (`pct reboot <CTID>`) for the passthrough to take effect.
 
 - **Docker Compose** (`docker-compose.yml`):
   ```yaml
   devices:
-    - "/dev/onewire-busmaster:/dev/onewire-busmaster"
+    - "/dev/bus/usb:/dev/bus/usb"          # plain USB busmaster(s) — whole tree, not the symlink
     - "/dev/onewire-pbm:/dev/ttyUSB0"
   ```
 
+  As for the LXC, map `/dev/bus/usb` for a plain busmaster, not the symlink. Docker fixes the device list when the container is created, so recreate the sidecar after re-plugging a busmaster (`docker compose up -d --force-recreate owserver`).
+
 #### 4. Configure `/etc/owfs.conf`
 
-`/etc/owfs.conf` is `owserver`'s own config file — it tells `owserver` which bus(es) to listen on. With OBS's own `owserver` packaging (the Proxmox LXC systemd service and the Docker Compose sidecar) you never hand-edit this file: both regenerate it from scratch on every start from a small set of `OBS_ONEWIRE__*` environment variables, via the same shared script (`scripts/obs-onewire-configure.sh`) behind both deployment paths. "Configuring `/etc/owfs.conf`" therefore means setting a couple of environment variables in the right place, using the stable symlinked path(s) from step 2 (not the raw `/dev/bus/usb/...` or `/dev/ttyUSB0`).
+`/etc/owfs.conf` is `owserver`'s own config file — it tells `owserver` which bus(es) to listen on. With OBS's own `owserver` packaging (the Proxmox LXC systemd service and the Docker Compose sidecar) you never hand-edit this file: both regenerate it from scratch on every start from a small set of `OBS_ONEWIRE__*` environment variables, via the same shared script (`scripts/obs-onewire-configure.sh`) behind both deployment paths. "Configuring `/etc/owfs.conf`" therefore means setting a couple of environment variables in the right place, using the stable path from step 2 for a PBM (not the raw `/dev/ttyUSB0`) — a plain busmaster needs no path, just `OBS_ONEWIRE__USB_ALL=true`.
 
 **Proxmox LXC** — edit `/etc/obs.env` inside the container (uncomment/add):
 
