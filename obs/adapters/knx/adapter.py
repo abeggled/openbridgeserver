@@ -54,6 +54,7 @@ from obs.adapters.base import (
     ConfirmationWriteOrder,
 )
 from obs.adapters.knx.dpt_registry import DPTRegistry
+from obs.adapters.knx.group_address import normalize_ga, try_normalize_ga
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 
@@ -147,6 +148,29 @@ class KnxBindingConfig(BaseModel):
         if value and value < READ_INTERVAL_MIN_S:
             raise ValueError(f"read_interval_s must be 0 (off) or at least {READ_INTERVAL_MIN_S} seconds")
         return value
+
+    # Eingang (#1296): jede ETS-Schreibweise → interne dreistufige Schreibweise,
+    # damit Zustellung und Vergleiche nicht vom Projektstil abhängen.
+    @field_validator("group_address")
+    @classmethod
+    def _normalize_group_address(cls, value: str) -> str:
+        return normalize_ga(value)
+
+    @field_validator("state_group_address")
+    @classmethod
+    def _normalize_state_group_address(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_ga(value)
+
+
+def _binding_group_addresses(config: dict) -> tuple[str | None, str | None]:
+    """Command and state GA of a raw binding config, in the internal notation (#1296)."""
+    return try_normalize_ga(config.get("group_address")), try_normalize_ga(config.get("state_group_address"))
+
+
+def _is_distinct_state_ga(config: dict, ga: str) -> bool:
+    """Whether ``ga`` is the binding's state GA and differs from its command GA."""
+    command_ga, state_ga = _binding_group_addresses(config)
+    return state_ga == ga and state_ga != command_ga
 
 
 # ---------------------------------------------------------------------------
@@ -777,7 +801,7 @@ class KnxAdapter(AdapterBase):
                 logger.error("KNX: xknx.telegram.apci not importable")
                 return
 
-            ga = str(telegram.destination_address)
+            ga = normalize_ga(str(telegram.destination_address))
             is_outgoing = getattr(getattr(telegram, "direction", None), "name", None) == "OUTGOING"
 
             # Handle incoming read requests: respond with current persisted value
@@ -1151,7 +1175,7 @@ class KnxAdapter(AdapterBase):
             return
         self._activate_outbound_write(
             telegram,
-            str(telegram.destination_address),
+            normalize_ga(str(telegram.destination_address)),
             _telegram_to_bytes(telegram),
         )
 
@@ -1168,7 +1192,7 @@ class KnxAdapter(AdapterBase):
                 if recent_write[0]
                 >= (
                     state_cutoff
-                    if (recent_write[4][3].get("state_group_address") == key_ga and recent_write[4][3].get("group_address") != key_ga)
+                    if _is_distinct_state_ga(recent_write[4][3], key_ga)
                     else command_cutoff
                 )
             )
@@ -1191,7 +1215,7 @@ class KnxAdapter(AdapterBase):
         """Retain bounded identity-independent suppression for invalidated state feedback."""
         written_at, raw, _, _, signature, *_ = recent_write
         config = signature[3]
-        if config.get("state_group_address") != ga or config.get("group_address") == ga:
+        if not _is_distinct_state_ga(config, ga):
             return
         tombstones = self._invalidated_state_confirmations.setdefault((ga, bytes(raw)), deque())
         tombstones.append((written_at, binding_id, str(signature[0])))
@@ -1258,8 +1282,7 @@ class KnxAdapter(AdapterBase):
         recent_writes = self._recent_writes.get((str(binding.id), ga))
         if not recent_writes:
             return None
-        state_ga = binding.config.get("state_group_address")
-        is_distinct_state_ga = state_ga == ga and state_ga != binding.config.get("group_address")
+        is_distinct_state_ga = _is_distinct_state_ga(binding.config, ga)
         if is_distinct_state_ga:
             if is_outgoing:
                 return None
@@ -1288,8 +1311,7 @@ class KnxAdapter(AdapterBase):
                 if written_raw != raw:
                     continue
                 config = signature[3]
-                command_ga = config.get("group_address")
-                state_ga = config.get("state_group_address")
+                command_ga, state_ga = _binding_group_addresses(config)
                 if is_outgoing and ga == command_ga:
                     datapoint_ids.add(str(signature[0]))
                 if not is_outgoing and ga == state_ga and state_ga != command_ga:
@@ -1314,8 +1336,7 @@ class KnxAdapter(AdapterBase):
                 if (
                     str(signature[0]) == datapoint_id
                     and recent_write[1] == raw
-                    and config.get("state_group_address") == ga
-                    and config.get("group_address") != ga
+                    and _is_distinct_state_ga(config, ga)
                     and candidate_order is not None
                     and candidate_order.is_newer_than(write_order)
                 ):
@@ -1338,8 +1359,7 @@ class KnxAdapter(AdapterBase):
         if recent_writes is None:
             return False, None, False, None
 
-        state_ga = binding.config.get("state_group_address")
-        is_distinct_state_ga = state_ga == ga and state_ga != binding.config.get("group_address")
+        is_distinct_state_ga = _is_distinct_state_ga(binding.config, ga)
         if is_distinct_state_ga:
             if is_outgoing:
                 return False, None, False, None
