@@ -13,8 +13,8 @@ from obs.db.database import Database, _migration_v55_knx_group_address_style
 
 
 async def _style(db: Database) -> str | None:
-    row = await db.fetchone("SELECT value FROM app_settings WHERE key='knx.group_address_style'")
-    return row["value"] if row else None
+    row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
+    return row["group_address_style"] if row else None
 
 
 @pytest.mark.asyncio
@@ -42,7 +42,7 @@ async def test_existing_addresses_reveal_the_style(addresses, expected):
     db = Database(":memory:")
     await db.connect()
     try:
-        await db.execute("DELETE FROM app_settings WHERE key='knx.group_address_style'")
+        await db.execute("DELETE FROM knx_project")
         await db.executemany("INSERT INTO knx_group_addresses (address, name) VALUES (?, '')", [(a,) for a in addresses])
         await db.commit()
 
@@ -58,7 +58,7 @@ async def test_migration_keeps_an_already_stored_style():
     db = Database(":memory:")
     await db.connect()
     try:
-        await db.execute_and_commit("UPDATE app_settings SET value='Free' WHERE key='knx.group_address_style'")
+        await db.execute_and_commit("UPDATE knx_project SET group_address_style='Free'")
         await db.execute_and_commit("INSERT INTO knx_group_addresses (address, name) VALUES ('1/234', '')")
 
         await _migration_v55_knx_group_address_style(db.conn)

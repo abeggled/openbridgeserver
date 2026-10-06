@@ -27,14 +27,24 @@ from tests.knxproj_style_variants import (
 pytestmark = pytest.mark.integration
 
 
-async def _knx_instance(client, auth_headers) -> dict:
+@pytest.fixture(scope="module")
+async def knx_instance(client, auth_headers):
+    """One disabled KNX instance for the module, removed with its bindings afterwards.
+
+    Re-imports update the instance's bindings instead of adding datapoints, and
+    removing it keeps the many imported KNX bindings out of later test modules
+    (e.g. the adapter filter of the search).
+    """
     resp = await client.post(
         "/api/v1/adapters/instances",
         json={"adapter_type": "KNX", "name": f"KnxStyle-{uuid.uuid4().hex[:8]}", "config": {}, "enabled": False},
         headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
-    return resp.json()
+    instance = resp.json()
+    yield instance
+    resp = await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)
+    assert resp.status_code == 204, resp.text
 
 
 async def _import(client, auth_headers, style: str, **params) -> dict:
@@ -91,8 +101,8 @@ async def test_search_finds_an_address_in_project_and_internal_notation(style, c
 
 
 @pytest.mark.parametrize("style", STYLES)
-async def test_device_datapoints_link_comm_objects_and_bindings_by_internal_address(style, client, auth_headers):
-    instance = await _knx_instance(client, auth_headers)
+async def test_device_datapoints_link_comm_objects_and_bindings_by_internal_address(style, client, auth_headers, knx_instance):
+    instance = knx_instance
     await _import(client, auth_headers, style, adapter_name=instance["name"])
 
     resp = await client.get(f"/api/v1/knxproj/devices/{DEVICE_PA}/datapoints", headers=auth_headers)
@@ -122,14 +132,14 @@ async def test_devices_by_group_address_rejects_an_invalid_address(client, auth_
 
 
 @pytest.mark.parametrize("style", STYLES)
-async def test_function_links_reach_a_hand_made_binding_in_another_notation(style, client, auth_headers):
+async def test_function_links_reach_a_hand_made_binding_in_another_notation(style, client, auth_headers, knx_instance):
     """Function→GA, import binding upsert and a hand-made binding meet on the internal address.
 
     A binding created by hand in the internal notation must be recognized by a
     later import of a two-level/free project: the import updates it instead of
     creating a second datapoint, and the building's function links it.
     """
-    instance = await _knx_instance(client, auth_headers)
+    instance = knx_instance
     datapoint = await _datapoint(client, auth_headers)
     resp = await client.post(
         f"/api/v1/datapoints/{datapoint['id']}/bindings",
@@ -148,8 +158,8 @@ async def test_function_links_reach_a_hand_made_binding_in_another_notation(styl
 
 
 @pytest.mark.parametrize("notation", STYLES)
-async def test_binding_api_stores_the_internal_notation(notation, client, auth_headers):
-    instance = await _knx_instance(client, auth_headers)
+async def test_binding_api_stores_the_internal_notation(notation, client, auth_headers, knx_instance):
+    instance = knx_instance
     datapoint = await _datapoint(client, auth_headers)
     resp = await client.post(
         f"/api/v1/datapoints/{datapoint['id']}/bindings",
@@ -174,8 +184,8 @@ async def test_binding_api_stores_the_internal_notation(notation, client, auth_h
     assert resp.json()["config"] == {"group_address": INTERNAL[FUNCTION_RAW]}
 
 
-async def test_binding_api_rejects_an_invalid_group_address(client, auth_headers):
-    instance = await _knx_instance(client, auth_headers)
+async def test_binding_api_rejects_an_invalid_group_address(client, auth_headers, knx_instance):
+    instance = knx_instance
     datapoint = await _datapoint(client, auth_headers)
     resp = await client.post(
         f"/api/v1/datapoints/{datapoint['id']}/bindings",
@@ -185,8 +195,8 @@ async def test_binding_api_rejects_an_invalid_group_address(client, auth_headers
     assert resp.status_code == 422, resp.text
 
 
-async def test_binding_api_keeps_an_empty_state_group_address_empty(client, auth_headers):
-    instance = await _knx_instance(client, auth_headers)
+async def test_binding_api_keeps_an_empty_state_group_address_empty(client, auth_headers, knx_instance):
+    instance = knx_instance
     datapoint = await _datapoint(client, auth_headers)
     resp = await client.post(
         f"/api/v1/datapoints/{datapoint['id']}/bindings",

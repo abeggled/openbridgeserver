@@ -54,8 +54,9 @@ There is exactly one implementation; a guardrail test fails on a second definiti
 ## Where the style comes from
 
 The `.knxproj` import reads xknxproject's `info.group_address_style` (`ThreeLevel`, `TwoLevel` or
-`Free`, taken from the `GroupAddressStyle` attribute in `project.xml`) and stores it in
-`app_settings` under `knx.group_address_style`. Migration V55 seeds it for existing installations:
+`Free`, taken from the `GroupAddressStyle` attribute in `project.xml`) and stores it in the
+single-row table `knx_project` (not in `app_settings`: every `app_settings` row ends up in the Logic
+engine's application config). Migration V55 creates and seeds it for existing installations:
 they stored addresses in the project's own notation, so a uniform part count reveals the style
 (3 → `ThreeLevel`, 2 → `TwoLevel`, 1 → `Free`); empty or mixed data falls back to `ThreeLevel`.
 

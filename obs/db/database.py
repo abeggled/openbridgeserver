@@ -737,7 +737,9 @@ async def _migration_v54_hierarchy_tree_root_nodes(conn: aiosqlite.Connection) -
 async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> None:
     """Store the ETS group address style of the imported project (#1296).
 
-    The .knxproj import records the style from now on. Installations that
+    Own single-row table rather than app_settings: every app_settings row ends up
+    in the Logic engine's application config. The .knxproj import records the
+    style from now on. Installations that
     imported before stored their addresses in the project's own notation, so a
     uniform part count reveals it (3 → ThreeLevel, 2 → TwoLevel, 1 → Free);
     empty or mixed data falls back to ThreeLevel, the notation xknx uses.
@@ -753,7 +755,13 @@ async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> 
     style = DEFAULT_GROUP_ADDRESS_STYLE
     if len(slash_counts) == 1:
         style = {2: THREE_LEVEL, 1: TWO_LEVEL, 0: FREE}.get(slash_counts.pop(), DEFAULT_GROUP_ADDRESS_STYLE)
-    await conn.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('knx.group_address_style', ?)", (style,))
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS knx_project (
+               id                  INTEGER PRIMARY KEY CHECK (id = 1),
+               group_address_style TEXT NOT NULL
+           )"""
+    )
+    await conn.execute("INSERT OR IGNORE INTO knx_project (id, group_address_style) VALUES (1, ?)", (style,))
 
 
 _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS = """

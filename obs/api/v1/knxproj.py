@@ -62,9 +62,6 @@ from obs.knxproj.parser import (
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knxproj"])
 
-# app_settings-Key: Gruppenadressstil des zuletzt importierten Projekts (#1296)
-GROUP_ADDRESS_STYLE_KEY = "knx.group_address_style"
-
 
 # ---------------------------------------------------------------------------
 # Response models
@@ -921,9 +918,10 @@ async def import_knxproj_file(
                imported_at     = excluded.imported_at""",
         [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
+    # Gruppenadressstil des zuletzt importierten Projekts (#1296)
     await db.execute(
-        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (GROUP_ADDRESS_STYLE_KEY, group_address_style),
+        "INSERT INTO knx_project (id, group_address_style) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET group_address_style=excluded.group_address_style",
+        (group_address_style,),
     )
     await db.commit()
 
@@ -1513,8 +1511,8 @@ async def list_knx_devices_for_group_address(
 
 
 async def _group_address_style(db: Database) -> str:
-    row = await db.fetchone("SELECT value FROM app_settings WHERE key=?", (GROUP_ADDRESS_STYLE_KEY,))
-    return row["value"] if row else DEFAULT_GROUP_ADDRESS_STYLE
+    row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
+    return row["group_address_style"] if row else DEFAULT_GROUP_ADDRESS_STYLE
 
 
 def _address_in_project_notation(q: str, style: str) -> str | None:
