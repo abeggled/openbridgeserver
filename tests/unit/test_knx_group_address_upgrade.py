@@ -180,7 +180,9 @@ async def test_migration_leaves_what_is_no_group_address_untouched(monkeypatch, 
     internal = INTERNAL[CO_SWITCH_RAW]
     extra = {
         # internal spelling already complete: nothing to fill from the raw row
-        "knx_group_addresses": [{"address": internal, "name": "neu", "description": "neu", "dpt": "DPT1.001", "main_group_name": "neu", "mid_group_name": "neu"}],
+        "knx_group_addresses": [
+            {"address": internal, "name": "neu", "description": "neu", "dpt": "DPT1.001", "main_group_name": "neu", "mid_group_name": "neu"}
+        ],
         # a function link whose address has no row in knx_group_addresses (no foreign key there)
         "knx_function_ga_links": [{"function_id": "F-orphan", "ga_address": "1/1000"}],
         "adapter_bindings": [{**template, "id": binding_id, "config": config} for binding_id, config in odd_configs.items()],
