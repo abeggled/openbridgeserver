@@ -734,6 +734,24 @@ async def _migration_v54_hierarchy_tree_root_nodes(conn: aiosqlite.Connection) -
         )
 
 
+async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> None:
+    """Store the ETS group address style of the imported project (#1296).
+
+    The .knxproj import records the style from now on. Installations that
+    imported before stored their addresses in the project's own notation, so a
+    uniform part count reveals it (3 → ThreeLevel, 2 → TwoLevel, 1 → Free);
+    empty or mixed data falls back to ThreeLevel, the notation xknx uses.
+    """
+    from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, FREE, THREE_LEVEL, TWO_LEVEL
+
+    async with conn.execute("SELECT DISTINCT LENGTH(address) - LENGTH(REPLACE(address, '/', '')) AS slashes FROM knx_group_addresses") as cur:
+        slash_counts = {row["slashes"] for row in await cur.fetchall()}
+    style = DEFAULT_GROUP_ADDRESS_STYLE
+    if len(slash_counts) == 1:
+        style = {2: THREE_LEVEL, 1: TWO_LEVEL, 0: FREE}.get(slash_counts.pop(), DEFAULT_GROUP_ADDRESS_STYLE)
+    await conn.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('knx.group_address_style', ?)", (style,))
+
+
 _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS = """
 CREATE TABLE IF NOT EXISTS hierarchy_logic_graph_links (
     id         TEXT PRIMARY KEY,
@@ -1271,6 +1289,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (52, _migration_v52_external_write),
     (53, _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS),
     (54, _migration_v54_hierarchy_tree_root_nodes),
+    (55, _migration_v55_knx_group_address_style),
 ]
 
 

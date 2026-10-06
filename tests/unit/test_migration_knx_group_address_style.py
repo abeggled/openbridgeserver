@@ -1,0 +1,68 @@
+"""Migration V55 (#1296): the project's group address style is stored.
+
+Existing installations imported their addresses in the project's notation
+(before #1296 nothing normalized them), so the stored addresses reveal the
+style; a fresh or mixed installation falls back to three-level.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from obs.db.database import Database, _migration_v55_knx_group_address_style
+
+
+async def _style(db: Database) -> str | None:
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key='knx.group_address_style'")
+    return row["value"] if row else None
+
+
+@pytest.mark.asyncio
+async def test_fresh_database_defaults_to_three_level():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        assert await _style(db) == "ThreeLevel"
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("addresses", "expected"),
+    [
+        (["1/0/234", "1/0/235"], "ThreeLevel"),
+        (["1/234", "1/235"], "TwoLevel"),
+        (["2282", "2283"], "Free"),
+        (["1/0/234", "1/235"], "ThreeLevel"),  # mixed notation: no single style to infer
+        ([], "ThreeLevel"),
+    ],
+)
+async def test_existing_addresses_reveal_the_style(addresses, expected):
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute("DELETE FROM app_settings WHERE key='knx.group_address_style'")
+        await db.executemany("INSERT INTO knx_group_addresses (address, name) VALUES (?, '')", [(a,) for a in addresses])
+        await db.commit()
+
+        await _migration_v55_knx_group_address_style(db.conn)
+
+        assert await _style(db) == expected
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_migration_keeps_an_already_stored_style():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        await db.execute_and_commit("UPDATE app_settings SET value='Free' WHERE key='knx.group_address_style'")
+        await db.execute_and_commit("INSERT INTO knx_group_addresses (address, name) VALUES ('1/234', '')")
+
+        await _migration_v55_knx_group_address_style(db.conn)
+
+        assert await _style(db) == "Free"
+    finally:
+        await db.disconnect()
