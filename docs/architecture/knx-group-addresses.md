@@ -44,9 +44,11 @@ without any error.
    The datapoint copy reuses the stored, already internal configs.
 4. **Existing data is migrated, not re-imported.** Migration V56 rewrites `knx_group_addresses`
    (primary key), `knx_co_ga_links` (foreign key with `ON DELETE CASCADE`), `knx_function_ga_links`
-   and the KNX binding configs in one transaction. When a raw and an internal spelling of the same
-   address both exist (a re-import with an intermediate version), they are merged: filled fields of
-   the internal row win, empty ones are taken from the raw row. The internal parent row is inserted
+   and the KNX binding configs in one transaction. Several spellings of the same address are merged
+   into one row: an existing internal row wins, otherwise the spelling in the project's notation
+   (style from V55), then the others in sorted order. Empty fields are filled from every spelling;
+   conflicting values are not dropped silently but logged and appended to the description of the
+   surviving row (`[#1296 zusammengeführt mit 01/257: name='…']`). The internal parent row is inserted
    before its links move and the raw one deleted afterwards, so no foreign key is ever violated.
    Texts that are no group address are left untouched. The migration is idempotent; a re-import
    afterwards finds the existing rows and bindings and creates no duplicates.
@@ -58,8 +60,9 @@ without any error.
    an error entry. For data that is already stored, the adapter treats an invalid feedback address
    (`state_group_address`) as absent — the binding keeps writing to its valid command address —
    skips a binding with an invalid command address, and reports both on the adapter card
-   (status code `knxInvalidGroupAddresses`). `try_normalize_ga()` returns `None` and is only for
-   such tolerant readers.
+   (status code `knxInvalidGroupAddresses`). The warning stays while the problem exists: a later
+   "ok" status (reconnect, tunnel pool stable) shows it again instead of clearing it.
+   `try_normalize_ga()` returns `None` and is only for such tolerant readers.
 6. **Display goes through `format_ga(address, style)`** — not implemented in the Admin GUI yet.
    The API delivers internal addresses plus the project's `group_address_style`; the GUI still
    shows the internal notation. The group-address search already accepts the project's notation.
@@ -79,9 +82,10 @@ another name is not detectable that way and is left to review.
 The `.knxproj` import reads xknxproject's `info.group_address_style` (`ThreeLevel`, `TwoLevel` or
 `Free`, taken from the `GroupAddressStyle` attribute in `project.xml`) and stores it in the
 single-row table `knx_project` (not in `app_settings`: every `app_settings` row ends up in the Logic
-engine's application config). Migration V55 creates the table; for existing installations a
-uniform part count of the stored addresses reveals the style (3 → `ThreeLevel`, 2 → `TwoLevel`,
-1 → `Free`), empty or mixed data falls back to `ThreeLevel`. V55 runs before V56 rewrites the
+engine's application config). Migration V55 creates the table; for existing installations the
+part count of the stored valid addresses reveals the style by majority (3 → `ThreeLevel`,
+2 → `TwoLevel`, 1 → `Free`); rows that are no group address do not count, no valid rows or a tie
+fall back to `ThreeLevel`. V55 runs before V56 rewrites the
 addresses. The factory reset clears it; the JSON config export does not carry it (a restored
 instance shows `ThreeLevel` until the next import).
 
@@ -100,9 +104,13 @@ Three layers, from strongest to weakest:
    for all 65536 addresses. Binding configs are JSON, may still hold legacy invalid addresses and are
    rewritten by unrelated edits, so they are not trigger-protected.
 2. **Data invariant** (`tests/knx_group_address_invariant.py`). Integration and upgrade tests drive
-   every entrance with two-level and free inputs and then scan every storage place — the three
-   `knx_*` columns and both GA fields of every KNX binding — for non-internal texts. This catches a
-   raw store through any module, field name or SQL statement.
+   every entrance with two-level and free inputs and then scan every storage place for non-internal
+   texts: the three `knx_*` columns, both GA fields of every KNX binding, and the binding snapshot of
+   new ringbuffer entries (it also feeds `ringbuffer_metadata_bindings.group_address`). The list was
+   taken from all schemas and every persisted JSON document; filter sets store device PAs, logic
+   graphs, Visu nodes and settings hold no group addresses. A new storage place must be added there,
+   otherwise the invariant does not see it. Separate tests prove that the triggers of layer 1 abort
+   raw inserts and updates on all three columns.
 3. **AST guardrail** (`tests/unit/test_knx_group_address_architecture.py`), limited to patterns it
    recognizes reliably: `str(<x>.destination_address)`, `.get`/`[...]` of `group_address` or
    `state_group_address`, and GA route parameters, used as a key or in a comparison (also one call
