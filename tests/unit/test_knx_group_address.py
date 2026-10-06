@@ -116,3 +116,35 @@ def test_styles_match_the_xknxproject_vocabulary():
     from xknxproject.models import GroupAddressStyle
 
     assert set(GROUP_ADDRESS_STYLES) == {style.value for style in GroupAddressStyle}
+
+
+def test_sql_predicate_agrees_with_normalize_ga():
+    """The database triggers use sql_is_internal_ga(); it must accept exactly the internal texts."""
+    import sqlite3
+
+    from obs.adapters.knx.group_address import sql_is_internal_ga
+
+    conn = sqlite3.connect(":memory:")
+    predicate = sql_is_internal_ga("v")
+    internal = [normalize_ga(str(raw)) for raw in range(65536)]
+    conn.execute("CREATE TABLE t (v TEXT)")
+    conn.executemany("INSERT INTO t VALUES (?)", [(v,) for v in internal])
+    rejected_samples = [
+        "1/234",
+        "2282",
+        "01/0/1",
+        "1/00/1",
+        "1/0/01",
+        "32/0/0",
+        "1/8/0",
+        "1/0/256",
+        " 1/0/1",
+        "1/0/1 ",
+        "",
+        "a/b/c",
+        "1/0/1/0",
+        "-1/0/0",
+    ]
+    conn.executemany("INSERT INTO t VALUES (?)", [(v,) for v in rejected_samples])
+    accepted = {row[0] for row in conn.execute(f"SELECT v FROM t WHERE {predicate}")}
+    assert accepted == set(internal)

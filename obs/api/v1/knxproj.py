@@ -1,7 +1,6 @@
 """KNX Project Import API
 
 POST /api/v1/knxproj/import          — .knxproj hochladen, GAs importieren
-POST /api/v1/knxproj/import-csv      — ETS GA-CSV hochladen (optional: DataPoints+Bindings anlegen)
 GET  /api/v1/knxproj/group-addresses — importierte GAs abfragen (Suche)
 DELETE /api/v1/knxproj/group-addresses — alle GAs löschen
 """
@@ -51,7 +50,6 @@ from obs.api.v1.services.knx_traceability import (
 )
 from obs.core.system_datapoints import is_system_datapoint
 from obs.db.database import Database, get_db
-from obs.knxproj.csv_parser import parse_ga_csv
 from obs.knxproj.parser import (
     parse_knxproj_devices,
     parse_knxproj_locations,
@@ -1084,111 +1082,6 @@ async def import_knxproj_file(
                 "group_addresses": sorted(record.address for record in records),
                 "hierarchy_modes": sorted(requested_hierarchy_modes),
             },
-        )
-    return result
-
-
-@router.post(
-    "/import-csv",
-    response_model=ImportResult,
-    dependencies=[Depends(contract_audit("POST", "/api/v1/knxproj/import-csv"))],
-)
-async def import_ga_csv_file(
-    file: UploadFile = File(...),
-    request: Request = None,
-    adapter_name: str | None = Query(
-        None,
-        description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
-    ),
-    direction: str = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
-    _user: str = Depends(get_admin_user),
-    db: Database = Depends(get_db),
-) -> ImportResult:
-    """ETS GA-CSV hochladen.
-
-    Ohne adapter_name: nur knx_group_addresses Tabelle befüllen (schnelle Vorschau).
-    Mit adapter_name:  zusätzlich DataPoints + KNX-Bindings in einer Transaktion anlegen
-                       (Bulk-Import, deutlich schneller als Einzelrequests).
-
-    Bestehende DataPoints/Bindings für dieselbe Gruppenadresse werden aktualisiert.
-    """
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Nur .csv Dateien werden akzeptiert",
-        )
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Datei ist leer")
-
-    try:
-        records = parse_ga_csv(content)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
-    except Exception as e:
-        logger.exception("Unerwarteter Fehler beim Parsen der GA-CSV-Datei")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Unerwarteter Fehler beim Parsen: {e}",
-        )
-
-    if not records:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Keine Gruppenadressen gefunden. Bitte prüfe ob du den ETS GA-Export als CSV verwendet hast.",
-        )
-
-    now = datetime.now(UTC).isoformat()
-
-    # GA-Tabelle immer befüllen (für Vorschau / manuelle Bindung im GUI)
-    await db.executemany(
-        """INSERT INTO knx_group_addresses
-               (address, name, description, dpt, main_group_name, mid_group_name, imported_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(address) DO UPDATE SET
-               name            = excluded.name,
-               description     = excluded.description,
-               dpt             = excluded.dpt,
-               main_group_name = excluded.main_group_name,
-               mid_group_name  = excluded.mid_group_name,
-               imported_at     = excluded.imported_at""",
-        [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
-    )
-    await db.commit()
-
-    # Ohne Adapter: nur GA-Tabelle → fertig
-    if not adapter_name:
-        result = ImportResult(
-            imported=len(records),
-            message=f"{len(records)} Gruppenadressen importiert (ohne DataPoints — adapter_name fehlt)",
-        )
-        if request is not None:
-            set_contract_audit_summary(
-                request,
-                resource_count=result.imported,
-                payload={"group_addresses": sorted(record.address for record in records)},
-            )
-        return result
-
-    # Mit Adapter: DataPoints + Bindings bulk anlegen
-    created, updated, skipped_system = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
-
-    msg = f"{created} DataPoints neu erstellt, {updated} aktualisiert"
-    if skipped_system:
-        msg += f", {skipped_system} übersprungen (bereits von einem System-Datenpunkt bedient)"
-    result = ImportResult(
-        imported=created + updated,
-        created=created,
-        updated=updated,
-        skipped_system=skipped_system,
-        message=msg,
-    )
-    if request is not None:
-        set_contract_audit_summary(
-            request,
-            resource_count=result.imported,
-            payload={"group_addresses": sorted(record.address for record in records)},
         )
     return result
 

@@ -1315,6 +1315,7 @@
       "knxTunnelOverload": "KNX tunnel slot likely occupied by another client — gateway pool overloaded.",
       "knxTunnelStable": "Tunnel pool stable again.",
       "invalidBindingsSkipped": "{count} invalid binding(s) skipped ({examples})",
+      "knxInvalidGroupAddresses": "Invalid KNX group addresses in {count} binding(s) ({examples})",
       "messageProviderFailures": "MESSAGE provider failures: {count} target(s)",
       "messageArchiveWriteFailed": "MESSAGE archive write failed",
       "messageSent": "MESSAGE sent",

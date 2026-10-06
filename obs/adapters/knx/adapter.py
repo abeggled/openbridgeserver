@@ -135,6 +135,10 @@ class KnxAdapterConfig(BaseModel):
     tunnel_overload_window_s: int = Field(default=300, ge=1)
 
 
+# Adapter-Statuscode (i18n adapters.statusDetail.*) für Bindungen mit ungültigen GAs (#1296)
+INVALID_GROUP_ADDRESSES_CODE = "knxInvalidGroupAddresses"
+
+
 class KnxBindingConfig(BaseModel):
     group_address: str  # z.B. "1/2/3"
     dpt_id: str = "DPT1.001"
@@ -159,8 +163,10 @@ class KnxBindingConfig(BaseModel):
     @field_validator("state_group_address")
     @classmethod
     def _normalize_state_group_address(cls, value: str | None) -> str | None:
-        # Leer = keine Rückmelde-GA (so behandelt der Adapter es seit jeher).
-        return normalize_ga(value) if value and value.strip() else None
+        # Leer oder ungültig = keine Rückmelde-GA: eine kaputte Rückmelde-GA darf die
+        # gültige Befehls-GA nicht mitreißen. Sichtbar macht das
+        # KnxAdapter._report_invalid_group_addresses; die Bindungs-API weist sie ab.
+        return try_normalize_ga(value)
 
 
 def _binding_group_addresses(config: dict) -> tuple[str | None, str | None]:
@@ -747,6 +753,7 @@ class KnxAdapter(AdapterBase):
             len(self._bindings),
             list(self._ga_source_map.keys()),
         )
+        await self._report_invalid_group_addresses()
 
         self._sync_read_pollers(read_pollers)
 
@@ -791,6 +798,35 @@ class KnxAdapter(AdapterBase):
             logger.info("KNX: sniffer registered for GAs: %s", list(self._ga_source_map.keys()))
         except Exception:
             logger.exception("KNX: failed to create/register sniffer device")
+
+    async def _report_invalid_group_addresses(self) -> None:
+        """Show broken group addresses on the adapter card, not only in the log (#1296).
+
+        A broken command GA disables its binding; a broken feedback GA is ignored
+        and the binding keeps working with its command GA.
+        """
+        issues: list[str] = []
+        for binding in self._bindings:
+            config = binding.config or {}
+            broken = [
+                f"{key}={config.get(key)!r}"
+                for key in ("group_address", "state_group_address")
+                if (key == "group_address" or str(config.get(key) or "").strip()) and try_normalize_ga(config.get(key)) is None
+            ]
+            if broken:
+                issues.append(f"{binding.id}: {', '.join(broken)}")
+        if issues:
+            examples = "; ".join(issues[:3]) + (f"; +{len(issues) - 3} more" if len(issues) > 3 else "")
+            logger.warning("KNX: %d binding(s) with invalid group addresses: %s", len(issues), examples)
+            await self._publish_status(
+                self._connected,
+                f"Invalid KNX group addresses in {len(issues)} binding(s) ({examples})",
+                severity="warning",
+                code=INVALID_GROUP_ADDRESSES_CODE,
+                params={"count": len(issues), "examples": examples},
+            )
+        elif self.last_detail_code == INVALID_GROUP_ADDRESSES_CODE:
+            await self._publish_status(self._connected, "", severity="ok")
 
     # ------------------------------------------------------------------
     # Inbound telegram handler (called by sniffer.process)

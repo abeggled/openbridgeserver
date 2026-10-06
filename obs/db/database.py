@@ -764,6 +764,112 @@ async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> 
     await conn.execute("INSERT OR IGNORE INTO knx_project (id, group_address_style) VALUES (1, ?)", (style,))
 
 
+_KNX_GA_COLUMNS = (
+    ("knx_group_addresses", "address"),
+    ("knx_co_ga_links", "ga_address"),
+    ("knx_function_ga_links", "ga_address"),
+)
+
+
+async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection) -> None:
+    """Move every stored group address text to the internal notation (#1296).
+
+    Before #1296 the .knxproj import stored addresses in the project's notation
+    (``1/234``, ``2282``), and the read paths now compare internal texts. In one
+    transaction this rewrites ``knx_group_addresses`` (primary key),
+    ``knx_co_ga_links`` (foreign key, ``ON DELETE CASCADE``),
+    ``knx_function_ga_links`` and the KNX binding configs. A raw row whose
+    internal spelling already exists (a reimport with an intermediate version)
+    is merged into it: filled fields of the internal row win, empty ones are
+    taken from the raw row. The parent row is inserted before its children
+    move and deleted after, so no foreign key is ever violated. Texts that are
+    no group address at all are left untouched. Idempotent.
+
+    Afterwards triggers reject any non-internal text in the three ``knx_*``
+    columns, so a store that bypassed ``normalize_ga`` fails loudly. Binding
+    configs are JSON and may carry legacy invalid addresses; they are checked
+    by the data-invariant tests instead.
+    """
+    import json as _json
+
+    from obs.adapters.knx.group_address import sql_is_internal_ga, try_normalize_ga
+
+    async def _rows(sql: str, params: tuple = ()) -> list[Any]:
+        async with conn.execute(sql, params) as cur:
+            return list(await cur.fetchall())
+
+    if not await _rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'"):
+        return
+    ga_columns = [row["name"] for row in await _rows("PRAGMA table_info(knx_group_addresses)")]
+    existing = {row["address"]: dict(row) for row in await _rows("SELECT * FROM knx_group_addresses")}
+    for raw, row in existing.items():
+        internal = try_normalize_ga(raw)
+        if internal is None or internal == raw:
+            continue
+        targets = await _rows("SELECT * FROM knx_group_addresses WHERE address = ?", (internal,))
+        if not targets:
+            values = {**row, "address": internal}
+            await conn.execute(
+                f"INSERT INTO knx_group_addresses ({','.join(ga_columns)}) VALUES ({','.join('?' * len(ga_columns))})",
+                [values[column] for column in ga_columns],
+            )
+        else:
+            target = targets[0]
+            fill = {
+                column: row[column] for column in ga_columns if column != "address" and target[column] in (None, "") and row[column] not in (None, "")
+            }
+            if fill:
+                await conn.execute(
+                    f"UPDATE knx_group_addresses SET {', '.join(f'{column} = ?' for column in fill)} WHERE address = ?",
+                    [*fill.values(), internal],
+                )
+        for table, owner in (("knx_co_ga_links", "comm_object_id"), ("knx_function_ga_links", "function_id")):
+            await conn.execute(
+                f"INSERT OR IGNORE INTO {table} ({owner}, ga_address) SELECT {owner}, ? FROM {table} WHERE ga_address = ?",
+                (internal, raw),
+            )
+            await conn.execute(f"DELETE FROM {table} WHERE ga_address = ?", (raw,))
+        await conn.execute("DELETE FROM knx_group_addresses WHERE address = ?", (raw,))
+
+    # Function links have no foreign key and may name addresses missing from knx_group_addresses.
+    for row in await _rows("SELECT function_id, ga_address FROM knx_function_ga_links"):
+        internal = try_normalize_ga(row["ga_address"])
+        if internal is not None and internal != row["ga_address"]:
+            await conn.execute(
+                "INSERT OR IGNORE INTO knx_function_ga_links (function_id, ga_address) VALUES (?, ?)",
+                (row["function_id"], internal),
+            )
+            await conn.execute(
+                "DELETE FROM knx_function_ga_links WHERE function_id = ? AND ga_address = ?",
+                (row["function_id"], row["ga_address"]),
+            )
+
+    for row in await _rows("SELECT id, config FROM adapter_bindings WHERE UPPER(adapter_type) = 'KNX'"):
+        try:
+            config = _json.loads(row["config"] or "{}")
+        except ValueError:
+            continue
+        if not isinstance(config, dict):
+            continue
+        changed = False
+        for key in ("group_address", "state_group_address"):
+            internal = try_normalize_ga(config.get(key))
+            if internal is not None and internal != config[key]:
+                config[key] = internal
+                changed = True
+        if changed:
+            await conn.execute("UPDATE adapter_bindings SET config = ? WHERE id = ?", (_json.dumps(config), row["id"]))
+
+    for table, column in _KNX_GA_COLUMNS:
+        for event in ("INSERT", f"UPDATE OF {column}"):
+            name = f"trg_{table}_{column}_internal_{event.split()[0].lower()}"
+            await conn.execute(
+                f"""CREATE TRIGGER IF NOT EXISTS {name} BEFORE {event} ON {table}
+                    WHEN NOT {sql_is_internal_ga("NEW." + column)}
+                    BEGIN SELECT RAISE(ABORT, '{table}.{column}: Gruppenadresse nicht in interner Schreibweise (#1296)'); END"""
+            )
+
+
 _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS = """
 CREATE TABLE IF NOT EXISTS hierarchy_logic_graph_links (
     id         TEXT PRIMARY KEY,
@@ -1302,6 +1408,7 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (53, _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS),
     (54, _migration_v54_hierarchy_tree_root_nodes),
     (55, _migration_v55_knx_group_address_style),
+    (56, _migration_v56_knx_internal_group_addresses),
 ]
 
 

@@ -83,3 +83,21 @@ def format_ga(address: str, style: str) -> str:
     if style == TWO_LEVEL:
         return f"{raw >> 11}/{raw & 0x7FF}"
     return str(raw)
+
+
+# Spellings of each part in the internal notation: no leading zeros, within range.
+_SQL_MAIN = ("[0-9]", "[1-2][0-9]", "3[0-1]")
+_SQL_MIDDLE = ("[0-7]",)
+_SQL_SUB = ("[0-9]", "[1-9][0-9]", "1[0-9][0-9]", "2[0-4][0-9]", "25[0-5]")
+
+
+def sql_is_internal_ga(column: str) -> str:
+    """SQLite expression: true when ``column`` holds an internal group address text.
+
+    Used by the database triggers that reject raw texts in the ``knx_*`` tables
+    (migration V56). Plain SQL (GLOB) on purpose, so the triggers also work for
+    tools that open the database without OBS' Python functions. A test checks it
+    against :func:`normalize_ga` for all 65536 addresses.
+    """
+    patterns = [f"{main}/{middle}/{sub}" for main in _SQL_MAIN for middle in _SQL_MIDDLE for sub in _SQL_SUB]
+    return "(" + " OR ".join(f"{column} GLOB '{pattern}'" for pattern in patterns) + ")"

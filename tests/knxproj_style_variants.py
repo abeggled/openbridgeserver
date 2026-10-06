@@ -31,10 +31,11 @@ DEVICE_PA = "1.1.5"
 CO_SWITCH_RAW = 2305  # 1/1/1  "Licht EG Schalten"
 CO_STATUS_RAW = 2306  # 1/1/2  "Licht OG Schalten"
 FUNCTION_RAW = 2307  # 1/1/3  "Licht Keller Schalten"
-INTERNAL = {CO_SWITCH_RAW: "1/1/1", CO_STATUS_RAW: "1/1/2", FUNCTION_RAW: "1/1/3"}
+STATE_RAW = 2308  # 1/1/4  "Licht Garten Schalten", linked by nothing
+INTERNAL = {CO_SWITCH_RAW: "1/1/1", CO_STATUS_RAW: "1/1/2", FUNCTION_RAW: "1/1/3", STATE_RAW: "1/1/4"}
 NOTATION = {
     "ThreeLevel": dict(INTERNAL),
-    "TwoLevel": {CO_SWITCH_RAW: "1/257", CO_STATUS_RAW: "1/258", FUNCTION_RAW: "1/259"},
+    "TwoLevel": {CO_SWITCH_RAW: "1/257", CO_STATUS_RAW: "1/258", FUNCTION_RAW: "1/259", STATE_RAW: "1/260"},
     "Free": {raw: str(raw) for raw in INTERNAL},
 }
 

@@ -20,6 +20,7 @@ from tests.knxproj_style_variants import (
     FUNCTION_RAW,
     INTERNAL,
     NOTATION,
+    STATE_RAW,
     STYLES,
     knxproj_in_style,
 )
@@ -209,3 +210,190 @@ async def test_binding_api_keeps_an_empty_state_group_address_empty(client, auth
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["config"] == {"group_address": "1/0/234", "state_group_address": " "}
+
+
+async def test_csv_import_endpoint_is_removed(client, auth_headers):
+    """P4: the CSV import was superseded by the .knxproj import (#67) and only accepted three-level rows."""
+    resp = await client.post(
+        "/api/v1/knxproj/import-csv",
+        files={"file": ("ga.csv", b'"Group name";"Address"\n"Spots";"1/234"\n', "text/csv")},
+        headers=auth_headers,
+    )
+    assert resp.status_code in (404, 405), resp.text
+
+
+async def _insert_raw_binding(datapoint_id: str, config: dict) -> None:
+    """A binding stored without passing any entrance, as data from before #1296 or a foreign tool.
+
+    Without adapter instance, so it stays out of the per-instance assertions of other tests.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from obs.db.database import get_db
+
+    now = datetime.now(UTC).isoformat()
+    await get_db().execute_and_commit(
+        """INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)
+           VALUES (?, ?, 'KNX', NULL, 'SOURCE', ?, 1, ?, ?)""",
+        (str(uuid.uuid4()), datapoint_id, json.dumps(config), now, now),
+    )
+
+
+@pytest.mark.parametrize("style", STYLES)
+async def test_traceability_per_style(style, client, auth_headers, knx_instance):
+    """GA→devices, device→datapoints and the datapoint's KNX context after an import in each style.
+
+    The second datapoint carries its binding in the project's notation without
+    having passed an entrance; the KNX context still resolves it (name, device).
+    """
+    await _import(client, auth_headers, style, adapter_name=knx_instance["name"])
+    switch = INTERNAL[CO_SWITCH_RAW]
+
+    for notation in STYLES:
+        resp = await client.get(f"/api/v1/knxproj/group-addresses/{NOTATION[notation][CO_SWITCH_RAW]}/devices", headers=auth_headers)
+        assert [device["pa"] for device in resp.json()["items"]] == [DEVICE_PA], notation
+
+    resp = await client.get(f"/api/v1/knxproj/devices/{DEVICE_PA}/datapoints", headers=auth_headers)
+    imported = [dp for dp in resp.json()["datapoints"] if dp["instance_name"] == knx_instance["name"] and dp["ga_address"] == switch]
+    assert len(imported) == 1
+
+    raw_dp = await _datapoint(client, auth_headers)
+    await _insert_raw_binding(raw_dp["id"], {"group_address": NOTATION[style][CO_SWITCH_RAW]})
+    for dp_id in (imported[0]["id"], raw_dp["id"]):
+        resp = await client.get(f"/api/v1/datapoints/{dp_id}/knx-context", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        [ga] = resp.json()["group_addresses"]
+        assert (ga["address"], ga["name"], [device["pa"] for device in ga["devices"]]) == (switch, "Licht EG Schalten", [DEVICE_PA])
+
+
+# One address per notation, so an earlier parameter cannot leave the expected row behind.
+CONFIG_GA = {"ThreeLevel": ("1/4/77", "1/4/77"), "TwoLevel": ("1/1102", "1/4/78"), "Free": ("3151", "1/4/79")}
+
+
+@pytest.mark.parametrize("notation", STYLES)
+async def test_config_import_stores_internal_addresses(notation, client, auth_headers, knx_instance, clean_group_addresses):
+    datapoint_id = str(uuid.uuid4())
+    resp = await client.post(
+        "/api/v1/config/import",
+        json={
+            "obs_version": "5",
+            "exported_at": "2026-01-01T00:00:00",
+            "datapoints": [{"id": datapoint_id, "name": f"CfgDP-{notation}", "data_type": "BOOLEAN", "unit": None, "tags": [], "mqtt_alias": None}],
+            "bindings": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "datapoint_id": datapoint_id,
+                    "adapter_type": "KNX",
+                    "adapter_instance_id": knx_instance["id"],
+                    "direction": "SOURCE",
+                    "config": {"group_address": CONFIG_GA[notation][0]},
+                    "enabled": True,
+                }
+            ],
+            "knx_group_addresses": [{"address": CONFIG_GA[notation][0], "name": "CfgGA", "description": "", "dpt": None}],
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["errors"] == []
+
+    resp = await client.get(f"/api/v1/datapoints/{datapoint_id}/knx-context", headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    assert [(ga["address"], ga["name"]) for ga in resp.json()["group_addresses"]] == [(CONFIG_GA[notation][1], "CfgGA")]
+
+
+@pytest.mark.parametrize("binding_notation", STYLES)
+async def test_ringbuffer_group_address_filter_accepts_every_notation(binding_notation, client, auth_headers, knx_instance):
+    from tests.integration.test_ringbuffer_filters import _query_ringbuffer_v2, _write_value
+
+    datapoint = await _datapoint(client, auth_headers)
+    resp = await client.post(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings",
+        json={"adapter_instance_id": knx_instance["id"], "direction": "SOURCE", "config": {"group_address": NOTATION[binding_notation][STATE_RAW]}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    await _write_value(client, auth_headers, datapoint["id"], True)
+
+    for filter_notation in STYLES:
+        rows = await _query_ringbuffer_v2(
+            client,
+            auth_headers,
+            {"filters": {"metadata": {"group_addresses_any_of": [NOTATION[filter_notation][STATE_RAW]]}}},
+        )
+        assert datapoint["id"] in {row["datapoint_id"] for row in rows}, filter_notation
+
+
+@pytest.mark.parametrize("style", ["TwoLevel", "Free"])
+async def test_every_entrance_stores_only_internal_addresses(style, client, auth_headers):
+    """Data invariant: drive every entrance with a project-notation input, then scan all GA storage.
+
+    Catches a raw store through any module, field name or SQL statement; the
+    ``knx_*`` tables additionally reject raw texts through database triggers (V56).
+    """
+    from obs.db.database import get_db
+    from tests.knx_group_address_invariant import non_internal_group_addresses
+
+    db = get_db()
+    before = {row["id"] for row in await db.fetchall("SELECT id FROM adapter_bindings")}
+    resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={"adapter_type": "KNX", "name": f"KnxInvariant-{uuid.uuid4().hex[:8]}", "config": {}, "enabled": False},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    knx_instance = resp.json()
+
+    await _import(client, auth_headers, style, adapter_name=knx_instance["name"], hierarchy_modes="buildings,trades")
+    datapoint = await _datapoint(client, auth_headers)
+    resp = await client.post(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings",
+        json={
+            "adapter_instance_id": knx_instance["id"],
+            "direction": "BOTH",
+            "config": {"group_address": NOTATION[style][STATE_RAW], "state_group_address": NOTATION[style][FUNCTION_RAW]},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    binding_id = resp.json()["id"]
+    resp = await client.patch(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings/{binding_id}",
+        json={"config": {"group_address": NOTATION[style][CO_STATUS_RAW]}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(f"/api/v1/datapoints/{datapoint['id']}/duplicate", json={"name": "Invariant copy"}, headers=auth_headers)
+    assert resp.status_code == 201, resp.text
+    imported_dp = str(uuid.uuid4())
+    resp = await client.post(
+        "/api/v1/config/import",
+        json={
+            "obs_version": "5",
+            "exported_at": "2026-01-01T00:00:00",
+            "datapoints": [{"id": imported_dp, "name": "Invariant", "data_type": "BOOLEAN", "unit": None, "tags": [], "mqtt_alias": None}],
+            "bindings": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "datapoint_id": imported_dp,
+                    "adapter_type": "KNX",
+                    "adapter_instance_id": knx_instance["id"],
+                    "direction": "BOTH",
+                    "config": {"group_address": NOTATION[style][CO_SWITCH_RAW], "state_group_address": NOTATION[style][STATE_RAW]},
+                    "enabled": True,
+                }
+            ],
+            "knx_group_addresses": [{"address": NOTATION[style][STATE_RAW], "name": "Invariant", "description": "", "dpt": None}],
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["errors"] == []
+
+    created = {row["id"] for row in await db.fetchall("SELECT id FROM adapter_bindings")} - before
+    assert len(created) >= 500 + 3
+    try:
+        assert await non_internal_group_addresses(db, binding_ids=created) == []
+    finally:
+        await client.delete(f"/api/v1/adapters/instances/{knx_instance['id']}", headers=auth_headers)

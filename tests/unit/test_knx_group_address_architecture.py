@@ -97,7 +97,16 @@ def _is_raw(node: ast.AST | None, tainted: frozenset[str]) -> bool:
         return any(_is_raw(value, tainted) for value in node.values)
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
         return any(_is_raw(element, tainted) for element in node.elts)
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return _is_raw(node.elt, tainted)
     return False
+
+
+def _is_constant(node: ast.AST) -> bool:
+    """Literal like ``""``/``None`` or a display of literals: an emptiness check, not an address comparison."""
+    if isinstance(node, ast.Constant):
+        return True
+    return isinstance(node, (ast.Tuple, ast.List, ast.Set)) and all(isinstance(element, ast.Constant) for element in node.elts)
 
 
 def _is_route(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -151,7 +160,12 @@ class _Module:
 def _is_sink(node: ast.AST, tainted: frozenset[str]) -> bool:
     """Whether ``node`` uses a raw group address text as a key or in a comparison."""
     if isinstance(node, ast.Compare):
-        return any(isinstance(op, COMPARE_OPS) for op in node.ops) and any(_is_raw(operand, tainted) for operand in (node.left, *node.comparators))
+        operands = (node.left, *node.comparators)
+        return (
+            any(isinstance(op, COMPARE_OPS) for op in node.ops)
+            and not any(_is_constant(operand) for operand in operands)
+            and any(_is_raw(operand, tainted) for operand in operands)
+        )
     if isinstance(node, ast.Subscript):
         return _is_raw(node.slice, tainted)
     if isinstance(node, ast.Dict):
@@ -229,7 +243,7 @@ def find_unnormalized_model_fields(source: str, path: str = "<snippet>") -> list
         for stmt in node.body:
             if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            calls_normalizer = any(isinstance(call, ast.Call) and _call_name(call) == "normalize_ga" for call in ast.walk(stmt))
+            calls_normalizer = any(isinstance(call, ast.Call) and _call_name(call) in ("normalize_ga", "try_normalize_ga") for call in ast.walk(stmt))
             for decorator in stmt.decorator_list:
                 if isinstance(decorator, ast.Call) and _call_name(decorator) == "field_validator" and calls_normalizer:
                     normalized.update(arg.value for arg in decorator.args if isinstance(arg, ast.Constant))
@@ -330,6 +344,12 @@ def test_there_is_a_single_normalization():
         def index(config, dp):
             return {config.get("group_address"): dp}
         """,
+        # list built from raw texts, then a membership test
+        """
+        def bound(configs, ga):
+            gas = [c.get("group_address") for c in configs]
+            return ga in gas
+        """,
     ],
 )
 def test_detects_raw_group_address_use(snippet):
@@ -376,6 +396,11 @@ def test_detects_raw_group_address_use(snippet):
         """
         def same(telegram, other):
             return telegram.destination_address == other
+        """,
+        # emptiness checks against literals
+        """
+        def missing(config):
+            return config.get("group_address") == "" or config.get("state_group_address") not in (None, "")
         """,
     ],
 )

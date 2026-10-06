@@ -1315,6 +1315,7 @@
       "knxTunnelOverload": "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet.",
       "knxTunnelStable": "Tunnel-Pool wieder stabil.",
       "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
+      "knxInvalidGroupAddresses": "Ungültige KNX-Gruppenadressen in {count} Verknüpfung(en) ({examples})",
       "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
       "messageArchiveWriteFailed": "Meldungsarchiv konnte nicht geschrieben werden",
       "messageSent": "MESSAGE gesendet",

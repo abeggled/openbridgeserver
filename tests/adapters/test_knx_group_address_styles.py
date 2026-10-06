@@ -148,3 +148,36 @@ async def test_state_feedback_after_own_write_is_recognized_as_confirmation(styl
     events = _value_events(mock_bus)
     assert [(event.datapoint_id, event.value) for event in events] == [(binding.datapoint_id, True)]
     assert events[0].suppress_write_propagation is True, "state feedback of the own write must count as confirmation"
+
+
+async def test_broken_state_address_does_not_disable_writes(connected_adapter, mock_bus):
+    """A broken feedback GA is treated as absent: the valid command GA keeps writing."""
+    binding = make_binding({"group_address": "1/234", "state_group_address": "1/2/x", "dpt_id": "DPT1.001"}, direction="BOTH")
+    binding.enabled = True
+    await connected_adapter.reload_bindings([binding])
+
+    assert await connected_adapter.write_with_context(binding, True, logical_value=True) is True
+    sent = connected_adapter._xknx.telegrams.get_nowait()
+    assert sent.destination_address == GroupAddress(COMMAND_RAW)
+
+    await connected_adapter._xknx.telegram_queue.process_telegram_incoming(_incoming(COMMAND_RAW, GroupValueWrite(DPTBinary(0))))
+    await _settle()
+    assert [(event.datapoint_id, event.value) for event in _value_events(mock_bus)] == [(binding.datapoint_id, False)]
+
+
+async def test_broken_group_addresses_are_reported_on_the_adapter_status(connected_adapter, mock_bus):
+    """Not only in the log: the adapter card shows a warning naming the bindings (#1296)."""
+    broken_state = make_binding({"group_address": "1/234", "state_group_address": "1/2/x", "dpt_id": "DPT1.001"}, direction="BOTH")
+    broken_command = make_binding({"group_address": "32/0/0", "dpt_id": "DPT1.001"})
+    healthy = make_binding({"group_address": "1/235", "dpt_id": "DPT1.001"})
+
+    await connected_adapter.reload_bindings([broken_state, broken_command, healthy])
+    assert connected_adapter.last_severity == "warning"
+    assert connected_adapter.last_detail_code == "knxInvalidGroupAddresses"
+    assert connected_adapter.last_detail_params["count"] == 2
+    assert str(broken_state.id) in connected_adapter.last_detail_params["examples"]
+    assert str(broken_command.id) in connected_adapter.last_detail_params["examples"]
+
+    await connected_adapter.reload_bindings([healthy])
+    assert connected_adapter.last_severity == "ok"
+    assert connected_adapter.last_detail_code != "knxInvalidGroupAddresses"

@@ -25,6 +25,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Re
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from obs.adapters.knx.group_address import normalize_ga
 from obs.api.audit import AuditLogWriter, AuditOutcome, audit_payload_sha256, build_audit_context
 from obs.api.auth import get_admin_user
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
@@ -33,6 +34,7 @@ from obs.api.v1.bindings import (
     _ensure_webhook_slug_free,
     _ensure_webhook_target_allowed,
     _json_config,
+    _normalize_knx_group_addresses,
     _validate_adapter_binding,
     _webhook_config_with_token,
 )
@@ -970,7 +972,7 @@ async def import_config(
             # An existing binding keeps its DataPoint (the UPDATE below never moves it).
             effective_dp_id = existing_binding["datapoint_id"] if existing_binding is not None else b_data.datapoint_id
             _ensure_system_datapoint_binding_allowed(effective_dp_id, effective_adapter_type, b_data.direction)
-            stored_config = b_data.config
+            stored_config = _normalize_knx_group_addresses(effective_adapter_type, b_data.config)
             if effective_adapter_type == "WEBHOOK":
                 # Store the config the way the create route would: slug trimmed and
                 # lower-case (so a later create of `bell` cannot collide with an
@@ -1070,7 +1072,7 @@ async def import_config(
                    VALUES (?,?,?,?)
                    ON CONFLICT(address) DO UPDATE
                    SET name=excluded.name, description=excluded.description, dpt=excluded.dpt""",
-                (ga.address, ga.name, ga.description, ga.dpt),
+                (normalize_ga(ga.address), ga.name, ga.description, ga.dpt),
             )
             result.knx_group_addresses_upserted += 1
         except Exception as exc:

@@ -9,7 +9,18 @@ from __future__ import annotations
 
 import pytest
 
+from obs.db import database
 from obs.db.database import Database, _migration_v55_knx_group_address_style
+
+
+async def _pre_1296_db(monkeypatch) -> Database:
+    """Database at schema V54: raw notations were still allowed in knx_group_addresses."""
+    monkeypatch.setattr(database, "MIGRATIONS", [m for m in database.MIGRATIONS if m[0] <= 54])
+    db = Database(":memory:")
+    await db.connect()
+    monkeypatch.undo()
+    await _migration_v55_knx_group_address_style(db.conn)
+    return db
 
 
 async def _style(db: Database) -> str | None:
@@ -38,9 +49,8 @@ async def test_fresh_database_defaults_to_three_level():
         ([], "ThreeLevel"),
     ],
 )
-async def test_existing_addresses_reveal_the_style(addresses, expected):
-    db = Database(":memory:")
-    await db.connect()
+async def test_existing_addresses_reveal_the_style(addresses, expected, monkeypatch):
+    db = await _pre_1296_db(monkeypatch)
     try:
         await db.execute("DELETE FROM knx_project")
         await db.executemany("INSERT INTO knx_group_addresses (address, name) VALUES (?, '')", [(a,) for a in addresses])
@@ -54,9 +64,8 @@ async def test_existing_addresses_reveal_the_style(addresses, expected):
 
 
 @pytest.mark.asyncio
-async def test_migration_keeps_an_already_stored_style():
-    db = Database(":memory:")
-    await db.connect()
+async def test_migration_keeps_an_already_stored_style(monkeypatch):
+    db = await _pre_1296_db(monkeypatch)
     try:
         await db.execute_and_commit("UPDATE knx_project SET group_address_style='Free'")
         await db.execute_and_commit("INSERT INTO knx_group_addresses (address, name) VALUES ('1/234', '')")
