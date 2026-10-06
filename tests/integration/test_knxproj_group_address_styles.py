@@ -195,6 +195,14 @@ async def test_binding_api_rejects_an_invalid_group_address(client, auth_headers
     )
     assert resp.status_code == 422, resp.text
 
+    # A broken feedback address is tolerated in stored data, but not accepted on save.
+    resp = await client.post(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings",
+        json={"adapter_instance_id": instance["id"], "direction": "BOTH", "config": {"group_address": "1/234", "state_group_address": "1/2/x"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
 
 async def test_binding_api_keeps_an_empty_state_group_address_empty(client, auth_headers, knx_instance):
     instance = knx_instance

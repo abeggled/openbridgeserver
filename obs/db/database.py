@@ -845,10 +845,7 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
             )
 
     for row in await _rows("SELECT id, config FROM adapter_bindings WHERE UPPER(adapter_type) = 'KNX'"):
-        try:
-            config = _json.loads(row["config"] or "{}")
-        except ValueError:
-            continue
+        config = _json.loads(row["config"] or "{}")  # CHECK json_valid(config) guarantees JSON
         if not isinstance(config, dict):
             continue
         changed = False

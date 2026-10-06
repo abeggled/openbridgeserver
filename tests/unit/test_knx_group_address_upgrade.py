@@ -170,3 +170,44 @@ async def test_migration_is_idempotent(monkeypatch, tmp_path):
         assert {table: [dict(row) for row in await db.fetchall(f"SELECT * FROM {table} ORDER BY 1, 2")] for table in INSERT_ORDER} == snapshot
     finally:
         await db.disconnect()
+
+
+async def test_migration_leaves_what_is_no_group_address_untouched(monkeypatch, tmp_path):
+    """Edge rows of a legacy database: kept as they are, the rest still migrates."""
+    data = _fixture("TwoLevel")
+    template = data["rows"]["adapter_bindings"][0]
+    odd_configs = {"json-list": "[1, 2]", "garbage-ga": '{"group_address": "x/y", "state_group_address": "1/2/x"}'}
+    internal = INTERNAL[CO_SWITCH_RAW]
+    extra = {
+        # internal spelling already complete: nothing to fill from the raw row
+        "knx_group_addresses": [{"address": internal, "name": "neu", "description": "neu", "dpt": "DPT1.001", "main_group_name": "neu", "mid_group_name": "neu"}],
+        # a function link whose address has no row in knx_group_addresses (no foreign key there)
+        "knx_function_ga_links": [{"function_id": "F-orphan", "ga_address": "1/1000"}],
+        "adapter_bindings": [{**template, "id": binding_id, "config": config} for binding_id, config in odd_configs.items()],
+    }
+    db = await _upgraded(monkeypatch, tmp_path, data, extra)
+    try:
+        assert dict((await db.fetchall("SELECT * FROM knx_group_addresses WHERE address = ?", (internal,)))[0])["name"] == "neu"
+        assert [row["ga_address"] for row in await db.fetchall("SELECT ga_address FROM knx_function_ga_links WHERE function_id = 'F-orphan'")] == [
+            "1/3/232"
+        ]
+        stored = {row["id"]: row["config"] for row in await db.fetchall("SELECT id, config FROM adapter_bindings")}
+        assert {binding_id: stored[binding_id] for binding_id in odd_configs} == odd_configs
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("typed", "kept"),
+    [(["1/257"], ["1/257"]), (["2305"], ["2305"]), (["1/1/2"], ["__obs_no_matching_group_address__"])],
+)
+def test_device_scope_keeps_a_group_address_filter_typed_in_any_notation(typed, kept):
+    """A filter set combining devices and group addresses: the device's addresses are internal (#1296).
+
+    The typed text is kept; the ringbuffer query expands it to every notation.
+    """
+    from obs.api.v1.ringbuffer import RingBufferMetadataFilterV2, RingBufferQueryV2, _apply_group_addresses_to_filter_query
+
+    query = RingBufferQueryV2.model_validate({"filters": {"metadata": RingBufferMetadataFilterV2(group_addresses_any_of=typed).model_dump()}})
+    scoped = _apply_group_addresses_to_filter_query(query, ["1/1/1"])
+    assert scoped.filters.metadata.group_addresses_any_of == kept
