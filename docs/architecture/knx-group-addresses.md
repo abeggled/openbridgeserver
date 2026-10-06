@@ -1,8 +1,9 @@
 # KNX group addresses
 
-How OBS writes, stores and compares KNX group addresses, and where the project's address style
-comes from. Applies to everything that reads, stores, keys or compares a group address text: the
-KNX adapter, the `.knxproj` import, the binding API and the KNX read endpoints.
+How OBS writes, stores and compares KNX group addresses, where the project's address style comes
+from, and how the rules are enforced. Applies to everything that reads, stores, keys or compares a
+group address text: the KNX adapter, the `.knxproj` import, bindings, the config import, the
+ringbuffer metadata and the KNX endpoints.
 
 ## Why
 
@@ -22,75 +23,108 @@ without any error.
 ## Rules
 
 1. **One internal notation.** Inside OBS a group address is the three-level text `main/middle/sub`
-   without leading zeros or whitespace (`1/0/234`). It is what xknx formats by default and what the
-   ring buffer history already contains, so three-level installations do not change.
-2. **Normalize at every entrance.** Text from outside OBS passes through `normalize_ga()` before
-   anything else happens to it:
-   - the `.knxproj` import — group addresses, communication object ↔ GA links, function ↔ GA links,
-     and the bindings the import creates (`obs/knxproj/parser.py`, `obs/api/v1/knxproj.py`);
-   - saving a KNX binding through the API — `group_address` and `state_group_address`
-     (`obs/api/v1/bindings.py`); `KnxBindingConfig` normalizes both fields itself, so every
-     consumer of the model gets internal addresses;
-   - group address path and query parameters of the KNX endpoints;
-   - the telegram side in the adapter: `normalize_ga(str(telegram.destination_address))`.
+   without leading zeros or whitespace (`1/0/234`). It is what xknx formats by default, so
+   three-level installations do not change.
+2. **Normalize at every entrance.** Text from outside passes through `normalize_ga()` before it is
+   stored, compared or used as a key:
+   - the `.knxproj` import — group addresses, communication object ↔ GA links, function ↔ GA links
+     and the bindings it creates (`obs/knxproj/parser.py`, `obs/api/v1/knxproj.py`);
+   - saving a KNX binding through the API and the JSON config import — `group_address` and
+     `state_group_address` (`obs/api/v1/bindings.py`, `obs/api/v1/config.py`), and the group
+     addresses of the config import;
+   - group address path and query parameters of the KNX endpoints, and the ringbuffer's group
+     address filter (`obs/ringbuffer/ringbuffer.py`);
+   - the telegram side in the adapter: `normalize_ga(str(telegram.destination_address))`, because
      `str()` of an xknx `GroupAddress` depends on the process-wide `GroupAddress.address_format`.
-3. **Store, compare and key only internal addresses.** Dictionary keys, set members, `==`/`in`
-   comparisons and SQL comparisons work on normalized text. A raw binding config read from the
-   database (which may predate #1296) is compared through `try_normalize_ga()`.
-4. **Display only through `format_ga(address, style)`.** It renders an internal address in the
-   project's style; a two-level project keeps seeing and typing `1/234`.
-5. **Invalid input is an error, not a silent skip.** `normalize_ga()` raises `InvalidGroupAddress`
-   (a `ValueError`, so Pydantic turns it into a 422). `try_normalize_ga()` returns `None` and is only
-   for tolerant readers of already-stored data, where one broken row must not abort the operation.
+   The CSV group-address import, which only accepted three-level rows, was removed instead.
+3. **Store, compare and key only internal addresses.** The `knx_*` tables, KNX binding configs and
+   new ringbuffer metadata hold internal texts; dictionary keys, `==`/`in` and SQL comparisons work
+   on them. Readers of binding configs (adapter, traceability, ringbuffer snapshot, import upsert)
+   still go through `try_normalize_ga()`, so a binding stored by another tool cannot break them.
+   The datapoint copy reuses the stored, already internal configs.
+4. **Existing data is migrated, not re-imported.** Migration V56 rewrites `knx_group_addresses`
+   (primary key), `knx_co_ga_links` (foreign key with `ON DELETE CASCADE`), `knx_function_ga_links`
+   and the KNX binding configs in one transaction. When a raw and an internal spelling of the same
+   address both exist (a re-import with an intermediate version), they are merged: filled fields of
+   the internal row win, empty ones are taken from the raw row. The internal parent row is inserted
+   before its links move and the raw one deleted afterwards, so no foreign key is ever violated.
+   Texts that are no group address are left untouched. The migration is idempotent; a re-import
+   afterwards finds the existing rows and bindings and creates no duplicates.
+   Ringbuffer history is not rewritten: entries recorded before the update keep the binding text
+   in the project's notation, and the group address filter expands every value to all three
+   notations so it finds old and new entries alike.
+5. **Invalid input is rejected or reported, never dropped silently.** `normalize_ga()` raises
+   `InvalidGroupAddress` (a `ValueError`); the binding API and the config import answer with 422 or
+   an error entry. For data that is already stored, the adapter treats an invalid feedback address
+   (`state_group_address`) as absent — the binding keeps writing to its valid command address —
+   skips a binding with an invalid command address, and reports both on the adapter card
+   (status code `knxInvalidGroupAddresses`). `try_normalize_ga()` returns `None` and is only for
+   such tolerant readers.
+6. **Display goes through `format_ga(address, style)`** — not implemented in the Admin GUI yet.
+   The API delivers internal addresses plus the project's `group_address_style`; the GUI still
+   shows the internal notation. The group-address search already accepts the project's notation.
 
 ## The module
 
-`obs/adapters/knx/group_address.py` holds `normalize_ga()`, `try_normalize_ga()`, `format_ga()`
-and the style constants. It sits next to `dpt_registry.py`, the other piece of KNX knowledge shared
-by the adapter and the import. It is pure Python on purpose: the result must not depend on xknx's
-process-wide formatting setting, and the import path can use it without importing the adapter.
-There is exactly one implementation; a guardrail test fails on a second definition.
+`obs/adapters/knx/group_address.py` holds `normalize_ga()`, `try_normalize_ga()`, `format_ga()`,
+the style constants and `sql_is_internal_ga()`, the SQL form of "is internal" used by the database
+triggers. It sits next to `dpt_registry.py`, the other piece of KNX knowledge shared by the adapter
+and the import. It is pure Python on purpose: the result must not depend on xknx's process-wide
+formatting setting, and the import path can use it without importing the adapter. A guardrail test
+fails when another module defines a function with one of these names; a second implementation under
+another name is not detectable that way and is left to review.
 
 ## Where the style comes from
 
 The `.knxproj` import reads xknxproject's `info.group_address_style` (`ThreeLevel`, `TwoLevel` or
 `Free`, taken from the `GroupAddressStyle` attribute in `project.xml`) and stores it in the
 single-row table `knx_project` (not in `app_settings`: every `app_settings` row ends up in the Logic
-engine's application config). Migration V55 creates and seeds it for existing installations:
-they stored addresses in the project's own notation, so a uniform part count reveals the style
-(3 → `ThreeLevel`, 2 → `TwoLevel`, 1 → `Free`); empty or mixed data falls back to `ThreeLevel`.
+engine's application config). Migration V55 creates the table; for existing installations a
+uniform part count of the stored addresses reveals the style (3 → `ThreeLevel`, 2 → `TwoLevel`,
+1 → `Free`), empty or mixed data falls back to `ThreeLevel`. V55 runs before V56 rewrites the
+addresses. The factory reset clears it; the JSON config export does not carry it (a restored
+instance shows `ThreeLevel` until the next import).
 
 `GET /api/v1/knxproj/group-addresses` returns the style as `group_address_style` next to the
 internal addresses, and its search additionally matches an address typed exactly in the project's
 notation. The import result carries the style as well.
 
-## Guardrail
+## Enforcement
 
-`tests/unit/test_knx_group_address_architecture.py` scans `obs/` and fails when a raw group address
-text is used as a key or in a comparison without passing a normalizer:
+Three layers, from strongest to weakest:
 
-- **Sources** (raw text): `str(<x>.destination_address)`; `<dict>.get("group_address" |
-  "state_group_address")` and the subscript form; FastAPI route parameters named `ga`,
-  `group_address` or `state_group_address`; and local names assigned from these (also through
-  `str()`, `.strip()`, `.lower()`, `.upper()`, `or` and tuple, list or set displays).
-- **Sinks** (key or comparison): `==`, `!=`, `in`, `not in`; subscript indices; dict keys; set
-  comprehension elements; the first argument of `get`, `setdefault`, `pop`, `add`, `discard`,
-  `remove`; and arguments passed one call deep, within the same module, to a parameter that reaches
-  one of these.
-- **Models:** every Pydantic field named `group_address` or `state_group_address` must have a
-  `field_validator` calling `normalize_ga()`.
+1. **Database triggers (V56).** `BEFORE INSERT` and `BEFORE UPDATE` triggers on
+   `knx_group_addresses.address`, `knx_co_ga_links.ga_address` and `knx_function_ga_links.ga_address`
+   abort any write of a non-internal text, whatever code issued it. Plain SQL (`GLOB`), so tools that
+   open the database without OBS keep working; a test checks the predicate against `normalize_ga()`
+   for all 65536 addresses. Binding configs are JSON, may still hold legacy invalid addresses and are
+   rewritten by unrelated edits, so they are not trigger-protected.
+2. **Data invariant** (`tests/knx_group_address_invariant.py`). Integration and upgrade tests drive
+   every entrance with two-level and free inputs and then scan every storage place — the three
+   `knx_*` columns and both GA fields of every KNX binding — for non-internal texts. This catches a
+   raw store through any module, field name or SQL statement.
+3. **AST guardrail** (`tests/unit/test_knx_group_address_architecture.py`), limited to patterns it
+   recognizes reliably: `str(<x>.destination_address)`, `.get`/`[...]` of `group_address` or
+   `state_group_address`, and GA route parameters, used as a key or in a comparison (also one call
+   deep within a module and through list comprehensions); comparisons with literals such as `== ""`
+   are ignored. It also requires every Pydantic field named `group_address` or
+   `state_group_address` to have a `field_validator` calling `normalize_ga()`/`try_normalize_ga()`.
+   It does not see SQL, storage, flows across modules or other field names; layers 1 and 2 do.
 
-Deliberately **not** detected: flows through containers and loop variables, across modules or
-deeper than one call; storing raw text (SQL parameters, records); comparisons inside SQL. These are
-covered by the behavioural tests — `tests/adapters/test_knx_group_address_styles.py` (telegram in,
-datapoint value out, per style) and `tests/integration/test_knxproj_group_address_styles.py`
-(import per style, read endpoints).
+Behavioural tests per style: `tests/unit/test_knx_group_address.py` (the module),
+`tests/adapters/test_knx_group_address_styles.py` (telegram in, datapoint value out),
+`tests/integration/test_knxproj_group_address_styles.py` (import, read endpoints, traceability,
+config import, ringbuffer filter, data invariant) and `tests/unit/test_knx_group_address_upgrade.py`
+(an installation created with the pre-#1296 code, upgraded; fixtures from
+`tools/knx_legacy_fixture.py`).
 
 ## Adding code that handles group addresses
 
-- Reading a group address from outside (request, file, telegram, stored binding config)? Normalize it
-  right where it is read.
+- Reading a group address from outside (request, file, telegram, foreign binding config)? Normalize
+  it right where it is read.
+- Storing one in a new column? Store the internal text and add the column to the data invariant;
+  for a plain text column also add the triggers.
 - Building a lookup table or comparing addresses? Use normalized text on both sides.
 - Showing an address to a user? `format_ga(address, style)` with the stored style.
-- Test it in all three styles; the fixtures in `tests/knxproj_style_variants.py` derive two-level and
-  free projects from the demo project at test time.
+- Test it in all three styles; `tests/knxproj_style_variants.py` derives two-level and free projects
+  from the demo project at test time.

@@ -175,7 +175,8 @@ acting:
   adding a new block. Automated guardrail tests enforce these rules.
 - Before reading, storing, comparing or displaying a KNX group address (adapter, `.knxproj` import,
   bindings, KNX endpoints), read `docs/architecture/knx-group-addresses.md` — one internal
-  notation, normalized at every entrance. An automated guardrail test enforces it.
+  notation, normalized at every entrance, migrated in place. Database triggers, a data-invariant
+  test and a guardrail test enforce it.
 - Before changing workflows, versioning, images, LXC packaging, runtime scripts, or release notes,
   read the applicable parts of `Release & CI`.
 

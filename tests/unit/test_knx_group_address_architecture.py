@@ -1,44 +1,30 @@
-"""Architectural guardrail for KNX group address texts (#1296).
+"""AST guardrail for KNX group address texts (#1296) — the weakest of three layers.
 
-The contract in ``docs/architecture/knx-group-addresses.md``: OBS stores,
-compares and keys group addresses only in the internal three-level notation,
-and every entrance normalizes with ``normalize_ga``. This file fails when code
-uses a group address text that did *not* pass the normalization as a key or in
-a comparison.
+The contract lives in ``docs/architecture/knx-group-addresses.md``. Storage is
+enforced by database triggers (migration V56) and by the data invariant in
+``tests/knx_group_address_invariant.py``, which the integration and upgrade
+tests check after driving every entrance. This file only covers what a syntax
+check recognizes reliably: a raw group address text used as a key or in a
+comparison.
 
-What counts as a **raw** group address text (a "source"):
+**Sources** (raw text): ``str(<x>.destination_address)``; ``.get``/``[...]``
+of ``group_address``/``state_group_address``; FastAPI route parameters named
+``ga``/``group_address``/``state_group_address``; and local names assigned from
+these (also via ``str()``, ``.strip()``, ``.lower()``, ``.upper()``, ``or``,
+tuple/list/set displays and list/set/generator comprehensions). A normalizer
+call makes a text clean; a name assigned from a normalizer anywhere in the
+function counts as normalized (``ga = normalize_ga(ga)``).
 
-- ``str(<telegram>.destination_address)`` — xknx formats with a process-wide
-  setting, not necessarily three-level;
-- ``<dict>.get("group_address" | "state_group_address")`` and
-  ``<dict>["group_address" | "state_group_address"]`` — a binding config as
-  stored or sent, possibly in a project's two-level or free notation;
-- a parameter named ``ga``/``group_address``/``state_group_address`` of a
-  FastAPI route — a path or query parameter as the client typed it;
-- a local name assigned from one of the above (also via ``str()``,
-  ``.strip()``, ``.lower()``, ``.upper()``, ``or`` and tuple/list/set
-  displays).
+**Sinks**: ``==``, ``!=``, ``in``, ``not in`` (except against literals such as
+``""`` or ``(None, "")``); subscript indices; dict keys; set comprehension
+elements; the first argument of ``get``/``setdefault``/``pop``/``add``/
+``discard``/``remove``; and arguments passed one call deep, within the same
+module, to a parameter that reaches one of these.
 
-Wrapping a source in ``normalize_ga``/``try_normalize_ga``/``format_ga`` makes
-it clean; a name assigned from a normalizer anywhere in the function counts as
-normalized (``ga = normalize_ga(ga)``).
+Every Pydantic field named ``group_address``/``state_group_address`` must have a
+``field_validator`` calling ``normalize_ga``/``try_normalize_ga``.
 
-What counts as **key or comparison use** (a "sink"): ``==``, ``!=``, ``in``,
-``not in``; a subscript index; a dict display or comprehension key; a set
-comprehension element; the first argument of ``get``/``setdefault``/``pop``/
-``add``/``discard``/``remove``; and — one call deep, within the same module —
-an argument passed to a function whose parameter reaches such a sink.
-
-Additionally every Pydantic model field named ``group_address`` or
-``state_group_address`` must be normalized by a ``field_validator`` calling
-``normalize_ga`` (that is how ``KnxBindingConfig`` hands the adapter internal
-addresses).
-
-Deliberately *not* detected (see the architecture page): flows through
-containers and loop variables, flows across modules or deeper than one call,
-storage of raw texts (SQL parameters, records) and comparisons done in SQL.
-Those are covered by the behavioural tests of the import (S3) and the
-adapter (S2).
+Not seen here: SQL, storing, flows across modules, other field names.
 """
 
 from __future__ import annotations
