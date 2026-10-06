@@ -119,6 +119,13 @@ async def test_device_datapoints_link_comm_objects_and_bindings_by_internal_addr
 @pytest.mark.parametrize("style", STYLES)
 @pytest.mark.parametrize("notation", STYLES)
 async def test_devices_by_group_address_accept_every_notation(style, notation, client, auth_headers):
+    """Each project style × each notation of the path parameter.
+
+    The diagonal (path typed in the project's own notation: ThreeLevel-ThreeLevel,
+    TwoLevel-TwoLevel, Free-Free) is a regression guard and green on b765f253 as
+    well — there the stored text and the path text happened to be the same raw
+    string. The six off-diagonal cases document the fix.
+    """
     await _import(client, auth_headers, style)
 
     path_address = NOTATION[notation][CO_SWITCH_RAW]
@@ -401,7 +408,40 @@ async def test_every_entrance_stores_only_internal_addresses(style, client, auth
 
     created = {row["id"] for row in await db.fetchall("SELECT id FROM adapter_bindings")} - before
     assert len(created) >= 500 + 3
+    # Ringbuffer: the binding snapshot of a new entry, also for a binding stored without any entrance.
+    from tests.integration.test_ringbuffer_filters import _query_ringbuffer, _write_value
+    from tests.knx_group_address_invariant import non_internal_ringbuffer_bindings
+
+    bypass_dp = await _datapoint(client, auth_headers)
+    await _insert_raw_binding(bypass_dp["id"], {"group_address": NOTATION[style][STATE_RAW], "state_group_address": NOTATION[style][CO_SWITCH_RAW]})
+    entries = []
+    for dp_id in (datapoint["id"], bypass_dp["id"]):
+        await _write_value(client, auth_headers, dp_id, True)
+        entries += await _query_ringbuffer(client, auth_headers, {"q": dp_id, "limit": 1})
+    assert len(entries) == 2
     try:
         assert await non_internal_group_addresses(db, binding_ids=created) == []
+        assert non_internal_ringbuffer_bindings(entries) == []
     finally:
         await client.delete(f"/api/v1/adapters/instances/{knx_instance['id']}", headers=auth_headers)
+
+
+async def test_import_with_destination_direction_creates_dest_bindings(client, auth_headers):
+    """The bulk binding import with direction=DEST (only the removed CSV tests covered it)."""
+    resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={"adapter_type": "KNX", "name": f"KnxDest-{uuid.uuid4().hex[:8]}", "config": {}, "enabled": False},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    instance = resp.json()
+    try:
+        body = await _import(client, auth_headers, "TwoLevel", adapter_name=instance["name"], direction="DEST")
+        assert body["created"] == 500
+        from obs.db.database import get_db
+
+        rows = await get_db().fetchall("SELECT direction, config FROM adapter_bindings WHERE adapter_instance_id = ?", (instance["id"],))
+        assert {row["direction"] for row in rows} == {"DEST"}
+        assert len(rows) == 500
+    finally:
+        await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)

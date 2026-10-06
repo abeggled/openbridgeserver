@@ -181,3 +181,18 @@ async def test_broken_group_addresses_are_reported_on_the_adapter_status(connect
     await connected_adapter.reload_bindings([healthy])
     assert connected_adapter.last_severity == "ok"
     assert connected_adapter.last_detail_code != "knxInvalidGroupAddresses"
+
+
+async def test_invalid_group_address_warning_survives_later_connection_status(connected_adapter, mock_bus):
+    """A later "ok" status (reconnect, tunnel pool stable) must not hide the warning while the problem persists."""
+    broken = make_binding({"group_address": "32/0/0", "dpt_id": "DPT1.001"})
+    await connected_adapter.reload_bindings([broken])
+    assert connected_adapter.last_detail_code == "knxInvalidGroupAddresses"
+
+    connected_adapter._warning_active = True  # a tunnel-overload warning was raised meanwhile …
+    await connected_adapter._record_reconnect()  # … and clears with an "ok" status once the pool is quiet
+    assert connected_adapter.last_severity == "warning"
+    assert connected_adapter.last_detail_code == "knxInvalidGroupAddresses"
+
+    await connected_adapter.reload_bindings([])
+    assert connected_adapter.last_severity == "ok"

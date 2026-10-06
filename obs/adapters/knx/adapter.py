@@ -244,6 +244,8 @@ class KnxAdapter(AdapterBase):
         # Tunnel-overload detection (issue #466)
         self._disconnect_times: deque[datetime] = deque()
         self._warning_active: bool = False
+        # Pending report of invalid group addresses (#1296): (detail, params) or None.
+        self._invalid_ga_report: tuple[str, dict[str, Any]] | None = None
 
     @staticmethod
     def _now() -> datetime:
@@ -818,15 +820,35 @@ class KnxAdapter(AdapterBase):
         if issues:
             examples = "; ".join(issues[:3]) + (f"; +{len(issues) - 3} more" if len(issues) > 3 else "")
             logger.warning("KNX: %d binding(s) with invalid group addresses: %s", len(issues), examples)
-            await self._publish_status(
-                self._connected,
+            self._invalid_ga_report = (
                 f"Invalid KNX group addresses in {len(issues)} binding(s) ({examples})",
-                severity="warning",
-                code=INVALID_GROUP_ADDRESSES_CODE,
-                params={"count": len(issues), "examples": examples},
+                {"count": len(issues), "examples": examples},
             )
-        elif self.last_detail_code == INVALID_GROUP_ADDRESSES_CODE:
-            await self._publish_status(self._connected, "", severity="ok")
+            await self._publish_status(self._connected, severity="ok")
+        else:
+            self._invalid_ga_report = None
+            if self.last_detail_code == INVALID_GROUP_ADDRESSES_CODE:
+                await self._publish_status(self._connected, "", severity="ok")
+
+    async def _publish_status(
+        self,
+        connected: bool,
+        detail: str = "",
+        severity: str = "ok",
+        *,
+        code: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """An "ok" status shows the pending invalid-GA warning instead (#1296).
+
+        Reconnects and the tunnel-pool all-clear publish "ok"; the warning must
+        stay visible as long as the bindings are broken. Errors and other
+        warnings are published unchanged.
+        """
+        if severity == "ok" and self._invalid_ga_report is not None:
+            detail, params = self._invalid_ga_report
+            severity, code = "warning", INVALID_GROUP_ADDRESSES_CODE
+        await super()._publish_status(connected, detail, severity, code=code, params=params)
 
     # ------------------------------------------------------------------
     # Inbound telegram handler (called by sniffer.process)

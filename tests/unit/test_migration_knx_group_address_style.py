@@ -45,7 +45,8 @@ async def test_fresh_database_defaults_to_three_level():
         (["1/0/234", "1/0/235"], "ThreeLevel"),
         (["1/234", "1/235"], "TwoLevel"),
         (["2282", "2283"], "Free"),
-        (["1/0/234", "1/235"], "ThreeLevel"),  # mixed notation: no single style to infer
+        (["1/0/234", "1/235"], "ThreeLevel"),  # tie: no single style to infer
+        (["1/234", "1/235", "1/236", "32/0/0", "1/9/9", "01/1/1"], "TwoLevel"),  # invalid rows do not count, majority wins
         ([], "ThreeLevel"),
     ],
 )

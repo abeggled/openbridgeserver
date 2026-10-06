@@ -739,22 +739,26 @@ async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> 
 
     Own single-row table rather than app_settings: every app_settings row ends up
     in the Logic engine's application config. The .knxproj import records the
-    style from now on. Installations that
-    imported before stored their addresses in the project's own notation, so a
-    uniform part count reveals it (3 → ThreeLevel, 2 → TwoLevel, 1 → Free);
-    empty or mixed data falls back to ThreeLevel, the notation xknx uses.
+    style from now on. Installations that imported before stored their
+    addresses in the project's own notation, so the part count of the valid
+    addresses reveals it (3 → ThreeLevel, 2 → TwoLevel, 1 → Free), by majority;
+    rows that are no group address do not count. No valid rows or a tie fall
+    back to ThreeLevel, the notation xknx uses.
     """
-    from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, FREE, THREE_LEVEL, TWO_LEVEL
+    from collections import Counter
 
-    slash_counts: set[int] = set()
+    from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, FREE, THREE_LEVEL, TWO_LEVEL, try_normalize_ga
+
+    part_counts: Counter[int] = Counter()
     async with conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'") as cur:
         has_addresses = await cur.fetchone() is not None
     if has_addresses:
-        async with conn.execute("SELECT DISTINCT LENGTH(address) - LENGTH(REPLACE(address, '/', '')) AS slashes FROM knx_group_addresses") as cur:
-            slash_counts = {row["slashes"] for row in await cur.fetchall()}
+        async with conn.execute("SELECT address FROM knx_group_addresses") as cur:
+            part_counts.update(len(row["address"].split("/")) for row in await cur.fetchall() if try_normalize_ga(row["address"]))
     style = DEFAULT_GROUP_ADDRESS_STYLE
-    if len(slash_counts) == 1:
-        style = {2: THREE_LEVEL, 1: TWO_LEVEL, 0: FREE}.get(slash_counts.pop(), DEFAULT_GROUP_ADDRESS_STYLE)
+    ranked = part_counts.most_common(2)
+    if ranked and (len(ranked) == 1 or ranked[0][1] > ranked[1][1]):
+        style = {3: THREE_LEVEL, 2: TWO_LEVEL, 1: FREE}[ranked[0][0]]
     await conn.execute(
         """CREATE TABLE IF NOT EXISTS knx_project (
                id                  INTEGER PRIMARY KEY CHECK (id = 1),
@@ -781,7 +785,10 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
     ``knx_function_ga_links`` and the KNX binding configs. A raw row whose
     internal spelling already exists (a reimport with an intermediate version)
     is merged into it: filled fields of the internal row win, empty ones are
-    taken from the raw row. The parent row is inserted before its children
+    taken from the raw row. Without an internal row, the spelling in the
+    project's notation (style from V55) becomes it, other spellings follow in
+    sorted order. Conflicting non-empty fields are not dropped silently: they
+    are logged and appended to the description of the surviving row. The parent row is inserted before its children
     move and deleted after, so no foreign key is ever violated. Texts that are
     no group address at all are left untouched. Idempotent.
 
@@ -792,7 +799,7 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
     """
     import json as _json
 
-    from obs.adapters.knx.group_address import sql_is_internal_ga, try_normalize_ga
+    from obs.adapters.knx.group_address import format_ga, sql_is_internal_ga, try_normalize_ga
 
     async def _rows(sql: str, params: tuple = ()) -> list[Any]:
         async with conn.execute(sql, params) as cur:
@@ -801,8 +808,16 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
     if not await _rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'"):
         return
     ga_columns = [row["name"] for row in await _rows("PRAGMA table_info(knx_group_addresses)")]
-    existing = {row["address"]: dict(row) for row in await _rows("SELECT * FROM knx_group_addresses")}
-    for raw, row in existing.items():
+    style_rows = await _rows("SELECT group_address_style FROM knx_project WHERE id = 1")
+    style = style_rows[0]["group_address_style"] if style_rows else None
+
+    def _rank(raw: str) -> tuple[bool, str]:
+        internal = try_normalize_ga(raw)
+        return (style is None or format_ga(internal, style) != raw, raw)
+
+    raw_rows = [dict(row) for row in await _rows("SELECT * FROM knx_group_addresses")]
+    for row in sorted(raw_rows, key=lambda row: _rank(row["address"]) if try_normalize_ga(row["address"]) else (True, row["address"])):
+        raw = row["address"]
         internal = try_normalize_ga(raw)
         if internal is None or internal == raw:
             continue
@@ -814,10 +829,22 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
                 [values[column] for column in ga_columns],
             )
         else:
-            target = targets[0]
-            fill = {
-                column: row[column] for column in ga_columns if column != "address" and target[column] in (None, "") and row[column] not in (None, "")
+            target = dict(targets[0])
+            merged_columns = [column for column in ga_columns if column not in ("address", "imported_at")]
+            fill = {column: row[column] for column in merged_columns if target[column] in (None, "") and row[column] not in (None, "")}
+            conflicts = {
+                column: row[column]
+                for column in merged_columns
+                if target[column] not in (None, "") and row[column] not in (None, "") and row[column] != target[column] and column != "description"
             }
+            if row["description"] not in (None, "", target["description"]) and target["description"] not in (None, ""):
+                conflicts["description"] = row["description"]
+            if conflicts:
+                logger.warning(
+                    "V56: %s und %s sind dieselbe Gruppenadresse %s; abweichende Felder von %s: %s", internal, raw, internal, raw, conflicts
+                )
+                note = ", ".join(f"{column}={value!r}" for column, value in conflicts.items())
+                fill["description"] = f"{fill.get('description', target['description']) or ''} [#1296 zusammengeführt mit {raw}: {note}]".strip()
             if fill:
                 await conn.execute(
                     f"UPDATE knx_group_addresses SET {', '.join(f'{column} = ?' for column in fill)} WHERE address = ?",
