@@ -744,8 +744,12 @@ async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> 
     """
     from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, FREE, THREE_LEVEL, TWO_LEVEL
 
-    async with conn.execute("SELECT DISTINCT LENGTH(address) - LENGTH(REPLACE(address, '/', '')) AS slashes FROM knx_group_addresses") as cur:
-        slash_counts = {row["slashes"] for row in await cur.fetchall()}
+    slash_counts: set[int] = set()
+    async with conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'") as cur:
+        has_addresses = await cur.fetchone() is not None
+    if has_addresses:
+        async with conn.execute("SELECT DISTINCT LENGTH(address) - LENGTH(REPLACE(address, '/', '')) AS slashes FROM knx_group_addresses") as cur:
+            slash_counts = {row["slashes"] for row in await cur.fetchall()}
     style = DEFAULT_GROUP_ADDRESS_STYLE
     if len(slash_counts) == 1:
         style = {2: THREE_LEVEL, 1: TWO_LEVEL, 0: FREE}.get(slash_counts.pop(), DEFAULT_GROUP_ADDRESS_STYLE)

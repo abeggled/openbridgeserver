@@ -93,6 +93,7 @@ def _make_db(fetchone_result=None, fetchall_result=None):
     db = MagicMock()
     db.fetchone = AsyncMock(return_value=fetchone_result)
     db.fetchall = AsyncMock(return_value=fetchall_result or [])
+    db.execute = AsyncMock()
     db.execute_and_commit = AsyncMock()
     db.executemany = AsyncMock()
     db.commit = AsyncMock()
@@ -987,6 +988,7 @@ class TestListGroupAddresses:
             fetchone_result=_Row({"n": 0}),
             fetchall_result=[],
         )
+        db.fetchone.side_effect = [None, _Row({"n": 0})]  # stored style (none → default), then count
         result = await list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
         assert result.total == 0
         assert result.items == []
@@ -998,6 +1000,7 @@ class TestListGroupAddresses:
             fetchone_result=_Row({"n": 1}),
             fetchall_result=rows,
         )
+        db.fetchone.side_effect = [None, _Row({"n": 1})]  # stored style (none → default), then count
         result = await list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
         assert result.total == 1
         assert result.items[0].address == "1/1/1"
@@ -1009,6 +1012,7 @@ class TestListGroupAddresses:
             fetchone_result=_Row({"n": 1}),
             fetchall_result=rows,
         )
+        db.fetchone.side_effect = [None, _Row({"n": 1})]  # stored style (none → default), then count
         result = await list_group_addresses(q="Light", page=0, size=100, _user="admin", db=db)
         assert result.total == 1
 
@@ -1112,7 +1116,7 @@ class TestImportKnxprojFile:
         upload.read = AsyncMock(return_value=b"garbage")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", side_effect=ValueError("bad format")),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", side_effect=ValueError("bad format")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
         ):
             result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
@@ -1125,7 +1129,7 @@ class TestImportKnxprojFile:
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", side_effect=RuntimeError("parser exploded")),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", side_effect=RuntimeError("parser exploded")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
         ):
             result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
@@ -1138,7 +1142,7 @@ class TestImportKnxprojFile:
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
         ):
             result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
@@ -1152,7 +1156,7 @@ class TestImportKnxprojFile:
         record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1167,7 +1171,7 @@ class TestImportKnxprojFile:
         record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", side_effect=RuntimeError("locations broken")),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1187,7 +1191,7 @@ class TestImportKnxprojFile:
         db.execute_and_commit = AsyncMock(side_effect=[RuntimeError("location write failed")])
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1205,7 +1209,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", side_effect=RuntimeError("trades broken")),
         ):
@@ -1224,7 +1228,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[trade]),
         ):
@@ -1260,7 +1264,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [function])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[trade]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1306,7 +1310,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1352,7 +1356,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(1, 0, 0)),
@@ -1424,7 +1428,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1453,7 +1457,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", side_effect=RuntimeError("optional parser failed")),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1495,7 +1499,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1525,7 +1529,7 @@ class TestImportKnxprojFile:
         create_hierarchy = AsyncMock()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", create_hierarchy),
@@ -1558,7 +1562,7 @@ class TestImportKnxprojFile:
         create_hierarchy = AsyncMock()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", create_hierarchy),
@@ -1611,7 +1615,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj._import_knx_devices_and_comm_objects", side_effect=RuntimeError("boom")),

@@ -159,7 +159,8 @@ class KnxBindingConfig(BaseModel):
     @field_validator("state_group_address")
     @classmethod
     def _normalize_state_group_address(cls, value: str | None) -> str | None:
-        return None if value is None else normalize_ga(value)
+        # Leer = keine Rückmelde-GA (so behandelt der Adapter es seit jeher).
+        return normalize_ga(value) if value and value.strip() else None
 
 
 def _binding_group_addresses(config: dict) -> tuple[str | None, str | None]:
@@ -1189,12 +1190,7 @@ class KnxAdapter(AdapterBase):
             retained = deque(
                 recent_write
                 for recent_write in recent_writes
-                if recent_write[0]
-                >= (
-                    state_cutoff
-                    if _is_distinct_state_ga(recent_write[4][3], key_ga)
-                    else command_cutoff
-                )
+                if recent_write[0] >= (state_cutoff if _is_distinct_state_ga(recent_write[4][3], key_ga) else command_cutoff)
             )
             if retained:
                 self._recent_writes[key] = retained
