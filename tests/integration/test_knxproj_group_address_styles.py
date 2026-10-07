@@ -580,8 +580,6 @@ async def test_binding_api_reports_a_bad_group_address_as_a_structured_error(con
         headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
-    resp = await client.patch(
-        f"/api/v1/datapoints/{datapoint['id']}/bindings/{resp.json()['id']}", json={"config": config}, headers=auth_headers
-    )
+    resp = await client.patch(f"/api/v1/datapoints/{datapoint['id']}/bindings/{resp.json()['id']}", json={"config": config}, headers=auth_headers)
     assert resp.status_code == 422, resp.text
     assert (resp.json()["detail"]["code"], resp.json()["detail"]["field"]) == (code, field)
