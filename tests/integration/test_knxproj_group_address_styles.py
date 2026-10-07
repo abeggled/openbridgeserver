@@ -448,15 +448,19 @@ async def test_import_with_destination_direction_creates_dest_bindings(client, a
 
 
 async def test_adapter_card_keeps_a_connection_error_despite_a_broken_feedback_address(client, auth_headers):
-    """GET /adapters/instances: a failing tunnel stays an error, the GA hint does not cover it (#1296, round 4)."""
+    """GET /adapters/instances: a connection error stays an error, the GA hint does not cover it (#1296, round 4).
+
+    The connection fails without touching the network (Routing Secure without a
+    backbone key), so no xknx transport outlives the test.
+    """
     import asyncio
 
     resp = await client.post(
         "/api/v1/adapters/instances",
         json={
             "adapter_type": "KNX",
-            "name": f"KnxBrokenTunnel-{uuid.uuid4().hex[:8]}",
-            "config": {"connection_type": "tunneling", "host": "127.0.0.1", "port": 9},
+            "name": f"KnxBrokenConnection-{uuid.uuid4().hex[:8]}",
+            "config": {"connection_type": "routing_secure"},
             "enabled": False,
         },
         headers=auth_headers,
@@ -486,7 +490,7 @@ async def test_adapter_card_keeps_a_connection_error_despite_a_broken_feedback_a
         await asyncio.sleep(3)  # … and for the binding load that follows it
         status = await _status()
         assert (status["severity"], status["connected"]) == ("error", False), status
-        assert status["status_detail_code"] != "knxInvalidGroupAddresses"
+        assert status["status_detail_code"] == "knxRoutingSecureRequiresKey"
     finally:
         await client.patch(f"/api/v1/adapters/instances/{instance['id']}", json={"enabled": False}, headers=auth_headers)
         await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)
