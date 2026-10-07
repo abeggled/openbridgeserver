@@ -8,7 +8,8 @@
       @keydown.enter.prevent="selectActive"
       @keydown.escape="close"
       :placeholder="effectivePlaceholder"
-      class="input pr-8"
+      :class="['input pr-8', invalid ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : '']"
+      :aria-invalid="invalid"
       autocomplete="off"
     />
     <GaStyleNotice class="mt-1" />
@@ -71,6 +72,7 @@ const { t } = useI18n()
 const props = defineProps({
   modelValue: { type: String, default: '' },
   placeholder: { type: String, default: null },
+  invalid: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue', 'select'])
 

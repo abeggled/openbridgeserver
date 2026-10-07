@@ -59,6 +59,7 @@
           :form="form"
           :grouped-dpts="groupedDpts"
           :dp-persist-value="props.dpPersistValue"
+          :ga-invalid="rejectedGa !== null && rejectedGa === cfg.group_address"
           @ga-select="onGaSelect"
         />
 
@@ -366,7 +367,10 @@ const knxProject = useKnxProjectStore()
 // A rejected group address comes as { code, field, value } (#1296): explain it with an
 // example in the project's style. Other errors keep their text; anything else is generic.
 const GA_ERROR_CODES = ['knxGroupAddressMissing', 'knxGroupAddressInvalid']
+// The command address the backend rejected; the field stays marked until it is changed.
+const rejectedGa = ref(null)
 function saveErrorText(detail) {
+  rejectedGa.value = GA_ERROR_CODES.includes(detail?.code) && detail.field === 'group_address' ? cfg.group_address : null
   if (GA_ERROR_CODES.includes(detail?.code)) {
     const field = t(detail.field === 'state_group_address' ? 'adapters.bindingForm.errors.knxFieldStateGroupAddress' : 'adapters.bindingForm.errors.knxFieldGroupAddress')
     const example = formatGa('1/2/3', knxProject.groupAddressStyle)

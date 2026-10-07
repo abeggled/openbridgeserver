@@ -173,8 +173,10 @@ Four layers, from strongest to weakest:
    `v-if`/`v-else-if`/`v-show`, `v-slot`, the `v-for` source, and `:key`, `:ref`, `:class`,
    `:style`, `:data-*` and `:value` on `<option>`. It deliberately lets through: strings built in
    `<script>` (computed properties, methods) and rendered under another name, a `v-for` over a list
-   returned by a function, dynamic property access (`dp[key]`), and a `formatGa` argument that is
-   more than one address. A non-address field named `address` in a checked position fails too.
+   returned by a function, dynamic property access (`dp[key]`), a `formatGa` argument that is
+   more than one address, a `formatGa` call with a hard-coded style (`formatGa(x, 'ThreeLevel')`)
+   instead of `knxProject.groupAddressStyle`, and addresses destructured from slot props
+   (`v-slot="{ address }"`), since `v-slot` is not checked. A non-address field named `address` in a checked position fails too.
    The spec replays the 14 mutations of the P4b review on the real components: 11 fail, the three
    that pass are the documented script and function-list cases. Component tests in all three styles
    cover the known places.

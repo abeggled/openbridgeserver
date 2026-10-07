@@ -113,3 +113,23 @@ it('BindingForm keeps showing other errors as before', async () => {
   expect(wrapper.text()).toContain('Fehler beim Speichern')
   wrapper.unmount()
 })
+
+it('BindingForm marks the group address field while its address is rejected', async () => {
+  const wrapper = await saveRejected('TwoLevel', { code: 'knxGroupAddressInvalid', field: 'group_address', value: '1/5000', message: 'x' })
+  expect(gaInput(wrapper).attributes('aria-invalid')).toBe('true')
+  expect(gaInput(wrapper).classes()).toContain('border-red-500')
+
+  await gaInput(wrapper).setValue('1/235')
+  expect(gaInput(wrapper).attributes('aria-invalid')).toBe('false')
+  expect(gaInput(wrapper).classes()).not.toContain('border-red-500')
+  wrapper.unmount()
+})
+
+it('BindingForm leaves the field unmarked for a rejected feedback address or another error', async () => {
+  let wrapper = await saveRejected('TwoLevel', { code: 'knxGroupAddressInvalid', field: 'state_group_address', value: '40/1', message: 'x' })
+  expect(gaInput(wrapper).attributes('aria-invalid')).toBe('false')
+  wrapper.unmount()
+  wrapper = await saveRejected('TwoLevel', 'Ungültige Formel: x')
+  expect(gaInput(wrapper).attributes('aria-invalid')).toBe('false')
+  wrapper.unmount()
+})

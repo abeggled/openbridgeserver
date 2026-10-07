@@ -21,8 +21,9 @@
  * Not seen (left to review and the component tests in all three styles):
  * strings built in <script> (computed properties, methods) and rendered under
  * another name, a v-for over a list returned by a function (`gaList(co)`),
- * dynamic property access (`dp[key]`), and a formatGa argument that is not a
- * single address. A non-address field that happens to be named `address`
+ * dynamic property access (`dp[key]`), a formatGa argument that is not a
+ * single address, formatGa with a hard-coded style instead of the project's,
+ * and addresses destructured from slot props (`v-slot="{ address }"`). A non-address field that happens to be named `address`
  * in a checked position fails too; wrap it in a named helper or rename it.
  */
 import { describe, it, expect } from 'vitest'
