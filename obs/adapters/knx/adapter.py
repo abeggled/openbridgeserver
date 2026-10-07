@@ -851,11 +851,7 @@ class KnxAdapter(AdapterBase):
         comes from the connection status.
         """
         connected, detail, severity, code, params = self._connection_status
-        if (
-            self._invalid_ga_report is not None
-            and connected
-            and _SEVERITY_RANK.get(severity, _SEVERITY_RANK["error"]) < _SEVERITY_RANK["warning"]
-        ):
+        if self._invalid_ga_report is not None and connected and _SEVERITY_RANK.get(severity, _SEVERITY_RANK["error"]) < _SEVERITY_RANK["warning"]:
             detail, params = self._invalid_ga_report
             severity, code = "warning", INVALID_GROUP_ADDRESSES_CODE
             # The base class keeps the connected flag on warnings; this warning is ours, not the connection's.
