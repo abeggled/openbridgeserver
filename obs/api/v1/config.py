@@ -982,17 +982,18 @@ async def import_config(
                 if instance_row is None:
                     raise ValueError(f"MESSAGE adapter instance not found: {effective_instance_id}")
                 instance_config = _json_config(instance_row["config"])
+            config = _normalize_knx_group_addresses(effective_adapter_type, b_data.config)
             _validate_adapter_binding(
                 effective_adapter_type,
                 b_data.direction,
-                b_data.config,
+                config,
                 enabled=b_data.enabled,
                 instance_config=instance_config,
             )
             # An existing binding keeps its DataPoint (the UPDATE below never moves it).
             effective_dp_id = existing_binding["datapoint_id"] if existing_binding is not None else b_data.datapoint_id
             _ensure_system_datapoint_binding_allowed(effective_dp_id, effective_adapter_type, b_data.direction)
-            stored_config = _normalize_knx_group_addresses(effective_adapter_type, b_data.config)
+            stored_config = config
             if effective_adapter_type == "WEBHOOK":
                 # Store the config the way the create route would: slug trimmed and
                 # lower-case (so a later create of `bell` cannot collide with an

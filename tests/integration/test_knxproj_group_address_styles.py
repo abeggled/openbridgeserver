@@ -548,3 +548,40 @@ async def test_config_import_reports_an_unknown_style_and_keeps_the_stored_one(c
     assert resp.json()["errors"] == []
     resp = await client.get("/api/v1/knxproj/group-addresses", params={"size": 1}, headers=auth_headers)
     assert resp.json()["group_address_style"] == "Free"
+
+
+@pytest.mark.parametrize(
+    ("config", "code", "field", "value"),
+    [
+        ({"group_address": "1/5000"}, "knxGroupAddressInvalid", "group_address", "1/5000"),
+        ({"group_address": "1/"}, "knxGroupAddressInvalid", "group_address", "1/"),
+        ({"group_address": "abc"}, "knxGroupAddressInvalid", "group_address", "abc"),
+        ({"group_address": ""}, "knxGroupAddressMissing", "group_address", ""),
+        ({"dpt_id": "DPT1.001"}, "knxGroupAddressMissing", "group_address", None),
+        ({"group_address": "1/234", "state_group_address": "40/1"}, "knxGroupAddressInvalid", "state_group_address", "40/1"),
+    ],
+)
+async def test_binding_api_reports_a_bad_group_address_as_a_structured_error(config, code, field, value, client, auth_headers, knx_instance):
+    """The GUI translates code and field and shows an example in the project's style; no validator dump (#1296, P4b round 2)."""
+    datapoint = await _datapoint(client, auth_headers)
+    resp = await client.post(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings",
+        json={"adapter_instance_id": knx_instance["id"], "direction": "BOTH", "config": config},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert (detail["code"], detail["field"], detail["value"]) == (code, field, value)
+    assert "pydantic" not in resp.text
+
+    resp = await client.post(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings",
+        json={"adapter_instance_id": knx_instance["id"], "direction": "SOURCE", "config": {"group_address": "1/234"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    resp = await client.patch(
+        f"/api/v1/datapoints/{datapoint['id']}/bindings/{resp.json()['id']}", json={"config": config}, headers=auth_headers
+    )
+    assert resp.status_code == 422, resp.text
+    assert (resp.json()["detail"]["code"], resp.json()["detail"]["field"]) == (code, field)
