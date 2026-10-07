@@ -845,12 +845,17 @@ class KnxAdapter(AdapterBase):
         """Publish what the adapter card shows: the connection status plus the invalid-GA hint.
 
         The hint is additional, never instead: it is shown only while the
-        connection status is less severe than a warning. An error or the
-        connection's own warning stays; once it clears, the hint shows again.
-        The connected flag always comes from the connection status.
+        adapter is connected and the connection status is less severe than a
+        warning. "Disconnected", an error or the connection's own warning
+        stays; once it clears, the hint shows again. The connected flag always
+        comes from the connection status.
         """
         connected, detail, severity, code, params = self._connection_status
-        if self._invalid_ga_report is not None and _SEVERITY_RANK.get(severity, _SEVERITY_RANK["error"]) < _SEVERITY_RANK["warning"]:
+        if (
+            self._invalid_ga_report is not None
+            and connected
+            and _SEVERITY_RANK.get(severity, _SEVERITY_RANK["error"]) < _SEVERITY_RANK["warning"]
+        ):
             detail, params = self._invalid_ga_report
             severity, code = "warning", INVALID_GROUP_ADDRESSES_CODE
             # The base class keeps the connected flag on warnings; this warning is ours, not the connection's.

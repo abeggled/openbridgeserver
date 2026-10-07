@@ -63,9 +63,10 @@ without any error.
    (`state_group_address`) as absent — the binding keeps writing to its valid command address —
    skips a binding with an invalid command address, and reports both on the adapter card
    (status code `knxInvalidGroupAddresses`). The card status is composed from the connection
-   status and this hint, never by overwriting: the hint is shown only while the connection status is
-   less severe than a warning, so a connection error or the connection's own warning (tunnel pool)
-   stays visible, and the hint returns as soon as it clears. The connected flag always comes from
+   status and this hint, never by overwriting: the hint is shown only while the adapter is connected
+   and the connection status is less severe than a warning, so "disconnected", a connection error
+   or the connection's own warning (tunnel pool) stays visible, and the hint returns as soon as it
+   clears. The connected flag always comes from
    the connection status.
    `try_normalize_ga()` returns `None` and is only for such tolerant readers.
 6. **Display goes through `format_ga(address, style)`** — not implemented in the Admin GUI yet.

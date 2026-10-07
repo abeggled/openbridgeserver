@@ -244,6 +244,21 @@ async def test_disconnect_reports_disconnected_also_with_the_hint(monkeypatch, m
     assert (last.connected, adapter.connected) == (False, False)
 
 
+async def test_disconnect_shows_disconnected_instead_of_the_hint(monkeypatch, mock_bus):
+    """A hint never hides a more important state: after disconnect() the card says "disconnected" (#1296, round 5)."""
+    monkeypatch.setattr(XKNX, "start", AsyncMock())
+    monkeypatch.setattr(XKNX, "stop", AsyncMock())
+    adapter = KnxAdapter(event_bus=mock_bus, config={"connection_type": "routing", "local_ip": "127.0.0.1"})
+    await adapter.connect()
+    await adapter.reload_bindings([make_binding({"group_address": "32/0/0", "dpt_id": "DPT1.001"})])
+    assert adapter.last_detail_code == "knxInvalidGroupAddresses"
+
+    await adapter.disconnect()
+
+    last = _status_events(mock_bus)[-1]
+    assert (last.connected, adapter.last_detail_code) == (False, "disconnected")
+
+
 async def test_tunnel_overload_warning_is_not_hidden_by_the_hint(connected_adapter, mock_bus):
     """Two warnings: the connection's own one wins while it lasts, the hint returns after it clears."""
     await connected_adapter.reload_bindings([make_binding({"group_address": "32/0/0", "dpt_id": "DPT1.001"})])
