@@ -83,3 +83,27 @@ describe('useKnxProjectStore', () => {
     expect(knx.groupAddressStyle).toBe('Free')
   })
 })
+
+describe('useKnxProjectStore — style unavailable (#1296, P4b round 2)', () => {
+  it('flags a failed load, a missing and an unknown style, and clears the flag on success', async () => {
+    const knx = await store()
+    expect(knx.styleUnavailable).toBe(false)
+
+    listGA.mockRejectedValueOnce(new Error('offline'))
+    await knx.load()
+    expect(knx.styleUnavailable).toBe(true)
+
+    listGA.mockResolvedValueOnce({ data: { total: 0, items: [] } })
+    await knx.load({ force: true })
+    expect(knx.styleUnavailable).toBe(true)
+
+    listGA.mockResolvedValueOnce(page('FourLevel'))
+    await knx.load({ force: true })
+    expect(knx.styleUnavailable).toBe(true)
+
+    listGA.mockResolvedValueOnce(page('TwoLevel'))
+    await knx.load({ force: true })
+    expect(knx.groupAddressStyle).toBe('TwoLevel')
+    expect(knx.styleUnavailable).toBe(false)
+  })
+})

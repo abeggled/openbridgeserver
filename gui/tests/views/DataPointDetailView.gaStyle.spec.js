@@ -58,3 +58,17 @@ describe.each(Object.keys(SHOWN))('DataPointDetailView in a %s project', (style)
     expect(context).toContain('Licht Status')
   })
 })
+
+describe('DataPointDetailView when the project style cannot be loaded', () => {
+  it('shows a notice in the KNX context and keeps the addresses readable', async () => {
+    apiMocks.knxprojApi.listGA.mockRejectedValue(new Error('offline'))
+    const wrapper = mount(DataPointDetailView, {
+      props: { id: 'dp-1' },
+      global: { stubs: { RouterLink: { template: '<a><slot /></a>' }, DataPointHierarchyCard: { template: '<div />' }, DataPointForm: { template: '<div />' }, BindingForm: { template: '<div />' }, Modal: { template: '<div />' }, ConfirmDialog: { template: '<div />' } } },
+    })
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="datapoint-knx-ga"]').map(item => item.text())).toEqual(SHOWN.ThreeLevel)
+    expect(wrapper.find('[data-testid="datapoint-knx-context"] [data-testid="ga-style-notice"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Licht Schalten')
+  })
+})

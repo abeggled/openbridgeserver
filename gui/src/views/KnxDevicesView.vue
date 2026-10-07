@@ -226,6 +226,7 @@
             </span>
           </div>
 
+          <GaStyleNotice class="mt-4" />
           <h4 class="mt-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
             {{ t('knxDevices.commObjectsTitle', { count: selectedDevice.comm_objects?.length ?? 0 }) }}
           </h4>
@@ -303,6 +304,7 @@ import QuickFilterInput from '@/components/ui/QuickFilterInput.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useKnxProjectStore } from '@/stores/knxProject'
 import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 const { t } = useI18n()

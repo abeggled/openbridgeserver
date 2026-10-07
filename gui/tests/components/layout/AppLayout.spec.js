@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 beforeEach(() => {
   vi.resetModules()
+  vi.doMock('@/api/client', () => ({ knxprojApi: { listGA: vi.fn().mockResolvedValue({ data: { total: 0, items: [] } }) } }))
   vi.doMock('@/components/layout/Sidebar.vue', () => ({
     default: {
       name: 'Sidebar',
@@ -25,6 +26,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.doUnmock('@/api/client')
   vi.doUnmock('@/components/layout/Sidebar.vue')
   vi.doUnmock('@/components/layout/TopBar.vue')
   vi.doUnmock('@/components/updates/UpdateNotice.vue')
@@ -81,5 +83,20 @@ describe('AppLayout', () => {
     const w = await mountAppLayout()
     await w.find('.topbar-stub').trigger('click')
     expect(w.find('.sidebar-stub').attributes('data-collapsed')).toBe('true')
+  })
+})
+
+describe('AppLayout loads the KNX project style early (#1296)', () => {
+  it('asks for it once on mount, before any view needs it', async () => {
+    const listGA = vi.fn().mockResolvedValue({ data: { total: 0, items: [], group_address_style: 'TwoLevel' } })
+    vi.doMock('@/api/client', () => ({ knxprojApi: { listGA } }))
+    try {
+      await mountAppLayout()
+      expect(listGA).toHaveBeenCalledWith({ size: 1 })
+      const { useKnxProjectStore } = await import('@/stores/knxProject')
+      expect(useKnxProjectStore().groupAddressStyle).toBe('TwoLevel')
+    } finally {
+      vi.doUnmock('@/api/client')
+    }
   })
 })

@@ -58,3 +58,31 @@ describe.each(Object.keys(SHOWN))('KnxDevicesView in a %s project', (style) => {
     expect(wrapper.find('[data-testid="knx-device-bound-ga"]').text()).toBe(SHOWN[style][1])
   })
 })
+
+describe('KnxDevicesView when the project style cannot be loaded', () => {
+  it('says so next to the three-level addresses, and a retry switches to the project style', async () => {
+    const knxprojApi = {
+      listGA: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ data: { total: 0, items: [], group_address_style: 'TwoLevel' } }),
+      listDevices: vi.fn().mockResolvedValue({ data: { items: [{ ...device, comm_objects: undefined }], total: 1, page: 0, size: 25, pages: 1 } }),
+      getDevice: vi.fn().mockResolvedValue({ data: device }),
+    }
+    vi.doMock('@/api/client', () => ({ knxprojApi, hierarchyApi: { listTrees: vi.fn().mockResolvedValue({ data: [] }), getTreeNodes: vi.fn().mockResolvedValue({ data: [] }) } }))
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const { default: KnxDevicesView } = await import('@/views/KnxDevicesView.vue')
+    const wrapper = mount(KnxDevicesView, { global: { plugins: [pinia], stubs: { RouterLink: { template: '<a><slot /></a>' }, HierarchyCombobox: { template: '<div />' } } } })
+    await flushPromises()
+    await wrapper.find('[data-testid="knx-device-row-1.1.5"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="knx-device-ga"]').map(chip => chip.text())).toEqual(SHOWN.ThreeLevel)
+    const notice = wrapper.find('[data-testid="ga-style-notice"]')
+    expect(notice.text()).toContain('dreistufig')
+    await notice.find('button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="knx-device-ga"]').map(chip => chip.text())).toEqual(SHOWN.TwoLevel)
+    expect(wrapper.find('[data-testid="ga-style-notice"]').exists()).toBe(false)
+  })
+})

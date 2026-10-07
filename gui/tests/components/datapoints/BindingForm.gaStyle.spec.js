@@ -70,3 +70,46 @@ describe.each(Object.keys(SHOWN))('BindingForm (KNX) in a %s project', (style) =
     wrapper.unmount()
   })
 })
+
+// #1296, P4b round 2: a rejected group address is explained in the user's language,
+// with an example in the project's style, never as a validator dump.
+const EXAMPLE = { ThreeLevel: '1/2/3', TwoLevel: '1/515', Free: '2563' }
+
+async function saveRejected(style, detail) {
+  vi.resetModules()
+  const wrapper = await mountEdit(style)
+  updateBinding.mockRejectedValueOnce({ response: { status: 422, data: { detail } } })
+  await wrapper.find('form').trigger('submit')
+  await flushPromises()
+  return wrapper
+}
+
+describe.each(Object.keys(SHOWN))('BindingForm (KNX) rejection in a %s project', (style) => {
+  it('explains an invalid command address with an example in the project style', async () => {
+    const wrapper = await saveRejected(style, { code: 'knxGroupAddressInvalid', field: 'group_address', value: '1/5000', message: 'Ungültige Gruppenadresse' })
+    expect(wrapper.text()).toContain(`„1/5000“ ist keine gültige Gruppenadresse. So sieht eine Adresse in diesem Projekt aus: ${EXAMPLE[style]}`)
+    expect(wrapper.text()).not.toContain('[object Object]')
+    wrapper.unmount()
+  })
+})
+
+it('BindingForm names the feedback address and asks for a missing one', async () => {
+  let wrapper = await saveRejected('TwoLevel', { code: 'knxGroupAddressInvalid', field: 'state_group_address', value: '40/1', message: 'x' })
+  expect(wrapper.text()).toContain('„40/1“ ist keine gültige Rückmelde-Gruppenadresse.')
+  wrapper.unmount()
+  wrapper = await saveRejected('TwoLevel', { code: 'knxGroupAddressMissing', field: 'group_address', value: '', message: 'x' })
+  expect(wrapper.text()).toContain('Bitte eine Gruppenadresse angeben, zum Beispiel 1/515.')
+  wrapper.unmount()
+})
+
+it('BindingForm keeps showing other errors as before', async () => {
+  let wrapper = await saveRejected('TwoLevel', 'Ungültige Formel: x')
+  expect(wrapper.text()).toContain('Ungültige Formel: x')
+  wrapper.unmount()
+  wrapper = await saveRejected('TwoLevel', [{ loc: ['body'], msg: 'bad' }])
+  expect(wrapper.text()).toContain('Fehler beim Speichern')
+  wrapper.unmount()
+  wrapper = await saveRejected('TwoLevel', undefined)
+  expect(wrapper.text()).toContain('Fehler beim Speichern')
+  wrapper.unmount()
+})

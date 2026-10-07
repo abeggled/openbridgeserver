@@ -16,10 +16,15 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import Sidebar from './Sidebar.vue'
 import TopBar  from './TopBar.vue'
 import UpdateNotice from '@/components/updates/UpdateNotice.vue'
+import { useKnxProjectStore } from '@/stores/knxProject'
 
 const sidebarCollapsed = ref(false)
+
+// Load the KNX project's group address style once per session, before a view shows addresses (#1296)
+const knxProject = useKnxProjectStore()
+onMounted(() => knxProject.load())
 </script>

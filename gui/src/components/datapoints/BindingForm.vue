@@ -348,6 +348,8 @@ import BindingFormWebhook from '@/components/datapoints/binding-form/BindingForm
 import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
 import { normalizeEntries } from '@/utils/ipAllowlist'
 import { hasPushoverTarget, normalizePriority, normalizePushoverOptions, pushoverOptionErrors, sendsNotification } from '@/utils/pushoverOptions'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -359,6 +361,19 @@ const props = defineProps({
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
+const knxProject = useKnxProjectStore()
+
+// A rejected group address comes as { code, field, value } (#1296): explain it with an
+// example in the project's style. Other errors keep their text; anything else is generic.
+const GA_ERROR_CODES = ['knxGroupAddressMissing', 'knxGroupAddressInvalid']
+function saveErrorText(detail) {
+  if (GA_ERROR_CODES.includes(detail?.code)) {
+    const field = t(detail.field === 'state_group_address' ? 'adapters.bindingForm.errors.knxFieldStateGroupAddress' : 'adapters.bindingForm.errors.knxFieldGroupAddress')
+    const example = formatGa('1/2/3', knxProject.groupAddressStyle)
+    return t(`adapters.bindingForm.errors.${detail.code}`, { value: String(detail.value ?? ''), field, example })
+  }
+  return typeof detail === 'string' && detail ? detail : t('common.saveError')
+}
 
 const saving       = ref(false)
 const error        = ref(null)
@@ -1559,7 +1574,7 @@ async function submit() {
     }
     emit('save')
   } catch (e) {
-    error.value = e.response?.data?.detail ?? t('common.saveError')
+    error.value = saveErrorText(e.response?.data?.detail)
   } finally {
     saving.value = false
   }

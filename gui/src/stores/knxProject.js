@@ -10,6 +10,8 @@ import { DEFAULT_GROUP_ADDRESS_STYLE, GROUP_ADDRESS_STYLES } from '@/utils/group
 export const useKnxProjectStore = defineStore('knxProject', () => {
   const groupAddressStyle = ref(DEFAULT_GROUP_ADDRESS_STYLE)
   const mergeConflicts = ref([])
+  // True while addresses fall back to three-level because the style is not known (#1296)
+  const styleUnavailable = ref(false)
   let loaded = false
   let pending = null
   let latest = 0
@@ -19,11 +21,14 @@ export const useKnxProjectStore = defineStore('knxProject', () => {
       const { data } = await knxprojApi.listGA({ size: 1 })
       if (request !== latest) return // a newer load() (after an import) answers instead
       const style = data?.group_address_style
-      groupAddressStyle.value = GROUP_ADDRESS_STYLES.includes(style) ? style : DEFAULT_GROUP_ADDRESS_STYLE
+      const known = GROUP_ADDRESS_STYLES.includes(style)
+      groupAddressStyle.value = known ? style : DEFAULT_GROUP_ADDRESS_STYLE
+      styleUnavailable.value = !known
       mergeConflicts.value = Array.isArray(data?.merge_conflicts) ? data.merge_conflicts : []
       loaded = true
     } catch {
       // Keep the last known style; the next load() tries again.
+      if (request === latest && !loaded) styleUnavailable.value = true
     }
   }
 
@@ -38,5 +43,5 @@ export const useKnxProjectStore = defineStore('knxProject', () => {
     return request
   }
 
-  return { groupAddressStyle, mergeConflicts, load }
+  return { groupAddressStyle, mergeConflicts, styleUnavailable, load }
 })

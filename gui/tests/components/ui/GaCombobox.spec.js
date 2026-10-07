@@ -120,3 +120,12 @@ it('GaCombobox shows text that is no group address as it is', async () => {
   const wrapper = await mountStyled('TwoLevel', { modelValue: 'Licht' })
   expect(wrapper.find('input').element.value).toBe('Licht')
 })
+
+it('GaCombobox notes when the project style is unavailable', async () => {
+  vi.doMock('@/api/client', () => ({ knxprojApi: { listGA: vi.fn().mockRejectedValue(new Error('offline')) } }))
+  const mod = await import('@/components/ui/GaCombobox.vue')
+  const wrapper = mount(mod.default, { attachTo: document.body, props: { modelValue: '1/0/234' } })
+  await flushPromises()
+  expect(wrapper.find('input').element.value).toBe('1/0/234')
+  expect(wrapper.find('[data-testid="ga-style-notice"]').exists()).toBe(true)
+})

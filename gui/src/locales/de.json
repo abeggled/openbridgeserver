@@ -425,7 +425,11 @@
         "onewireAliasSaveFailed": "Alias konnte nicht gespeichert werden",
         "webhookEntryNotFound": "Aufruf-URL für diese Verknüpfung nicht gefunden",
         "webhookLoadFailed": "Aufruf-URL konnte nicht geladen werden",
-        "webhookRotateFailed": "Token konnte nicht neu erzeugt werden"
+        "webhookRotateFailed": "Token konnte nicht neu erzeugt werden",
+        "knxGroupAddressMissing": "Bitte eine Gruppenadresse angeben, zum Beispiel {example}.",
+        "knxGroupAddressInvalid": "„{value}“ ist keine gültige {field}. So sieht eine Adresse in diesem Projekt aus: {example}",
+        "knxFieldGroupAddress": "Gruppenadresse",
+        "knxFieldStateGroupAddress": "Rückmelde-Gruppenadresse"
       },
       "knxSection": "KNX-Verknüpfung",
       "dptLabel": "DPT *",
@@ -3900,7 +3904,9 @@
     "chooseFile": "Datei wählen",
     "noFileSelected": "Keine Datei ausgewählt",
     "copy": "Kopieren",
-    "copied": "Kopiert"
+    "copied": "Kopiert",
+    "gaStyleUnavailable": "Der Adressstil des KNX-Projekts konnte nicht geladen werden; Gruppenadressen werden vorerst dreistufig angezeigt.",
+    "gaStyleRetry": "Erneut versuchen"
   },
   "hierarchy": {
     "title": "Hierarchien",

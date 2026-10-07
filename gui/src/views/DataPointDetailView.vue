@@ -139,6 +139,7 @@
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
               <div v-if="b.adapter_type?.toUpperCase() === 'KNX'" class="mt-2 flex flex-col gap-2" data-testid="datapoint-knx-context">
+                <GaStyleNotice />
                 <div v-if="knxContextLoading" class="text-xs text-slate-500">
                   {{ $t('common.loading') }}
                 </div>
@@ -251,6 +252,7 @@ import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useKnxProjectStore } from '@/stores/knxProject'
 import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 import { useTz } from '@/composables/useTz'
 import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'

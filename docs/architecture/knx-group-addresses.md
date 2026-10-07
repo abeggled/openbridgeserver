@@ -60,7 +60,11 @@ without any error.
    notations so it finds old and new entries alike.
 5. **Invalid input is rejected or reported, never dropped silently.** `normalize_ga()` raises
    `InvalidGroupAddress` (a `ValueError`); the binding API and the config import answer with 422 or
-   an error entry. For data that is already stored, the adapter treats an invalid feedback address
+   an error entry. The binding API normalizes before the schema validation and answers a missing
+   or invalid address with a structured `detail` (`code` `knxGroupAddressMissing` or
+   `knxGroupAddressInvalid`, `field`, `value`, `message`; `GroupAddressInputError` in
+   `obs/api/v1/bindings.py`), which the binding form translates and completes with an example in
+   the project's style — never a validator dump. For data that is already stored, the adapter treats an invalid feedback address
    (`state_group_address`) as absent — the binding keeps writing to its valid command address —
    skips a binding with an invalid command address, and reports both on the adapter card
    (status code `knxInvalidGroupAddresses`). The card status is composed from the connection
@@ -75,12 +79,24 @@ without any error.
    every group address through `formatGa(address, knxProject.groupAddressStyle)`
    (`gui/src/utils/groupAddress.js`), with the style from the one store `useKnxProjectStore`
    (`gui/src/stores/knxProject.js`, fed from `GET /api/v1/knxproj/group-addresses`, reloaded after
-   an import, a restore or the factory reset). Text that is no group address is shown unchanged;
+   an import, a restore or the factory reset). `AppLayout` loads it once when the authenticated
+   shell mounts, so views usually have it before they show an address. When it cannot be loaded
+   (or the API sends no known style), addresses fall back to the internal three-level notation and
+   `GaStyleNotice` says so next to them, with a retry; it only adds a line and never replaces
+   another message. Text that is no group address is shown unchanged;
    the merge notes' `spelling` is the stored raw text on purpose. Inputs accept every notation:
    the GA field of the binding form keeps what the user typed (two-level `1/234` included) and the
    backend normalizes it on save; a stored address is shown in the project's style and saved back
    unchanged. The group-address search accepts the project's notation exactly; a partial address
    typed in two-level or free notation is matched against the internal text only.
+7. **Machine-readable outputs stay internal, on purpose.** The ringbuffer CSV export
+   (`metadata_json`, `obs/api/v1/ringbuffer.py`), the JSON config export, API responses and the log
+   lines (`GA=…` in the adapter, shown in the support package's log viewer) carry the internal
+   three-level text. They are read by tools, filters and support staff, compared across
+   installations and with xknx's own logging, and must not change meaning when a project's style
+   changes; the ringbuffer's group address filter accepts every notation, a log search needs the
+   three-level text. Ringbuffer entries written before
+   #1296 keep the binding text in the project's notation (rule 4).
 
 ## Python ↔ JavaScript parity
 
@@ -146,14 +162,22 @@ Four layers, from strongest to weakest:
    are ignored. It also requires every Pydantic field named `group_address` or
    `state_group_address` to have a `field_validator` calling `normalize_ga()`/`try_normalize_ga()`.
    It does not see SQL, storage, flows across modules or other field names; layers 1 and 2 do.
-4. **GUI display guardrail** (`gui/tests/guardrails/gaDisplay.spec.js`). Scans every Admin GUI
-   template for display positions (interpolation, `v-text`/`v-html`, bound `title`, `placeholder`,
-   `aria-label`, `alt`, `label`, `value`) that render a group address path as it is: a member chain
-   ending in `address`, `group_address`, `state_group_address` or `ga_address`, or the alias of a
-   `v-for` over `ga_addresses`/`group_addresses`, checked per operand (concatenations, fallbacks,
-   ternaries, template literals). Function calls such as `formatGa(...)` or a lookup by address do
-   not count. It does not see strings built in `<script>`, values passed on under another name or
-   input `v-model`s; component tests in all three styles cover the known places.
+4. **GUI template guardrail** (`gui/tests/guardrails/gaDisplay.spec.js`). In every Admin GUI
+   template, any read of a group address field fails, in whatever form (member, bracket access,
+   method or function call, concatenation, template literal), unless it sits in the arguments of
+   an allowed call: `formatGa(...)`, or the lookups by address `knxGaLabel(...)` and
+   `knxGaContext(...)`, which return a name or a context, not the address. Fields are the API's
+   names `address`, `group_address`, `state_group_address`, `ga_address`, `ga_addresses`,
+   `group_addresses`, plus the alias of a `v-for` over such a list (also destructured). Checked are
+   text interpolations and every directive except those that never display: `v-on`, `v-model`,
+   `v-if`/`v-else-if`/`v-show`, `v-slot`, the `v-for` source, and `:key`, `:ref`, `:class`,
+   `:style`, `:data-*` and `:value` on `<option>`. It deliberately lets through: strings built in
+   `<script>` (computed properties, methods) and rendered under another name, a `v-for` over a list
+   returned by a function, dynamic property access (`dp[key]`), and a `formatGa` argument that is
+   more than one address. A non-address field named `address` in a checked position fails too.
+   The spec replays the 14 mutations of the P4b review on the real components: 11 fail, the three
+   that pass are the documented script and function-list cases. Component tests in all three styles
+   cover the known places.
 
 Behavioural tests per style: `tests/unit/test_knx_group_address.py` (the module),
 `tests/adapters/test_knx_group_address_styles.py` (telegram in, datapoint value out),

@@ -11,6 +11,7 @@
       class="input pr-8"
       autocomplete="off"
     />
+    <GaStyleNotice class="mt-1" />
     <!-- Clear button -->
     <button v-if="query" type="button" @click="clear"
       class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
@@ -63,6 +64,7 @@ import { useI18n } from 'vue-i18n'
 import { knxprojApi } from '@/api/client'
 import { useKnxProjectStore } from '@/stores/knxProject'
 import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 
 const { t } = useI18n()
 

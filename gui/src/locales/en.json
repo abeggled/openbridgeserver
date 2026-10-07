@@ -425,7 +425,11 @@
         "onewireAliasSaveFailed": "Could not save alias",
         "webhookEntryNotFound": "No call URL found for this binding",
         "webhookLoadFailed": "Could not load the call URL",
-        "webhookRotateFailed": "Could not issue a new token"
+        "webhookRotateFailed": "Could not issue a new token",
+        "knxGroupAddressMissing": "Please enter a group address, for example {example}.",
+        "knxGroupAddressInvalid": "“{value}” is not a valid {field}. An address in this project looks like this: {example}",
+        "knxFieldGroupAddress": "group address",
+        "knxFieldStateGroupAddress": "feedback group address"
       },
       "knxSection": "KNX binding",
       "dptLabel": "DPT *",
@@ -3900,7 +3904,9 @@
     "chooseFile": "Choose file",
     "noFileSelected": "No file selected",
     "copy": "Copy",
-    "copied": "Copied"
+    "copied": "Copied",
+    "gaStyleUnavailable": "The KNX project's address style could not be loaded; group addresses are shown in three-level notation for now.",
+    "gaStyleRetry": "Try again"
   },
   "hierarchy": {
     "title": "Hierarchies",
