@@ -41,7 +41,7 @@ function toRaw(value) {
  * like format_ga; the style store only ever hands out known styles.
  */
 export function formatGa(address, style) {
-  if (!GROUP_ADDRESS_STYLES.includes(style)) throw new Error(`Unknown group address style: ${style}`)
+  if (!GROUP_ADDRESS_STYLES.includes(style)) throw new RangeError(String(style))
   const raw = toRaw(address)
   if (raw === null) return address
   if (style === THREE_LEVEL) return `${raw >> 11}/${(raw >> 8) & 0x7}/${raw & 0xff}`
