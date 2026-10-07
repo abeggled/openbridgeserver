@@ -524,13 +524,6 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("resource_count", "payload_sha256"),
     ),
-    ("POST", "/api/v1/knxproj/import-csv"): _admin(
-        "knx_group_addresses",
-        "knx.group_addresses.imported",
-        result=True,
-        audit_effect=AuditEffect.EXTERNAL_MUTATION,
-        details=("resource_count", "payload_sha256"),
-    ),
     ("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"): _admin(
         "knx_device", "knx.device.hierarchy_links_updated", details=("resource_count", "payload_sha256")
     ),

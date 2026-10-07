@@ -1,0 +1,354 @@
+{
+ "before": {
+  "bindings": 6,
+  "contexts_with_device": 2,
+  "contexts_with_name": 6,
+  "device_datapoints": 2,
+  "devices_for_switch_ga": [
+   "1.1.5"
+  ]
+ },
+ "generated_with": "",
+ "rows": {
+  "adapter_bindings": [
+   {
+    "adapter_instance_id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "adapter_type": "KNX",
+    "config": "{\"group_address\": \"2305\", \"dpt_id\": \"DPT1.001\"}",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "datapoint_id": "01431e68-e36d-4c35-8a41-c32a4d2c81ac",
+    "direction": "SOURCE",
+    "enabled": 1,
+    "id": "af6ea0c1-9517-4e53-ba85-5705a969686a",
+    "send_min_delta": null,
+    "send_min_delta_pct": null,
+    "send_on_change": 0,
+    "send_throttle_ms": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00",
+    "value_formula": null,
+    "value_map": null
+   },
+   {
+    "adapter_instance_id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "adapter_type": "KNX",
+    "config": "{\"group_address\": \"2306\", \"dpt_id\": \"DPT1.001\"}",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "datapoint_id": "fdda8e54-232f-45e1-b870-f0620a98d84d",
+    "direction": "SOURCE",
+    "enabled": 1,
+    "id": "b93a4fdb-c6fd-461b-ba77-8b653799ca3c",
+    "send_min_delta": null,
+    "send_min_delta_pct": null,
+    "send_on_change": 0,
+    "send_throttle_ms": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00",
+    "value_formula": null,
+    "value_map": null
+   },
+   {
+    "adapter_instance_id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "adapter_type": "KNX",
+    "config": "{\"group_address\": \"2307\", \"dpt_id\": \"DPT1.001\"}",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "datapoint_id": "16d90520-4601-48dc-a2d6-be50878e2a38",
+    "direction": "SOURCE",
+    "enabled": 1,
+    "id": "f2026ea7-b17b-495c-815b-6844415c5df5",
+    "send_min_delta": null,
+    "send_min_delta_pct": null,
+    "send_on_change": 0,
+    "send_throttle_ms": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00",
+    "value_formula": null,
+    "value_map": null
+   },
+   {
+    "adapter_instance_id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "adapter_type": "KNX",
+    "config": "{\"group_address\": \"2308\", \"dpt_id\": \"DPT1.001\"}",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "datapoint_id": "dc9e6f62-7128-4110-9ee3-eadd45b6a97f",
+    "direction": "SOURCE",
+    "enabled": 1,
+    "id": "1fece6c2-6ce2-4e3e-946a-8dc91efb9b61",
+    "send_min_delta": null,
+    "send_min_delta_pct": null,
+    "send_on_change": 0,
+    "send_throttle_ms": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00",
+    "value_formula": null,
+    "value_map": null
+   },
+   {
+    "adapter_instance_id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "adapter_type": "KNX",
+    "config": "{\"group_address\": \"2309\", \"dpt_id\": \"DPT1.001\"}",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "datapoint_id": "6028c58b-b815-4420-a2ad-8f0873b61e29",
+    "direction": "SOURCE",
+    "enabled": 1,
+    "id": "36519be0-767e-4e36-a2c3-0c5e5780cd05",
+    "send_min_delta": null,
+    "send_min_delta_pct": null,
+    "send_on_change": 0,
+    "send_throttle_ms": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00",
+    "value_formula": null,
+    "value_map": null
+   },
+   {
+    "adapter_instance_id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "adapter_type": "KNX",
+    "config": "{\"group_address\": \"2310\", \"dpt_id\": \"DPT1.001\"}",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "datapoint_id": "9ba1d0dd-7e65-4866-881d-b83f51be662c",
+    "direction": "SOURCE",
+    "enabled": 1,
+    "id": "5312c0c5-301b-4502-aeff-13fee0cd4b4b",
+    "send_min_delta": null,
+    "send_min_delta_pct": null,
+    "send_on_change": 0,
+    "send_throttle_ms": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00",
+    "value_formula": null,
+    "value_map": null
+   }
+  ],
+  "adapter_instances": [
+   {
+    "adapter_type": "KNX",
+    "config": "{}",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "enabled": 0,
+    "id": "a2c7efe9-200a-4b4e-9dc6-59017c76f3e2",
+    "name": "KNX-Bestand",
+    "updated_at": "2026-01-01T00:00:00+00:00"
+   }
+  ],
+  "datapoints": [
+   {
+    "control_class": "room_local",
+    "created_at": "2026-10-06T18:18:31.504214+00:00",
+    "data_type": "BOOLEAN",
+    "external_write_enabled": 0,
+    "id": "01431e68-e36d-4c35-8a41-c32a4d2c81ac",
+    "mqtt_alias": null,
+    "mqtt_topic": "dp/01431e68-e36d-4c35-8a41-c32a4d2c81ac/value",
+    "name": "Licht EG Schalten",
+    "persist_value": 1,
+    "record_history": 1,
+    "tags": "[]",
+    "unit": null,
+    "updated_at": "2026-10-06T18:18:31.504214+00:00"
+   },
+   {
+    "control_class": "room_local",
+    "created_at": "2026-10-06T18:18:31.504216+00:00",
+    "data_type": "BOOLEAN",
+    "external_write_enabled": 0,
+    "id": "16d90520-4601-48dc-a2d6-be50878e2a38",
+    "mqtt_alias": null,
+    "mqtt_topic": "dp/16d90520-4601-48dc-a2d6-be50878e2a38/value",
+    "name": "Licht Keller Schalten",
+    "persist_value": 1,
+    "record_history": 1,
+    "tags": "[]",
+    "unit": null,
+    "updated_at": "2026-10-06T18:18:31.504216+00:00"
+   },
+   {
+    "control_class": "room_local",
+    "created_at": "2026-10-06T18:18:31.504218+00:00",
+    "data_type": "BOOLEAN",
+    "external_write_enabled": 0,
+    "id": "6028c58b-b815-4420-a2ad-8f0873b61e29",
+    "mqtt_alias": null,
+    "mqtt_topic": "dp/6028c58b-b815-4420-a2ad-8f0873b61e29/value",
+    "name": "Licht Garage Schalten",
+    "persist_value": 1,
+    "record_history": 1,
+    "tags": "[]",
+    "unit": null,
+    "updated_at": "2026-10-06T18:18:31.504218+00:00"
+   },
+   {
+    "control_class": "room_local",
+    "created_at": "2026-10-06T18:18:31.504219+00:00",
+    "data_type": "BOOLEAN",
+    "external_write_enabled": 0,
+    "id": "9ba1d0dd-7e65-4866-881d-b83f51be662c",
+    "mqtt_alias": null,
+    "mqtt_topic": "dp/9ba1d0dd-7e65-4866-881d-b83f51be662c/value",
+    "name": "Licht Flur Schalten",
+    "persist_value": 1,
+    "record_history": 1,
+    "tags": "[]",
+    "unit": null,
+    "updated_at": "2026-10-06T18:18:31.504219+00:00"
+   },
+   {
+    "control_class": "room_local",
+    "created_at": "2026-10-06T18:18:31.504217+00:00",
+    "data_type": "BOOLEAN",
+    "external_write_enabled": 0,
+    "id": "dc9e6f62-7128-4110-9ee3-eadd45b6a97f",
+    "mqtt_alias": null,
+    "mqtt_topic": "dp/dc9e6f62-7128-4110-9ee3-eadd45b6a97f/value",
+    "name": "Licht Garten Schalten",
+    "persist_value": 1,
+    "record_history": 1,
+    "tags": "[]",
+    "unit": null,
+    "updated_at": "2026-10-06T18:18:31.504217+00:00"
+   },
+   {
+    "control_class": "room_local",
+    "created_at": "2026-10-06T18:18:31.504215+00:00",
+    "data_type": "BOOLEAN",
+    "external_write_enabled": 0,
+    "id": "fdda8e54-232f-45e1-b870-f0620a98d84d",
+    "mqtt_alias": null,
+    "mqtt_topic": "dp/fdda8e54-232f-45e1-b870-f0620a98d84d/value",
+    "name": "Licht OG Schalten",
+    "persist_value": 1,
+    "record_history": 1,
+    "tags": "[]",
+    "unit": null,
+    "updated_at": "2026-10-06T18:18:31.504215+00:00"
+   }
+  ],
+  "knx_co_ga_links": [
+   {
+    "comm_object_id": "1.1.5/O-1_R-1",
+    "ga_address": "2305"
+   },
+   {
+    "comm_object_id": "1.1.5/O-2_R-2",
+    "ga_address": "2306"
+   }
+  ],
+  "knx_comm_objects": [
+   {
+    "datapoint_type": "DPT1.001",
+    "device_id": "1.1.5",
+    "function_text": "",
+    "id": "1.1.5/O-1_R-1",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "name": "",
+    "number": "0",
+    "text": "Schalten"
+   },
+   {
+    "datapoint_type": "DPT1.001",
+    "device_id": "1.1.5",
+    "function_text": "",
+    "id": "1.1.5/O-2_R-2",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "name": "",
+    "number": "0",
+    "text": "Status"
+   }
+  ],
+  "knx_devices": [
+   {
+    "description": "",
+    "hardware2program_refid": "",
+    "id": "1.1.5",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "individual_address": "1.1.5",
+    "name": "Testaktor",
+    "product_name": "MDT technologies",
+    "product_refid": ""
+   }
+  ],
+  "knx_function_ga_links": [
+   {
+    "function_id": "F-1",
+    "ga_address": "2307"
+   }
+  ],
+  "knx_functions": [
+   {
+    "id": "F-1",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "name": "Licht Keller",
+    "space_id": "P-065E-0_BP-1",
+    "trade_id": null,
+    "usage_text": ""
+   }
+  ],
+  "knx_group_addresses": [
+   {
+    "address": "2305",
+    "description": "Demo 01 - Binaersignale / Schalten / Licht EG Schalten",
+    "dpt": "DPT1.001",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "main_group_name": "",
+    "mid_group_name": "",
+    "name": "Licht EG Schalten"
+   },
+   {
+    "address": "2306",
+    "description": "Demo 01 - Binaersignale / Schalten / Licht OG Schalten",
+    "dpt": "DPT1.001",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "main_group_name": "",
+    "mid_group_name": "",
+    "name": "Licht OG Schalten"
+   },
+   {
+    "address": "2307",
+    "description": "Demo 01 - Binaersignale / Schalten / Licht Keller Schalten",
+    "dpt": "DPT1.001",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "main_group_name": "",
+    "mid_group_name": "",
+    "name": "Licht Keller Schalten"
+   },
+   {
+    "address": "2308",
+    "description": "Demo 01 - Binaersignale / Schalten / Licht Garten Schalten",
+    "dpt": "DPT1.001",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "main_group_name": "",
+    "mid_group_name": "",
+    "name": "Licht Garten Schalten"
+   },
+   {
+    "address": "2309",
+    "description": "Demo 01 - Binaersignale / Schalten / Licht Garage Schalten",
+    "dpt": "DPT1.001",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "main_group_name": "",
+    "mid_group_name": "",
+    "name": "Licht Garage Schalten"
+   },
+   {
+    "address": "2310",
+    "description": "Demo 01 - Binaersignale / Schalten / Licht Flur Schalten",
+    "dpt": "DPT1.001",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "main_group_name": "",
+    "mid_group_name": "",
+    "name": "Licht Flur Schalten"
+   }
+  ],
+  "knx_locations": [
+   {
+    "id": "P-065E-0_BP-1",
+    "imported_at": "2026-10-06T18:18:31.504214+00:00",
+    "name": "Demo-Test-Projekt",
+    "parent_id": null,
+    "sort_order": 1,
+    "space_type": "Building"
+   }
+  ],
+  "knx_space_device_links": [
+   {
+    "device_id": "1.1.5",
+    "space_id": "P-065E-0_BP-1"
+   }
+  ]
+ },
+ "style": "Free"
+}

@@ -32,6 +32,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from obs.adapters.knx.group_address import try_normalize_ga
 from obs.api.audit import audit_payload_sha256
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction, AuthzTarget, RoleGrant, authorize
@@ -769,7 +770,8 @@ def _apply_group_addresses_to_filter_query(
     existing = _normalize_nonempty(metadata_payload.get("group_addresses_any_of", []))
     if existing:
         allowed_set = set(normalized_group_addresses)
-        allowed = [ga for ga in existing if ga in allowed_set]
+        # Resolved device addresses are internal; the filter may be typed in any notation (#1296).
+        allowed = [ga for ga in existing if (try_normalize_ga(ga) or ga) in allowed_set]
         if not allowed:
             allowed = ["__obs_no_matching_group_address__"]
     else:

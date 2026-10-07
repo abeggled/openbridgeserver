@@ -25,10 +25,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Re
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from obs.adapters.knx.group_address import GROUP_ADDRESS_STYLES, normalize_ga
 from obs.api.audit import AuditLogWriter, AuditOutcome, audit_payload_sha256, build_audit_context
 from obs.api.auth import get_admin_user
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
-from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.v1.bindings import _json_config, _normalize_knx_group_addresses, _validate_adapter_binding
 from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
@@ -92,6 +93,16 @@ class ExportedKnxGroupAddress(BaseModel):
     name: str
     description: str
     dpt: str | None
+
+
+class ExportedKnxGaMergeConflict(BaseModel):
+    """A note of migration V56: two spellings of one address disagreed (#1296)."""
+
+    address: str
+    spelling: str
+    field: str
+    kept: str
+    dropped: str
 
 
 # Legacy (v1 export format)
@@ -282,6 +293,9 @@ class ConfigExport(BaseModel):
     bindings: list[ExportedBinding]
     adapter_instances: list[ExportedAdapterInstance] = []
     knx_group_addresses: list[ExportedKnxGroupAddress] = []
+    # Project's group address style and V56 merge notes (#1296); absent in older exports
+    knx_group_address_style: str | None = None
+    knx_ga_merge_conflicts: list[ExportedKnxGaMergeConflict] = []
     logic_graphs: list[ExportedLogicGraph] = []
     # Legacy field (v1) — ignoriert beim Import wenn adapter_instances vorhanden
     adapter_configs: list[ExportedAdapterConfig] = []
@@ -405,6 +419,11 @@ async def export_config(
             dpt=r["dpt"],
         )
         for r in ga_rows
+    ]
+    style_row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
+    knx_ga_merge_conflicts = [
+        ExportedKnxGaMergeConflict(**dict(r))
+        for r in await db.fetchall("SELECT address, spelling, field, kept, dropped FROM knx_ga_merge_conflicts ORDER BY address, spelling, field")
     ]
 
     graph_rows = await db.fetchall("SELECT * FROM logic_graphs ORDER BY name")
@@ -598,6 +617,8 @@ async def export_config(
         bindings=bindings,
         adapter_instances=adapter_instances,
         knx_group_addresses=knx_group_addresses,
+        knx_group_address_style=style_row["group_address_style"] if style_row else None,
+        knx_ga_merge_conflicts=knx_ga_merge_conflicts,
         logic_graphs=logic_graphs,
         icons=icons,
         fa_api_key=fa_api_key,
@@ -917,10 +938,11 @@ async def import_config(
                 if instance_row is None:
                     raise ValueError(f"MESSAGE adapter instance not found: {effective_instance_id}")
                 instance_config = _json_config(instance_row["config"])
+            config = _normalize_knx_group_addresses(effective_adapter_type, b_data.config)
             _validate_adapter_binding(
                 effective_adapter_type,
                 b_data.direction,
-                b_data.config,
+                config,
                 enabled=b_data.enabled,
                 instance_config=instance_config,
             )
@@ -934,7 +956,7 @@ async def import_config(
                        WHERE id=?""",
                     (
                         b_data.direction,
-                        json.dumps(b_data.config),
+                        json.dumps(config),
                         int(b_data.enabled),
                         formula,
                         b_data.send_throttle_ms,
@@ -961,7 +983,7 @@ async def import_config(
                         b_data.adapter_type,
                         b_data.adapter_instance_id,
                         b_data.direction,
-                        json.dumps(b_data.config),
+                        json.dumps(config),
                         int(b_data.enabled),
                         formula,
                         b_data.send_throttle_ms,
@@ -1006,12 +1028,31 @@ async def import_config(
                    VALUES (?,?,?,?)
                    ON CONFLICT(address) DO UPDATE
                    SET name=excluded.name, description=excluded.description, dpt=excluded.dpt""",
-                (ga.address, ga.name, ga.description, ga.dpt),
+                (normalize_ga(ga.address), ga.name, ga.description, ga.dpt),
             )
             result.knx_group_addresses_upserted += 1
         except Exception as exc:
             logger.exception(f"KNX GA {ga.address} failed")
             result.errors.append(f"KNX GA {ga.address}: {exc}")
+
+    # --- KNX project style and merge notes (#1296) ---
+    if body.knx_group_address_style is not None:
+        if body.knx_group_address_style in GROUP_ADDRESS_STYLES:
+            await db.execute_and_commit(
+                "INSERT INTO knx_project (id, group_address_style) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET group_address_style=excluded.group_address_style",
+                (body.knx_group_address_style,),
+            )
+        else:
+            result.errors.append(f"KNX group address style {body.knx_group_address_style!r}: unknown, kept the stored style")
+    for conflict in body.knx_ga_merge_conflicts:
+        try:
+            await db.execute_and_commit(
+                "INSERT OR REPLACE INTO knx_ga_merge_conflicts (address, spelling, field, kept, dropped) VALUES (?, ?, ?, ?, ?)",
+                (normalize_ga(conflict.address), conflict.spelling, conflict.field, conflict.kept, conflict.dropped),
+            )
+        except Exception as exc:
+            logger.exception(f"KNX GA merge note {conflict.address} failed")
+            result.errors.append(f"KNX GA merge note {conflict.address}: {exc}")
 
     # --- Logic Graphs ---
     imported_graph_ids: list[str] = []
@@ -1487,7 +1528,7 @@ async def factory_reset(
         result.errors.append(f"DataPoints and adapters reset failed: {exc}")
 
     try:
-        for table in ("knx_space_device_links", "knx_co_ga_links", "knx_comm_objects", "knx_devices"):
+        for table in ("knx_space_device_links", "knx_co_ga_links", "knx_comm_objects", "knx_devices", "knx_project", "knx_ga_merge_conflicts"):
             await db.execute_and_commit(f"DELETE FROM {table}")
         row = await db.fetchone("SELECT COUNT(*) as n FROM knx_group_addresses")
         result.knx_group_addresses_deleted = row["n"] if row else 0

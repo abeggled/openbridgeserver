@@ -56,6 +56,7 @@
           :form="form"
           :grouped-dpts="groupedDpts"
           :dp-persist-value="props.dpPersistValue"
+          :ga-invalid="gaRejected"
           @ga-select="onGaSelect"
         />
 
@@ -325,6 +326,8 @@ import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/
 import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnmp.vue'
 import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
 import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -335,6 +338,23 @@ const props = defineProps({
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
+const knxProject = useKnxProjectStore()
+
+// A rejected group address comes as { code, field, value } (#1296): explain it with an
+// example in the project's style. Other errors keep their text; anything else is generic.
+const GA_ERROR_CODES = ['knxGroupAddressMissing', 'knxGroupAddressInvalid']
+// The command address the backend rejected; the field stays marked until it is changed.
+const rejectedGa = ref(null)
+const gaRejected = computed(() => rejectedGa.value !== null && rejectedGa.value === cfg.group_address)
+function saveErrorText(detail) {
+  rejectedGa.value = GA_ERROR_CODES.includes(detail?.code) && detail.field === 'group_address' ? cfg.group_address : null
+  if (GA_ERROR_CODES.includes(detail?.code)) {
+    const field = t(detail.field === 'state_group_address' ? 'adapters.bindingForm.errors.knxFieldStateGroupAddress' : 'adapters.bindingForm.errors.knxFieldGroupAddress')
+    const example = formatGa('1/2/3', knxProject.groupAddressStyle)
+    return t(`adapters.bindingForm.errors.${detail.code}`, { value: String(detail.value ?? ''), field, example })
+  }
+  return typeof detail === 'string' && detail ? detail : t('common.saveError')
+}
 
 const saving       = ref(false)
 const error        = ref(null)
@@ -1388,7 +1408,7 @@ async function submit() {
     }
     emit('save')
   } catch (e) {
-    error.value = e.response?.data?.detail ?? t('common.saveError')
+    error.value = saveErrorText(e.response?.data?.detail)
   } finally {
     saving.value = false
   }

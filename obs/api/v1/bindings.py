@@ -266,6 +266,49 @@ def _validate_adapter_binding(
             ) from exc
 
 
+class GroupAddressInputError(HTTPException):
+    """422 for a KNX group address that cannot be stored (#1296).
+
+    ``detail`` is structured — ``code`` (``knxGroupAddressMissing`` or
+    ``knxGroupAddressInvalid``), ``field``, ``value`` and a ``message`` — so the
+    GUI can explain it in the user's language with an example in the project's
+    style instead of showing a validator dump.
+    """
+
+    def __init__(self, code: str, field: str, value: Any, message: str) -> None:
+        self.message = message
+        super().__init__(status.HTTP_422_UNPROCESSABLE_CONTENT, {"code": code, "field": field, "value": value, "message": message})
+
+    def __str__(self) -> str:
+        return f"{self.status_code}: {self.message}"
+
+
+def _normalize_knx_group_addresses(adapter_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    """KNX: store group addresses only in the internal notation (#1296).
+
+    Runs before the schema validation, so a missing or invalid address is
+    reported as :class:`GroupAddressInputError`, including a broken feedback
+    address, which the binding model itself tolerates as absent for stored data.
+    """
+    if adapter_type != "KNX":
+        return config
+    from obs.adapters.knx.group_address import InvalidGroupAddress, normalize_ga
+
+    command = config.get("group_address")
+    if not str(command or "").strip():
+        raise GroupAddressInputError("knxGroupAddressMissing", "group_address", command, "Gruppenadresse fehlt")
+    normalized = dict(config)
+    for key in ("group_address", "state_group_address"):
+        value = config.get(key)
+        if not str(value or "").strip():
+            continue
+        try:
+            normalized[key] = normalize_ga(value)
+        except InvalidGroupAddress as exc:
+            raise GroupAddressInputError("knxGroupAddressInvalid", key, value, str(exc)) from exc
+    return normalized
+
+
 def _validate_timer_output_value(adapter_type: str, config: dict[str, Any], dp_id: uuid.UUID) -> None:
     """Reject a Zeitschaltuhr switching value that the target DataPoint type cannot hold.
 
@@ -408,14 +451,15 @@ async def create_binding(
         adapter_type,
     )
 
+    config = _normalize_knx_group_addresses(adapter_type, body.config)
     _validate_adapter_binding(
         adapter_type,
         body.direction,
-        body.config,
+        config,
         enabled=body.enabled,
         instance_config=_json_config(instance_row["config"]) if adapter_type == "MESSAGE" else None,
     )
-    _validate_timer_output_value(adapter_type, body.config, dp_id)
+    _validate_timer_output_value(adapter_type, config, dp_id)
 
     # Formel validieren
     if body.value_formula:
@@ -449,7 +493,7 @@ async def create_binding(
                 adapter_type,
                 str(body.adapter_instance_id),
                 body.direction,
-                json.dumps(body.config),
+                json.dumps(config),
                 int(body.enabled),
                 body.send_throttle_ms,
                 int(body.send_on_change),
@@ -501,7 +545,8 @@ async def update_binding(
 
     direction = updates.get("direction", row["direction"])
     config = updates.get("config", _json_config(row["config"]))
-    config_val = json.dumps(config)
+    if "config" in updates:
+        config = _normalize_knx_group_addresses(row["adapter_type"], config)
     enabled = int(updates.get("enabled", bool(row["enabled"])))
     throttle_ms = updates.get("send_throttle_ms", row["send_throttle_ms"])
     on_change = int(updates.get("send_on_change", bool(row["send_on_change"])))
@@ -527,6 +572,7 @@ async def update_binding(
     )
     if "config" in updates:
         _validate_timer_output_value(row["adapter_type"], config, dp_id)
+    config_val = json.dumps(config)
 
     # Formel validieren
     if formula:

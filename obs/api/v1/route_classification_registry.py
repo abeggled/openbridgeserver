@@ -204,7 +204,6 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("POST", "/api/v1/icons/knxuf"): "config_mutation",
     ("POST", "/api/v1/knx/keyfile"): "config_mutation",
     ("POST", "/api/v1/knxproj/import"): "config_mutation",
-    ("POST", "/api/v1/knxproj/import-csv"): "config_mutation",
     ("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"): "config_mutation",
     ("POST", "/api/v1/logic/graphs"): "config_mutation",
     ("POST", "/api/v1/logic/graphs/import"): "config_mutation",

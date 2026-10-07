@@ -736,3 +736,74 @@ describe('SettingsView history and icon coverage', () => {
     clickSpy.mockRestore()
   })
 })
+
+// #1296: merge notes of the group address conversion, shown to admins in the project's style.
+describe('SettingsView KNX merge notes', () => {
+  const NOTE = { address: '1/0/234', spelling: '1/234', field: 'description', kept: 'neu', dropped: 'alt' }
+  const gaPage = (style, conflicts) => ({ data: { total: 3, items: [], group_address_style: style, merge_conflicts: conflicts } })
+
+  it('shows nothing while there are no notes', async () => {
+    knxprojApi.listGA.mockResolvedValue(gaPage('TwoLevel', []))
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    expect(wrapper.find('[data-testid="knx-merge-conflicts"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['ThreeLevel', '1/0/234'],
+    ['TwoLevel', '1/234'],
+    ['Free', '2282'],
+  ])('lists the notes with the address in the %s style', async (style, shown) => {
+    knxprojApi.listGA.mockResolvedValue(gaPage(style, [NOTE]))
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    const hint = wrapper.find('[data-testid="knx-merge-conflicts"]')
+    expect(hint.text()).toContain('Hinweis zur Umstellung der Gruppenadressen')
+    expect(hint.text()).toContain('1 Angabe(n)')
+    const cells = hint.find('[data-testid="knx-merge-conflict"]').findAll('td').map(td => td.text())
+    expect(cells).toEqual([shown, '1/234', 'description', 'neu', 'alt'])
+    wrapper.unmount()
+  })
+
+  it('reloads style and notes after every import, restore and the factory reset', async () => {
+    knxprojApi.listGA.mockResolvedValue(gaPage('ThreeLevel', [NOTE]))
+    configApi.reset = vi.fn().mockResolvedValue({ data: { datapoints_deleted: 0, bindings_deleted: 0, adapter_instances_deleted: 0, knx_group_addresses_deleted: 3, logic_graphs_deleted: 0 } })
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    const shownAddress = () => wrapper.find('[data-testid="knx-merge-conflict"] td').text()
+    expect(shownAddress()).toBe('1/0/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('TwoLevel', [NOTE]))
+    await selectKnxProjectFile(wrapper)
+    await findKnxImportButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(shownAddress()).toBe('1/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('Free', [NOTE]))
+    await selectFile(wrapper.find('input[accept=".json"]'), new File(['{}'], 'backup.json', { type: 'application/json' }))
+    await flushPromises()
+    expect(shownAddress()).toBe('2282')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('TwoLevel', [NOTE]))
+    await selectFile(wrapper.find('input[accept=".sqlite,.db"]'), new File(['sqlite'], 'backup.sqlite', { type: 'application/octet-stream' }))
+    await flushPromises()
+    expect(shownAddress()).toBe('1/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('ThreeLevel', [NOTE]))
+    await wrapper.findAll('select').find(select => select.html().includes('20240506-0300')).setValue('20240506-0300')
+    await findButton(wrapper, 'Wiederherstellen').trigger('click')
+    await flushPromises()
+    expect(shownAddress()).toBe('1/0/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('ThreeLevel', []))
+    await openTab(wrapper, 'Gefahrenzone')
+    await findButton(wrapper, 'Alles löschen').trigger('click')
+    wrapper.findComponent({ name: 'ConfirmDialog' }).vm.$emit('confirm')
+    await flushPromises()
+    expect(configApi.reset).toHaveBeenCalled()
+    await openImportExportTab(wrapper)
+    expect(wrapper.find('[data-testid="knx-merge-conflicts"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

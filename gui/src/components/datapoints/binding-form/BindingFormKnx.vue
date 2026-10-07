@@ -2,7 +2,7 @@
   <div class="section-header">{{ $t('adapters.bindingForm.knxSection') }}</div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.groupAddressLabel') }}</label>
-    <GaCombobox v-model="cfg.group_address" :placeholder="$t('adapters.bindingForm.groupAddressPlaceholder')" @select="$emit('ga-select', $event)" />
+    <GaCombobox v-model="cfg.group_address" :invalid="gaInvalid" @select="$emit('ga-select', $event)" />
   </div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>
@@ -45,6 +45,7 @@ defineProps({
   form: { type: Object, required: true },
   groupedDpts: { type: Array, required: true },
   dpPersistValue: { type: Boolean, required: true },
+  gaInvalid: { type: Boolean, default: false },
 })
 
 defineEmits(['ga-select'])
