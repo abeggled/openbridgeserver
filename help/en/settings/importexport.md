@@ -61,6 +61,11 @@ them.
 addresses, linked to a chosen KNX adapter instance. Direction is selectable:
 read/write, read-only (from adapter), or write-only (to adapter).
 
+If the project names only the main type of a group address (e.g. DPT 14 without a subtype),
+OBS takes over exactly that: "DPT 14 (no subtype)", without unit or scaling (DPT 5 is the raw
+value 0–255, not percent). A re-import does not replace a subtype an existing binding already
+carries with that bare main type; choose the subtype in the binding form if you know it.
+
 **Create hierarchies** (optional, independent of the data points) — generates hierarchy nodes
 from the ETS project's structure, in up to three modes at once: topology (group address
 structure), buildings/rooms, and trades — buildings/rooms and trades are only created if the

@@ -64,6 +64,12 @@ ob dabei Objekte angelegt werden.
 DataPoints an, verknüpft mit einer gewählten KNX-Adapter-Instanz. Richtung wählbar:
 Lesen/Schreiben, nur Lesen (von Adapter) oder nur Schreiben (auf Adapter).
 
+Nennt das Projekt für eine Gruppenadresse nur den Haupttyp (z. B. DPT 14 ohne Subtyp),
+übernimmt OBS genau diesen: „DPT 14 (ohne Subtyp)", ohne Einheit und ohne Skalierung (DPT 5 ist
+der Rohwert 0–255, nicht Prozent). Ein erneuter Import ersetzt einen Subtyp, den eine bestehende
+Verknüpfung bereits trägt, nicht durch diesen bloßen Haupttyp; den passenden Subtyp wählst du
+bei Bedarf im Binding-Formular.
+
 **Hierarchien anlegen** (optional, unabhängig von den Objekten) — erzeugt Hierarchie-Knoten
 aus der Struktur des ETS-Projekts, in bis zu drei Modi gleichzeitig: Topologie
 (Gruppenadress-Struktur), Gebäude/Räume und Gewerke — Gebäude/Räume und Gewerke werden nur

@@ -10,7 +10,10 @@
       <option value="">{{ $t('adapters.bindingForm.selectDpt') }}</option>
       <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
         <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
-          {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+          <template v-if="dpt.dpt_id.includes('.')">
+            {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+          </template>
+          <template v-else>{{ $t('adapters.bindingForm.dptMainType', { main: dpt.dpt_id.replace('DPT', '') }) }}</template>
         </option>
       </optgroup>
     </select>
