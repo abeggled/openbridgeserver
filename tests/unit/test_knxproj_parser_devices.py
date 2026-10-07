@@ -244,7 +244,7 @@ def test_parse_knxproj_devices_tolerates_missing_optional_fields(fake_xknxprojec
     assert devices[0].communication_object_ids == []
 
     assert len(comm_objects) == 1
-    assert comm_objects[0].dpts == ["DPT9.001", "DPT9.001"]
+    assert comm_objects[0].dpts == ["DPT9.001", "DPT9"]  # main type only: no guessed subtype (#1260)
     assert ga_links == []
 
 
