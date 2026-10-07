@@ -86,6 +86,39 @@ def test_dpt4_main_type_reads_both_character_sets_and_writes_ascii():
     assert dpt4.encoder("ä") == b"?"
 
 
-@pytest.mark.parametrize("main", ["DPT15", "DPT21", "DPT232", "DPT251"])
-def test_main_type_without_a_codec_stays_unknown(main):
-    assert DPTRegistry.get(main).dpt_id == "UNKNOWN"
+def _families() -> dict[str, list]:
+    families: dict[str, list] = {}
+    for dpt_id, dpt in DPTRegistry.all().items():
+        if "." in dpt_id:
+            families.setdefault(dpt_id.split(".")[0], []).append(dpt)
+    return families
+
+
+# Main types whose subtypes encode differently in this registry, and the subtype codec the
+# main type takes instead: (encoder of, decoder of). DPT5: the raw byte, no scaling.
+# DPT4: write ASCII (valid for 4.001 and 4.002), read ISO 8859-1 (a superset of ASCII).
+MIXED_FAMILIES = {"DPT5": ("DPT5.010", "DPT5.010"), "DPT4": ("DPT4.001", "DPT4.002")}
+
+
+def _main_types() -> list[str]:
+    return sorted(dpt_id for dpt_id in DPTRegistry.all() if "." not in dpt_id)
+
+
+@pytest.mark.parametrize("main", _main_types())
+def test_every_main_type_entry_takes_the_codec_its_subtypes_share(main):
+    """Derived from the registry: a main type without subtypes here has no codec to share."""
+    dpt = DPTRegistry.get(main)
+    subtypes = _families().get(main)
+    assert subtypes, f"{main} has no subtype in the registry, so no codec can be shared"
+    assert {(s.data_type, s.size_bytes) for s in subtypes} >= {(dpt.data_type, dpt.size_bytes)}
+    if main in MIXED_FAMILIES:
+        enc_of, dec_of = MIXED_FAMILIES[main]
+        assert (dpt.encoder, dpt.decoder) == (DPTRegistry.get(enc_of).encoder, DPTRegistry.get(dec_of).decoder)
+        assert len({(s.encoder, s.decoder) for s in subtypes}) > 1, f"{main} is no longer mixed; drop it from MIXED_FAMILIES"
+    else:
+        assert {(s.encoder, s.decoder) for s in subtypes} == {(dpt.encoder, dpt.decoder)}
+    assert dpt.unit == ""
+
+
+def test_every_subtype_family_has_a_main_type_entry():
+    assert sorted(_families()) == _main_types()

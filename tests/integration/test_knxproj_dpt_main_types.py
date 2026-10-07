@@ -28,6 +28,7 @@ DIMMER = 6401  # DPST-5-1
 ENERGY = 8705  # DPST-13-10
 TEMPERATURE = 4353  # DPST-9-1
 HVAC_MODE = 5377  # DPST-20-102
+CLOCK = 10497  # DPST-10-1
 
 MAIN_ONLY = {POWER_L1: "DPT-14", DIMMER: "DPT-5", ENERGY: "DPT-13", TEMPERATURE: "DPT-9", HVAC_MODE: "DPT-20"}
 
@@ -155,6 +156,19 @@ async def test_reimport_with_another_main_type_replaces_the_old_subtype(client, 
     assert binding["config"]["dpt_id"] == "DPT7"
     datapoint = await _datapoint(client, auth_headers, binding["datapoint_id"])
     assert (datapoint["data_type"], datapoint["unit"]) == ("INTEGER", None)
+
+
+async def test_reimport_with_a_main_type_that_only_shares_digits_replaces_the_subtype(client, auth_headers, knx_instance):
+    """DPT10.001 is no subtype of DPT1: the guard compares whole main types, not text prefixes."""
+    await _import(client, auth_headers, {}, knx_instance)
+    assert (await _bindings(client, auth_headers, knx_instance))[_ga(CLOCK)]["config"]["dpt_id"] == "DPT10.001"
+
+    await _import(client, auth_headers, {CLOCK: "DPT-1"}, knx_instance)
+
+    binding = (await _bindings(client, auth_headers, knx_instance))[_ga(CLOCK)]
+    assert binding["config"]["dpt_id"] == "DPT1"
+    datapoint = await _datapoint(client, auth_headers, binding["datapoint_id"])
+    assert (datapoint["data_type"], datapoint["unit"]) == ("BOOLEAN", None)
 
 
 async def test_reimport_with_a_subtype_still_replaces_the_stored_one(client, auth_headers, knx_instance):

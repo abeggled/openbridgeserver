@@ -6,7 +6,7 @@
   </div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>
-    <select v-model="cfg.dpt_id" class="input" required>
+    <select v-model="cfg.dpt_id" class="input" required @change="$emit('dpt-change')">
       <option value="">{{ $t('adapters.bindingForm.selectDpt') }}</option>
       <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
         <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
@@ -72,5 +72,5 @@ defineProps({
   gaInvalid: { type: Boolean, default: false },
 })
 
-defineEmits(['ga-select'])
+defineEmits(['ga-select', 'dpt-change'])
 </script>

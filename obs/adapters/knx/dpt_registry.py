@@ -78,6 +78,18 @@ class DPTRegistry:
         return [d for d in cls._dpts.values() if d.data_type == data_type]
 
 
+def keeps_stored_subtype(new: str | None, stored: str | None) -> bool:
+    """Whether a DPT already set keeps winning over a DPT taken over from the project (#1260).
+
+    A project (or the group address catalog) that names only the main type ("DPT5") does
+    not replace a subtype of that main type already set ("DPT5.001", guessed by an older
+    import or chosen by hand): the values would change, e.g. by a factor of 2.55 for DPT5.
+    A subtype, a different main type or an empty field take the new DPT. Used by the
+    .knxproj re-import and, as ``keepsStoredSubtype`` in ``gui/src/utils/dpt.js``, by the
+    binding form; ``gui/tests/fixtures/dpt-keep-parity.json`` holds the contract.
+    """
+    return bool(new and stored and "." not in new and stored.startswith(f"{new}."))
+
 # ---------------------------------------------------------------------------
 # Codec helpers
 # ---------------------------------------------------------------------------

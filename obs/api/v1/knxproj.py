@@ -176,17 +176,6 @@ class KnxDevicePage(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _keeps_stored_subtype(imported: str | None, stored: str | None) -> bool:
-    """Whether a re-import keeps the DPT a binding already carries (#1260).
-
-    A project that names only the main type ("DPT5") does not replace a subtype of that
-    main type ("DPT5.001", guessed by an older import or chosen by hand): the values would
-    change, e.g. by a factor of 2.55 for DPT5. The binding and its datapoint stay as they
-    are. A subtype from the project, a different main type or an empty field take the import.
-    """
-    return bool(imported and stored and "." not in imported and stored.startswith(f"{imported}."))
-
-
 async def _bulk_import_datapoints(
     records: list[Any],
     adapter_name: str,
@@ -201,7 +190,7 @@ async def _bulk_import_datapoints(
     Gruppenadressen, die ein schreibgeschützter System-Datenpunkt (#1370)
     bereits bedient und für die deshalb kein DataPoint angelegt wird.
     """
-    from obs.adapters.knx.dpt_registry import DPTRegistry
+    from obs.adapters.knx.dpt_registry import DPTRegistry, keeps_stored_subtype
     from obs.core.registry import ValueState, _row_to_datapoint, get_registry
 
     # --- Adapter-Instanz ermitteln ---
@@ -260,7 +249,7 @@ async def _bulk_import_datapoints(
 
     for row_idx, record in enumerate(records):
         existing = existing_map.get(record.address)
-        keep = existing is not None and _keeps_stored_subtype(record.dpt, existing["dpt_id"])
+        keep = existing is not None and keeps_stored_subtype(record.dpt, existing["dpt_id"])
         dpt = existing["dpt_id"] if keep else record.dpt
         # DPT → data_type + unit aus Registry
         dpt_def = DPTRegistry.get(dpt) if dpt else None
