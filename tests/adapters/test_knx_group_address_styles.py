@@ -196,3 +196,61 @@ async def test_invalid_group_address_warning_survives_later_connection_status(co
 
     await connected_adapter.reload_bindings([])
     assert connected_adapter.last_severity == "ok"
+
+
+def _status_events(mock_bus):
+    from obs.core.event_bus import AdapterStatusEvent
+
+    return [call.args[0] for call in mock_bus.publish.call_args_list if isinstance(call.args[0], AdapterStatusEvent)]
+
+
+async def test_invalid_group_address_hint_never_hides_a_connection_error(monkeypatch, mock_bus):
+    """The GA hint is in addition to the connection status: an error stays an error (#1296, round 4).
+
+    The connection fails, then the bindings arrive (one with a broken feedback GA):
+    the card keeps the error. Once the connection works, the hint shows.
+    """
+    monkeypatch.setattr(XKNX, "stop", AsyncMock())
+    monkeypatch.setattr(XKNX, "start", AsyncMock(side_effect=OSError("Tunnel connection could not be established")))
+    adapter = KnxAdapter(event_bus=mock_bus, config={"connection_type": "routing", "local_ip": "127.0.0.1"})
+    broken = make_binding({"group_address": "1/234", "state_group_address": "1/2/x", "dpt_id": "DPT1.001"}, direction="BOTH")
+    try:
+        await adapter.connect()
+        await adapter.reload_bindings([broken])
+        assert (adapter.last_severity, adapter.connected) == ("error", False)
+        assert adapter.last_detail_code != "knxInvalidGroupAddresses"
+        assert [event.severity for event in _status_events(mock_bus)][-1] == "error"
+
+        monkeypatch.setattr(XKNX, "start", AsyncMock())
+        await adapter.connect()  # the reconnect path
+        assert (adapter.last_severity, adapter.last_detail_code, adapter.connected) == ("warning", "knxInvalidGroupAddresses", True)
+        assert _status_events(mock_bus)[-1].connected is True
+    finally:
+        await adapter.disconnect()
+
+
+async def test_disconnect_reports_disconnected_also_with_the_hint(monkeypatch, mock_bus):
+    """After disconnect() the status event says connected=False, also while the GA hint is shown."""
+    monkeypatch.setattr(XKNX, "start", AsyncMock())
+    monkeypatch.setattr(XKNX, "stop", AsyncMock())
+    adapter = KnxAdapter(event_bus=mock_bus, config={"connection_type": "routing", "local_ip": "127.0.0.1"})
+    await adapter.connect()
+    await adapter.reload_bindings([make_binding({"group_address": "32/0/0", "dpt_id": "DPT1.001"})])
+    assert adapter.connected is True
+
+    await adapter.disconnect()
+
+    last = _status_events(mock_bus)[-1]
+    assert (last.connected, adapter.connected) == (False, False)
+
+
+async def test_tunnel_overload_warning_is_not_hidden_by_the_hint(connected_adapter, mock_bus):
+    """Two warnings: the connection's own one wins while it lasts, the hint returns after it clears."""
+    await connected_adapter.reload_bindings([make_binding({"group_address": "32/0/0", "dpt_id": "DPT1.001"})])
+    for _ in range(3):
+        await connected_adapter._record_disconnect()  # xknx reports tunnel disconnects through this path
+    assert connected_adapter.last_detail_code == "knxTunnelOverload"
+
+    connected_adapter._disconnect_times.clear()
+    await connected_adapter._record_reconnect()
+    assert connected_adapter.last_detail_code == "knxInvalidGroupAddresses"

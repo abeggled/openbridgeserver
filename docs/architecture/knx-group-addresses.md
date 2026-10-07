@@ -47,8 +47,10 @@ without any error.
    and the KNX binding configs in one transaction. Several spellings of the same address are merged
    into one row: an existing internal row wins, otherwise the spelling in the project's notation
    (style from V55), then the others in sorted order. Empty fields are filled from every spelling;
-   conflicting values are not dropped silently but logged and appended to the description of the
-   surviving row (`[#1296 zusammengeführt mit 01/257: name='…']`). The internal parent row is inserted
+   conflicting values are not dropped silently: they are logged and recorded in
+   `knx_ga_merge_conflicts` (address, spelling, field, kept and dropped value), which
+   `GET /api/v1/knxproj/group-addresses` returns as `merge_conflicts` (admins). Stored fields,
+   descriptions included, are never rewritten with system text. The internal parent row is inserted
    before its links move and the raw one deleted afterwards, so no foreign key is ever violated.
    Texts that are no group address are left untouched. The migration is idempotent; a re-import
    afterwards finds the existing rows and bindings and creates no duplicates.
@@ -60,8 +62,11 @@ without any error.
    an error entry. For data that is already stored, the adapter treats an invalid feedback address
    (`state_group_address`) as absent — the binding keeps writing to its valid command address —
    skips a binding with an invalid command address, and reports both on the adapter card
-   (status code `knxInvalidGroupAddresses`). The warning stays while the problem exists: a later
-   "ok" status (reconnect, tunnel pool stable) shows it again instead of clearing it.
+   (status code `knxInvalidGroupAddresses`). The card status is composed from the connection
+   status and this hint, never by overwriting: the hint is shown only while the connection status is
+   less severe than a warning, so a connection error or the connection's own warning (tunnel pool)
+   stays visible, and the hint returns as soon as it clears. The connected flag always comes from
+   the connection status.
    `try_normalize_ga()` returns `None` and is only for such tolerant readers.
 6. **Display goes through `format_ga(address, style)`** — not implemented in the Admin GUI yet.
    The API delivers internal addresses plus the project's `group_address_style`; the GUI still

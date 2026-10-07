@@ -130,7 +130,11 @@ async def test_raw_and_internal_spelling_of_one_address_are_merged(style, monkey
         rows = await db.fetchall("SELECT * FROM knx_group_addresses WHERE address = ?", (internal,))
         assert len(rows) == 1
         assert rows[0]["name"] == "Licht EG Schalten", "an empty field of the newer row is filled from the legacy row"
-        assert rows[0]["description"].startswith("neu [#1296"), "a filled field of the newer row wins, the conflicting one is noted"
+        assert rows[0]["description"] == "neu", "a filled field of the newer row wins; the description is never rewritten"
+        page = await knxproj_api.list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
+        assert [(c.address, c.spelling, c.field, c.kept, c.dropped) for c in page.merge_conflicts] == [
+            (internal, NOTATION[style][CO_SWITCH_RAW], "description", "neu", data["rows"]["knx_group_addresses"][0]["description"])
+        ]
         assert len(await db.fetchall("SELECT 1 FROM knx_co_ga_links WHERE ga_address = ?", (internal,))) == 1
         assert [row["ga_address"] for row in await db.fetchall("SELECT ga_address FROM knx_function_ga_links")] == [INTERNAL[FUNCTION_RAW]]
         assert await non_internal_group_addresses(db) == []
@@ -238,8 +242,12 @@ async def test_two_raw_spellings_of_one_address_merge_without_silent_loss(monkey
         [row] = await db.fetchall("SELECT * FROM knx_group_addresses WHERE address = '1/1/1'")
         assert (row["name"], row["dpt"]) == ("Licht EG Schalten", "DPT1.001"), "the row in the project's notation wins"
         assert row["mid_group_name"] == "Mitte", "an empty field is filled from the other spelling"
-        assert "01/257" in row["description"] and "AndererName" in row["description"] and "DPST-9-1" in row["description"]
-        assert row["description"].startswith("Demo 01 - Binaersignale / Schalten / Licht EG Schalten")
+        assert row["description"] == "Demo 01 - Binaersignale / Schalten / Licht EG Schalten", "user data stays untouched"
+        page = await knxproj_api.list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
+        assert {(c.address, c.spelling, c.field, c.kept, c.dropped) for c in page.merge_conflicts} == {
+            ("1/1/1", "01/257", "name", "Licht EG Schalten", "AndererName"),
+            ("1/1/1", "01/257", "dpt", "DPT1.001", "DPST-9-1"),
+        }
     assert any("01/257" in record.getMessage() and record.levelname == "WARNING" for record in caplog.records)
 
 

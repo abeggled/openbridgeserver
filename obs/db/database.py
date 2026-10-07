@@ -788,7 +788,9 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
     taken from the raw row. Without an internal row, the spelling in the
     project's notation (style from V55) becomes it, other spellings follow in
     sorted order. Conflicting non-empty fields are not dropped silently: they
-    are logged and appended to the description of the surviving row. The parent row is inserted before its children
+    are logged and recorded in ``knx_ga_merge_conflicts``, which
+    ``GET /api/v1/knxproj/group-addresses`` returns as ``merge_conflicts``; the
+    stored fields themselves (descriptions included) stay untouched. The parent row is inserted before its children
     move and deleted after, so no foreign key is ever violated. Texts that are
     no group address at all are left untouched. Idempotent.
 
@@ -807,6 +809,16 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
 
     if not await _rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'"):
         return
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS knx_ga_merge_conflicts (
+               address  TEXT NOT NULL,
+               spelling TEXT NOT NULL,
+               field    TEXT NOT NULL,
+               kept     TEXT NOT NULL,
+               dropped  TEXT NOT NULL,
+               PRIMARY KEY (address, spelling, field)
+           )"""
+    )
     ga_columns = [row["name"] for row in await _rows("PRAGMA table_info(knx_group_addresses)")]
     style_rows = await _rows("SELECT group_address_style FROM knx_project WHERE id = 1")
     style = style_rows[0]["group_address_style"] if style_rows else None
@@ -843,8 +855,10 @@ async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection
                 logger.warning(
                     "V56: %s und %s sind dieselbe Gruppenadresse %s; abweichende Felder von %s: %s", internal, raw, internal, raw, conflicts
                 )
-                note = ", ".join(f"{column}={value!r}" for column, value in conflicts.items())
-                fill["description"] = f"{fill.get('description', target['description']) or ''} [#1296 zusammengeführt mit {raw}: {note}]".strip()
+                await conn.executemany(
+                    "INSERT OR REPLACE INTO knx_ga_merge_conflicts (address, spelling, field, kept, dropped) VALUES (?, ?, ?, ?, ?)",
+                    [(internal, raw, column, str(target[column]), str(value)) for column, value in conflicts.items()],
+                )
             if fill:
                 await conn.execute(
                     f"UPDATE knx_group_addresses SET {', '.join(f'{column} = ?' for column in fill)} WHERE address = ?",

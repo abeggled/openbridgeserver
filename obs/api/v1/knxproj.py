@@ -109,9 +109,20 @@ class GroupAddressOut(BaseModel):
     imported_at: str
 
 
+class GroupAddressMergeConflict(BaseModel):
+    """Two spellings of one address disagreed when migration V56 merged them (#1296)."""
+
+    address: str
+    spelling: str
+    field: str
+    kept: str
+    dropped: str
+
+
 class GroupAddressPage(BaseModel):
     total: int
     items: list[GroupAddressOut]
+    merge_conflicts: list[GroupAddressMergeConflict] = Field(default_factory=list)
     # Adressen sind intern dreistufig; der Stil sagt der GUI, wie sie anzuzeigen sind.
     group_address_style: str = DEFAULT_GROUP_ADDRESS_STYLE
 
@@ -1403,6 +1414,11 @@ async def list_knx_devices_for_group_address(
     )
 
 
+async def _merge_conflicts(db: Database) -> list[GroupAddressMergeConflict]:
+    rows = await db.fetchall("SELECT address, spelling, field, kept, dropped FROM knx_ga_merge_conflicts ORDER BY address, spelling, field")
+    return [GroupAddressMergeConflict(**dict(row)) for row in rows]
+
+
 async def _group_address_style(db: Database) -> str:
     row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
     return row["group_address_style"] if row else DEFAULT_GROUP_ADDRESS_STYLE
@@ -1493,6 +1509,7 @@ async def list_group_addresses(
         total=total,
         items=[GroupAddressOut(**dict(r)) for r in rows],
         group_address_style=style,
+        merge_conflicts=await _merge_conflicts(db),
     )
 
 

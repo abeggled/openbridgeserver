@@ -445,3 +445,48 @@ async def test_import_with_destination_direction_creates_dest_bindings(client, a
         assert len(rows) == 500
     finally:
         await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)
+
+
+async def test_adapter_card_keeps_a_connection_error_despite_a_broken_feedback_address(client, auth_headers):
+    """GET /adapters/instances: a failing tunnel stays an error, the GA hint does not cover it (#1296, round 4)."""
+    import asyncio
+
+    resp = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "KNX",
+            "name": f"KnxBrokenTunnel-{uuid.uuid4().hex[:8]}",
+            "config": {"connection_type": "tunneling", "host": "127.0.0.1", "port": 9},
+            "enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    instance = resp.json()
+    datapoint = await _datapoint(client, auth_headers)
+    try:
+        # a legacy binding: valid command GA, broken feedback GA (the API would reject it today)
+        from obs.db.database import get_db
+
+        await _insert_raw_binding(datapoint["id"], {"group_address": "1/234", "state_group_address": "1/2/x"})
+        await get_db().execute_and_commit(
+            "UPDATE adapter_bindings SET adapter_instance_id = ? WHERE datapoint_id = ?", (instance["id"], datapoint["id"])
+        )
+        resp = await client.patch(f"/api/v1/adapters/instances/{instance['id']}", json={"enabled": True}, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+
+        async def _status() -> dict:
+            resp = await client.get("/api/v1/adapters/instances", headers=auth_headers)
+            return next(item for item in resp.json() if item["id"] == instance["id"])
+
+        for _ in range(60):  # wait for the connection attempt to fail …
+            if (await _status())["severity"] != "ok":
+                break
+            await asyncio.sleep(0.5)
+        await asyncio.sleep(3)  # … and for the binding load that follows it
+        status = await _status()
+        assert (status["severity"], status["connected"]) == ("error", False), status
+        assert status["status_detail_code"] != "knxInvalidGroupAddresses"
+    finally:
+        await client.patch(f"/api/v1/adapters/instances/{instance['id']}", json={"enabled": False}, headers=auth_headers)
+        await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)

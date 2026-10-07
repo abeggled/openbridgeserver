@@ -137,6 +137,7 @@ class KnxAdapterConfig(BaseModel):
 
 # Adapter-Statuscode (i18n adapters.statusDetail.*) für Bindungen mit ungültigen GAs (#1296)
 INVALID_GROUP_ADDRESSES_CODE = "knxInvalidGroupAddresses"
+_SEVERITY_RANK = {"ok": 0, "warning": 1, "error": 2}
 
 
 class KnxBindingConfig(BaseModel):
@@ -244,7 +245,8 @@ class KnxAdapter(AdapterBase):
         # Tunnel-overload detection (issue #466)
         self._disconnect_times: deque[datetime] = deque()
         self._warning_active: bool = False
-        # Pending report of invalid group addresses (#1296): (detail, params) or None.
+        # Adapter card (#1296): the last connection status and the invalid-GA hint, combined on publish.
+        self._connection_status: tuple[bool, str, str, str | None, dict[str, Any]] = (False, "", "ok", None, {})
         self._invalid_ga_report: tuple[str, dict[str, Any]] | None = None
 
     @staticmethod
@@ -817,18 +819,14 @@ class KnxAdapter(AdapterBase):
             ]
             if broken:
                 issues.append(f"{binding.id}: {', '.join(broken)}")
+        report = None
         if issues:
             examples = "; ".join(issues[:3]) + (f"; +{len(issues) - 3} more" if len(issues) > 3 else "")
             logger.warning("KNX: %d binding(s) with invalid group addresses: %s", len(issues), examples)
-            self._invalid_ga_report = (
-                f"Invalid KNX group addresses in {len(issues)} binding(s) ({examples})",
-                {"count": len(issues), "examples": examples},
-            )
-            await self._publish_status(self._connected, severity="ok")
-        else:
-            self._invalid_ga_report = None
-            if self.last_detail_code == INVALID_GROUP_ADDRESSES_CODE:
-                await self._publish_status(self._connected, "", severity="ok")
+            report = (f"Invalid KNX group addresses in {len(issues)} binding(s) ({examples})", {"count": len(issues), "examples": examples})
+        if report != self._invalid_ga_report:
+            self._invalid_ga_report = report
+            await self._publish_card_status()
 
     async def _publish_status(
         self,
@@ -839,15 +837,24 @@ class KnxAdapter(AdapterBase):
         code: str | None = None,
         params: dict[str, Any] | None = None,
     ) -> None:
-        """An "ok" status shows the pending invalid-GA warning instead (#1296).
+        """Record the connection status and publish it combined with the GA hint (#1296)."""
+        self._connection_status = (connected, detail, severity, code, params or {})
+        await self._publish_card_status()
 
-        Reconnects and the tunnel-pool all-clear publish "ok"; the warning must
-        stay visible as long as the bindings are broken. Errors and other
-        warnings are published unchanged.
+    async def _publish_card_status(self) -> None:
+        """Publish what the adapter card shows: the connection status plus the invalid-GA hint.
+
+        The hint is additional, never instead: it is shown only while the
+        connection status is less severe than a warning. An error or the
+        connection's own warning stays; once it clears, the hint shows again.
+        The connected flag always comes from the connection status.
         """
-        if severity == "ok" and self._invalid_ga_report is not None:
+        connected, detail, severity, code, params = self._connection_status
+        if self._invalid_ga_report is not None and _SEVERITY_RANK.get(severity, _SEVERITY_RANK["error"]) < _SEVERITY_RANK["warning"]:
             detail, params = self._invalid_ga_report
             severity, code = "warning", INVALID_GROUP_ADDRESSES_CODE
+            # The base class keeps the connected flag on warnings; this warning is ours, not the connection's.
+            self._connected = connected
         await super()._publish_status(connected, detail, severity, code=code, params=params)
 
     # ------------------------------------------------------------------

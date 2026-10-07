@@ -1001,6 +1001,7 @@ class TestListGroupAddresses:
             fetchall_result=rows,
         )
         db.fetchone.side_effect = [None, _Row({"n": 1})]  # stored style (none → default), then count
+        db.fetchall.side_effect = [rows, []]  # addresses, then merge conflicts
         result = await list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
         assert result.total == 1
         assert result.items[0].address == "1/1/1"
@@ -1013,6 +1014,7 @@ class TestListGroupAddresses:
             fetchall_result=rows,
         )
         db.fetchone.side_effect = [None, _Row({"n": 1})]  # stored style (none → default), then count
+        db.fetchall.side_effect = [rows, []]  # addresses, then merge conflicts
         result = await list_group_addresses(q="Light", page=0, size=100, _user="admin", db=db)
         assert result.total == 1
 
