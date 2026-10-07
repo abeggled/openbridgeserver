@@ -55,6 +55,12 @@ test('zweistufiges KNX-Projekt: Adressen erscheinen und werden angenommen in der
     await expect(suggestion).toContainText('1/257')
     await expect(suggestion).not.toContainText('1/1/1')
 
+    // An impossible address is explained in the project's notation, not as a validator dump
+    await gaInput.fill('1/5000')
+    await page.locator('form button[type="submit"]').click()
+    await expect(page.getByText('„1/5000“ ist keine gültige Gruppenadresse. So sieht eine Adresse in diesem Projekt aus: 1/515')).toBeVisible()
+    await expect(page.getByText('pydantic')).toHaveCount(0)
+
     // A two-level address typed by hand is taken and stored internally
     await gaInput.fill('1/258')
     await page.locator('form button[type="submit"]').click()

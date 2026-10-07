@@ -90,11 +90,25 @@ describe('AppLayout loads the KNX project style early (#1296)', () => {
   it('asks for it once on mount, before any view needs it', async () => {
     const listGA = vi.fn().mockResolvedValue({ data: { total: 0, items: [], group_address_style: 'TwoLevel' } })
     vi.doMock('@/api/client', () => ({ knxprojApi: { listGA } }))
+    localStorage.setItem('access_token', 'token')
     try {
       await mountAppLayout()
       expect(listGA).toHaveBeenCalledWith({ size: 1 })
       const { useKnxProjectStore } = await import('@/stores/knxProject')
       expect(useKnxProjectStore().groupAddressStyle).toBe('TwoLevel')
+    } finally {
+      localStorage.removeItem('access_token')
+      vi.doUnmock('@/api/client')
+    }
+  })
+
+  it('does not ask before login: a 401 would send the login page into a reload loop', async () => {
+    const listGA = vi.fn().mockResolvedValue({ data: { total: 0, items: [] } })
+    vi.doMock('@/api/client', () => ({ knxprojApi: { listGA } }))
+    localStorage.removeItem('access_token')
+    try {
+      await mountAppLayout()
+      expect(listGA).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('@/api/client')
     }
