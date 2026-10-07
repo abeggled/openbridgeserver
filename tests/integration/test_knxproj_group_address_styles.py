@@ -400,6 +400,9 @@ async def test_every_entrance_stores_only_internal_addresses(style, client, auth
                 }
             ],
             "knx_group_addresses": [{"address": NOTATION[style][STATE_RAW], "name": "Invariant", "description": "", "dpt": None}],
+            "knx_ga_merge_conflicts": [
+                {"address": NOTATION[style][STATE_RAW], "spelling": NOTATION[style][STATE_RAW], "field": "name", "kept": "a", "dropped": "b"}
+            ],
         },
         headers=auth_headers,
     )
@@ -494,3 +497,54 @@ async def test_adapter_card_keeps_a_connection_error_despite_a_broken_feedback_a
     finally:
         await client.patch(f"/api/v1/adapters/instances/{instance['id']}", json={"enabled": False}, headers=auth_headers)
         await client.delete(f"/api/v1/adapters/instances/{instance['id']}", headers=auth_headers)
+
+
+async def test_config_export_carries_style_and_merge_conflicts_through_a_restore(client, auth_headers, clean_group_addresses):
+    """A restored instance shows the project's notation and keeps the V56 merge notes (#1296, round 5)."""
+    from obs.db.database import get_db
+
+    db = get_db()
+    await _import(client, auth_headers, "TwoLevel")
+    switch = INTERNAL[CO_SWITCH_RAW]
+    await db.execute_and_commit("DELETE FROM knx_ga_merge_conflicts")
+    await db.execute_and_commit(
+        "INSERT INTO knx_ga_merge_conflicts (address, spelling, field, kept, dropped) VALUES (?, ?, 'description', 'neu', 'alt')",
+        (switch, NOTATION["TwoLevel"][CO_SWITCH_RAW]),
+    )
+    conflict = {"address": switch, "spelling": NOTATION["TwoLevel"][CO_SWITCH_RAW], "field": "description", "kept": "neu", "dropped": "alt"}
+
+    resp = await client.get("/api/v1/config/export", headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    export = resp.json()
+    assert export["knx_group_address_style"] == "TwoLevel"
+    assert export["knx_ga_merge_conflicts"] == [conflict]
+
+    # a fresh instance: no style row (shows ThreeLevel), no notes
+    await db.execute_and_commit("DELETE FROM knx_project")
+    await db.execute_and_commit("DELETE FROM knx_ga_merge_conflicts")
+    resp = await client.get("/api/v1/knxproj/group-addresses", params={"size": 1}, headers=auth_headers)
+    assert (resp.json()["group_address_style"], resp.json()["merge_conflicts"]) == ("ThreeLevel", [])
+
+    # an older or hand-written export may carry the conflict address in the project's notation
+    restore = {**export, "knx_ga_merge_conflicts": [{**conflict, "address": NOTATION["TwoLevel"][CO_SWITCH_RAW]}]}
+    resp = await client.post("/api/v1/config/import", json=restore, headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    resp = await client.get("/api/v1/knxproj/group-addresses", params={"size": 1}, headers=auth_headers)
+    assert (resp.json()["group_address_style"], resp.json()["merge_conflicts"]) == ("TwoLevel", [conflict])
+    await db.execute_and_commit("DELETE FROM knx_ga_merge_conflicts")
+
+
+async def test_config_import_reports_an_unknown_style_and_keeps_the_stored_one(client, auth_headers, clean_group_addresses):
+    await _import(client, auth_headers, "Free")
+    base = {"obs_version": "5", "exported_at": "2026-01-01T00:00:00", "datapoints": [], "bindings": []}
+
+    broken_note = {"address": "1/2/x", "spelling": "1/2/x", "field": "name", "kept": "a", "dropped": "b"}
+    resp = await client.post(
+        "/api/v1/config/import", json={**base, "knx_group_address_style": "FourLevel", "knx_ga_merge_conflicts": [broken_note]}, headers=auth_headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert [("FourLevel" in error, "1/2/x" in error) for error in resp.json()["errors"]] == [(True, False), (False, True)]
+    resp = await client.post("/api/v1/config/import", json=base, headers=auth_headers)  # an export without a style
+    assert resp.json()["errors"] == []
+    resp = await client.get("/api/v1/knxproj/group-addresses", params={"size": 1}, headers=auth_headers)
+    assert resp.json()["group_address_style"] == "Free"

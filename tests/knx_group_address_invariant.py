@@ -10,7 +10,8 @@ from every JSON document OBS persists, searched for ``group_address``/``ga``
 fields:
 
 - ``knx_group_addresses.address``, ``knx_co_ga_links.ga_address``,
-  ``knx_function_ga_links.ga_address`` — :func:`non_internal_group_addresses`;
+  ``knx_function_ga_links.ga_address``, ``knx_ga_merge_conflicts.address`` (its
+  ``spelling`` is the raw text on purpose) — :func:`non_internal_group_addresses`;
 - ``adapter_bindings.config`` → ``group_address``/``state_group_address`` of KNX
   bindings — :func:`non_internal_group_addresses`;
 - ringbuffer entries: the binding snapshot in ``metadata`` and the
@@ -32,6 +33,7 @@ KNX_GA_COLUMNS = (
     ("knx_group_addresses", "address"),
     ("knx_co_ga_links", "ga_address"),
     ("knx_function_ga_links", "ga_address"),
+    ("knx_ga_merge_conflicts", "address"),
 )
 BINDING_GA_KEYS = ("group_address", "state_group_address")
 
