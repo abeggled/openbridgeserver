@@ -2,7 +2,7 @@
   <div class="section-header">{{ $t('adapters.bindingForm.knxSection') }}</div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.groupAddressLabel') }}</label>
-    <GaCombobox v-model="cfg.group_address" :placeholder="$t('adapters.bindingForm.groupAddressPlaceholder')" @select="$emit('ga-select', $event)" />
+    <GaCombobox v-model="cfg.group_address" @select="$emit('ga-select', $event)" />
   </div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>

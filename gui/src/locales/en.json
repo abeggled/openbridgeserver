@@ -388,7 +388,7 @@
       "timerReadOnlyHint": "The timer is a read-only source.",
       "systemDestOnlyHint": "System DataPoints are read-only: their value can only be sent.",
       "groupAddressLabel": "Group address *",
-      "groupAddressPlaceholder": "e.g. 1/2/3 or search name …",
+      "groupAddressPlaceholder": "e.g. {example} or search name …",
       "selectDpt": "Select DPT …",
       "noValueMapping": "— no value mapping —",
       "valueMapNumInvert": "0 ↔ 1 (invert numeric)",
@@ -3549,7 +3549,15 @@
       "dbImportResultOk": "Database restore OK: {message} ({adapters} adapters restarted). Please reload the page.",
       "dbImportFailed": "Database restore failed",
       "messageArchiveDbImportResultOk": "Message archive restore OK: {message}",
-      "messageArchiveDbImportFailed": "Message archive restore failed"
+      "messageArchiveDbImportFailed": "Message archive restore failed",
+      "knxMergeConflictsTitle": "Note on the group address conversion",
+      "knxMergeConflictsText": "While converting to the uniform address notation, group addresses were merged. {n} value(s) differed; one value was kept each time.",
+      "knxMergeConflictsShow": "Show differences",
+      "knxMergeConflictsAddress": "Address",
+      "knxMergeConflictsSpelling": "Spelling",
+      "knxMergeConflictsField": "Field",
+      "knxMergeConflictsKept": "Kept",
+      "knxMergeConflictsDropped": "Dropped"
     },
     "history": {
       "dbTitle": "History DB",
