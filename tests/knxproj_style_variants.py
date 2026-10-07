@@ -123,3 +123,31 @@ def knxproj_in_style(style: str) -> bytes:
                 data = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
             zout.writestr(info, data)
     return out.getvalue()
+
+
+def knxproj_with_datapoint_types(datapoint_types: dict[int, str | None]) -> bytes:
+    """Return the three-level demo project with the ``DatapointType`` of some group addresses replaced (#1260).
+
+    ``datapoint_types`` maps a raw address to its new ETS value: ``"DPT-14"`` (main type only),
+    ``"DPST-14-56"`` (with subtype) or ``None`` (no datapoint type at all).
+    """
+    ElementTree.register_namespace("", _NS)
+    ElementTree.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+    ElementTree.register_namespace("xsd", "http://www.w3.org/2001/XMLSchema")
+    out = io.BytesIO()
+    with zipfile.ZipFile(DEMO_KNXPROJ) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename == f"{_PROJECT}/0.xml":
+                root = ElementTree.fromstring(data)
+                for ga in root.iter(_q("GroupAddress")):
+                    raw = int(ga.get("Address", "-1"))
+                    if raw not in datapoint_types:
+                        continue
+                    if datapoint_types[raw] is None:
+                        ga.attrib.pop("DatapointType", None)
+                    else:
+                        ga.set("DatapointType", datapoint_types[raw])
+                data = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+            zout.writestr(info, data)
+    return out.getvalue()

@@ -1644,7 +1644,9 @@ class TestBulkImportDatapoints:
     async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(self):
         db = _make_db(
             fetchone_result={"id": "inst-1", "adapter_type": "KNX"},
-            fetchall_result=[{"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}'}],
+            fetchall_result=[
+                {"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}', "data_type": "BOOLEAN", "unit": None},
+            ],
         )
 
         def _get_dpt(_dpt):

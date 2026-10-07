@@ -150,6 +150,9 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
     """Xknxproject DPT-Dict → open bridge server DPT-ID.
 
     xknxproject liefert: {"main": 9, "sub": 1} oder None
+
+    Nur Haupttyp ({"main": 14, "sub": None}) → "DPT14", kein geratener Subtyp (#1260):
+    ein Subtyp bringt Einheit und Skalierung mit, die das Projekt nicht festlegt.
     """
     if not dpt:
         return None
@@ -159,21 +162,7 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
         return None
     if sub is not None:
         return f"DPT{main}.{str(sub).zfill(3)}"
-    # Nur Haupttyp → Default-Subtyp
-    defaults = {
-        1: "DPT1.001",
-        2: "DPT2.001",
-        5: "DPT5.001",
-        6: "DPT6.010",
-        7: "DPT7.001",
-        8: "DPT8.001",
-        9: "DPT9.001",
-        12: "DPT12.001",
-        13: "DPT13.001",
-        14: "DPT14.054",
-        16: "DPT16.000",
-    }
-    return defaults.get(main, f"DPT{main}.001")
+    return f"DPT{main}"
 
 
 def _collect_fi_to_fn(root: Any) -> dict[str, str]:
