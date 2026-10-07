@@ -59,7 +59,7 @@
           :form="form"
           :grouped-dpts="groupedDpts"
           :dp-persist-value="props.dpPersistValue"
-          :ga-invalid="rejectedGa !== null && rejectedGa === cfg.group_address"
+          :ga-invalid="gaRejected"
           @ga-select="onGaSelect"
         />
 
@@ -369,6 +369,7 @@ const knxProject = useKnxProjectStore()
 const GA_ERROR_CODES = ['knxGroupAddressMissing', 'knxGroupAddressInvalid']
 // The command address the backend rejected; the field stays marked until it is changed.
 const rejectedGa = ref(null)
+const gaRejected = computed(() => rejectedGa.value !== null && rejectedGa.value === cfg.group_address)
 function saveErrorText(detail) {
   rejectedGa.value = GA_ERROR_CODES.includes(detail?.code) && detail.field === 'group_address' ? cfg.group_address : null
   if (GA_ERROR_CODES.includes(detail?.code)) {
