@@ -241,3 +241,12 @@ async def test_two_raw_spellings_of_one_address_merge_without_silent_loss(monkey
         assert "01/257" in row["description"] and "AndererName" in row["description"] and "DPST-9-1" in row["description"]
         assert row["description"].startswith("Demo 01 - Binaersignale / Schalten / Licht EG Schalten")
     assert any("01/257" in record.getMessage() and record.levelname == "WARNING" for record in caplog.records)
+
+
+async def test_identical_spellings_merge_without_a_note(monkeypatch, tmp_path):
+    """The realistic intermediate reimport: the internal row carries the same data, nothing to fill or note."""
+    data = _fixture("TwoLevel")
+    legacy = next(row for row in data["rows"]["knx_group_addresses"] if row["address"] == NOTATION["TwoLevel"][CO_SWITCH_RAW])
+    async with _upgraded(monkeypatch, tmp_path, data, {"knx_group_addresses": [{**legacy, "address": INTERNAL[CO_SWITCH_RAW]}]}) as db:
+        [row] = await db.fetchall("SELECT * FROM knx_group_addresses WHERE address = ?", (INTERNAL[CO_SWITCH_RAW],))
+        assert {key: row[key] for key in legacy if key != "address"} == {key: value for key, value in legacy.items() if key != "address"}
