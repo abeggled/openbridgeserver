@@ -729,6 +729,7 @@ Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual
 | **OR** | A, B | Out | True when **at least one** input is true. |
 | **NOT** | In | Out | Inverts the input. |
 | **XOR** | A, B | Out | True when **exactly one** input is true. |
+| **Binary statistics** | IN 1 … IN 30 | Count TRUE, Count FALSE, Majority TRUE, Total, TRUE %, Tie, Threshold reached | Counts TRUE/FALSE over 2–30 binary inputs (per-input negation applied before counting). Unwired inputs are ignored by default or counted as FALSE; `Threshold` enables a "k of n" output. Stateless. |
 | **Memory** | In, Reset | Out | Outputs the stored value from the previous graph run and stores the current input for the next run. Use this block to build controlled feedback loops. |
 | **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
 | **Edge detection** | In, Reset | Out, Trigger rising, Trigger falling | Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the configured rising value and sets the Rising trigger, a falling edge (true → false) the falling value and the Falling trigger. Without an edge nothing is sent on Out, so a downstream Write Object does not write on every run. Each direction is configured on its own — send a value, only pulse the trigger, or stay silent — and Reset drops the remembered level so the next value starts fresh. |

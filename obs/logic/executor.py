@@ -1650,6 +1650,28 @@ class GraphExecutor:
                     result = not result
                 return {"out": result}
 
+            case "binary_stats":
+                wired = {edge.targetHandle or "in" for edge in self.flow.edges if edge.target == node.id}
+                wired.update(inputs)  # debug/manual overrides count as supplied inputs
+                only = wired if d.get("unwired_inputs", "ignore") != "count_false" else None
+                vals = self._collect_gate_inputs(inputs, d, only_ports=only)
+                count_true = sum(vals)
+                total = len(vals)
+                count_false = total - count_true
+                try:
+                    threshold = int(d.get("threshold_count", 0) or 0)
+                except (TypeError, ValueError):
+                    threshold = 0
+                return {
+                    "count_true": count_true,
+                    "count_false": count_false,
+                    "majority_true": count_true > count_false,
+                    "total": total,
+                    "percent_true": self._round_half_up(count_true * 100 / total, 1) if total else 0.0,
+                    "tie": total > 0 and count_true == count_false,
+                    "threshold_reached": threshold > 0 and count_true >= threshold,
+                }
+
             case "gate":
                 enable = self._to_bool(inputs.get("enable"))
                 if d.get("negate_enable"):
@@ -3069,16 +3091,20 @@ class GraphExecutor:
         }
         return inputs.get(active) if active is not None else None
 
-    def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any]) -> list[bool]:
+    def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any], only_ports: set[str] | None = None) -> list[bool]:
         """Collect all active gate inputs with per-input negation applied.
 
         Port naming: in1, in2, in3, … up to input_count.
         Negation config: "negate_in1", "negate_in2", …
+        ``only_ports`` restricts the result to the named ports (used by blocks
+        that count only wired inputs instead of treating them as False).
         """
         count = max(2, min(30, int(d.get("input_count", 2))))
         vals: list[bool] = []
         for i in range(1, count + 1):
             port_id = f"in{i}"
+            if only_ports is not None and port_id not in only_ports:
+                continue
             v = self._to_bool(inputs.get(port_id))
             if d.get(f"negate_{port_id}"):
                 v = not v
