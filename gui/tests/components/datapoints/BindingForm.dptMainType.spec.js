@@ -109,6 +109,13 @@ describe('BindingForm (KNX): DPT taken over from the group address catalog (#126
     w.unmount()
   })
 
+  it('leaves the DPT alone when the catalog has none for the address', async () => {
+    const w = await mountForm('DPT5.001')
+    await pickGroupAddress(w, '3/1/1', null)
+    expect(await savedDpt(w)).toBe('DPT5.001')
+    w.unmount()
+  })
+
   describe('picking another address and then the first one again (round trip)', () => {
     it.each(['DPT9', 'DPT9.001'])('restores the stored subtype after a detour over %s', async (detour) => {
       const w = await mountForm('DPT5.001')
