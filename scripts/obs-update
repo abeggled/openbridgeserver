@@ -86,7 +86,10 @@ for r in sorted(non_draft, key=lambda r: sort_key(r['tag_name']), reverse=True):
 result = list(versioned)
 if show_nightlies:
     result.extend(r for r in non_draft if re.match(r'^nightly-\d{8}\$', r['tag_name']))
-result.sort(key=lambda r: sort_key(r['tag_name']), reverse=True)
+# Display newest first by publication time. sort_key() cannot order nightlies
+# against versioned tags: it compares a release's patch number with a
+# nightly's day of month, so 2026.10.0 would land below nightly-20261008.
+result.sort(key=lambda r: r.get('published_at') or '', reverse=True)
 
 for r in result:
     tag = r['tag_name']

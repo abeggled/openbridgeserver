@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import re
 import sys
 import textwrap
@@ -289,3 +290,83 @@ def test_channel_info_script_yields_empty_lines_when_lxc_not_yet_published():
     lines = _run_channel_info_script(obs_update, manifest)
 
     assert lines == ["", "", ""]
+
+
+def _run_version_list_script(releases: list[dict], *, show_nightlies: bool) -> list[str]:
+    """Run the VERSION_LIST Python snippet as bash would hand it to python3."""
+    m = re.search(
+        r'VERSION_LIST=\$\(echo "\$ALL_RELEASES" \| SHOW_NIGHTLIES="\$SHOW_NIGHTLIES" python3 -c "\n(.*?)\n"\)', _obs_update_text(), re.DOTALL
+    )
+    assert m, "Could not find VERSION_LIST python block"
+    # Inside bash double quotes `\$` reaches python3 as a plain `$`.
+    script = m.group(1).replace("\\$", "$")
+
+    old_stdin, old_stdout = sys.stdin, sys.stdout
+    old_env = os.environ.get("SHOW_NIGHTLIES")
+    os.environ["SHOW_NIGHTLIES"] = "true" if show_nightlies else "false"
+    sys.stdin = io.StringIO(json.dumps(releases))
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        exec(script, {})  # noqa: S102
+    finally:
+        sys.stdin, sys.stdout = old_stdin, old_stdout
+        if old_env is None:
+            del os.environ["SHOW_NIGHTLIES"]
+        else:
+            os.environ["SHOW_NIGHTLIES"] = old_env
+    return buf.getvalue().splitlines()
+
+
+def _release(tag: str, published_at: str | None, *, prerelease: bool = False) -> dict:
+    return {"tag_name": tag, "draft": False, "prerelease": prerelease, "published_at": published_at}
+
+
+def test_version_list_orders_release_above_same_month_nightlies():
+    """#1323: 2026.10.0 published after nightly-20261008 must be listed first,
+    not below every nightly of October (patch 0 vs day of month 8)."""
+    releases = [
+        _release("nightly-20261008", "2026-10-08T09:10:57Z", prerelease=True),
+        _release("2026.10.0", "2026-10-08T19:40:34Z"),
+        _release("nightly-20261007", "2026-10-07T08:53:09Z", prerelease=True),
+        _release("nightly-20261001", "2026-10-01T09:06:15Z", prerelease=True),
+        _release("nightly-20260930", "2026-09-30T08:43:49Z", prerelease=True),
+        _release("2026.9.1", "2026-09-08T20:22:13Z"),
+        _release("2026.9.0", "2026-09-07T19:57:15Z"),
+    ]
+
+    lines = _run_version_list_script(releases, show_nightlies=True)
+
+    assert lines == [
+        "stable 2026.10.0",
+        "nightly nightly-20261008",
+        "nightly nightly-20261007",
+        "nightly nightly-20261001",
+        "nightly nightly-20260930",
+        "stable 2026.9.1",
+    ]
+
+
+def test_version_list_without_nightlies_keeps_two_stables_newest_first():
+    releases = [
+        _release("nightly-20261008", "2026-10-08T09:10:57Z", prerelease=True),
+        _release("2026.9.1", "2026-09-08T20:22:13Z"),
+        _release("2026.10.0", "2026-10-08T19:40:34Z"),
+        _release("2026.10.1-RC1", "2026-10-09T10:00:00Z", prerelease=True),
+        _release("2026.9.0", "2026-09-07T19:57:15Z"),
+    ]
+
+    lines = _run_version_list_script(releases, show_nightlies=False)
+
+    assert lines == ["rc 2026.10.1-RC1", "stable 2026.10.0", "stable 2026.9.1"]
+
+
+def test_version_list_puts_release_without_published_at_last():
+    releases = [
+        _release("2026.9.1", None),
+        _release("2026.10.0", "2026-10-08T19:40:34Z"),
+    ]
+
+    lines = _run_version_list_script(releases, show_nightlies=False)
+
+    assert lines == ["stable 2026.10.0", "stable 2026.9.1"]
