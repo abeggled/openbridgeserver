@@ -61,7 +61,7 @@
           :dp-persist-value="props.dpPersistValue"
           :ga-invalid="gaRejected"
           @ga-select="onGaSelect"
-          @dpt-change="dptChosen = true"
+          @dpt-change="dptAnchor = cfg.dpt_id"
         />
 
       <!-- Modbus -->
@@ -426,9 +426,11 @@ const VALUE_MAP_PRESETS = [
   { key: 'custom',      label: t('adapters.bindingForm.customValueMapping'),         map: null },
 ]
 
-// The DPT in the form is a choice (stored with the binding or picked by the user), not the
-// form default: only then does a catalog main type leave its subtype alone (#1260).
-const dptChosen = ref(false)
+// The anchor is the DPT chosen for this binding: the one stored with it, replaced by every
+// pick in the DPT select. The form default is no choice. Picking a group address whose
+// catalog entry names only the anchor's main type brings the anchor's subtype back, also
+// after a detour over another address (#1260).
+const dptAnchor = ref(null)
 
 const cfg = reactive({
   group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false, read_interval_s: null,
@@ -702,7 +704,7 @@ watch(() => props.initial, val => {
   form.direction           = val.direction
   form.enabled             = val.enabled
   Object.assign(cfg, val.config ?? {})
-  dptChosen.value = Boolean(val.config?.dpt_id)
+  dptAnchor.value = val.config?.dpt_id || null
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
@@ -1343,7 +1345,7 @@ function onMqttJsonSampleInput() {
 }
 
 function onGaSelect(item) {
-  if (item.dpt && !keepsStoredSubtype(item.dpt, dptChosen.value ? cfg.dpt_id : null)) cfg.dpt_id = item.dpt
+  if (item.dpt) cfg.dpt_id = keepsStoredSubtype(item.dpt, dptAnchor.value) ? dptAnchor.value : item.dpt
 }
 
 function onPresetSelect(e) {

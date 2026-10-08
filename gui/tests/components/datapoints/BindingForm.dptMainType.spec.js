@@ -108,4 +108,31 @@ describe('BindingForm (KNX): DPT taken over from the group address catalog (#126
     expect(await savedDpt(w)).toBe('DPT9')
     w.unmount()
   })
+
+  describe('picking another address and then the first one again (round trip)', () => {
+    it.each(['DPT9', 'DPT9.001'])('restores the stored subtype after a detour over %s', async (detour) => {
+      const w = await mountForm('DPT5.001')
+      await pickGroupAddress(w, '2/1/1', detour)
+      await pickGroupAddress(w, '3/1/1', 'DPT5')
+      expect(await savedDpt(w)).toBe('DPT5.001')
+      w.unmount()
+    })
+
+    it('restores the subtype last chosen in the form, not the stored one', async () => {
+      const w = await mountForm('DPT5.001')
+      await w.findAll('select').find(s => s.find('option[value="DPT5.004"]').exists()).setValue('DPT5.004')
+      await pickGroupAddress(w, '2/1/1', 'DPT9')
+      await pickGroupAddress(w, '3/1/1', 'DPT5')
+      expect(await savedDpt(w)).toBe('DPT5.004')
+      w.unmount()
+    })
+
+    it('a new binding without a choice ends with the catalog main type', async () => {
+      const w = await mountForm()
+      await pickGroupAddress(w, '2/1/1', 'DPT9')
+      await pickGroupAddress(w, '3/1/1', 'DPT5')
+      expect(await savedDpt(w)).toBe('DPT5')
+      w.unmount()
+    })
+  })
 })
