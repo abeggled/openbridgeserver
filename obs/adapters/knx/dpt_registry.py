@@ -90,6 +90,7 @@ def keeps_stored_subtype(new: str | None, stored: str | None) -> bool:
     """
     return bool(new and stored and "." not in new and stored.startswith(f"{new}."))
 
+
 # ---------------------------------------------------------------------------
 # Codec helpers
 # ---------------------------------------------------------------------------
