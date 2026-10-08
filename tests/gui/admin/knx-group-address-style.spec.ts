@@ -15,10 +15,12 @@ import { apiDelete, apiGet, apiPost } from '../helpers'
 
 const REPO = path.resolve(__dirname, '..', '..', '..')
 
+// The derivation uses the standard library only, so the runner's python3 is
+// enough; the E2E job runs OBS in Docker and has no project venv.
 function twoLevelProject(): Buffer {
   return execFileSync(
-    path.join(REPO, 'tools', 'with-venv'),
-    ['python', '-c', "import sys; from tests.knxproj_style_variants import knxproj_in_style; sys.stdout.buffer.write(knxproj_in_style('TwoLevel'))"],
+    'python3',
+    ['-c', "import sys; from tests.knxproj_style_variants import knxproj_in_style; sys.stdout.buffer.write(knxproj_in_style('TwoLevel'))"],
     { cwd: REPO, maxBuffer: 64 * 1024 * 1024 },
   )
 }
