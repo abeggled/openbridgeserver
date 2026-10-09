@@ -3646,6 +3646,57 @@ class LogicManager:
         # live source — the executor only ever consumes the live one, so
         # tainting through the shadowed edge too would hold a downstream
         # change_filter hostage to a source nothing actually reads from.
+        # Multi-output fan-in blocks: each output handle can be decided by a different input.
+        _per_handle_fan_in_types = frozenset({"binary_stats"})
+        _fan_in_probe = GraphExecutor(flow, {}, ical_app_config)
+
+        def _handle_independent_of_volatile_inputs(
+            node_id: str,
+            output_handle: str,
+            volatile_edge: Callable[[Any], bool],
+            outs: dict[str, dict[str, Any]],
+            _seen: frozenset[str] = frozenset(),
+        ) -> bool:
+            """True if ``output_handle`` of a multi-output fan-in node ignores its volatile inputs.
+
+            A whole-node taint (unresolved source, missing pulse) is too coarse
+            for a block like Binary Statistics, where one input can change
+            ``total`` yet leave ``threshold_reached`` decided by a sibling. Each
+            volatile input is probed with both booleans and only the handle a
+            consumer reads is compared. An input fed by another such block counts
+            as volatile only if the upstream handle itself is; debug-overridden
+            ports never are.
+            """
+            node = _node_by_id_early.get(node_id)
+            if node is None or node.type not in _per_handle_fan_in_types or node_id in _seen:
+                return False
+            inputs: dict[str, Any] = {}
+            volatile: set[str] = set()
+            for incoming in _effective_edges:
+                if incoming.target != node_id:
+                    continue
+                handle = incoming.targetHandle or "in"
+                inputs[handle] = GraphExecutor._get_output_value(outs.get(incoming.source, {}), incoming.sourceHandle or "out")
+                if (
+                    handle not in debug_overrides.get(node_id, {})
+                    and volatile_edge(incoming)
+                    and not _handle_independent_of_volatile_inputs(
+                        incoming.source, incoming.sourceHandle or "out", volatile_edge, outs, _seen | {node_id}
+                    )
+                ):
+                    volatile.add(handle)
+            inputs.update(debug_overrides.get(node_id, {}))
+            try:
+                actual = GraphExecutor._get_output_value(outs.get(node_id, {}), output_handle)
+                for handle in volatile:
+                    for counterfactual in (False, True):
+                        result = _fan_in_probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, handle: counterfactual}))
+                        if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
+                            return False
+                return True
+            except Exception:  # noqa: BLE001 - malformed imported config remains conservative
+                return False
+
         def _compute_cf_hold_ids(seed_ids: set[str], outputs_source: dict[str, dict[str, Any]] | None = None) -> set[str]:
             """Taint-BFS from `seed_ids` (unresolved sources), returning the
             change_filter node ids that must be held this pass. Factored out
@@ -3747,6 +3798,10 @@ class LogicManager:
                         # A debug override replaces this effective edge for
                         # the current execution, so its unresolved source
                         # cannot taint the overridden value or descendants.
+                        continue
+                    if _handle_independent_of_volatile_inputs(_te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _src):
+                        # The read output handle is decided by an input that is
+                        # not tainted, whatever the unresolved ones deliver.
                         continue
                     _target_node = _node_by_id_early.get(_te.target)
                     _target_type = _target_node.type if _target_node is not None else None
@@ -4169,9 +4224,6 @@ class LogicManager:
                 "xml_extractor",
                 "substring_extractor",
             }
-            _fan_in_probe = GraphExecutor(flow, {}, ical_app_config)
-            # Multi-output fan-in blocks: each output handle can be decided by a different input.
-            _per_handle_fan_in_types = {"binary_stats"}
 
             def _has_independent_fresh_trigger(target_id: str, trigger_ports: set[str], missing_origins: set[str]) -> bool:
                 target_fresh_handles = event_fresh.get(target_id, set()) if event_fresh is not None else set()
@@ -4249,45 +4301,11 @@ class LogicManager:
                 except Exception:  # noqa: BLE001 - malformed imported relay config remains provenance-conservative
                     return False
 
-            def _handle_ignores_pulse_inputs(node_id: str, output_handle: str) -> bool:
-                """True if ``output_handle`` of a multi-output fan-in node is independent of its pulse inputs.
-
-                Whole-output comparison (``_fresh_fan_in_preserves_output``) is too
-                coarse for a block like Binary Statistics: a pulse input changes
-                ``total``/``count_true`` yet leaves ``threshold_reached`` decided by
-                a sibling. Probe each pulse-carrying input with both booleans and
-                compare only the handle a consumer actually reads.
-                """
-                if _node_type_by_id.get(node_id) not in _per_handle_fan_in_types:
-                    return False
-                node = _node_by_id_early[node_id]
-                inputs: dict[str, Any] = {}
-                pulse_handles: set[str] = set()
-                for incoming in _effective_edges:
-                    if incoming.target != node_id:
-                        continue
-                    handle = incoming.targetHandle or "in"
-                    inputs[handle] = GraphExecutor._get_output_value(outputs.get(incoming.source, {}), incoming.sourceHandle or "out")
-                    # change_filter.out is a sustained value, not a pulse.
-                    if incoming.source in relay_origins and not (
-                        _node_type_by_id.get(incoming.source) == "change_filter" and (incoming.sourceHandle or "out") != "changed"
-                    ):
-                        pulse_handles.add(handle)
-                inputs.update(debug_overrides.get(node_id, {}))
-                if not pulse_handles:
-                    return False
-                try:
-                    actual = GraphExecutor._get_output_value(outputs.get(node_id, {}), output_handle)
-                    for handle in pulse_handles:
-                        for counterfactual in (False, True):
-                            probe = dict(inputs)
-                            probe[handle] = counterfactual
-                            result = _fan_in_probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, probe))
-                            if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
-                                return False
-                    return True
-                except Exception:  # noqa: BLE001 - malformed imported config remains provenance-conservative
-                    return False
+            def _pulse_input_edge(edge: Any) -> bool:
+                # change_filter.out is a sustained value, not a pulse.
+                return edge.source in relay_origins and not (
+                    _node_type_by_id.get(edge.source) == "change_filter" and (edge.sourceHandle or "out") != "changed"
+                )
 
             queue = list(relay_origins)
             while queue:
@@ -4296,8 +4314,8 @@ class LogicManager:
                 for pulse_edge in _effective_edges:
                     if pulse_edge.source != source_id:
                         continue
-                    if _node_type_by_id.get(source_id) not in _PULSE_ORIGIN_NODE_TYPES and _handle_ignores_pulse_inputs(
-                        source_id, pulse_edge.sourceHandle or "out"
+                    if _node_type_by_id.get(source_id) not in _PULSE_ORIGIN_NODE_TYPES and _handle_independent_of_volatile_inputs(
+                        source_id, pulse_edge.sourceHandle or "out", _pulse_input_edge, outputs
                     ):
                         continue
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
