@@ -9,13 +9,23 @@ NODE_TYPE = NodeTypeDef(
     type="host_check",
     label="Host Check (Ping)",
     category="integration",
-    description="Pingt einen Host und liefert den Erreichbarkeitsstatus sowie die Latenz. Wird ausgelöst wenn der Trigger-Eingang true ist (Flanke). Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
+    description=(
+        "Pingt einen Host und liefert den Erreichbarkeitsstatus sowie die Latenz. Wird ausgelöst wenn der Trigger-Eingang true ist — "
+        "je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke. "
+        "Empfehlung: mit einem Timer/Cron-Knoten verbinden."
+    ),
     inputs=[port("trigger", "Trigger", "trigger")],
     outputs=[
         port("reachable", "Erreichbar", "boolean"),
         port("latency_ms", "Latenz (ms)", "number"),
     ],
     config_schema={
+        "trigger_mode": {
+            "type": "string",
+            "enum": ["event", "edge"],
+            "default": "event",
+            "label": "Auslösemodus (jedes Event / nur steigende Flanke)",
+        },
         "host": {
             "type": "string",
             "default": "",

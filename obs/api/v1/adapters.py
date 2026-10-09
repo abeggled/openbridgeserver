@@ -887,10 +887,11 @@ async def migrate_instance_bindings(
         (source_id,),
     )
     target_bindings = await db.fetchall(
-        "SELECT datapoint_id FROM adapter_bindings WHERE adapter_instance_id=?",
+        "SELECT datapoint_id, config FROM adapter_bindings WHERE adapter_instance_id=?",
         (target_id,),
     )
     target_datapoint_ids = {row["datapoint_id"] for row in target_bindings}
+    target_slugs = {_json_config(row["config"]).get("slug") for row in target_bindings} if source_row["adapter_type"] == "WEBHOOK" else set()
 
     migrated = 0
     skipped = 0
@@ -904,6 +905,16 @@ async def migrate_instance_bindings(
             skipped += 1
             continue
         await _ensure_binding_mutation_scope(db, principal, uuid.UUID(binding_row["datapoint_id"]))
+        # A slug is the public name of one endpoint per instance: moving a
+        # binding next to one that already owns it would leave one URL dead
+        # after the reload, so refuse the whole migration before any row moves.
+        if source_row["adapter_type"] == "WEBHOOK":
+            slug = _json_config(binding_row["config"]).get("slug")
+            if slug in target_slugs:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"Der Slug '{slug}' ist in der Ziel-Instanz bereits vergeben",
+                )
         if target_message_config is not None:
             _validate_adapter_binding(
                 "MESSAGE",
@@ -1822,6 +1833,306 @@ async def snmp_walk(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             f"SNMP Walk fehlgeschlagen: {exc}",
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# WEBHOOK — ready-to-copy call URLs and token rotation (issue #1256)
+# ---------------------------------------------------------------------------
+
+
+class WebhookRejectionOut(BaseModel):
+    """Why calls were turned away — the diagnostics behind an opaque 404."""
+
+    total: int = 0
+    counts: dict[str, int] = {}
+    last_reason: str | None = None
+    last_client_ip: str | None = None
+    last_slug: str | None = None
+    last_at: str | None = None
+
+
+class WebhookBindingEntry(BaseModel):
+    binding_id: str
+    datapoint_id: str
+    datapoint_name: str | None
+    enabled: bool
+    slug: str
+    token: str
+    methods: list[str]
+    allowed_networks: list[str]
+    value_source: str
+    fixed_value: str
+    value_param: str
+    debounce_ms: int
+    autoreset: bool
+    autoreset_value: str
+    autoreset_delay_ms: int
+    # Relative paths — the GUI prefixes its own origin, because the server
+    # cannot know the host name or port the device has to call.
+    call_path: str
+    call_path_token_in_path: str
+    call_count: int
+    publish_count: int
+    last_called: str | None
+    last_status: int | None
+    rejections: WebhookRejectionOut = WebhookRejectionOut()
+
+
+class WebhookOverview(BaseModel):
+    """The instance's own webhook settings plus its bindings.
+
+    The GUI needs the endpoint-wide settings alongside the bindings to build
+    and judge a call URL; the allowlist itself lives on each binding.
+    """
+
+    instance_id: str
+    running: bool
+    path_prefix: str
+    trust_forwarded_for: bool
+    rate_limit_per_minute: int
+    rejections: WebhookRejectionOut = WebhookRejectionOut()
+    bindings: list[WebhookBindingEntry] = []
+
+
+class WebhookTokenRotationResult(BaseModel):
+    binding_id: str
+    slug: str
+    token: str
+    call_path: str
+    call_path_token_in_path: str
+
+
+async def _filter_binding_manageable_datapoint_ids(db: Database, principal: Principal, dp_ids: list[str]) -> set[str]:
+    allowed: set[str] = set()
+    for dp_id in dict.fromkeys(dp_ids):
+        try:
+            await _ensure_binding_mutation_scope(db, principal, uuid.UUID(dp_id))
+        except HTTPException:
+            continue
+        allowed.add(dp_id)
+    return allowed
+
+
+def _ensure_webhook_secret_user(principal: Principal) -> None:
+    """Keep webhook bearer tokens away from API keys.
+
+    Both the overview (which serves the token in clear text) and the rotation
+    reply expose a secret that authorises its DataPoint anonymously and outlives
+    the key that fetched it. WEBHOOK deliberately delegates nothing to API keys,
+    so a key must not read or rotate it however many grants it holds.
+    """
+    if principal.type != "user":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Webhook-Token sind nur für Benutzer zugänglich")
+
+
+async def _webhook_instance_row(db: Database, instance_id: uuid.UUID) -> Any:
+    row = await db.fetchone("SELECT adapter_type, config FROM adapter_instances WHERE id=?", (str(instance_id),))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "WEBHOOK":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für WEBHOOK-Instanzen verfügbar")
+    return row
+
+
+def _webhook_path_prefix(instance_row: Any) -> str:
+    from obs.adapters.webhook.adapter import DEFAULT_PATH_PREFIX, normalise_path_prefix
+
+    raw = _json_config(instance_row["config"]).get("path_prefix") or DEFAULT_PATH_PREFIX
+    try:
+        return normalise_path_prefix(str(raw))
+    except ValueError:
+        # A stored prefix can only be invalid if it predates the current
+        # validation; report the default rather than failing the listing.
+        return DEFAULT_PATH_PREFIX
+
+
+def _webhook_call_paths(prefix: str, slug: str, token: str) -> tuple[str, str]:
+    return f"{prefix}/{slug}?token={token}", f"{prefix}/{slug}/{token}"
+
+
+def _webhook_rejections_out(counters: Any) -> WebhookRejectionOut:
+    """Map the adapter's in-memory rejection counters to the API shape."""
+    if counters is None:
+        return WebhookRejectionOut()
+    last = counters.last
+    return WebhookRejectionOut(
+        total=counters.total,
+        counts=dict(counters.counts),
+        last_reason=last.reason.value if last else None,
+        last_client_ip=last.client_ip if last else None,
+        last_slug=last.slug if last else None,
+        last_at=last.at.isoformat() if last else None,
+    )
+
+
+def _webhook_instance_settings(instance_row: Any) -> Any:
+    """Parse the stored instance config, falling back to the defaults.
+
+    An imported backup or a hand-edited row can hold a configuration the
+    current validation would refuse; the overview reports defaults rather than
+    failing, exactly like ``_webhook_path_prefix`` does for the prefix alone.
+    """
+    from obs.adapters.webhook.adapter import WebhookAdapterConfig
+
+    try:
+        return WebhookAdapterConfig(**_json_config(instance_row["config"]))
+    except ValidationError:
+        return WebhookAdapterConfig()
+
+
+@router.get("/instances/{instance_id}/webhook/bindings", response_model=WebhookOverview)
+async def webhook_list_bindings(
+    instance_id: uuid.UUID,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> WebhookOverview:
+    """The instance's webhook settings plus its bindings' call URLs and counters.
+
+    This is the only route that serves a binding token in clear text — the
+    generic binding listing redacts it — so it requires the same WRITE grant on
+    the adapter instance that creating the binding needed.  The token is a
+    bearer secret for exactly one DataPoint, and whoever may hand it to a
+    device may also read it back to build the URL.
+
+    It also reports why calls were turned away.  A rejected call answers an
+    indistinguishable 404 on purpose, which makes a misconfigured allowlist
+    look exactly like a broken adapter — the counters and the address of the
+    last rejection are what make that diagnosable from the GUI.
+    """
+    from obs.adapters.webhook.adapter import WebhookBindingConfig
+    from obs.core.registry import get_registry
+
+    principal = _principal_from_dependency(_user)
+    _ensure_webhook_secret_user(principal)
+    instance_row = await _webhook_instance_row(db, instance_id)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
+
+    settings = _webhook_instance_settings(instance_row)
+    prefix = _webhook_path_prefix(instance_row)
+    instance = adapter_registry.get_instance_by_id(str(instance_id))
+    rows = await db.fetchall(
+        "SELECT * FROM adapter_bindings WHERE adapter_instance_id=? AND adapter_type='WEBHOOK' ORDER BY created_at",
+        (str(instance_id),),
+    )
+    # The entry carries the binding's bearer token, which authorises writes to
+    # its DataPoint. READ access to that DataPoint is therefore not enough: the
+    # caller needs the same right that changing the binding requires, or the
+    # token would turn a read grant into an anonymous write path.
+    allowed_dp_ids = await _filter_binding_manageable_datapoint_ids(db, principal, [row["datapoint_id"] for row in rows])
+
+    registry = get_registry()
+    result: list[WebhookBindingEntry] = []
+    for row in rows:
+        if row["datapoint_id"] not in allowed_dp_ids:
+            continue
+        try:
+            config = WebhookBindingConfig(**_json_config(row["config"]))
+        except ValidationError:
+            logger.warning("WEBHOOK binding %s has an invalid configuration — skipped in listing", row["id"])
+            continue
+        stats = instance.stats_for(row["id"]) if instance is not None else None
+        dp = registry.get(uuid.UUID(row["datapoint_id"]))
+        call_path, call_path_in_path = _webhook_call_paths(prefix, config.slug, config.token)
+        result.append(
+            WebhookBindingEntry(
+                binding_id=row["id"],
+                datapoint_id=row["datapoint_id"],
+                datapoint_name=dp.name if dp is not None else None,
+                enabled=bool(row["enabled"]),
+                slug=config.slug,
+                token=config.token,
+                methods=list(config.methods),
+                allowed_networks=list(config.allowed_networks),
+                value_source=config.value_source,
+                fixed_value=config.fixed_value,
+                value_param=config.value_param,
+                debounce_ms=config.debounce_ms,
+                autoreset=config.autoreset,
+                autoreset_value=config.autoreset_value,
+                autoreset_delay_ms=config.autoreset_delay_ms,
+                call_path=call_path,
+                call_path_token_in_path=call_path_in_path,
+                call_count=stats.call_count if stats else 0,
+                publish_count=stats.publish_count if stats else 0,
+                last_called=stats.last_called.isoformat() if stats and stats.last_called else None,
+                last_status=stats.last_status if stats else None,
+                rejections=_webhook_rejections_out(stats.rejections if stats else None),
+            )
+        )
+    return WebhookOverview(
+        instance_id=str(instance_id),
+        running=instance is not None,
+        path_prefix=prefix,
+        trust_forwarded_for=settings.trust_forwarded_for,
+        rate_limit_per_minute=settings.rate_limit_per_minute,
+        rejections=_webhook_rejections_out(instance.rejections if instance is not None else None),
+        bindings=result,
+    )
+
+
+@router.post(
+    "/instances/{instance_id}/webhook/bindings/{binding_id}/rotate-token",
+    response_model=WebhookTokenRotationResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/webhook/bindings/{binding_id}/rotate-token"))],
+)
+async def webhook_rotate_token(
+    instance_id: uuid.UUID,
+    binding_id: uuid.UUID,
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> WebhookTokenRotationResult:
+    """Issue a new token for one webhook binding, revoking the old one.
+
+    Scoped to this binding on purpose: a device whose configuration leaked can
+    be re-keyed without touching any other integration.  The new token is
+    returned once in the response and never written to the audit log — the
+    audit entry records only that the binding was rotated.
+    """
+    from obs.adapters.webhook.adapter import WebhookBindingConfig, generate_token
+    from obs.core.registry import get_registry
+
+    principal = _principal_from_dependency(_user)
+    _ensure_webhook_secret_user(principal)
+    instance_row = await _webhook_instance_row(db, instance_id)
+    await _ensure_instance_write_grant(db, principal, str(instance_id))
+
+    # The token is rewritten as part of the whole config object, exactly like a
+    # binding PATCH does. Both hold the registry's external-write lock around
+    # that read-modify-write, so a save that started before the rotation cannot
+    # land afterwards and put the revoked token back.
+    async with get_registry().external_write_lock:
+        row = await db.fetchone(
+            "SELECT * FROM adapter_bindings WHERE id=? AND adapter_instance_id=? AND adapter_type='WEBHOOK'",
+            (str(binding_id), str(instance_id)),
+        )
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Binding nicht gefunden")
+        await _ensure_binding_mutation_scope(db, principal, uuid.UUID(row["datapoint_id"]))
+
+        try:
+            config = WebhookBindingConfig(**_json_config(row["config"]))
+        except Exception as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Ungültige Binding-Config: {exc}") from exc
+
+        rotated = config.model_copy(update={"token": generate_token()})
+        await db.execute_and_commit(
+            "UPDATE adapter_bindings SET config=?, updated_at=? WHERE id=?",
+            (json.dumps(rotated.model_dump()), datetime.now(UTC).isoformat(), str(binding_id)),
+        )
+    await adapter_registry.reload_instance_bindings(str(instance_id), db)
+    if request is not None:
+        set_contract_audit_resource_id(request, str(binding_id))
+
+    prefix = _webhook_path_prefix(instance_row)
+    call_path, call_path_in_path = _webhook_call_paths(prefix, rotated.slug, rotated.token)
+    return WebhookTokenRotationResult(
+        binding_id=str(binding_id),
+        slug=rotated.slug,
+        token=rotated.token,
+        call_path=call_path,
+        call_path_token_in_path=call_path_in_path,
+    )
 
 
 # ---------------------------------------------------------------------------

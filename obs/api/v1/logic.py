@@ -321,10 +321,16 @@ def _flow_from_row(row: dict) -> FlowData:
     return FlowData.model_validate(raw)
 
 
+# Blocks whose ###OBSn### variables read DataPoints (#1301); all need the same authorization as a Read Object.
+_VARIABLE_BLOCK_TYPES = frozenset(
+    {"api_client", "json_extractor", "xml_extractor", "string_concat", "string_replace", "notify_message", "message_archive", "ical"}
+)
+
+
 def _node_datapoint_ids(node: LogicNode) -> list[object]:
     if node.type in {"datapoint_read", "datapoint_write"}:
         return [node.data.get("datapoint_id")]
-    if node.type == "api_client":
+    if node.type in _VARIABLE_BLOCK_TYPES:
         return [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
     if node.type == "value_sequence":
         steps = node.data.get("steps") or []
@@ -1241,7 +1247,7 @@ async def get_datapoint_logic_usages(
                 if node.data.get("datapoint_id") != dp_id:
                     continue
                 direction = "DEST"
-            elif node.type == "api_client":
+            elif node.type in _VARIABLE_BLOCK_TYPES:
                 variables = _normalise_api_client_variables(node.data.get("variables"))
                 if not any(variable["datapoint_id"] == dp_id for variable in variables.values()):
                     continue

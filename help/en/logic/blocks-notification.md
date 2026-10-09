@@ -15,6 +15,11 @@ connected, its value is sent instead of the fallback text. Without data point co
 logic block, MESSAGE placeholders in the text are sent unchanged. **Priority** ranges from -2
 (very low) to 1 (high).
 
+**Title** and **fallback message** support variables: date/time (`###HH###`, `###DATE###`,
+`###TS###` …) and objects assigned under **Variables** (`###OBS1###` …), list: [JSON Extractor](./blocks-integration#logic-block-json-extractor). The message
+text connected via the input is not evaluated. If an `###OBSn###` slot is unconfigured or has no
+value, nothing is sent and the error is shown on the block.
+
 The block fires automatically as soon as a value arrives on the **Message** input, or the
 **Trigger** input becomes true.
 
@@ -24,6 +29,9 @@ Writes a message into a selected message archive. **Message type** and **Severit
 how the message is categorized in the archive. Title and message are fallback values, used only
 when the corresponding inputs (**Title**/**Message**) aren't connected — a connected input
 overrides the fallback text.
+
+The fallback texts support the same variables as the notification (date/time and `###OBSn###`,
+see [JSON Extractor](./blocks-integration#logic-block-json-extractor)); with an unresolvable slot nothing is archived and the error is shown.
 
 The block fires automatically as soon as a value arrives on the **Message** input, or the
 **Trigger** input becomes true.

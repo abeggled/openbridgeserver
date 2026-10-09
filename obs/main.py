@@ -55,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.log_buffer import LogBufferHandler
 
     LogBufferHandler.install(asyncio.get_event_loop(), level=log_level)
+    # Runs after uvicorn configured its loggers, whichever way the server was started.
+    from obs.adapters.webhook.access_log import install_webhook_access_log_filter
+
+    install_webhook_access_log_filter()
     logger.info(f"open bridge server v{__version__} starting …")
 
     # 1. Database
@@ -139,6 +143,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
     import obs.adapters.snmp.adapter
+    import obs.adapters.webhook.adapter
     import obs.adapters.zeitschaltuhr.adapter  # noqa: F401
 
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
@@ -318,6 +323,30 @@ def create_app() -> FastAPI:
     app.state.limiter = auth_limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+    from fastapi import Request
+    from fastapi.responses import JSONResponse, RedirectResponse
+
+    # ── WEBHOOK adapter trigger endpoint (issue #1256) ────────────────────
+    # Registered *before* the CORS middleware and _setup_gate: Starlette runs the
+    # last-added middleware first, so this puts the webhook gate innermost.
+    #   * CORS wraps it, which means a browser caller on an allowed origin gets
+    #     the allow-origin header on the trigger response and not only on the
+    #     preflight (a response returned from here never reaches inner layers).
+    #   * The setup gate stays the outermost middleware: an installation that
+    #     has not been claimed yet must not expose any entry point, not even one
+    #     guarded by a per-binding token.
+    #
+    # A middleware rather than a route because each WEBHOOK instance picks its
+    # own path prefix at runtime; see obs/api/webhook.py for the full reasoning.
+    @app.middleware("http")
+    async def _webhook_gate(request: Request, call_next):
+        from obs.api.webhook import handle_webhook_request
+
+        response = await handle_webhook_request(request)
+        if response is not None:
+            return response
+        return await call_next(request)
+
     # CORS — configure allowed origins via config.yaml or OBS_CORS__ORIGINS env var
     app.add_middleware(
         CORSMiddleware,
@@ -329,9 +358,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router, prefix="/api/v1")
-
-    from fastapi import Request
-    from fastapi.responses import JSONResponse, RedirectResponse
 
     @app.middleware("http")
     async def _setup_gate(request: Request, call_next):

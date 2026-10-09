@@ -9,10 +9,19 @@ NODE_TYPE = NodeTypeDef(
     type="wake_on_lan",
     label="Wake on LAN",
     category="integration",
-    description="Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
+    description=(
+        "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist — "
+        "je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke."
+    ),
     inputs=[port("trigger", "Trigger", "trigger")],
     outputs=[port("sent", "Gesendet", "trigger")],
     config_schema={
+        "trigger_mode": {
+            "type": "string",
+            "enum": ["event", "edge"],
+            "default": "event",
+            "label": "Auslösemodus (jedes Event / nur steigende Flanke)",
+        },
         "mac_address": {
             "type": "string",
             "default": "",

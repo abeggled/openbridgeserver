@@ -92,6 +92,60 @@ async def test_claiming_a_configured_installation_is_refused(client, in_setup_mo
     assert setup_required() is False
 
 
+async def test_webhook_trigger_is_refused_while_awaiting_setup(client, auth_headers, in_setup_mode):
+    """An unclaimed installation exposes no entry point, token or not (#1256).
+
+    The webhook gate is registered before the setup gate, so the setup gate
+    stays the outermost middleware and sees the request first. Pinned here
+    because reversing that registration order would silently open a write path
+    on an installation that has no owner yet.
+    """
+    import uuid as _uuid
+
+    # A running WEBHOOK instance claims its path prefix process-wide, so it has
+    # to be removed even when an assertion below fails — otherwise every later
+    # webhook test in the session would hit a prefix conflict instead of its
+    # own instance.
+    instance_id = None
+    set_setup_required(False)
+    try:
+        dp = await client.post(
+            "/api/v1/datapoints/",
+            json={"name": f"SetupHook-{_uuid.uuid4().hex[:8]}", "data_type": "BOOLEAN"},
+            headers=auth_headers,
+        )
+        assert dp.status_code == 201, dp.text
+        instance = await client.post(
+            "/api/v1/adapters/instances",
+            json={"adapter_type": "WEBHOOK", "name": f"SetupHook-{_uuid.uuid4().hex[:6]}", "config": {}, "enabled": True},
+            headers=auth_headers,
+        )
+        assert instance.status_code == 201, instance.text
+        instance_id = instance.json()["id"]
+        binding = await client.post(
+            f"/api/v1/datapoints/{dp.json()['id']}/bindings",
+            json={"adapter_instance_id": instance_id, "direction": "SOURCE", "config": {"slug": "setup-gate-bell"}},
+            headers=auth_headers,
+        )
+        assert binding.status_code == 201, binding.text
+        overview = await client.get(f"/api/v1/adapters/instances/{instance_id}/webhook/bindings", headers=auth_headers)
+        assert overview.status_code == 200, overview.text
+        call_path = overview.json()["bindings"][0]["call_path"]
+
+        set_setup_required(True)
+        blocked = await client.get(call_path)
+        assert blocked.status_code == 303
+        assert blocked.headers["location"] == "/setup"
+
+        set_setup_required(False)
+        assert (await client.get(call_path)).status_code == 204
+    finally:
+        set_setup_required(False)
+        if instance_id is not None:
+            await client.delete(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)
+        set_setup_required(True)
+
+
 async def test_normal_operation_once_setup_is_done(client):
     """Outside setup mode nothing is intercepted — auth decides again, not the gate."""
     status_resp = await client.get("/api/v1/setup/status")

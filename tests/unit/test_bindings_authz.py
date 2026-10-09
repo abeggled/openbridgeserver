@@ -45,6 +45,19 @@ def test_admin_binding_delegation_keeps_legacy_adapter_access() -> None:
     bindings_api._ensure_adapter_delegates_binding(_principal("admin", is_admin=True), "UNKNOWN")
 
 
+def test_webhook_binding_delegation_is_for_users_not_api_keys() -> None:
+    bindings_api._ensure_adapter_delegates_binding(_principal("alice"), "WEBHOOK")
+
+    with pytest.raises(HTTPException) as api_key:
+        bindings_api._ensure_adapter_delegates_binding(Principal(subject="api_key:device", type="api_key", is_admin=False), "WEBHOOK")
+    assert api_key.value.status_code == 403
+
+    # The user exception is specific to WEBHOOK: other adapters keep their gate.
+    with pytest.raises(HTTPException) as other:
+        bindings_api._ensure_adapter_delegates_binding(_principal("alice"), "KNX")
+    assert other.value.status_code == 403
+
+
 async def _insert_tree_and_nodes(db: Database) -> None:
     await db.execute_and_commit(
         """
@@ -524,3 +537,29 @@ async def test_clear_stale_external_write_enabled_noop_for_unknown_datapoint(mon
     await _clear_stale_external_write_enabled(uuid.uuid4(), adapter_type="KNX", enabled=True)
 
     assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_operator_user_can_create_a_webhook_binding(monkeypatch, db: Database):
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.webhook.adapter import WebhookAdapter
+
+    dp_id = uuid.uuid4()
+    instance_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room")
+    await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
+    await _insert_instance(db, instance_id, "WEBHOOK")
+    await _insert_instance_grant(db, instance_id)
+    monkeypatch.setitem(adapter_registry._adapters, "WEBHOOK", WebhookAdapter)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+    monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
+
+    created = await bindings_api.create_binding(
+        dp_id=dp_id,
+        body=AdapterBindingCreate(adapter_instance_id=instance_id, direction="SOURCE", config={"slug": "bell"}),
+        _user=_principal("alice"),
+        db=db,
+    )
+
+    assert created.adapter_type == "WEBHOOK"

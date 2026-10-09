@@ -15,6 +15,21 @@ NODE_TYPE = NodeTypeDef(
     config_schema={
         "json_path": {"type": "string", "default": "", "label": "Schlüsselpfad (Legacy)"},
         "json_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in the paths as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
     },
     color="#0369a1",
     help_id="logic-block-json-extractor",

@@ -20,6 +20,21 @@ NODE_TYPE = NodeTypeDef(
         "archive_id": {"type": "string", "default": "", "label": "Meldungsarchiv"},
         "title": {"type": "string", "default": "", "label": "Titel (Fallback)"},
         "message": {"type": "string", "default": "", "label": "Nachricht (Fallback)"},
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in title and fallback message as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
         "type": {
             "type": "string",
             "enum": ["automation", "notification", "system", "security", "adapter", "diagnostic"],

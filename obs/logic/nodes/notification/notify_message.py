@@ -18,6 +18,21 @@ NODE_TYPE = NodeTypeDef(
         "title": {"type": "string", "default": "", "label": "Titel"},
         "message": {"type": "string", "default": "", "label": "Nachricht (Fallback)"},
         "priority": {"type": "integer", "default": 0, "min": -2, "max": 1, "label": "Priorität"},
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in title and fallback message as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
     },
     color="#e11d48",
     help_id="logic-block-notify-message",

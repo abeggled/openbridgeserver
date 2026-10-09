@@ -91,13 +91,13 @@ describe('NodeConfigPanel notification', () => {
     adapterApi.listInstances.mockRejectedValueOnce(new Error('offline'))
     const wrapper = await mountPanel()
 
-    expect(wrapper.findAll('select option')).toHaveLength(1)
+    expect(wrapper.findAll('select:not([data-testid="variable-insert-select"]) option')).toHaveLength(1)
   })
 
   it('ignores non-array adapter responses', async () => {
     adapterApi.listInstances.mockResolvedValueOnce({ data: {} })
     const wrapper = await mountPanel()
 
-    expect(wrapper.findAll('select option')).toHaveLength(1)
+    expect(wrapper.findAll('select:not([data-testid="variable-insert-select"]) option')).toHaveLength(1)
   })
 })

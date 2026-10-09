@@ -141,6 +141,8 @@ export const adapterApi = {
   anwesenheitDatapoints:  (id)          => api.get(`/adapters/instances/${id}/anwesenheit/datapoints`),
   anwesenheitSyncBindings:(id, dpIds)  => api.post(`/adapters/instances/${id}/anwesenheit/sync-bindings`, { datapoint_ids: dpIds }),
   anwesenheitHealth:      (id)          => api.get(`/adapters/instances/${id}/anwesenheit/health`),
+  webhookBindings:    (id)              => api.get(`/adapters/instances/${id}/webhook/bindings`),
+  webhookRotateToken: (id, bindingId)   => api.post(`/adapters/instances/${id}/webhook/bindings/${bindingId}/rotate-token`),
   snmpWalk: (id, host, oid = '1.3.6.1.2.1', port = 161, maxResults = 50, timeout = 10, startOid = null) => {
     const params = { host, oid, port, max_results: maxResults, timeout }
     if (startOid) params.start_oid = startOid

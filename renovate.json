@@ -20,6 +20,11 @@
       "matchPackageNames": ["typescript"],
       "matchUpdateTypes": ["major"],
       "enabled": false
+    },
+    {
+      "description": "Automerge patch updates once all required checks are green (#1291). `strict` branch protection makes Renovate rebase a stale branch on its own (rebaseWhen: auto, default) before merging, so the up-to-date guarantee holds without manual rework.",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
     }
   ]
 }

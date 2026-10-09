@@ -145,11 +145,11 @@
     </div>
 
     <!-- Assign a hierarchy position (additive — existing assignments stay) -->
-    <Modal v-model="assignModal.open" :title="$t('logic.graphPicker.assign')" max-width="sm">
+    <Modal v-model="assignModal.open" :title="$t('logic.graphPicker.assign')" max-width="6xl">
       <template #header-actions>
         <HelpButton help-id="logic-graph-picker-assign" />
       </template>
-      <div class="flex flex-col gap-4">
+      <div class="flex flex-col gap-4 min-h-[34rem]">
         <p class="text-xs text-slate-500">{{ $t('logic.graphPicker.assignHint') }}</p>
         <HierarchyCombobox v-model="assignModal.nodes" include-tree-roots data-testid="assign-hierarchy-combobox" />
         <div v-if="assignModal.msg" class="text-sm text-red-400">{{ assignModal.msg }}</div>
@@ -167,7 +167,7 @@
     <!-- Every hierarchy position this graph is linked to, from "Alle
          anzeigen" — each individually removable, since there is no single
          "current position" to unlink from like the folder-browse view has. -->
-    <Modal v-model="linksModal.open" :title="linksModalTitle" max-width="sm">
+    <Modal v-model="linksModal.open" :title="linksModalTitle" max-width="6xl">
       <template #header-actions>
         <HelpButton help-id="logic-graph-picker-links" />
       </template>

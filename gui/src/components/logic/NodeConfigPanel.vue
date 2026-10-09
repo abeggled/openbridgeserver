@@ -374,6 +374,11 @@
               {{ $t('logic.nodeConfig.apiClient.checkTarget') }}
             </button>
           </div>
+          <VariablePathHelper
+            :path="localData.url || ''"
+            :obs-slots="blockObsSlots"
+            @insert="appendVariable('url', $event)"
+          />
           <div v-if="urlTargetDecision" :class="['mt-2 p-3 rounded-lg border text-xs', urlTargetDecision.allowed ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300' : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300']">
             <div class="font-semibold">{{ urlTargetDecision.allowed ? $t('logic.nodeConfig.apiClient.targetAllowed') : $t('logic.nodeConfig.apiClient.targetBlocked') }}</div>
             <p class="mt-1">{{ urlTargetDecision.reason }}</p>
@@ -384,67 +389,13 @@
           </div>
           <div v-if="urlTargetMsg" :class="['mt-2 p-2 rounded text-xs', urlTargetMsg.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500']">{{ urlTargetMsg.text }}</div>
         </div>
-        <div class="section-label flex items-center justify-between mt-1">
-          <span>{{ $t('logic.nodeConfig.apiClient.variablesSection') }}</span>
-          <button type="button" class="btn-secondary btn-sm text-teal-400" @click="addApiVariable" data-testid="api-client-add-variable">
-            {{ $t('logic.nodeConfig.apiClient.addVariable') }}
-          </button>
-        </div>
-        <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.apiClient.variablesHint') }}</p>
-        <div v-if="apiVariables.length === 0" class="text-xs text-slate-500 italic">
-          {{ $t('logic.nodeConfig.apiClient.noVariables') }}
-        </div>
-        <div
-          v-for="(variable, i) in apiVariables"
-          :key="variable.slot || i"
-          class="border border-slate-700 rounded-lg p-3 flex flex-col gap-2 bg-slate-900/40"
-          :data-testid="`api-client-variable-${i}`"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <div class="min-w-0">
-              <span class="text-xs font-semibold text-teal-400">OBS{{ variable.slot || i + 1 }}</span>
-              <code class="ml-2 text-xs text-slate-400 break-all">###OBS{{ variable.slot || i + 1 }}###</code>
-            </div>
-            <button
-              type="button"
-              class="text-xs text-red-400 hover:text-red-300 shrink-0"
-              @click="removeApiVariable(i)"
-              :data-testid="`api-client-variable-remove-${i}`"
-            >
-              {{ $t('logic.nodeConfig.apiClient.removeVariable') }}
-            </button>
-          </div>
-          <div class="form-group">
-            <label class="label">{{ $t('logic.ports.object') }}</label>
-            <input
-              :value="apiVariableSearches[i] ?? variable.datapoint_name ?? ''"
-              type="text"
-              class="input text-sm"
-              :placeholder="$t('logic.nodeConfig.connection.searchPlaceholder')"
-              @input="onApiVariableSearchInput(i, $event)"
-              :data-testid="`api-client-variable-search-${i}`"
-            />
-            <div
-              v-if="apiVariableResults[i]?.length"
-              class="mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto"
-            >
-              <button
-                v-for="dp in apiVariableResults[i]"
-                :key="dp.id"
-                type="button"
-                @click="selectApiVariableDp(i, dp)"
-                class="w-full text-left px-3 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
-                :data-testid="`api-client-variable-result-${i}`"
-              >
-                {{ dp.name }}
-                <span class="text-slate-500 ml-1">{{ dp.data_type }}</span>
-              </button>
-            </div>
-            <div v-if="variable.datapoint_name" class="mt-1 text-xs text-teal-400">
-              ✓ {{ variable.datapoint_name }}
-            </div>
-          </div>
-        </div>
+        <ObjectVariablesEditor
+          :key="node?.id"
+          v-model="localData.variables"
+          test-id-prefix="api-client"
+          :hint="$t('logic.nodeConfig.apiClient.variablesHint')"
+          @update:model-value="emitUpdate"
+        />
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.methodLabel') }}</label>
           <select v-model="localData.method" class="input text-sm" @change="emitUpdate"
@@ -470,6 +421,7 @@
           <label class="label">{{ $t('logic.nodeConfig.apiClient.headersLabel') }}</label>
           <input v-model="localData.headers" type="text" class="input text-sm font-mono" @change="emitUpdate"
             :placeholder="$t('logic.nodeConfig.apiClient.headersPlaceholder')" />
+          <VariablePathHelper :path="localData.headers || ''" :obs-slots="blockObsSlots" @insert="appendVariable('headers', $event)" />
         </div>
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.apiClient.timeoutLabel') }}</label>
@@ -505,11 +457,13 @@
             <label class="label">{{ $t('logic.nodeConfig.apiClient.username') }}</label>
             <input v-model="localData.auth_username" type="text" class="input text-sm"
               autocomplete="off" @change="emitUpdate" />
+            <VariablePathHelper :path="localData.auth_username || ''" :obs-slots="blockObsSlots" @insert="appendVariable('auth_username', $event)" />
           </div>
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.apiClient.password') }}</label>
             <input v-model="localData.auth_password" type="password" class="input text-sm"
               autocomplete="new-password" @change="emitUpdate" />
+            <VariablePathHelper :path="localData.auth_password || ''" :obs-slots="blockObsSlots" @insert="appendVariable('auth_password', $event)" />
           </div>
         </template>
         <template v-if="localData.auth_type === 'bearer'">
@@ -517,6 +471,7 @@
             <label class="label">{{ $t('logic.nodeConfig.apiClient.authBearer') }}</label>
             <input v-model="localData.auth_token" type="password" class="input text-sm"
               autocomplete="new-password" @change="emitUpdate" />
+            <VariablePathHelper :path="localData.auth_token || ''" :obs-slots="blockObsSlots" @insert="appendVariable('auth_token', $event)" />
           </div>
         </template>
       </div>
@@ -555,18 +510,23 @@
         <div class="section-label">{{ $t('logic.nodeConfig.stringConcat.staticSection') }}</div>
         <p class="text-xs text-slate-500 -mt-2">{{ $t('logic.nodeConfig.stringConcat.staticHint') }}</p>
         <div class="flex flex-col gap-2">
-          <div v-for="i in concatSlots" :key="i" class="flex items-center gap-2">
-            <span class="text-xs text-slate-400 w-5 text-right shrink-0">{{ i }}</span>
-            <input
-              :value="localData[`text_${i}`] ?? ''"
-              @input="localData[`text_${i}`] = $event.target.value"
-              @change="emitUpdate"
-              class="input text-sm flex-1"
-              :placeholder="$t('logic.nodeConfig.stringConcat.inputPlaceholder', { n: i })"
-              :data-testid="`concat-text-${i}`"
-            />
+          <div v-for="i in concatSlots" :key="i" class="flex flex-col gap-1">
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-slate-400 w-5 text-right shrink-0">{{ i }}</span>
+              <input
+                :value="localData[`text_${i}`] ?? ''"
+                @input="localData[`text_${i}`] = $event.target.value"
+                @change="emitUpdate"
+                class="input text-sm flex-1"
+                :placeholder="$t('logic.nodeConfig.stringConcat.inputPlaceholder', { n: i })"
+                :data-testid="`concat-text-${i}`"
+              />
+            </div>
+            <VariablePathHelper :path="localData[`text_${i}`] || ''" :obs-slots="blockObsSlots" @insert="appendVariable(`text_${i}`, $event)" />
           </div>
         </div>
+        <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="concat" :hint="$t('logic.variables.textHint')" @update:model-value="emitUpdate" />
+        <IssueList :issues="blockIssues" />
       </div>
     </template>
 
@@ -644,6 +604,7 @@
               :placeholder="$t('logic.nodeConfig.stringReplace.replacePlaceholder')"
               :data-testid="`replace-rule-replacement-${i}`"
             />
+            <VariablePathHelper :path="rule.replace || ''" :obs-slots="blockObsSlots" @insert="updateReplaceRule(i, 'replace', `${rule.replace || ''}${$event}`)" />
             <p v-if="replaceRuleIsRegex(rule)" class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.stringReplace.groupHint') }}</p>
           </div>
 
@@ -669,6 +630,8 @@
             <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.stringReplace.replaceAll') }}</span>
           </label>
         </div>
+        <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="replace" :hint="$t('logic.variables.replaceHint')" @update:model-value="emitUpdate" />
+        <IssueList :issues="blockIssues" />
       </div>
     </template>
 
@@ -902,6 +865,15 @@
           />
         </div>
 
+        <ObjectVariablesEditor
+          :key="node?.id"
+          v-model="localData.variables"
+          test-id-prefix="extractor"
+          :hint="$t('logic.variables.extractorHint')"
+          @update:model-value="emitUpdate"
+        />
+        <IssueList :issues="extractorIssues" />
+
         <!-- ── JSON Extractor: multi-output UI ──────────────────────────── -->
         <template v-if="node.type === 'json_extractor'">
 
@@ -926,7 +898,13 @@
               <option value="">{{ $t('logic.nodeConfig.extractor.pathPlaceholder') }}</option>
               <option v-for="p in extractorPaths" :key="p" :value="p">{{ p }}</option>
             </select>
+            <p v-if="extractorPathsTruncated" class="text-xs text-amber-400/80 mt-1" data-testid="extractor-paths-truncated">
+              {{ $t('logic.nodeConfig.extractor.pathListTruncated', { n: EXTRACTOR_MAX_PATHS }) }}
+            </p>
           </div>
+          <p v-if="extractorPreviewPruned" class="text-xs text-amber-400/80" data-testid="extractor-preview-pruned">
+            {{ $t('logic.nodeConfig.extractor.previewPruned') }}
+          </p>
 
           <!-- Output rows -->
           <div class="form-group">
@@ -967,6 +945,12 @@
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.pathExample')"
                 data-testid="extractor-path-input"
+              />
+              <VariablePathHelper
+                :path="entry.path || ''"
+                :resolved="extractorResolvedPath(i)"
+                :obs-slots="extractorObsSlots"
+                @insert="insertExtractorVariable('json', i, $event)"
               />
               <p v-if="jsonPathPreview(i) !== null" class="text-xs text-teal-400">
                 ↳ {{ String(jsonPathPreview(i)) }}
@@ -1045,6 +1029,12 @@
                 :class="activeExtractorRow === i ? 'ring-1 ring-teal-500/60' : ''"
                 :placeholder="$t('logic.nodeConfig.extractor.xmlPathPlaceholder')"
                 data-testid="extractor-path-input"
+              />
+              <VariablePathHelper
+                :path="entry.path || ''"
+                :resolved="extractorResolvedPath(i)"
+                :obs-slots="extractorObsSlots"
+                @insert="insertExtractorVariable('xml', i, $event)"
               />
               <p v-if="xmlPathPreview(i) !== null" class="text-xs text-teal-400">
                 ↳ {{ String(xmlPathPreview(i)) }}
@@ -1178,7 +1168,10 @@
           <input v-model="localData.url" type="text" class="input text-sm"
             placeholder="https://example.com/calendar.ics"
             @change="emitUpdate" data-testid="ical-url" />
+          <VariablePathHelper :path="localData.url || ''" :obs-slots="blockObsSlots" @insert="appendVariable('url', $event)" />
+          <p class="text-xs text-slate-500 mt-1">{{ $t('logic.variables.urlHint') }}</p>
         </div>
+        <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="ical" @update:model-value="emitUpdate" />
 
         <!-- Refresh interval -->
         <div class="form-group">
@@ -1291,6 +1284,20 @@
         <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
 
         <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.triggerMode.label') }}</label>
+          <select
+            :value="triggerModeValue"
+            class="input text-sm"
+            @change="onTriggerModeChange"
+            data-testid="wol-trigger-mode"
+          >
+            <option value="event">{{ $t('logic.nodeConfig.triggerMode.event') }}</option>
+            <option value="edge">{{ $t('logic.nodeConfig.triggerMode.edge') }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">{{ $t(`logic.nodeConfig.triggerMode.${triggerModeValue}Hint`) }}</p>
+        </div>
+
+        <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.wake_on_lan.mac_address') }}</label>
           <input
             v-model="localData.mac_address"
@@ -1336,6 +1343,20 @@
     <template v-else-if="isHostCheckNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         <p class="text-xs text-slate-500">{{ nodeDescription(nodeDef) }}</p>
+
+        <div class="form-group">
+          <label class="label">{{ $t('logic.nodeConfig.triggerMode.label') }}</label>
+          <select
+            :value="triggerModeValue"
+            class="input text-sm"
+            @change="onTriggerModeChange"
+            data-testid="hc-trigger-mode"
+          >
+            <option value="event">{{ $t('logic.nodeConfig.triggerMode.event') }}</option>
+            <option value="edge">{{ $t('logic.nodeConfig.triggerMode.edge') }}</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-1">{{ $t(`logic.nodeConfig.triggerMode.${triggerModeValue}Hint`) }}</p>
+        </div>
 
         <div class="form-group">
           <label class="label">{{ $t('logic.nodeConfig.host_check.host') }}</label>
@@ -1423,6 +1444,7 @@
             data-testid="message-archive-title"
             @change="emitUpdate"
           />
+          <VariablePathHelper :path="localData.title || ''" :obs-slots="blockObsSlots" @insert="appendVariable('title', $event)" />
         </div>
 
         <div class="form-group">
@@ -1433,7 +1455,9 @@
             :placeholder="$t('logic.nodeConfig.messageArchive.messagePlaceholder')"
             @change="emitUpdate"
           />
+          <VariablePathHelper :path="localData.message || ''" :obs-slots="blockObsSlots" @insert="appendVariable('message', $event)" />
         </div>
+        <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="archive" :hint="$t('logic.variables.textHint')" @update:model-value="emitUpdate" />
       </div>
     </template>
 
@@ -1455,8 +1479,9 @@
           </label>
           <p v-if="localData.adapter_instance_id && !notificationTargets.length" class="text-xs text-amber-500">{{ $t('logic.nodeConfig.notification.noTargets') }}</p>
         </div>
-        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.title') }}</label><input v-model="localData.title" class="input text-sm" @change="emitUpdate" /></div>
-        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.fallback') }}</label><textarea v-model="localData.message" class="input text-sm min-h-24" @change="emitUpdate" /><p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.notification.placeholders') }}</p></div>
+        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.title') }}</label><input v-model="localData.title" class="input text-sm" @change="emitUpdate" /><VariablePathHelper :path="localData.title || ''" :obs-slots="blockObsSlots" @insert="appendVariable('title', $event)" /></div>
+        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.fallback') }}</label><textarea v-model="localData.message" class="input text-sm min-h-24" @change="emitUpdate" /><VariablePathHelper :path="localData.message || ''" :obs-slots="blockObsSlots" @insert="appendVariable('message', $event)" /><p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.notification.placeholders') }}</p></div>
+        <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="notify" :hint="$t('logic.variables.textHint')" @update:model-value="emitUpdate" />
         <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.priority') }}</label><input v-model.number="localData.priority" type="number" min="-2" max="1" class="input text-sm" @change="emitUpdate" /></div>
       </div>
     </template>
@@ -1542,6 +1567,7 @@
       v-if="debugMode && panelTab === 'debug'"
       :inputs="debugInputs"
       :outputs="debugOutputs"
+      :output-labels="debugOutputLabels"
       :metadata="debugMetadata"
       :has-overrides="hasDebugOverrides"
       @set-override="(inputId, text) => emit('set-override', inputId, text)"
@@ -1553,11 +1579,16 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adapterApi, dpApi, messageArchivesApi, searchApi, securityApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { getAutoContrastText } from '@/utils/colorContrast'
+import ObjectVariablesEditor from './ObjectVariablesEditor.vue'
+import VariablePathHelper from './VariablePathHelper.vue'
+import { normaliseObjectVariables, configuredObsSlots, VARIABLE_BLOCK_TYPES } from '@/utils/logicVariables'
+import IssueList from './IssueList.vue'
+import { EXTRACTOR_MAX_PATHS, collectJsonPaths, extractorOutputLabels, parseExtractorJson } from '@/utils/logicExtractorOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
@@ -1610,8 +1641,6 @@ const urlTargetChecking = ref(false)
 const urlTargetSaving = ref(false)
 const urlTargetDecision = ref(null)
 const urlTargetMsg = ref(null)
-const apiVariableSearches = ref([])
-const apiVariableResults = ref([])
 const messageArchives = ref([])
 const messageAdapters = ref([])
 const MESSAGE_TYPE_OPTIONS = ['automation', 'notification', 'system', 'security', 'adapter', 'diagnostic']
@@ -1807,9 +1836,15 @@ const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
 const isSensorWatchdogNode = computed(() => props.node?.type === 'sensor_watchdog')
 const isICalNode          = computed(() => props.node?.type === 'ical')
-const apiVariables = computed(() => Array.isArray(localData.value.variables) ? localData.value.variables : [])
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
+// Nodes saved before issue #1274 carry no trigger_mode and keep the rising-edge
+// behaviour on the backend — show exactly that instead of the schema default.
+const triggerModeValue    = computed(() => (localData.value.trigger_mode === 'event' ? 'event' : 'edge'))
+function onTriggerModeChange(event) {
+  localData.value.trigger_mode = event.target.value
+  emitUpdate()
+}
 const isMessageArchiveNode = computed(() => props.node?.type === 'message_archive')
 const isNotifyMessageNode = computed(() => props.node?.type === 'notify_message')
 const selectedMessageAdapter = computed(() => messageAdapters.value.find(instance => instance.id === localData.value.adapter_instance_id))
@@ -2135,38 +2170,13 @@ function removeWatchdogInput(i) {
 // ── Extractor: preview + path helpers ─────────────────────────────────────
 const activeExtractorRow = ref(null)
 
+// Debug tab lists extractor outputs under their configured names (issue #1104)
+const debugOutputLabels = computed(() => extractorOutputLabels(props.node, t))
+
 const extractorPreview = computed(() => {
   if (!props.node) return ''
   return props.nodeOutputs[props.node.id]?._preview ?? ''
 })
-
-// Flatten all dot-notation paths from a JSON object (max depth 6)
-function _flattenJsonPaths(obj, prefix = '', depth = 0) {
-  if (depth > 6 || obj === null || typeof obj !== 'object') {
-    return prefix ? [prefix] : []
-  }
-  const paths = []
-  if (Array.isArray(obj)) {
-    obj.forEach((item, i) => {
-      const key = `${prefix}[${i}]`
-      if (item !== null && typeof item === 'object') {
-        paths.push(..._flattenJsonPaths(item, key, depth + 1))
-      } else {
-        paths.push(key)
-      }
-    })
-  } else {
-    for (const [k, v] of Object.entries(obj)) {
-      const key = prefix ? `${prefix}.${k}` : k
-      if (v !== null && typeof v === 'object') {
-        paths.push(..._flattenJsonPaths(v, key, depth + 1))
-      } else {
-        paths.push(key)
-      }
-    }
-  }
-  return paths
-}
 
 // Collect XPath expressions from XML — simple .//tag plus positional .//tag[n]/child paths
 function _collectXmlPaths(rootEl) {
@@ -2216,51 +2226,40 @@ function _collectXmlPaths(rootEl) {
   return [...paths]
 }
 
+// Parsed once per received payload — the path list and every output row's
+// live preview read from this instead of re-parsing the (up to 256 KB)
+// snapshot on each render.
+const extractorParsedJson = computed(() => {
+  const preview = extractorPreview.value
+  if (!preview || props.node?.type !== 'json_extractor') return undefined
+  try { return parseExtractorJson(preview) } catch { return undefined }
+})
+
+// The backend pruned the snapshot (arrays/strings shortened) because the
+// document exceeded its size limit — row previews may then differ from the
+// block's real outputs.
+const extractorPreviewPruned = computed(() =>
+  !!props.node && props.nodeOutputs[props.node.id]?._preview_pruned === true
+)
+
+// JSON path scan — bounded; `truncated` drives the hint below the picker.
+const extractorJsonPathScan = computed(() => {
+  const obj = extractorParsedJson.value
+  return obj === undefined ? { paths: [], truncated: false } : collectJsonPaths(obj, EXTRACTOR_MAX_PATHS)
+})
+const extractorPathsTruncated = computed(() => extractorJsonPathScan.value.truncated)
+
 const extractorPaths = computed(() => {
   const preview = extractorPreview.value
   if (!preview) return []
   if (props.node?.type === 'json_extractor') {
-    try {
-      const obj = JSON.parse(preview)
-      return _flattenJsonPaths(obj)
-    } catch { return [] }
+    return extractorJsonPathScan.value.paths
   } else {
     try {
       const doc = new DOMParser().parseFromString(preview, 'text/xml')
       if (doc.querySelector('parsererror')) return []
       return _collectXmlPaths(doc.documentElement)
     } catch { return [] }
-  }
-})
-
-// Live-evaluate current path against preview to show resolved value
-const extractorPreviewValue = computed(() => {
-  const preview = extractorPreview.value
-  if (!preview) return null
-  if (props.node?.type === 'json_extractor') {
-    const path = (localData.value.json_path || '').trim()
-    if (!path) return null
-    try {
-      const obj = JSON.parse(preview)
-      // Traverse dotted path (same logic as backend _json_extract)
-      const normPath = path.replace(/\[(\d+)\]/g, '.$1')
-      const parts = normPath.split('.').filter(Boolean)
-      let cur = obj
-      for (const p of parts) {
-        if (cur === null || typeof cur !== 'object') return null
-        cur = Array.isArray(cur) ? cur[Number(p)] : cur[p]
-      }
-      return cur !== undefined ? cur : null
-    } catch { return null }
-  } else {
-    const path = (localData.value.xml_path || '').trim()
-    if (!path) return null
-    try {
-      const doc = new DOMParser().parseFromString(preview, 'text/xml')
-      if (doc.querySelector('parseerror')) return null
-      const el = doc.evaluate(path, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
-      return el ? el.textContent?.trim() ?? null : null
-    } catch { return null }
   }
 })
 
@@ -2298,14 +2297,67 @@ function updateJsonPath(i, key, value) {
   _saveJsonPaths(paths)
 }
 
+// ── Extractor variables (issue #1301) ─────────────────────────────────────
+const blockObsSlots = computed(() => configuredObsSlots(localData.value.variables))
+const extractorObsSlots = blockObsSlots
+// Issues belong to the configuration of the run that reported them: hidden once it was edited.
+const configSignature = computed(() => JSON.stringify(localData.value))
+const issuesRunSignature = ref('')
+watch(
+  [() => props.node?.id, () => (props.node ? props.nodeOutputs?.[props.node.id] : null)],
+  () => { issuesRunSignature.value = configSignature.value },
+  { flush: 'post' },
+)
+onMounted(() => { issuesRunSignature.value = configSignature.value })
+const extractorIssues = computed(() => {
+  const issues = props.node ? props.nodeOutputs?.[props.node.id]?._issues : null
+  return Array.isArray(issues) && issuesRunSignature.value === configSignature.value ? issues : []
+})
+
+// Append a variable token to a plain text field of the block (#1301).
+function appendVariable(key, token) {
+  localData.value[key] = `${localData.value[key] || ''}${token}`
+  emitUpdate()
+}
+
+// Server-reported variable issues of the block's last run (concat/replace).
+const blockIssues = extractorIssues
+
+// Server-resolved path of output row i (empty until the block ran with variables).
+// Ignored once the path or an object binding was edited after that run.
+const bindingSignature = computed(() => JSON.stringify(normaliseObjectVariables(localData.value.variables).map(v => v.datapoint_id)))
+const resolvedRunSignature = ref('')
+watch(
+  [() => props.node?.id, () => (props.node ? props.nodeOutputs?.[props.node.id] : null)], // compared per element: a parent re-sync of the node object must not count
+  () => { resolvedRunSignature.value = bindingSignature.value },
+  { flush: 'post' }, // after the node watcher refilled localData
+)
+onMounted(() => { resolvedRunSignature.value = bindingSignature.value })
+
+function extractorResolvedPath(i) {
+  const out = props.node ? props.nodeOutputs?.[props.node.id] : null
+  const resolved = out?._resolved_paths
+  if (!Array.isArray(resolved) || typeof resolved[i] !== 'string') return ''
+  if (resolvedRunSignature.value !== bindingSignature.value) return ''
+  const rows = props.node?.type === 'xml_extractor' ? xmlPaths.value : jsonPaths.value
+  const current = String(rows[i]?.path ?? '').trim()
+  return out._path_templates?.[i] === current ? resolved[i] : ''
+}
+
+function insertExtractorVariable(kind, i, token) {
+  const isJson = kind === 'json'
+  const entry = (isJson ? jsonPaths.value : xmlPaths.value)[i]
+  if (!entry) return
+  ;(isJson ? updateJsonPath : updateXmlPath)(i, 'path', `${entry.path || ''}${token}`)
+}
+
 function jsonPathPreview(i) {
-  const preview = extractorPreview.value
-  if (!preview) return null
+  const obj = extractorParsedJson.value
+  if (obj === undefined) return null
   const entry = jsonPaths.value[i]
   if (!entry?.path) return null
   try {
-    const obj = JSON.parse(preview)
-    const normPath = entry.path.replace(/\[(\d+)\]/g, '.$1')
+    const normPath = (extractorResolvedPath(i) || entry.path).replace(/\[(\d+)\]/g, '.$1')
     const parts = normPath.split('.').filter(Boolean)
     let cur = obj
     for (const p of parts) {
@@ -2366,7 +2418,7 @@ function xmlPathPreview(i) {
   try {
     const doc = new DOMParser().parseFromString(preview, 'text/xml')
     if (doc.querySelector('parsererror')) return null
-    const el = doc.evaluate(entry.path, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
+    const el = doc.evaluate(extractorResolvedPath(i) || entry.path, doc, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
     return el ? el.textContent?.trim() ?? null : null
   } catch { return null }
 }
@@ -2653,33 +2705,6 @@ function fieldLabel(nodeType, fieldKey, fallback) {
   return te(key) ? t(key) : (fallback ?? fieldKey)
 }
 
-function normaliseApiVariables(raw) {
-  let variables = raw
-  if (typeof variables === 'string') {
-    try {
-      variables = JSON.parse(variables)
-    } catch {
-      variables = []
-    }
-  }
-  return Array.isArray(variables)
-    ? variables.map((v, i) => {
-        const slot = Number.parseInt(v?.slot, 10)
-        return {
-          slot: Number.isInteger(slot) && slot > 0 ? slot : i + 1,
-          datapoint_id: v?.datapoint_id || '',
-          datapoint_name: v?.datapoint_name || '',
-        }
-      })
-    : []
-}
-
-function syncApiVariableUiState() {
-  const vars = apiVariables.value
-  apiVariableSearches.value = vars.map((v, i) => apiVariableSearches.value[i] ?? v.datapoint_name ?? '')
-  apiVariableResults.value = vars.map((_, i) => apiVariableResults.value[i] ?? [])
-}
-
 // ── Watchers ───────────────────────────────────────────────────────────────
 watch(() => props.node, (n) => {
   if (n) {
@@ -2699,13 +2724,8 @@ watch(() => props.node, (n) => {
     if (n.type === 'ical') {
       localData.value.max_payload_size_mb = normaliseIcalPayloadSize(localData.value.max_payload_size_mb)
     }
-    if (n.type === 'api_client') {
-      localData.value.variables = normaliseApiVariables(localData.value.variables)
-      apiVariableSearches.value = localData.value.variables.map(v => v.datapoint_name || '')
-      apiVariableResults.value = localData.value.variables.map(() => [])
-    } else {
-      apiVariableSearches.value = []
-      apiVariableResults.value = []
+    if (VARIABLE_BLOCK_TYPES.includes(n.type)) {
+      localData.value.variables = normaliseObjectVariables(localData.value.variables)
     }
     if (n.type === 'message_archive') {
       if (!localData.value.type) localData.value.type = 'automation'
@@ -2867,66 +2887,6 @@ function moveSequenceStep(index, delta) { const target = index + delta; if (targ
 function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; syncSequencePickerState(); emitUpdate() }
 async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
 function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearchDrafts.value[index] = ''; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
-
-function addApiVariable() {
-  const variables = normaliseApiVariables(localData.value.variables)
-  const maxSlot = variables.reduce((max, variable) => Math.max(max, variable.slot || 0), 0)
-  variables.push({ slot: maxSlot + 1, datapoint_id: '', datapoint_name: '' })
-  localData.value.variables = variables
-  syncApiVariableUiState()
-  emitUpdate()
-}
-
-function removeApiVariable(index) {
-  const variables = normaliseApiVariables(localData.value.variables)
-  variables.splice(index, 1)
-  localData.value.variables = variables
-  apiVariableSearches.value.splice(index, 1)
-  apiVariableResults.value.splice(index, 1)
-  syncApiVariableUiState()
-  emitUpdate()
-}
-
-async function searchApiVariableDps(index, query) {
-  try {
-    let items
-    if ((query || '').length < 1) {
-      const { data } = await dpApi.list(0, 50)
-      items = data.items || data
-    } else {
-      const { data } = await searchApi.search({ q: query, size: 50 })
-      items = data.items || data
-    }
-    const next = apiVariableResults.value.slice()
-    next[index] = items
-    apiVariableResults.value = next
-  } catch {
-    const next = apiVariableResults.value.slice()
-    next[index] = []
-    apiVariableResults.value = next
-  }
-}
-
-function onApiVariableSearchInput(index, event) {
-  const query = event.target.value
-  const searches = apiVariableSearches.value.slice()
-  searches[index] = query
-  apiVariableSearches.value = searches
-  searchApiVariableDps(index, query)
-}
-
-function selectApiVariableDp(index, dp) {
-  const variables = normaliseApiVariables(localData.value.variables)
-  variables[index] = { slot: variables[index]?.slot || index + 1, datapoint_id: dp.id, datapoint_name: dp.name }
-  localData.value.variables = variables
-  const searches = apiVariableSearches.value.slice()
-  searches[index] = dp.name
-  apiVariableSearches.value = searches
-  const results = apiVariableResults.value.slice()
-  results[index] = []
-  apiVariableResults.value = results
-  emitUpdate()
-}
 
 function normaliseUrlTargetInput(value) {
   const trimmed = (value || '').trim()

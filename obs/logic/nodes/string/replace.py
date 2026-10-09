@@ -43,6 +43,21 @@ NODE_TYPE = NodeTypeDef(
                 {"search": "", "replace": "", "mode": "plain", "case_sensitive": True, "replace_all": True},
             ],
         },
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in the replacement text as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
     },
     color="#0891b2",
     help_id="logic-block-string-replace",

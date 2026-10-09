@@ -126,7 +126,9 @@ services:
       OBS_ONEWIRE__USB_ALL: ${OBS_ONEWIRE_USB_ALL:-}
       OBS_ONEWIRE__PBM_DEVICES: ${OBS_ONEWIRE_PBM_DEVICES:-}
     ports:
-      - "${OBS_ONEWIRE_HOST_PORT:-4304}:4304"
+      # Loopback only: OBS reaches the sidecar over the Compose network
+      # (host: owserver); owserver has no authentication.
+      - "127.0.0.1:${OBS_ONEWIRE_HOST_PORT:-4304}:4304"
     # devices:
     #   - "/dev/bus/usb/002/007:/dev/bus/usb/002/007"                # plain USB busmaster
     #   - "/dev/serial/by-id/usb-FTDI_...:/dev/ttyUSB0"                # ElabNET PBM (stable path!)

@@ -21,6 +21,21 @@ NODE_TYPE = NodeTypeDef(
             "label": "Anzahl Eingänge",
         },
         "separator": {"type": "string", "default": "", "label": "Trennzeichen"},
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in the static texts as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
     },
     color="#0891b2",
     help_id="logic-block-string-concat",

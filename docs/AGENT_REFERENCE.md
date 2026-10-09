@@ -49,8 +49,12 @@ in the shared project venv, then let worktrees resolve that environment through 
 
 ### GUI Node dependencies for agents and worktrees
 
-Do not run `npm install` or `npm ci` in issue or PR worktrees. GUI dependencies are shared from the
-main worktree through a local `gui/node_modules` symlink:
+Which command applies depends on whether this checkout is a **linked worktree** beside a main
+worktree, or a **standalone checkout** (CI job, review sandbox, fresh clone). Check with
+`git worktree list`:
+
+**Linked worktree (more than one entry).** Do not run `npm install` or `npm ci` here. GUI
+dependencies are shared from the main worktree through a local `gui/node_modules` symlink:
 
 ```bash
 tools/link-worktree-node-modules
@@ -59,6 +63,22 @@ tools/link-worktree-node-modules
 The pre-push hook runs this linker automatically before GUI Vitest gates if `gui/node_modules` is
 missing. If the main worktree dependencies are missing or stale, update them in the main worktree,
 not in the issue/PR worktree.
+
+**Standalone checkout (a single entry).** There is no main worktree to share from, so the linker
+cannot help and exits 1 by design. Install directly:
+
+```bash
+cd gui && npm ci
+```
+
+This is the supported path for CI jobs, automated review sandboxes and fresh clones. The rule above
+exists to keep several local worktrees on one shared `node_modules`, not to forbid installing
+dependencies where none exist.
+
+> Why this distinction is spelled out: an automated reviewer followed the linked-worktree rule in a
+> standalone sandbox, hit `vitest: not found` (exit 127), saw the linker exit 1, and reported the
+> whole GUI surface as unreviewed partial coverage rather than installing. The commands were right,
+> the precondition was not stated.
 
 ### config.yaml — required local overrides
 
@@ -110,7 +130,10 @@ Default login: `admin` / `admin`
 
 - `gui/` — Admin GUI (Vue 3 + Vite), dev server on port 5173, built to `gui_dist/` (served by FastAPI at `/`)
 - `frontend/` — Visu SPA (Vue 3 + TypeScript), built to `frontend_dist/` (served by FastAPI at `/visu`)
-- Both proxy `/api` to `localhost:8080` during dev via `vite.config`
+- Both proxy `/api` to `localhost:8080` during dev via `vite.config`; the Admin GUI additionally
+  proxies `/help` and `/hook` (the WEBHOOK adapter's trigger endpoint, #1256 — the binding form
+  builds its call URL from the browser origin, so without that proxy a URL copied in dev would hit
+  Vite's SPA fallback instead of the backend)
 
 #### Logic editor node cards
 
@@ -545,6 +568,7 @@ actually starts once an admin has configured a 1-Wire bus master.
 | Path | Purpose |
 |---|---|
 | `/etc/systemd/system/owserver.service.d/override.conf` | Drop-in that gates the packaged unit — does not replace its `ExecStart=`, so package upgrades keep working |
+| `/etc/systemd/system/owserver.socket.d/override.conf` | Binds the packaged, always-enabled `owserver.socket` to `127.0.0.1:4304` instead of all interfaces — owserver has no authentication (#1288). With socket activation owserver ignores the port from `/etc/owfs.conf`, so `OBS_ONEWIRE__PORT` has no effect in the LXC; change the socket instead |
 | `scripts/obs-onewire-should-run.sh` | `ExecCondition=` — exits 0 only if `OBS_ONEWIRE__USB_ALL=true` or `OBS_ONEWIRE__PBM_DEVICES` is set in `/etc/obs.env` |
 | `scripts/obs-onewire-configure.sh` | `ExecStartPre=` — (re)generates `/etc/owfs.conf` from those same env vars on every start attempt |
 | `/etc/obs.env` | Same file as the MQTT credentials; `OBS_ONEWIRE__*` lines ship commented out |

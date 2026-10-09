@@ -418,7 +418,10 @@
         "selectOnewireInstanceFirst": "Bitte zuerst eine 1-Wire-Instanz wählen",
         "noSensorsFound": "Keine Sensoren gefunden",
         "onewireScanFailed": "1-Wire-Sensor-Scan fehlgeschlagen",
-        "onewireAliasSaveFailed": "Alias konnte nicht gespeichert werden"
+        "onewireAliasSaveFailed": "Alias konnte nicht gespeichert werden",
+        "webhookEntryNotFound": "Aufruf-URL für diese Verknüpfung nicht gefunden",
+        "webhookLoadFailed": "Aufruf-URL konnte nicht geladen werden",
+        "webhookRotateFailed": "Token konnte nicht neu erzeugt werden"
       },
       "knxSection": "KNX-Verknüpfung",
       "dptLabel": "DPT *",
@@ -629,7 +632,22 @@
       "ztSelectHoliday": "— Feiertag wählen —",
       "ztOutputDivider": "Ausgabe",
       "ztOutputValueLabel": "Schalt-Wert",
-      "ztOutputValueHint": "z.B. 1 / 0 / true / false / 21.5 / Beliebiger Text",
+      "ztOutputValueHint_boolean": "Schaltet den Wert auf Ein (true) bzw. Aus (false).",
+      "ztOutputValueHint_integer": "Ganzzahl, z.B. 50 oder 0.",
+      "ztOutputValueHint_float": "Dezimalzahl, z.B. 21.5 oder 0.",
+      "ztOutputValueHint_date": "Datum im Format JJJJ-MM-TT, z.B. 2026-12-24.",
+      "ztOutputValueHint_time": "Uhrzeit im Format HH:MM:SS, z.B. 08:00:00.",
+      "ztOutputValueHint_datetime": "Datum und Uhrzeit (ISO 8601), z.B. 2026-12-24T08:00:00.",
+      "ztOutputValueHint_text": "Wird unverändert übernommen — auch 1, 0, on oder ein.",
+      "ztOutputValueOn": "Ein (true)",
+      "ztOutputValueOff": "Aus (false)",
+      "ztOutputValueErrorRequired": "Bitte einen Schaltwert angeben.",
+      "ztOutputValueErrorBoolean": "Kein gültiger Ja/Nein-Wert — erlaubt sind 1/0, true/false, on/off, ein/aus.",
+      "ztOutputValueErrorInteger": "Kein gültiger Ganzzahl-Wert.",
+      "ztOutputValueErrorFloat": "Kein gültiger Zahlenwert.",
+      "ztOutputValueErrorDate": "Kein gültiges Datum (erwartet JJJJ-MM-TT).",
+      "ztOutputValueErrorTime": "Keine gültige Uhrzeit (erwartet HH:MM oder HH:MM:SS).",
+      "ztOutputValueErrorDatetime": "Kein gültiger Zeitstempel (erwartet JJJJ-MM-TTTHH:MM:SS).",
       "anwSection": "Anwesenheitssimulation — Binding-Optionen",
       "anwOffsetOverrideLabel": "Versatz überschreiben",
       "anwDefaultAdapter": "Standard (Adapter)",
@@ -736,7 +754,40 @@
       "ztChristmasEve": "Heiligabend",
       "ztAdventOffset": "1. Advent {sign}{n} Tage",
       "notSet": "—",
-      "ztHolidayOffset": "{name} {sign}{n} Tage"
+      "ztHolidayOffset": "{name} {sign}{n} Tage",
+      "webhookSection": "Webhook-Verknüpfung",
+      "webhookIntro": "Ein eingehender HTTP-Aufruf setzt diesen Datenpunkt. Geeignet für Geräte, die nur eine URL aufrufen können — z. B. eine Türsprechstelle beim Klingeln.",
+      "webhookSlugLabel": "Slug (Pfadsegment)",
+      "webhookSlugPlaceholder": "haustuer-klingel",
+      "webhookSlugHint": "Kleinbuchstaben, Ziffern, Bindestrich und Unterstrich. Teil der Aufruf-URL und je Webhook-Instanz eindeutig.",
+      "webhookMethodsLabel": "Erlaubte HTTP-Methoden",
+      "webhookMethodsHint": "Geräte, die nur eine URL aufrufen können, benutzen GET.",
+      "webhookValueSourceLabel": "Wertquelle",
+      "webhookValueSourceFixed": "Fester Wert",
+      "webhookValueSourceRequest": "Wert aus der Anfrage",
+      "webhookFixedValueLabel": "Fester Wert",
+      "webhookFixedValueHint": "Wird in den Datentyp des Datenpunkts umgewandelt — für einen Taster oder eine Klingel „true“.",
+      "webhookValueParamLabel": "Parameter-/Feldname",
+      "webhookValueParamHint": "Bei GET der Query-Parameter „?{name}=…“, bei POST das gleichnamige Feld im JSON-Body.",
+      "webhookDebounceLabel": "Entprellung (ms)",
+      "webhookDebounceHint": "Weitere Aufrufe innerhalb dieser Zeit werden mit 204 bestätigt, setzen den Wert aber nicht erneut. 0 = aus.",
+      "webhookCallUrlSection": "Aufruf-URL",
+      "webhookCallUrlLabel": "URL mit Token als Query-Parameter",
+      "webhookCallUrlHint": "Diese URL im Gerät hinterlegen. Das Token berechtigt ausschließlich diesen einen Datenpunkt.",
+      "webhookCallUrlPathLabel": "URL mit Token im Pfad",
+      "webhookCallUrlPathHint": "Alternative für Geräte, deren Konfigurationsfeld keine Query-Parameter zulässt.",
+      "webhookCallCount": "Aufrufe",
+      "webhookPublishCount": "Gesetzte Werte",
+      "webhookLastCalled": "Letzter Aufruf",
+      "webhookNeverCalled": "nie",
+      "webhookRotateToken": "Token neu erzeugen",
+      "webhookRotateTokenHint": "Widerruft die bisherige URL sofort — andere Integrationen bleiben unberührt.",
+      "webhookAutoresetLabel": "Auto-Reset aktivieren",
+      "webhookAutoresetHint": "Setzt den Datenpunkt nach der eingestellten Zeit automatisch auf den Reset-Wert zurück — damit wird aus dem Webhook ein Trigger (Klingel: true, kurz darauf wieder false). Ein erneuter, angenommener Aufruf startet die Zeit neu; ein Aufruf innerhalb der Entprellung zählt nicht.",
+      "webhookAutoresetValueLabel": "Reset-Wert",
+      "webhookAutoresetValueHint": "Wird wie der ausgelöste Wert in den Datentyp umgewandelt und durchläuft dieselbe Transformation.",
+      "webhookAutoresetDelayLabel": "Reset-Verzögerung (ms)",
+      "webhookAutoresetDelayHint": "Wie lange der ausgelöste Wert stehen bleibt. 0 = sofort zurücksetzen."
     },
     "knx": {
       "scan": {
@@ -1155,6 +1206,50 @@
           "title": "Anfrage-Timeout (s)",
           "description": "Sekunden pro owserver-Aufruf, bevor er als Fehler gewertet wird"
         }
+      },
+      "WEBHOOK": {
+        "path_prefix": {
+          "title": "Pfad-Präfix"
+        },
+        "trust_forwarded_for": {
+          "title": "X-Forwarded-For vertrauen"
+        },
+        "rate_limit_per_minute": {
+          "title": "Ratenlimit (Aufrufe/Minute je IP)"
+        },
+        "slug": {
+          "title": "Slug (Pfadsegment)"
+        },
+        "token": {
+          "title": "Token"
+        },
+        "methods": {
+          "title": "HTTP-Methoden"
+        },
+        "value_source": {
+          "title": "Wertquelle"
+        },
+        "fixed_value": {
+          "title": "Fester Wert"
+        },
+        "value_param": {
+          "title": "Parameter-/Feldname"
+        },
+        "debounce_ms": {
+          "title": "Entprellung (ms)"
+        },
+        "allowed_networks": {
+          "title": "Erlaubte Netze (CIDR)"
+        },
+        "autoreset": {
+          "title": "Auto-Reset"
+        },
+        "autoreset_value": {
+          "title": "Reset-Wert"
+        },
+        "autoreset_delay_ms": {
+          "title": "Reset-Verzögerung (ms)"
+        }
       }
     },
     "statusDetail": {
@@ -1192,7 +1287,11 @@
       "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
       "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
       "messageArchiveWriteFailed": "Meldungsarchiv konnte nicht geschrieben werden",
-      "messageSent": "MESSAGE gesendet"
+      "messageSent": "MESSAGE gesendet",
+      "webhookListening": "Erreichbar unter {prefix}/<slug>",
+      "webhookPrefixConflict": "Pfad-Präfix {prefix} überschneidet sich mit dem Präfix einer anderen Instanz",
+      "webhookDuplicateSlug": "Doppelte Slugs ignoriert: {slugs}",
+      "webhookInvalidConfig": "Ungültige Instanz-Konfiguration"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
@@ -1200,6 +1299,27 @@
       "configValidationError": "Konfigurations-Validierungsfehler: {error}",
       "connectOk": "Verbindung zu {type} erfolgreich",
       "connectFailed": "Verbindungsversuch fehlgeschlagen"
+    },
+    "allowlist": {
+      "bindingLabel": "Erlaubte Netze (CIDR)",
+      "placeholder": "10.38.0.0/16",
+      "addEntry": "Eintrag hinzufügen",
+      "removeEntry": "Eintrag entfernen",
+      "emptyMeansAny": "Keine Einträge — alle Absender dürfen diese Verknüpfung auslösen.",
+      "invalidEntries": "{n} Eintrag/Einträge sind keine gültige IP oder CIDR-Notation",
+      "hint": "Je Zeile eine IP-Adresse oder ein Netz, z. B. 10.38.0.0/16 oder 192.168.1.5. Eine leere Liste schränkt nicht ein.",
+      "rejectedCalls": "{n} Aufruf(e) abgewiesen",
+      "instanceRejectedCalls": "Instanzweit abgewiesen: {n} Aufruf(e) (Summe über alle Verknüpfungen, auch nicht zuordenbare)",
+      "lastRejection": "Zuletzt: {reason} — Absender {host}",
+      "originBlocked": "Diese URL zeigt auf {host}. Die Allowlist dieser Verknüpfung erlaubt diesen Absender nicht — ein Aufruf von hier aus wird mit 404 abgewiesen.",
+      "reason": {
+        "rate_limited": "Ratenlimit überschritten",
+        "unknown_slug": "unbekannter Slug",
+        "invalid_binding": "ungültige Binding-Konfiguration",
+        "invalid_token": "falsches Token",
+        "method_not_allowed": "HTTP-Methode nicht erlaubt",
+        "address_blocked": "Absenderadresse nicht in der Allowlist"
+      }
     }
   },
   "history": {
@@ -2040,7 +2160,7 @@
         "variablesSection": "Variablen",
         "addVariable": "Variable hinzufügen",
         "removeVariable": "Entfernen",
-        "variablesHint": "Variablen referenzieren bestehende Objekte und können als ###OBS1###, ###OBS2### usw. in URL, Headern, Auth-Feldern und Body verwendet werden.",
+        "variablesHint": "Variablen referenzieren bestehende Objekte und können als ###OBS1###, ###OBS2### usw. in URL, Headern, Auth-Feldern und Body verwendet werden. Zusätzlich stehen die Datums-/Zeitvariablen (z. B. ###HH###, ###yyyy###, ###DATE###, ###TS###) zur Verfügung; im Schema, Host und Port der URL sind keine Variablen erlaubt.",
         "noVariables": "Keine Variablen konfiguriert."
       },
       "stringConcat": {
@@ -2140,7 +2260,9 @@
         "valueN": "Wert {n}",
         "outputsCount": "Ausgänge ({n})",
         "labelPlaceholder": "Bezeichnung",
-        "pathExample": "z.B. data.temperature"
+        "pathExample": "z.B. data.temperature",
+        "previewPruned": "Vorschau gekürzt: Das Dokument überschreitet die Vorschaugrösse, Arrays und lange Texte wurden verkürzt. Die Live-Werte je Ausgang können vom tatsächlichen Ergebnis abweichen.",
+        "pathListTruncated": "Pfadliste auf {n} Einträge gekürzt — weitere Pfade bitte direkt eingeben."
       },
       "substr": {
         "modeLabel": "Modus",
@@ -2464,7 +2586,14 @@
         "out_min": "Ausgang Min",
         "out_max": "Ausgang Max"
       },
-      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern"
+      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern",
+      "triggerMode": {
+        "label": "Auslösemodus",
+        "event": "Bei jedem Event",
+        "edge": "Nur bei steigender Flanke",
+        "eventHint": "Jedes eingehende true am Trigger-Eingang löst aus – auch wenn der Wert vorher schon true war.",
+        "edgeHint": "Löst nur beim Wechsel von false auf true aus. Ein erneutes true ohne vorheriges false wird ignoriert."
+      }
     },
     "portLabels": {
       "heizmode": "Heizmodus",
@@ -2558,8 +2687,8 @@
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "message_archive": "Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
-      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
-      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird bei steigender Flanke am Trigger-Eingang ausgeführt. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
+      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist – je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke.",
+      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird ausgelöst wenn der Trigger-Eingang true ist – je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
       "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
@@ -2590,6 +2719,28 @@
       "links": "Verknüpfungen",
       "linksModalTitle": "Hierarchie-Verknüpfungen: {name}",
       "linksEmpty": "Diese Logik ist aktuell keiner Hierarchie-Position zugeordnet."
+    },
+    "variables": {
+      "insert": "Variable einfügen…",
+      "groupStandard": "Standardwerte",
+      "groupDateTime": "Datum/Zeit",
+      "groupObjects": "Objektvariablen",
+      "resolvedPath": "Aufgelöster Pfad",
+      "unresolved": "Nicht auflösbare Variable(n): {names}",
+      "extractorHint": "Variablen können als ###OBS1###, ###OBS2### usw. in den Pfaden verwendet werden – zusammen mit den Datums-/Zeitvariablen (z. B. ###HH###, ###yyyy###).",
+      "textHint": "Variablen können als ###OBS1###, ###OBS2### usw. in Titel, Fallback-Text bzw. statischen Texten verwendet werden – zusammen mit den Datums-/Zeitvariablen (z. B. ###HH###, ###DATE###). Über Eingänge verbundene Werte werden nicht ausgewertet.",
+      "replaceHint": "Variablen können als ###OBS1###, ###OBS2### usw. im Ersetzungstext verwendet werden – zusammen mit den Datums-/Zeitvariablen. Bei RegEx-Regeln bleiben eingesetzte Werte wörtlich (Gruppenverweise wie \\1 wirken nur im eigenen Text).",
+      "urlHint": "Variablen (z. B. ###yyyy###, ###OBS1###) sind nur im Pfad und in der Query der URL erlaubt, nicht in Schema, Host oder Port.",
+      "issues": {
+        "unknownVariable": "Unbekannte Variable {name}",
+        "pathNotFound": "Pfad '{path}' nicht gefunden",
+        "invalidXPath": "Ungültiger XPath '{path}': {error}",
+        "notConfigured": "Variable {name} ist nicht konfiguriert",
+        "notAvailable": "Variable {name}: Objekt {object} ist nicht verfügbar",
+        "invalidObject": "Variable {name} verweist auf ein ungültiges Objekt",
+        "noValue": "Variable {name}: Objekt {object} hat keinen Wert",
+        "emptyValue": "Der Variablenwert ist leer"
+      }
     }
   },
   "authzPreflight": {
@@ -3318,7 +3469,9 @@
       "december": "Dezember"
     },
     "chooseFile": "Datei wählen",
-    "noFileSelected": "Keine Datei ausgewählt"
+    "noFileSelected": "Keine Datei ausgewählt",
+    "copy": "Kopieren",
+    "copied": "Kopiert"
   },
   "hierarchy": {
     "title": "Hierarchien",

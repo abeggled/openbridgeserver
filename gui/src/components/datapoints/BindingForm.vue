@@ -18,7 +18,7 @@
     <!-- ── TAB: Verbindung ── -->
     <div v-show="activeTab === 'conn'" class="flex flex-col gap-4">
 
-      <div class="grid gap-4" :class="selectedAdapterType === 'ANWESENHEITSSIMULATION' ? 'grid-cols-1' : 'grid-cols-2'">
+      <div class="grid gap-4" :class="DIRECTION_LOCKED_TYPES.includes(selectedAdapterType) ? 'grid-cols-1' : 'grid-cols-2'">
         <div class="form-group">
           <label class="label">{{ $t('adapters.bindingForm.adapterInstanceLabel') }}</label>
           <div v-if="props.initial" class="input bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed">
@@ -31,7 +31,7 @@
             </optgroup>
           </select>
         </div>
-        <div v-if="selectedAdapterType !== 'ANWESENHEITSSIMULATION' && selectedAdapterType !== 'MESSAGE'" class="form-group">
+        <div v-if="!DIRECTION_LOCKED_TYPES.includes(selectedAdapterType)" class="form-group">
           <label class="label">{{ $t('adapters.bindingForm.directionLabel') }}</label>
           <select
             v-model="form.direction"
@@ -130,6 +130,8 @@
       <BindingFormTimer
         v-if="selectedAdapterType === 'ZEITSCHALTUHR'"
           :cfg="cfg"
+          :dp-data-type="props.dpDataType"
+          :dp-unit="props.dpUnit"
           :zt-holidays="ztHolidays"
           :zt-holidays-loading="ztHolidaysLoading"
           :zt-holidays-error="ztHolidaysError"
@@ -175,6 +177,19 @@
         v-if="selectedAdapterType === 'MESSAGE'"
           :cfg="cfg"
           :selected-instance="selectedInstance"
+        />
+
+      <!-- WEBHOOK -->
+      <BindingFormWebhook
+        v-if="selectedAdapterType === 'WEBHOOK'"
+          :cfg="cfg"
+          :is-existing="!!props.initial"
+          :entry="webhookEntry"
+          :loading="webhookLoading"
+          :error="webhookError"
+          :rotating="webhookRotating"
+          :instance-rejections="webhookInstanceRejections"
+          @rotate-token="rotateWebhookToken"
         />
 
       <div v-if="!selectedAdapterType && !props.initial" class="p-3 bg-slate-100/80 dark:bg-slate-800/40 rounded-lg text-sm text-slate-500 text-center">
@@ -322,12 +337,16 @@ import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTi
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
 import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnmp.vue'
 import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
+import BindingFormWebhook from '@/components/datapoints/binding-form/BindingFormWebhook.vue'
+import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
+import { normalizeEntries } from '@/utils/ipAllowlist'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
   initial:        { type: Object,  default: null },
   dpPersistValue: { type: Boolean, default: false },
   dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
+  dpUnit:         { type: String,  default: '' },         // DataPoint.unit, shown next to typed value inputs
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
@@ -345,6 +364,10 @@ const anwOffsetSelect  = ref('')  // '' | '1' | '7' | '14' | 'custom'
 // ---------------------------------------------------------------------------
 
 const THROTTLE_FACTORS = { ms: 1, s: 1000, min: 60_000, h: 3_600_000 }
+
+// Adapter types that only ever observe values, so the direction select is
+// hidden and SOURCE is forced (see the watcher further down and submit()).
+const DIRECTION_LOCKED_TYPES = ['ANWESENHEITSSIMULATION', 'MESSAGE', 'WEBHOOK']
 
 const form = reactive({
   adapter_instance_id:  '',
@@ -406,6 +429,17 @@ const cfg = reactive({
   send_on_change: true,
   archive_id: '',
   archive_strategy: 'send_only',
+  // WEBHOOK
+  slug: '',
+  methods: ['GET'],
+  allowed_networks: [],
+  value_source: 'fixed',
+  fixed_value: 'true',
+  value_param: 'value',
+  debounce_ms: 0,
+  autoreset: false,
+  autoreset_value: 'false',
+  autoreset_delay_ms: 1000,
   // ZEITSCHALTUHR
   timer_type: 'daily', meta_type: 'none',
   weekdays: [0,1,2,3,4,5,6], months: [], day_of_month: 0,
@@ -417,7 +451,10 @@ const cfg = reactive({
   date_window_enabled: false,
   date_window_from: '',
   date_window_to: '',
-  value: '1',
+  // Typgerechter Startwert: der Adapter setzt für einen fehlenden Wert "1" ein,
+  // was ein DATE/TIME/DATETIME-Objekt nicht halten kann — die API weist einen
+  // solchen Schaltpunkt beim Speichern ab (siehe `timerValueDefault()`).
+  value: timerValueDefault(props.dpDataType),
 })
 
 // MQTT source data type constants + compatibility map
@@ -471,6 +508,13 @@ const onewireSensors = ref([])
 const onewireBrowseLoading = ref(false)
 const onewireBrowseError = ref(null)
 const onewireAliasDrafts = reactive({})
+
+// WEBHOOK call-URL state (token is served only by the dedicated route)
+const webhookEntry    = ref(null)
+const webhookLoading  = ref(false)
+const webhookError    = ref(null)
+const webhookInstanceRejections = ref(null)
+const webhookRotating = ref(false)
 
 // SNMP Walk state
 const snmpWalkResults = ref([])
@@ -656,7 +700,7 @@ watch(() => props.initial, val => {
   if (cfg.date_window_to      == null) cfg.date_window_to      = ''
   if (cfg.date_window_from) parseWinExprInto(cfg.date_window_from, winFrom)
   if (cfg.date_window_to)   parseWinExprInto(cfg.date_window_to,   winTo)
-  if (cfg.value             == null) cfg.value             = '1'
+  if (cfg.value             == null) cfg.value             = timerValueDefault(props.dpDataType)
   // ANWESENHEITSSIMULATION defaults + select sync
   if (cfg.offset_override      === undefined) cfg.offset_override      = null
   if (cfg.on_presence_override === undefined) cfg.on_presence_override = null
@@ -668,6 +712,17 @@ watch(() => props.initial, val => {
   if (cfg.data_type == null) cfg.data_type = 'auto'
   if (cfg.timeout  == null) cfg.timeout  = 5.0
   if (cfg.retries  == null) cfg.retries  = 1
+  // WEBHOOK defaults when loading
+  if (cfg.slug         == null) cfg.slug         = ''
+  if (cfg.methods      == null) cfg.methods      = ['GET']
+  cfg.allowed_networks = normalizeEntries(cfg.allowed_networks)
+  if (cfg.value_source == null) cfg.value_source = 'fixed'
+  if (cfg.fixed_value  == null) cfg.fixed_value  = 'true'
+  if (cfg.value_param  == null) cfg.value_param  = 'value'
+  if (cfg.debounce_ms  == null) cfg.debounce_ms  = 0
+  if (cfg.autoreset          == null) cfg.autoreset          = false
+  if (cfg.autoreset_value    == null) cfg.autoreset_value    = 'false'
+  if (cfg.autoreset_delay_ms == null) cfg.autoreset_delay_ms = 1000
   // MESSAGE defaults when loading
   if (cfg.operator == null) cfg.operator = '=='
   if (cfg.compare_value == null) cfg.compare_value = ''
@@ -721,6 +776,7 @@ onMounted(async () => {
   if (cfg.timer_type === 'holiday' && selectedInstanceId.value) {
     await loadZsuHolidays()
   }
+  await loadWebhookEntry()
 })
 
 async function loadZsuHolidays() {
@@ -862,6 +918,46 @@ async function saveOnewireAlias(romId) {
   }
 }
 
+async function loadWebhookEntry() {
+  // The call URL carries the binding's token, which the generic binding
+  // listing redacts — it comes from the dedicated webhook route instead.
+  if (!props.initial || selectedAdapterType.value !== 'WEBHOOK') return
+  webhookLoading.value = true
+  webhookError.value = null
+  try {
+    const { data } = await adapterApi.webhookBindings(selectedInstanceId.value)
+    webhookInstanceRejections.value = data.rejections ?? null
+    webhookEntry.value = (data.bindings ?? []).find(e => String(e.binding_id) === String(props.initial.id)) ?? null
+    if (!webhookEntry.value) webhookError.value = t('adapters.bindingForm.errors.webhookEntryNotFound')
+  } catch (e) {
+    webhookError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.webhookLoadFailed')
+  } finally {
+    webhookLoading.value = false
+  }
+}
+
+async function rotateWebhookToken() {
+  // Only reachable from the call-URL section, which renders for an existing
+  // binding whose webhook entry was loaded — so both ids are known here.
+  webhookRotating.value = true
+  webhookError.value = null
+  try {
+    const { data } = await adapterApi.webhookRotateToken(selectedInstanceId.value, props.initial.id)
+    // Spreading the previous entry keeps the call counters visible; the button
+    // only renders once an entry was loaded, so there is nothing else to keep.
+    webhookEntry.value = {
+      ...webhookEntry.value,
+      token: data.token,
+      call_path: data.call_path,
+      call_path_token_in_path: data.call_path_token_in_path,
+    }
+  } catch (e) {
+    webhookError.value = e.response?.data?.detail ?? t('adapters.bindingForm.errors.webhookRotateFailed')
+  } finally {
+    webhookRotating.value = false
+  }
+}
+
 async function snmpWalk(append = false) {
   const instanceId = selectedInstanceId.value
   if (!instanceId || !cfg.host) return
@@ -940,7 +1036,7 @@ watch(() => cfg.source_data_type, sdt => {
 
 // Force direction to SOURCE for adapters that observe values instead of writing.
 watch(selectedAdapterType, type => {
-  if (type === 'ZEITSCHALTUHR' || type === 'MESSAGE') form.direction = 'SOURCE'
+  if (type === 'ZEITSCHALTUHR' || type === 'MESSAGE' || type === 'WEBHOOK') form.direction = 'SOURCE'
   if (type === 'IOBROKER') {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false
@@ -1251,6 +1347,25 @@ function buildConfig() {
       c.json_key = cfg.json_key.trim()
     return c
   }
+  if (type === 'WEBHOOK') {
+    const c = {
+      slug: cfg.slug.trim().toLowerCase(),
+      methods: [...cfg.methods],
+      allowed_networks: normalizeEntries(cfg.allowed_networks).map(e => e.trim()).filter(Boolean),
+      value_source: cfg.value_source,
+      // An emptied number input yields '' through v-model.number, which the
+      // backend would reject — normalise it back to "no debounce".
+      debounce_ms: Number(cfg.debounce_ms) || 0,
+      autoreset: !!cfg.autoreset,
+    }
+    if (c.value_source === 'fixed') c.fixed_value = cfg.fixed_value
+    else c.value_param = cfg.value_param.trim() || 'value'
+    if (c.autoreset) {
+      c.autoreset_value = cfg.autoreset_value
+      c.autoreset_delay_ms = Number(cfg.autoreset_delay_ms) || 0
+    }
+    return c
+  }
   if (type === 'ZEITSCHALTUHR') {
     const c = {
       timer_type:   cfg.timer_type,
@@ -1337,7 +1452,19 @@ async function submit() {
   saving.value = true
   try {
     const config     = buildConfig()
-    const effectiveDirection = ['ANWESENHEITSSIMULATION', 'MESSAGE'].includes(selectedAdapterType.value) ? 'SOURCE' : form.direction
+    // Zeitschaltuhr: Schaltwert muss zum Objekttyp passen (Issue #1008) —
+    // sonst antwortet die API mit 422.
+    if (selectedAdapterType.value === 'ZEITSCHALTUHR' && config.timer_type !== 'meta') {
+      // Bewusst `cfg.value` und nicht `config.value`: `buildConfig()` setzt für
+      // einen leeren Wert den Default "1" ein, sodass die Prüfung sonst den
+      // Ersatzwert absegnet und ein getipptes Objekt mit einem Schaltwert
+      // gespeichert würde, den niemand eingegeben hat.
+      const valueErrorKey = validateTimerValue(cfg.value, props.dpDataType)
+      if (valueErrorKey) {
+        error.value = t(valueErrorKey); saving.value = false; return
+      }
+    }
+    const effectiveDirection = ['ANWESENHEITSSIMULATION', 'MESSAGE', 'WEBHOOK'].includes(selectedAdapterType.value) ? 'SOURCE' : form.direction
     const throttleMs = form.throttle_value > 0
       ? Math.round(form.throttle_value * THROTTLE_FACTORS[form.throttle_unit]) : null
     let resolvedValueMap = null

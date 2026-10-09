@@ -79,4 +79,3 @@ url = https://hosted.weblate.org/api/components/openbridgeserver/frontend-visu/
 # "help-settings-general", "help-settings-password", ...), add one
 # [components.help-<slug>] section per page here, mirroring gui-admin/
 # frontend-visu above, and `wlc push`/`wlc pull` work the same way.
-

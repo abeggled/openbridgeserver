@@ -34,6 +34,9 @@ const liveValue = computed((): DataPointValue | null => {
   return dpStore.getValue(cfgDatapointId.value)
 })
 
+/** DataPoint-Objekttyp — bestimmt, ob der Ausgang als Aktiv/Inaktiv gefärbt wird (Issue #1008). */
+const dpDataType = ref('UNKNOWN')
+
 function resolveBool(v: DataPointValue | null): boolean | null {
   if (v === null) return null
   const raw = v.v
@@ -43,7 +46,16 @@ function resolveBool(v: DataPointValue | null): boolean | null {
   return null
 }
 
-const outputActive = computed(() => resolveBool(liveValue.value))
+/**
+ * Nur boolesche Ausgänge werden grün/grau als Aktiv/Inaktiv dargestellt.
+ * Zahlen, Texte und Zeitstempel würden sonst irreführend als „aktiv“ erscheinen
+ * (z.B. Fensterposition 50 % als grünes „aktiv“-Badge).
+ */
+const isBooleanOutput = computed(() =>
+  dpDataType.value.toUpperCase() === 'BOOLEAN' || typeof liveValue.value?.v === 'boolean'
+)
+
+const outputActive = computed(() => (isBooleanOutput.value ? resolveBool(liveValue.value) : null))
 const quality      = computed(() => liveValue.value?.q ?? null)
 
 // ── ZSU bindings ──────────────────────────────────────────────────────────
@@ -66,6 +78,15 @@ onMounted(async () => {
     try {
       bindings.value = await dpApi.listBindings(cfgDatapointId.value)
     } catch { /* ignore */ }
+    // Ohne JWT kann diese Route nur mit 401 antworten — die Anfrage also gar
+    // nicht erst stellen. Anonyme Betrachter fallen auf die Werttyp-Heuristik
+    // zurück, die boolesche Werte weiterhin korrekt einfärbt.
+    if (getJwt()) {
+      try {
+        const dp = await dpApi.get(cfgDatapointId.value)
+        dpDataType.value = dp.data_type || 'UNKNOWN'
+      } catch { /* ignore */ }
+    }
   }
 })
 
@@ -132,12 +153,12 @@ watch(showModal, async (open) => {
           <span
             v-if="quality === 'bad'"
             class="ml-auto w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
-            title="Qualität: schlecht"
+            :title="$t('zst.qualityBad')"
           />
           <span
             v-else-if="quality === 'uncertain'"
             class="ml-auto w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0"
-            title="Qualität: undefiniert"
+            :title="$t('zst.qualityUncertain')"
           />
         </template>
       </div>
@@ -171,10 +192,10 @@ watch(showModal, async (open) => {
             : anyEnabled ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'"
         >
           <template v-if="editorMode">
-            {{ cfgMode === 'full' ? 'Vollzugriff' : cfgMode === 'restricted' ? 'Eingeschränkt' : 'Minimal' }}
+            {{ cfgMode === 'full' ? $t('zst.modeFull') : cfgMode === 'restricted' ? $t('zst.modeRestricted') : $t('zst.modeMinimal') }}
           </template>
-          <template v-else-if="instanceBindings.length === 0"><span data-testid="zsu-status">Keine Schaltpunkte</span></template>
-          <template v-else><span data-testid="zsu-status">{{ anyEnabled ? 'Zeitschaltuhr aktiv' : 'Zeitschaltuhr inaktiv' }}</span></template>
+          <template v-else-if="instanceBindings.length === 0"><span data-testid="zsu-status">{{ $t('zst.noSchedulePoints') }}</span></template>
+          <template v-else><span data-testid="zsu-status">{{ anyEnabled ? $t('zst.timerActive') : $t('zst.timerInactive') }}</span></template>
         </span>
       </div>
 
@@ -185,7 +206,7 @@ watch(showModal, async (open) => {
       <div v-if="canInteract" class="flex justify-end mt-1">
         <button
           type="button"
-          title="Schaltpunkte bearbeiten"
+          :title="$t('zst.editSchedulePoints')"
           data-testid="zsu-edit-btn"
           class="text-xs text-gray-400 dark:text-gray-600 hover:text-blue-500 dark:hover:text-blue-400 px-1 rounded transition-colors leading-none"
           @click="openEdit"
@@ -207,7 +228,7 @@ watch(showModal, async (open) => {
         @click.stop
       >
         <p class="text-xs text-center text-gray-700 dark:text-gray-200 leading-tight font-medium">
-          Zeitschaltuhr {{ pendingTarget ? 'aktivieren' : 'deaktivieren' }}?
+          {{ pendingTarget ? $t('zst.confirmActivate') : $t('zst.confirmDeactivate') }}
         </p>
         <div class="flex gap-2">
           <button
@@ -215,14 +236,14 @@ watch(showModal, async (open) => {
             data-testid="zsu-confirm-no"
             class="px-3 py-1 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             @click.stop="cancelToggle"
-          >Nein</button>
+          >{{ $t('common.no') }}</button>
           <button
             type="button"
             data-testid="zsu-confirm-yes"
             class="px-3 py-1 rounded text-xs text-white transition-colors"
             :class="pendingTarget ? 'bg-green-600 hover:bg-green-500' : 'bg-red-600 hover:bg-red-500'"
             @click.stop="executeToggle"
-          >Ja</button>
+          >{{ $t('common.yes') }}</button>
         </div>
       </div>
     </Transition>

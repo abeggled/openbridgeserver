@@ -38,6 +38,17 @@ from obs.core.json import jsonable
 from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
+from obs.logic.variables import (
+    VARIABLE_RE,
+    ResolvedTemplate,
+    TimeSnapshot,
+    VariableError,
+    make_time_snapshot,
+    normalise_variable_slots,
+    resolve_template,
+    value_to_string,
+    variable_key,
+)
 from obs.security.url_targets import resolve_url_target
 
 logger = logging.getLogger(__name__)
@@ -748,7 +759,7 @@ _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
-_API_CLIENT_VARIABLE_RE = re.compile(r"###OBS([1-9][0-9]*)###")
+_API_CLIENT_VARIABLE_RE = VARIABLE_RE
 _API_CLIENT_URL_LEADING_STRIP_CHARS = "".join(chr(value) for value in range(0x21))
 _API_CLIENT_URL_REMOVE_CHARS = str.maketrans("", "", "\r\n\t")
 _HOST_CHECK_MIN_TIMEOUT_S = 1.0
@@ -758,7 +769,7 @@ _HOST_CHECK_MAX_COUNT = 10
 _HOST_CHECK_RUNTIME_TOKEN = uuid.uuid4().hex
 
 
-class _ApiClientVariableError(ValueError):
+class _ApiClientVariableError(VariableError):
     pass
 
 
@@ -842,34 +853,7 @@ def _migrate_legacy_api_client_field_names(flow: FlowData) -> None:
                 node.data[new_key] = legacy_value
 
 
-def _normalise_api_client_variables(raw: Any) -> dict[int, dict[str, str]]:
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            raw = []
-    if not isinstance(raw, list):
-        return {}
-
-    variables: dict[int, dict[str, str]] = {}
-    for idx, entry in enumerate(raw, start=1):
-        if not isinstance(entry, dict):
-            continue
-        slot_raw = entry.get("slot", idx)
-        try:
-            slot = int(slot_raw)
-        except (TypeError, ValueError):
-            slot = idx
-        if slot < 1:
-            slot = idx
-        datapoint_id = str(entry.get("datapoint_id") or "").strip()
-        if not datapoint_id:
-            continue
-        variables[slot] = {
-            "datapoint_id": datapoint_id,
-            "datapoint_name": str(entry.get("datapoint_name") or datapoint_id),
-        }
-    return variables
+_normalise_api_client_variables = normalise_variable_slots
 
 
 def _rename_api_client_variable_datapoint_names(raw: Any, datapoint_id: str, new_name: str) -> tuple[Any, bool]:
@@ -898,13 +882,10 @@ def _rename_api_client_variable_datapoint_names(raw: Any, datapoint_id: str, new
 
 
 def _api_client_value_to_string(value: Any) -> str:
-    if value is None:
-        raise _ApiClientVariableError("API client variable value is empty")
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
+    try:
+        return value_to_string(value)
+    except VariableError as exc:
+        raise _ApiClientVariableError("API client variable value is empty") from exc
 
 
 def _replace_api_client_placeholders(
@@ -915,7 +896,7 @@ def _replace_api_client_placeholders(
     if isinstance(value, str):
 
         def _replace(match: re.Match[str]) -> str:
-            replacement = resolver(int(match.group(1)))
+            replacement = resolver(variable_key(match.group(1)))
             return transform(replacement) if transform is not None else replacement
 
         return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
@@ -978,7 +959,7 @@ def _replace_api_client_url_placeholders(value: str, resolver: Any) -> str:
             raise _ApiClientVariableError(
                 "API client URL variables are not allowed in the scheme, host, userinfo, or port",
             )
-        replacement = resolver(int(match.group(1)))
+        replacement = resolver(variable_key(match.group(1)))
         return _quote_api_client_url_value(replacement)
 
     return _API_CLIENT_VARIABLE_RE.sub(_replace, value)
@@ -988,37 +969,45 @@ def _make_api_client_variable_resolver(
     registry: Any,
     raw_variables: Any,
     execution_values_by_datapoint_id: dict[str, Any] | None = None,
+    snapshot: TimeSnapshot | None = None,
+    subject: str = "API client",
 ) -> Any:
     variables = _normalise_api_client_variables(raw_variables)
     execution_values_by_datapoint_id = execution_values_by_datapoint_id or {}
     cache: dict[int, str] = {}
 
-    def _resolve(index: int) -> str:
+    def _resolve(index: int | str) -> str:
+        if isinstance(index, str):
+            # Shared date/time variables (#1301): one snapshot per logic run.
+            nonlocal snapshot
+            if snapshot is None:
+                snapshot = make_time_snapshot(None)
+            return snapshot.value(index)
         if index in cache:
             return cache[index]
         variable = variables.get(index)
         if variable is None:
-            raise _ApiClientVariableError(f"API client variable OBS{index} is not configured")
+            raise _ApiClientVariableError(f"{subject} variable OBS{index} is not configured")
         datapoint_id = variable["datapoint_id"]
         if datapoint_id in execution_values_by_datapoint_id:
             value = execution_values_by_datapoint_id[datapoint_id]
             if value is None:
                 raise _ApiClientVariableError(
-                    f"API client variable OBS{index} object {variable['datapoint_name']} has no value",
+                    f"{subject} variable OBS{index} object {variable['datapoint_name']} has no value",
                 )
             cache[index] = _api_client_value_to_string(value)
             return cache[index]
         try:
             state = registry.get_value(uuid.UUID(datapoint_id))
         except Exception as exc:
-            raise _ApiClientVariableError(f"API client variable OBS{index} references an invalid object") from exc
+            raise _ApiClientVariableError(f"{subject} variable OBS{index} references an invalid object") from exc
         if state is None:
             raise _ApiClientVariableError(
-                f"API client variable OBS{index} object {variable['datapoint_name']} is not available",
+                f"{subject} variable OBS{index} object {variable['datapoint_name']} is not available",
             )
         if state.value is None:
             raise _ApiClientVariableError(
-                f"API client variable OBS{index} object {variable['datapoint_name']} has no value",
+                f"{subject} variable OBS{index} object {variable['datapoint_name']} has no value",
             )
         cache[index] = _api_client_value_to_string(state.value)
         return cache[index]
@@ -1284,6 +1273,23 @@ def _should_send_cookie(
     if not _cookie_path_matches(req_path, cookie_path):
         return False
     return not (bool(cookie_secure) and not req_is_https)
+
+
+_TRIGGER_MODE_EDGE = "edge"
+_TRIGGER_MODE_EVENT = "event"
+
+
+def _trigger_mode(node_data: dict[str, Any] | None) -> str:
+    """Trigger semantics of a wake_on_lan/host_check node (issue #1274).
+
+    "event" fires on every freshly delivered truthy trigger; "edge" only on
+    the False→True transition. Nodes saved before the option existed carry no
+    value and keep the historic rising-edge behaviour, so existing sheets do
+    not silently start re-sending on cyclic status telegrams.
+    """
+    if (node_data or {}).get("trigger_mode") == _TRIGGER_MODE_EVENT:
+        return _TRIGGER_MODE_EVENT
+    return _TRIGGER_MODE_EDGE
 
 
 def _send_wol_packet(mac: str, broadcast: str, port: int) -> None:
@@ -2517,6 +2523,7 @@ class LogicManager:
                     hyst_copy,
                     self._app_config,
                     retained_boundary_handles=init_retained_boundary_handles,
+                    datapoint_lookup=self._datapoint_value_lookup,
                 )
                 outputs = executor.execute(overrides, commit_memory=False)
 
@@ -2860,6 +2867,11 @@ class LogicManager:
         except Exception:
             logger.exception("Graph %s: failed to reset node_state", graph_id[:8])
 
+    def _datapoint_value_lookup(self, datapoint_id: str) -> Any:
+        """Current registry value for ``###OBSn###`` slots of non-API blocks (None if unknown)."""
+        state = self._registry.get_value(uuid.UUID(datapoint_id))
+        return None if state is None else state.value
+
     async def _execute_graph(
         self,
         graph_id: str,
@@ -2896,6 +2908,8 @@ class LogicManager:
         execute_now = datetime.now(UTC)
         execution_started = perf_counter()
         ical_app_config = dict(self._app_config)
+        # One instant for every ###VAR### of this logic run (#1301).
+        api_time_snapshot = make_time_snapshot(ical_app_config, execute_now)
         graph_state = self._node_state.setdefault(graph_id, {})
         ical_generation = self._ical_cache_generations.setdefault(graph_id, object())
         ical_result_cache = self._ical_result_caches.setdefault(graph_id, {})
@@ -3008,6 +3022,8 @@ class LogicManager:
                     ical_app_config,
                     ical_result_cache=pass_ical_cache,
                     ical_cache_outputs_owned=True,
+                    run_time=execute_now,
+                    datapoint_lookup=self._datapoint_value_lookup,
                 )
 
             else:
@@ -3029,6 +3045,8 @@ class LogicManager:
                     run_inputs,
                     pass_ical_cache,
                     ical_cache_outputs_owned=True,
+                    run_time=execute_now,
+                    datapoint_lookup=self._datapoint_value_lookup,
                 )
 
             if not ical_nodes or execution_ical_prepared:
@@ -3041,6 +3059,8 @@ class LogicManager:
                     ical_app_config,
                     ical_result_cache=pass_ical_cache,
                     ical_cache_outputs_owned=True,
+                    run_time=execute_now,
+                    datapoint_lookup=self._datapoint_value_lookup,
                 )
                 previous = pass_ical_cache.get(ical_node.id)
                 try:
@@ -3217,12 +3237,45 @@ class LogicManager:
         # ── Pre-fetch iCal URLs (refresh only when cache is stale) ───────────
         hyst = self._hysteresis.setdefault(graph_id, {})
         refreshed_ical_nodes: set[str] = set()
+        ical_variable_errors: dict[str, str] = {}
+
+        def _drop_ical_data_of_other_url(cached: dict[str, Any] | None, resolved_url: str) -> None:
+            if cached and cached.get("fetched_url") not in (None, resolved_url):
+                for key in ("raw", "fetched_url", "last_fetch_ts"):
+                    cached.pop(key, None)
+
         for node in flow.nodes:
             if node.type != "ical":
                 continue
             url = (node.data.get("url") or "").strip()
             if not url:
                 continue
+            variable_url = bool(VARIABLE_RE.search(url))
+            if variable_url:
+                # Date/object variables are allowed in path and query only; the
+                # authority guard of the API client applies unchanged (#1301).
+                try:
+                    url = _replace_api_client_url_placeholders(
+                        url,
+                        _make_api_client_variable_resolver(
+                            self._registry,
+                            node.data.get("variables"),
+                            None,
+                            api_time_snapshot,
+                            subject="iCal",
+                        ),
+                    ).strip()
+                    # A changed resolved URL invalidates the calendar fetched from the old one,
+                    # even if fetching the new one fails.
+                    _drop_ical_data_of_other_url(hyst.get(node.id), url)
+                except _ApiClientVariableError as exc:
+                    logger.warning("Graph %s: iCal variable error on node %s: %s", graph_id[:8], node.id[:8], exc)
+                    # Never keep acting on a calendar fetched under a different URL.
+                    stale = hyst.setdefault(node.id, {})
+                    for key in ("raw", "fetched_url", "last_fetch_ts", "_ical_last_attempt_url", "_ical_last_attempt_limit", "_ical_last_attempt_ts"):
+                        stale.pop(key, None)
+                    ical_variable_errors[node.id] = str(exc)
+                    continue
             refresh_min = float(node.data.get("refresh_interval_min") or 60)
             payload_limit = _ical_payload_limit_bytes(node.data)
             hyst_node = hyst.setdefault(node.id, {})
@@ -3235,6 +3288,10 @@ class LogicManager:
                 if self._ical_cache_generations.get(graph_id) is not ical_generation:
                     fetch_lock.release()
                     continue
+                # A refresh that was in flight while the URL changed may have stored
+                # the old URL's calendar meanwhile (re-checked under the lock).
+                if variable_url:
+                    _drop_ical_data_of_other_url(hyst_node, url)
                 # Another execution may have refreshed this node while this one
                 # waited.  Re-check the shared attempt metadata under the lock;
                 # a failed attempt also satisfies queued callers.
@@ -3530,6 +3587,9 @@ class LogicManager:
         except Exception:
             logger.exception("Graph %s (%s) execution error", graph_id, name)
             return {}
+
+        for ical_error_id, ical_error in ical_variable_errors.items():
+            outputs.setdefault(ical_error_id, {})["__error__"] = ical_error
 
         # ── Change Filter: correct any comparison made against an unresolved
         # value on this real pass ─────────────────────────────────────────
@@ -4575,32 +4635,61 @@ class LogicManager:
         # source, not every cron/change_filter in the graph.
         fired_crons = overrides.keys() & cron_node_ids
         cron_reachable: set[str] = set(fired_crons)
+
+        def _propagate_pulse_reachability(reachable: set[str], frontier: list[str]) -> None:
+            """Extend *reachable* in place with every node a pulse travelling
+            from *frontier* reaches through pulse-carrying edges."""
+            queue = list(frontier)
+            while queue:
+                current = queue.pop()
+                # memory is an explicit tick boundary: a pulse legitimately
+                # reaches its trigger-typed "reset" port (added to the
+                # reachable set like any other trigger-typed target), but
+                # memory's "out" this pass is whatever was already committed
+                # at the end of a *previous* tick, entirely independent of
+                # the reset/in this pulse just delivered — that only takes
+                # effect via the deferred commit_memory_inputs, for the
+                # *next* tick. The pulse must not be treated as having
+                # propagated through to memory's own descendants.
+                if _node_type_by_id.get(current) == "memory":
+                    continue
+                for edge in _effective_edges:
+                    if edge.source == current and edge.target not in reachable and _edge_carries_pulse(edge):
+                        reachable.add(edge.target)
+                        queue.append(edge.target)
+
         # Seed only the targets reached via each pulsing change_filter's
         # "changed" handle — its "out" handle carries the held/passthrough
         # value, not a discrete pulse, and must not bypass rising-edge dedup.
         for _cfe in _effective_edges:
             if (_cfe.source, _cfe.sourceHandle or "out") in _initial_pulse_handles and _edge_carries_pulse(_cfe):
                 cron_reachable.add(_cfe.target)
-        if cron_reachable:
-            _cq: list[str] = list(cron_reachable)
-            while _cq:
-                _cn = _cq.pop()
-                # memory is an explicit tick boundary: a pulse legitimately
-                # reaches its trigger-typed "reset" port (added to
-                # cron_reachable above/below like any other trigger-typed
-                # target), but memory's "out" this pass is whatever was
-                # already committed at the end of a *previous* tick,
-                # entirely independent of the reset/in this pulse just
-                # delivered — that only takes effect via the deferred
-                # commit_memory_inputs, for the *next* tick. The pulse must
-                # not be treated as having propagated through to memory's
-                # own descendants.
-                if _node_type_by_id.get(_cn) == "memory":
-                    continue
-                for _ce in _effective_edges:
-                    if _ce.source == _cn and _ce.target not in cron_reachable and _edge_carries_pulse(_ce):
-                        cron_reachable.add(_ce.target)
-                        _cq.append(_ce.target)
+        _propagate_pulse_reachability(cron_reachable, list(cron_reachable))
+
+        # Trigger mode "event" (issue #1274): a Read Object whose DataPoint
+        # genuinely received a new value this tick is a discrete event source
+        # as well — every such telegram, even a repeated TRUE, must re-fire a
+        # wake_on_lan/host_check it drives. Read Objects merely re-seeded from
+        # the registry (an unrelated DataPoint's event, cron, ...) are not in
+        # `overrides` and keep being deduplicated. A run without any event
+        # overrides is an explicit manual/debug run, where — as for
+        # notifications — every input counts as freshly delivered (None).
+        event_reachable: set[str] | None = None
+        if overrides:
+            event_reachable = {
+                node_id
+                for node_id, values in overrides.items()
+                if _node_type_by_id.get(node_id) == "datapoint_read" and GraphExecutor._to_bool(values.get("changed"))
+            }
+            _propagate_pulse_reachability(event_reachable, list(event_reachable))
+
+        def _retrigger_allowed(node: Any) -> bool:
+            """May a sustained truthy trigger fire *node*'s action again?"""
+            if node.id in cron_reachable:
+                return True
+            if _trigger_mode(node.data) != _TRIGGER_MODE_EVENT:
+                return False
+            return event_reachable is None or node.id in event_reachable
 
         def _register_change_filter_pulses(node_ids: set[str]) -> None:
             # change_filter_pulse_ids/cron_reachable above only see pulses
@@ -4624,17 +4713,7 @@ class LogicManager:
                 if (_pe.source, _pe.sourceHandle or "out") in _new_pulses and _pe.target not in cron_reachable and _edge_carries_pulse(_pe):
                     cron_reachable.add(_pe.target)
                     _pq.append(_pe.target)
-            while _pq:
-                _pn = _pq.pop()
-                # Same memory tick-boundary stop as the preamble traversal
-                # above — a pulse reaching memory's "reset" must not be
-                # treated as having propagated through to its descendants.
-                if _node_type_by_id.get(_pn) == "memory":
-                    continue
-                for _pe2 in _effective_edges:
-                    if _pe2.source == _pn and _pe2.target not in cron_reachable and _edge_carries_pulse(_pe2):
-                        cron_reachable.add(_pe2.target)
-                        _pq.append(_pe2.target)
+            _propagate_pulse_reachability(cron_reachable, _pq)
 
         executed_host_check_nodes: set[str] = set()
 
@@ -4643,7 +4722,7 @@ class LogicManager:
             hyst_hc = hyst.setdefault(node.id, {})
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
             was_triggered = hyst_hc.get("hc_prev_trigger", False)
-            is_cron_triggered = node.id in cron_reachable
+            retrigger_allowed = _retrigger_allowed(node)
             if not is_triggered:
                 return False
             host = (node.data.get("host") or "").strip()
@@ -4664,7 +4743,7 @@ class LogicManager:
                 return False
             if (
                 was_triggered
-                and not is_cron_triggered
+                and not retrigger_allowed
                 and hyst_hc.get("hc_config_sig") == config_sig
                 and hyst_hc.get("hc_runtime_token") == _HOST_CHECK_RUNTIME_TOKEN
             ):
@@ -4904,13 +4983,12 @@ class LogicManager:
             hyst_wol = hyst.setdefault(node.id, {})
             is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
             was_triggered = hyst_wol.get("wol_prev_trigger", False)
-            # Cron-retrigger exception applies only when the firing cron node
-            # actually drives this specific WoL node (reachability check above).
-            is_cron_triggered = node.id in cron_reachable
             if not is_triggered:
                 hyst_wol["wol_prev_trigger"] = False
                 return False
-            if was_triggered and not is_cron_triggered:
+            # Retrigger exception applies only when a firing pulse/event source
+            # actually drives this specific WoL node (reachability check above).
+            if was_triggered and not _retrigger_allowed(node):
                 # Dedup skip, not a failure — but the trigger IS active this
                 # tick and "sent" is settled (no new packet this time), so a
                 # change_filter held behind this node's output must still be
@@ -5144,6 +5222,18 @@ class LogicManager:
             if priority >= execution_value_priority_by_datapoint_id.get(dp_id_str, 0):
                 execution_values_by_datapoint_id[dp_id_str] = node_override["value"]
                 execution_value_priority_by_datapoint_id[dp_id_str] = priority
+
+        def _resolve_node_text(node: Any, text: str) -> ResolvedTemplate:
+            """Expand ###VAR### in a static text field (notification/archive fallbacks)."""
+            resolver = _make_api_client_variable_resolver(
+                self._registry,
+                node.data.get("variables"),
+                None,  # registry values only: a debug override must never reach a sent/archived text
+                api_time_snapshot,
+                subject="Variable",
+            )
+            return resolve_template(text, api_time_snapshot, resolver)
+
         import json as _json
 
         async def _run_api_client_node(node: Any, target_set: set[str]) -> bool:
@@ -5154,6 +5244,7 @@ class LogicManager:
                 self._registry,
                 node.data.get("variables"),
                 execution_values_by_datapoint_id,
+                api_time_snapshot,
             )
             try:
                 url = _replace_api_client_url_placeholders(
@@ -5511,40 +5602,11 @@ class LogicManager:
             for node in flow.nodes:
                 if node.type != "wake_on_lan" or node.id not in post_api_hc_descendants or node.id in triggered_wol_nodes:
                     continue
-                out = outputs.get(node.id, {})
-                hyst_wol = hyst.setdefault(node.id, {})
-                is_triggered = GraphExecutor._to_bool(out.get("_trigger"))
-                was_triggered = hyst_wol.get("wol_prev_trigger", False)
-                is_cron_triggered = node.id in cron_reachable
-                if not is_triggered:
-                    hyst_wol["wol_prev_trigger"] = False
-                    continue
-                if was_triggered and not is_cron_triggered:
-                    continue
-                mac = (node.data.get("mac_address") or "").strip()
-                if not mac:
-                    logger.warning("wake_on_lan: mac_address missing on node %s", node.id[:8])
-                    continue
-                broadcast = (node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
-                _port_raw = node.data.get("port")
-                try:
-                    if isinstance(_port_raw, float) and not _port_raw.is_integer():
-                        raise ValueError(f"fractional port {_port_raw!r} — must be a whole number")
-                    port = int(_port_raw) if _port_raw not in (None, "") else 9
-                    if not (1 <= port <= 65535):
-                        raise ValueError(f"port {port!r} out of range 1–65535")
-                    try:
-                        ipaddress.IPv4Address(broadcast)
-                    except ValueError:
-                        raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
-                    await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
-                    hyst_wol["wol_prev_trigger"] = True
-                    outputs[node.id]["sent"] = True
+                # Scratch target set: this late pass only records nodes whose
+                # packet actually went out; skipped/failed nodes stay unresolved.
+                if await _run_wake_on_lan_node(node, set()):
                     post_api_wol_nodes.add(node.id)
                     triggered_wol_nodes.add(node.id)
-                    logger.info("Graph %s: WoL sent by node %s", graph_id[:8], node.id[:8])
-                except Exception:
-                    logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], node.id[:8])
 
         if post_api_wol_nodes:
             _add_resolved_outputs(post_api_wol_nodes)
@@ -5667,6 +5729,7 @@ class LogicManager:
                     self._registry,
                     node.data.get("variables"),
                     execution_values_by_datapoint_id,
+                    api_time_snapshot,
                 )
                 try:
                     url = _replace_api_client_url_placeholders(
@@ -5970,37 +6033,9 @@ class LogicManager:
         for _fw_node in flow.nodes:
             if _fw_node.type != "wake_on_lan" or _fw_node.id in triggered_wol_nodes:
                 continue
-            _fw_out = outputs.get(_fw_node.id, {})
-            _fw_hyst = hyst.setdefault(_fw_node.id, {})
-            if not GraphExecutor._to_bool(_fw_out.get("_trigger")):
-                _fw_hyst["wol_prev_trigger"] = False
-                continue
-            if _fw_hyst.get("wol_prev_trigger") and _fw_node.id not in cron_reachable:
-                continue
-            _fw_mac = (_fw_node.data.get("mac_address") or "").strip()
-            if not _fw_mac:
-                logger.warning("wake_on_lan: mac_address missing on node %s", _fw_node.id[:8])
-                continue
-            _fw_broadcast = (_fw_node.data.get("broadcast_ip") or "").strip() or "255.255.255.255"
-            _fw_port_raw = _fw_node.data.get("port")
-            try:
-                if isinstance(_fw_port_raw, float) and not _fw_port_raw.is_integer():
-                    raise ValueError(f"fractional port {_fw_port_raw!r}")
-                _fw_port = int(_fw_port_raw) if _fw_port_raw not in (None, "") else 9
-                if not (1 <= _fw_port <= 65535):
-                    raise ValueError(f"port {_fw_port!r} out of range 1–65535")
-                try:
-                    ipaddress.IPv4Address(_fw_broadcast)
-                except ValueError:
-                    raise ValueError(f"invalid broadcast IP {_fw_broadcast!r}") from None
-                await asyncio.to_thread(_send_wol_packet, _fw_mac, _fw_broadcast, _fw_port)
-                _fw_hyst["wol_prev_trigger"] = True
-                outputs[_fw_node.id]["sent"] = True
+            if await _run_wake_on_lan_node(_fw_node, set()):
                 _final_wol_candidates.add(_fw_node.id)
                 triggered_wol_nodes.add(_fw_node.id)
-                logger.info("Graph %s: WoL sent by node %s", graph_id[:8], _fw_node.id[:8])
-            except Exception:
-                logger.exception("Graph %s: WoL failed on node %s", graph_id[:8], _fw_node.id[:8])
         if _final_wol_candidates:
             _add_resolved_outputs(_final_wol_candidates)
             _fwol_dn_ovr: dict[str, dict[str, Any]] = {}
@@ -6131,9 +6166,18 @@ class LogicManager:
                 return False
 
             _raw_msg = out.get("_message")
-            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else str(node.data.get("message") or "")
             _raw_title = out.get("_title")
-            title = _msg_to_str(_raw_title) if _raw_title is not None else str(node.data.get("title") or "")
+            # Only the configured fallbacks are templates; wired values are data.
+            _fallback_msg = _resolve_node_text(node, str(node.data.get("message") or "")) if _raw_msg is None else None
+            _fallback_title = _resolve_node_text(node, str(node.data.get("title") or "")) if _raw_title is None else None
+            _variable_errors = [*(_fallback_msg.errors if _fallback_msg else []), *(_fallback_title.errors if _fallback_title else [])]
+            if _variable_errors:
+                outputs[node.id]["__error__"] = "; ".join(_variable_errors)
+                logger.warning("Graph %s: message archive variable error: %s", graph_id[:8], outputs[node.id]["__error__"])
+                target_set.add(node.id)
+                return False
+            msg = _msg_to_str(_raw_msg) if _raw_msg is not None else _fallback_msg.text
+            title = _msg_to_str(_raw_title) if _raw_title is not None else _fallback_title.text
             message_type = str(node.data.get("type") or "automation")
             severity = str(node.data.get("severity") or "info")
 
@@ -6294,7 +6338,15 @@ class LogicManager:
                     target_set.add(node.id)
                     return False
                 raw_message = out.get("_message")
-                message = _msg_to_str(raw_message) if raw_message is not None else str(node.data.get("message") or "")
+                fallback_message = _resolve_node_text(node, str(node.data.get("message") or "")) if raw_message is None else None
+                resolved_title = _resolve_node_text(node, str(node.data.get("title") or ""))
+                variable_errors = [*(fallback_message.errors if fallback_message else []), *resolved_title.errors]
+                if variable_errors:
+                    outputs[node.id]["__error__"] = "; ".join(variable_errors)
+                    logger.warning("Graph %s: notification variable error: %s", graph_id[:8], outputs[node.id]["__error__"])
+                    target_set.add(node.id)
+                    return False
+                message = _msg_to_str(raw_message) if raw_message is not None else fallback_message.text
                 try:
                     raw_priority = node.data.get("priority")
                     try:
@@ -6305,7 +6357,7 @@ class LogicManager:
                     results = await adapter.send_notification(
                         message=message,
                         providers=providers,
-                        title=str(node.data.get("title") or "") or None,
+                        title=resolved_title.text or None,
                         priority=priority,
                     )
                     failures = [result for result in results if not result.ok]

@@ -1380,15 +1380,17 @@ Der Gerätepfad eines 1-Wire-Busmasters ist über Reboots hinweg oder beim Ansch
 - Ein einfacher USB-Busmaster (z. B. DS9490) meldet sich als `/dev/bus/usb/<bus>/<device>` — Bus-/Device-Nummern können sich verschieben.
 - Das ElabNET PBM meldet sich als FTDI-Serial-Gerät (`/dev/ttyUSB0`, `/dev/ttyUSB1`, …) — die laufende Nummer hängt von der Anschlussreihenfolge ab.
 
-Für das PBM ist `/dev/serial/by-id/usb-FTDI_...` in der Regel bereits ein stabiler Pfad, den udev automatisch für jedes Serial-Gerät mit Seriennummer anlegt — ohne eigene Regel (siehe die `ls /dev/serial/by-id/`-Ausgabe in Schritt 1) — `OBS_ONEWIRE__PBM_DEVICES` direkt auf diesen Pfad zu setzen reicht aus, dann kann direkt zu Schritt 3 übergegangen werden. Einfache USB-Busmaster bekommen kein vergleichbares automatisches Alias, hier ist eine eigene udev-Regel der zuverlässige Weg. Eine eigene Regel für das PBM lohnt sich nur, wenn ein kurzer, selbst gewählter Name statt des langen `by-id`-Pfads gewünscht ist.
+Für das PBM ist `/dev/serial/by-id/usb-FTDI_...` in der Regel bereits ein stabiler Pfad, den udev automatisch für jedes Serial-Gerät mit Seriennummer anlegt — ohne eigene Regel (siehe die `ls /dev/serial/by-id/`-Ausgabe in Schritt 1) — `OBS_ONEWIRE__PBM_DEVICES` direkt auf diesen Pfad zu setzen reicht aus, dann kann direkt zu Schritt 3 übergegangen werden. Ein einfacher USB-Busmaster braucht dagegen **gar keinen** stabilen Pfad: `owserver` (`server: usb = all`) bekommt keinen Gerätepfad, sondern durchsucht `/dev/bus/usb` selbst per libusb und findet jeden Busmaster, egal unter welcher Nummer er sich meldet. Seine udev-Regel legt deshalb keinen Symlink an, sondern erlaubt nur root im unprivilegierten LXC, das Gerät zu öffnen (warum der Symlink für den Busmaster nicht taugt, steht in Schritt 3). Eine eigene Regel für das PBM lohnt sich nur, wenn ein kurzer, selbst gewählter Name statt des langen `by-id`-Pfads gewünscht ist.
 
-Die Regel auf dem **Proxmox-Host** anlegen (nicht im Container — Proxmox löst den LXC-Passthrough-Mount gegen den Gerätebaum des Hosts auf, bevor der Container startet, der Symlink muss dort also schon existieren), z. B. `/etc/udev/rules.d/99-onewire.rules`:
+Die Regel auf dem **Proxmox-Host** anlegen (nicht im Container — Geräteknoten und ihre Rechte kommen aus dem Gerätebaum des Hosts, und Proxmox löst einen durchgereichten Symlink dort auf, bevor der Container startet), z. B. `/etc/udev/rules.d/99-onewire.rules`:
 
 ```
-# DS9490/DS1490F einfacher USB-Busmaster — idVendor/idProduct sind für diese Gerätefamilie
-# fix (04fa:2490). Keine serial-Bedingung, da dieses Gerät keine Seriennummer meldet (siehe
-# Schritt 1) — bei mehreren identischen Busmastern reicht dieses Match nicht zur Unterscheidung.
-SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", SYMLINK+="onewire-busmaster"
+# DS9490/DS1490F einfacher USB-Busmaster (04fa:2490) — kein Symlink: owserver (usb = all)
+# durchsucht /dev/bus/usb selbst (siehe Schritt 3). GROUP/MODE erlauben root im
+# unprivilegierten LXC das Öffnen; 100000 ist bei der Standard-ID-Zuordnung von Proxmox die
+# Host-GID der root-Gruppe im Container. Das Match gilt für jeden Busmaster dieser Familie,
+# mehrere Busmaster funktionieren also ebenso.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", GROUP="100000", MODE="0660"
 
 # ElabNET PBM (FTDI) — ATTRS{} statt ATTR{}, da idVendor/idProduct/serial auf dem
 # übergeordneten USB-Gerät sitzen, nicht auf dem tty-Gerät selbst (siehe Schritt 1).
@@ -1399,49 +1401,62 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", ATTRS{seria
 
 Nur die Blöcke übernehmen, deren Hardware auch tatsächlich vorhanden ist (siehe `lsusb`-Ausgabe in Schritt 1) — eine Regel für nicht angeschlossene Hardware ist harmlos, erzeugt aber logischerweise auch keinen Symlink.
 
-Ohne Neustart anwenden und den entstandenen Symlink prüfen:
+Ohne Neustart anwenden und das Ergebnis prüfen (Busmaster: der `/dev/bus/usb/<bus>/<device>`-Pfad aus `lsusb`):
 
 ```bash
 udevadm control --reload-rules && udevadm trigger
-ls -l /dev/onewire-busmaster /dev/onewire-pbm
+ls -l /dev/bus/usb/001/004 /dev/onewire-pbm
 ```
 
 Beispielhafte Ausgabe für die Geräte aus Schritt 1 (beide Regeln angewendet):
 
 ```
-$ ls -l /dev/onewire-busmaster /dev/onewire-pbm
-lrwxrwxrwx 1 root root 15 Jul 26 14:02 /dev/onewire-busmaster -> bus/usb/001/004
+$ ls -l /dev/bus/usb/001/004 /dev/onewire-pbm
+crw-rw---- 1 root 100000 189, 3 Jul 26 14:02 /dev/bus/usb/001/004
 lrwxrwxrwx 1 root root  7 Jul 26 14:02 /dev/onewire-pbm -> ttyUSB0
 ```
 
-Falls nur eine der beiden Regeln zur eigenen Hardware passt, meldet `ls` für den anderen Symlink `No such file or directory` — das ist erwartet, kein Fehler (siehe Hinweis oben). Das Symlink-**Ziel** (`ttyUSB0`, `bus/usb/001/004`, …) kann sich über Reboots oder Neuanstecken hinweg ebenfalls ändern — die Regel matcht auf feste Geräteattribute, nicht auf den vom Kernel vergebenen Namen, udev richtet den Symlink also bei jedem Mal neu auf den tatsächlichen Ort aus. Das ist unkritisch: Stabil bleiben muss nur der Symlink-Name selbst (`/dev/onewire-pbm`), denn genau darauf beziehen sich Schritt 3 und 4 — nie auf den rohen Gerätepfad.
+Falls nur eine der beiden Regeln zur eigenen Hardware passt, meldet `ls` für den anderen Pfad `No such file or directory` — das ist erwartet, kein Fehler (siehe Hinweis oben). Das Symlink-**Ziel** (`ttyUSB0`, `ttyUSB1`, …) kann sich über Reboots oder Neuanstecken hinweg ebenfalls ändern — die Regel matcht auf feste Geräteattribute, nicht auf den vom Kernel vergebenen Namen, udev richtet den Symlink also bei jedem Mal neu auf den tatsächlichen Ort aus. Das ist unkritisch: Stabil bleiben muss nur der Symlink-Name selbst (`/dev/onewire-pbm`), denn genau darauf beziehen sich Schritt 3 und 4 — nie auf den rohen Gerätepfad.
 
 #### 3. Gerät(e) an den Container durchreichen
 
-- **Proxmox-LXC**: Container öffnen → **Resources** → **Add** → **Device Passthrough**, bei **Device Path** den stabilen Symlink aus Schritt 2 eintragen (z. B. `/dev/onewire-busmaster`), bestätigen. Pro zutreffendem Gerät wiederholen (Busmaster und/oder PBM):
+- **Proxmox-LXC, einfacher USB-Busmaster**: das komplette `/dev/bus/usb` des Hosts per Bind-Mount in den Container einbinden und die USB-Zeichengeräte (Major 189) freigeben. Beide Zeilen auf dem Host in `/etc/pve/lxc/<CTID>.conf` eintragen, und zwar im obersten Abschnitt — hat der Container Snapshots, folgen weiter unten `[snapshot]`-Abschnitte, und ganz ans Ende angehängte Zeilen landen im letzten Snapshot statt in der aktiven Konfiguration:
 
-  ![Proxmox-Container-Resources-Tab mit zwei durchgereichten 1-Wire-Geräten](docs/device-passthrough1.jpeg)
-  ![Proxmox-Device-Passthrough-Bearbeitungsdialog](docs/device-passthrough2.jpeg)
+  ```
+  lxc.cgroup2.devices.allow: c 189:* rwm
+  lxc.mount.entry: /dev/bus/usb dev/bus/usb none bind,optional,create=dir
+  ```
 
-  Proxmox schreibt den passenden Mount-Eintrag und die cgroup-Geräteberechtigung selbst — kein manuelles Editieren von `lxc.mount.entry`/`lxc.cgroup2.devices.allow`, und kein Risiko, die cgroup-Zeile zu vergessen (der häufigste Fehler beim manuellen Weg). Anschließend den Container neu starten (`pct reboot <CTID>`), damit der Passthrough greift.
+  Den Busmaster nicht als Symlink per *Device Passthrough* durchreichen: Der Knoten existiert dann im Container nur unter dem Symlink-Namen, libusb sucht Busmaster aber ausschließlich unter `/dev/bus/usb/<bus>/<device>` — `owserver` bricht mit `LIBUSB_ERROR_NO_DEVICE` / `No valid 1-wire buses found` ab (https://github.com/abeggled/openbridgeserver/issues/1287). Der Bind-Mount deckt außerdem mehrere Busmaster und Umstecken ohne Container-Neustart ab (ein durchgereichter Pfad wird nur einmal beim Containerstart aufgelöst). Nach dem Eintragen den Container einmal neu starten (`pct reboot <CTID>`); beide Zeilen sind nötig — der Mount allein reicht nicht.
+
+  Hinweis: Mit der cgroup-Regel und dem Bind-Mount sieht der Container **alle** USB-Geräte des Hosts, nicht nur den Busmaster. Bei den üblichen Rechten unter `/dev/bus/usb` (`0664 root:root`) kann root im unprivilegierten Container sie nur lesen; vergeben andere udev-Regeln am Host lockerere Rechte (z. B. `MODE="0666"`), kann der Container auch diese Geräte benutzen.
+
+- **Proxmox-LXC, ElabNET PBM**: Container öffnen → **Resources** → **Add** → **Device Passthrough**, bei **Device Path** den stabilen Pfad aus Schritt 2 eintragen (z. B. `/dev/onewire-pbm` oder den `/dev/serial/by-id/...`-Pfad), bestätigen:
+
+  ![Proxmox-Container-Resources-Tab mit durchgereichtem PBM](docs/device-passthrough1.jpeg)
+  ![Proxmox-Device-Passthrough-Bearbeitungsdialog für das PBM](docs/device-passthrough2.jpeg)
+
+  Proxmox schreibt den passenden Mount-Eintrag und die cgroup-Geräteberechtigung selbst — kein manuelles Editieren von `lxc.mount.entry`/`lxc.cgroup2.devices.allow`. Anschließend den Container neu starten (`pct reboot <CTID>`), damit der Passthrough greift.
 
 - **Docker Compose** (`docker-compose.yml`):
   ```yaml
   devices:
-    - "/dev/onewire-busmaster:/dev/onewire-busmaster"
+    - "/dev/bus/usb:/dev/bus/usb"          # einfache(r) USB-Busmaster — ganzer Baum, nicht der Symlink
     - "/dev/onewire-pbm:/dev/ttyUSB0"
   ```
 
+  Wie beim LXC für einen einfachen Busmaster `/dev/bus/usb` durchreichen, nicht den Symlink. Docker legt die Geräteliste beim Erstellen des Containers fest — nach dem Umstecken eines Busmasters den Sidecar neu erstellen (`docker compose up -d --force-recreate owserver`).
+
 #### 4. `/etc/owfs.conf` konfigurieren
 
-`/etc/owfs.conf` ist die eigene Konfigurationsdatei von `owserver` — sie legt fest, welche(n) Bus(se) `owserver` bedient. Bei OBS' eigenem `owserver`-Packaging (dem systemd-Dienst im Proxmox-LXC-Template und dem Docker-Compose-Sidecar) wird diese Datei nie von Hand bearbeitet: Beide erzeugen sie bei jedem Start komplett neu aus einer kleinen Menge `OBS_ONEWIRE__*`-Umgebungsvariablen, über dasselbe gemeinsame Skript (`scripts/obs-onewire-configure.sh`), das hinter beiden Deployment-Wegen steckt. „`/etc/owfs.conf` konfigurieren" bedeutet also, ein paar Umgebungsvariablen an der richtigen Stelle zu setzen, nicht die Datei selbst zu editieren — dabei die stabilen, symlinkten Pfade aus Schritt 2 verwenden (nicht das rohe `/dev/bus/usb/...` bzw. `/dev/ttyUSB0`).
+`/etc/owfs.conf` ist die eigene Konfigurationsdatei von `owserver` — sie legt fest, welche(n) Bus(se) `owserver` bedient. Bei OBS' eigenem `owserver`-Packaging (dem systemd-Dienst im Proxmox-LXC-Template und dem Docker-Compose-Sidecar) wird diese Datei nie von Hand bearbeitet: Beide erzeugen sie bei jedem Start komplett neu aus einer kleinen Menge `OBS_ONEWIRE__*`-Umgebungsvariablen, über dasselbe gemeinsame Skript (`scripts/obs-onewire-configure.sh`), das hinter beiden Deployment-Wegen steckt. „`/etc/owfs.conf` konfigurieren" bedeutet also, ein paar Umgebungsvariablen an der richtigen Stelle zu setzen, nicht die Datei selbst zu editieren — für ein PBM dabei den stabilen Pfad aus Schritt 2 verwenden (nicht das rohe `/dev/ttyUSB0`) — ein einfacher Busmaster braucht keinen Pfad, nur `OBS_ONEWIRE__USB_ALL=true`.
 
 **Proxmox-LXC** — `/etc/obs.env` im Container bearbeiten (auskommentieren/ergänzen):
 
 ```bash
 OBS_ONEWIRE__USB_ALL=true                    # falls ein einfacher Busmaster durchgereicht wurde
 OBS_ONEWIRE__PBM_DEVICES=/dev/onewire-pbm    # kommagetrennt für mehrere PBMs
-# OBS_ONEWIRE__PORT=4304                     # optional, nur falls der Standardport geändert wurde
+# OBS_ONEWIRE__PORT hat im LXC keine Wirkung — der systemd-Socket (127.0.0.1:4304) legt den Port fest
 ```
 
 Anschließend den Dienst neu starten — `ExecCondition=` wird bei jedem Startversuch neu ausgewertet, das regeneriert also sowohl `/etc/owfs.conf` als auch startet `owserver` jetzt, wo es tatsächlich etwas zu bedienen gibt:
@@ -1705,7 +1720,27 @@ Erzeugt zeitgesteuerte Ereignisse ohne externe Hardware — für tageszeit- oder
 | `every_minute` | `true`/`false` | Jede Minute auslösen |
 | `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten an Feiertagen |
 | `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Verhalten in Ferienperioden |
-| `value` | Text | Wert der beim Auslösen geschrieben wird (Standard: `"1"`) |
+| `value` | Text | Wert der beim Auslösen geschrieben wird (Standard: `"1"`). Wird gegen den `data_type` des Ziel-Objekts geparst — siehe unten. |
+
+**Schaltwert und Objekttyp:**
+
+Der Schaltwert wird als Text gespeichert und beim Auslösen in den `data_type` des Ziel-Objekts
+umgewandelt. Beide Frontends zeigen ein passendes Eingabefeld für das verknüpfte Objekt und
+lehnen einen unpassenden Wert bereits beim Speichern der Verknüpfung ab (HTTP 422).
+
+| Objekttyp | Erlaubte Schaltwerte | Ergebnis |
+|---|---|---|
+| `BOOLEAN` | `1`/`0`, `true`/`false`, `on`/`off`, `ein`/`aus`, `yes`/`no`, `ja`/`nein` | `True` / `False` |
+| `INTEGER` | Ganzzahl (`50`, `-3`, `0`); boolesche Literale werden zu `1`/`0` | `int` |
+| `FLOAT` | Zahl (`21.5`, `0`, `50`); boolesche Literale werden zu `1.0`/`0.0` | `float` |
+| `STRING` | Beliebiger Text, wörtlich übernommen — auch `on`, `1` oder `ein` | `str` |
+| `DATE` | ISO-8601-Datum, z. B. `2026-12-24` | `date` |
+| `TIME` | ISO-8601-Uhrzeit, z. B. `08:00:00` | `time` |
+| `DATETIME` | ISO-8601-Zeitstempel, z. B. `2026-12-24T08:00:00` | `datetime` |
+| `UNKNOWN` | Beliebiger Text | Heuristik: boolesches Literal → `int` → `float` → `str` |
+
+Ein nicht konvertierbarer Wert wird nicht publiziert; es wird eine Warnung geloggt und ein
+`type_mismatch`-Diagnostic am Datenpunkt hinterlegt.
 
 **Feiertagsmodi:**
 

@@ -30,6 +30,21 @@ describe('DebugInspector', () => {
     expect(wrapper.emitted('set-override')[0]).toEqual(['payload', '{"test":true}'])
   })
 
+  it('labels outputs with the configured names and falls back to the port id (issue #1104)', async () => {
+    const wrapper = mount(DebugInspector, {
+      props: {
+        outputs: { out_1: 1, out_2: '192.168.178.181', _preview: '{}' },
+        outputLabels: { out_1: 'On/Off' },
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('On/Off')
+    expect(text).not.toContain('out_1')
+    expect(text).toContain('out_2')
+    expect(text).toContain('_preview')
+  })
+
   it('falls back to placeholders for incomplete execution metadata', async () => {
     const wrapper = mount(DebugInspector, {
       props: { outputs: { result: 1 }, metadata: { timestamp: '', used_overrides: false } },

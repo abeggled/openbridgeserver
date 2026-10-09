@@ -28,6 +28,7 @@ from obs.api.authz_service import (
     load_role_grants,
     resolve_datapoint_targets,
 )
+from obs.api.v1.redaction import REDACTED
 from obs.core.registry import get_registry
 from obs.db.database import Database, get_db
 from obs.models.binding import (
@@ -36,6 +37,8 @@ from obs.models.binding import (
 )
 
 router = APIRouter(tags=["bindings"])
+
+WEBHOOK_ADAPTER_TYPE = "WEBHOOK"
 
 
 async def _clear_stale_external_write_enabled(dp_id: uuid.UUID, *, adapter_type: str, enabled: bool) -> None:
@@ -169,6 +172,11 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
 def _ensure_adapter_delegates_binding(principal: Principal, adapter_type: str) -> None:
     if _is_admin_principal(principal):
         return
+    # A webhook binding is managed by a human with operator rights on both the
+    # DataPoint and the instance; only a non-user principal (an API key) is
+    # kept out, since the empty capability set below exists for exactly that.
+    if adapter_type == WEBHOOK_ADAPTER_TYPE and principal.type == "user":
+        return
 
     from obs.adapters.base import AdapterDelegationCapability
     from obs.adapters.registry import supports_delegation
@@ -247,6 +255,11 @@ def _validate_adapter_binding(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "MESSAGE-Bindings unterstützen nur Richtung SOURCE",
         )
+    if adapter_type == WEBHOOK_ADAPTER_TYPE and direction != "SOURCE":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "WEBHOOK-Bindings unterstützen nur Richtung SOURCE",
+        )
     if adapter_type != "MESSAGE" and not validate_schema:
         return
 
@@ -264,6 +277,98 @@ def _validate_adapter_binding(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"Ungültige Binding-Config: {exc}",
             ) from exc
+
+
+def _ensure_webhook_target_allowed(dp_id: uuid.UUID) -> None:
+    """Refuse a webhook binding on a central-plant DataPoint (issue #1256).
+
+    The trigger call has no principal, so the only thing standing between a
+    device "mounted outside the house, configured in clear text" and the
+    DataPoint is its token.  ``write_value()`` draws the same line for the
+    anonymous Visu path, and the reasoning is stronger here.  The adapter
+    re-checks this on every call, because a DataPoint can be reclassified after
+    its binding was created.
+    """
+    dp = get_registry().get(dp_id)
+    if getattr(dp, "control_class", "room_local") == "central_plant":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "WEBHOOK-Bindings sind für Datenpunkte der Klasse 'central_plant' nicht erlaubt",
+        )
+
+
+async def _ensure_webhook_slug_free(
+    db: Database,
+    instance_id: str,
+    slug: str,
+    *,
+    exclude_binding_id: str | None = None,
+) -> None:
+    """A slug is the public name of one endpoint, so it must be unique per instance."""
+    rows = await db.fetchall(
+        "SELECT id, config FROM adapter_bindings WHERE adapter_instance_id=? AND adapter_type=?",
+        (instance_id, WEBHOOK_ADAPTER_TYPE),
+    )
+    for row in rows:
+        if exclude_binding_id is not None and row["id"] == exclude_binding_id:
+            continue
+        if _json_config(row["config"]).get("slug") == slug:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Der Slug '{slug}' ist in dieser Webhook-Instanz bereits vergeben",
+            )
+
+
+def _webhook_config_with_token(config: dict[str, Any], *, stored_token: str | None) -> dict[str, Any]:
+    """Return *config* with a server-owned token and a normalised slug.
+
+    A client never supplies or changes the token: on create one is generated,
+    on update the stored one is kept.  Rotation goes through the dedicated
+    ``/rotate-token`` route so it is audited as its own operation.
+
+    ``_validate_adapter_binding()`` has already rejected a malformed config
+    against the very same schema, so this only adds the token and returns the
+    normalised result.
+    """
+    from obs.adapters.webhook.adapter import WebhookBindingConfig, generate_token
+
+    parsed = WebhookBindingConfig(**{**config, "token": stored_token or generate_token()})
+    return parsed.model_dump()
+
+
+def _validate_timer_output_value(adapter_type: str, config: dict[str, Any], dp_id: uuid.UUID) -> None:
+    """Reject a Zeitschaltuhr switching value that the target DataPoint type cannot hold.
+
+    Issue #1008: the switching value used to be parsed type-blind at fire time, so an
+    incompatible value was only discovered (and silently dropped) hours later. Validating
+    it on save surfaces the problem immediately as a 422.
+
+    An *omitted* value is not "no value": both routes store the config as sent, and the
+    adapter then fills in its own default when the schedule point fires. So the default
+    is what has to hold for the target type — otherwise a DATE/TIME/DATETIME point would
+    be accepted here and dropped at every firing, the very failure mode this guards
+    against (Codex review).
+    """
+    if adapter_type != "ZEITSCHALTUHR":
+        return
+    if str(config.get("timer_type", "daily")) == "meta":
+        return
+    dp = get_registry().get(dp_id)
+    if dp is None:
+        return
+
+    from obs.adapters.zeitschaltuhr.adapter import ZeitschaltuhrBindingConfig
+    from obs.models.types import coerce_text_value_for_type
+
+    raw = config.get("value", ZeitschaltuhrBindingConfig.model_fields["value"].default)
+
+    try:
+        coerce_text_value_for_type(str(raw), dp.data_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Ungültiger Schaltwert für Objekttyp {dp.data_type}: {exc}",
+        ) from exc
 
 
 def _json_config(raw: Any) -> dict[str, Any]:
@@ -296,6 +401,20 @@ def _validate_message_target_refs(binding_config: Any, instance_config: dict[str
             raise ValueError(f"MESSAGE target not configured: {ref.provider}/{ref.target}")
 
 
+def _redacted_config(adapter_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Keep a webhook token out of the generic binding listing (issue #1256).
+
+    The token is a bearer secret for one DataPoint, so it is served only by
+    ``GET /adapters/instances/{id}/webhook/bindings``, which requires a WRITE
+    grant on the adapter instance.  Redacting here is safe because create and
+    update never accept a client-supplied token — they generate one or keep the
+    stored one — so a GUI round-trip cannot overwrite it with the placeholder.
+    """
+    if adapter_type != WEBHOOK_ADAPTER_TYPE or not config.get("token"):
+        return config
+    return {**config, "token": REDACTED}
+
+
 def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
     instance_id = row["adapter_instance_id"]
     throttle = row["send_throttle_ms"]
@@ -308,7 +427,7 @@ def _row_out(row: Any, name_map: dict[str, str] | None = None) -> BindingOut:
         adapter_instance_id=uuid.UUID(instance_id) if instance_id else None,
         instance_name=name_map.get(instance_id) if name_map and instance_id else None,
         direction=row["direction"],
-        config=_json_config(row["config"]),
+        config=_redacted_config(row["adapter_type"], _json_config(row["config"])),
         enabled=bool(row["enabled"]),
         send_throttle_ms=int(throttle) if throttle is not None else None,
         send_on_change=bool(row["send_on_change"]),
@@ -380,6 +499,12 @@ async def create_binding(
         enabled=body.enabled,
         instance_config=_json_config(instance_row["config"]) if adapter_type == "MESSAGE" else None,
     )
+    _validate_timer_output_value(adapter_type, body.config, dp_id)
+
+    effective_config = body.config
+    if adapter_type == WEBHOOK_ADAPTER_TYPE:
+        _ensure_webhook_target_allowed(dp_id)
+        effective_config = _webhook_config_with_token(body.config, stored_token=None)
 
     # Formel validieren
     if body.value_formula:
@@ -401,6 +526,10 @@ async def create_binding(
     # then observes correctly (Codex review, see datapoints.py).
     reg = get_registry()
     async with reg.external_write_lock:
+        # Inside the lock, which every other binding create/update also takes,
+        # so two concurrent creates cannot both pass the uniqueness check.
+        if adapter_type == WEBHOOK_ADAPTER_TYPE:
+            await _ensure_webhook_slug_free(db, str(body.adapter_instance_id), effective_config["slug"])
         await db.execute_and_commit(
             """INSERT INTO adapter_bindings
                (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled,
@@ -413,7 +542,7 @@ async def create_binding(
                 adapter_type,
                 str(body.adapter_instance_id),
                 body.direction,
-                json.dumps(body.config),
+                json.dumps(effective_config),
                 int(body.enabled),
                 body.send_throttle_ms,
                 int(body.send_on_change),
@@ -489,6 +618,17 @@ async def update_binding(
         enabled=bool(enabled),
         instance_config=instance_config,
     )
+    if "config" in updates:
+        _validate_timer_output_value(row["adapter_type"], config, dp_id)
+
+    if row["adapter_type"] == WEBHOOK_ADAPTER_TYPE:
+        # A binding on a since-reclassified DataPoint can still be switched off;
+        # only a binding that would be live has to point at an allowed target.
+        if enabled:
+            _ensure_webhook_target_allowed(dp_id)
+        stored_token = _json_config(row["config"]).get("token") or None
+        config = _webhook_config_with_token(config, stored_token=stored_token)
+        config_val = json.dumps(config)
 
     # Formel validieren
     if formula:
@@ -502,6 +642,19 @@ async def update_binding(
     # above and datapoints.py's update_datapoint() for why (Codex review).
     reg = get_registry()
     async with reg.external_write_lock:
+        # See create_binding(): the uniqueness check belongs inside the lock.
+        if row["adapter_type"] == WEBHOOK_ADAPTER_TYPE:
+            await _ensure_webhook_slug_free(
+                db,
+                row["adapter_instance_id"],
+                config["slug"],
+                exclude_binding_id=str(binding_id),
+            )
+            # The token was read before the lock was taken; a rotation that ran
+            # in between must win, so take the stored one again under the lock.
+            fresh = await db.fetchone("SELECT config FROM adapter_bindings WHERE id=?", (str(binding_id),))
+            config = {**config, "token": _json_config(fresh["config"] if fresh is not None else None).get("token") or config.get("token")}
+            config_val = json.dumps(config)
         await db.execute_and_commit(
             """UPDATE adapter_bindings
                SET direction=?, config=?, enabled=?,
