@@ -14,6 +14,7 @@ import copy
 import email.utils
 import http.cookies
 import ipaddress
+import itertools
 import json
 import logging
 import os
@@ -219,6 +220,9 @@ _INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
 # resolved yet: committing that pass's placeholder would record a level/value
 # that never occurred, and any action they drive would already have run
 # irreversibly by the time the replay corrects them.
+# Upper bound on volatile inputs probed combinatorially (2**n evaluations).
+_MAX_PROBED_VOLATILE_INPUTS = 10
+
 _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
@@ -3688,11 +3692,15 @@ class LogicManager:
             inputs.update(debug_overrides.get(node_id, {}))
             try:
                 actual = GraphExecutor._get_output_value(outs.get(node_id, {}), output_handle)
-                for handle in volatile:
-                    for counterfactual in (False, True):
-                        result = _fan_in_probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, handle: counterfactual}))
-                        if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
-                            return False
+                # An output can depend on a conjunction of volatile inputs, so
+                # every combination is probed, not one input at a time.
+                if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
+                    return False
+                handles = sorted(volatile)
+                for values in itertools.product((False, True), repeat=len(handles)):
+                    result = _fan_in_probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, **dict(zip(handles, values))}))
+                    if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
+                        return False
                 return True
             except Exception:  # noqa: BLE001 - malformed imported config remains conservative
                 return False

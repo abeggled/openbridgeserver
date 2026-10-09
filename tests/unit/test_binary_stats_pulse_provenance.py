@@ -189,3 +189,45 @@ async def test_output_that_depends_on_the_unresolved_source_stays_held():
     with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
         out = await manager.execute_graph("g")
     assert out["cf"]["changed"] is False
+
+
+def _two_pulse_flow(threshold: int):
+    target = uuid.uuid4()
+    return _flow(
+        [
+            node("s1", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf1", "change_filter"),
+            node("s2", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf2", "change_filter"),
+            node("stats", "binary_stats", {"input_count": 2, "threshold_count": threshold}),
+            node("write", "datapoint_write", {"datapoint_id": str(target)}),
+        ],
+        [
+            edge("s1", "cf1", "value", "in"),
+            edge("cf1", "stats", "changed", "in1"),
+            edge("s2", "cf2", "value", "in"),
+            edge("cf2", "stats", "changed", "in2"),
+            edge("stats", "write", "threshold_reached", "value"),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_output_depending_on_a_conjunction_of_pulse_inputs_is_suppressed():
+    manager = _stats_manager(_two_pulse_flow(2))
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        await manager.execute_graph("g")
+        out = await manager.execute_graph("g")
+    assert out["write"].get("_write_value") is None
+
+
+@pytest.mark.asyncio
+async def test_too_many_volatile_inputs_stay_conservative():
+    manager = _stats_manager(_two_pulse_flow(1))
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+        patch("obs.logic.manager._MAX_PROBED_VOLATILE_INPUTS", 1),
+    ):
+        await manager.execute_graph("g")
+        out = await manager.execute_graph("g")
+    assert out["write"].get("_write_value") is None
