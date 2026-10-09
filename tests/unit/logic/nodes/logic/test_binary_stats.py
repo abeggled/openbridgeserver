@@ -130,7 +130,7 @@ def test_nothing_wired_yields_defined_zero_values():
 
 @pytest.mark.parametrize(
     ("threshold", "expected"),
-    [(0, False), (2, True), (3, False), ("2", True), ("x", False), (None, False), (1.5, False), (2.9, False), (2.0, True)],
+    [(0, False), (2, True), (3, False), ("2", True), ("x", False), (None, False), (1.5, False), (2.9, False), (2.0, True), (10**400, False)],
 )
 def test_threshold_follows_threshold_count(threshold, expected):
     out = run({1: True, 2: True, 3: False}, {"input_count": 3, "threshold_count": threshold})
@@ -166,8 +166,23 @@ def test_count_false_mode_negates_unwired_inputs_like_and_or():
     assert (out["total"], out["count_true"], out["count_false"]) == (3, 2, 1)
 
 
-@pytest.mark.parametrize("input_count", ["", None, "abc"])
+@pytest.mark.parametrize("input_count", ["", None, "abc", float("inf"), float("nan")])
 def test_invalid_input_count_falls_back_to_the_default_of_two(input_count):
     out = run({1: True, 2: False, 3: True}, {"input_count": input_count})
 
     assert (out["total"], out["count_true"], out["count_false"]) == (2, 1, 1)
+
+
+def test_fractional_input_count_is_rounded_half_up_like_the_gui():
+    out = run({1: True, 2: True, 3: False, 4: False}, {"input_count": 2.5})
+
+    assert out["total"] == 3
+
+
+def test_explicit_none_from_a_producer_counts_as_false_even_when_negated():
+    nodes = [node("src", "const_value", {"value": 1}), node("stats", "binary_stats", {"negate_in1": True})]
+    executor = make_executor(nodes, [edge("src", "stats", "value", "in1")])
+
+    out = executor.execute({"stats": {"in1": None}})["stats"]
+
+    assert (out["total"], out["count_true"], out["count_false"]) == (1, 0, 1)
