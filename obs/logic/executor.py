@@ -1651,7 +1651,11 @@ class GraphExecutor:
                 return {"out": result}
 
             case "binary_stats":
-                count = max(2, min(30, int(d.get("input_count", 2))))
+                try:
+                    count = max(2, min(30, int(d.get("input_count", 2))))
+                except (TypeError, ValueError):
+                    count = 2  # cleared/null field: fall back to the declared default
+                d = {**d, "input_count": count}
                 names = {f"in{i}" for i in range(1, count + 1)}
                 # Debug/manual overrides arrive in ``inputs`` and count as supplied.
                 supplied = ({edge.targetHandle or "in" for edge in self.flow.edges if edge.target == node.id} | set(inputs)) & names

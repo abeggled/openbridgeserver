@@ -164,3 +164,10 @@ def test_count_false_mode_negates_unwired_inputs_like_and_or():
     out = run({1: True}, {"input_count": 3, "unwired_inputs": "count_false", "negate_in3": True})
 
     assert (out["total"], out["count_true"], out["count_false"]) == (3, 2, 1)
+
+
+@pytest.mark.parametrize("input_count", ["", None, "abc"])
+def test_invalid_input_count_falls_back_to_the_default_of_two(input_count):
+    out = run({1: True, 2: False, 3: True}, {"input_count": input_count})
+
+    assert (out["total"], out["count_true"], out["count_false"]) == (2, 1, 1)
