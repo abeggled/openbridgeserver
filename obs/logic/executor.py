@@ -1653,7 +1653,7 @@ class GraphExecutor:
             case "binary_stats":
                 wired = {edge.targetHandle or "in" for edge in self.flow.edges if edge.target == node.id}
                 wired.update(inputs)  # debug/manual overrides count as supplied inputs
-                only = wired if d.get("unwired_inputs", "ignore") != "count_false" else None
+                only = wired if str(d.get("unwired_inputs", "ignore")).strip().lower() != "count_false" else None
                 vals = self._collect_gate_inputs(inputs, d, only_ports=only)
                 count_true = sum(vals)
                 total = len(vals)

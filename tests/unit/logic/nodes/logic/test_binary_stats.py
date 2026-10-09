@@ -93,6 +93,13 @@ def test_unwired_inputs_count_false_reproduces_gate_behaviour():
     assert out["percent_true"] == 10.0
 
 
+@pytest.mark.parametrize("mode", [" COUNT_FALSE ", "Count_False"])
+def test_unwired_mode_is_normalised_before_comparison(mode):
+    out = run({1: True}, {"input_count": 3, "unwired_inputs": mode})
+
+    assert (out["total"], out["count_false"]) == (3, 2)
+
+
 def test_wired_input_without_value_counts_as_false():
     out = run({1: True}, {"input_count": 3}, dangling=(2,))
 
