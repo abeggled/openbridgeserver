@@ -342,6 +342,7 @@ import DatapointNode    from '@/components/logic/nodes/DatapointNode.vue'
 import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const { t, locale } = useI18n()
@@ -988,7 +989,10 @@ const debugInputs = computed(() => {
   let ports = definition?.inputs || []
   const count = Number(selectedNode.value.data?.input_count) || 2
   if (['and', 'or', 'xor', 'binary_stats'].includes(selectedNode.value.type)) {
-    ports = Array.from({ length: Math.max(2, Math.min(30, count)) }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
+    const gateCount = selectedNode.value.type === 'binary_stats'
+      ? binaryStatsInputCount(selectedNode.value.data?.input_count)
+      : Math.max(2, Math.min(30, count))
+    ports = Array.from({ length: gateCount }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'avg_multi') {
     ports = Array.from({ length: Math.max(2, Math.min(20, count)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'string_concat') {

@@ -144,4 +144,11 @@ describe('GenericNode binary_stats rendering', () => {
     expect(buttons[1].text()).toBe('IN 2')
     expect(wrapper.find('.gn-port-negate--right').exists()).toBe(false)
   })
+
+  it('rounds an imported fractional input_count like the executor', () => {
+    const wrapper = mountStats({ input_count: 2.5 })
+
+    expect(wrapper.findAll('[data-type="target"]')).toHaveLength(3)
+    expect(wrapper.text()).toContain('3 Eingänge')
+  })
 })

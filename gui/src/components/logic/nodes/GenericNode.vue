@@ -78,6 +78,7 @@ import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -205,7 +206,9 @@ const def = computed(() => {
   const base = NODE_DEFS.value[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
   if (isGateNode.value || isMergeNode.value || isBinaryStatsNode.value) {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+    const count = isBinaryStatsNode.value
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
       label: t('logic.ports.in_n', { n: i + 1 }),
@@ -465,7 +468,9 @@ const summary = computed(() => {
     return d.negate_enable ? `${t('logic.summary.negateEnable')}  ${behavior}` : behavior
   }
   if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge' || props.type === 'binary_stats') {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+    const count = props.type === 'binary_stats'
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     return count > 2 ? t('logic.summary.inputs', { n: count }) : null
   }
   return null
