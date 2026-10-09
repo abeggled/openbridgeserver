@@ -130,7 +130,7 @@ def test_nothing_wired_yields_defined_zero_values():
 
 @pytest.mark.parametrize(
     ("threshold", "expected"),
-    [(0, False), (2, True), (3, False), ("2", True), ("x", False), (None, False)],
+    [(0, False), (2, True), (3, False), ("2", True), ("x", False), (None, False), (1.5, False), (2.9, False), (2.0, True)],
 )
 def test_threshold_follows_threshold_count(threshold, expected):
     out = run({1: True, 2: True, 3: False}, {"input_count": 3, "threshold_count": threshold})
@@ -144,3 +144,23 @@ def test_percent_true_rounds_half_up_to_one_decimal():
     assert out["percent_true"] == 12.5
     out = run({i: i <= 1 for i in range(1, 17)}, {"input_count": 16})
     assert out["percent_true"] == 6.3
+
+
+def test_negated_wired_input_without_value_still_counts_as_false():
+    out = run({1: True}, {"input_count": 2, "negate_in2": True}, dangling=(2,))
+
+    assert (out["total"], out["count_true"], out["count_false"]) == (2, 1, 1)
+
+
+def test_count_false_mode_with_nothing_wired_yields_zero_values():
+    out = run({}, {"input_count": 5, "unwired_inputs": "count_false"})
+
+    assert (out["total"], out["count_true"], out["count_false"], out["percent_true"]) == (0, 0, 0, 0.0)
+    assert out["tie"] is False
+    assert out["majority_true"] is False
+
+
+def test_count_false_mode_negates_unwired_inputs_like_and_or():
+    out = run({1: True}, {"input_count": 3, "unwired_inputs": "count_false", "negate_in3": True})
+
+    assert (out["total"], out["count_true"], out["count_false"]) == (3, 2, 1)

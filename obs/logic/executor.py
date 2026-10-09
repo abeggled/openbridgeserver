@@ -1651,17 +1651,28 @@ class GraphExecutor:
                 return {"out": result}
 
             case "binary_stats":
-                wired = {edge.targetHandle or "in" for edge in self.flow.edges if edge.target == node.id}
-                wired.update(inputs)  # debug/manual overrides count as supplied inputs
-                only = wired if str(d.get("unwired_inputs", "ignore")).strip().lower() != "count_false" else None
-                vals = self._collect_gate_inputs(inputs, d, only_ports=only)
+                count = max(2, min(30, int(d.get("input_count", 2))))
+                names = {f"in{i}" for i in range(1, count + 1)}
+                # Debug/manual overrides arrive in ``inputs`` and count as supplied.
+                supplied = ({edge.targetHandle or "in" for edge in self.flow.edges if edge.target == node.id} | set(inputs)) & names
+                # A wired input that delivered no value this run is FALSE and is
+                # not negated: negating "no value" would invent a TRUE vote.
+                vals: list[bool] = []
+                if supplied:
+                    with_value = names & set(inputs)
+                    vals = self._collect_gate_inputs(inputs, d, only_ports=with_value)
+                    vals += [False] * len(supplied - with_value)
+                    if str(d.get("unwired_inputs", "ignore")).strip().lower() == "count_false":
+                        vals += self._collect_gate_inputs(inputs, d, only_ports=names - supplied)
                 count_true = sum(vals)
                 total = len(vals)
                 count_false = total - count_true
                 try:
-                    threshold = int(d.get("threshold_count", 0) or 0)
+                    threshold_value = float(d.get("threshold_count", 0) or 0)
                 except (TypeError, ValueError):
-                    threshold = 0
+                    threshold_value = 0.0
+                # A fractional threshold is invalid config: treat it as "off" rather than truncating.
+                threshold = int(threshold_value) if threshold_value.is_integer() else 0
                 return {
                     "count_true": count_true,
                     "count_false": count_false,
