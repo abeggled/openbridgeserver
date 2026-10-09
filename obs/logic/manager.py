@@ -4268,7 +4268,10 @@ class LogicManager:
                         continue
                     handle = incoming.targetHandle or "in"
                     inputs[handle] = GraphExecutor._get_output_value(outputs.get(incoming.source, {}), incoming.sourceHandle or "out")
-                    if incoming.source in relay_origins:
+                    # change_filter.out is a sustained value, not a pulse.
+                    if incoming.source in relay_origins and not (
+                        _node_type_by_id.get(incoming.source) == "change_filter" and (incoming.sourceHandle or "out") != "changed"
+                    ):
                         pulse_handles.add(handle)
                 inputs.update(debug_overrides.get(node_id, {}))
                 if not pulse_handles:

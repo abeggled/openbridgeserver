@@ -61,3 +61,30 @@ async def test_probe_failure_stays_provenance_conservative():
 async def test_off_threshold_is_independent_of_the_pulse():
     out = await _run_twice({"input_count": 2, "threshold_count": "x"}, "true")
     assert out["write"]["_write_value"] is False
+
+
+@pytest.mark.asyncio
+async def test_sustained_change_filter_out_input_preserves_the_threshold():
+    target = uuid.uuid4()
+    flow = _flow(
+        [
+            node("source", "const_value", {"value": "true", "data_type": "boolean"}),
+            node("cf", "change_filter"),
+            node("stats", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+            node("write", "datapoint_write", {"datapoint_id": str(target)}),
+        ],
+        [
+            edge("source", "cf", "value", "in"),
+            edge("cf", "stats", "changed", "in1"),
+            edge("cf", "stats", "out", "in2"),
+            edge("stats", "write", "threshold_reached", "value"),
+        ],
+    )
+    manager = _make_manager()
+    manager._graphs["g"] = ("test", True, flow)
+    manager._node_state["g"] = {}
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        await manager._execute_graph("g", "test", flow, {})
+        out = await manager._execute_graph("g", "test", flow, {})
+    assert out["stats"]["threshold_reached"] is True
+    assert out["write"]["_write_value"] is True
