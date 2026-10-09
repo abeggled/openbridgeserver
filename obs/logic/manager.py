@@ -3796,7 +3796,13 @@ class LogicManager:
                         return True
                 return False
 
-            _tq: list[str] = list(_tainted)
+            _tq: list[str] = sorted(_tainted)
+            # Sources with an edge skipped as handle-independent. Taint can
+            # still grow after that decision (a longer unresolved path joins
+            # later), so they are re-checked once the queue drains: an edge is
+            # followed iff it is volatile under the FINAL taint, which makes the
+            # result independent of traversal order.
+            _deferred_edges: list[Any] = []
             while _tq:
                 _tn = _tq.pop()
                 for _te in _effective_edges:
@@ -3810,6 +3816,7 @@ class LogicManager:
                     if _handle_independent_of_volatile_inputs(_te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _src):
                         # The read output handle is decided by an input that is
                         # not tainted, whatever the unresolved ones deliver.
+                        _deferred_edges.append(_te)
                         continue
                     _target_node = _node_by_id_early.get(_te.target)
                     _target_type = _target_node.type if _target_node is not None else None
@@ -3899,6 +3906,15 @@ class LogicManager:
                         if isinstance(_pre_hold_state, dict) and "value" in _pre_hold_state:
                             continue
                     _tq.append(_te.target)
+                if not _tq:
+                    _flipped = [
+                        _de
+                        for _de in _deferred_edges
+                        if not _handle_independent_of_volatile_inputs(_de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _src)
+                    ]
+                    # Reprocessing re-adds an edge if it is still skipped.
+                    _deferred_edges[:] = [_de for _de in _deferred_edges if _de not in _flipped]
+                    _tq.extend({_de.source for _de in _flipped})
             return {n.id for n in flow.nodes if n.type in _HELD_ON_UNRESOLVED_SOURCE and n.id in _tainted}
 
         # Async nodes whose real side effect has actually run this tick (as
@@ -4316,6 +4332,10 @@ class LogicManager:
                 )
 
             queue = list(relay_origins)
+            # Same fixpoint as in _compute_cf_hold_ids: an edge skipped as
+            # handle-independent is re-checked once the queue drains,
+            # because later pulse inputs can make that handle pulse-dependent.
+            deferred_edges: list[Any] = []
             while queue:
                 source_id = queue.pop()
                 source_origins = relay_origins[source_id]
@@ -4325,6 +4345,7 @@ class LogicManager:
                     if _node_type_by_id.get(source_id) not in _PULSE_ORIGIN_NODE_TYPES and _handle_independent_of_volatile_inputs(
                         source_id, pulse_edge.sourceHandle or "out", _pulse_input_edge, outputs
                     ):
+                        deferred_edges.append(pulse_edge)
                         continue
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
                         continue
@@ -4472,6 +4493,14 @@ class LogicManager:
                         if new_origins:
                             target_origins.update(new_origins)
                             queue.append(pulse_edge.target)
+                if not queue:
+                    flipped = [
+                        e
+                        for e in deferred_edges
+                        if not _handle_independent_of_volatile_inputs(e.source, e.sourceHandle or "out", _pulse_input_edge, outputs)
+                    ]
+                    deferred_edges[:] = [e for e in deferred_edges if e not in flipped]
+                    queue.extend({e.source for e in flipped})
             return message_origins, trigger_origins, trigger_handle_origins, downstream_filter_origins, stateful_relay_origins
 
         _initial_event_fresh = (

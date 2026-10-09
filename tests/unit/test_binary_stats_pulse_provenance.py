@@ -231,3 +231,64 @@ async def test_too_many_volatile_inputs_stay_conservative():
         await manager.execute_graph("g")
         out = await manager.execute_graph("g")
     assert out["write"].get("_write_value") is None
+
+
+@pytest.mark.asyncio
+async def test_unresolved_taint_arriving_over_a_longer_path_still_holds_the_filter():
+    # "z_short" is popped first (LIFO over sorted seeds), so the stats block is
+    # first judged with only its short path tainted; the longer a_long -> not
+    # path joins afterwards and must flip that decision.
+    target = uuid.uuid4()
+    flow = _flow(
+        [
+            node("z_short", "datapoint_read", {}),
+            node("a_long", "datapoint_read", {}),
+            node("n", "not"),
+            node("s", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+            node("cf", "change_filter"),
+            node("w", "datapoint_write", {"datapoint_id": str(target)}),
+        ],
+        [
+            edge("z_short", "s", "value", "in1"),
+            edge("a_long", "n", "value", "in1"),
+            edge("n", "s", "out", "in2"),
+            edge("s", "cf", "threshold_reached", "in"),
+            edge("cf", "w", "out", "value"),
+        ],
+    )
+    manager = _stats_manager(flow)
+    manager._hysteresis["g"] = {"cf": {"value": False}}
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        out = await manager.execute_graph("g")
+    assert out["cf"]["changed"] is False
+    assert out["w"].get("_write_value") is not True
+
+
+@pytest.mark.asyncio
+async def test_pulse_arriving_over_a_longer_path_still_suppresses_the_output():
+    target = uuid.uuid4()
+    flow = _flow(
+        [
+            node("s2", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf_long", "change_filter"),
+            node("n", "not"),
+            node("stats", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+            node("s1", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf_short", "change_filter"),
+            node("write", "datapoint_write", {"datapoint_id": str(target)}),
+        ],
+        [
+            edge("s1", "cf_short", "value", "in"),
+            edge("cf_short", "stats", "changed", "in1"),
+            edge("s2", "cf_long", "value", "in"),
+            edge("cf_long", "n", "changed", "in1"),
+            edge("n", "stats", "out", "in2"),
+            edge("stats", "write", "threshold_reached", "value"),
+        ],
+    )
+    manager = _stats_manager(flow)
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        await manager.execute_graph("g")
+        out = await manager.execute_graph("g")
+    assert out["stats"]["threshold_reached"] is True
+    assert out["write"].get("_write_value") is None
