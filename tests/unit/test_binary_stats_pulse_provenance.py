@@ -292,3 +292,31 @@ async def test_pulse_arriving_over_a_longer_path_still_suppresses_the_output():
         out = await manager.execute_graph("g")
     assert out["stats"]["threshold_reached"] is True
     assert out["write"].get("_write_value") is None
+
+
+@pytest.mark.asyncio
+async def test_correlated_handles_of_one_upstream_block_are_not_decorrelated():
+    # count_true / count_false of one supplied input are always (1, 0) or (0, 1),
+    # so threshold_count=1 downstream holds for every state the block can emit.
+    target = uuid.uuid4()
+    flow = _flow(
+        [
+            node("src", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf", "change_filter"),
+            node("a", "binary_stats", {"input_count": 2}),
+            node("b", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+            node("w", "datapoint_write", {"datapoint_id": str(target)}),
+        ],
+        [
+            edge("src", "cf", "value", "in"),
+            edge("cf", "a", "changed", "in1"),
+            edge("a", "b", "count_true", "in1"),
+            edge("a", "b", "count_false", "in2"),
+            edge("b", "w", "threshold_reached", "value"),
+        ],
+    )
+    manager = _stats_manager(flow)
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        await manager.execute_graph("g")
+        out = await manager.execute_graph("g")
+    assert out["w"]["_write_value"] is True

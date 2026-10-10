@@ -10,7 +10,7 @@ describe('binaryStatsInputCount', () => {
   })
 
   it('falls back to the default of 2 for empty, zero or non-finite values', () => {
-    for (const value of [undefined, null, '', 'abc', 0, NaN, Infinity]) {
+    for (const value of [undefined, null, '', 'abc', 0, NaN, Infinity, [3], { a: 3 }]) {
       expect(binaryStatsInputCount(value)).toBe(2)
     }
   })

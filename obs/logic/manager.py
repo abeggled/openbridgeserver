@@ -1474,34 +1474,67 @@ def _handle_independent_of_volatile_inputs(
     as volatile only if the upstream handle itself is; debug-overridden
     ports never are.
     """
-    node = node_by_id.get(node_id)
-    if node is None or node.type not in _PER_HANDLE_FAN_IN_TYPES or node_id in _seen:
+
+    def fan_in_node(nid: str, seen: frozenset[str]) -> Any | None:
+        candidate = node_by_id.get(nid)
+        return candidate if candidate is not None and candidate.type in _PER_HANDLE_FAN_IN_TYPES and nid not in seen else None
+
+    def volatile_state(nid: str, seen: frozenset[str]) -> tuple[dict[str, Any], dict[str, Any]]:
+        inputs: dict[str, Any] = {}
+        volatile: dict[str, Any] = {}
+        for incoming in edges:
+            if incoming.target != nid:
+                continue
+            handle = incoming.targetHandle or "in"
+            inputs[handle] = GraphExecutor._get_output_value(outs.get(incoming.source, {}), incoming.sourceHandle or "out")
+            if (
+                handle not in debug_overrides.get(nid, {})
+                and volatile_edge(incoming)
+                and not _handle_independent_of_volatile_inputs(
+                    probe, node_by_id, edges, debug_overrides, incoming.source, incoming.sourceHandle or "out", volatile_edge, outs, seen | {nid}
+                )
+            ):
+                volatile[handle] = incoming
+        inputs.update(debug_overrides.get(nid, {}))
+        return inputs, volatile
+
+    def assignments(nid: str, inputs: dict[str, Any], volatile: dict[str, Any], seen: frozenset[str]) -> list[dict[str, Any]]:
+        """Joint values the volatile inputs of ``nid`` can take together.
+
+        Handles fed by the same upstream fan-in block are correlated (for
+        example ``count_true`` and ``count_false`` always add up to the
+        supplied inputs), so only the outputs that block can actually emit
+        are combined; unrelated handles are probed as free booleans.
+        """
+        if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
+            raise ValueError("too many volatile inputs")
+        by_source: dict[str, list[str]] = {}
+        for handle, incoming in volatile.items():
+            by_source.setdefault(incoming.source, []).append(handle)
+        options: list[list[dict[str, Any]]] = []
+        for source_id, group in sorted(by_source.items()):
+            upstream = fan_in_node(source_id, seen | {nid})
+            if len(group) < 2 or upstream is None:
+                options.extend([{h: False}, {h: True}] for h in sorted(group))
+                continue
+            up_inputs, up_volatile = volatile_state(source_id, seen | {nid})
+            group_options = []
+            for up_assignment in assignments(source_id, up_inputs, up_volatile, seen | {nid}):
+                result = probe._eval_node(upstream, GraphExecutor._resolve_effective_inputs(upstream, {**up_inputs, **up_assignment}))
+                group_options.append({h: GraphExecutor._get_output_value(result, volatile[h].sourceHandle or "out") for h in group})
+            options.append(group_options)
+        return [{k: v for part in combo for k, v in part.items()} for combo in itertools.product(*options)]
+
+    node = fan_in_node(node_id, _seen)
+    if node is None:
         return False
-    inputs: dict[str, Any] = {}
-    volatile: set[str] = set()
-    for incoming in edges:
-        if incoming.target != node_id:
-            continue
-        handle = incoming.targetHandle or "in"
-        inputs[handle] = GraphExecutor._get_output_value(outs.get(incoming.source, {}), incoming.sourceHandle or "out")
-        if (
-            handle not in debug_overrides.get(node_id, {})
-            and volatile_edge(incoming)
-            and not _handle_independent_of_volatile_inputs(
-                probe, node_by_id, edges, debug_overrides, incoming.source, incoming.sourceHandle or "out", volatile_edge, outs, _seen | {node_id}
-            )
-        ):
-            volatile.add(handle)
-    inputs.update(debug_overrides.get(node_id, {}))
+    inputs, volatile = volatile_state(node_id, _seen)
     try:
         actual = GraphExecutor._get_output_value(outs.get(node_id, {}), output_handle)
         # An output can depend on a conjunction of volatile inputs, so
-        # every combination is probed, not one input at a time.
-        if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
-            return False
-        handles = sorted(volatile)
-        for values in itertools.product((False, True), repeat=len(handles)):
-            result = probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, **dict(zip(handles, values))}))
+        # every feasible combination is probed, not one input at a time.
+        for assignment in assignments(node_id, inputs, volatile, _seen):
+            result = probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, **assignment}))
             if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
                 return False
         return True
