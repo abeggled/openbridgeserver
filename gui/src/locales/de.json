@@ -1773,6 +1773,7 @@
       "or": "OR",
       "not": "NOT",
       "xor": "XOR",
+      "binary_stats": "Binärstatistik",
       "gate": "TOR",
       "memory": "Speicher",
       "change_filter": "Änderungsfilter",
@@ -2346,6 +2347,15 @@
       "xor": {
         "input_count": "Anzahl Eingänge"
       },
+      "binary_stats": {
+        "input_count": "Anzahl Eingänge",
+        "unwired_inputs": "Unverbundene Eingänge",
+        "unwired_inputsOptions": {
+          "ignore": "Ignorieren",
+          "count_false": "Als FALSE zählen"
+        },
+        "threshold_count": "Schwelle (0 = aus)"
+      },
       "gate": {
         "closed_behavior": "Verhalten (gesperrt)",
         "default_value": "Standardwert (bei gesperrt)",
@@ -2643,7 +2653,14 @@
       "reachable": "Erreichbar",
       "latencyMs": "Latenz (ms)",
       "faultText": "Fehlertext",
-      "faultTrigger": "Fehler-Trigger"
+      "faultTrigger": "Fehler-Trigger",
+      "countTrue": "Anzahl TRUE",
+      "countFalse": "Anzahl FALSE",
+      "majorityTrue": "Mehrheit TRUE",
+      "total": "Gesamt",
+      "percentTrue": "Anteil TRUE %",
+      "tie": "Gleichstand",
+      "thresholdReached": "Schwelle erreicht"
     },
     "nodeDescriptions": {
       "datetime": "Gibt aktuelles Datum und Uhrzeit in der konfigurierten Zeitzone und im gewählten Format aus.",
@@ -2653,6 +2670,7 @@
       "or": "Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "not": "Invertiert den Eingang",
       "xor": "Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
+      "binary_stats": "Zählt TRUE/FALSE über 2–30 Binäreingänge (je Eingang negierbar): Anzahl, Mehrheit, Gleichstand, Prozentanteil und Schwelle (k von n). Unverbundene Eingänge werden wahlweise ignoriert.",
       "gate": "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben.",
       "memory": "Gibt den gespeicherten Wert aus dem vorherigen Logiklauf aus und speichert den aktuellen Eingangswert für den nächsten Lauf. Explizite Tick-Grenze für kontrollierte Rückkopplungen.",
       "change_filter": "Gibt den Eingangswert aus und setzt den Geändert-Trigger nur dann, wenn er sich vom zuletzt empfangenen Wert unterscheidet. Wiederholt gleiche Werte werden unterdrückt.",

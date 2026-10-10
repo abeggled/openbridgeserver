@@ -1773,6 +1773,7 @@
       "or": "OR",
       "not": "NOT",
       "xor": "XOR",
+      "binary_stats": "Binary statistics",
       "gate": "Gate",
       "memory": "Memory",
       "change_filter": "Change filter",
@@ -2346,6 +2347,15 @@
       "xor": {
         "input_count": "Input count"
       },
+      "binary_stats": {
+        "input_count": "Number of inputs",
+        "unwired_inputs": "Unwired inputs",
+        "unwired_inputsOptions": {
+          "ignore": "Ignore",
+          "count_false": "Count as FALSE"
+        },
+        "threshold_count": "Threshold (0 = off)"
+      },
       "gate": {
         "closed_behavior": "Behavior (closed)",
         "default_value": "Default value (when closed)",
@@ -2643,7 +2653,14 @@
       "reachable": "Reachable",
       "latencyMs": "Latency (ms)",
       "faultText": "Fault Text",
-      "faultTrigger": "Fault Trigger"
+      "faultTrigger": "Fault Trigger",
+      "countTrue": "Count TRUE",
+      "countFalse": "Count FALSE",
+      "majorityTrue": "Majority TRUE",
+      "total": "Total",
+      "percentTrue": "TRUE %",
+      "tie": "Tie",
+      "thresholdReached": "Threshold reached"
     },
     "nodeDescriptions": {
       "datetime": "Outputs the current date and time in the configured timezone and format.",
@@ -2653,6 +2670,7 @@
       "or": "Output is true when AT LEAST ONE input is true. Inputs (2–30) and output can be individually negated.",
       "not": "Inverts the input",
       "xor": "Output is true when EXACTLY ONE input is true. Inputs (2–30) and output can be individually negated.",
+      "binary_stats": "Counts TRUE/FALSE across 2–30 binary inputs (each input can be negated): counts, majority, tie, percentage and threshold (k of n). Unwired inputs can be ignored or counted as FALSE.",
       "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
       "memory": "Outputs the stored value from the previous logic run and stores the current input value for the next run. Explicit tick boundary for controlled feedback.",
       "change_filter": "Outputs the input value and sets the changed trigger only when it differs from the last received value. Repeated identical values are suppressed.",

@@ -23,6 +23,7 @@ PURE_LOGIC_NODE_TYPES = frozenset(
         "and",
         "astro_sun",
         "avg_multi",
+        "binary_stats",
         "change_filter",
         "clamp",
         "compare",

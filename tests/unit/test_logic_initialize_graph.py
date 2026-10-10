@@ -3505,3 +3505,49 @@ async def test_a_read_feeding_the_level_still_forms_an_initialization_dependency
     await mgr.initialize_graph("g1")
 
     mgr._event_bus.publish.assert_not_awaited()
+
+
+def _stats_init_flow(a: str, b: str, threshold: int, *, long_path: bool = False) -> FlowData:
+    nodes = [
+        {"id": "a", "type": "datapoint_read", "data": {"datapoint_id": a}},
+        {"id": "b", "type": "datapoint_read", "data": {"datapoint_id": b}},
+        {"id": "s", "type": "binary_stats", "data": {"input_count": 2, "threshold_count": threshold}},
+        {"id": "cf", "type": "change_filter", "data": {}},
+    ]
+    edges = [
+        {"source": "a", "sourceHandle": "value", "target": "s", "targetHandle": "in1"},
+        {"source": "s", "sourceHandle": "threshold_reached", "target": "cf", "targetHandle": "in"},
+    ]
+    if long_path:
+        nodes.append({"id": "n", "type": "not", "data": {}})
+        edges += [
+            {"source": "b", "sourceHandle": "value", "target": "n", "targetHandle": "in1"},
+            {"source": "n", "sourceHandle": "out", "target": "s", "targetHandle": "in2"},
+        ]
+    else:
+        edges.append({"source": "b", "sourceHandle": "value", "target": "s", "targetHandle": "in2"})
+    return _flow(nodes, edges)
+
+
+@pytest.mark.asyncio
+async def test_initialize_seeds_a_filter_behind_a_statistics_output_decided_by_a_seeded_input():
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g": ("G", True, _stats_init_flow(a, b, 1))}, values={a: True})
+    await mgr.initialize_graph("g")
+    assert mgr._hysteresis["g"]["cf"]["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_initialize_does_not_seed_a_filter_behind_an_output_that_needs_the_unseeded_input():
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g": ("G", True, _stats_init_flow(a, b, 2))}, values={a: True})
+    await mgr.initialize_graph("g")
+    assert "cf" not in mgr._hysteresis.get("g", {})
+
+
+@pytest.mark.asyncio
+async def test_initialize_revisits_a_statistics_output_when_taint_arrives_over_a_longer_path():
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    mgr = _make_manager({"g": ("G", True, _stats_init_flow(a, b, 2, long_path=True))}, values={a: True})
+    await mgr.initialize_graph("g")
+    assert "cf" not in mgr._hysteresis.get("g", {})

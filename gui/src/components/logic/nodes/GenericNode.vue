@@ -38,7 +38,7 @@
           >
             <!-- Input label — clickable negation toggle for gate nodes -->
             <button
-              v-if="isGateNode && def.inputs[r]"
+              v-if="(isGateNode || isBinaryStatsNode) && def.inputs[r]"
               class="gn-port-negate nodrag"
               :class="{ 'gn-port-negate--active': !!data[`negate_${def.inputs[r].id}`] }"
               :title="$t('logic.negatePort', { id: def.inputs[r].id })"
@@ -78,6 +78,7 @@ import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -112,6 +113,7 @@ const NODE_DEFS = computed(() => ({
   or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})}],                                                      outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  binary_stats: { label: t('logic.nodeTypes.binary_stats'), color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}], outputs: [{id:'count_true',label:t('logic.portLabels.countTrue')},{id:'count_false',label:t('logic.portLabels.countFalse')},{id:'majority_true',label:t('logic.portLabels.majorityTrue')},{id:'total',label:t('logic.portLabels.total')},{id:'percent_true',label:t('logic.portLabels.percentTrue')},{id:'tie',label:t('logic.portLabels.tie')},{id:'threshold_reached',label:t('logic.portLabels.thresholdReached')}] },
   merge:        { label: 'Klemme',      color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
@@ -195,17 +197,23 @@ const isGateNode = computed(() =>
 // are plain values (not booleans) — kept separate from isGateNode so the
 // per-port negation toggles (boolean-only) never render for it.
 const isMergeNode = computed(() => props.type === 'merge')
+// binary_stats takes the gates' dynamic in1..inN inputs and per-input negation,
+// but has its own output ports and no output negation.
+const isBinaryStatsNode = computed(() => props.type === 'binary_stats')
 
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
   const base = NODE_DEFS.value[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
-  if (isGateNode.value || isMergeNode.value) {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+  if (isGateNode.value || isMergeNode.value || isBinaryStatsNode.value) {
+    const count = isBinaryStatsNode.value
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
       label: t('logic.ports.in_n', { n: i + 1 }),
     }))
+    if (isBinaryStatsNode.value) return { ...base, label, inputs }
     return { ...base, label, inputs, outputs: [{ id: 'out', label: t('logic.ports.out') }] }
   }
   if (props.type === 'string_concat') {
@@ -330,7 +338,7 @@ function renameNode(label) { updateNodeData(props.id, { label }) }
 // viewer would silently discard whatever they typed.
 const auth = useAuthStore()
 
-// ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
+// ── Inline negation toggle (AND / OR / XOR / binary_stats) ─────
 function toggleNegate(portId) {
   const key = `negate_${portId}`
   updateNodeData(props.id, { [key]: !props.data[key] })
@@ -459,8 +467,10 @@ const summary = computed(() => {
     const behavior = d.closed_behavior === 'default_value' ? `→ ${d.default_value ?? 0}` : t('logic.summary.hold')
     return d.negate_enable ? `${t('logic.summary.negateEnable')}  ${behavior}` : behavior
   }
-  if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge') {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge' || props.type === 'binary_stats') {
+    const count = props.type === 'binary_stats'
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     return count > 2 ? t('logic.summary.inputs', { n: count }) : null
   }
   return null
