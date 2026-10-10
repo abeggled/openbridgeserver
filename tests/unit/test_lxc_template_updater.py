@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -370,3 +371,50 @@ def test_version_list_puts_release_without_published_at_last():
     lines = _run_version_list_script(releases, show_nightlies=False)
 
     assert lines == ["stable 2026.10.0", "stable 2026.9.1"]
+
+
+def test_updater_follows_redirects_of_transferred_repos():
+    """A transferred repo answers the API with 301 + JSON body; -f alone lets it through (#1322)."""
+    obs_update = _obs_update_text()
+
+    assert 'ALL_RELEASES=$(curl -sfL "https://api.github.com/repos/${REPO}/releases")' in obs_update
+    assert 'MANIFEST=$(curl -sfL "https://raw.githubusercontent.com/' in obs_update
+    assert not re.search(r"curl -sf ", obs_update)
+
+
+def _run_version_recovery(tmp_path: Path, version: str | None, stamp: str | None) -> tuple[str, str | None]:
+    """Run the startup block of obs-update (up to the migration recovery) against a fake install dir."""
+    obs_update = _obs_update_text()
+    m = re.search(r"^CURRENT=\$\(cat .*?^fi\n", obs_update, re.DOTALL | re.MULTILINE)
+    assert m, "Could not find CURRENT / migration recovery block"
+    install_dir = tmp_path / "opt-obs"
+    (install_dir / "obs").mkdir(parents=True)
+    if version is not None:
+        (install_dir / "version").write_text(version + "\n")
+    if stamp is not None:
+        (install_dir / "obs" / "version").write_text(stamp + "\n")
+    script = f'set -euo pipefail\nINSTALL_DIR="{install_dir}"\n{m.group(0)}printf "%s" "$CURRENT"\n'
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    version_file = install_dir / "version"
+    return result.stdout, version_file.read_text().strip() if version_file.exists() else None
+
+
+def test_version_recovery_restores_real_version_after_migration_patch(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.99.0", "2026.10.0")
+
+    assert current == "2026.10.0"
+    assert written == "2026.10.0"
+
+
+def test_version_recovery_leaves_regular_version_untouched(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.11.0", "2026.10.0")
+
+    assert current == "2026.11.0"
+    assert written == "2026.11.0"
+
+
+def test_version_recovery_keeps_patch_tag_without_version_stamp(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.99.0", None)
+
+    assert current == "2026.99.0"
+    assert written == "2026.99.0"

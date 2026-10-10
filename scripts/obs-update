@@ -21,6 +21,16 @@ SERVICE="obs"
 
 CURRENT=$(cat "$INSTALL_DIR/version" 2>/dev/null || echo "unknown")
 
+# Organisation move (#1322): the migration patch release from the placeholder
+# repo is installed by the previous obs-update, which writes the patch tag into
+# the version file. Recover the real version from the stamp the build puts into
+# the app code, which the patch bundle leaves untouched.
+MIGRATION_PATCH_TAG="2026.99.0"
+if [[ "$CURRENT" == "$MIGRATION_PATCH_TAG" && -s "$INSTALL_DIR/obs/version" ]]; then
+    CURRENT=$(cat "$INSTALL_DIR/obs/version")
+    echo "$CURRENT" > "$INSTALL_DIR/version"
+fi
+
 SHOW_NIGHTLIES=false
 CHANNEL=""
 for arg in "$@"; do
@@ -32,7 +42,7 @@ done
 
 if [[ -n "$CHANNEL" ]]; then
     echo "Fetching channel manifest ($CHANNEL)..."
-    MANIFEST=$(curl -sf "https://raw.githubusercontent.com/${OPS_REPO}/main/channels/${CHANNEL}.json")
+    MANIFEST=$(curl -sfL "https://raw.githubusercontent.com/${OPS_REPO}/main/channels/${CHANNEL}.json")
     CHANNEL_INFO=$(echo "$MANIFEST" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -50,7 +60,9 @@ print(lxc.get('sha256') or '')
     fi
 else
 echo "Fetching release information..."
-ALL_RELEASES=$(curl -sf "https://api.github.com/repos/${REPO}/releases")
+# -L: a renamed or transferred repo answers with 301 + a JSON body, which -f
+# does not treat as an error (#1322).
+ALL_RELEASES=$(curl -sfL "https://api.github.com/repos/${REPO}/releases")
 
 # Build ordered list: versioned releases (up to 2 stables) plus nightlies if requested
 VERSION_LIST=$(echo "$ALL_RELEASES" | SHOW_NIGHTLIES="$SHOW_NIGHTLIES" python3 -c "
