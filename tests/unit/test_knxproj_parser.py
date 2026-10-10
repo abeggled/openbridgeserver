@@ -64,14 +64,13 @@ class TestDptFromXknxproject:
     def test_sub_zero_padded(self):
         assert _dpt_from_xknxproject({"main": 9, "sub": 4}) == "DPT9.004"
 
-    def test_main_only_known(self):
-        assert _dpt_from_xknxproject({"main": 1}) == "DPT1.001"
+    def test_main_only_keeps_the_main_type(self):
+        # #1260: no guessed subtype — it would add a unit or scaling the project does not set
+        assert _dpt_from_xknxproject({"main": 14, "sub": None}) == "DPT14"
+        assert _dpt_from_xknxproject({"main": 5}) == "DPT5"
 
-    def test_main_only_unknown_falls_back(self):
-        assert _dpt_from_xknxproject({"main": 99}) == "DPT99.001"
-
-    def test_main_16_default(self):
-        assert _dpt_from_xknxproject({"main": 16}) == "DPT16.000"
+    def test_main_only_unknown_keeps_the_main_type(self):
+        assert _dpt_from_xknxproject({"main": 99}) == "DPT99"
 
     def test_main_missing_key(self):
         assert _dpt_from_xknxproject({"sub": 1}) is None

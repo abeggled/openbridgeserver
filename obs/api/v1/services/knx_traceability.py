@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from obs.adapters.knx.group_address import try_normalize_ga
 from obs.db.database import Database
 
 
@@ -234,9 +235,10 @@ async def _devices_by_group_address(group_addresses: list[str], db: Database) ->
 
 
 def _extract_knx_ga_roles(config: dict[str, Any]) -> list[tuple[str, str]]:
+    # Binding configs are compared with imported (normalized) addresses — #1296.
     pairs = [
-        ("group_address", str(config.get("group_address") or "").strip()),
-        ("state_group_address", str(config.get("state_group_address") or "").strip()),
+        ("group_address", try_normalize_ga(config.get("group_address"))),
+        ("state_group_address", try_normalize_ga(config.get("state_group_address"))),
     ]
     out: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()

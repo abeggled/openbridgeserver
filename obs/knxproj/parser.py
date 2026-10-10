@@ -24,12 +24,14 @@ from xml.etree import ElementTree
 
 import pyzipper
 
+from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, normalize_ga
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class GroupAddressRecord:
-    address: str  # "1/2/3"
+    address: str  # "1/2/3", interne dreistufige Schreibweise (#1296)
     name: str
     description: str
     dpt: str | None  # "DPT9.001" oder None
@@ -52,7 +54,7 @@ class FunctionRecord:
     space_id: str  # identifier of the containing Space
     name: str
     usage_text: str  # e.g. "Bewegung", "Heizen/Klima", "Schalten/Dimmen"
-    ga_addresses: list[str] = field(default_factory=list)  # ["1/2/3", …]
+    ga_addresses: list[str] = field(default_factory=list)  # ["1/2/3", …], intern normalisiert
 
 
 @dataclass
@@ -148,6 +150,9 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
     """Xknxproject DPT-Dict → open bridge server DPT-ID.
 
     xknxproject liefert: {"main": 9, "sub": 1} oder None
+
+    Nur Haupttyp ({"main": 14, "sub": None}) → "DPT14", kein geratener Subtyp (#1260):
+    ein Subtyp bringt Einheit und Skalierung mit, die das Projekt nicht festlegt.
     """
     if not dpt:
         return None
@@ -157,21 +162,7 @@ def _dpt_from_xknxproject(dpt: dict | None) -> str | None:
         return None
     if sub is not None:
         return f"DPT{main}.{str(sub).zfill(3)}"
-    # Nur Haupttyp → Default-Subtyp
-    defaults = {
-        1: "DPT1.001",
-        2: "DPT2.001",
-        5: "DPT5.001",
-        6: "DPT6.010",
-        7: "DPT7.001",
-        8: "DPT8.001",
-        9: "DPT9.001",
-        12: "DPT12.001",
-        13: "DPT13.001",
-        14: "DPT14.054",
-        16: "DPT16.000",
-    }
-    return defaults.get(main, f"DPT{main}.001")
+    return f"DPT{main}"
 
 
 def _collect_fi_to_fn(root: Any) -> dict[str, str]:
@@ -482,7 +473,7 @@ def _walk_spaces(
                 else:
                     addr = str(getattr(ref, "address", "") or "").strip()
                 if addr:
-                    ga_addresses.append(addr)
+                    ga_addresses.append(normalize_ga(addr))
 
             fn_list.append(
                 FunctionRecord(
@@ -641,7 +632,7 @@ def parse_knxproj_devices(
         if isinstance(comm_obj, dict):
             identifier = str(comm_obj.get("identifier") or co_id)
             dpt_values = [_dpt_from_xknxproject(dpt) for dpt in (comm_obj.get("dpts") or [])]
-            ga_links = [str(ga).strip() for ga in (comm_obj.get("group_address_links") or []) if str(ga).strip()]
+            ga_links = [normalize_ga(str(ga)) for ga in (comm_obj.get("group_address_links") or []) if str(ga).strip()]
             flags_raw = comm_obj.get("flags") or {}
             dpas_raw = comm_obj.get("dpas") or []
             record = CommunicationObjectRecord(
@@ -663,7 +654,7 @@ def parse_knxproj_devices(
         else:
             identifier = str(getattr(comm_obj, "identifier", co_id))
             dpt_values = [_dpt_from_xknxproject(dpt) for dpt in (getattr(comm_obj, "dpts", []) or [])]
-            ga_links = [str(ga).strip() for ga in (getattr(comm_obj, "group_address_links", []) or []) if str(ga).strip()]
+            ga_links = [normalize_ga(str(ga)) for ga in (getattr(comm_obj, "group_address_links", []) or []) if str(ga).strip()]
             flags_raw = getattr(comm_obj, "flags", {}) or {}
             dpas_raw = getattr(comm_obj, "dpas", []) or []
             record = CommunicationObjectRecord(
@@ -704,14 +695,20 @@ def parse_knxproj_devices(
 
 
 def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupAddressRecord]:
-    """.knxproj Datei parsen und alle Gruppenadressen zurückgeben.
+    """.knxproj Datei parsen und alle Gruppenadressen zurückgeben (siehe parse_knxproj_with_style)."""
+    return parse_knxproj_with_style(file_bytes, password)[0]
+
+
+def parse_knxproj_with_style(file_bytes: bytes, password: str | None = None) -> tuple[list[GroupAddressRecord], str]:
+    """.knxproj Datei parsen: alle Gruppenadressen und den Gruppenadressstil des Projekts.
 
     Args:
         file_bytes: Rohe Bytes der .knxproj Datei
         password:   Projektpasswort (falls vorhanden)
 
     Returns:
-        Liste von GroupAddressRecord
+        (Liste von GroupAddressRecord in interner Schreibweise,
+         Stil aus xknxproject ``info.group_address_style``: ThreeLevel/TwoLevel/Free)
 
     Raises:
         ValueError: wenn die Datei nicht geparst werden kann
@@ -753,8 +750,10 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
 
     if isinstance(project, dict):
         group_addresses = project.get("group_addresses", {}) or {}
+        style = str((project.get("info") or {}).get("group_address_style") or DEFAULT_GROUP_ADDRESS_STYLE)
     else:
         group_addresses = getattr(project, "group_addresses", {}) or {}
+        style = str(getattr(getattr(project, "info", None), "group_address_style", None) or DEFAULT_GROUP_ADDRESS_STYLE)
 
     logger.info(
         "group_addresses Typ: %s, Anzahl: %d",
@@ -785,13 +784,13 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
             description = getattr(ga, "comment", "") or getattr(ga, "description", "") or ""
             dpt_raw = getattr(ga, "dpt", None)
 
-        # Resolve parent group names
+        # Resolve parent group names — xknxproject keys the ranges in the project's notation
         parts = addr_str.split("/")
         main_key = parts[0] if parts else ""
         mid_key = f"{parts[0]}/{parts[1]}" if len(parts) > 1 else ""
         records.append(
             GroupAddressRecord(
-                address=addr_str,
+                address=normalize_ga(addr_str),
                 name=name,
                 description=description,
                 dpt=_dpt_from_xknxproject(dpt_raw),
@@ -800,5 +799,5 @@ def parse_knxproj(file_bytes: bytes, password: str | None = None) -> list[GroupA
             ),
         )
 
-    logger.info("xknxproject: %d Gruppenadressen gelesen", len(records))
-    return records
+    logger.info("xknxproject: %d Gruppenadressen gelesen (Stil %s)", len(records), style)
+    return records, style

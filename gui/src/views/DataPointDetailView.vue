@@ -135,6 +135,7 @@
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
               <div v-if="b.adapter_type?.toUpperCase() === 'KNX'" class="mt-2 flex flex-col gap-2" data-testid="datapoint-knx-context">
+                <GaStyleNotice />
                 <div v-if="knxContextLoading" class="text-xs text-slate-500">
                   {{ $t('common.loading') }}
                 </div>
@@ -144,7 +145,7 @@
                   class="rounded border border-slate-200 dark:border-slate-700 px-2 py-1.5"
                 >
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="font-mono text-xs text-blue-600 dark:text-blue-300">{{ ga.address }}</span>
+                    <span class="font-mono text-xs text-blue-600 dark:text-blue-300" data-testid="datapoint-knx-ga">{{ formatGa(ga.address, knxProject.groupAddressStyle) }}</span>
                     <Badge variant="muted" size="xs">{{ knxRoleLabel(ga.role) }}</Badge>
                     <span class="truncate text-xs text-slate-700 dark:text-slate-200">{{ knxGaLabel(ga.address) }}</span>
                     <span v-if="knxGaContext(ga.address)?.dpt" class="font-mono text-xs text-slate-500">{{ knxGaContext(ga.address).dpt }}</span>
@@ -244,6 +245,9 @@ import { useI18n } from 'vue-i18n'
 import { dpApi, logicApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 import { useTz } from '@/composables/useTz'
 import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'
@@ -262,6 +266,7 @@ const { fmtDateTime } = useTz()
 const { fmtNumber } = useRegionalFormat()
 const dpStore = useDatapointStore()
 const ws      = useWebSocketStore()
+const knxProject = useKnxProjectStore()
 
 const dp                  = ref(null)
 const bindings            = ref([])
@@ -309,7 +314,7 @@ onMounted(async () => {
   unsubWs = ws.onValue((id, value, quality) => {
     if (id === props.id && dp.value) { dp.value.value = value; dp.value.quality = quality }
   })
-  await Promise.all([loadBindings(), loadLogicUsages(), loadKnxContext()])
+  await Promise.all([loadBindings(), loadLogicUsages(), loadKnxContext(), knxProject.load()])
 })
 onUnmounted(() => unsubWs?.())
 

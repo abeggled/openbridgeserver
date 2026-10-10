@@ -4,10 +4,6 @@ Covers:
   POST   /api/v1/knxproj/import          wrong extension → 400, empty → 400,
                                           valid .knxproj → 200, with adapter_name,
                                           password-protected ETS6 → correct/wrong/missing password
-  POST   /api/v1/knxproj/import-csv      wrong extension → 400, empty → 400,
-                                          invalid format → 400, valid CSV → 200,
-                                          valid CSV + adapter_name → creates DPs+bindings,
-                                          re-import same CSV → update path
   GET    /api/v1/knxproj/group-addresses  empty list, populated list, search filter, pagination
   DELETE /api/v1/knxproj/group-addresses  clears all GAs
 """
@@ -27,23 +23,17 @@ from obs.api.auth import create_access_token
 
 pytestmark = pytest.mark.integration
 
-# ---------------------------------------------------------------------------
-# Minimal valid ETS GA CSV (semicolon-separated, UTF-8)
-# ---------------------------------------------------------------------------
-
-_CSV_HEADER = "Group name;Address;Description;DatapointType\n"
-_CSV_ROWS = "Licht EG;1/1/1;Wohnzimmer Licht;DPT-1\nTemperatur EG;1/1/2;Wohnzimmer Temperatur;DPST-9-1\nRolladen EG;1/1/3;Wohnzimmer Rolladen;\n"
-_VALID_CSV = (_CSV_HEADER + _CSV_ROWS).encode("utf-8")
-
-# Folder rows (address contains dash) plus valid rows
-_CSV_WITH_FOLDERS = (
-    _CSV_HEADER
-    + "EG;1/-/-;;DPT-1\n"  # folder — skipped by parser
-    + _CSV_ROWS
-).encode("utf-8")
-
 _DEMO_KNXPROJ = Path(__file__).parent.parent.parent / "tools" / "Demo-Test-Projekt-2026-04-06-17-18.knxproj"
 _HAS_DEMO = _DEMO_KNXPROJ.exists()
+
+
+async def _import_demo(client, auth_headers) -> None:
+    resp = await client.post(
+        "/api/v1/knxproj/import",
+        files={"file": ("demo.knxproj", _DEMO_KNXPROJ.read_bytes(), "application/octet-stream")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
 
 
 async def _make_adapter_instance(client, auth_headers, adapter_type: str = "ANWESENHEITSSIMULATION") -> dict:
@@ -187,205 +177,6 @@ async def test_import_knxproj_adapter_not_found_returns_404(client, auth_headers
 
 
 # ---------------------------------------------------------------------------
-# POST /knxproj/import-csv  — error paths
-# ---------------------------------------------------------------------------
-
-
-async def test_import_csv_requires_auth(client):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", _VALID_CSV, "text/csv")},
-    )
-    assert resp.status_code == 401
-
-
-async def test_import_csv_non_admin_forbidden(client, auth_headers):
-    non_admin_headers, username = await _create_non_admin_headers(client, auth_headers)
-    try:
-        resp = await client.post(
-            "/api/v1/knxproj/import-csv",
-            files={"file": ("test.csv", _VALID_CSV, "text/csv")},
-            headers=non_admin_headers,
-        )
-        assert resp.status_code == 403
-    finally:
-        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
-
-
-async def test_import_csv_wrong_extension_returns_400(client, auth_headers):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.txt", _VALID_CSV, "text/plain")},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 400
-
-
-async def test_import_csv_empty_file_returns_400(client, auth_headers):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", b"", "text/csv")},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 400
-
-
-async def test_import_csv_invalid_format_returns_400(client, auth_headers):
-    bad_csv = b"col1,col2,col3\nval1,val2,val3\n"
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", bad_csv, "text/csv")},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 400
-
-
-async def test_import_csv_no_ga_rows_returns_422(client, auth_headers):
-    only_folders = (_CSV_HEADER + "EG;1/-/-;;DPT-1\n").encode("utf-8")
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", only_folders, "text/csv")},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 422
-
-
-# ---------------------------------------------------------------------------
-# POST /knxproj/import-csv  — success: GA-only (no adapter_name)
-# ---------------------------------------------------------------------------
-
-
-async def test_import_csv_success_no_adapter(client, auth_headers):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["imported"] == 3
-    assert "message" in body
-
-
-async def test_import_csv_result_shape(client, auth_headers):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
-    body = resp.json()
-    for field in ("imported", "created", "updated", "message"):
-        assert field in body, f"missing: {field}"
-
-
-async def test_import_csv_with_folder_rows_skipped(client, auth_headers):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _CSV_WITH_FOLDERS, "text/csv")},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["imported"] == 3  # folder row skipped
-
-
-# ---------------------------------------------------------------------------
-# POST /knxproj/import-csv  — with adapter_name → creates DPs + bindings
-# ---------------------------------------------------------------------------
-
-
-async def test_import_csv_with_adapter_creates_datapoints(client, auth_headers):
-    inst = await _make_adapter_instance(client, auth_headers)
-
-    unique_csv = (
-        _CSV_HEADER + f"Sensor-{uuid.uuid4().hex[:4]};9/9/1;Test sensor;DPST-9-1\n" + f"Switch-{uuid.uuid4().hex[:4]};9/9/2;Test switch;DPT-1\n"
-    ).encode("utf-8")
-
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", unique_csv, "text/csv")},
-        params={"adapter_name": inst["name"], "direction": "SOURCE"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["created"] == 2
-    assert body["updated"] == 0
-
-
-async def test_import_csv_with_adapter_direction_dest(client, auth_headers):
-    inst = await _make_adapter_instance(client, auth_headers)
-    unique_csv = (_CSV_HEADER + f"Actor-{uuid.uuid4().hex[:4]};8/8/1;Test actor;DPT-1\n").encode("utf-8")
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", unique_csv, "text/csv")},
-        params={"adapter_name": inst["name"], "direction": "DEST"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["created"] == 1
-
-
-async def test_import_csv_with_adapter_survives_reload_instance_bindings_failure(client, auth_headers, monkeypatch):
-    """The live adapter-instance reload after a successful CSV import is best-effort:
-    the DB write already committed, so a failure reloading the running adapter (e.g.
-    adapter not loaded, transient I/O) must be logged, not fail the request."""
-    import obs.adapters.registry as adapters_registry
-
-    inst = await _make_adapter_instance(client, auth_headers)
-    unique_csv = (_CSV_HEADER + f"Reload-{uuid.uuid4().hex[:4]};9/9/3;Test reload;DPT-1\n").encode("utf-8")
-
-    async def _raise(*args, **kwargs):
-        raise RuntimeError("simulated adapter reload failure")
-
-    monkeypatch.setattr(adapters_registry, "reload_instance_bindings", _raise)
-
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", unique_csv, "text/csv")},
-        params={"adapter_name": inst["name"], "direction": "SOURCE"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    assert resp.json()["created"] == 1
-
-
-async def test_import_csv_reimport_updates_existing(client, auth_headers):
-    inst = await _make_adapter_instance(client, auth_headers)
-    unique_addr = f"7/{uuid.uuid4().int % 8}/1"
-
-    first_csv = (_CSV_HEADER + f"First Name;{unique_addr};description;DPT-1\n").encode("utf-8")
-    second_csv = (_CSV_HEADER + f"Updated Name;{unique_addr};description;DPT-1\n").encode("utf-8")
-
-    resp1 = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", first_csv, "text/csv")},
-        params={"adapter_name": inst["name"]},
-        headers=auth_headers,
-    )
-    assert resp1.json()["created"] == 1
-
-    resp2 = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", second_csv, "text/csv")},
-        params={"adapter_name": inst["name"]},
-        headers=auth_headers,
-    )
-    assert resp2.status_code == 200
-    assert resp2.json()["updated"] == 1
-    assert resp2.json()["created"] == 0
-
-
-async def test_import_csv_adapter_not_found_returns_404(client, auth_headers):
-    resp = await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("test.csv", _VALID_CSV, "text/csv")},
-        params={"adapter_name": f"nonexistent-{uuid.uuid4().hex[:8]}"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
 # GET /knxproj/group-addresses
 # ---------------------------------------------------------------------------
 
@@ -404,22 +195,14 @@ async def test_list_group_addresses_returns_page(client, auth_headers):
     assert isinstance(body["items"], list)
 
 
-async def test_list_group_addresses_after_csv_import(client, auth_headers):
-    await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
+async def test_list_group_addresses_after_import(client, auth_headers):
+    await _import_demo(client, auth_headers)
     resp = await client.get("/api/v1/knxproj/group-addresses", headers=auth_headers)
     assert resp.json()["total"] >= 3
 
 
 async def test_list_group_addresses_item_shape(client, auth_headers):
-    await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
+    await _import_demo(client, auth_headers)
     resp = await client.get("/api/v1/knxproj/group-addresses", headers=auth_headers)
     items = resp.json()["items"]
     if items:
@@ -428,13 +211,8 @@ async def test_list_group_addresses_item_shape(client, auth_headers):
 
 
 async def test_list_group_addresses_search_by_name(client, auth_headers):
-    unique_name = f"UniqueGA-{uuid.uuid4().hex[:8]}"
-    unique_csv = (_CSV_HEADER + f"{unique_name};2/3/4;search test;DPT-1\n").encode("utf-8")
-    await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", unique_csv, "text/csv")},
-        headers=auth_headers,
-    )
+    unique_name = "Licht Wohnzimmer Schalten"
+    await _import_demo(client, auth_headers)
 
     resp = await client.get(
         "/api/v1/knxproj/group-addresses",
@@ -449,11 +227,7 @@ async def test_list_group_addresses_search_by_name(client, auth_headers):
 
 
 async def test_list_group_addresses_search_by_address(client, auth_headers):
-    await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
+    await _import_demo(client, auth_headers)
     resp = await client.get(
         "/api/v1/knxproj/group-addresses",
         params={"q": "1/1/1"},
@@ -476,11 +250,7 @@ async def test_list_group_addresses_search_no_match(client, auth_headers):
 
 
 async def test_list_group_addresses_pagination(client, auth_headers):
-    await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
+    await _import_demo(client, auth_headers)
     resp = await client.get(
         "/api/v1/knxproj/group-addresses",
         params={"size": 1, "page": 0},
@@ -501,11 +271,7 @@ async def test_delete_group_addresses_requires_auth(client):
 
 
 async def test_delete_group_addresses_clears_all(client, auth_headers):
-    await client.post(
-        "/api/v1/knxproj/import-csv",
-        files={"file": ("ga.csv", _VALID_CSV, "text/csv")},
-        headers=auth_headers,
-    )
+    await _import_demo(client, auth_headers)
 
     del_resp = await client.delete("/api/v1/knxproj/group-addresses", headers=auth_headers)
     assert del_resp.status_code == 204

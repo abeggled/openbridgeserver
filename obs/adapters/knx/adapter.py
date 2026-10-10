@@ -40,7 +40,7 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from obs.adapters.base import (
     AdapterBase,
@@ -50,6 +50,7 @@ from obs.adapters.base import (
     ConfirmationWriteOrder,
 )
 from obs.adapters.knx.dpt_registry import DPTRegistry
+from obs.adapters.knx.group_address import normalize_ga, try_normalize_ga
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 
@@ -125,11 +126,42 @@ class KnxAdapterConfig(BaseModel):
     tunnel_overload_window_s: int = Field(default=300, ge=1)
 
 
+# Adapter-Statuscode (i18n adapters.statusDetail.*) für Bindungen mit ungültigen GAs (#1296)
+INVALID_GROUP_ADDRESSES_CODE = "knxInvalidGroupAddresses"
+_SEVERITY_RANK = {"ok": 0, "warning": 1, "error": 2}
+
+
 class KnxBindingConfig(BaseModel):
     group_address: str  # z.B. "1/2/3"
     dpt_id: str = "DPT1.001"
     state_group_address: str | None = None  # DEST-Bindings Rückmelde-GA
     respond_to_read: bool = False  # SOURCE: antworte auf GroupValueRead mit aktuellem Wert
+
+    # Eingang (#1296): jede ETS-Schreibweise → interne dreistufige Schreibweise,
+    # damit Zustellung und Vergleiche nicht vom Projektstil abhängen.
+    @field_validator("group_address")
+    @classmethod
+    def _normalize_group_address(cls, value: str) -> str:
+        return normalize_ga(value)
+
+    @field_validator("state_group_address")
+    @classmethod
+    def _normalize_state_group_address(cls, value: str | None) -> str | None:
+        # Leer oder ungültig = keine Rückmelde-GA: eine kaputte Rückmelde-GA darf die
+        # gültige Befehls-GA nicht mitreißen. Sichtbar macht das
+        # KnxAdapter._report_invalid_group_addresses; die Bindungs-API weist sie ab.
+        return try_normalize_ga(value)
+
+
+def _binding_group_addresses(config: dict) -> tuple[str | None, str | None]:
+    """Command and state GA of a raw binding config, in the internal notation (#1296)."""
+    return try_normalize_ga(config.get("group_address")), try_normalize_ga(config.get("state_group_address"))
+
+
+def _is_distinct_state_ga(config: dict, ga: str) -> bool:
+    """Whether ``ga`` is the binding's state GA and differs from its command GA."""
+    command_ga, state_ga = _binding_group_addresses(config)
+    return state_ga == ga and state_ga != command_ga
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +218,9 @@ class KnxAdapter(AdapterBase):
         # Tunnel-overload detection (issue #466)
         self._disconnect_times: deque[datetime] = deque()
         self._warning_active: bool = False
+        # Adapter card (#1296): the last connection status and the invalid-GA hint, combined on publish.
+        self._connection_status: tuple[bool, str, str, str | None, dict[str, Any]] = (False, "", "ok", None, {})
+        self._invalid_ga_report: tuple[str, dict[str, Any]] | None = None
 
     @staticmethod
     def _now() -> datetime:
@@ -610,6 +645,7 @@ class KnxAdapter(AdapterBase):
             len(self._bindings),
             list(self._ga_source_map.keys()),
         )
+        await self._report_invalid_group_addresses()
 
         if not self._xknx:
             return
@@ -653,6 +689,61 @@ class KnxAdapter(AdapterBase):
         except Exception:
             logger.exception("KNX: failed to create/register sniffer device")
 
+    async def _report_invalid_group_addresses(self) -> None:
+        """Show broken group addresses on the adapter card, not only in the log (#1296).
+
+        A broken command GA disables its binding; a broken feedback GA is ignored
+        and the binding keeps working with its command GA.
+        """
+        issues: list[str] = []
+        for binding in self._bindings:
+            config = binding.config or {}
+            broken = [
+                f"{key}={config.get(key)!r}"
+                for key in ("group_address", "state_group_address")
+                if (key == "group_address" or str(config.get(key) or "").strip()) and try_normalize_ga(config.get(key)) is None
+            ]
+            if broken:
+                issues.append(f"{binding.id}: {', '.join(broken)}")
+        report = None
+        if issues:
+            examples = "; ".join(issues[:3]) + (f"; +{len(issues) - 3} more" if len(issues) > 3 else "")
+            logger.warning("KNX: %d binding(s) with invalid group addresses: %s", len(issues), examples)
+            report = (f"Invalid KNX group addresses in {len(issues)} binding(s) ({examples})", {"count": len(issues), "examples": examples})
+        if report != self._invalid_ga_report:
+            self._invalid_ga_report = report
+            await self._publish_card_status()
+
+    async def _publish_status(
+        self,
+        connected: bool,
+        detail: str = "",
+        severity: str = "ok",
+        *,
+        code: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        """Record the connection status and publish it combined with the GA hint (#1296)."""
+        self._connection_status = (connected, detail, severity, code, params or {})
+        await self._publish_card_status()
+
+    async def _publish_card_status(self) -> None:
+        """Publish what the adapter card shows: the connection status plus the invalid-GA hint.
+
+        The hint is additional, never instead: it is shown only while the
+        adapter is connected and the connection status is less severe than a
+        warning. "Disconnected", an error or the connection's own warning
+        stays; once it clears, the hint shows again. The connected flag always
+        comes from the connection status.
+        """
+        connected, detail, severity, code, params = self._connection_status
+        if self._invalid_ga_report is not None and connected and _SEVERITY_RANK.get(severity, _SEVERITY_RANK["error"]) < _SEVERITY_RANK["warning"]:
+            detail, params = self._invalid_ga_report
+            severity, code = "warning", INVALID_GROUP_ADDRESSES_CODE
+            # The base class keeps the connected flag on warnings; this warning is ours, not the connection's.
+            self._connected = connected
+        await super()._publish_status(connected, detail, severity, code=code, params=params)
+
     # ------------------------------------------------------------------
     # Inbound telegram handler (called by sniffer.process)
     # ------------------------------------------------------------------
@@ -663,7 +754,7 @@ class KnxAdapter(AdapterBase):
                 logger.error("KNX: xknx.telegram.apci not importable")
                 return
 
-            ga = str(telegram.destination_address)
+            ga = normalize_ga(str(telegram.destination_address))
             is_outgoing = getattr(getattr(telegram, "direction", None), "name", None) == "OUTGOING"
 
             # Handle incoming read requests: respond with current persisted value
@@ -1033,7 +1124,7 @@ class KnxAdapter(AdapterBase):
             return
         self._activate_outbound_write(
             telegram,
-            str(telegram.destination_address),
+            normalize_ga(str(telegram.destination_address)),
             _telegram_to_bytes(telegram),
         )
 
@@ -1047,12 +1138,7 @@ class KnxAdapter(AdapterBase):
             retained = deque(
                 recent_write
                 for recent_write in recent_writes
-                if recent_write[0]
-                >= (
-                    state_cutoff
-                    if (recent_write[4][3].get("state_group_address") == key_ga and recent_write[4][3].get("group_address") != key_ga)
-                    else command_cutoff
-                )
+                if recent_write[0] >= (state_cutoff if _is_distinct_state_ga(recent_write[4][3], key_ga) else command_cutoff)
             )
             if retained:
                 self._recent_writes[key] = retained
@@ -1073,7 +1159,7 @@ class KnxAdapter(AdapterBase):
         """Retain bounded identity-independent suppression for invalidated state feedback."""
         written_at, raw, _, _, signature, *_ = recent_write
         config = signature[3]
-        if config.get("state_group_address") != ga or config.get("group_address") == ga:
+        if not _is_distinct_state_ga(config, ga):
             return
         tombstones = self._invalidated_state_confirmations.setdefault((ga, bytes(raw)), deque())
         tombstones.append((written_at, binding_id, str(signature[0])))
@@ -1140,8 +1226,7 @@ class KnxAdapter(AdapterBase):
         recent_writes = self._recent_writes.get((str(binding.id), ga))
         if not recent_writes:
             return None
-        state_ga = binding.config.get("state_group_address")
-        is_distinct_state_ga = state_ga == ga and state_ga != binding.config.get("group_address")
+        is_distinct_state_ga = _is_distinct_state_ga(binding.config, ga)
         if is_distinct_state_ga:
             if is_outgoing:
                 return None
@@ -1170,8 +1255,7 @@ class KnxAdapter(AdapterBase):
                 if written_raw != raw:
                     continue
                 config = signature[3]
-                command_ga = config.get("group_address")
-                state_ga = config.get("state_group_address")
+                command_ga, state_ga = _binding_group_addresses(config)
                 if is_outgoing and ga == command_ga:
                     datapoint_ids.add(str(signature[0]))
                 if not is_outgoing and ga == state_ga and state_ga != command_ga:
@@ -1196,8 +1280,7 @@ class KnxAdapter(AdapterBase):
                 if (
                     str(signature[0]) == datapoint_id
                     and recent_write[1] == raw
-                    and config.get("state_group_address") == ga
-                    and config.get("group_address") != ga
+                    and _is_distinct_state_ga(config, ga)
                     and candidate_order is not None
                     and candidate_order.is_newer_than(write_order)
                 ):
@@ -1220,8 +1303,7 @@ class KnxAdapter(AdapterBase):
         if recent_writes is None:
             return False, None, False, None
 
-        state_ga = binding.config.get("state_group_address")
-        is_distinct_state_ga = state_ga == ga and state_ga != binding.config.get("group_address")
+        is_distinct_state_ga = _is_distinct_state_ga(binding.config, ga)
         if is_distinct_state_ga:
             if is_outgoing:
                 return False, None, False, None

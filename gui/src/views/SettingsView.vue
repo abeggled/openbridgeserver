@@ -882,6 +882,36 @@
             </li>
           </ul>
         </div>
+        <div v-if="knxProject.mergeConflicts.length" class="p-3 rounded-lg text-sm bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30" data-testid="knx-merge-conflicts">
+          <p class="font-medium">{{ $t('settings.importexport.knxMergeConflictsTitle') }}</p>
+          <p class="mt-1">{{ $t('settings.importexport.knxMergeConflictsText', { n: knxProject.mergeConflicts.length }) }}</p>
+          <details class="mt-2 text-xs">
+            <summary class="cursor-pointer">{{ $t('settings.importexport.knxMergeConflictsShow') }}</summary>
+            <div class="mt-2 overflow-x-auto">
+              <table class="w-full text-left">
+                <thead>
+                  <tr>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsAddress') }}</th>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsSpelling') }}</th>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsField') }}</th>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsKept') }}</th>
+                    <th class="font-medium">{{ $t('settings.importexport.knxMergeConflictsDropped') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="conflict in knxProject.mergeConflicts" :key="`${conflict.address}:${conflict.spelling}:${conflict.field}`" data-testid="knx-merge-conflict">
+                    <td class="pr-2 font-mono">{{ formatGa(conflict.address, knxProject.groupAddressStyle) }}</td>
+                    <!-- the spelling as it was stored before the conversion, deliberately not reformatted -->
+                    <td class="pr-2 font-mono">{{ conflict.spelling }}</td>
+                    <td class="pr-2 font-mono">{{ conflict.field }}</td>
+                    <td class="pr-2">{{ conflict.kept }}</td>
+                    <td>{{ conflict.dropped }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
       </div>
     </div>
 
@@ -1585,6 +1615,8 @@ import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
 import { useTz } from '@/composables/useTz'
 import Badge            from '@/components/ui/Badge.vue'
 import Spinner          from '@/components/ui/Spinner.vue'
@@ -1602,6 +1634,8 @@ import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/compo
 const { t, te } = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
+// Group address style and V56 merge notes of the KNX project (#1296)
+const knxProject = useKnxProjectStore()
 const navStore = useNavLinksStore()
 const { fmtDate, fmtDateTime } = useTz()
 const activeTab = ref('general')
@@ -2654,6 +2688,7 @@ async function onImportFile(e) {
     importResult.value = { ok: true, text: t('settings.importexport.importResultOk', { objects: data.datapoints_created + data.datapoints_updated, bindings: data.bindings_created + data.bindings_updated }) + gaInfo + lgInfo + iconInfo + visuInfo }
     await loadFaSettings()
     if ((data.icons_imported ?? 0) > 0) await loadIcons()
+    await knxProject.load({ force: true })
   } catch (err) {
     importResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.importFailed') }
   }
@@ -2666,6 +2701,7 @@ async function onImportDbFile(e) {
   try {
     const { data } = await configApi.importDb(file)
     importDbResult.value = { ok: true, text: t('settings.importexport.dbImportResultOk', { message: data.message ?? '', adapters: data.adapters_restarted ?? 0 }) }
+    await knxProject.load({ force: true })
   } catch (err) {
     importDbResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.dbImportFailed') }
   }
@@ -2724,6 +2760,7 @@ async function restoreAutobackup() {
     autobackupRestoreMsg.value = { ok: true, text: t('settings.importexport.autobackupRestoreOk', { objects: data.datapoints, bindings: data.bindings, visu: data.visu_nodes }) + errInfo }
     await loadFaSettings()
     await loadIcons()
+    await knxProject.load({ force: true })
   } catch (err) {
     autobackupRestoreMsg.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.autobackupRestoreFailed') }
   } finally { autobackupRestoring.value = false }
@@ -2848,6 +2885,7 @@ async function doKnxImport() {
     if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
     knxResult.value = { ok: true, text: msg, hierarchies: Array.isArray(data.hierarchies) ? data.hierarchies : [] }
     await loadKnxGaCount()
+    await knxProject.load({ force: true })
   } catch (err) {
     const resp = err.response?.data
     const code = resp?.error_code
@@ -2865,6 +2903,7 @@ onMounted(async () => {
   if (auth.isAdmin) await loadUsers()
   await loadKeys()
   await loadKnxGaCount()
+  await knxProject.load()
   await loadKnxAdapterInstances()
   await loadAutobackupConfig()
   await loadAutobackupList()
@@ -2918,7 +2957,7 @@ const DZ_CONFIG = {
       const iconInfo = (data.icons_deleted ?? 0) > 0 ? t('settings.dangerzone.factory.resultIcons', { n: data.icons_deleted }) : ''
       return t('settings.dangerzone.factory.result', { dp: data.datapoints_deleted, bindings: data.bindings_deleted, adapters: data.adapter_instances_deleted, knxga: data.knx_group_addresses_deleted, logic: data.logic_graphs_deleted }) + iconInfo
     },
-    after: () => { knxGaCount.value = 0; faSavedKey.value = null; icons.value = [] },
+    after: () => { knxGaCount.value = 0; faSavedKey.value = null; icons.value = []; knxProject.load({ force: true }) },
   },
 }
 

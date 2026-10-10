@@ -56,7 +56,9 @@
           :form="form"
           :grouped-dpts="groupedDpts"
           :dp-persist-value="props.dpPersistValue"
+          :ga-invalid="gaRejected"
           @ga-select="onGaSelect"
+          @dpt-change="dptAnchor = cfg.dpt_id"
         />
 
       <!-- Modbus -->
@@ -339,6 +341,9 @@ import BindingFormSnmp from '@/components/datapoints/binding-form/BindingFormSnm
 import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
 import BindingFormWebhook from '@/components/datapoints/binding-form/BindingFormWebhook.vue'
 import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
+import { keepsStoredSubtype } from '@/utils/dpt'
 import { normalizeEntries } from '@/utils/ipAllowlist'
 
 const props = defineProps({
@@ -350,6 +355,23 @@ const props = defineProps({
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
+const knxProject = useKnxProjectStore()
+
+// A rejected group address comes as { code, field, value } (#1296): explain it with an
+// example in the project's style. Other errors keep their text; anything else is generic.
+const GA_ERROR_CODES = ['knxGroupAddressMissing', 'knxGroupAddressInvalid']
+// The command address the backend rejected; the field stays marked until it is changed.
+const rejectedGa = ref(null)
+const gaRejected = computed(() => rejectedGa.value !== null && rejectedGa.value === cfg.group_address)
+function saveErrorText(detail) {
+  rejectedGa.value = GA_ERROR_CODES.includes(detail?.code) && detail.field === 'group_address' ? cfg.group_address : null
+  if (GA_ERROR_CODES.includes(detail?.code)) {
+    const field = t(detail.field === 'state_group_address' ? 'adapters.bindingForm.errors.knxFieldStateGroupAddress' : 'adapters.bindingForm.errors.knxFieldGroupAddress')
+    const example = formatGa('1/2/3', knxProject.groupAddressStyle)
+    return t(`adapters.bindingForm.errors.${detail.code}`, { value: String(detail.value ?? ''), field, example })
+  }
+  return typeof detail === 'string' && detail ? detail : t('common.saveError')
+}
 
 const saving       = ref(false)
 const error        = ref(null)
@@ -394,6 +416,12 @@ const VALUE_MAP_PRESETS = [
   { key: 'onoff_num',   label: t('adapters.bindingForm.valueMapOnOffNum'),          map: { 'off': '0', 'on': '1' } },
   { key: 'custom',      label: t('adapters.bindingForm.customValueMapping'),         map: null },
 ]
+
+// The anchor is the DPT chosen for this binding: the one stored with it, replaced by every
+// pick in the DPT select. The form default is no choice. Picking a group address whose
+// catalog entry names only the anchor's main type brings the anchor's subtype back, also
+// after a detour over another address (#1260).
+const dptAnchor = ref(null)
 
 const cfg = reactive({
   group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false,
@@ -661,6 +689,7 @@ watch(() => props.initial, val => {
   form.direction           = val.direction
   form.enabled             = val.enabled
   Object.assign(cfg, val.config ?? {})
+  dptAnchor.value = val.config?.dpt_id || null
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
@@ -1283,7 +1312,7 @@ function onMqttJsonSampleInput() {
 }
 
 function onGaSelect(item) {
-  if (item.dpt && item.dpt !== cfg.dpt_id) cfg.dpt_id = item.dpt
+  if (item.dpt) cfg.dpt_id = keepsStoredSubtype(item.dpt, dptAnchor.value) ? dptAnchor.value : item.dpt
 }
 
 function onPresetSelect(e) {
@@ -1496,7 +1525,7 @@ async function submit() {
     }
     emit('save')
   } catch (e) {
-    error.value = e.response?.data?.detail ?? t('common.saveError')
+    error.value = saveErrorText(e.response?.data?.detail)
   } finally {
     saving.value = false
   }

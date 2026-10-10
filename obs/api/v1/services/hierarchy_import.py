@@ -117,7 +117,7 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
         if not rows:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj oder CSV importieren.",
+                "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj importieren.",
             )
 
         if request.mode == "mid":
