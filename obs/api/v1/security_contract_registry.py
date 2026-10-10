@@ -368,10 +368,10 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         details=("resource_count", "payload_sha256", "error_count"),
     ),
     # Webhook token rotation (issue #1256): a config_mutation like any other
-    # binding operation.  No `capability` is declared, so an API-key principal
-    # can never rotate a device token — WEBHOOK declares no
-    # AdapterDelegationCapability.  No detail fields: the token itself must
-    # never reach the audit log, and the resource id already names the binding.
+    # binding operation.  No `capability` is declared, and the route refuses
+    # every non-user principal, so an API key can never rotate a device token.
+    # No detail fields: the token itself must never reach the audit log, and
+    # the resource id already names the binding.
     ("POST", "/api/v1/adapters/instances/{instance_id}/webhook/bindings/{binding_id}/rotate-token"): _policy(
         "binding",
         "adapter.webhook.token_rotated",

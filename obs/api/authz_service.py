@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from obs.adapters import registry as adapter_registry
 from obs.api.auth import Principal
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.db.database import Database
@@ -166,6 +167,25 @@ async def authorize_adapter_instance(
         action=action,
         targets=[AuthzTarget(node_type="adapter_instance", node_id=instance_id, min_role=min_role)],
         grants=grants,
+    )
+
+
+def adapter_delegates(principal: Principal, adapter_type: str, *capabilities: Any) -> bool:
+    """Whether *principal* may run an adapter-owned operation needing *capabilities*.
+
+    Admins always may.  Otherwise only a *user* principal may, and only when the
+    adapter type declares every capability (``AdapterDelegationCapability``).
+    API keys never receive adapter delegation, and unknown or undeclared adapter
+    types fail closed — see ``docs/authz-creation-authority.md``.  The decision
+    depends on the principal type and the declaration alone, never on the
+    adapter type's name.
+    """
+    if principal.type == "user" and principal.is_admin:
+        return True
+    return (
+        principal.type == "user"
+        and bool(capabilities)
+        and all(adapter_registry.supports_delegation(adapter_type, capability) for capability in capabilities)
     )
 
 
