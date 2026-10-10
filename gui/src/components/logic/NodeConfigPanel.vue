@@ -711,6 +711,11 @@
       </div>
     </template>
 
+    <!-- ── hems_surplus: grid measurement + priority-ordered consumer list ── -->
+    <template v-else-if="isHemsSurplusNode">
+      <HemsSurplusConfig :data="localData" :description="nodeDescription(nodeDef)" @update="onHemsSurplusUpdate" />
+    </template>
+
     <!-- ── decision / value_mapping ─────────────────────────────────────── -->
     <template v-else-if="isDecisionNode || isValueMappingNode">
       <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
@@ -1589,11 +1594,13 @@ import VariablePathHelper from './VariablePathHelper.vue'
 import { normaliseObjectVariables, configuredObsSlots, VARIABLE_BLOCK_TYPES } from '@/utils/logicVariables'
 import IssueList from './IssueList.vue'
 import { EXTRACTOR_MAX_PATHS, collectJsonPaths, extractorOutputLabels, parseExtractorJson } from '@/utils/logicExtractorOutputs'
+import { hemsOutputLabels } from '@/utils/logicHemsOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import HelpButton from '@/components/ui/HelpButton.vue'
 import DebugInspector from './DebugInspector.vue'
+import HemsSurplusConfig from './HemsSurplusConfig.vue'
 
 const { t, te } = useI18n()
 const auth = useAuthStore()
@@ -1835,6 +1842,7 @@ const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
 const isSensorWatchdogNode = computed(() => props.node?.type === 'sensor_watchdog')
+const isHemsSurplusNode = computed(() => props.node?.type === 'hems_surplus')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
@@ -2122,6 +2130,12 @@ function moveReplaceRule(i, delta) {
   _saveReplaceRules(rows)
 }
 
+// ── hems_surplus: the editor component hands back the complete data object ──
+function onHemsSurplusUpdate(next) {
+  localData.value = { ...next }
+  emitUpdate()
+}
+
 // ── sensor_watchdog: per-input timeout/fault-value rows (issue #1218) ─────
 // Own dedicated array field ("inputs"), same JSON-string persistence and
 // row-editing shape as string_replace's "rules" above — kept separate
@@ -2171,7 +2185,7 @@ function removeWatchdogInput(i) {
 const activeExtractorRow = ref(null)
 
 // Debug tab lists extractor outputs under their configured names (issue #1104)
-const debugOutputLabels = computed(() => extractorOutputLabels(props.node, t))
+const debugOutputLabels = computed(() => ({ ...extractorOutputLabels(props.node, t), ...hemsOutputLabels(props.node, t) }))
 
 const extractorPreview = computed(() => {
   if (!props.node) return ''

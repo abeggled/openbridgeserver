@@ -463,6 +463,8 @@ const nodeTypeComponents = {
   heating_circuit: _generic, min_max_tracker: _generic, consumption_counter: _generic,
   // Timer extended
   operating_hours: _generic, sensor_watchdog: _generic,
+  // HEMS
+  hems_surplus: _generic,
   // String
   string_concat: _generic, string_replace: _generic,
   // Notification

@@ -814,6 +814,12 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | **JSON extractor** | Data (JSON text) | Value | Parses a JSON string and extracts a value using a dot-notation path, e.g. `sensors.temperature`. |
 | **XML extractor** | Data (XML text) | Value | Parses an XML string and extracts a value using an XPath expression, e.g. `./sensor/temperature`. |
 
+#### Energy Management
+
+| Block | Inputs | Outputs | Description |
+|---|---|---|---|
+| **Surplus control** | Grid power (or import/export, or feed-in only), Enable, Feed-in reserve, Plant OK, per consumer: Measured power / Maximum power / Reset | Per consumer: setpoint (0–100 %), on/off or trigger pulse plus status; diagnostics: Grid power, Surplus, Budget, Allocated, Remaining, Status, Warning | HEMS Lite: distributes the surplus measured at the grid connection point across any number of consumers by priority (list order, drag and drop). Consumers are continuous (0–100 %), on/off with hysteresis, or one-shot triggers, with minimum run/off times and switch-on/off delays. An invalid or stale meter value puts all outputs into the safe state (0 %, off, no trigger). Runs its own control interval (default 30 s). |
+
 ---
 
 ### Filters and transformation for DP blocks
