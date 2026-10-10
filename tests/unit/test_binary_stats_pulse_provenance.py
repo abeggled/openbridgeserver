@@ -320,3 +320,133 @@ async def test_correlated_handles_of_one_upstream_block_are_not_decorrelated():
         await manager.execute_graph("g")
         out = await manager.execute_graph("g")
     assert out["w"]["_write_value"] is True
+
+
+_STATS_OUTPUTS = ["count_true", "count_false", "majority_true", "total", "percent_true", "tie", "threshold_reached"]
+
+
+@pytest.mark.asyncio
+async def test_steady_tick_probes_the_block_a_bounded_number_of_times():
+    from obs.logic.executor import GraphExecutor
+
+    count = 8
+    nodes, edges = [], []
+    for i in range(1, count + 1):
+        nodes += [node(f"c{i}", "const_value", {"value": str(i), "data_type": "number"}), node(f"cf{i}", "change_filter")]
+        edges += [edge(f"c{i}", f"cf{i}", "value", "in"), edge(f"cf{i}", "x", "changed", f"in{i}")]
+    nodes.append(node("x", "binary_stats", {"input_count": count, "threshold_count": 3}))
+    for j, handle in enumerate(_STATS_OUTPUTS):
+        nodes.append(node(f"w{j}", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}))
+        edges.append(edge("x", f"w{j}", handle, "value"))
+    flow = _flow(nodes, edges)
+    manager = _make_manager()
+    manager._graphs["g"] = ("t", True, flow)
+    manager._node_state["g"] = {}
+    calls = {"n": 0}
+    original = GraphExecutor._eval_node
+
+    def counting(self, n, inputs):
+        calls["n"] += n.type == "binary_stats"
+        return original(self, n, inputs)
+
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")), patch.object(GraphExecutor, "_eval_node", counting):
+        await manager._execute_graph("g", "t", flow, {})
+        calls["n"] = 0
+        await manager._execute_graph("g", "t", flow, {})
+    # Cached per handle (~320 evaluations); uncached it is ~9000.
+    assert calls["n"] <= 1000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_change_filter", [False, True])
+async def test_wired_input_without_a_value_counts_as_false(with_change_filter):
+    nodes = [
+        node("one", "const_value", {"value": "true", "data_type": "boolean"}),
+        node("script", "python_script", {"script": "result = 1 / 0"}),
+        node("s", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+        node("write", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
+    ]
+    edges = [edge("one", "s", "value", "in1"), edge("script", "s", "result", "in2")]
+    if with_change_filter:
+        nodes.append(node("cf", "change_filter"))
+        edges += [edge("s", "cf", "threshold_reached", "in"), edge("cf", "write", "out", "value")]
+    else:
+        edges.append(edge("s", "write", "threshold_reached", "value"))
+    flow = _flow(nodes, edges)
+    manager = _make_manager()
+    manager._graphs["g"] = ("t", True, flow)
+    manager._node_state["g"] = {}
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        out = await manager._execute_graph("g", "t", flow, {})
+    assert out["s"].get("threshold_reached") is True
+    assert out["write"].get("_write_value") is True
+
+
+def _probe(nodes, edges, node_id, handle, volatile, outs=None, cache=None):
+    from obs.logic.manager import _handle_independent_of_volatile_inputs
+    from tests.unit.conftest import make_executor
+
+    executor = make_executor(nodes, edges)
+    outs = executor.execute() if outs is None else outs
+    by_id = {n.id: n for n in executor.flow.nodes}
+    return _handle_independent_of_volatile_inputs(
+        make_executor(nodes, edges), by_id, list(executor.flow.edges), {}, node_id, handle, volatile, outs, {} if cache is None else cache
+    )
+
+
+def test_probe_ignores_an_edge_from_a_deleted_node_like_the_executor():
+    nodes = [
+        node("src", "const_value", {"value": True, "data_type": "bool"}),
+        node("t", "const_value", {"value": True, "data_type": "bool"}),
+        node("stats", "binary_stats", {"input_count": 3, "unwired_inputs": "ignore"}),
+    ]
+    edges = [edge("src", "stats", "value", "in1"), edge("t", "stats", "value", "in2"), edge("gone", "stats", "value", "in3")]
+    # Two real votes: src=False turns tie True, so "tie" depends on src.
+    assert _probe(nodes, edges, "stats", "tie", lambda e: e.source == "src") is False
+
+
+def _chained(a_value):
+    nodes = [
+        node("a", "const_value", {"value": a_value, "data_type": "bool"}),
+        node("v", "const_value", {"value": True, "data_type": "bool"}),
+        node("w", "const_value", {"value": True, "data_type": "bool"}),
+        node("y", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+        node("x", "binary_stats", {"input_count": 2}),
+    ]
+    edges = [
+        edge("a", "y", "value", "in1"),
+        edge("v", "y", "value", "in2"),
+        edge("y", "x", "threshold_reached", "in1"),
+        edge("w", "x", "value", "in2"),
+    ]
+    return nodes, edges
+
+
+def test_probe_in_a_new_pass_sees_changed_upstream_values():
+    from tests.unit.conftest import make_executor
+
+    volatile = lambda e: e.source in {"v", "y"}
+    nodes, edges = _chained(True)
+    outs = make_executor(nodes, edges).execute()
+    assert _probe(nodes, edges, "x", "count_true", volatile, outs) is True
+    # Same graph, upstream "a" now False: a new pass with a new cache sees the change.
+    outs.clear()
+    outs.update(make_executor(*_chained(False)).execute())
+    assert _probe(nodes, edges, "x", "count_true", volatile, outs) is False
+
+
+def test_probe_with_an_unrepresentable_input_stays_conservative_and_is_not_cached():
+    class Unprintable:
+        def __repr__(self):
+            raise RuntimeError("no repr")
+
+    nodes = [
+        node("src", "const_value", {"value": True, "data_type": "bool"}),
+        node("t", "const_value", {"value": True, "data_type": "bool"}),
+        node("stats", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+    ]
+    edges = [edge("src", "stats", "value", "in1"), edge("t", "stats", "value", "in2")]
+    cache: dict = {}
+    outs = {"src": {"value": Unprintable()}, "t": {"value": True}, "stats": {"threshold_reached": True}}
+    assert _probe(nodes, edges, "stats", "threshold_reached", lambda e: e.source == "src", outs, cache) is False
+    assert cache == {}

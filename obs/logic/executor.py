@@ -31,6 +31,8 @@ from obs.logic.variables import ResolvedTemplate, TimeSnapshot, make_obs_resolve
 
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
+# Plain decimal literal; shared with gui/src/utils/binaryStatsInputCount.js.
+_DECIMAL_NUMBER_RE = re.compile(r"[ \t\n\r\f\v]*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?[ \t\n\r\f\v]*")
 
 # json_extractor `_preview` snapshot (config-panel path picker, issue #1104):
 # the full document up to this size; larger documents are pruned
@@ -217,6 +219,7 @@ class GraphExecutor:
         datapoint_lookup: Callable[[str], Any] | None = None,
     ):
         self.flow = flow
+        self._flow_node_ids = {n.id for n in flow.nodes}
         # NOTE: use `is not None` instead of `or {}` — an empty dict {} is falsy,
         # so `hysteresis_state or {}` would silently create a *new* dict instead of
         # using the passed-in reference, breaking state persistence between runs.
@@ -410,6 +413,10 @@ class GraphExecutor:
                             value = not value
                         resolved_values.append(value)
                     absorbed = any(resolved_values) if node.type == "or" else any(not value for value in resolved_values)
+                elif unresolved and node.type == "binary_stats":
+                    # A wired input without a value is defined as FALSE for
+                    # Binary Statistics, so every output stays well-defined.
+                    absorbed = True
                 if unresolved and not absorbed and node.id in change_filter_ancestors and node.type not in {"change_filter", "memory"}:
                     details = ", ".join(f"{handle} <- {src_id}.{src_handle}" for handle, src_id, src_handle in unresolved)
                     raise ExecutionError(f"Missing upstream output: {details}")
@@ -1651,15 +1658,24 @@ class GraphExecutor:
                 return {"out": result}
 
             case "binary_stats":
+                raw_count = d.get("input_count", 2)
                 try:
+                    # Plain decimal strings only, like the Admin GUI: float()
+                    # alone would also accept "1_0".
+                    if isinstance(raw_count, str) and not _DECIMAL_NUMBER_RE.fullmatch(raw_count):
+                        raise ValueError(raw_count)
                     # Rounded like the Admin GUI does for integer fields.
-                    count = max(2, min(30, int(self._round_half_up(float(d.get("input_count", 2))))))
+                    count = max(2, min(30, int(self._round_half_up(float(raw_count)))))
                 except (TypeError, ValueError, OverflowError):
                     count = 2  # cleared/null/non-finite field: fall back to the declared default
                 d = {**d, "input_count": count}
                 names = {f"in{i}" for i in range(1, count + 1)}
                 # Debug/manual overrides arrive in ``inputs`` and count as supplied.
-                supplied = ({edge.targetHandle or "in" for edge in self.flow.edges if edge.target == node.id} | set(inputs)) & names
+                # Like the edge map the last edge into a handle wins, and an
+                # edge whose source node no longer exists is not wired.
+                last_source = {edge.targetHandle or "in": edge.source for edge in self.flow.edges if edge.target == node.id}
+                wired = {handle for handle, source in last_source.items() if source in self._flow_node_ids}
+                supplied = (wired | set(inputs)) & names
                 # A wired input that delivered no value this run is FALSE and is
                 # not negated: negating "no value" would invent a TRUE vote.
                 vals: list[bool] = []

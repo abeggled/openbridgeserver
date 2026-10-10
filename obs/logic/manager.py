@@ -221,7 +221,7 @@ _INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
 # that never occurred, and any action they drive would already have run
 # irreversibly by the time the replay corrects them.
 # Upper bound on volatile inputs probed combinatorially (2**n evaluations).
-_MAX_PROBED_VOLATILE_INPUTS = 10
+_MAX_PROBED_VOLATILE_INPUTS = 8
 
 _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 
@@ -1462,6 +1462,7 @@ def _handle_independent_of_volatile_inputs(
     output_handle: str,
     volatile_edge: Callable[[Any], bool],
     outs: dict[str, dict[str, Any]],
+    cache: dict[Any, bool],
     _seen: frozenset[str] = frozenset(),
 ) -> bool:
     """True if ``output_handle`` of a multi-output fan-in node ignores its volatile inputs.
@@ -1473,6 +1474,9 @@ def _handle_independent_of_volatile_inputs(
     consumer reads is compared. An input fed by another such block counts
     as volatile only if the upstream handle itself is; debug-overridden
     ports never are.
+
+    ``cache`` memoises answers for one taint pass, during which ``outs``
+    must not change; the caller creates a fresh dict per pass.
     """
 
     def fan_in_node(nid: str, seen: frozenset[str]) -> Any | None:
@@ -1483,7 +1487,8 @@ def _handle_independent_of_volatile_inputs(
         inputs: dict[str, Any] = {}
         volatile: dict[str, Any] = {}
         for incoming in edges:
-            if incoming.target != nid:
+            if incoming.target != nid or incoming.source not in node_by_id:
+                # An edge from a deleted node is not wired for the executor either.
                 continue
             handle = incoming.targetHandle or "in"
             inputs[handle] = GraphExecutor._get_output_value(outs.get(incoming.source, {}), incoming.sourceHandle or "out")
@@ -1491,7 +1496,16 @@ def _handle_independent_of_volatile_inputs(
                 handle not in debug_overrides.get(nid, {})
                 and volatile_edge(incoming)
                 and not _handle_independent_of_volatile_inputs(
-                    probe, node_by_id, edges, debug_overrides, incoming.source, incoming.sourceHandle or "out", volatile_edge, outs, seen | {nid}
+                    probe,
+                    node_by_id,
+                    edges,
+                    debug_overrides,
+                    incoming.source,
+                    incoming.sourceHandle or "out",
+                    volatile_edge,
+                    outs,
+                    cache,
+                    seen | {nid},
                 )
             ):
                 volatile[handle] = incoming
@@ -1529,17 +1543,29 @@ def _handle_independent_of_volatile_inputs(
     if node is None:
         return False
     inputs, volatile = volatile_state(node_id, _seen)
+    key: Any = None
     try:
         actual = GraphExecutor._get_output_value(outs.get(node_id, {}), output_handle)
+        # The probe is exponential in the volatile inputs and a taint pass asks
+        # the same question again whenever its queue drains, so remember the
+        # answer per (node, handle, volatility, input values) for that pass.
+        volatility = tuple(i for i, e in enumerate(edges) if volatile_edge(e))  # also pins upstream volatility
+        key = (node_id, output_handle, volatility, repr(sorted(inputs.items())), repr(actual), tuple(sorted(_seen)))
+        if key in cache:
+            return cache[key]
+        independent = True
         # An output can depend on a conjunction of volatile inputs, so
         # every feasible combination is probed, not one input at a time.
         for assignment in assignments(node_id, inputs, volatile, _seen):
             result = probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, **assignment}))
             if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
-                return False
-        return True
+                independent = False
+                break
     except Exception:  # noqa: BLE001 - malformed imported config remains conservative
-        return False
+        independent = False
+    if key is not None:
+        cache[key] = independent
+    return independent
 
 
 class LogicManager:
@@ -2742,6 +2768,9 @@ class LogicManager:
             _cfq: list[str] = sorted(cf_tainted)
             _init_probe = GraphExecutor(flow, {}, self._app_config)
 
+            # One cache for this pass; ``outputs`` does not change during it.
+            _init_probe_cache: dict[Any, bool] = {}
+
             def _init_handle_independent(edge: Any) -> bool:
                 return _handle_independent_of_volatile_inputs(
                     _init_probe,
@@ -2752,18 +2781,19 @@ class LogicManager:
                     edge.sourceHandle or "out",
                     lambda e: e.source in cf_tainted,
                     outputs,
+                    _init_probe_cache,
                 )
 
             # Edges skipped as handle-independent (see _compute_cf_hold_ids):
             # re-checked against the final taint once the queue drains.
-            _init_deferred: list[Any] = []
+            _init_deferred: dict[int, Any] = {}
             while _cfq:
                 _cn = _cfq.pop()
                 for _ce in _effective_edges_init:
                     if _ce.source != _cn or _ce.target in cf_tainted:
                         continue
                     if _init_handle_independent(_ce):
-                        _init_deferred.append(_ce)
+                        _init_deferred[id(_ce)] = _ce
                         continue
                     _ctarget = _node_by_id_init.get(_ce.target)
                     _ctype = _ctarget.type if _ctarget is not None else None
@@ -2812,8 +2842,8 @@ class LogicManager:
                     cf_tainted.add(_ce.target)
                     _cfq.append(_ce.target)
                 if not _cfq:
-                    _init_flipped = [_de for _de in _init_deferred if not _init_handle_independent(_de)]
-                    _init_deferred[:] = [_de for _de in _init_deferred if _de not in _init_flipped]
+                    _init_flipped = [_de for _de in _init_deferred.values() if not _init_handle_independent(_de)]
+                    _init_deferred = {k: v for k, v in _init_deferred.items() if v not in _init_flipped}
                     _cfq.extend({_de.source for _de in _init_flipped})
 
             # Commit gate/hysteresis state only for nodes whose switched
@@ -3769,9 +3799,11 @@ class LogicManager:
         # change_filter hostage to a source nothing actually reads from.
         _fan_in_probe = GraphExecutor(flow, {}, ical_app_config)
 
-        def _handle_independent(node_id: str, output_handle: str, volatile_edge: Callable[[Any], bool], outs: dict[str, dict[str, Any]]) -> bool:
+        def _handle_independent(
+            node_id: str, output_handle: str, volatile_edge: Callable[[Any], bool], outs: dict[str, dict[str, Any]], cache: dict[Any, bool]
+        ) -> bool:
             return _handle_independent_of_volatile_inputs(
-                _fan_in_probe, _node_by_id_early, _effective_edges, debug_overrides, node_id, output_handle, volatile_edge, outs
+                _fan_in_probe, _node_by_id_early, _effective_edges, debug_overrides, node_id, output_handle, volatile_edge, outs, cache
             )
 
         def _compute_cf_hold_ids(seed_ids: set[str], outputs_source: dict[str, dict[str, Any]] | None = None) -> set[str]:
@@ -3871,7 +3903,8 @@ class LogicManager:
             # later), so they are re-checked once the queue drains: an edge is
             # followed iff it is volatile under the FINAL taint, which makes the
             # result independent of traversal order.
-            _deferred_edges: list[Any] = []
+            _deferred_edges: dict[int, Any] = {}
+            _probe_cache: dict[Any, bool] = {}  # per pass: ``_src`` is fixed while it runs
             while _tq:
                 _tn = _tq.pop()
                 for _te in _effective_edges:
@@ -3882,10 +3915,10 @@ class LogicManager:
                         # the current execution, so its unresolved source
                         # cannot taint the overridden value or descendants.
                         continue
-                    if _handle_independent(_te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _src):
+                    if _handle_independent(_te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _src, _probe_cache):
                         # The read output handle is decided by an input that is
                         # not tainted, whatever the unresolved ones deliver.
-                        _deferred_edges.append(_te)
+                        _deferred_edges[id(_te)] = _te
                         continue
                     _target_node = _node_by_id_early.get(_te.target)
                     _target_type = _target_node.type if _target_node is not None else None
@@ -3978,11 +4011,11 @@ class LogicManager:
                 if not _tq:
                     _flipped = [
                         _de
-                        for _de in _deferred_edges
-                        if not _handle_independent(_de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _src)
+                        for _de in _deferred_edges.values()
+                        if not _handle_independent(_de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _src, _probe_cache)
                     ]
                     # Reprocessing re-adds an edge if it is still skipped.
-                    _deferred_edges[:] = [_de for _de in _deferred_edges if _de not in _flipped]
+                    _deferred_edges = {k: v for k, v in _deferred_edges.items() if v not in _flipped}
                     _tq.extend({_de.source for _de in _flipped})
             return {n.id for n in flow.nodes if n.type in _HELD_ON_UNRESOLVED_SOURCE and n.id in _tainted}
 
@@ -4404,7 +4437,8 @@ class LogicManager:
             # Same fixpoint as in _compute_cf_hold_ids: an edge skipped as
             # handle-independent is re-checked once the queue drains,
             # because later pulse inputs can make that handle pulse-dependent.
-            deferred_edges: list[Any] = []
+            deferred_edges: dict[int, Any] = {}
+            probe_cache: dict[Any, bool] = {}  # per pass: ``outputs`` is fixed while it runs
             while queue:
                 source_id = queue.pop()
                 source_origins = relay_origins[source_id]
@@ -4412,9 +4446,9 @@ class LogicManager:
                     if pulse_edge.source != source_id:
                         continue
                     if _node_type_by_id.get(source_id) not in _PULSE_ORIGIN_NODE_TYPES and _handle_independent(
-                        source_id, pulse_edge.sourceHandle or "out", _pulse_input_edge, outputs
+                        source_id, pulse_edge.sourceHandle or "out", _pulse_input_edge, outputs, probe_cache
                     ):
-                        deferred_edges.append(pulse_edge)
+                        deferred_edges[id(pulse_edge)] = pulse_edge
                         continue
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
                         continue
@@ -4563,8 +4597,12 @@ class LogicManager:
                             target_origins.update(new_origins)
                             queue.append(pulse_edge.target)
                 if not queue:
-                    flipped = [e for e in deferred_edges if not _handle_independent(e.source, e.sourceHandle or "out", _pulse_input_edge, outputs)]
-                    deferred_edges[:] = [e for e in deferred_edges if e not in flipped]
+                    flipped = [
+                        e
+                        for e in deferred_edges.values()
+                        if not _handle_independent(e.source, e.sourceHandle or "out", _pulse_input_edge, outputs, probe_cache)
+                    ]
+                    deferred_edges = {k: v for k, v in deferred_edges.items() if v not in flipped}
                     queue.extend({e.source for e in flipped})
             return message_origins, trigger_origins, trigger_handle_origins, downstream_filter_origins, stateful_relay_origins
 

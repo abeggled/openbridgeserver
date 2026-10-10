@@ -186,3 +186,53 @@ def test_explicit_none_from_a_producer_counts_as_false_even_when_negated():
     out = executor.execute({"stats": {"in1": None}})["stats"]
 
     assert (out["total"], out["count_true"], out["count_false"]) == (1, 0, 1)
+
+
+def test_edge_from_a_missing_node_is_not_a_wired_input():
+    executor = make_executor(
+        [
+            node("t", "const_value", {"value": True, "data_type": "bool"}),
+            node("f", "const_value", {"value": False, "data_type": "bool"}),
+            node("stats", "binary_stats", {"input_count": 3, "unwired_inputs": "ignore"}),
+        ],
+        [
+            edge("t", "stats", "value", "in1"),
+            edge("f", "stats", "value", "in2"),
+            edge("gone", "stats", "value", "in3"),
+        ],
+    )
+    out = executor.execute()["stats"]
+    assert out["total"] == 2
+    assert out["tie"] is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_total"),
+    [("0x10", 2), ("0b11", 2), ("0o7", 2), ("1_0", 2), (" 12 ", 12), (7.5, 8), ("7.5", 8), ("", 2), (True, 2), ("1e1", 10), (".5e1", 5)],
+)
+def test_input_count_accepts_plain_decimals_only(raw, expected_total):
+    nodes = [node("t", "const_value", {"value": True, "data_type": "bool"}), node("stats", "binary_stats", {"input_count": raw})]
+    edges = [edge("t", "stats", "value", f"in{i}") for i in range(1, 31)]
+    assert make_executor(nodes, edges).execute()["stats"]["total"] == expected_total
+
+
+@pytest.mark.parametrize("raw", ["\x1c5", "﻿5", "\x855"])
+def test_input_count_ignores_non_ascii_whitespace(raw):
+    nodes = [node("t", "const_value", {"value": True, "data_type": "bool"}), node("stats", "binary_stats", {"input_count": raw})]
+    edges = [edge("t", "stats", "value", f"in{i}") for i in range(1, 31)]
+    assert make_executor(nodes, edges).execute()["stats"]["total"] == 2
+
+
+def test_shadowed_edge_does_not_make_a_port_wired():
+    executor = make_executor(
+        [
+            node("t", "const_value", {"value": True, "data_type": "bool"}),
+            node("stats", "binary_stats", {"input_count": 2, "unwired_inputs": "ignore"}),
+        ],
+        [
+            edge("t", "stats", "value", "in1"),
+            edge("t", "stats", "value", "in2"),
+            edge("gone", "stats", "value", "in2"),  # last edge into in2 wins and is dangling
+        ],
+    )
+    assert executor.execute()["stats"]["total"] == 1

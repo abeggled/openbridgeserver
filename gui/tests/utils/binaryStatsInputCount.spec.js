@@ -14,4 +14,17 @@ describe('binaryStatsInputCount', () => {
       expect(binaryStatsInputCount(value)).toBe(2)
     }
   })
+
+  it('accepts plain decimal strings only, like the executor', () => {
+    for (const value of ['0x10', '0b11', '0o7', '1_0']) {
+      expect(binaryStatsInputCount(value)).toBe(2)
+    }
+    expect(binaryStatsInputCount(' 12 ')).toBe(12)
+    expect(binaryStatsInputCount('7.5')).toBe(8)
+    expect(binaryStatsInputCount('1e1')).toBe(10)
+    expect(binaryStatsInputCount(true)).toBe(2)
+    for (const value of ['\x1c5', '\ufeff5', '\x855']) {
+      expect(binaryStatsInputCount(value)).toBe(2)
+    }
+  })
 })
