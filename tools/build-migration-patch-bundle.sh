@@ -60,7 +60,48 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
 sed -e "s|__REPO__|${REPO}|g" -e "s|__OPS_REPO__|${OPS_REPO}|g" \
-    "$ROOT/scripts/obs-update" > "$STAGE/obs-update"
+    "$ROOT/scripts/obs-update" > "$STAGE/obs-update.body"
+
+# Landing pad for in-place self-updates. obs-update 2026.4.5–2026.6.1 replaces
+# itself with `cp` while it is still running. bash reads a script piecewise and
+# continues at the same byte offset, now in the new file: after the cp at byte
+# 3081 (2026.4.5–2026.5.2) or 3643 (2026.6.x) for abeggled/openbridgeserver,
+# a few bytes less for shorter repo names. Without a pad the old process parses
+# arbitrary code there, aborts, and leaves the service stopped.
+# Every suffix of a ": : :" line is a valid no-op, so the old process runs
+# harmlessly into the hand-off block, which finishes its job (start the
+# service, but keep the real version file) and exits. A fresh run skips the
+# block because TARGET and SERVICE are not set yet.
+PAD_END=4608
+{
+    head -n 1 "$STAGE/obs-update.body"
+    echo "# Migration patch for the organisation move (#1322), see"
+    echo "# tools/build-migration-patch-bundle.sh for the landing pad below."
+    PAD_LINE=": : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : :"
+    : > "$STAGE/obs-update.pad"
+    while [[ $(wc -c < "$STAGE/obs-update.pad") -lt $PAD_END ]]; do
+        echo "$PAD_LINE" >> "$STAGE/obs-update.pad"
+    done
+    cat "$STAGE/obs-update.pad"
+    cat <<EOF
+if [[ -n "\${SERVICE:-}" && "\${TARGET:-}" == "${TAG}" ]]; then
+    rm -f "\${INSTALL_DIR:-/opt/obs}/obs-update"
+    systemctl start "\$SERVICE"
+    echo "Done. obs-update now fetches releases from ${REPO}."
+    echo "Run obs-update again to see them."
+    exit 0
+fi
+EOF
+    tail -n +2 "$STAGE/obs-update.body"
+} > "$STAGE/obs-update"
+rm -f "$STAGE/obs-update.body" "$STAGE/obs-update.pad"
+
+PAD_START=$(grep -bm1 '^: : :' "$STAGE/obs-update" | cut -d: -f1)
+if [[ "$PAD_START" -ge 3000 ]]; then
+    echo "Error: landing pad starts at byte $PAD_START, after the oldest resume offset." >&2
+    exit 1
+fi
+
 install -m 755 "$ROOT/scripts/obs-admin" "$STAGE/obs-admin"
 chmod 755 "$STAGE/obs-update"
 
