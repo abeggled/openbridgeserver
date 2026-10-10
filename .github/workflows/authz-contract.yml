@@ -45,4 +45,6 @@ jobs:
           tests/unit/test_api_v1_route_classification_registry.py
           tests/unit/test_authz_policy.py
           tests/unit/test_authz_creation_authority_matrix.py
+          tests/unit/test_binding_delegation_matrix.py
+          tests/unit/test_authz_adapter_type_gate.py
           tests/unit/test_audit_log.py

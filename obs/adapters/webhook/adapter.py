@@ -11,10 +11,12 @@ Two separate concerns, deliberately kept apart:
 
 * **Managing** a binding (creating it, rotating its token) is an ordinary
   ``config_mutation`` performed by a user principal through ``/api/v1/...`` and
-  authorized by the regular RBAC rules.  ``WEBHOOK`` declares **no**
-  ``AdapterDelegationCapability``, so an API-key principal can never create or
-  rotate a webhook binding — the reasoning in the issue ("a compromised device
-  can only ring the bell") must not accidentally cover the management side too.
+  authorized by the regular RBAC rules.  ``WEBHOOK`` declares
+  ``AdapterDelegationCapability.LINK_BINDING`` like every other delegable
+  adapter, which delegates binding changes to *user* principals only; an
+  API-key principal can never create or rotate a webhook binding — the
+  reasoning in the issue ("a compromised device can only ring the bell") must
+  not accidentally cover the management side too.
 * **Triggering** a binding is done by a device that has no principal at all.
   The template for that is the anonymous Visu write path in
   ``obs/api/v1/datapoints.py``: not a principal, but a narrow secret bound to
@@ -83,7 +85,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from obs.adapters.base import AdapterBase
+from obs.adapters.base import AdapterBase, AdapterDelegationCapability
 from obs.adapters.registry import register
 from obs.adapters.webhook.ingress import address_allowed, normalise_entries, parse_networks, resolve_client_ip
 from obs.core.event_bus import DataValueEvent
@@ -493,10 +495,9 @@ class WebhookAdapter(AdapterBase):
     adapter_type = "WEBHOOK"
     config_schema = WebhookAdapterConfig
     binding_config_schema = WebhookBindingConfig
-    # Deliberately empty: no API key may create or rotate a webhook binding.
-    # A *user* with operator grants may — ``_ensure_adapter_delegates_binding``
-    # lets user principals through for this type — see the module docstring.
-    delegation_capabilities = frozenset()
+    # A *user* with operator grants on the DataPoint and the instance may manage
+    # webhook bindings; API keys never receive adapter delegation (issue #1303).
+    delegation_capabilities = frozenset({AdapterDelegationCapability.LINK_BINDING})
 
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)

@@ -45,14 +45,22 @@ def test_admin_binding_delegation_keeps_legacy_adapter_access() -> None:
     bindings_api._ensure_adapter_delegates_binding(_principal("admin", is_admin=True), "UNKNOWN")
 
 
-def test_webhook_binding_delegation_is_for_users_not_api_keys() -> None:
+def test_webhook_binding_delegation_is_for_users_not_api_keys(monkeypatch) -> None:
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.knx.adapter import KnxAdapter
+    from obs.adapters.webhook.adapter import WebhookAdapter
+
+    # WEBHOOK follows the regular model: it declares LINK_BINDING, and binding
+    # delegation reaches user principals only (issue #1303).
+    monkeypatch.setitem(adapter_registry._adapters, "WEBHOOK", WebhookAdapter)
+    monkeypatch.setitem(adapter_registry._adapters, "KNX", KnxAdapter)
     bindings_api._ensure_adapter_delegates_binding(_principal("alice"), "WEBHOOK")
 
     with pytest.raises(HTTPException) as api_key:
         bindings_api._ensure_adapter_delegates_binding(Principal(subject="api_key:device", type="api_key", is_admin=False), "WEBHOOK")
     assert api_key.value.status_code == 403
 
-    # The user exception is specific to WEBHOOK: other adapters keep their gate.
+    # Undeclared adapters keep their gate for users as well.
     with pytest.raises(HTTPException) as other:
         bindings_api._ensure_adapter_delegates_binding(_principal("alice"), "KNX")
     assert other.value.status_code == 403

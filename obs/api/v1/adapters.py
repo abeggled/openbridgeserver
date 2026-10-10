@@ -45,7 +45,7 @@ from obs.api.audit import (
 )
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
-from obs.api.authz_service import authorize_adapter_instance, filter_authorized_datapoints
+from obs.api.authz_service import adapter_delegates, authorize_adapter_instance, filter_authorized_datapoints
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.api.v1.bindings import _ensure_binding_mutation_scope, _json_config, _validate_adapter_binding
 from obs.api.v1.redaction import REDACTED
@@ -460,13 +460,7 @@ def _ensure_adapter_delegates_operation(
     *capabilities: AdapterDelegationCapability,
 ) -> None:
     """Require every closed, code-declared capability for an adapter operation."""
-    if principal.type == "user" and principal.is_admin:
-        return
-    if (
-        principal.type != "user"
-        or not capabilities
-        or not all(adapter_registry.supports_delegation(adapter_type, capability) for capability in capabilities)
-    ):
+    if not adapter_delegates(principal, adapter_type, *capabilities):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Operation nicht erlaubt")
 
 
@@ -1918,8 +1912,8 @@ def _ensure_webhook_secret_user(principal: Principal) -> None:
 
     Both the overview (which serves the token in clear text) and the rotation
     reply expose a secret that authorises its DataPoint anonymously and outlives
-    the key that fetched it. WEBHOOK deliberately delegates nothing to API keys,
-    so a key must not read or rotate it however many grants it holds.
+    the key that fetched it. API keys never receive adapter delegation, so a key
+    must not read or rotate it however many grants it holds.
     """
     if principal.type != "user":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Webhook-Token sind nur für Benutzer zugänglich")
