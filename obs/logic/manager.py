@@ -35,6 +35,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from obs.core.json import jsonable
+from obs.logic import hems_surplus
 from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
@@ -183,6 +184,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "min_max_tracker",
         "consumption_counter",
         "heating_circuit",
+        "hems_surplus",
         "random_value",
         "memory",
     }
@@ -1901,6 +1903,21 @@ class LogicManager:
                         name,
                         node.id[:8],
                     )
+                elif node.type == "hems_surplus":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    task = asyncio.create_task(
+                        self._hems_loop(graph_id, node.id),
+                        name=f"hems-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "HEMS surplus control scheduled: graph=%s (%s) node=%s",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                    )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
         """Fires a timer_cron graph node on its cron schedule — runs indefinitely.
@@ -2007,6 +2024,40 @@ class LogicManager:
                 raise
             except Exception:
                 logger.exception("Sensor watchdog loop error graph=%s node=%s", graph_id[:8], node_id[:8])
+                await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _hems_loop(self, graph_id: str, node_id: str) -> None:
+        """Periodically re-evaluates a hems_surplus node so it regulates without any event.
+
+        The block gates its own control cycle by the configured interval (see
+        ``obs.logic.hems_surplus``), so this loop only has to wake the graph at
+        least that often — and earlier when the block reports a pending trigger
+        pulse end (``next_wake``), because a pulse can be shorter than the
+        interval. The interval is re-read every iteration, so an edited value
+        applies without a graph reload.
+        """
+        while True:
+            try:
+                entry = self._graphs.get(graph_id)
+                sleep_s = hems_surplus.DEFAULT_INTERVAL_S
+                if entry and entry[1]:  # still exists and enabled
+                    g_name, _, flow = entry
+                    node = next((n for n in flow.nodes if n.id == node_id), None)
+                    if node is not None:
+                        sleep_s = GraphExecutor._to_num(node.data.get("interval_s"), default=hems_surplus.DEFAULT_INTERVAL_S)
+                        sleep_s = min(hems_surplus.MAX_INTERVAL_S, max(hems_surplus.MIN_INTERVAL_S, sleep_s))
+                    await self._execute_graph(graph_id, g_name, flow, {node_id: {}})
+                    next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
+                    if next_wake is not None:
+                        sleep_s = min(sleep_s, max(0.1, next_wake - datetime.now(UTC).timestamp()))
+                    logger.debug("HEMS surplus graph %s (%s) node %s evaluated", graph_id[:8], g_name, node_id[:8])
+
+                await asyncio.sleep(sleep_s)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("HEMS surplus loop error graph=%s node=%s", graph_id[:8], node_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
     # ── Event Handler ─────────────────────────────────────────────────────
@@ -2416,6 +2467,9 @@ class LogicManager:
             # synchronous node between one of them and a Change Filter would log
             # "Missing upstream output" on every single save.
             init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
+            for node in flow.nodes:
+                if node.type == "hems_surplus":
+                    init_retained_boundary_handles[node.id] = hems_surplus.output_handles(node.data)
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
@@ -3989,6 +4043,11 @@ class LogicManager:
                 if _pn.type == "change_filter":
                     if GraphExecutor._to_bool(_pout.get("changed")):
                         pulses.add((_pn.id, "changed"))
+                elif _pn.type == "hems_surplus":
+                    # A trigger consumer's output is an event per firing, not a level.
+                    for _ph in hems_surplus.trigger_output_handles(_pn.data):
+                        if GraphExecutor._to_bool(_pout.get(_ph)):
+                            pulses.add((_pn.id, _ph))
                 elif _pn.type == "edge_detect":
                     for _ph in ("rising", "falling"):
                         if GraphExecutor._to_bool(_pout.get(_ph)):
@@ -6911,7 +6970,9 @@ class LogicManager:
             if graph_entry:
                 _, _, _flow = graph_entry
                 current_nodes = {node.id: node for node in _flow.nodes}
-                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
+                # hems_surplus never persists: its timers and on/off states must
+                # start from the safe state after a restart.
+                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False or n.type == "hems_surplus"}
                 state_to_save = {}
                 for node_id, node_state in hyst.items():
                     if node_id not in current_nodes or node_id in no_persist:

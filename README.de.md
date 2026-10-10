@@ -811,6 +811,12 @@ Entscheidung und Zuordnung teilen dieselben Bedingungsoperatoren: gleich, unglei
 | **JSON-Extraktor** | Daten (JSON-Text) | Wert | Parst einen JSON-String und extrahiert einen Wert anhand eines Pfads mit Punktnotation, z. B. `sensors.temperature`. |
 | **XML-Extraktor** | Daten (XML-Text) | Wert | Parst einen XML-String und extrahiert einen Wert per XPath-Ausdruck, z. B. `./sensor/temperature`. |
 
+#### Energiemanagement
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Überschussregelung** | Netzleistung (oder Bezug/Einspeisung bzw. nur Einspeisung), Freigabe, Einspeisereserve, Anlage OK, je Verbraucher: Gemessene Leistung / Maximalleistung / Reset | Je Verbraucher: Sollwert (0–100 %), Ein/Aus oder Triggerimpuls plus Status; Diagnose: Netzleistung, Überschuss, Budget, Verteilt, Verbleibend, Status, Warnung | HEMS Lite: verteilt den am Netzanschlusspunkt gemessenen Überschuss nach Priorität (Listenreihenfolge, Drag-and-drop) auf beliebig viele Verbraucher. Verbraucher sind stufenlos (0–100 %), Ein/Aus mit Hysterese oder einmalige Trigger, mit Mindestlauf-/Auszeiten und Ein-/Ausschaltverzögerung. Ein ungültiger oder veralteter Zählerwert setzt alle Ausgänge in den sicheren Zustand (0 %, aus, kein Trigger). Eigenes Regelintervall (Standard 30 s). |
+
 ---
 
 ### Filter und Transformation bei DP-Blöcken

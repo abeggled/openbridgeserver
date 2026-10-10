@@ -582,3 +582,63 @@ describe('GenericNode — delete', () => {
     expect(removeNodesMock).toHaveBeenCalledWith(['gn-1'])
   })
 })
+
+describe('GenericNode — hems_surplus', () => {
+  const ids = (w, type) => w.findAll('.handle').filter(h => h.attributes('data-type') === type).map(h => h.attributes('data-id'))
+  const DIAGNOSTICS = ['grid_power', 'surplus', 'budget', 'allocated', 'remaining', 'status', 'warning']
+
+  it('shows the Überschussregelung label and, unconfigured, the single grid input plus the diagnostics', async () => {
+    const w = await mountGN('hems_surplus')
+    await flushPromises()
+    expect(w.find('.gn-title').text()).toBe('Überschussregelung')
+    expect(ids(w, 'target')).toEqual(['grid', 'enable', 'target', 'plant_ok'])
+    expect(ids(w, 'source')).toEqual(DIAGNOSTICS)
+    expect(w.find('.gn-summary').text()).toBe('0 Verbraucher')
+  })
+
+  it('exposes the meter inputs of the selected measurement mode', async () => {
+    const split = await mountGN('hems_surplus', { grid_mode: 'split' })
+    await flushPromises()
+    expect(ids(split, 'target').slice(0, 2)).toEqual(['grid_import', 'grid_export'])
+    const feedIn = await mountGN('hems_surplus', { grid_mode: 'feed_in_only' })
+    await flushPromises()
+    expect(ids(feedIn, 'target')[0]).toBe('feed_in')
+    const unknown = await mountGN('hems_surplus', { grid_mode: 'bogus' })
+    await flushPromises()
+    expect(ids(unknown, 'target')[0]).toBe('grid')
+  })
+
+  it('adds a changed input per meter input only while the age check is active', async () => {
+    const w = await mountGN('hems_surplus', { grid_mode: 'split', max_age_s: 120 })
+    await flushPromises()
+    expect(ids(w, 'target').slice(0, 4)).toEqual(['grid_import', 'grid_import_changed', 'grid_export', 'grid_export_changed'])
+  })
+
+  it('generates ports from the stable consumer ids, in list order', async () => {
+    const consumers = [
+      { id: 'boiler', name: 'Boiler', mode: 'onoff' },
+      { id: 'car', name: 'Wallbox', mode: 'percent', power_source: 'input' },
+      { id: 'wash', mode: 'trigger' },
+    ]
+    const w = await mountGN('hems_surplus', { consumers })
+    await flushPromises()
+    expect(ids(w, 'target')).toEqual([
+      'grid', 'enable', 'target', 'plant_ok',
+      'c_boiler_power', 'c_car_power', 'c_car_max_power', 'c_wash_reset',
+    ])
+    expect(ids(w, 'source')).toEqual(['c_boiler', 'c_boiler_status', 'c_car', 'c_car_status', 'c_wash', 'c_wash_status', ...DIAGNOSTICS])
+    expect(w.find('.gn-summary').text()).toBe('3 Verbraucher')
+    const right = w.findAll('.gn-port-right').map(p => p.text())
+    expect(right).toContain('Wallbox')
+    expect(right).toContain('Wallbox: Status')
+    expect(right).toContain('Verbraucher 3')
+  })
+
+  it('reordering the consumers reorders the ports but keeps their ids', async () => {
+    const a = { id: 'a', name: 'A', mode: 'percent' }
+    const b = { id: 'b', name: 'B', mode: 'percent' }
+    const w = await mountGN('hems_surplus', { consumers: JSON.stringify([b, a]) })
+    await flushPromises()
+    expect(ids(w, 'source').slice(0, 4)).toEqual(['c_b', 'c_b_status', 'c_a', 'c_a_status'])
+  })
+})

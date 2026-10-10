@@ -1816,7 +1816,8 @@
       "substring_extractor": "Substring / RegEx",
       "ical": "iCalendar",
       "api_client": "API Client",
-      "mcp_tool": "MCP Tool"
+      "mcp_tool": "MCP Tool",
+      "hems_surplus": "Surplus control"
     },
     "selectGraph": "— Select logic sheet —",
     "newGraphBtn": "+ New",
@@ -1923,7 +1924,8 @@
         "notification": "Notification",
         "integration": "Integration",
         "script": "Scripts",
-        "ai": "AI"
+        "ai": "AI",
+        "hems": "Energy Management"
       }
     },
     "ports": {
@@ -1984,7 +1986,8 @@
         "zwischen": "between",
         "ausschneiden": "cut out",
         "regex": "regex"
-      }
+      },
+      "consumers": "{n} consumers"
     },
     "missingNode": {
       "title": "Unknown Block",
@@ -2593,6 +2596,90 @@
         "edge": "Rising edge only",
         "eventHint": "Every incoming true on the trigger input fires – even if the value was already true before.",
         "edgeHint": "Fires only on a change from false to true. A repeated true without a preceding false is ignored."
+      },
+      "hemsSurplus": {
+        "gridSection": "Grid connection point & control",
+        "gridMode": "Measurement mode",
+        "gridModeOptions": {
+          "bidirectional": "Bidirectional via one input",
+          "split": "Separate inputs (import/export)",
+          "feed_in_only": "Feed-in power only"
+        },
+        "gridModeHints": {
+          "bidirectional": "One input: positive value = grid import, negative value = export.",
+          "split": "Two positive inputs. Internally grid power = import − export. Both values must be valid.",
+          "feed_in_only": "One input carrying the feed-in power (0 or greater)."
+        },
+        "feedInOnlyWarning": "Limitation: at 0 W the block cannot tell a balanced meter from grid import. It therefore holds the power first and, after the off-delay has passed, reduces it step by step.",
+        "global": {
+          "interval_s": "Control interval (seconds, 5–3600)",
+          "target_w": "Feed-in reserve at the grid connection point (W)",
+          "on_delay_s": "Switch-on delay (seconds)",
+          "off_delay_s": "Switch-off delay (seconds)",
+          "max_age_s": "Maximum age of meter values (seconds)",
+          "max_age_sHint": "0 = no age check. Otherwise the Read Object's changed output must be wired to the block; when no new telegram arrives for longer, the value counts as stale.",
+          "invalid_behavior": "Behaviour on invalid input values",
+          "invalid_behaviorOptions": {
+            "off": "Safe: 0 %, off, no trigger",
+            "hold": "Hold last outputs"
+          },
+          "only_on_change": "Output only on change",
+          "only_on_changeHint": "Avoids unnecessary writes"
+        },
+        "consumers": "Consumers",
+        "add": "+ Consumer",
+        "remove": "Remove consumer",
+        "removeShort": "−",
+        "noConsumers": "No consumer configured yet.",
+        "priorityHint": "The order is the priority: top = highest priority. Sort by drag and drop; new consumers are appended at the bottom.",
+        "dragHint": "Drag to reorder",
+        "namePlaceholder": "Name",
+        "fields": {
+          "active": "Active (include in control)",
+          "mode": "Control type",
+          "modeOptions": {
+            "percent": "Percent (0–100 %)",
+            "onoff": "On/Off",
+            "trigger": "Trigger"
+          },
+          "power_source": "Power source",
+          "power_sourceOptions": {
+            "fixed": "Fixed value",
+            "input": "Input"
+          },
+          "power_w": "Maximum power (W)",
+          "power_w_onoff": "Rated power (W)",
+          "min_power_w": "Minimum power (W)",
+          "min_setpoint": "Minimum setpoint (%)",
+          "max_setpoint": "Maximum setpoint (%)",
+          "step": "Step size (%)",
+          "below_min": "Below the minimum power",
+          "below_minOptions": {
+            "off": "Set to 0 %",
+            "hold_min": "Hold at minimum (until the switch-off delay expires)"
+          },
+          "on_threshold_w": "Switch-on threshold (W)",
+          "on_threshold_wPlaceholder": "empty = rated power",
+          "off_threshold_w": "Switch-off threshold (W)",
+          "off_threshold_wPlaceholder": "empty = rated power",
+          "min_runtime_s": "Minimum run time (seconds)",
+          "min_off_s": "Minimum off time (seconds)",
+          "on_delay_s": "Switch-on delay (seconds)",
+          "on_delay_s_trigger": "Minimum surplus must persist for (seconds)",
+          "on_delay_sPlaceholder": "empty = global value",
+          "off_delay_s": "Switch-off delay (seconds)",
+          "off_delay_sPlaceholder": "empty = global value",
+          "min_surplus_w": "Required minimum surplus (W)",
+          "pulse_s": "Pulse duration (seconds)",
+          "lockout_s": "Lockout after firing (seconds)",
+          "rearm": "Re-arm",
+          "rearmOptions": {
+            "after_lockout": "After the lockout has expired",
+            "after_drop": "Only after the threshold was undershot in between",
+            "reset_input": "Via the reset input"
+          },
+          "reserve_w": "Power reserved while firing (W)"
+        }
       }
     },
     "portLabels": {
@@ -2643,7 +2730,27 @@
       "reachable": "Reachable",
       "latencyMs": "Latency (ms)",
       "faultText": "Fault Text",
-      "faultTrigger": "Fault Trigger"
+      "faultTrigger": "Fault Trigger",
+      "hems": {
+        "grid": "Grid power (+import/−export)",
+        "grid_import": "Grid import",
+        "grid_export": "Grid export",
+        "feed_in": "Feed-in power",
+        "enable": "Enable",
+        "target": "Feed-in reserve (dyn.)",
+        "plant_ok": "Plant OK",
+        "consumer": "Consumer {n}",
+        "measuredPower": "Measured power",
+        "maxPower": "Maximum power",
+        "reset": "Reset",
+        "status": "Status",
+        "grid_power": "Grid power",
+        "surplus": "Surplus",
+        "budget": "Power budget",
+        "allocated": "Allocated power",
+        "remaining": "Remaining budget",
+        "warning": "Warning"
+      }
     },
     "nodeDescriptions": {
       "datetime": "Outputs the current date and time in the configured timezone and format.",
@@ -2693,7 +2800,8 @@
       "xml_extractor": "Parses an XML string and extracts one or more values by XPath expressions (ElementTree syntax, e.g. .//temperature). Multiple outputs configurable via + in the config panel.",
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",
       "ical": "Loads an iCal/ICS file from a URL and evaluates events. The RAW output delivers the raw calendar text. Each filter provides 4 outputs: Array (all events), Next date, Tomorrow (bool), Today (bool). Filters can be applied to Summary, Location and/or Description.",
-      "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution."
+      "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution.",
+      "hems_surplus": "HEMS Lite: distributes the surplus measured at the grid connection point across several consumers by priority — continuously (0–100 %), on/off, or as a one-shot trigger. The list order is the priority; when the budget shrinks, consumers are reduced from the bottom up. With an invalid or stale meter value all outputs go to the safe state (0 %, off, no trigger)."
     },
     "graphPicker": {
       "title": "Open Logic",

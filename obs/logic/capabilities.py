@@ -36,6 +36,7 @@ PURE_LOGIC_NODE_TYPES = frozenset(
         "edge_detect",
         "gate",
         "heating_circuit",
+        "hems_surplus",
         "hysteresis",
         "json_extractor",
         "math_formula",

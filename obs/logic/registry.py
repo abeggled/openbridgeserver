@@ -18,6 +18,7 @@ from obs.logic.models import NodeTypeDef
 from obs.logic.nodes.ai import NODE_TYPES as AI_NODE_TYPES
 from obs.logic.nodes.astro import NODE_TYPES as ASTRO_NODE_TYPES
 from obs.logic.nodes.datapoint import NODE_TYPES as DATAPOINT_NODE_TYPES
+from obs.logic.nodes.hems import NODE_TYPES as HEMS_NODE_TYPES
 from obs.logic.nodes.integration import NODE_TYPES as INTEGRATION_NODE_TYPES
 from obs.logic.nodes.logic import NODE_TYPES as LOGIC_NODE_TYPES
 from obs.logic.nodes.math import NODE_TYPES as MATH_NODE_TYPES
@@ -38,6 +39,7 @@ BUILTIN_NODE_CATEGORIES: dict[str, tuple[NodeTypeDef, ...]] = {
     "astro": ASTRO_NODE_TYPES,
     "notification": NOTIFICATION_NODE_TYPES,
     "integration": INTEGRATION_NODE_TYPES,
+    "hems": HEMS_NODE_TYPES,
     "script": SCRIPT_NODE_TYPES,
     "ai": AI_NODE_TYPES,
 }

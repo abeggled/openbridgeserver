@@ -1816,7 +1816,8 @@
       "substring_extractor": "Substring / RegEx",
       "ical": "iCalendar",
       "api_client": "API Client",
-      "mcp_tool": "MCP Tool"
+      "mcp_tool": "MCP Tool",
+      "hems_surplus": "Überschussregelung"
     },
     "selectGraph": "— Logikblatt wählen —",
     "newGraphBtn": "+ Neu",
@@ -1923,7 +1924,8 @@
         "notification": "Benachrichtigung",
         "integration": "Integration",
         "script": "Skripte",
-        "ai": "AI"
+        "ai": "AI",
+        "hems": "Energiemanagement"
       }
     },
     "ports": {
@@ -1984,7 +1986,8 @@
         "zwischen": "zwischen",
         "ausschneiden": "ausschneiden",
         "regex": "regex"
-      }
+      },
+      "consumers": "{n} Verbraucher"
     },
     "missingNode": {
       "title": "Unbekannter Block",
@@ -2593,6 +2596,90 @@
         "edge": "Nur bei steigender Flanke",
         "eventHint": "Jedes eingehende true am Trigger-Eingang löst aus – auch wenn der Wert vorher schon true war.",
         "edgeHint": "Löst nur beim Wechsel von false auf true aus. Ein erneutes true ohne vorheriges false wird ignoriert."
+      },
+      "hemsSurplus": {
+        "gridSection": "Netzanschlusspunkt & Regelung",
+        "gridMode": "Messart",
+        "gridModeOptions": {
+          "bidirectional": "Bidirektional über einen Eingang",
+          "split": "Getrennte Eingänge (Bezug/Einspeisung)",
+          "feed_in_only": "Nur Einspeiseleistung"
+        },
+        "gridModeHints": {
+          "bidirectional": "Ein Eingang: positiver Wert = Netzbezug, negativer Wert = Einspeisung.",
+          "split": "Zwei positive Eingänge. Intern gilt Netzleistung = Netzbezug − Netzeinspeisung. Beide Werte müssen gültig sein.",
+          "feed_in_only": "Ein Eingang mit der Einspeiseleistung (0 oder größer)."
+        },
+        "feedInOnlyWarning": "Einschränkung: Bei 0 W kann der Block nicht unterscheiden, ob Gleichgewicht oder bereits Netzbezug vorliegt. Er hält die Leistung deshalb zunächst und reduziert nach Ablauf der Ausschaltverzögerung schrittweise.",
+        "global": {
+          "interval_s": "Regelintervall (Sekunden, 5–3600)",
+          "target_w": "Einspeisereserve am Netzanschlusspunkt (W)",
+          "on_delay_s": "Einschaltverzögerung (Sekunden)",
+          "off_delay_s": "Ausschaltverzögerung (Sekunden)",
+          "max_age_s": "Maximales Alter der Zählerwerte (Sekunden)",
+          "max_age_sHint": "0 = keine Alterungsprüfung. Sonst muss der Geändert-Ausgang des Read-Objekts am Block angeschlossen sein; bleibt ein neues Telegramm länger aus, gilt der Wert als veraltet.",
+          "invalid_behavior": "Verhalten bei ungültigen Eingangswerten",
+          "invalid_behaviorOptions": {
+            "off": "Sicher: 0 %, aus, kein Trigger",
+            "hold": "Letzte Ausgaben halten"
+          },
+          "only_on_change": "Nur bei Änderung ausgeben",
+          "only_on_changeHint": "Verhindert unnötige Schreibvorgänge"
+        },
+        "consumers": "Verbraucher",
+        "add": "+ Verbraucher",
+        "remove": "Verbraucher entfernen",
+        "removeShort": "−",
+        "noConsumers": "Noch kein Verbraucher angelegt.",
+        "priorityHint": "Die Reihenfolge ist die Priorität: oben = höchste Priorität. Per Drag-and-drop sortieren; neue Verbraucher werden unten angefügt.",
+        "dragHint": "Zum Umsortieren ziehen",
+        "namePlaceholder": "Name",
+        "fields": {
+          "active": "Aktiv (in der Regelung berücksichtigen)",
+          "mode": "Regelart",
+          "modeOptions": {
+            "percent": "Prozent (0–100 %)",
+            "onoff": "Ein/Aus",
+            "trigger": "Trigger"
+          },
+          "power_source": "Leistungsquelle",
+          "power_sourceOptions": {
+            "fixed": "Fester Wert",
+            "input": "Eingang"
+          },
+          "power_w": "Maximalleistung (W)",
+          "power_w_onoff": "Nennleistung (W)",
+          "min_power_w": "Mindestleistung (W)",
+          "min_setpoint": "Minimaler Sollwert (%)",
+          "max_setpoint": "Maximaler Sollwert (%)",
+          "step": "Schrittweite (%)",
+          "below_min": "Unterhalb der Mindestleistung",
+          "below_minOptions": {
+            "off": "Auf 0 % setzen",
+            "hold_min": "Auf Mindestwert halten (bis Ausschaltverzögerung abläuft)"
+          },
+          "on_threshold_w": "Einschaltschwelle (W)",
+          "on_threshold_wPlaceholder": "leer = Nennleistung",
+          "off_threshold_w": "Ausschaltschwelle (W)",
+          "off_threshold_wPlaceholder": "leer = Nennleistung",
+          "min_runtime_s": "Mindestlaufzeit (Sekunden)",
+          "min_off_s": "Mindestauszeit (Sekunden)",
+          "on_delay_s": "Einschaltverzögerung (Sekunden)",
+          "on_delay_s_trigger": "Mindestüberschuss muss bestehen für (Sekunden)",
+          "on_delay_sPlaceholder": "leer = globaler Wert",
+          "off_delay_s": "Ausschaltverzögerung (Sekunden)",
+          "off_delay_sPlaceholder": "leer = globaler Wert",
+          "min_surplus_w": "Benötigter Mindestüberschuss (W)",
+          "pulse_s": "Impulsdauer (Sekunden)",
+          "lockout_s": "Sperrzeit nach Auslösung (Sekunden)",
+          "rearm": "Erneute Freigabe",
+          "rearmOptions": {
+            "after_lockout": "Nach Ablauf der Sperrzeit",
+            "after_drop": "Erst nach zwischenzeitlichem Unterschreiten des Schwellwerts",
+            "reset_input": "Über den Reset-Eingang"
+          },
+          "reserve_w": "Reservierte Leistung bei Auslösung (W)"
+        }
       }
     },
     "portLabels": {
@@ -2643,7 +2730,27 @@
       "reachable": "Erreichbar",
       "latencyMs": "Latenz (ms)",
       "faultText": "Fehlertext",
-      "faultTrigger": "Fehler-Trigger"
+      "faultTrigger": "Fehler-Trigger",
+      "hems": {
+        "grid": "Netzleistung (+Bezug/−Einspeisung)",
+        "grid_import": "Netzbezug",
+        "grid_export": "Netzeinspeisung",
+        "feed_in": "Einspeiseleistung",
+        "enable": "Freigabe",
+        "target": "Einspeisereserve (dyn.)",
+        "plant_ok": "Anlage OK",
+        "consumer": "Verbraucher {n}",
+        "measuredPower": "Gemessene Leistung",
+        "maxPower": "Maximalleistung",
+        "reset": "Reset",
+        "status": "Status",
+        "grid_power": "Netzleistung",
+        "surplus": "Überschuss",
+        "budget": "Leistungsbudget",
+        "allocated": "Verteilte Leistung",
+        "remaining": "Verbleibendes Budget",
+        "warning": "Warnung"
+      }
     },
     "nodeDescriptions": {
       "datetime": "Gibt aktuelles Datum und Uhrzeit in der konfigurierten Zeitzone und im gewählten Format aus.",
@@ -2693,7 +2800,8 @@
       "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
       "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
-      "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
+      "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung.",
+      "hems_surplus": "HEMS Lite: verteilt den am Netzanschlusspunkt gemessenen Überschuss nach Priorität auf mehrere Verbraucher — stufenlos (0–100 %), Ein/Aus oder als einmaliger Trigger. Die Reihenfolge der Liste ist die Priorität; sinkt das Budget, wird von unten nach oben reduziert. Bei ungültigem oder veraltetem Zählerwert gehen alle Ausgänge in den sicheren Zustand (0 %, aus, kein Trigger)."
     },
     "graphPicker": {
       "title": "Logik öffnen",

@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo as _ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
 
 from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
+from obs.logic import hems_surplus
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
 from obs.logic.variables import ResolvedTemplate, TimeSnapshot, make_obs_resolver, make_time_snapshot, resolve_template
@@ -297,6 +298,12 @@ class GraphExecutor:
         # must treat it as a normal missing input instead of reporting the
         # producer as broken on every single run.
         retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
+        # hems_surplus withholds every output that did not change (and all
+        # consumer outputs between control cycles) — an absent handle is a
+        # defined outcome there, not a failed producer.
+        for node in self.flow.nodes:
+            if node.type == "hems_surplus":
+                retained_boundary_handles[node.id] = hems_surplus.output_handles(node.data)
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
         # Only failed-output paths that can influence a Change Filter need to
@@ -2801,6 +2808,14 @@ class GraphExecutor:
                     "prev_monthly": state["prev_monthly"],
                     "prev_yearly": state["prev_yearly"],
                 }
+
+            case "hems_surplus":
+                # Control engine lives in obs/logic/hems_surplus.py; the per-node
+                # state is volatile (never persisted) so a restart begins safe.
+                state = self.hysteresis_state.setdefault(node.id, {})
+                # A debug run (input capture active) shows every output, not just what
+                # this tick happened to emit.
+                return hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id, full_snapshot=self.input_capture is not None)
 
             case "ical":
                 # The raw iCal text is pre-fetched by LogicManager and stored in

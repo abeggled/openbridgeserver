@@ -154,6 +154,12 @@ const NODE_DEFS = computed(() => ({
       {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
     ]
   },
+  // HEMS — hems_surplus: ports are generated from the grid mode and the consumer
+  // list (see the `def` computed below); this entry is the pre-config-load fallback.
+  hems_surplus:       { label: t('logic.nodeTypes.hems_surplus'), color: '#0d9488',
+    inputs: [{id:'grid',label:t('logic.portLabels.hems.grid')}],
+    outputs: [{id:'status',label:t('logic.portLabels.hems.status')}]
+  },
   // Notification
   notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
@@ -239,6 +245,39 @@ const def = computed(() => {
       { id: 'fault_text',    label: t('logic.portLabels.faultText') },
       { id: 'fault_trigger', label: t('logic.portLabels.faultTrigger') },
     )
+    return { ...base, label, inputs, outputs }
+  }
+  if (props.type === 'hems_surplus') {
+    const d = props.data
+    const gridMode = ['split', 'feed_in_only'].includes(d.grid_mode) ? d.grid_mode : 'bidirectional'
+    const meters = { bidirectional: ['grid'], split: ['grid_import', 'grid_export'], feed_in_only: ['feed_in'] }[gridMode]
+    const withAge = Number(d.max_age_s) > 0
+    const inputs = []
+    for (const m of meters) {
+      const meterLabel = t(`logic.portLabels.hems.${m}`)
+      inputs.push({ id: m, label: meterLabel })
+      const changedLabel = `${meterLabel}: ${t('logic.ports.changed')}`
+      if (withAge) inputs.push({ id: `${m}_changed`, label: changedLabel })
+    }
+    inputs.push(
+      { id: 'enable',   label: t('logic.portLabels.hems.enable') },
+      { id: 'target',   label: t('logic.portLabels.hems.target') },
+      { id: 'plant_ok', label: t('logic.portLabels.hems.plant_ok') },
+    )
+    const outputs = []
+    parseRowList(d.consumers).forEach((c, i) => {
+      const name = c.name || t('logic.portLabels.hems.consumer', { n: i + 1 })
+      if (c.mode !== 'trigger') inputs.push({ id: `c_${c.id}_power`, label: `${name}: ${t('logic.portLabels.hems.measuredPower')}` })
+      if (c.mode !== 'trigger' && c.power_source === 'input') inputs.push({ id: `c_${c.id}_max_power`, label: `${name}: ${t('logic.portLabels.hems.maxPower')}` })
+      if (c.mode === 'trigger') inputs.push({ id: `c_${c.id}_reset`, label: `${name}: ${t('logic.portLabels.hems.reset')}` })
+      outputs.push(
+        { id: `c_${c.id}`, label: name },
+        { id: `c_${c.id}_status`, label: `${name}: ${t('logic.portLabels.hems.status')}` },
+      )
+    })
+    for (const k of ['grid_power', 'surplus', 'budget', 'allocated', 'remaining', 'status', 'warning']) {
+      outputs.push({ id: k, label: t(`logic.portLabels.hems.${k}`) })
+    }
     return { ...base, label, inputs, outputs }
   }
   if (props.type === 'ical') {
@@ -411,6 +450,9 @@ const summary = computed(() => {
   if (props.type === 'sensor_watchdog') {
     const rows = parseRowList(d.inputs)
     return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
+  }
+  if (props.type === 'hems_surplus') {
+    return t('logic.summary.consumers', { n: parseRowList(d.consumers).length })
   }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)

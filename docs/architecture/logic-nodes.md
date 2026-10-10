@@ -20,6 +20,7 @@ obs/logic/
 ├── capabilities.py          # authorization capability identifiers per node type
 ├── executor.py              # shared execution dispatcher (see "Execution")
 ├── graph_analysis.py        # shared graph/topology helpers
+├── hems_surplus.py          # control engine called by the hems_surplus dispatcher branch
 ├── manager.py               # scheduling, persistence, runtime
 ├── models.py                # NodeTypeDef, NodeTypePort, FlowData, …
 ├── registry.py              # assembles the catalogue, lookup helpers
@@ -33,6 +34,7 @@ obs/logic/
     │   ├── and_node.py      # one module per function block: NODE_TYPE
     │   ├── …
     ├── datapoint/
+    ├── hems/
     ├── math/
     ├── string/
     ├── timer/
@@ -171,6 +173,11 @@ test-enforced.
 Two registered types are intentionally never executed and fall through the dispatcher's `case _`
 no-op branch: `comment` (purely visual annotation) and `ai_logic` (placeholder). They are listed as
 `NON_EXECUTING_NODE_TYPES` in the guardrail test; every other registered type must have a branch.
+
+A block whose algorithm is too large for a `case` branch (`hems_surplus`) keeps the branch a thin
+call into a pure, I/O-free engine module next to the executor (`obs/logic/hems_surplus.py`): it
+reads neither the clock nor the graph — `now` and the per-node state dict are passed in — so the
+dispatcher remains the only place that decides *when* a node runs.
 
 ### Node-specific knowledge outside node modules
 
