@@ -23,6 +23,7 @@ from obs.api.audit import contract_audit, set_contract_audit_resource_id
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
 from obs.api.authz_service import (
+    adapter_delegates,
     authorize_adapter_instance,
     filter_authorized_datapoints,
     load_role_grants,
@@ -170,18 +171,10 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
 
 
 def _ensure_adapter_delegates_binding(principal: Principal, adapter_type: str) -> None:
-    if _is_admin_principal(principal):
-        return
-    # A webhook binding is managed by a human with operator rights on both the
-    # DataPoint and the instance; only a non-user principal (an API key) is
-    # kept out, since the empty capability set below exists for exactly that.
-    if adapter_type == WEBHOOK_ADAPTER_TYPE and principal.type == "user":
-        return
-
+    """Binding changes are delegated to user principals of LINK_BINDING adapters only."""
     from obs.adapters.base import AdapterDelegationCapability
-    from obs.adapters.registry import supports_delegation
 
-    if not supports_delegation(adapter_type, AdapterDelegationCapability.LINK_BINDING):
+    if not adapter_delegates(principal, adapter_type, AdapterDelegationCapability.LINK_BINDING):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Typ erlaubt keine delegierte Binding-Änderung")
 
 
