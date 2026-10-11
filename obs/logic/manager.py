@@ -1449,6 +1449,8 @@ def init_logic_manager(db: Any, event_bus: Any, registry: Any) -> LogicManager:
 
 # Multi-output fan-in blocks: each output handle can be decided by a different input.
 _PER_HANDLE_FAN_IN_TYPES = frozenset({"binary_stats"})
+# Stateless gates the probe evaluates to follow such a block's outputs downstream.
+_PROBE_TRANSPARENT_TYPES = frozenset({"not", "and", "or", "xor"})
 # Upper bound on volatile inputs probed combinatorially (2**n evaluations), and
 # on the joint combinations of one probe once correlated groups are expanded.
 _MAX_PROBED_VOLATILE_INPUTS = 8
@@ -1518,34 +1520,71 @@ def _handle_independent_of_volatile_inputs(
         inputs.update(debug_overrides.get(nid, {}))
         return inputs, volatile
 
+    def correlation(incoming: Any, seen: frozenset[str]) -> tuple[str, Callable[[dict[str, Any]], Any]] | None:
+        """Fan-in block whose output a volatile edge carries, if any.
+
+        The edge may reach that block through stateless gates that have no
+        other volatile input; their remaining inputs keep their current
+        values. Returns the block id and a function mapping the block's
+        outputs to the value arriving over ``incoming``.
+        """
+        hops: list[tuple[Any, dict[str, Any], str, str]] = []
+        visited: set[str] = set()
+        while (upstream := fan_in_node(incoming.source, seen)) is None:
+            gate = node_by_id.get(incoming.source)
+            if gate is None or gate.type not in _PROBE_TRANSPARENT_TYPES or gate.id in visited:
+                return None
+            visited.add(gate.id)
+            gate_inputs, gate_volatile = volatile_state(gate.id, seen)
+            if len(gate_volatile) != 1:
+                return None
+            ((gate_handle, gate_incoming),) = gate_volatile.items()
+            hops.append((gate, gate_inputs, gate_handle, incoming.sourceHandle or "out"))
+            incoming = gate_incoming
+        origin_handle = incoming.sourceHandle or "out"
+
+        def carried(result: dict[str, Any]) -> Any:
+            value = GraphExecutor._get_output_value(result, origin_handle)
+            for gate, gate_inputs, gate_handle, out_handle in reversed(hops):
+                gate_result = probe._eval_node(gate, GraphExecutor._resolve_effective_inputs(gate, {**gate_inputs, gate_handle: value}))
+                value = GraphExecutor._get_output_value(gate_result, out_handle)
+            return value
+
+        return upstream.id, carried
+
     def assignments(nid: str, inputs: dict[str, Any], volatile: dict[str, Any], seen: frozenset[str]) -> Iterator[dict[str, Any]]:
         """Joint values the volatile inputs of ``nid`` can take together.
 
         Handles fed by the same upstream fan-in block are correlated (for
         example ``count_true`` and ``count_false`` always add up to the
-        supplied inputs), so only the outputs that block can actually emit
-        are combined; unrelated handles are probed as free booleans. The
-        combinations are yielded lazily and capped at
-        ``_MAX_PROBED_COMBINATIONS``: chained blocks multiply.
+        supplied inputs), also when stateless gates sit in between, so only
+        the outputs that block can actually emit are combined; unrelated
+        handles are probed as free booleans. The combinations are yielded
+        lazily and capped at ``_MAX_PROBED_COMBINATIONS``: chained blocks
+        multiply.
         """
         if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
             raise ValueError("too many volatile inputs")
+        carriers: dict[str, Callable[[dict[str, Any]], Any]] = {}
         by_source: dict[str, list[str]] = {}
         for handle, incoming in volatile.items():
-            by_source.setdefault(incoming.source, []).append(handle)
-        options: list[list[dict[str, Any]]] = []
+            link = correlation(incoming, seen | {nid})
+            if link is not None:
+                by_source.setdefault(link[0], []).append(handle)
+                carriers[handle] = link[1]
+        grouped = {h for group in by_source.values() if len(group) > 1 for h in group}
+        options: list[list[dict[str, Any]]] = [[{h: False}, {h: True}] for h in sorted(volatile) if h not in grouped]
         for source_id, group in sorted(by_source.items()):
-            upstream = fan_in_node(source_id, seen | {nid})
-            if len(group) < 2 or upstream is None:
-                options.extend([{h: False}, {h: True}] for h in sorted(group))
+            if len(group) < 2:
                 continue
+            upstream = node_by_id[source_id]
             up_inputs, up_volatile = volatile_state(source_id, seen | {nid})
             # Many upstream combinations give the same handle values (256 input
             # patterns yield at most 9 count pairs), so keep each one once.
             group_options: dict[str, dict[str, Any]] = {}
             for up_assignment in assignments(source_id, up_inputs, up_volatile, seen | {nid}):
                 result = probe._eval_node(upstream, GraphExecutor._resolve_effective_inputs(upstream, {**up_inputs, **up_assignment}))
-                values = {h: GraphExecutor._get_output_value(result, volatile[h].sourceHandle or "out") for h in group}
+                values = {h: carriers[h](result) for h in sorted(group)}
                 group_options.setdefault(repr(sorted(values.items())), values)
             options.append(list(group_options.values()))
         if math.prod(len(option) for option in options) > _MAX_PROBED_COMBINATIONS:

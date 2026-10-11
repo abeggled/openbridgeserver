@@ -497,3 +497,88 @@ async def test_replay_probe_reads_the_real_async_output_and_holds_the_filter():
         out = await manager._execute_graph("g", "t", flow, {})
     assert out["cf"] == {"out": None, "changed": False}
     assert "cf" not in manager._hysteresis.get("g", {})
+
+
+def _through_gates():
+    """count_true / count_false of "a" reach "b" through the stateless gates ``n1`` and ``n2``."""
+    nodes = [
+        node("src", "const_value", {"value": True, "data_type": "bool"}),
+        node("on", "const_value", {"value": True, "data_type": "bool"}),
+        node("a", "binary_stats", {"input_count": 2}),
+        node("n1", "not"),
+        node("n2", "and"),
+        node("b", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+    ]
+    edges = [
+        edge("src", "a", "value", "in1"),
+        edge("a", "n1", "count_true", "in1"),
+        edge("a", "n2", "count_false", "in1"),
+        edge("on", "n2", "value", "in2"),
+        edge("n1", "b", "out", "in1"),
+        edge("n2", "b", "out", "in2"),
+    ]
+    return nodes, edges
+
+
+def test_probe_keeps_correlations_through_stateless_gates():
+    # NOT(count_true) and AND(count_false, True) always agree: both False for
+    # (1, 0), both True for (0, 1). "tie" therefore stays False; probed as free
+    # booleans, (True, False) would make it True.
+    nodes, edges = _through_gates()
+    assert _probe(nodes, edges, "b", "tie", lambda e: e.source in {"src", "a", "n1", "n2"}) is True
+
+
+def test_probe_frees_a_gate_with_more_than_one_volatile_input():
+    nodes, edges = _through_gates()
+    edges[3] = edge("a", "n2", "count_true", "in2")
+    # n2 now reads two volatile inputs, so in2 is probed freely and "tie" may flip.
+    assert _probe(nodes, edges, "b", "tie", lambda e: e.source in {"src", "a", "n1", "n2"}) is False
+
+
+def test_probe_stops_tracing_at_a_gate_cycle():
+    nodes = [
+        node("src", "const_value", {"value": True, "data_type": "bool"}),
+        node("a", "binary_stats", {"input_count": 2}),
+        node("n1", "not"),
+        node("n2", "not"),
+        node("b", "binary_stats", {"input_count": 2}),
+    ]
+    edges = [
+        edge("src", "a", "value", "in1"),
+        edge("n2", "n1", "out", "in1"),
+        edge("n1", "n2", "out", "in1"),
+        edge("n1", "b", "out", "in1"),
+        edge("a", "b", "count_true", "in2"),
+    ]
+    outs = {"src": {"value": True}, "a": {"count_true": 1}, "n1": {"out": True}, "n2": {"out": False}, "b": {"total": 2}}
+    assert _probe(nodes, edges, "b", "total", lambda e: e.source != "src", outs) is True
+
+
+@pytest.mark.asyncio
+async def test_correlated_handles_through_not_gates_are_not_decorrelated():
+    flow = _flow(
+        [
+            node("src", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf", "change_filter"),
+            node("a", "binary_stats", {"input_count": 2}),
+            node("n1", "not"),
+            node("n2", "not"),
+            node("b", "binary_stats", {"input_count": 2, "threshold_count": 1}),
+            node("w", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
+        ],
+        [
+            edge("src", "cf", "value", "in"),
+            edge("cf", "a", "changed", "in1"),
+            edge("a", "n1", "count_true", "in1"),
+            edge("a", "n2", "count_false", "in1"),
+            edge("n1", "b", "out", "in1"),
+            edge("n2", "b", "out", "in2"),
+            edge("b", "w", "threshold_reached", "value"),
+        ],
+    )
+    manager = _stats_manager(flow)
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        await manager.execute_graph("g")
+        out = await manager.execute_graph("g")
+    assert out["b"]["threshold_reached"] is True
+    assert out["w"]["_write_value"] is True
