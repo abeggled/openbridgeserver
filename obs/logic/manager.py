@@ -1465,6 +1465,7 @@ def _handle_independent_of_volatile_inputs(
     volatile_edge: Callable[[Any], bool],
     outs: dict[str, dict[str, Any]],
     cache: dict[Any, bool],
+    seeds: frozenset[str] = frozenset(),
     _seen: frozenset[str] = frozenset(),
 ) -> bool:
     """True if ``output_handle`` of a multi-output fan-in node ignores its volatile inputs.
@@ -1478,7 +1479,9 @@ def _handle_independent_of_volatile_inputs(
     ports never are.
 
     ``cache`` memoises answers for one taint pass, during which ``outs``
-    must not change; the caller creates a fresh dict per pass.
+    must not change; the caller creates a fresh dict per pass. A node in
+    ``seeds`` is tainted itself, whatever its inputs are, so none of its
+    handles is independent.
     """
 
     def fan_in_node(nid: str, seen: frozenset[str]) -> Any | None:
@@ -1507,6 +1510,7 @@ def _handle_independent_of_volatile_inputs(
                     volatile_edge,
                     outs,
                     cache,
+                    seeds,
                     seen | {nid},
                 )
             ):
@@ -1549,7 +1553,7 @@ def _handle_independent_of_volatile_inputs(
         return ({k: v for part in combo for k, v in part.items()} for combo in itertools.product(*options))
 
     node = fan_in_node(node_id, _seen)
-    if node is None:
+    if node is None or node_id in seeds:
         return False
     # ``outs`` and ``debug_overrides`` are fixed for one pass, so within it the
     # answer only depends on which edges are volatile (taint grows during a
@@ -2772,6 +2776,7 @@ class LogicManager:
                     ):
                         cf_tainted.discard(_initial_id)
             _cfq: list[str] = sorted(cf_tainted)
+            _init_seed_ids = frozenset(cf_tainted)
             _init_probe = GraphExecutor(flow, {}, self._app_config)
 
             # One cache for this pass; ``outputs`` does not change during it.
@@ -2788,6 +2793,7 @@ class LogicManager:
                     lambda e: e.source in cf_tainted,
                     outputs,
                     _init_probe_cache,
+                    _init_seed_ids,
                 )
 
             # Edges skipped as handle-independent (see _compute_cf_hold_ids):
@@ -3807,10 +3813,15 @@ class LogicManager:
         _fan_in_probe = GraphExecutor(flow, {}, ical_app_config)
 
         def _handle_independent(
-            node_id: str, output_handle: str, volatile_edge: Callable[[Any], bool], outs: dict[str, dict[str, Any]], cache: dict[Any, bool]
+            node_id: str,
+            output_handle: str,
+            volatile_edge: Callable[[Any], bool],
+            outs: dict[str, dict[str, Any]],
+            cache: dict[Any, bool],
+            seeds: frozenset[str] = frozenset(),
         ) -> bool:
             return _handle_independent_of_volatile_inputs(
-                _fan_in_probe, _node_by_id_early, _effective_edges, debug_overrides, node_id, output_handle, volatile_edge, outs, cache
+                _fan_in_probe, _node_by_id_early, _effective_edges, debug_overrides, node_id, output_handle, volatile_edge, outs, cache, seeds
             )
 
         def _compute_cf_hold_ids(seed_ids: set[str], outputs_source: dict[str, dict[str, Any]] | None = None) -> set[str]:
@@ -3838,6 +3849,9 @@ class LogicManager:
                 return set()
             _tainted: set[str] = set(seed_ids)
             _src = outputs_source if outputs_source is not None else outputs
+            # The handle probe follows the same rule as _v_src below: an async
+            # node's own output is authoritative only in the outer ``outputs``.
+            _probe_src = {**_src, **{nid: outputs[nid] for nid in async_replay_source_ids if nid in outputs}}
 
             def _gate_taint_absorbed(gate_id: str, gate_type: str) -> bool:
                 decisive = _decisive_gate_value[gate_type]
@@ -3911,7 +3925,8 @@ class LogicManager:
             # followed iff it is volatile under the FINAL taint, which makes the
             # result independent of traversal order.
             _deferred_edges: dict[int, Any] = {}
-            _probe_cache: dict[Any, bool] = {}  # per pass: ``_src`` is fixed while it runs
+            _probe_cache: dict[Any, bool] = {}  # per pass: ``_probe_src`` is fixed while it runs
+            _seed_set = frozenset(seed_ids)
             while _tq:
                 _tn = _tq.pop()
                 for _te in _effective_edges:
@@ -3922,7 +3937,9 @@ class LogicManager:
                         # the current execution, so its unresolved source
                         # cannot taint the overridden value or descendants.
                         continue
-                    if _handle_independent(_te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _src, _probe_cache):
+                    if _handle_independent(
+                        _te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _probe_src, _probe_cache, _seed_set
+                    ):
                         # The read output handle is decided by an input that is
                         # not tainted, whatever the unresolved ones deliver.
                         _deferred_edges[id(_te)] = _te
@@ -4019,7 +4036,9 @@ class LogicManager:
                     _flipped = [
                         _de
                         for _de in _deferred_edges.values()
-                        if not _handle_independent(_de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _src, _probe_cache)
+                        if not _handle_independent(
+                            _de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _probe_src, _probe_cache, _seed_set
+                        )
                     ]
                     # Reprocessing re-adds an edge if it is still skipped.
                     _flipped_ids = {id(edge) for edge in _flipped}

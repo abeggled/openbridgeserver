@@ -3551,3 +3551,29 @@ async def test_initialize_revisits_a_statistics_output_when_taint_arrives_over_a
     mgr = _make_manager({"g": ("G", True, _stats_init_flow(a, b, 2, long_path=True))}, values={a: True})
     await mgr.initialize_graph("g")
     assert "cf" not in mgr._hysteresis.get("g", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mid_type", "mid_data", "mid_out"), [("not", {}, "out"), ("binary_stats", {"input_count": 2}, "count_true")], ids=["not", "binary_stats"]
+)
+async def test_initialize_holds_a_filter_behind_a_seeded_block(mid_type, mid_data, mid_out):
+    # The middle block is an initialization seed itself (changed target behind
+    # edge_detect); its own inputs are not tainted, but its output still is.
+    a = str(uuid.uuid4())
+    flow = _flow(
+        [
+            {"id": "a", "type": "datapoint_read", "data": {"datapoint_id": a}},
+            {"id": "ed", "type": "edge_detect", "data": {}},
+            {"id": "m", "type": mid_type, "data": mid_data},
+            {"id": "cf", "type": "change_filter", "data": {}},
+        ],
+        [
+            {"source": "a", "sourceHandle": "value", "target": "ed", "targetHandle": "in"},
+            {"source": "ed", "sourceHandle": "rising", "target": "m", "targetHandle": "in1"},
+            {"source": "m", "sourceHandle": mid_out, "target": "cf", "targetHandle": "in"},
+        ],
+    )
+    mgr = _make_manager({"g": ("G", True, flow)}, values={a: True})
+    await mgr.initialize_graph("g")
+    assert "cf" not in mgr._hysteresis.get("g", {})

@@ -227,7 +227,14 @@ class GraphExecutor:
         datapoint_lookup: Callable[[str], Any] | None = None,
     ):
         self.flow = flow
-        self._flow_node_ids = {n.id for n in flow.nodes}
+        node_ids = {n.id for n in flow.nodes}
+        # Wired input handles per node: like the edge map the last edge into a
+        # handle wins, and an edge whose source node no longer exists is not wired.
+        last_source = {(edge.target, edge.targetHandle or "in"): edge.source for edge in flow.edges}
+        self._wired_handles: dict[str, set[str]] = {}
+        for (target, handle), source in last_source.items():
+            if source in node_ids:
+                self._wired_handles.setdefault(target, set()).add(handle)
         # NOTE: use `is not None` instead of `or {}` — an empty dict {} is falsy,
         # so `hysteresis_state or {}` would silently create a *new* dict instead of
         # using the passed-in reference, breaking state persistence between runs.
@@ -1674,11 +1681,7 @@ class GraphExecutor:
                 d = {**d, "input_count": count}
                 names = {f"in{i}" for i in range(1, count + 1)}
                 # Debug/manual overrides arrive in ``inputs`` and count as supplied.
-                # Like the edge map the last edge into a handle wins, and an
-                # edge whose source node no longer exists is not wired.
-                last_source = {edge.targetHandle or "in": edge.source for edge in self.flow.edges if edge.target == node.id}
-                wired = {handle for handle, source in last_source.items() if source in self._flow_node_ids}
-                supplied = (wired | set(inputs)) & names
+                supplied = (self._wired_handles.get(node.id, set()) | set(inputs)) & names
                 # A wired input that delivered no value this run is FALSE and is
                 # not negated: negating "no value" would invent a TRUE vote.
                 vals: list[bool] = []

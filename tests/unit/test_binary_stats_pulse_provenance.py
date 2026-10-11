@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import time
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from tests.unit.conftest import edge, node
-from tests.unit.test_host_check import _flow, _make_manager
+from tests.unit.test_host_check import _flow, _make_manager, _MockResponse
 
 
 async def _run_twice(stats_cfg: dict, decisive_value: str):
@@ -460,3 +460,40 @@ def test_probe_caps_the_joint_combinations_of_chained_blocks():
     started = time.perf_counter()
     assert _probe(nodes, edges, "b", "total", lambda e: e.source[0] in "sa") is False
     assert time.perf_counter() - started < 5
+
+
+@pytest.mark.asyncio
+async def test_replay_probe_reads_the_real_async_output_and_holds_the_filter():
+    # api_client.success is True for real but still its placeholder False in the
+    # replay snapshot; majority_true then depends on the unresolved Read.
+    flow = _flow(
+        [
+            node("cv", "const_value", {"value": "true", "data_type": "bool"}),
+            node("ac", "api_client", {"url": "http://93.184.216.34/", "method": "GET", "response_type": "text/plain"}),
+            node("read", "datapoint_read", {"datapoint_id": str(uuid.uuid4())}),
+            node("s", "binary_stats", {"input_count": 2}),
+            node("cf", "change_filter"),
+            node("write", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
+        ],
+        [
+            edge("cv", "ac", "value", "trigger"),
+            edge("ac", "s", "success", "in1"),
+            edge("read", "s", "value", "in2"),
+            edge("s", "cf", "majority_true", "in"),
+            edge("cf", "write", "out", "value"),
+        ],
+    )
+    manager = _make_manager()
+    manager._graphs["g"] = ("t", True, flow)
+    manager._node_state["g"] = {}
+    with (
+        patch("obs.logic.manager.httpx.AsyncClient") as client_cls,
+        patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
+    ):
+        client = AsyncMock()
+        client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+        client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        out = await manager._execute_graph("g", "t", flow, {})
+    assert out["cf"] == {"out": None, "changed": False}
+    assert "cf" not in manager._hysteresis.get("g", {})
