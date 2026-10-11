@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hemsOutputLabels } from '@/utils/logicHemsOutputs'
+import { hemsConsumers, hemsOutputLabels } from '@/utils/logicHemsOutputs'
 
 const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key)
 const node = data => ({ type: 'hems_surplus', data })
@@ -30,5 +30,28 @@ describe('hemsOutputLabels', () => {
     }
     expect(hemsOutputLabels({ type: 'hems_surplus' }, t).status).toBe('logic.portLabels.hems.status')
     expect(hemsOutputLabels(node({ consumers: '' }), t).warning).toBe('logic.portLabels.hems.warning')
+  })
+})
+
+describe('hemsConsumers', () => {
+  it('normalises ids and modes exactly like the engine', () => {
+    const list = hemsConsumers([{ id: 'a-b', mode: 'onoff' }, { id: 'ab' }, null, { id: '' }, { id: 'ab', mode: 'trigger' }, 'x'])
+    expect(list.map(c => c.id)).toEqual(['ab', 'ab_', 'n4', 'ab__'])
+    expect(list.map(c => c.mode)).toEqual(['onoff', 'percent', 'percent', 'trigger'])
+  })
+
+  it('keeps the other fields and reads JSON storage', () => {
+    expect(hemsConsumers(JSON.stringify([{ id: 'k', name: 'Boiler', power_w: 2000 }]))).toEqual([
+      { id: 'k', name: 'Boiler', power_w: 2000, mode: 'percent' },
+    ])
+    expect(hemsConsumers('{')).toEqual([])
+    expect(hemsConsumers('')).toEqual([])
+    expect(hemsConsumers({ a: 1 })).toEqual([])
+  })
+
+  it('labels the outputs under the normalised id', () => {
+    const labels = hemsOutputLabels(node({ consumers: [{ id: 'a-b', name: 'Pool' }] }), t)
+    expect(labels.c_ab).toBe('Pool')
+    expect(labels['c_a-b']).toBeUndefined()
   })
 })

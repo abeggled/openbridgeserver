@@ -70,7 +70,8 @@ hysteresis; a switch-off threshold below the rated power tolerates some grid imp
 **minimum surplus** has been present continuously for the configured time and is then blocked for
 the **lockout time**. **Re-arm**: after the lockout has expired, only after the threshold was
 undershot in between (default), or via the **Reset** input. An optional **reserved power** holds
-budget for a short while for the firing. A trigger never fires again on every control cycle.
+budget for a short while for the firing. The **pulse duration** ranges from 0.1 s to 1 h. A trigger
+never fires again on every control cycle.
 
 ### Outputs
 
@@ -78,14 +79,20 @@ Per consumer: one output (percentage / on-off / trigger pulse) and a status (`in
 `on_delay`, `active`, `reduced`, `min_runtime`, `off_delay`, `locked`, `fired`, `safe`,
 `safe_hold`, `invalid_input`). Diagnostics: grid power, surplus, power budget, allocated power, remaining budget,
 block status (`ok`, `disabled`, `plant_not_ok`, `invalid_input`, `stale_input`) and warning. With
-**Output only on change** (default) unchanged outputs are not sent again. The debug tab lists every output with its last emitted value; in the safe state the diagnostics stay visible (grid power when known; surplus, budget, allocated and remaining = 0).
+**Output only on change** (default) unchanged outputs are not sent again; a logic block behind such
+an output (e.g. NOT) then outputs nothing in that run either, instead of reading the missing value as
+`false`. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator
+that is still wired does not stay on. The debug tab lists every output with its last emitted value; in the safe state the diagnostics stay visible (grid power when known; surplus, budget, allocated and remaining = 0).
 
 ### Error and restart behaviour
 
 - Missing, non-numeric, `NaN` or stale meter values, as well as *Enable* = false or *Plant OK* =
   false, never activate anything. By default all percentages go to 0 %, all switching outputs to
-  `false` and no trigger fires (alternative: hold the last outputs). The event is written to the log.
+  `false` and no trigger fires (alternative: hold the last outputs — only an output that was already
+  sent is held; a consumer without one, e.g. right after a restart, goes to the safe state). The
+  event is written to the log.
 - **Stale values** are only checked when **Maximum age of meter values** is greater than 0 *and* the
-  Read Object's *Changed* output is wired to the block (see Sensor Watchdog).
+  Read Object's *Changed* output is wired to the block (see Sensor Watchdog). The block reacts as soon
+  as the age is exceeded, not only at the next control cycle.
 - After a restart the block always begins in the safe state; its state is not persisted, and a
   trigger never fires because of a restored old state.

@@ -43,6 +43,8 @@ _EPS = 1e-9
 # and the one after it, so a load that needs a moment to ramp up is not
 # immediately handed to a lower priority.
 _TRIGGER_RESERVE_CYCLES = 1
+# The scheduler wakes this long after a meter value's age limit has passed.
+_STALE_WAKE_MARGIN_S = 0.05
 
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_]")
 
@@ -316,18 +318,52 @@ def evaluate(
     """
     consumers = load_consumers(data.get("consumers"))
     states: dict[str, dict[str, Any]] = state.setdefault("consumers", {})
-    for stale_id in set(states) - {c["id"] for c in consumers}:
-        del states[stale_id]
+    removed = _forget_removed_consumers(consumers, states, state.setdefault("last_out", {}))
     for consumer in consumers:
         states.setdefault(consumer["id"], _new_consumer_state())
 
-    result = _tick(data, inputs, state, now, node_id, consumers, states)
-    # Remember the earliest pending pulse end so the scheduler wakes in time.
-    ends = [states[c["id"]]["pulse_until"] for c in consumers if states[c["id"]]["pulse_until"] is not None]
-    state["next_wake"] = min(ends) if ends else None
+    result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
+    state["next_wake"] = _next_wake(data, consumers, states, state, now)
     if full_snapshot:
         return {**state.get("last_out", {}), **result}
     return result
+
+
+def _forget_removed_consumers(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], last_out: dict[str, Any]) -> dict[str, Any]:
+    """Drop the state of consumers no longer configured, switching them off first.
+
+    The edge of a removed consumer's output stays in the graph, so the last value
+    it carried would otherwise stay on the actuator: an output last sent as
+    on / a non-zero setpoint is answered with off / 0 once before it is forgotten.
+    """
+    result: dict[str, Any] = {}
+    for stale_id in set(states) - {c["id"] for c in consumers}:
+        del states[stale_id]
+        last = last_out.pop(f"c_{stale_id}", None)
+        last_out.pop(f"c_{stale_id}_status", None)
+        if isinstance(last, bool):
+            if last:
+                result[f"c_{stale_id}"] = False
+        elif last:
+            result[f"c_{stale_id}"] = 0
+    return result
+
+
+def _next_wake(
+    data: dict[str, Any], consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], state: dict[str, Any], now: float
+) -> float | None:
+    """Earliest moment the scheduler must re-evaluate before the next interval.
+
+    That is a pending pulse end — a pulse can be shorter than the interval — and
+    the moment a still-fresh meter value turns stale, so the safe state is not
+    delayed by up to a whole control interval.
+    """
+    wakes = [states[c["id"]]["pulse_until"] for c in consumers if states[c["id"]]["pulse_until"] is not None]
+    max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
+    if max_age_s > 0:
+        # Stale means strictly older than max_age_s, so wake just after it.
+        wakes.extend(seen + max_age_s + _STALE_WAKE_MARGIN_S for seen in state.get("last_seen", {}).values() if seen + max_age_s >= now)
+    return min(wakes) if wakes else None
 
 
 def _tick(
@@ -387,8 +423,14 @@ def _tick(
         # healthy tick starts a fresh cycle straight away.
         state["last_cycle"] = None
         if status in ("invalid_input", "stale_input") and data.get("invalid_behavior") == "hold":
-            for consumer in consumers:
+            # Only an output that was actually sent can be held. Without one —
+            # e.g. right after a restart — the actuator may still carry a value
+            # from before, so that consumer falls back to the safe state.
+            last_out = state.setdefault("last_out", {})
+            held = [c for c in consumers if f"c_{c['id']}" in last_out]
+            for consumer in held:
                 emit(f"c_{consumer['id']}_status", "safe_hold")
+            _apply_safe_state([c for c in consumers if c not in held], states, now, emit)
         else:
             _apply_safe_state(consumers, states, now, emit)
         # Nothing is being distributed in the safe state; the measured grid power

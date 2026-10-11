@@ -252,3 +252,74 @@ async def test_real_wiring_publishes_switch_and_one_shot_trigger():
     published = [(str(c.args[0].datapoint_id), c.args[0].value) for c in manager._event_bus.publish.await_args_list]
     assert (str(dp_wash), False) in published
     assert (str(dp_wash), True) not in published
+
+
+def _relay_flow(dp_grid, dp_out, consumer, relay_edges, extra_nodes):
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("h", "hems_surplus", {"consumers": [consumer], "interval_s": 5}),
+                *extra_nodes,
+            ],
+            "edges": [edge("read", "h", "value", "grid"), *relay_edges],
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "consumer",
+    [
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 1},
+        {"id": "wash", "mode": "onoff", "power_w": 1000, "on_delay_s": 0},
+    ],
+)
+async def test_a_withheld_output_is_not_relayed_as_false_through_logic(consumer):
+    # Between two emissions the HEMS output is absent ("unchanged"), not False:
+    # a NOT behind it must not turn that absence into a published True.
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        dp_out,
+        consumer,
+        [edge("h", "n", "c_wash", "in1"), edge("n", "w", "out", "value")],
+        [node("n", "not", {}), node("w", "datapoint_write", {"datapoint_id": str(dp_out)})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+
+    def written():
+        values = [c.args[0].value for c in manager._event_bus.publish.await_args_list if str(c.args[0].datapoint_id) == str(dp_out)]
+        manager._event_bus.publish.reset_mock()
+        return values
+
+    await manager._execute_graph("g", "G", flow, {})
+    assert written() == [False]
+    await manager._execute_graph("g", "G", flow, {"h": {}})
+    assert written() == []
+
+    if consumer["mode"] == "trigger":
+        # the pulse ends: the emitted False is relayed as a real value
+        manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0
+        await manager._execute_graph("g", "G", flow, {"h": {}})
+        assert written() == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_trigger_does_not_restart_a_value_sequence():
+    dp_grid = uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        None,
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 1},
+        [edge("h", "seq", "c_wash", "trigger")],
+        [node("seq", "value_sequence", {"steps": []})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+    with patch.object(manager, "_start_value_sequence") as start:
+        await manager._execute_graph("g", "G", flow, {})
+        assert start.call_count == 1
+        await manager._execute_graph("g", "G", flow, {"h": {}})
+        assert start.call_count == 1

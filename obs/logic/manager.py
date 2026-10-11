@@ -228,7 +228,9 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
 # They are the roots of the pulse-provenance trace: a consumer fed from one of
 # them must not read the "no pulse this pass" placeholder as a real value.
-_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
+# hems_surplus belongs here because it withholds every output that did not
+# change: like Edge Detection's "out", a handle's presence is the event.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on
@@ -2219,9 +2221,9 @@ class LogicManager:
 
         The block gates its own control cycle by the configured interval (see
         ``obs.logic.hems_surplus``), so this loop only has to wake the graph at
-        least that often — and earlier when the block reports a pending trigger
-        pulse end (``next_wake``), because a pulse can be shorter than the
-        interval. The interval is re-read every iteration, so an edited value
+        least that often — and earlier when the block reports ``next_wake``: a
+        pending trigger pulse end, which can be shorter than the interval, or
+        the moment a meter value exceeds its maximum age. The interval is re-read every iteration, so an edited value
         applies without a graph reload.
         """
         while True:
@@ -4332,6 +4334,10 @@ class LogicManager:
             on that node fired.
             """
             origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
+            if _node_type_by_id.get(origin_id) == "hems_surplus":
+                # A withheld (unchanged) handle is absent, an emitted one present.
+                _hems_out = outputs.get(origin_id, {})
+                return handle in _hems_out if handle is not None else bool(_hems_out)
             if _node_type_by_id.get(origin_id) == "edge_detect":
                 pulses = _discrete_pulse_handles({origin_id})
                 return (origin_id, handle) in pulses if handle is not None else bool(pulses)
@@ -4370,6 +4376,12 @@ class LogicManager:
                 _node_type_by_id.get(edge.source) == "edge_detect"
                 and require_fired_change_filter
                 and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
+            ):
+                return False
+            if (
+                _node_type_by_id.get(edge.source) == "hems_surplus"
+                and require_fired_change_filter
+                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {})
             ):
                 return False
             if _node_type_by_id.get(edge.source) == "change_filter":

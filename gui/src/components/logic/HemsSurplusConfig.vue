@@ -211,7 +211,7 @@ const FIELDS = {
   trigger: [
     { key: 'min_surplus_w', type: 'number', min: 0, default: 1000 },
     { key: 'on_delay_s', type: 'number', min: 0, optional: true },
-    { key: 'pulse_s', type: 'number', min: 0.1, default: 1 },
+    { key: 'pulse_s', type: 'number', min: 0.1, max: 3600, default: 1 },
     { key: 'lockout_s', type: 'number', min: 0, default: 3600 },
     { key: 'rearm', type: 'select', default: 'after_drop', options: ['after_lockout', 'after_drop', 'reset_input'] },
     { key: 'reserve_w', type: 'number', min: 0, default: 0 },

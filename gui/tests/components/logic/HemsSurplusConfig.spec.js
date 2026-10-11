@@ -244,6 +244,13 @@ describe('HemsSurplusConfig — fields per control type', () => {
     expect(lastConsumers(w)[0].power_source).toBe('input')
   })
 
+  it('caps the trigger pulse at the one hour the engine allows', async () => {
+    const w = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'trigger' })]) })
+    expect(w.find('[data-testid="hems-consumer-pulse_s-0"]').attributes('max')).toBe('3600')
+    await setValue(w, 'hems-consumer-pulse_s-0', '7200')
+    expect(lastConsumers(w)[0].pulse_s).toBe(3600)
+  })
+
   it('an emptied required number falls back to its default, an emptied optional one to "use the global value"', async () => {
     const w = mountCfg({ consumers: JSON.stringify([C('a', { on_delay_s: 30, step: 5 })]) })
     await setValue(w, 'hems-consumer-on_delay_s-0', '')

@@ -79,6 +79,7 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { hemsConsumers } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -273,7 +274,7 @@ const def = computed(() => {
       { id: 'plant_ok', label: t('logic.portLabels.hems.plant_ok') },
     )
     const outputs = []
-    parseRowList(d.consumers).forEach((c, i) => {
+    hemsConsumers(d.consumers).forEach((c, i) => {
       const name = c.name || t('logic.portLabels.hems.consumer', { n: i + 1 })
       if (c.mode !== 'trigger') inputs.push({ id: `c_${c.id}_power`, label: `${name}: ${t('logic.portLabels.hems.measuredPower')}` })
       if (c.mode !== 'trigger' && c.power_source === 'input') inputs.push({ id: `c_${c.id}_max_power`, label: `${name}: ${t('logic.portLabels.hems.maxPower')}` })

@@ -70,7 +70,7 @@ NODE_TYPE = NodeTypeDef(
                     "on_threshold_w": {"type": "number", "min": 0, "label": "Einschaltschwelle (W)"},
                     "off_threshold_w": {"type": "number", "min": 0, "label": "Ausschaltschwelle (W)"},
                     "min_surplus_w": {"type": "number", "default": 1000, "min": 0, "label": "Benötigter Mindestüberschuss (W)"},
-                    "pulse_s": {"type": "number", "default": 1, "min": 0.1, "label": "Impulsdauer (Sekunden)"},
+                    "pulse_s": {"type": "number", "default": 1, "min": 0.1, "max": 3600, "label": "Impulsdauer (Sekunden)"},
                     "lockout_s": {"type": "number", "default": 3600, "min": 0, "label": "Sperrzeit nach Auslösung (Sekunden)"},
                     "rearm": {
                         "type": "string",

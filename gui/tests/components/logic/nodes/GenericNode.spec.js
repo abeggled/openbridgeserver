@@ -634,6 +634,20 @@ describe('GenericNode — hems_surplus', () => {
     expect(right).toContain('Verbraucher 3')
   })
 
+  it('builds the ports from the ids the engine normalises them to', async () => {
+    const consumers = [
+      { id: 'a-b', mode: 'onoff' },
+      { id: 'ab', mode: 'bogus' },
+      { mode: 'trigger' },
+    ]
+    const w = await mountGN('hems_surplus', { consumers })
+    await flushPromises()
+    expect(ids(w, 'source').slice(0, 6)).toEqual(['c_ab', 'c_ab_status', 'c_ab_', 'c_ab__status', 'c_n3', 'c_n3_status'])
+    // an unknown mode is read as percent, so it gets the measured-power input
+    expect(ids(w, 'target')).toContain('c_ab__power')
+    expect(ids(w, 'target')).toContain('c_n3_reset')
+  })
+
   it('reordering the consumers reorders the ports but keeps their ids', async () => {
     const a = { id: 'a', name: 'A', mode: 'percent' }
     const b = { id: 'b', name: 'B', mode: 'percent' }

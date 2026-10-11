@@ -189,6 +189,25 @@ def test_invalid_behavior_hold_keeps_outputs_and_does_not_fire_triggers():
     assert sim.cstate("a")["on"] is True
 
 
+def test_hold_without_a_sent_output_falls_back_to_the_safe_state():
+    # Right after a restart there is nothing to hold: the actuator may still
+    # carry a value from before, so it is switched off instead.
+    sim = Sim([onoff("load")], invalid_behavior="hold")
+    out = sim.tick(grid=None)
+    assert (out["c_load"], out["c_load_status"]) == (False, "safe")
+
+
+def test_hold_keeps_only_consumers_whose_output_was_sent():
+    sim = Sim([onoff("a", on_delay_s=0)], invalid_behavior="hold", only_on_change=True)
+    sim.tick(grid=-3000)
+    sim.config["consumers"] = [onoff("a", on_delay_s=0), pct("b")]
+    out = sim.tick(grid="bad")
+    assert "c_a" not in out
+    assert out["c_a_status"] == "safe_hold"
+    assert (out["c_b"], out["c_b_status"]) == (0, "safe")
+    assert sim.cstate("a")["on"] is True
+
+
 def test_hold_does_not_apply_to_disabled():
     sim = Sim([pct()], on_delay_s=0, invalid_behavior="hold")
     sim.tick(grid=-12000)
@@ -203,6 +222,34 @@ def test_stale_meter_detected_via_changed_flag():
     assert (out["status"], out["warning"], out["c_a"]) == ("stale_input", True, 0)
     # a fresh telegram recovers
     assert sim.tick(advance=1, grid=-12000, grid_changed=True)["status"] == "ok"
+
+
+def test_next_wake_is_the_moment_a_fresh_meter_value_turns_stale():
+    sim = Sim([onoff("load", on_delay_s=0)], max_age_s=5, interval_s=30)
+    sim.tick(grid=-3000, grid_changed=True)
+    assert sim.state["next_wake"] == pytest.approx(sim.now + 5 + hs._STALE_WAKE_MARGIN_S)
+    out = sim.tick(advance=5 + hs._STALE_WAKE_MARGIN_S, grid=-3000, grid_changed=False)
+    assert (out["status"], out["c_load"]) == ("stale_input", False)
+    # once stale there is nothing left to wait for
+    assert sim.state["next_wake"] is None
+
+
+def test_next_wake_takes_the_earlier_of_pulse_end_and_meter_age():
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=2)], max_age_s=10)
+    sim.tick(grid=-3000, grid_changed=True)
+    assert sim.state["next_wake"] == sim.now + 2
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=20)], max_age_s=10)
+    sim.tick(grid=-3000, grid_changed=True)
+    assert sim.state["next_wake"] == pytest.approx(sim.now + 10 + hs._STALE_WAKE_MARGIN_S)
+
+
+def test_next_wake_ignores_the_meter_age_without_a_limit_or_changed_signal():
+    sim = Sim([onoff("load")], max_age_s=0)
+    sim.tick(grid=-3000, grid_changed=True)
+    assert sim.state["next_wake"] is None
+    sim = Sim([onoff("load")], max_age_s=5)
+    sim.tick(grid=-3000)
+    assert sim.state["next_wake"] is None
 
 
 def test_stale_check_needs_the_changed_signal_and_a_positive_max_age():
@@ -516,6 +563,32 @@ def test_removed_consumers_lose_their_state():
     sim.config["consumers"] = [pct("b")]
     sim.tick(grid=0)
     assert set(sim.state["consumers"]) == {"b"}
+
+
+def test_a_removed_consumer_is_switched_off_before_it_is_forgotten():
+    sim = Sim([onoff("load", on_delay_s=0), pct("heat", on_delay_s=0)], on_delay_s=0)
+    out = sim.tick(grid=-20000)
+    assert out["c_load"] is True
+    assert out["c_heat"] == 100
+    sim.config["consumers"] = []
+    out = sim.tick(grid=-20000)
+    assert (out["c_load"], out["c_heat"]) == (False, 0)
+    assert type(out["c_heat"]) is int
+    assert sim.state["consumers"] == {}
+    assert not any(key.startswith(("c_load", "c_heat")) for key in sim.state["last_out"])
+    # forgotten for good: nothing is sent again
+    out = sim.tick(grid=-20000)
+    assert "c_load" not in out
+    assert "c_heat" not in out
+
+
+def test_a_removed_idle_or_never_sent_consumer_sends_nothing():
+    sim = Sim([onoff("idle"), trig("t", on_delay_s=0, pulse_s=1)], only_on_change=True)
+    sim.tick(grid=0)  # idle stays off, the trigger has no surplus
+    sim.state["consumers"]["ghost"] = hs._new_consumer_state()  # state without a sent output
+    sim.config["consumers"] = []
+    out = sim.tick(grid=0)
+    assert not any(key.startswith(("c_idle", "c_t", "c_ghost")) for key in out)
 
 
 def test_consumer_order_is_the_priority():
