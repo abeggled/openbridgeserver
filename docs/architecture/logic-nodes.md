@@ -17,6 +17,7 @@ module and its tests; shared infrastructure is only touched when the shared cont
 
 ```text
 obs/logic/
+├── booleans.py              # to_bool: the boolean rule shared by executor and engine modules
 ├── capabilities.py          # authorization capability identifiers per node type
 ├── executor.py              # shared execution dispatcher (see "Execution")
 ├── graph_analysis.py        # shared graph/topology helpers

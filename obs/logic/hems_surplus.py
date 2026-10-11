@@ -23,6 +23,8 @@ import math
 import re
 from typing import Any
 
+from obs.logic.booleans import to_bool
+
 logger = logging.getLogger(__name__)
 
 MODES = ("bidirectional", "split", "feed_in_only")
@@ -88,18 +90,20 @@ def _opt_num(value: Any, minimum: float | None = None) -> float | None:
     return max(minimum, result) if minimum is not None else result
 
 
-def _truthy(value: Any) -> bool:
-    """The boolean rule every other logic block applies (``GraphExecutor._to_bool``).
+def _raw_id(value: Any) -> str:
+    """A configured id as text, spelled the way the editor's ``String()`` spells it.
 
-    ``None`` is false and a string is false only for "0"/"false"/"no"/"off"/"";
-    any other text — "OK", "running" — is true, so the same DataPoint means the
-    same thing on this block as everywhere else.
+    The editor builds the ports from the same id (``hemsConsumers`` in
+    logicHemsOutputs.js), so a non-text id from an import must give the same
+    port name on both sides: ``true`` not ``True``, ``2`` not ``2.0``.
     """
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return value.strip().lower() not in ("0", "false", "no", "off", "")
-    return bool(value)
+    if not value:
+        return ""
+    if isinstance(value, bool):
+        return "true"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def load_consumers(raw: Any) -> list[dict[str, Any]]:
@@ -123,7 +127,7 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             continue
-        cid = _ID_SAFE.sub("", str(item.get("id") or "")) or f"n{index + 1}"
+        cid = _ID_SAFE.sub("", _raw_id(item.get("id"))) or f"n{index + 1}"
         while cid in seen:
             cid = f"{cid}_"
         seen.add(cid)
@@ -132,7 +136,7 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
             {
                 "id": cid,
                 "name": str(item.get("name") or "").strip() or f"#{index + 1}",
-                "active": item.get("active") is None or _truthy(item.get("active")),
+                "active": item.get("active") is None or to_bool(item.get("active")),
                 "mode": mode,
                 "power_source": "input" if item.get("power_source") == "input" else "fixed",
                 "power_w": _cfg_num(item.get("power_w"), 1000.0, 0.0),
@@ -294,7 +298,7 @@ def _read_meter(
     judged = [name for name in names if f"{name}_changed" in inputs] if max_age_s > 0 else []  # no signal → age not judged
     last_seen = state.setdefault("last_seen", {}) if judged else {}
     for name in judged:
-        if _truthy(inputs.get(f"{name}_changed")):
+        if to_bool(inputs.get(f"{name}_changed")):
             last_seen[name] = now
 
     values: dict[str, float] = {}
@@ -397,7 +401,7 @@ def _tick(
 ) -> dict[str, Any]:
     mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
     cycle_s = interval_s(data)
-    only_on_change = data.get("only_on_change") is None or _truthy(data.get("only_on_change"))
+    only_on_change = data.get("only_on_change") is None or to_bool(data.get("only_on_change"))
     result: dict[str, Any] = {}
 
     def emit(key: str, value: Any, *, event: bool = False) -> None:
@@ -417,9 +421,10 @@ def _tick(
         cs = states[consumer["id"]]
         if cs["pulse_until"] is not None and now >= cs["pulse_until"]:
             cs["pulse_until"] = None
-            emit(f"c_{consumer['id']}", False)
+            if consumer["mode"] == "trigger":  # switched to another mode mid-pulse: its own value follows
+                emit(f"c_{consumer['id']}", False)
         if consumer["mode"] == "trigger":
-            reset_now = _truthy(inputs.get(f"c_{consumer['id']}_reset"))
+            reset_now = to_bool(inputs.get(f"c_{consumer['id']}_reset"))
             if reset_now and not cs["reset_prev"]:
                 cs["armed"] = True
                 cs["dropped"] = True
@@ -434,9 +439,9 @@ def _tick(
     status = problem or "ok"
     # A wired interlock fails safe: no value (unseeded Read Object, failed
     # producer) counts as "not enabled" / "plant not OK", just like false.
-    if "enable" in inputs and not _truthy(inputs.get("enable")):
+    if "enable" in inputs and not to_bool(inputs.get("enable")):
         status = "disabled"
-    elif "plant_ok" in inputs and not _truthy(inputs.get("plant_ok")):
+    elif "plant_ok" in inputs and not to_bool(inputs.get("plant_ok")):
         status = "plant_not_ok"
 
     meter_detail = f"mode={mode}, " + ", ".join(f"{name}={inputs.get(name)!r}" for name in grid_input_names(mode))
@@ -491,21 +496,26 @@ def _tick(
         # A requested step stays requested until the consumer has actually
         # given it up — an on/off consumer still runs its own off-delay — and
         # only then does the next off-delay towards another step begin.
+        # No consumer may get more than it has now (``caps``), so power freed
+        # by one is never handed to another, and a positive feed-in reserve —
+        # which 0 W feed-in certainly falls short of — is cut straight away.
         zero_since = state.get("zero_since")
-        commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
+        caps = {c["id"]: _consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers}
+        commanded_w = sum(caps.values())
         if zero_since is None:
             state["zero_since"] = now
             state["zero_shed_w"] = 0.0
         elif not state.get("zero_shed_w") and now - zero_since >= off_delay_s:
             state["zero_shed_w"] = _shed_step_w(consumers, states, rated)
-        budget_w = commanded_w - (state.get("zero_shed_w") or 0.0)
+        budget_w = commanded_w - max(0.0, target_w) - (state.get("zero_shed_w") or 0.0)
     else:
         state["zero_since"] = None
         state["zero_shed_w"] = 0.0
         commanded_w = None
+        caps = None
         budget_w = used_w - grid_w - target_w
 
-    allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit)
+    allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps)
     if commanded_w is not None and state["zero_shed_w"]:
         new_commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
         if new_commanded_w <= commanded_w - state["zero_shed_w"] + _EPS:
@@ -575,8 +585,13 @@ def _allocate(
     on_delay_s: float,
     off_delay_s: float,
     emit: Any,
+    caps: dict[str, float] | None = None,
 ) -> tuple[float, float]:
-    """Serve the consumers top-down and emit their setpoints; returns (allocated, remaining)."""
+    """Serve the consumers top-down and emit their setpoints; returns (allocated, remaining).
+
+    ``caps`` limits what each consumer may be offered (W) — used to hold an
+    allocation without letting any consumer grow.
+    """
     available = budget_w
     allocated = 0.0
     for consumer in consumers:
@@ -597,14 +612,15 @@ def _allocate(
             emit(f"c_{cid}_status", "invalid_input")
             continue
 
+        offer = available if caps is None else min(available, caps[cid])
         if consumer["mode"] == "percent":
-            consumed, label = _step_percent(consumer, cs, power, available, now, on_delay_s, off_delay_s)
+            consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
             emit(f"c_{cid}", _pct_out(cs["setpoint"]) if cs["on"] else 0)
         elif consumer["mode"] == "onoff":
-            consumed, label = _step_onoff(consumer, cs, power, available, now, on_delay_s, off_delay_s)
+            consumed, label = _step_onoff(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
             emit(f"c_{cid}", cs["on"])
         else:
-            consumed, label = _step_trigger(consumer, cs, available, now, on_delay_s)
+            consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
             emit(f"c_{cid}", cs["pulse_until"] is not None, event=True)
         emit(f"c_{cid}_status", label)
         available -= consumed

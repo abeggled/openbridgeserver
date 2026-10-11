@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfoNotFoundError
 
 from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 from obs.logic import hems_surplus
+from obs.logic.booleans import to_bool
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
 from obs.logic.variables import ResolvedTemplate, TimeSnapshot, make_obs_resolver, make_time_snapshot, resolve_template
@@ -316,10 +317,9 @@ class GraphExecutor:
         # must treat it as a normal missing input instead of reporting the
         # producer as broken on every single run.
         retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
-        # hems_surplus withholds every output that did not change (and all
-        # consumer outputs between control cycles) — an absent handle is a
-        # defined outcome there, not a failed producer. That includes the
-        # handle of a removed consumer whose edge is still in the graph.
+        # An absent hems_surplus handle — never sent yet, or a removed consumer
+        # whose edge is still in the graph — is a defined outcome, not a failed
+        # producer, unless the block itself failed.
         hems_ids = {node.id for node in self.flow.nodes if node.type == "hems_surplus"}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
@@ -376,13 +376,12 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
-                if not has_value and src_id in hems_ids and node.type != "datapoint_write" and "__error__" not in src_out:
-                    # hems_surplus outputs are levels: "withheld" means unchanged,
-                    # so downstream logic computes with the value last sent. Only
-                    # a directly wired Write Object stays silent — that is what
-                    # the block's "output only on change" is for.
-                    retained = self.hysteresis_state.get(src_id, {}).get("last_out", {})
-                    has_value, value = src_handle in retained, retained.get(src_handle)
+                if has_value and src_id in hems_ids and node.type == "datapoint_write" and src_handle not in src_out.get("_emitted", ()):
+                    # hems_surplus outputs always carry their current level, so
+                    # all logic computes with it; only a directly wired Write
+                    # Object stays silent for a level that did not change — that
+                    # is what the block's "output only on change" is for.
+                    has_value = False
                 if has_value:
                     inputs[handle] = value
                 else:
@@ -405,7 +404,9 @@ class GraphExecutor:
                 unresolved = [
                     item
                     for item in missing_inputs
-                    if item[0] not in node_overrides and item[2] not in retained_boundary_handles.get(item[1], set()) and item[1] not in hems_ids
+                    if item[0] not in node_overrides
+                    and item[2] not in retained_boundary_handles.get(item[1], set())
+                    and (item[1] not in hems_ids or "__error__" in outputs.get(item[1], {}))
                 ]
                 if node.type == "hysteresis":
                     # An absent value deliberately means "emit retained
@@ -1493,11 +1494,7 @@ class GraphExecutor:
     @staticmethod
     def _to_bool(v: Any) -> bool:
         """Coerce any value to bool. Strings '0'/'false'/'off' → False."""
-        if v is None:
-            return False
-        if isinstance(v, str):
-            return v.strip().lower() not in ("0", "false", "no", "off", "")
-        return bool(v)
+        return to_bool(v)
 
     def _memory_initial_value(self, node: LogicNode) -> Any:
         return self._coerce_typed_value(node, node.data.get("initial_value"))
@@ -2890,8 +2887,11 @@ class GraphExecutor:
             case "hems_surplus":
                 # Control engine lives in obs/logic/hems_surplus.py; the per-node
                 # state is volatile (never persisted) so a restart begins safe.
+                # The engine returns only what it sends this tick; the graph sees
+                # every output at its current level plus which ones were sent.
                 state = self.hysteresis_state.setdefault(node.id, {})
-                return hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id)
+                emitted = hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id)
+                return {**state.get("last_out", {}), **emitted, "_emitted": sorted(emitted)}
 
             case "ical":
                 # The raw iCal text is pre-fetched by LogicManager and stored in

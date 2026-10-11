@@ -111,20 +111,6 @@ def _copy_graph_worker_state(state: dict[str, Any]) -> tuple[dict[str, Any], dic
     return base, _safe_deepcopy_state(base)
 
 
-def _with_hems_last_outputs(flow: Any, hyst: dict[str, Any], outputs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Display copy of ``outputs`` in which every hems_surplus node shows all its outputs.
-
-    The block withholds unchanged outputs and evaluates only once per control
-    interval, so a debug view would otherwise be empty most of the time. Only
-    for display — never fed back into writes.
-    """
-    shown = dict(outputs)
-    for node in flow.nodes:
-        if node.type == "hems_surplus":
-            shown[node.id] = {**hyst.get(node.id, {}).get("last_out", {}), **outputs.get(node.id, {})}
-    return shown
-
-
 def _serialize_logic_debug_payload(
     graph_id: str,
     outputs: dict[str, Any],
@@ -2249,8 +2235,11 @@ class LogicManager:
                         sleep_s = hems_surplus.interval_s(node.data)
                     await self._execute_graph(graph_id, g_name, flow, {node_id: {}})
                     next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
-                    if next_wake is not None:
-                        sleep_s = min(sleep_s, max(0.1, next_wake - datetime.now(UTC).timestamp()))
+                    now_ts = datetime.now(UTC).timestamp()
+                    # A wake time already past was not refreshed by this run — the
+                    # node was skipped or failed — so it must not spin the loop.
+                    if next_wake is not None and next_wake > now_ts:
+                        sleep_s = min(sleep_s, max(0.1, next_wake - now_ts))
                     logger.debug("HEMS surplus graph %s (%s) node %s evaluated", graph_id[:8], g_name, node_id[:8])
 
                 await asyncio.sleep(sleep_s)
@@ -2465,7 +2454,7 @@ class LogicManager:
             debug_overrides=input_overrides or {},
             debug_input_capture=input_capture,
         )
-        return _with_hems_last_outputs(flow, self._hysteresis.get(graph_id, {}), outputs), input_capture
+        return outputs, input_capture
 
     async def initialize_graph(self, graph_id: str, logic_depth: int = 0, seed_overrides: dict[str, Any] | None = None) -> None:
         """Seed Read Object nodes with their current registry values right
@@ -4320,9 +4309,10 @@ class LogicManager:
                     if GraphExecutor._to_bool(_pout.get("changed")):
                         pulses.add((_pn.id, "changed"))
                 elif _pn.type == "hems_surplus":
-                    # A trigger consumer's output is an event per firing, not a level.
+                    # A trigger consumer's output is an event per firing, not a
+                    # level: it pulses only on the run that actually sent True.
                     for _ph in hems_surplus.trigger_output_handles(_pn.data):
-                        if GraphExecutor._to_bool(_pout.get(_ph)):
+                        if GraphExecutor._to_bool(_pout.get(_ph)) and _ph in _pout.get("_emitted", ()):
                             pulses.add((_pn.id, _ph))
                 elif _pn.type == "edge_detect":
                     for _ph in ("rising", "falling"):
@@ -7229,7 +7219,7 @@ class LogicManager:
             payload = await _run_logic_debug_serialization_in_worker(
                 _serialize_logic_debug_payload,
                 graph_id,
-                _with_hems_last_outputs(flow, hyst, outputs),
+                outputs,
                 debug_inputs or {},
                 debug_overrides,
                 execution_started,

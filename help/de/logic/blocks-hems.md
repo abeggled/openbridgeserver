@@ -30,6 +30,8 @@ Einspeisung länger als die **Ausschaltverzögerung** aus, wird schrittweise je 
 Verbrauchers mit der niedrigsten Priorität abgebaut. Die Abbau-Anforderung bleibt bestehen, bis der
 Verbraucher sie umgesetzt hat (ein Ein/Aus-Verbraucher durchläuft dabei seine eigene
 Ausschaltverzögerung und Mindestlaufzeit); erst danach beginnt die Wartezeit für den nächsten Schritt.
+Frei werdende Leistung geht dabei an keinen anderen Verbraucher, und eine positive Einspeisereserve
+wird sofort abgezogen, da sie bei 0 W Einspeisung sicher nicht erreicht ist.
 
 Optionale globale Eingänge: **Freigabe** (false = alles sicher aus), **Einspeisereserve (dyn.)**
 (überschreibt den konfigurierten Wert) und **Anlage OK** (false = alles sicher aus). Unverbundene

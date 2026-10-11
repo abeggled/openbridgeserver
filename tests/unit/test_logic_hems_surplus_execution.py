@@ -52,9 +52,13 @@ def test_dispatcher_runs_the_engine_and_keeps_state_between_runs():
     assert out["status"] == "ok"
     assert state["h"]["consumers"]["boiler"]["on"] is True
 
-    # the next tick inside the control interval emits nothing at all
+    assert set(out["_emitted"]) == {k for k in out if k != "_emitted"}
+
+    # the next tick inside the control interval sends nothing, but the graph
+    # still sees every output at its current level
     again = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})["h"]
-    assert again == {}
+    assert again["_emitted"] == []
+    assert again["c_boiler"] is True
 
 
 def test_input_capture_does_not_change_what_the_block_emits():
@@ -63,7 +67,7 @@ def test_input_capture_does_not_change_what_the_block_emits():
     state: dict = {}
     GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
     debug = GraphExecutor(flow, state, input_capture={}).execute(input_overrides={"h": {"grid": -2500}})["h"]
-    assert debug == {}
+    assert debug["_emitted"] == []
 
 
 @pytest.mark.asyncio
@@ -190,10 +194,22 @@ async def test_loop_wakes_early_for_a_pending_pulse_end():
 async def test_loop_never_sleeps_less_than_a_tenth_of_a_second():
     manager = _loop_manager()
     now = 1_000_000.0
-    manager._hysteresis = {"g": {"h": {"next_wake": now - 50}}}
+    manager._hysteresis = {"g": {"h": {"next_wake": now + 0.01}}}
     with patch("obs.logic.manager.datetime") as fake_datetime:
         fake_datetime.now.return_value.timestamp.return_value = now
         assert await _run_loop(manager) == [0.1]
+
+
+@pytest.mark.asyncio
+async def test_loop_ignores_a_wake_time_the_run_did_not_refresh():
+    # The node was skipped or failed, so next_wake is still the old, past value:
+    # the loop must fall back to its interval instead of spinning every 0.1 s.
+    manager = _loop_manager()
+    now = 1_000_000.0
+    manager._hysteresis = {"g": {"h": {"next_wake": now - 50}}}
+    with patch("obs.logic.manager.datetime") as fake_datetime:
+        fake_datetime.now.return_value.timestamp.return_value = now
+        assert await _run_loop(manager) == [45.0]
 
 
 @pytest.mark.asyncio
@@ -454,3 +470,16 @@ def test_logic_behind_a_failed_block_does_not_compute_with_stale_values():
         out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -5000}})
     assert "__error__" in out["h"]
     assert out["n"]["out"] is True  # the ordinary missing-input default, not NOT(stale True)
+
+
+def test_a_failed_block_is_a_failed_producer_for_a_change_filter():
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("n", "not", {}), node("cf", "change_filter", {})],
+            "edges": [edge("h", "n", "c_boiler", "in1"), edge("n", "cf", "out", "in")],
+        }
+    )
+    with patch("obs.logic.executor.hems_surplus.evaluate", side_effect=RuntimeError("boom")):
+        out = GraphExecutor(flow, {}).execute(input_overrides={"h": {"grid": -5000}})
+    assert "Missing upstream output" in out["n"]["__error__"]
+    assert out["cf"].get("changed") is not True

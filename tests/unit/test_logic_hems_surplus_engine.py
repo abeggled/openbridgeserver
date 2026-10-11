@@ -11,6 +11,7 @@ import math
 import pytest
 
 from obs.logic import hems_surplus as hs
+from obs.logic.executor import GraphExecutor
 
 
 class Sim:
@@ -83,8 +84,9 @@ def test_cfg_num_and_opt_num_apply_defaults_and_bounds():
         (None, False),
     ],
 )
-def test_truthy(value, expected):
-    assert hs._truthy(value) is expected
+def test_boolean_inputs_follow_the_rule_of_every_other_block(value, expected):
+    assert hs.to_bool(value) is expected
+    assert GraphExecutor._to_bool(value) is expected
 
 
 def test_load_consumers_accepts_json_string_and_list():
@@ -1051,3 +1053,46 @@ def test_split_mode_records_a_telegram_even_when_the_other_input_is_invalid():
     assert out["status"] == "invalid_input"
     out = sim.tick(grid_import=0, grid_import_changed=False, grid_export=3000, grid_export_changed=True)
     assert out["status"] == "ok"
+
+
+# ── Review findings (fourth round) ──────────────────────────────────────
+
+
+def test_feed_in_zero_never_hands_freed_power_to_another_consumer():
+    # B (1 kW) runs, A is still locked by its minimum off time. At 0 W feed-in
+    # the allocation is held: once A may start it must not take B's power,
+    # which B still counts during its own off-delay.
+    sim = Sim([pct("a", power_w=2000, min_off_s=30, on_delay_s=0), onoff("b", power_w=1000, on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=0)  # zero hold starts with nothing allocated
+    sim.state["consumers"]["a"].update(since=sim.now)  # A just switched off → locked
+    sim.state["consumers"]["b"].update(on=True, since=sim.now - 1000)  # B running
+    for _ in range(10):
+        out = sim.tick(feed_in=0)
+        assert out["allocated"] <= 1000
+    assert sim.cstate("a")["on"] is False
+
+
+def test_feed_in_zero_cuts_a_positive_reserve_and_stays_monotonic():
+    sim = Sim([pct("a", power_w=2000, on_delay_s=0)], grid_mode="feed_in_only", target_w=500, off_delay_s=180)
+    sim.tick(feed_in=2500)  # 2000 W allocated, 500 W left as reserve
+    assert sim.cstate("a")["setpoint"] == 100
+    with_feed_in = sim.tick(feed_in=10)["budget"]
+    sim.state["consumers"]["a"].update(setpoint=100.0)  # compare from the same allocation
+    at_zero = sim.tick(feed_in=0)["budget"]
+    assert at_zero <= with_feed_in
+    assert sim.cstate("a")["setpoint"] == 75
+
+
+def test_a_pulse_end_after_a_mode_change_sends_no_boolean_to_the_new_output():
+    consumers = [trig("x", on_delay_s=0, pulse_s=60)]
+    sim = Sim(consumers, only_on_change=True)
+    assert sim.tick(grid=-3000)["c_x"] is True
+    consumers[0] = pct("x", on_delay_s=0)
+    out = sim.tick(advance=61, grid=-3000)
+    assert out["c_x"] == 30
+    assert type(out["c_x"]) is int
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(2.0, "c_2"), (2.5, "c_25"), (7, "c_7"), (True, "c_true"), (False, "c_n1"), (0, "c_n1")])
+def test_non_text_ids_are_spelled_like_the_editor_spells_them(raw, expected):
+    assert hs.load_consumers([{"id": raw}])[0]["id"] == expected[2:]

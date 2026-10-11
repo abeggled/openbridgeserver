@@ -40,6 +40,10 @@ describe('hemsConsumers', () => {
     expect(list.map(c => c.mode)).toEqual(['onoff', 'percent', 'percent', 'trigger'])
   })
 
+  it('spells non-text ids like the engine (true, 2 not 2.0)', () => {
+    expect(hemsConsumers([{ id: 2.0 }, { id: 2.5 }, { id: true }, { id: false }, { id: 0 }]).map(c => c.id)).toEqual(['2', '25', 'true', 'n4', 'n5'])
+  })
+
   it('keeps the other fields and reads JSON storage', () => {
     expect(hemsConsumers(JSON.stringify([{ id: 'k', name: 'Boiler', power_w: 2000 }]))).toEqual([
       { id: 'k', name: 'Boiler', power_w: 2000, mode: 'percent' },

@@ -28,7 +28,9 @@ import. It therefore reacts conservatively: while no feed-in is reported the cur
 (never increased). If feed-in stays absent for longer than the **switch-off delay**, one step of
 the lowest-priority consumer is removed at a time. The reduction request stands until the consumer
 has carried it out (an on/off consumer still runs its own switch-off delay and minimum run time);
-only then does the wait for the next step begin.
+only then does the wait for the next step begin. Power freed in the process goes to no other
+consumer, and a positive feed-in reserve is deducted straight away, since 0 W feed-in certainly falls
+short of it.
 
 Optional global inputs: **Enable** (false = everything safely off), **Feed-in reserve (dyn.)**
 (overrides the configured value) and **Plant OK** (false = everything safely off). Unconnected
