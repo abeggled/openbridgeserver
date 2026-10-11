@@ -582,3 +582,33 @@ async def test_correlated_handles_through_not_gates_are_not_decorrelated():
         out = await manager.execute_graph("g")
     assert out["b"]["threshold_reached"] is True
     assert out["w"]["_write_value"] is True
+
+
+@pytest.mark.asyncio
+async def test_correlation_through_a_chained_block_is_not_lost():
+    # a.count_true reaches b directly and through c; both always agree, so
+    # b.tie is False in every state and the steady run must still write it.
+    flow = _flow(
+        [
+            node("src", "const_value", {"value": "1", "data_type": "number"}),
+            node("cf", "change_filter"),
+            node("a", "binary_stats", {"input_count": 2}),
+            node("c", "binary_stats", {"input_count": 2}),
+            node("b", "binary_stats", {"input_count": 2}),
+            node("w", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
+        ],
+        [
+            edge("src", "cf", "value", "in"),
+            edge("cf", "a", "changed", "in1"),
+            edge("a", "c", "count_true", "in1"),
+            edge("a", "b", "count_true", "in1"),
+            edge("c", "b", "count_true", "in2"),
+            edge("b", "w", "tie", "value"),
+        ],
+    )
+    manager = _stats_manager(flow)
+    with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+        await manager.execute_graph("g")
+        out = await manager.execute_graph("g")
+    assert out["b"]["tie"] is False
+    assert out["w"]["_write_value"] is False

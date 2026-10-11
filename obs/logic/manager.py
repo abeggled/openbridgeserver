@@ -1520,70 +1520,86 @@ def _handle_independent_of_volatile_inputs(
         inputs.update(debug_overrides.get(nid, {}))
         return inputs, volatile
 
-    def correlation(incoming: Any, seen: frozenset[str]) -> tuple[str, Callable[[dict[str, Any]], Any]] | None:
-        """Fan-in block whose output a volatile edge carries, if any.
+    def correlation(incoming: Any, seen: frozenset[str]) -> tuple[tuple[str, ...], Callable[[dict[str, Any]], Any]] | None:
+        """Common origin of a volatile edge, and how its value arrives.
 
-        The edge may reach that block through stateless gates that have no
-        other volatile input; their remaining inputs keep their current
-        values. Returns the block id and a function mapping the block's
-        outputs to the value arriving over ``incoming``.
+        The edge is followed upstream through stateless blocks (gates and
+        fan-in blocks) that have exactly one volatile input; their remaining
+        inputs keep their current values. It ends at a fan-in block with
+        several volatile inputs, whose feasible outputs are probed, or at the
+        volatile output of any other block, probed as a free boolean. Returns
+        a key for that origin and a function mapping the origin's outputs to
+        the value arriving over ``incoming``; None for a gate with several
+        volatile inputs or a cycle.
         """
         hops: list[tuple[Any, dict[str, Any], str, str]] = []
         visited: set[str] = set()
-        while (upstream := fan_in_node(incoming.source, seen)) is None:
-            gate = node_by_id.get(incoming.source)
-            if gate is None or gate.type not in _PROBE_TRANSPARENT_TYPES or gate.id in visited:
+        while True:
+            source = node_by_id[incoming.source]
+            if source.type not in _PROBE_TRANSPARENT_TYPES and source.type not in _PER_HANDLE_FAN_IN_TYPES:
+                origin: tuple[str, ...] = ("output", source.id, incoming.sourceHandle or "out")
+                break
+            if source.id in visited or source.id in seen:
                 return None
-            visited.add(gate.id)
-            gate_inputs, gate_volatile = volatile_state(gate.id, seen)
-            if len(gate_volatile) != 1:
-                return None
-            ((gate_handle, gate_incoming),) = gate_volatile.items()
-            hops.append((gate, gate_inputs, gate_handle, incoming.sourceHandle or "out"))
-            incoming = gate_incoming
+            visited.add(source.id)
+            source_inputs, source_volatile = volatile_state(source.id, seen)
+            if len(source_volatile) != 1:
+                if source.type not in _PER_HANDLE_FAN_IN_TYPES:
+                    return None
+                origin = ("block", source.id)
+                break
+            ((source_handle, source_incoming),) = source_volatile.items()
+            hops.append((source, source_inputs, source_handle, incoming.sourceHandle or "out"))
+            incoming = source_incoming
         origin_handle = incoming.sourceHandle or "out"
 
         def carried(result: dict[str, Any]) -> Any:
             value = GraphExecutor._get_output_value(result, origin_handle)
-            for gate, gate_inputs, gate_handle, out_handle in reversed(hops):
-                gate_result = probe._eval_node(gate, GraphExecutor._resolve_effective_inputs(gate, {**gate_inputs, gate_handle: value}))
-                value = GraphExecutor._get_output_value(gate_result, out_handle)
+            for hop, hop_inputs, hop_handle, out_handle in reversed(hops):
+                hop_result = probe._eval_node(hop, GraphExecutor._resolve_effective_inputs(hop, {**hop_inputs, hop_handle: value}))
+                value = GraphExecutor._get_output_value(hop_result, out_handle)
             return value
 
-        return upstream.id, carried
+        return origin, carried
 
     def assignments(nid: str, inputs: dict[str, Any], volatile: dict[str, Any], seen: frozenset[str]) -> Iterator[dict[str, Any]]:
         """Joint values the volatile inputs of ``nid`` can take together.
 
-        Handles fed by the same upstream fan-in block are correlated (for
-        example ``count_true`` and ``count_false`` always add up to the
-        supplied inputs), also when stateless gates sit in between, so only
-        the outputs that block can actually emit are combined; unrelated
-        handles are probed as free booleans. The combinations are yielded
-        lazily and capped at ``_MAX_PROBED_COMBINATIONS``: chained blocks
-        multiply.
+        Handles derived from the same origin are correlated (for example
+        ``count_true`` and ``count_false`` of one block always add up to the
+        supplied inputs), also through gates and chained blocks in between,
+        so only the values that origin can actually produce are combined;
+        unrelated handles are probed as free booleans. The combinations are
+        yielded lazily and capped at ``_MAX_PROBED_COMBINATIONS``: chained
+        blocks multiply.
         """
         if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
             raise ValueError("too many volatile inputs")
         carriers: dict[str, Callable[[dict[str, Any]], Any]] = {}
-        by_source: dict[str, list[str]] = {}
+        by_origin: dict[tuple[str, ...], list[str]] = {}
         for handle, incoming in volatile.items():
             link = correlation(incoming, seen | {nid})
             if link is not None:
-                by_source.setdefault(link[0], []).append(handle)
+                by_origin.setdefault(link[0], []).append(handle)
                 carriers[handle] = link[1]
-        grouped = {h for group in by_source.values() if len(group) > 1 for h in group}
+        grouped = {h for group in by_origin.values() if len(group) > 1 for h in group}
         options: list[list[dict[str, Any]]] = [[{h: False}, {h: True}] for h in sorted(volatile) if h not in grouped]
-        for source_id, group in sorted(by_source.items()):
+        for origin, group in sorted(by_origin.items()):
             if len(group) < 2:
                 continue
-            upstream = node_by_id[source_id]
-            up_inputs, up_volatile = volatile_state(source_id, seen | {nid})
+            if origin[0] == "block":
+                upstream = node_by_id[origin[1]]
+                up_inputs, up_volatile = volatile_state(origin[1], seen | {nid})
+                results: Iterator[dict[str, Any]] = (
+                    probe._eval_node(upstream, GraphExecutor._resolve_effective_inputs(upstream, {**up_inputs, **up_assignment}))
+                    for up_assignment in assignments(origin[1], up_inputs, up_volatile, seen | {nid})
+                )
+            else:
+                results = iter([{origin[2]: False}, {origin[2]: True}])
             # Many upstream combinations give the same handle values (256 input
             # patterns yield at most 9 count pairs), so keep each one once.
             group_options: dict[str, dict[str, Any]] = {}
-            for up_assignment in assignments(source_id, up_inputs, up_volatile, seen | {nid}):
-                result = probe._eval_node(upstream, GraphExecutor._resolve_effective_inputs(upstream, {**up_inputs, **up_assignment}))
+            for result in results:
                 values = {h: carriers[h](result) for h in sorted(group)}
                 group_options.setdefault(repr(sorted(values.items())), values)
             options.append(list(group_options.values()))
