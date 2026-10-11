@@ -444,9 +444,8 @@ def _tick(
     for consumer in consumers:
         cs = states[consumer["id"]]
         if cs["pulse_until"] is not None and now >= cs["pulse_until"]:
-            cs["pulse_until"] = None
-            if consumer["mode"] == "trigger":  # switched to another mode mid-pulse: its own value follows
-                emit(f"c_{consumer['id']}", False)
+            cs["pulse_until"] = None  # only a trigger has one: a mode change resets the state
+            emit(f"c_{consumer['id']}", False)
         if consumer["mode"] == "trigger":
             reset_now = to_bool(inputs.get(f"c_{consumer['id']}_reset"))
             if reset_now and not cs["reset_prev"]:
