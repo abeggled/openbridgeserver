@@ -26,7 +26,9 @@ a control cycle runs at most once per interval.
 **Limitation of "Feed-in power only":** at `0 W` the block cannot tell an exact balance from grid
 import. It therefore reacts conservatively: while no feed-in is reported the current power is held
 (never increased). If feed-in stays absent for longer than the **switch-off delay**, one step of
-the lowest-priority consumer is removed at a time.
+the lowest-priority consumer is removed at a time. The reduction request stands until the consumer
+has carried it out (an on/off consumer still runs its own switch-off delay and minimum run time);
+only then does the wait for the next step begin.
 
 Optional global inputs: **Enable** (false = everything safely off), **Feed-in reserve (dyn.)**
 (overrides the configured value) and **Plant OK** (false = everything safely off). Unconnected
@@ -79,9 +81,10 @@ Per consumer: one output (percentage / on-off / trigger pulse) and a status (`in
 `on_delay`, `active`, `reduced`, `min_runtime`, `off_delay`, `locked`, `fired`, `safe`,
 `safe_hold`, `invalid_input`). Diagnostics: grid power, surplus, power budget, allocated power, remaining budget,
 block status (`ok`, `disabled`, `plant_not_ok`, `invalid_input`, `stale_input`) and warning. With
-**Output only on change** (default) unchanged outputs are not sent again; a logic block behind such
-an output (e.g. NOT) then outputs nothing in that run either, instead of reading the missing value as
-`false`. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator
+**Output only on change** (default) unchanged outputs are not sent again to directly wired Write
+Objects. Logic blocks behind an output (e.g. NOT, AND) always compute with the value it last sent —
+it is a state, not an event; the Write Object's own *Only on change* option prevents repeated writes
+behind them if needed. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator
 that is still wired does not stay on. The debug tab lists every output with its last emitted value; in the safe state the diagnostics stay visible (grid power when known; surplus, budget, allocated and remaining = 0).
 
 ### Error and restart behaviour
@@ -97,3 +100,6 @@ that is still wired does not stay on. The debug tab lists every output with its 
   as stale until the meter reports a new telegram.
 - After a restart the block always begins in the safe state; its state is not persisted, and a
   trigger never fires because of a restored old state.
+- Disabling the logic sheet or deleting the block ends the control, but — as with every logic
+  block — its outputs are not reset. To shut down in a controlled way, first set *Enable* to false
+  (safe state), then disable.

@@ -57,16 +57,52 @@ def test_dispatcher_runs_the_engine_and_keeps_state_between_runs():
     assert again == {}
 
 
-def test_a_debug_run_shows_every_output_even_inside_the_control_interval():
+def test_input_capture_does_not_change_what_the_block_emits():
+    # The debug view (input capture) must not turn withheld outputs into writes.
     flow = _flow()
     state: dict = {}
     GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    plain = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})["h"]
-    assert plain == {}
     debug = GraphExecutor(flow, state, input_capture={}).execute(input_overrides={"h": {"grid": -2500}})["h"]
-    assert debug["c_boiler"] is True
-    assert debug["status"] == "ok"
-    assert "surplus" in debug
+    assert debug == {}
+
+
+@pytest.mark.asyncio
+async def test_a_manual_debug_run_shows_every_output_even_inside_the_control_interval():
+    flow = _flow()
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    await manager.execute_graph_debug("g", {"h": {"grid": -2500}})
+    outputs, _inputs = await manager.execute_graph_debug("g", {"h": {"grid": -2500}})
+    assert outputs["h"]["c_boiler"] is True
+    assert outputs["h"]["status"] == "ok"
+    assert "surplus" in outputs["h"]
+
+
+@pytest.mark.asyncio
+async def test_an_open_debug_view_neither_repeats_writes_nor_hides_outputs():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("h", "hems_surplus", {"consumers": CONSUMERS}),
+                node("w", "datapoint_write", {"datapoint_id": str(dp_out)}),
+            ],
+            "edges": [edge("read", "h", "value", "grid"), edge("h", "w", "c_boiler", "value")],
+        }
+    )
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    ws = MagicMock()
+    ws.has_logic_debug_subscribers.return_value = True
+    ws.broadcast_logic_debug = AsyncMock()
+    with patch("obs.api.v1.websocket.get_ws_manager", return_value=ws):
+        for _ in range(3):
+            await manager._execute_graph("g", "G", flow, {"read": {"value": -5000}})
+    written = [c.args[0].value for c in manager._event_bus.publish.await_args_list if str(c.args[0].datapoint_id) == str(dp_out)]
+    assert written == [True]
+    payload = ws.broadcast_logic_debug.await_args_list[-1].args[1]
+    assert "c_boiler" in json.dumps(payload)
 
 
 def test_dispatcher_puts_an_invalid_meter_into_the_safe_state():
@@ -275,9 +311,9 @@ def _relay_flow(dp_grid, dp_out, consumer, relay_edges, extra_nodes):
         {"id": "wash", "mode": "onoff", "power_w": 1000, "on_delay_s": 0},
     ],
 )
-async def test_a_withheld_output_is_not_relayed_as_false_through_logic(consumer):
-    # Between two emissions the HEMS output is absent ("unchanged"), not False:
-    # a NOT behind it must not turn that absence into a published True.
+async def test_logic_behind_a_withheld_output_computes_with_the_value_last_sent(consumer):
+    # Between two emissions the HEMS output is unchanged, not False: a NOT
+    # behind it keeps inverting the level last sent instead of a placeholder.
     dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
     flow = _relay_flow(
         dp_grid,
@@ -297,13 +333,50 @@ async def test_a_withheld_output_is_not_relayed_as_false_through_logic(consumer)
     await manager._execute_graph("g", "G", flow, {})
     assert written() == [False]
     await manager._execute_graph("g", "G", flow, {"h": {}})
-    assert written() == []
+    assert written() == [False]  # never the spurious True of a missing input
 
     if consumer["mode"] == "trigger":
-        # the pulse ends: the emitted False is relayed as a real value
         manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0
         await manager._execute_graph("g", "G", flow, {"h": {}})
         assert written() == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_held_level_combines_with_another_live_signal():
+    dp_grid, dp_window, dp_out = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        dp_out,
+        {"id": "boiler", "mode": "onoff", "power_w": 1000, "on_delay_s": 0},
+        [edge("h", "and", "c_boiler", "in1"), edge("win", "and", "value", "in2"), edge("and", "w", "out", "value")],
+        [
+            node("win", "datapoint_read", {"datapoint_id": str(dp_window)}),
+            node("and", "and", {}),
+            node("w", "datapoint_write", {"datapoint_id": str(dp_out)}),
+        ],
+    )
+    manager = _manager({str(dp_grid): -2000, str(dp_window): False})
+    manager._graphs["g"] = ("G", True, flow)
+    await manager._execute_graph("g", "G", flow, {})
+    manager._event_bus.publish.reset_mock()
+    # the window closes inside the control interval: c_boiler is withheld but still True
+    await manager._execute_graph("g", "G", flow, {"win": {"value": True}})
+    written = [c.args[0].value for c in manager._event_bus.publish.await_args_list if str(c.args[0].datapoint_id) == str(dp_out)]
+    assert written == [True]
+
+
+def test_a_directly_wired_write_stays_silent_while_the_output_is_withheld():
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("w", "datapoint_write", {"datapoint_id": str(uuid.uuid4())})],
+            "edges": [edge("h", "w", "c_boiler", "value")],
+        }
+    )
+    state: dict = {}
+    first = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    assert first["w"]["_write_value"] is True
+    again = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    assert again["w"].get("_write_value") is None
 
 
 @pytest.mark.asyncio
@@ -323,3 +396,21 @@ async def test_a_withheld_trigger_does_not_restart_a_value_sequence():
         assert start.call_count == 1
         await manager._execute_graph("g", "G", flow, {"h": {}})
         assert start.call_count == 1
+
+
+def test_logic_behind_a_never_sent_output_gets_no_value():
+    # A consumer added inside the control interval has sent nothing yet, so
+    # there is no last value to compute with.
+    consumers = [dict(CONSUMERS[0])]
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("h", "hems_surplus", {"consumers": consumers}), node("n", "not", {})],
+            "edges": [edge("h", "n", "c_new", "in1")],
+        }
+    )
+    state: dict = {}
+    GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    flow.nodes[0].data["consumers"] = [*consumers, {"id": "new", "mode": "onoff"}]
+    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    assert "c_new" not in state["h"]["last_out"]
+    assert out["n"]["out"] is True  # the executor's ordinary missing-input default

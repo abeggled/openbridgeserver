@@ -27,7 +27,9 @@ zusätzlich auf neue Zählerwerte; ein Regelzyklus läuft aber höchstens einmal
 ein exaktes Gleichgewicht oder bereits Netzbezug vorliegt. Er reagiert deshalb konservativ: Solange
 keine Einspeisung gemeldet wird, wird die aktuelle Leistung gehalten (nie erhöht). Bleibt die
 Einspeisung länger als die **Ausschaltverzögerung** aus, wird schrittweise je ein Schritt des
-Verbrauchers mit der niedrigsten Priorität abgebaut.
+Verbrauchers mit der niedrigsten Priorität abgebaut. Die Abbau-Anforderung bleibt bestehen, bis der
+Verbraucher sie umgesetzt hat (ein Ein/Aus-Verbraucher durchläuft dabei seine eigene
+Ausschaltverzögerung und Mindestlaufzeit); erst danach beginnt die Wartezeit für den nächsten Schritt.
 
 Optionale globale Eingänge: **Freigabe** (false = alles sicher aus), **Einspeisereserve (dyn.)**
 (überschreibt den konfigurierten Wert) und **Anlage OK** (false = alles sicher aus). Unverbundene
@@ -82,8 +84,10 @@ Pro Verbraucher: ein Ausgang (Prozentwert / Ein-Aus / Triggerimpuls) und ein Sta
 `safe`, `safe_hold`, `invalid_input`). Diagnose: Netzleistung, Überschuss, Leistungsbudget, verteilte Leistung,
 verbleibendes Budget, Status des Blocks (`ok`, `disabled`, `plant_not_ok`, `invalid_input`,
 `stale_input`) und Warnung. Mit **Nur bei Änderung ausgeben** (Standard) werden unveränderte
-Ausgänge nicht erneut gesendet; ein nachgeschalteter Logikbaustein (z. B. NICHT) gibt in so einem
-Lauf ebenfalls nichts aus, statt den fehlenden Wert als `false` zu werten. Wird ein Verbraucher aus
+Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet. Nachgeschaltete Logikbausteine
+(z. B. NICHT, UND) rechnen dagegen immer mit dem zuletzt gesendeten Wert des Ausgangs weiter — er ist
+ein Zustand, kein Ereignis; doppelte Schreibvorgänge dahinter verhindert bei Bedarf die Option *Nur bei
+Änderung* des Write-Objekts. Wird ein Verbraucher aus
 der Liste entfernt, geht sein Ausgang einmalig auf 0 % bzw. `false`, damit ein noch verbundener
 Aktor nicht eingeschaltet bleibt. Im Debug-Tab erscheinen alle Ausgänge mit dem zuletzt ausgegebenen Wert; im sicheren Zustand bleiben die Diagnosewerte sichtbar (Netzleistung, soweit bekannt; Überschuss, Budget, verteilt und Rest = 0).
 
@@ -102,3 +106,6 @@ Aktor nicht eingeschaltet bleibt. Im Debug-Tab erscheinen alle Ausgänge mit dem
   meldet.
 - Nach einem Neustart beginnt der Block immer im sicheren Zustand; der Zustand wird nicht
   gespeichert, ein Trigger löst nie aufgrund eines alten Zustands aus.
+- Wird das Logikblatt deaktiviert oder der Block gelöscht, endet die Regelung, die Ausgänge werden
+  aber — wie bei jedem Logikbaustein — nicht zurückgesetzt. Zum geregelten Abschalten zuerst
+  *Freigabe* auf false setzen (sicherer Zustand), dann deaktivieren.

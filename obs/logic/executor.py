@@ -322,6 +322,7 @@ class GraphExecutor:
         for node in self.flow.nodes:
             if node.type == "hems_surplus":
                 retained_boundary_handles[node.id] = hems_surplus.output_handles(node.data)
+        hems_ids = {node.id for node in self.flow.nodes if node.type == "hems_surplus"}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
         # Only failed-output paths that can influence a Change Filter need to
@@ -377,6 +378,13 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
+                if not has_value and src_id in hems_ids and node.type != "datapoint_write":
+                    # hems_surplus outputs are levels: "withheld" means unchanged,
+                    # so downstream logic computes with the value last sent. Only
+                    # a directly wired Write Object stays silent — that is what
+                    # the block's "output only on change" is for.
+                    retained = self.hysteresis_state.get(src_id, {}).get("last_out", {})
+                    has_value, value = src_handle in retained, retained.get(src_handle)
                 if has_value:
                     inputs[handle] = value
                 else:
@@ -2875,9 +2883,7 @@ class GraphExecutor:
                 # Control engine lives in obs/logic/hems_surplus.py; the per-node
                 # state is volatile (never persisted) so a restart begins safe.
                 state = self.hysteresis_state.setdefault(node.id, {})
-                # A debug run (input capture active) shows every output, not just what
-                # this tick happened to emit.
-                return hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id, full_snapshot=self.input_capture is not None)
+                return hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id)
 
             case "ical":
                 # The raw iCal text is pre-fetched by LogicManager and stored in

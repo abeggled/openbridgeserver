@@ -896,16 +896,12 @@ def test_a_pulse_longer_than_the_interval_stays_active_across_cycles_without_ref
     assert sim.cstate("a")["pulse_until"] == 1030.0 + 100
 
 
-def test_full_snapshot_adds_the_last_emitted_outputs_without_recomputing():
+def test_last_out_keeps_every_output_while_unchanged_ones_are_withheld():
     sim = Sim([onoff(on_delay_s=0)], only_on_change=True)
     first = sim.tick(grid=-3000)
     assert sim.tick(advance=1, grid=-3000) == {}  # inside the interval
-    snap = hs.evaluate(sim.config, {"grid": -3000}, sim.state, sim.now + 1, "n", full_snapshot=True)
-    assert snap == sim.state["last_out"]
-    assert snap["c_a"] is True
-    assert set(first) == set(snap)
-    # a fresh instance has nothing to add and simply runs
-    assert hs.evaluate(sim.config, {"grid": -3000}, {}, 1000.0, "n", full_snapshot=True)["status"] == "ok"
+    assert sim.state["last_out"] == first
+    assert sim.state["last_out"]["c_a"] is True
 
 
 def test_diagnostics_are_reported_in_the_safe_state_too():
@@ -966,3 +962,41 @@ def test_disabling_a_fired_trigger_releases_its_reservation():
     out = sim.tick(grid=0)
     assert (out["budget"], out["c_p"]) == (0.0, 0)
     assert sim.cstate("t")["reserve_cycles"] == 0
+
+
+def test_feed_in_zero_sheds_an_onoff_consumer_despite_its_own_off_delay():
+    sim = Sim([onoff("a", on_delay_s=0), onoff("b", on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=4000)
+    assert sim.cstate("b")["on"] is True
+    sim.tick(feed_in=0)  # zero starts: hold
+    sim.tick(advance=60, feed_in=0)  # block off-delay over: shed b → b's own off-delay starts
+    assert sim.state["zero_shed_w"] == 2000
+    assert sim.tick(advance=30, feed_in=0)["c_b_status"] == "off_delay"  # the request is kept
+    out = sim.tick(advance=30, feed_in=0)
+    assert out["c_b"] is False
+    assert sim.cstate("a")["on"] is True
+    assert sim.state["zero_shed_w"] == 0.0  # done; the next step waits for a new off-delay
+    sim.tick(advance=30, feed_in=0)
+    assert sim.cstate("a")["on"] is True
+    sim.tick(advance=30, feed_in=0)  # 60 s after b went off: a is requested now
+    sim.tick(advance=60, feed_in=0)
+    assert sim.cstate("a")["on"] is False
+
+
+def test_returning_feed_in_cancels_a_pending_shed_request():
+    sim = Sim([onoff("a", on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=3000)
+    sim.tick(feed_in=0)
+    sim.tick(advance=60, feed_in=0)
+    assert sim.state["zero_shed_w"] == 2000
+    sim.tick(feed_in=500)
+    assert sim.state["zero_shed_w"] == 0.0
+    assert sim.cstate("a")["on"] is True
+
+
+def test_split_mode_records_a_telegram_even_when_the_other_input_is_invalid():
+    sim = Sim([], grid_mode="split", max_age_s=120)
+    out = sim.tick(grid_import=0, grid_import_changed=True, grid_export=None, grid_export_changed=False)
+    assert out["status"] == "invalid_input"
+    out = sim.tick(grid_import=0, grid_import_changed=False, grid_export=3000, grid_export_changed=True)
+    assert out["status"] == "ok"

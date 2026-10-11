@@ -244,6 +244,21 @@ describe('HemsSurplusConfig — fields per control type', () => {
     expect(lastConsumers(w)[0].power_source).toBe('input')
   })
 
+  it('reads yes/no settings exactly like the engine', () => {
+    expect(mountCfg({ only_on_change: 'off' }).find('[data-testid="hems-global-only_on_change"]').element.checked).toBe(false)
+    expect(mountCfg({ only_on_change: 'ja' }).find('[data-testid="hems-global-only_on_change"]').element.checked).toBe(true)
+    const w = mountCfg({ consumers: JSON.stringify([C('a', { active: '0' }), C('b', { active: undefined })]) })
+    expect(w.find('[data-testid="hems-consumer-active-0"]').element.checked).toBe(false)
+    expect(w.find('[data-testid="hems-consumer-active-1"]').element.checked).toBe(true)
+  })
+
+  it('shows imported rows under the engine ids and repairs them on the next save', async () => {
+    const w = mountCfg({ consumers: JSON.stringify([{ name: 'X' }, C('a-b'), C('ab')]) })
+    await setValue(w, 'hems-consumer-power_w-0', '500')
+    expect(lastConsumers(w).map(c => c.id)).toEqual(['n1', 'ab', 'ab_'])
+    expect(lastConsumers(w)[0].power_w).toBe(500)
+  })
+
   it('caps the trigger pulse at the one hour the engine allows', async () => {
     const w = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'trigger' })]) })
     expect(w.find('[data-testid="hems-consumer-pulse_s-0"]').attributes('max')).toBe('3600')

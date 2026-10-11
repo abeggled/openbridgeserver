@@ -648,6 +648,12 @@ describe('GenericNode — hems_surplus', () => {
     expect(ids(w, 'target')).toContain('c_n3_reset')
   })
 
+  it('labels a consumer with a blank name by its number, like the debug tab', async () => {
+    const w = await mountGN('hems_surplus', { consumers: [{ id: 'a', name: '   ', mode: 'onoff' }] })
+    await flushPromises()
+    expect(w.findAll('.gn-port-right').map(p => p.text())).toContain('Verbraucher 1')
+  })
+
   it('reordering the consumers reorders the ports but keeps their ids', async () => {
     const a = { id: 'a', name: 'A', mode: 'percent' }
     const b = { id: 'b', name: 'B', mode: 'percent' }

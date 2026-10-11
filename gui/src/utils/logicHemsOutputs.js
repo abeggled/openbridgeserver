@@ -2,7 +2,7 @@
 // stable consumer id (c_<id>), which means nothing to a user, so they are shown
 // under the consumer's name, like the ports on the block card.
 
-const DIAGNOSTICS = ['grid_power', 'surplus', 'budget', 'allocated', 'remaining', 'status', 'warning']
+export const HEMS_DIAGNOSTICS = ['grid_power', 'surplus', 'budget', 'allocated', 'remaining', 'status', 'warning']
 
 const CONSUMER_MODES = ['percent', 'onoff', 'trigger']
 
@@ -35,6 +35,31 @@ export function hemsConsumers(raw) {
 }
 
 /**
+ * A yes/no setting as the engine reads it: unset means yes, a string is yes
+ * only for "1"/"true"/"yes"/"on"/"ja"/"ein" (`_truthy` in hems_surplus.py).
+ *
+ * @param {unknown} value  stored setting
+ * @returns {boolean}
+ */
+export function hemsFlag(value) {
+  if (value === undefined || value === null) return true
+  if (typeof value === 'string') return ['1', 'true', 'yes', 'on', 'ja', 'ein'].includes(value.trim().toLowerCase())
+  return Boolean(value)
+}
+
+/**
+ * Display name of a consumer: its trimmed name, else "Consumer <n>".
+ *
+ * @param {{name?: unknown}} consumer
+ * @param {number} index  position in the list
+ * @param {(key: string, params?: object) => string} t  vue-i18n translate function
+ * @returns {string}
+ */
+export function hemsConsumerName(consumer, index, t) {
+  return String(consumer.name ?? '').trim() || t('logic.portLabels.hems.consumer', { n: index + 1 })
+}
+
+/**
  * @param {{type?: string, data?: object}} node  logic node
  * @param {(key: string, params?: object) => string} t  vue-i18n translate function
  * @returns {Record<string, string>} output handle → display label
@@ -43,10 +68,10 @@ export function hemsOutputLabels(node, t) {
   if (node?.type !== 'hems_surplus') return {}
   const labels = {}
   hemsConsumers(node.data?.consumers).forEach((c, i) => {
-    const name = String(c.name ?? '').trim() || t('logic.portLabels.hems.consumer', { n: i + 1 })
+    const name = hemsConsumerName(c, i, t)
     labels[`c_${c.id}`] = name
     labels[`c_${c.id}_status`] = `${name}: ${t('logic.portLabels.hems.status')}`
   })
-  for (const key of DIAGNOSTICS) labels[key] = t(`logic.portLabels.hems.${key}`)
+  for (const key of HEMS_DIAGNOSTICS) labels[key] = t(`logic.portLabels.hems.${key}`)
   return labels
 }

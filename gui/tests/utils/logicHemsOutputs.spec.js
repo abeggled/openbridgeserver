@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hemsConsumers, hemsOutputLabels } from '@/utils/logicHemsOutputs'
+import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsFlag, hemsOutputLabels } from '@/utils/logicHemsOutputs'
 
 const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key)
 const node = data => ({ type: 'hems_surplus', data })
@@ -53,5 +53,26 @@ describe('hemsConsumers', () => {
     const labels = hemsOutputLabels(node({ consumers: [{ id: 'a-b', name: 'Pool' }] }), t)
     expect(labels.c_ab).toBe('Pool')
     expect(labels['c_a-b']).toBeUndefined()
+  })
+})
+
+describe('hemsFlag', () => {
+  it('treats unset as yes and strings like the engine', () => {
+    expect(hemsFlag(undefined)).toBe(true)
+    expect(hemsFlag(null)).toBe(true)
+    for (const yes of [true, 1, '1', 'true', ' Yes ', 'on', 'ja', 'ein']) expect(hemsFlag(yes)).toBe(true)
+    for (const no of [false, 0, '', '0', 'false', 'no', 'off', 'nein']) expect(hemsFlag(no)).toBe(false)
+  })
+})
+
+describe('hemsConsumerName', () => {
+  it('trims the name and numbers a blank one', () => {
+    expect(hemsConsumerName({ name: ' Pool ' }, 0, t)).toBe('Pool')
+    expect(hemsConsumerName({ name: '   ' }, 2, t)).toBe('logic.portLabels.hems.consumer:{"n":3}')
+    expect(hemsConsumerName({}, 0, t)).toBe('logic.portLabels.hems.consumer:{"n":1}')
+  })
+
+  it('exports the diagnostic outputs once for card and debug tab', () => {
+    expect(HEMS_DIAGNOSTICS).toHaveLength(7)
   })
 })

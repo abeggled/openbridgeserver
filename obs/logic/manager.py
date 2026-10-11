@@ -111,6 +111,20 @@ def _copy_graph_worker_state(state: dict[str, Any]) -> tuple[dict[str, Any], dic
     return base, _safe_deepcopy_state(base)
 
 
+def _with_hems_last_outputs(flow: Any, hyst: dict[str, Any], outputs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Display copy of ``outputs`` in which every hems_surplus node shows all its outputs.
+
+    The block withholds unchanged outputs and evaluates only once per control
+    interval, so a debug view would otherwise be empty most of the time. Only
+    for display — never fed back into writes.
+    """
+    shown = dict(outputs)
+    for node in flow.nodes:
+        if node.type == "hems_surplus":
+            shown[node.id] = {**hyst.get(node.id, {}).get("last_out", {}), **outputs.get(node.id, {})}
+    return shown
+
+
 def _serialize_logic_debug_payload(
     graph_id: str,
     outputs: dict[str, Any],
@@ -228,9 +242,7 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
 # They are the roots of the pulse-provenance trace: a consumer fed from one of
 # them must not read the "no pulse this pass" placeholder as a real value.
-# hems_surplus belongs here because it withholds every output that did not
-# change: like Edge Detection's "out", a handle's presence is the event.
-_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on
@@ -2234,8 +2246,7 @@ class LogicManager:
                     g_name, _, flow = entry
                     node = next((n for n in flow.nodes if n.id == node_id), None)
                     if node is not None:
-                        sleep_s = GraphExecutor._to_num(node.data.get("interval_s"), default=hems_surplus.DEFAULT_INTERVAL_S)
-                        sleep_s = min(hems_surplus.MAX_INTERVAL_S, max(hems_surplus.MIN_INTERVAL_S, sleep_s))
+                        sleep_s = hems_surplus.interval_s(node.data)
                     await self._execute_graph(graph_id, g_name, flow, {node_id: {}})
                     next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
                     if next_wake is not None:
@@ -2454,7 +2465,7 @@ class LogicManager:
             debug_overrides=input_overrides or {},
             debug_input_capture=input_capture,
         )
-        return outputs, input_capture
+        return _with_hems_last_outputs(flow, self._hysteresis.get(graph_id, {}), outputs), input_capture
 
     async def initialize_graph(self, graph_id: str, logic_depth: int = 0, seed_overrides: dict[str, Any] | None = None) -> None:
         """Seed Read Object nodes with their current registry values right
@@ -4334,10 +4345,6 @@ class LogicManager:
             on that node fired.
             """
             origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
-            if _node_type_by_id.get(origin_id) == "hems_surplus":
-                # A withheld (unchanged) handle is absent, an emitted one present.
-                _hems_out = outputs.get(origin_id, {})
-                return handle in _hems_out if handle is not None else bool(_hems_out)
             if _node_type_by_id.get(origin_id) == "edge_detect":
                 pulses = _discrete_pulse_handles({origin_id})
                 return (origin_id, handle) in pulses if handle is not None else bool(pulses)
@@ -4376,12 +4383,6 @@ class LogicManager:
                 _node_type_by_id.get(edge.source) == "edge_detect"
                 and require_fired_change_filter
                 and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
-            ):
-                return False
-            if (
-                _node_type_by_id.get(edge.source) == "hems_surplus"
-                and require_fired_change_filter
-                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {})
             ):
                 return False
             if _node_type_by_id.get(edge.source) == "change_filter":
@@ -7228,7 +7229,7 @@ class LogicManager:
             payload = await _run_logic_debug_serialization_in_worker(
                 _serialize_logic_debug_payload,
                 graph_id,
-                outputs,
+                _with_hems_last_outputs(flow, hyst, outputs),
                 debug_inputs or {},
                 debug_overrides,
                 execution_started,

@@ -152,6 +152,11 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
     return consumers
 
 
+def interval_s(data: dict[str, Any]) -> float:
+    """The configured control interval in seconds, clamped to its supported range."""
+    return _cfg_num(data.get("interval_s"), DEFAULT_INTERVAL_S, MIN_INTERVAL_S, MAX_INTERVAL_S)
+
+
 def grid_input_names(mode: str) -> tuple[str, ...]:
     """Meter input port ids the given measurement mode reads."""
     if mode == "split":
@@ -270,6 +275,16 @@ def _read_meter(
     ``problem`` is ``"invalid_input"`` / ``"stale_input"`` or ``None``.
     """
     names = grid_input_names(mode)
+    # Only an actual telegram makes a value fresh: a value restored from before
+    # a restart stays stale until its meter reports again. Every telegram is
+    # recorded before any input is judged, so in split mode a fresh telegram on
+    # one side is never lost because the other side is stale or invalid.
+    judged = [name for name in names if f"{name}_changed" in inputs] if max_age_s > 0 else []  # no signal → age not judged
+    last_seen = state.setdefault("last_seen", {}) if judged else {}
+    for name in judged:
+        if _truthy(inputs.get(f"{name}_changed")):
+            last_seen[name] = now
+
     values: dict[str, float] = {}
     for name in names:
         value = _num(inputs.get(name))
@@ -277,18 +292,8 @@ def _read_meter(
             return None, None, "invalid_input"
         values[name] = value
 
-    if max_age_s > 0:
-        last_seen = state.setdefault("last_seen", {})
-        # Only an actual telegram makes a value fresh: a value restored from
-        # before a restart stays stale until its meter reports again. Every
-        # input is refreshed before any is judged, so in split mode a fresh
-        # telegram on one side is never lost because the other side is stale.
-        judged = [name for name in names if f"{name}_changed" in inputs]  # without the signal the age cannot be judged
-        for name in judged:
-            if _truthy(inputs.get(f"{name}_changed")):
-                last_seen[name] = now
-        if any(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
-            return None, None, "stale_input"
+    if any(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
+        return None, None, "stale_input"
 
     if mode == "split":
         if values["grid_import"] < 0 or values["grid_export"] < 0:
@@ -310,18 +315,12 @@ def evaluate(
     state: dict[str, Any],
     now: float,
     node_id: str = "",
-    *,
-    full_snapshot: bool = False,
 ) -> dict[str, Any]:
     """Run one tick of the block and return the output values to emit.
 
     Outputs that must not be sent this tick are simply absent from the result.
-    ``state`` is mutated in place and is the only memory between ticks.
-
-    ``full_snapshot`` is for interactive debug runs: the control interval and
-    "only on change" would otherwise leave the inspector empty whenever the
-    scheduler evaluated the block a moment earlier, so the last emitted value
-    of every output is added to what this tick emitted. Nothing is recomputed.
+    ``state`` is mutated in place and is the only memory between ticks; its
+    ``last_out`` holds the last value sent on every output.
     """
     consumers = load_consumers(data.get("consumers"))
     states: dict[str, dict[str, Any]] = state.setdefault("consumers", {})
@@ -331,8 +330,6 @@ def evaluate(
 
     result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
     state["next_wake"] = _next_wake(data, consumers, states, state, now)
-    if full_snapshot:
-        return {**state.get("last_out", {}), **result}
     return result
 
 
@@ -383,7 +380,7 @@ def _tick(
     states: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
-    interval_s = _cfg_num(data.get("interval_s"), DEFAULT_INTERVAL_S, MIN_INTERVAL_S, MAX_INTERVAL_S)
+    cycle_s = interval_s(data)
     only_on_change = data.get("only_on_change") is None or _truthy(data.get("only_on_change"))
     result: dict[str, Any] = {}
 
@@ -451,7 +448,7 @@ def _tick(
         return result
 
     last_cycle = state.get("last_cycle")
-    if last_cycle is not None and now - last_cycle < interval_s * _CYCLE_TOLERANCE:
+    if last_cycle is not None and now - last_cycle < cycle_s * _CYCLE_TOLERANCE:
         return result
     state["last_cycle"] = now
 
@@ -471,18 +468,29 @@ def _tick(
         # running consumer only after the off-delay has passed without feed-in.
         # The hold is the *commanded* allocation, not the measured draw: a
         # consumer drawing more than its setpoint must not raise the setpoint.
+        # A requested step stays requested until the consumer has actually
+        # given it up — an on/off consumer still runs its own off-delay — and
+        # only then does the next off-delay towards another step begin.
         zero_since = state.get("zero_since")
-        budget_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
+        commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
         if zero_since is None:
             state["zero_since"] = now
-        elif now - zero_since >= off_delay_s:
-            budget_w -= _shed_step_w(consumers, states, rated)
-            state["zero_since"] = now
+            state["zero_shed_w"] = 0.0
+        elif not state.get("zero_shed_w") and now - zero_since >= off_delay_s:
+            state["zero_shed_w"] = _shed_step_w(consumers, states, rated)
+        budget_w = commanded_w - (state.get("zero_shed_w") or 0.0)
     else:
         state["zero_since"] = None
+        state["zero_shed_w"] = 0.0
+        commanded_w = None
         budget_w = used_w - grid_w - target_w
 
     allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit)
+    if commanded_w is not None and state["zero_shed_w"]:
+        new_commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
+        if new_commanded_w <= commanded_w - state["zero_shed_w"] + _EPS:
+            state["zero_shed_w"] = 0.0
+            state["zero_since"] = now
 
     emit("grid_power", round(grid_w, 2) + 0.0)
     emit("surplus", round(max(0.0, -grid_w - target_w), 2) + 0.0)

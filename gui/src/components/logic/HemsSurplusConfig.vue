@@ -45,7 +45,7 @@
         <label v-else class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
-            :checked="data[f.key] !== false && data[f.key] !== 'false'"
+            :checked="hemsFlag(data[f.key])"
             :data-testid="'hems-global-' + f.key"
             @change="setGlobal(f.key, $event.target.checked)"
           />
@@ -106,7 +106,7 @@
           <label class="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
-              :checked="c.active !== false"
+              :checked="hemsFlag(c.active)"
               :data-testid="'hems-consumer-active-' + i"
               @change="setConsumer(i, 'active', $event.target.checked)"
             />
@@ -156,6 +156,7 @@
 <script setup>
 import { computed } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
+import { hemsConsumers, hemsFlag } from '@/utils/logicHemsOutputs'
 
 // Editor of the hems_surplus block (HEMS Lite, issue #1327). The consumer list
 // order *is* the priority: it is edited by drag-and-drop only, the position
@@ -220,16 +221,10 @@ const FIELDS = {
 
 const gridMode = computed(() => (GRID_MODES.includes(props.data.grid_mode) ? props.data.grid_mode : 'bidirectional'))
 
-function parseConsumers(raw) {
-  let list = raw
-  if (typeof raw === 'string') {
-    try { list = JSON.parse(raw || '[]') } catch (_) { list = [] }
-  }
-  return Array.isArray(list) ? list.filter(c => c && typeof c === 'object' && !Array.isArray(c)) : []
-}
-
+// Rows carry the ids the engine uses (and names the ports after), so keys are
+// unique and the next save repairs an imported list with odd or duplicate ids.
 const consumers = computed({
-  get: () => parseConsumers(props.data.consumers),
+  get: () => hemsConsumers(props.data.consumers),
   set: rows => saveConsumers(rows),
 })
 
