@@ -230,16 +230,21 @@ def _pct_out(value: float) -> int | float:
 
 
 def _consumer_power(consumer: dict[str, Any], cs: dict[str, Any], inputs: dict[str, Any], rated_w: float) -> float:
-    """Power the consumer draws right now: measured when available, else estimated."""
-    measured = _num(inputs.get(f"c_{consumer['id']}_power")) if f"c_{consumer['id']}_power" in inputs else None
+    """Power the consumer draws right now: measured when available, else estimated.
+
+    A trigger consumer has no measured-power port, so a wire left over from a
+    previous mode is ignored — it only ever counts its configured reservation.
+    """
+    mode = consumer["mode"]
+    measured = _num(inputs.get(f"c_{consumer['id']}_power")) if mode != "trigger" and f"c_{consumer['id']}_power" in inputs else None
     if measured is not None:
         return max(0.0, measured)
-    mode = consumer["mode"]
     if mode == "percent":
         return rated_w * cs["setpoint"] / 100.0 if cs["on"] else 0.0
     if mode == "onoff":
         return rated_w if cs["on"] else 0.0
-    return consumer["reserve_w"] if cs["reserve_cycles"] > 0 else 0.0
+    # The reservation is bookkeeping, not a draw: a disabled trigger holds none.
+    return consumer["reserve_w"] if cs["reserve_cycles"] > 0 and consumer["active"] else 0.0
 
 
 def _rated_power(consumer: dict[str, Any], inputs: dict[str, Any]) -> float | None:
@@ -274,14 +279,16 @@ def _read_meter(
 
     if max_age_s > 0:
         last_seen = state.setdefault("last_seen", {})
-        for name in names:
-            changed_key = f"{name}_changed"
-            if changed_key not in inputs:
-                continue  # no telegram signal wired → age cannot be judged
-            if _truthy(inputs.get(changed_key)) or name not in last_seen:
+        # Only an actual telegram makes a value fresh: a value restored from
+        # before a restart stays stale until its meter reports again. Every
+        # input is refreshed before any is judged, so in split mode a fresh
+        # telegram on one side is never lost because the other side is stale.
+        judged = [name for name in names if f"{name}_changed" in inputs]  # without the signal the age cannot be judged
+        for name in judged:
+            if _truthy(inputs.get(f"{name}_changed")):
                 last_seen[name] = now
-            if now - last_seen[name] > max_age_s:
-                return None, None, "stale_input"
+        if any(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
+            return None, None, "stale_input"
 
     if mode == "split":
         if values["grid_import"] < 0 or values["grid_export"] < 0:
@@ -462,12 +469,14 @@ def _tick(
         # Feed-in-only meter reading 0 W: balanced or already importing — unknown.
         # Hold the current allocation, and shed one step of the lowest-priority
         # running consumer only after the off-delay has passed without feed-in.
+        # The hold is the *commanded* allocation, not the measured draw: a
+        # consumer drawing more than its setpoint must not raise the setpoint.
         zero_since = state.get("zero_since")
-        budget_w = used_w
+        budget_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
         if zero_since is None:
             state["zero_since"] = now
         elif now - zero_since >= off_delay_s:
-            budget_w = used_w - _shed_step_w(consumers, states, rated)
+            budget_w -= _shed_step_w(consumers, states, rated)
             state["zero_since"] = now
     else:
         state["zero_since"] = None
@@ -550,6 +559,7 @@ def _allocate(
             _set_off(cs, now)
             cs["trigger_pending"] = None
             cs["pulse_until"] = None
+            cs["reserve_cycles"] = 0
             emit(f"c_{cid}", 0 if consumer["mode"] == "percent" else False)
             emit(f"c_{cid}_status", "inactive")
             continue

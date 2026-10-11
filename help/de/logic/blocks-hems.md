@@ -97,6 +97,8 @@ Aktor nicht eingeschaltet bleibt. Im Debug-Tab erscheinen alle Ausgänge mit dem
   vermerkt.
 - **Veraltete Werte** werden nur geprüft, wenn **Maximales Alter der Zählerwerte** größer als 0 ist
   *und* der Ausgang *Geändert* des Read-Objekts am Block angeschlossen ist (siehe Sensor Watchdog).
-  Der Block reagiert, sobald das Alter überschritten ist, nicht erst beim nächsten Regelzyklus.
+  Der Block reagiert, sobald das Alter überschritten ist, nicht erst beim nächsten Regelzyklus. Ein
+  nach einem Neustart wiederhergestellter Wert gilt als veraltet, bis der Zähler ein neues Telegramm
+  meldet.
 - Nach einem Neustart beginnt der Block immer im sicheren Zustand; der Zustand wird nicht
   gespeichert, ein Trigger löst nie aufgrund eines alten Zustands aus.

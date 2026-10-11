@@ -93,6 +93,7 @@ that is still wired does not stay on. The debug tab lists every output with its 
   event is written to the log.
 - **Stale values** are only checked when **Maximum age of meter values** is greater than 0 *and* the
   Read Object's *Changed* output is wired to the block (see Sensor Watchdog). The block reacts as soon
-  as the age is exceeded, not only at the next control cycle.
+  as the age is exceeded, not only at the next control cycle. A value restored after a restart counts
+  as stale until the meter reports a new telegram.
 - After a restart the block always begins in the safe state; its state is not persisted, and a
   trigger never fires because of a restored old state.

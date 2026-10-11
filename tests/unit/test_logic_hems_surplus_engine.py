@@ -918,3 +918,51 @@ def test_diagnostics_are_reported_in_the_safe_state_too():
     assert out["status"] == "invalid_input"
     assert "grid_power" not in out
     assert out["budget"] == 0.0
+
+
+# ── Review findings (second round) ──────────────────────────────────────
+
+
+def test_a_restored_meter_value_is_stale_until_its_first_telegram():
+    # After a restart the Read Object delivers its persisted value with
+    # changed=False: that reading may be a day old and must not energise anything.
+    sim = Sim([onoff("load", on_delay_s=0)], max_age_s=300)
+    out = sim.tick(grid=-3000, grid_changed=False)
+    assert (out["status"], out["c_load"]) == ("stale_input", False)
+    out = sim.tick(advance=1, grid=-3000, grid_changed=True)
+    assert (out["status"], out["c_load"]) == ("ok", True)
+
+
+def test_split_mode_refreshes_every_changed_input_before_judging_age():
+    sim = Sim([], grid_mode="split", max_age_s=50)
+    sim.tick(grid_import=0, grid_export=2000, grid_import_changed=True, grid_export_changed=True)
+    # import is stale, but the export telegram of this tick is still recorded
+    assert sim.tick(advance=60, grid_import=0, grid_export=2000, grid_import_changed=False, grid_export_changed=True)["status"] == "stale_input"
+    assert sim.state["last_seen"]["grid_export"] == sim.now
+    out = sim.tick(advance=1, grid_import=0, grid_export=2000, grid_import_changed=True, grid_export_changed=False)
+    assert out["status"] == "ok"
+
+
+def test_a_trigger_ignores_a_leftover_measured_power_wire():
+    sim = Sim([trig("t", on_delay_s=0, min_surplus_w=1500)])
+    out = sim.tick(grid=1000, c_t_power=3000)
+    assert out["budget"] == -1000
+    assert out["c_t"] is False
+
+
+def test_feed_in_zero_holds_the_commanded_setpoint_not_the_measured_draw():
+    sim = Sim([pct("load", on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=100)
+    assert sim.tick(feed_in=5000)["c_load"] == 50
+    out = sim.tick(feed_in=0, c_load_power=8000)
+    assert out["budget"] == 5000
+    assert sim.cstate("load")["setpoint"] == 50
+
+
+def test_disabling_a_fired_trigger_releases_its_reservation():
+    consumers = [trig("t", on_delay_s=0, min_surplus_w=1000, reserve_w=2000), pct("p", on_delay_s=0)]
+    sim = Sim(consumers)
+    assert sim.tick(grid=-2000)["c_t"] is True
+    consumers[0]["active"] = False
+    out = sim.tick(grid=0)
+    assert (out["budget"], out["c_p"]) == (0.0, 0)
+    assert sim.cstate("t")["reserve_cycles"] == 0
