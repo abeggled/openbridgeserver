@@ -60,8 +60,8 @@ describe('hemsFlag', () => {
   it('treats unset as yes and strings like the engine', () => {
     expect(hemsFlag(undefined)).toBe(true)
     expect(hemsFlag(null)).toBe(true)
-    for (const yes of [true, 1, '1', 'true', ' Yes ', 'on', 'ja', 'ein']) expect(hemsFlag(yes)).toBe(true)
-    for (const no of [false, 0, '', '0', 'false', 'no', 'off', 'nein']) expect(hemsFlag(no)).toBe(false)
+    for (const yes of [true, 1, '1', 'true', ' Yes ', 'on', 'OK', 'running', [0]]) expect(hemsFlag(yes)).toBe(true)
+    for (const no of [false, 0, '', '0', 'false', 'no', ' Off ', [], {}]) expect(hemsFlag(no)).toBe(false)
   })
 })
 

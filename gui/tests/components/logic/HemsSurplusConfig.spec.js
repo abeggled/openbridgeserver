@@ -246,7 +246,7 @@ describe('HemsSurplusConfig — fields per control type', () => {
 
   it('reads yes/no settings exactly like the engine', () => {
     expect(mountCfg({ only_on_change: 'off' }).find('[data-testid="hems-global-only_on_change"]').element.checked).toBe(false)
-    expect(mountCfg({ only_on_change: 'ja' }).find('[data-testid="hems-global-only_on_change"]').element.checked).toBe(true)
+    expect(mountCfg({ only_on_change: 'OK' }).find('[data-testid="hems-global-only_on_change"]').element.checked).toBe(true)
     const w = mountCfg({ consumers: JSON.stringify([C('a', { active: '0' }), C('b', { active: undefined })]) })
     expect(w.find('[data-testid="hems-consumer-active-0"]').element.checked).toBe(false)
     expect(w.find('[data-testid="hems-consumer-active-1"]').element.checked).toBe(true)

@@ -89,8 +89,16 @@ def _opt_num(value: Any, minimum: float | None = None) -> float | None:
 
 
 def _truthy(value: Any) -> bool:
+    """The boolean rule every other logic block applies (``GraphExecutor._to_bool``).
+
+    ``None`` is false and a string is false only for "0"/"false"/"no"/"off"/"";
+    any other text — "OK", "running" — is true, so the same DataPoint means the
+    same thing on this block as everywhere else.
+    """
+    if value is None:
+        return False
     if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on", "ja", "ein")
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
     return bool(value)
 
 
@@ -235,21 +243,25 @@ def _pct_out(value: float) -> int | float:
 
 
 def _consumer_power(consumer: dict[str, Any], cs: dict[str, Any], inputs: dict[str, Any], rated_w: float) -> float:
-    """Power the consumer draws right now: measured when available, else estimated.
+    """Power of this consumer the block may hand out again: measured when available, else estimated.
 
-    A trigger consumer has no measured-power port, so a wire left over from a
-    previous mode is ignored — it only ever counts its configured reservation.
+    Only a consumer the block itself has switched on counts. One that is
+    inactive or switched off by the block but still draws power — run by hand,
+    or by its own thermostat — is ordinary house load: its draw is already in
+    the grid power and cannot be redistributed. A trigger consumer counts
+    nothing here — its reservation is not a draw and is deducted only from what
+    lower priorities get (see ``_step_trigger``); a measured-power wire left over
+    from a previous mode is ignored.
     """
-    mode = consumer["mode"]
-    measured = _num(inputs.get(f"c_{consumer['id']}_power")) if mode != "trigger" and f"c_{consumer['id']}_power" in inputs else None
+    if consumer["mode"] == "trigger" or not consumer["active"] or not cs["on"]:
+        return 0.0
+    key = f"c_{consumer['id']}_power"
+    measured = _num(inputs.get(key)) if key in inputs else None
     if measured is not None:
         return max(0.0, measured)
-    if mode == "percent":
-        return rated_w * cs["setpoint"] / 100.0 if cs["on"] else 0.0
-    if mode == "onoff":
-        return rated_w if cs["on"] else 0.0
-    # The reservation is bookkeeping, not a draw: a disabled trigger holds none.
-    return consumer["reserve_w"] if cs["reserve_cycles"] > 0 and consumer["active"] else 0.0
+    if consumer["mode"] == "percent":
+        return rated_w * cs["setpoint"] / 100.0
+    return rated_w
 
 
 def _rated_power(consumer: dict[str, Any], inputs: dict[str, Any]) -> float | None:
@@ -358,11 +370,15 @@ def _next_wake(
 ) -> float | None:
     """Earliest moment the scheduler must re-evaluate before the next interval.
 
-    That is a pending pulse end — a pulse can be shorter than the interval — and
-    the moment a still-fresh meter value turns stale, so the safe state is not
-    delayed by up to a whole control interval.
+    That is the next due control cycle, a pending pulse end — a pulse can be
+    shorter than the interval — and the moment a still-fresh meter value turns
+    stale, so the safe state is not delayed by up to a whole control interval.
     """
     wakes = [states[c["id"]]["pulse_until"] for c in consumers if states[c["id"]]["pulse_until"] is not None]
+    if state.get("last_cycle") is not None:
+        # The next cycle is due one interval after the last one, also when that
+        # one was started by an event rather than by the scheduler.
+        wakes.append(state["last_cycle"] + interval_s(data))
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
     if max_age_s > 0:
         # Stale means strictly older than max_age_s, so wake just after it.
@@ -384,9 +400,11 @@ def _tick(
     only_on_change = data.get("only_on_change") is None or _truthy(data.get("only_on_change"))
     result: dict[str, Any] = {}
 
-    def emit(key: str, value: Any) -> None:
+    def emit(key: str, value: Any, *, event: bool = False) -> None:
+        # ``event``: a trigger pulse is sent once per firing even without "only
+        # on change" — repeating True each cycle would read as a new firing.
         last = state.setdefault("last_out", {})
-        if only_on_change and key in last and last[key] == value and type(last[key]) is type(value):
+        if (only_on_change or event) and key in last and last[key] == value and type(last[key]) is type(value):
             return
         last[key] = value
         result[key] = value
@@ -414,9 +432,11 @@ def _tick(
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
     grid_w, feed_in_w, problem = _read_meter(mode, inputs, state, now, max_age_s)
     status = problem or "ok"
-    if "enable" in inputs and inputs.get("enable") is not None and not _truthy(inputs.get("enable")):
+    # A wired interlock fails safe: no value (unseeded Read Object, failed
+    # producer) counts as "not enabled" / "plant not OK", just like false.
+    if "enable" in inputs and not _truthy(inputs.get("enable")):
         status = "disabled"
-    elif "plant_ok" in inputs and inputs.get("plant_ok") is not None and not _truthy(inputs.get("plant_ok")):
+    elif "plant_ok" in inputs and not _truthy(inputs.get("plant_ok")):
         status = "plant_not_ok"
 
     meter_detail = f"mode={mode}, " + ", ".join(f"{name}={inputs.get(name)!r}" for name in grid_input_names(mode))
@@ -585,7 +605,7 @@ def _allocate(
             emit(f"c_{cid}", cs["on"])
         else:
             consumed, label = _step_trigger(consumer, cs, available, now, on_delay_s)
-            emit(f"c_{cid}", cs["pulse_until"] is not None)
+            emit(f"c_{cid}", cs["pulse_until"] is not None, event=True)
         emit(f"c_{cid}_status", label)
         available -= consumed
         allocated += consumed
@@ -623,7 +643,7 @@ def _step_percent(
                 cs["setpoint"] = hold_pct
                 return power * hold_pct / 100.0, "off_delay"
         _set_off(cs, now)
-        return 0.0, "reduced"
+        return 0.0, "off"
 
     label = _step_off_consumer(consumer, cs, eligible, wanted_pct, now, on_delay_s)
     return (power * cs["setpoint"] / 100.0 if cs["on"] else 0.0), label

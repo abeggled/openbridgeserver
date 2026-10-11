@@ -32,7 +32,9 @@ only then does the wait for the next step begin.
 
 Optional global inputs: **Enable** (false = everything safely off), **Feed-in reserve (dyn.)**
 (overrides the configured value) and **Plant OK** (false = everything safely off). Unconnected
-inputs count as "clear".
+inputs count as "clear"; a connected input without a value (e.g. a Read Object not yet seeded after
+a restart) counts as false. Text values are read as in every logic block: only `0`, `false`, `no`,
+`off` and empty are false.
 
 ### Power budget
 
@@ -42,7 +44,9 @@ budget = power currently used by the controlled consumers − grid power − fee
 
 This keeps power that was already allocated, even though it has reduced the previously measured
 export. The "used power" is the consumer's measured power (input *Measured power*), otherwise the
-value estimated from setpoint and maximum power.
+value estimated from setpoint and maximum power. Only consumers the block itself switched on count:
+an inactive consumer, or one the block switched off, that still draws power (manual operation, own
+thermostat) is ordinary house load and is not handed to others.
 
 Example: 2 000 W controlled load, meter −1 000 W, reserve 200 W → budget 2 800 W.
 
@@ -71,8 +75,9 @@ hysteresis; a switch-off threshold below the rated power tolerates some grid imp
 **Trigger** — a one-shot pulse (e.g. start a washing machine through an API). It fires when the
 **minimum surplus** has been present continuously for the configured time and is then blocked for
 the **lockout time**. **Re-arm**: after the lockout has expired, only after the threshold was
-undershot in between (default), or via the **Reset** input. An optional **reserved power** holds
-budget for a short while for the firing. The **pulse duration** ranges from 0.1 s to 1 h. A trigger
+undershot in between (default), or via the **Reset** input. An optional **reserved power** is
+deducted from the budget of lower priorities in the firing cycle and the next one, so the starting
+load's power is not handed out already. The **pulse duration** ranges from 0.1 s to 1 h. A trigger
 never fires again on every control cycle.
 
 ### Outputs

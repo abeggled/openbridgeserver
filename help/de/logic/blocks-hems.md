@@ -33,7 +33,9 @@ Ausschaltverzögerung und Mindestlaufzeit); erst danach beginnt die Wartezeit f�
 
 Optionale globale Eingänge: **Freigabe** (false = alles sicher aus), **Einspeisereserve (dyn.)**
 (überschreibt den konfigurierten Wert) und **Anlage OK** (false = alles sicher aus). Unverbundene
-Eingänge gelten als „frei".
+Eingänge gelten als „frei"; ein verbundener Eingang ohne Wert (z. B. ein noch nicht befülltes
+Read-Objekt nach einem Neustart) gilt dagegen als false. Text-Werte werden wie bei allen
+Logikbausteinen gelesen: nur `0`, `false`, `no`, `off` und leer sind false.
 
 ### Leistungsbudget
 
@@ -43,7 +45,10 @@ Budget = aktuell verwendete Leistung der geregelten Verbraucher − Netzleistung
 
 Bereits zugeteilte Leistung bleibt dadurch erhalten, obwohl sie die zuvor gemessene Einspeisung
 inzwischen verringert hat. Als „verwendete Leistung" dient die gemessene Leistung des Verbrauchers
-(Eingang *Gemessene Leistung*), sonst die aus Sollwert und Maximalleistung geschätzte.
+(Eingang *Gemessene Leistung*), sonst die aus Sollwert und Maximalleistung geschätzte. Gezählt
+werden nur Verbraucher, die der Block selbst eingeschaltet hat: Ein inaktiver oder vom Block
+ausgeschalteter Verbraucher, der trotzdem Leistung bezieht (Handbetrieb, eigener Thermostat), ist
+normale Hauslast und wird nicht an andere verteilt.
 
 Beispiel: 2 000 W geregelte Last, Zähler −1 000 W, Reserve 200 W → Budget 2 800 W.
 
@@ -74,7 +79,8 @@ bestimmter Netzbezug toleriert.
 **Mindestüberschuss** durchgehend für die eingestellte Zeit vorhanden war, und ist dann für die
 **Sperrzeit** gesperrt. **Erneute Freigabe**: nach Ablauf der Sperrzeit, erst nachdem der
 Schwellwert zwischenzeitlich unterschritten wurde (Standard) oder über den **Reset**-Eingang. Eine
-optionale **Reservierte Leistung** hält Budget kurz für die Auslösung vor. Die **Impulsdauer** beträgt
+optionale **Reservierte Leistung** wird im Auslöse- und im folgenden Zyklus vom Budget der
+niedrigeren Prioritäten abgezogen, damit die anlaufende Last nicht schon verteilt ist. Die **Impulsdauer** beträgt
 0,1 s bis 1 h. Ein Trigger wird nie bei jedem Regelzyklus erneut ausgelöst.
 
 ### Ausgänge

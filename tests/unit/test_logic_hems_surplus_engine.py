@@ -67,7 +67,22 @@ def test_cfg_num_and_opt_num_apply_defaults_and_bounds():
     assert hs._opt_num(-3) == -3
 
 
-@pytest.mark.parametrize(("value", "expected"), [("true", True), (" On ", True), ("0", False), ("nein", False), (1, True), (0, False), (None, False)])
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("true", True),
+        (" On ", True),
+        ("OK", True),
+        ("running", True),
+        ("0", False),
+        (" off ", False),
+        ("no", False),
+        ("", False),
+        (1, True),
+        (0, False),
+        (None, False),
+    ],
+)
 def test_truthy(value, expected):
     assert hs._truthy(value) is expected
 
@@ -159,14 +174,23 @@ def test_unknown_grid_mode_falls_back_to_bidirectional():
     assert sim.tick(grid=-300)["grid_power"] == -300
 
 
-def test_disabled_and_plant_not_ok_force_safe_state_but_unconnected_or_none_do_not():
+def test_disabled_and_plant_not_ok_force_safe_state_but_unconnected_inputs_do_not():
     sim = Sim([pct()], on_delay_s=0)
     assert sim.tick(grid=-12000)["c_a"] > 0
     out = sim.tick(grid=-12000, enable=False)
     assert (out["status"], out["c_a"], out["warning"]) == ("disabled", 0, False)
     out = sim.tick(grid=-12000, enable=True, plant_ok=0)
     assert out["status"] == "plant_not_ok"
-    assert sim.tick(grid=-12000, enable=None, plant_ok=None)["status"] == "ok"
+    assert sim.tick(grid=-12000)["status"] == "ok"  # neither input wired
+
+
+def test_a_wired_interlock_without_a_value_fails_safe():
+    # An unseeded Read Object (or a failed producer) delivers no value: the
+    # plant state is unknown, so control must not run.
+    sim = Sim([onoff(on_delay_s=0)])
+    out = sim.tick(grid=-3000, plant_ok=None)
+    assert (out["status"], out["c_a"]) == ("plant_not_ok", False)
+    assert sim.tick(grid=-3000, enable=None)["status"] == "disabled"
 
 
 def test_recovery_after_safe_state_starts_a_cycle_immediately_but_still_honours_the_delay():
@@ -246,9 +270,19 @@ def test_next_wake_takes_the_earlier_of_pulse_end_and_meter_age():
 def test_next_wake_ignores_the_meter_age_without_a_limit_or_changed_signal():
     sim = Sim([onoff("load")], max_age_s=0)
     sim.tick(grid=-3000, grid_changed=True)
-    assert sim.state["next_wake"] is None
+    assert sim.state["next_wake"] == sim.now + 30  # only the next cycle
     sim = Sim([onoff("load")], max_age_s=5)
     sim.tick(grid=-3000)
+    assert sim.state["next_wake"] == sim.now + 30
+
+
+def test_next_wake_is_the_next_due_cycle_even_after_an_event_driven_one():
+    sim = Sim([], interval_s=30)
+    sim.tick(grid=0)
+    cycle = sim.now
+    sim.tick(advance=2, grid=0)  # an event inside the interval does not start a cycle
+    assert sim.state["next_wake"] == cycle + 30
+    sim.tick(grid=None)  # safe state: no cycle is pending
     assert sim.state["next_wake"] is None
 
 
@@ -326,9 +360,20 @@ def test_negative_zero_is_normalised():
 
 def test_budget_keeps_already_used_power_in_the_calculation():
     sim = Sim([pct(on_delay_s=0)], target_w=200)
+    sim.tick(grid=-5000)  # switched on
     out = sim.tick(grid=-1000, c_a_power=2000)
     assert out["budget"] == 2800
     assert out["surplus"] == 800
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_power_of_a_consumer_the_block_has_not_switched_on_is_not_redistributed(active):
+    # b runs by hand or by its own thermostat: its draw is house load, already
+    # in the grid power, and must not be handed to a.
+    sim = Sim([pct("a", power_w=5000, on_delay_s=0), onoff("b", active=active, power_w=3000, on_threshold_w=1e9)])
+    out = sim.tick(grid=0, c_b_power=3000)
+    assert out["budget"] == 0
+    assert out["c_a"] == 0
 
 
 def test_budget_example_from_the_issue_distributes_by_priority():
@@ -465,7 +510,7 @@ def test_percent_below_min_off_switches_off_immediately():
     assert "c_a" not in out
     out = sim.tick(grid=2500, c_a_power=5000)  # budget 2500 < 3000
     assert out["c_a"] == 0
-    assert sim.state["last_out"]["c_a_status"] == "reduced"
+    assert sim.state["last_out"]["c_a_status"] == "off"
     assert sim.cstate("a")["on"] is False
 
 
@@ -689,7 +734,7 @@ def test_trigger_fires_once_after_the_surplus_held_long_enough():
     assert sim.tick(advance=1, grid=-2000) == {}
     out = sim.tick(advance=1, grid=-2000)
     assert out == {"c_a": False}
-    assert sim.state["next_wake"] is None
+    assert sim.state["next_wake"] == sim.state["last_cycle"] + 30  # only the next cycle
     # never again in the following cycles
     for _ in range(5):
         out = sim.tick(advance=60, grid=-2000)
@@ -779,11 +824,16 @@ def test_trigger_reserves_power_while_firing():
     assert sim.cstate("p")["setpoint"] == 100
 
 
-def test_trigger_power_input_is_not_used_for_the_trigger_itself():
-    sim = Sim([trig(on_delay_s=0, reserve_w=500)])
-    sim.tick(grid=-2000)
-    # the reservation counts as used power in the next cycle's budget
-    assert sim.tick(grid=-1000)["budget"] == 1500
+def test_a_reservation_is_not_counted_as_redistributable_power():
+    # Export 3 kW, the trigger reserves 2 kW: the next cycle must still leave
+    # only 1 kW for the lower priority, not hand the reservation out again.
+    consumers = [trig("t", on_delay_s=0, min_surplus_w=1000, reserve_w=2000), pct("b", power_w=5000, on_delay_s=0)]
+    sim = Sim(consumers)
+    out = sim.tick(grid=-3000)
+    assert (out["c_t"], out["c_b"]) == (True, 20)
+    out = sim.tick(grid=-2000)  # b draws its 1 kW, the machine has not started yet
+    assert out["budget"] == 3000
+    assert sim.cstate("b")["setpoint"] == 20
 
 
 def test_inactive_trigger_never_fires_and_clears_a_pulse():
@@ -891,7 +941,8 @@ def test_a_pulse_longer_than_the_interval_stays_active_across_cycles_without_ref
     sim = Sim([trig(on_delay_s=0, pulse_s=100, lockout_s=0, rearm="after_lockout")])
     assert sim.tick(grid=-2000)["c_a"] is True
     out = sim.tick(advance=30, grid=-2000)
-    assert out["c_a"] is True
+    # sent once per firing, even with "only on change" off
+    assert "c_a" not in out
     assert out["c_a_status"] == "fired"
     assert sim.cstate("a")["pulse_until"] == 1030.0 + 100
 

@@ -414,3 +414,43 @@ def test_logic_behind_a_never_sent_output_gets_no_value():
     out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
     assert "c_new" not in state["h"]["last_out"]
     assert out["n"]["out"] is True  # the executor's ordinary missing-input default
+
+
+def test_a_wired_interlock_that_delivers_nothing_puts_the_block_into_the_safe_state():
+    # Edge Detection sends nothing without an edge: plant_ok is wired, but unknown.
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("ed", "edge_detect", {}), node("h", "hems_surplus", {"consumers": CONSUMERS})],
+            "edges": [edge("ed", "h", "out", "plant_ok")],
+        }
+    )
+    out = GraphExecutor(flow, {}).execute(input_overrides={"h": {"grid": -5000}})["h"]
+    assert out["status"] == "plant_not_ok"
+    assert out["c_boiler"] is False
+
+
+def test_a_removed_consumer_with_a_dangling_edge_is_not_a_failed_producer():
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("n", "not", {}), node("cf", "change_filter", {})],
+            "edges": [edge("h", "n", "c_gone", "in1"), edge("n", "cf", "out", "in")],
+        }
+    )
+    out = GraphExecutor(flow, {}).execute(input_overrides={"h": {"grid": -5000}})
+    assert "__error__" not in out["n"]
+
+
+def test_logic_behind_a_failed_block_does_not_compute_with_stale_values():
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("n", "not", {})],
+            "edges": [edge("h", "n", "c_boiler", "in1")],
+        }
+    )
+    state: dict = {}
+    GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -5000}})
+    assert state["h"]["last_out"]["c_boiler"] is True
+    with patch("obs.logic.executor.hems_surplus.evaluate", side_effect=RuntimeError("boom")):
+        out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -5000}})
+    assert "__error__" in out["h"]
+    assert out["n"]["out"] is True  # the ordinary missing-input default, not NOT(stale True)

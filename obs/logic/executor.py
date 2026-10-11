@@ -318,10 +318,8 @@ class GraphExecutor:
         retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
         # hems_surplus withholds every output that did not change (and all
         # consumer outputs between control cycles) — an absent handle is a
-        # defined outcome there, not a failed producer.
-        for node in self.flow.nodes:
-            if node.type == "hems_surplus":
-                retained_boundary_handles[node.id] = hems_surplus.output_handles(node.data)
+        # defined outcome there, not a failed producer. That includes the
+        # handle of a removed consumer whose edge is still in the graph.
         hems_ids = {node.id for node in self.flow.nodes if node.type == "hems_surplus"}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
@@ -378,7 +376,7 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
-                if not has_value and src_id in hems_ids and node.type != "datapoint_write":
+                if not has_value and src_id in hems_ids and node.type != "datapoint_write" and "__error__" not in src_out:
                     # hems_surplus outputs are levels: "withheld" means unchanged,
                     # so downstream logic computes with the value last sent. Only
                     # a directly wired Write Object stays silent — that is what
@@ -405,7 +403,9 @@ class GraphExecutor:
                 # Change Filter would then commit. Keep the output absent so
                 # the missing state propagates through every intermediate hop.
                 unresolved = [
-                    item for item in missing_inputs if item[0] not in node_overrides and item[2] not in retained_boundary_handles.get(item[1], set())
+                    item
+                    for item in missing_inputs
+                    if item[0] not in node_overrides and item[2] not in retained_boundary_handles.get(item[1], set()) and item[1] not in hems_ids
                 ]
                 if node.type == "hysteresis":
                     # An absent value deliberately means "emit retained
@@ -443,6 +443,14 @@ class GraphExecutor:
                             value = not value
                         resolved_values.append(value)
                     absorbed = any(resolved_values) if node.type == "or" else any(not value for value in resolved_values)
+                elif node.type == "hems_surplus":
+                    # A wired input that delivered nothing is passed as None:
+                    # the block treats it as unknown — a missing meter or
+                    # interlock value puts it into the safe state — instead of
+                    # mistaking it for an unwired (permissive) input.
+                    for handle, _src_id, _src_handle in missing_inputs:
+                        inputs.setdefault(handle, None)
+                    absorbed = True
                 elif unresolved and node.type == "binary_stats":
                     # A wired input without a value is defined as FALSE for
                     # Binary Statistics, so every output stays well-defined.

@@ -1,3 +1,5 @@
+import { isBackendFalse } from '@/utils/logicBooleans'
+
 // Debug-tab labels of the hems_surplus block: its outputs are addressed by the
 // stable consumer id (c_<id>), which means nothing to a user, so they are shown
 // under the consumer's name, like the ports on the block card.
@@ -35,16 +37,15 @@ export function hemsConsumers(raw) {
 }
 
 /**
- * A yes/no setting as the engine reads it: unset means yes, a string is yes
- * only for "1"/"true"/"yes"/"on"/"ja"/"ein" (`_truthy` in hems_surplus.py).
+ * A yes/no setting as the engine reads it: unset means yes, anything else the
+ * backend boolean rule (`_truthy` in hems_surplus.py = GraphExecutor._to_bool).
  *
  * @param {unknown} value  stored setting
  * @returns {boolean}
  */
 export function hemsFlag(value) {
   if (value === undefined || value === null) return true
-  if (typeof value === 'string') return ['1', 'true', 'yes', 'on', 'ja', 'ein'].includes(value.trim().toLowerCase())
-  return Boolean(value)
+  return !isBackendFalse(value)
 }
 
 /**
