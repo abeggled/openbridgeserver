@@ -17,13 +17,14 @@ import ipaddress
 import itertools
 import json
 import logging
+import math
 import os
 import re
 import socket
 import stat
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
 from functools import partial
@@ -220,9 +221,6 @@ _INIT_STATE_ALWAYS_COMMIT = frozenset({"change_filter", "edge_detect"})
 # resolved yet: committing that pass's placeholder would record a level/value
 # that never occurred, and any action they drive would already have run
 # irreversibly by the time the replay corrects them.
-# Upper bound on volatile inputs probed combinatorially (2**n evaluations).
-_MAX_PROBED_VOLATILE_INPUTS = 8
-
 _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
@@ -1451,6 +1449,10 @@ def init_logic_manager(db: Any, event_bus: Any, registry: Any) -> LogicManager:
 
 # Multi-output fan-in blocks: each output handle can be decided by a different input.
 _PER_HANDLE_FAN_IN_TYPES = frozenset({"binary_stats"})
+# Upper bound on volatile inputs probed combinatorially (2**n evaluations), and
+# on the joint combinations of one probe once correlated groups are expanded.
+_MAX_PROBED_VOLATILE_INPUTS = 8
+_MAX_PROBED_COMBINATIONS = 2**_MAX_PROBED_VOLATILE_INPUTS
 
 
 def _handle_independent_of_volatile_inputs(
@@ -1512,13 +1514,15 @@ def _handle_independent_of_volatile_inputs(
         inputs.update(debug_overrides.get(nid, {}))
         return inputs, volatile
 
-    def assignments(nid: str, inputs: dict[str, Any], volatile: dict[str, Any], seen: frozenset[str]) -> list[dict[str, Any]]:
+    def assignments(nid: str, inputs: dict[str, Any], volatile: dict[str, Any], seen: frozenset[str]) -> Iterator[dict[str, Any]]:
         """Joint values the volatile inputs of ``nid`` can take together.
 
         Handles fed by the same upstream fan-in block are correlated (for
         example ``count_true`` and ``count_false`` always add up to the
         supplied inputs), so only the outputs that block can actually emit
-        are combined; unrelated handles are probed as free booleans.
+        are combined; unrelated handles are probed as free booleans. The
+        combinations are yielded lazily and capped at
+        ``_MAX_PROBED_COMBINATIONS``: chained blocks multiply.
         """
         if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
             raise ValueError("too many volatile inputs")
@@ -1532,27 +1536,30 @@ def _handle_independent_of_volatile_inputs(
                 options.extend([{h: False}, {h: True}] for h in sorted(group))
                 continue
             up_inputs, up_volatile = volatile_state(source_id, seen | {nid})
-            group_options = []
+            # Many upstream combinations give the same handle values (256 input
+            # patterns yield at most 9 count pairs), so keep each one once.
+            group_options: dict[str, dict[str, Any]] = {}
             for up_assignment in assignments(source_id, up_inputs, up_volatile, seen | {nid}):
                 result = probe._eval_node(upstream, GraphExecutor._resolve_effective_inputs(upstream, {**up_inputs, **up_assignment}))
-                group_options.append({h: GraphExecutor._get_output_value(result, volatile[h].sourceHandle or "out") for h in group})
-            options.append(group_options)
-        return [{k: v for part in combo for k, v in part.items()} for combo in itertools.product(*options)]
+                values = {h: GraphExecutor._get_output_value(result, volatile[h].sourceHandle or "out") for h in group}
+                group_options.setdefault(repr(sorted(values.items())), values)
+            options.append(list(group_options.values()))
+        if math.prod(len(option) for option in options) > _MAX_PROBED_COMBINATIONS:
+            raise ValueError("too many probe combinations")
+        return ({k: v for part in combo for k, v in part.items()} for combo in itertools.product(*options))
 
     node = fan_in_node(node_id, _seen)
     if node is None:
         return False
-    inputs, volatile = volatile_state(node_id, _seen)
-    key: Any = None
+    # ``outs`` and ``debug_overrides`` are fixed for one pass, so within it the
+    # answer only depends on which edges are volatile (taint grows during a
+    # pass). Look it up before the recursive volatile_state() walk.
+    key = (node_id, output_handle, tuple(i for i, e in enumerate(edges) if volatile_edge(e)), _seen)
+    if key in cache:
+        return cache[key]
     try:
+        inputs, volatile = volatile_state(node_id, _seen)
         actual = GraphExecutor._get_output_value(outs.get(node_id, {}), output_handle)
-        # The probe is exponential in the volatile inputs and a taint pass asks
-        # the same question again whenever its queue drains, so remember the
-        # answer per (node, handle, volatility, input values) for that pass.
-        volatility = tuple(i for i, e in enumerate(edges) if volatile_edge(e))  # also pins upstream volatility
-        key = (node_id, output_handle, volatility, repr(sorted(inputs.items())), repr(actual), tuple(sorted(_seen)))
-        if key in cache:
-            return cache[key]
         independent = True
         # An output can depend on a conjunction of volatile inputs, so
         # every feasible combination is probed, not one input at a time.
@@ -1563,8 +1570,7 @@ def _handle_independent_of_volatile_inputs(
                 break
     except Exception:  # noqa: BLE001 - malformed imported config remains conservative
         independent = False
-    if key is not None:
-        cache[key] = independent
+    cache[key] = independent
     return independent
 
 
@@ -2843,7 +2849,8 @@ class LogicManager:
                     _cfq.append(_ce.target)
                 if not _cfq:
                     _init_flipped = [_de for _de in _init_deferred.values() if not _init_handle_independent(_de)]
-                    _init_deferred = {k: v for k, v in _init_deferred.items() if v not in _init_flipped}
+                    _init_flipped_ids = {id(edge) for edge in _init_flipped}
+                    _init_deferred = {k: v for k, v in _init_deferred.items() if k not in _init_flipped_ids}
                     _cfq.extend({_de.source for _de in _init_flipped})
 
             # Commit gate/hysteresis state only for nodes whose switched
@@ -4015,7 +4022,8 @@ class LogicManager:
                         if not _handle_independent(_de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _src, _probe_cache)
                     ]
                     # Reprocessing re-adds an edge if it is still skipped.
-                    _deferred_edges = {k: v for k, v in _deferred_edges.items() if v not in _flipped}
+                    _flipped_ids = {id(edge) for edge in _flipped}
+                    _deferred_edges = {k: v for k, v in _deferred_edges.items() if k not in _flipped_ids}
                     _tq.extend({_de.source for _de in _flipped})
             return {n.id for n in flow.nodes if n.type in _HELD_ON_UNRESOLVED_SOURCE and n.id in _tainted}
 
@@ -4602,7 +4610,8 @@ class LogicManager:
                         for e in deferred_edges.values()
                         if not _handle_independent(e.source, e.sourceHandle or "out", _pulse_input_edge, outputs, probe_cache)
                     ]
-                    deferred_edges = {k: v for k, v in deferred_edges.items() if v not in flipped}
+                    flipped_ids = {id(edge) for edge in flipped}
+                    deferred_edges = {k: v for k, v in deferred_edges.items() if k not in flipped_ids}
                     queue.extend({e.source for e in flipped})
             return message_origins, trigger_origins, trigger_handle_origins, downstream_filter_origins, stateful_relay_origins
 

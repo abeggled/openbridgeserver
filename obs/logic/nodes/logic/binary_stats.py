@@ -11,7 +11,7 @@ NODE_TYPE = NodeTypeDef(
     category="logic",
     description=(
         "Zählt TRUE/FALSE über 2–30 Binäreingänge (je Eingang negierbar): Anzahl, Mehrheit, Gleichstand, "
-        "Prozentanteil und Schwelle (k von n). Unverbundene Eingänge werden wahlweise ignoriert."
+        "Prozentanteil und Schwelle (k von n). Unverbundene Eingänge werden wahlweise ignoriert oder als FALSE gezählt."
     ),
     inputs=[port("in1", "IN 1"), port("in2", "IN 2")],
     outputs=[

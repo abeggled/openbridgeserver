@@ -34,6 +34,14 @@ _AVG_MULTI_MAX_SAMPLES = 100_000
 # Plain decimal literal; shared with gui/src/utils/binaryStatsInputCount.js.
 _DECIMAL_NUMBER_RE = re.compile(r"[ \t\n\r\f\v]*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?[ \t\n\r\f\v]*")
 
+
+def _plain_decimal(value: Any) -> float:
+    """``float()`` restricted to plain decimal strings, like the Admin GUI (no "1_0")."""
+    if isinstance(value, str) and not _DECIMAL_NUMBER_RE.fullmatch(value):
+        raise ValueError(value)
+    return float(value)
+
+
 # json_extractor `_preview` snapshot (config-panel path picker, issue #1104):
 # the full document up to this size; larger documents are pruned
 # structurally (arrays and strings shortened) so the snapshot stays valid
@@ -1658,14 +1666,9 @@ class GraphExecutor:
                 return {"out": result}
 
             case "binary_stats":
-                raw_count = d.get("input_count", 2)
                 try:
-                    # Plain decimal strings only, like the Admin GUI: float()
-                    # alone would also accept "1_0".
-                    if isinstance(raw_count, str) and not _DECIMAL_NUMBER_RE.fullmatch(raw_count):
-                        raise ValueError(raw_count)
                     # Rounded like the Admin GUI does for integer fields.
-                    count = max(2, min(30, int(self._round_half_up(float(raw_count)))))
+                    count = max(2, min(30, int(self._round_half_up(_plain_decimal(d.get("input_count", 2))))))
                 except (TypeError, ValueError, OverflowError):
                     count = 2  # cleared/null/non-finite field: fall back to the declared default
                 d = {**d, "input_count": count}
@@ -1688,8 +1691,10 @@ class GraphExecutor:
                 count_true = sum(vals)
                 total = len(vals)
                 count_false = total - count_true
+                raw_threshold = d.get("threshold_count", 0)
                 try:
-                    threshold_value = float(d.get("threshold_count", 0) or 0)
+                    # A boolean is no count (float(True) would be a threshold of 1).
+                    threshold_value = 0.0 if isinstance(raw_threshold, bool) else _plain_decimal(raw_threshold or 0)
                 except (TypeError, ValueError, OverflowError):
                     threshold_value = 0.0
                 # A fractional threshold is invalid config: treat it as "off" rather than truncating.

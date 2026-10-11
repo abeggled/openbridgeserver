@@ -130,7 +130,20 @@ def test_nothing_wired_yields_defined_zero_values():
 
 @pytest.mark.parametrize(
     ("threshold", "expected"),
-    [(0, False), (2, True), (3, False), ("2", True), ("x", False), (None, False), (1.5, False), (2.9, False), (2.0, True), (10**400, False)],
+    [
+        (0, False),
+        (2, True),
+        (3, False),
+        ("2", True),
+        ("x", False),
+        (None, False),
+        (1.5, False),
+        (2.9, False),
+        (2.0, True),
+        (10**400, False),
+        ("0_2", False),
+        (True, False),
+    ],
 )
 def test_threshold_follows_threshold_count(threshold, expected):
     out = run({1: True, 2: True, 3: False}, {"input_count": 3, "threshold_count": threshold})

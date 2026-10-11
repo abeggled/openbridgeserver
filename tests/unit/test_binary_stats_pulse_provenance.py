@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from unittest.mock import patch
 
@@ -435,18 +436,27 @@ def test_probe_in_a_new_pass_sees_changed_upstream_values():
     assert _probe(nodes, edges, "x", "count_true", volatile, outs) is False
 
 
-def test_probe_with_an_unrepresentable_input_stays_conservative_and_is_not_cached():
-    class Unprintable:
-        def __repr__(self):
-            raise RuntimeError("no repr")
+def _chained_groups(groups: int):
+    """``groups`` 8-input blocks whose count_true/count_false all feed one block "b"."""
+    nodes, edges = [node("b", "binary_stats", {"input_count": 2 * groups})], []
+    for g in range(1, groups + 1):
+        nodes.append(node(f"a{g}", "binary_stats", {"input_count": 8}))
+        for i in range(1, 9):
+            nodes.append(node(f"s{g}_{i}", "const_value", {"value": True, "data_type": "bool"}))
+            edges.append(edge(f"s{g}_{i}", f"a{g}", "value", f"in{i}"))
+        edges += [edge(f"a{g}", "b", "count_true", f"in{2 * g - 1}"), edge(f"a{g}", "b", "count_false", f"in{2 * g}")]
+    return nodes, edges
 
-    nodes = [
-        node("src", "const_value", {"value": True, "data_type": "bool"}),
-        node("t", "const_value", {"value": True, "data_type": "bool"}),
-        node("stats", "binary_stats", {"input_count": 2, "threshold_count": 1}),
-    ]
-    edges = [edge("src", "stats", "value", "in1"), edge("t", "stats", "value", "in2")]
-    cache: dict = {}
-    outs = {"src": {"value": Unprintable()}, "t": {"value": True}, "stats": {"threshold_reached": True}}
-    assert _probe(nodes, edges, "stats", "threshold_reached", lambda e: e.source == "src", outs, cache) is False
-    assert cache == {}
+
+def test_probe_dedupes_correlated_groups():
+    # 2 groups x 256 upstream patterns collapse to 9 x 9 distinct count pairs.
+    nodes, edges = _chained_groups(2)
+    assert _probe(nodes, edges, "b", "total", lambda e: e.source[0] in "sa") is True
+
+
+def test_probe_caps_the_joint_combinations_of_chained_blocks():
+    # 9**3 = 729 joint combinations exceed the cap: conservative, and fast.
+    nodes, edges = _chained_groups(3)
+    started = time.perf_counter()
+    assert _probe(nodes, edges, "b", "total", lambda e: e.source[0] in "sa") is False
+    assert time.perf_counter() - started < 5
