@@ -38,7 +38,7 @@ export function hemsConsumers(raw) {
 
 /**
  * A yes/no setting as the engine reads it: unset means yes, anything else the
- * backend boolean rule (`_truthy` in hems_surplus.py = GraphExecutor._to_bool).
+ * backend boolean rule (`to_bool` in obs/logic/booleans.py, used by the engine and GraphExecutor).
  *
  * @param {unknown} value  stored setting
  * @returns {boolean}

@@ -128,7 +128,6 @@ def test_handle_helpers():
     assert hs.grid_input_names("split") == ("grid_import", "grid_export")
     assert hs.grid_input_names("feed_in_only") == ("feed_in",)
     assert hs.grid_input_names("anything") == ("grid",)
-    assert {"c_a", "c_a_status", "c_b", "grid_power", "status", "warning"} <= hs.output_handles(data)
     assert hs.trigger_output_handles(data) == {"c_b"}
 
 
@@ -851,7 +850,7 @@ def test_inactive_trigger_never_fires_and_clears_a_pulse():
 # ── Feed-in-only mode ───────────────────────────────────────────────────
 
 
-def test_feed_in_only_holds_at_zero_and_sheds_one_step_after_the_off_delay():
+def test_feed_in_only_holds_at_zero_then_sheds_one_step_per_cycle_after_the_off_delay():
     sim = Sim([pct(step=10, on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=100)
     sim.tick(feed_in=5000)
     assert sim.cstate("a")["setpoint"] == 50
@@ -862,10 +861,47 @@ def test_feed_in_only_holds_at_zero_and_sheds_one_step_after_the_off_delay():
     assert sim.cstate("a")["setpoint"] == 50
     sim.tick(advance=60, feed_in=0)  # off-delay over → one 10 % step (1000 W)
     assert sim.cstate("a")["setpoint"] == 40
-    sim.tick(advance=60, feed_in=0)
-    assert sim.cstate("a")["setpoint"] == 40  # the next step waits for another off-delay
-    sim.tick(advance=60, feed_in=0)
+    sim.tick(feed_in=0)  # … and one more every following cycle
     assert sim.cstate("a")["setpoint"] == 30
+
+
+def test_feed_in_zero_sheds_at_least_ten_percent_per_step():
+    # A fine 1 % step would take hours: 80 % of 10 kW must be gone within minutes.
+    sim = Sim([pct(step=1, on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=180)
+    sim.tick(feed_in=8000)
+    assert sim.cstate("a")["setpoint"] == 80
+    sim.tick(feed_in=0)
+    for _ in range(14):
+        sim.tick(feed_in=0)
+    assert sim.cstate("a")["on"] is False
+
+
+def test_changing_the_control_type_starts_the_consumer_from_scratch():
+    consumers = [onoff("a", on_delay_s=0)]
+    sim = Sim(consumers)
+    assert sim.tick(grid=-3000)["c_a"] is True
+    consumers[0] = trig("a", on_delay_s=0, min_surplus_w=1e9)
+    sim.tick(grid=-3000)
+    assert sim.cstate("a")["on"] is False
+    consumers[0] = onoff("a", on_delay_s=600)
+    out = sim.tick(grid=-100)
+    assert (out["c_a"], out["c_a_status"]) == (False, "off")
+    assert out["budget"] == 100  # the switched-off actuator is not counted
+
+
+def test_a_clock_set_back_shifts_every_timer_with_it():
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=60)], max_age_s=600)
+    assert sim.tick(grid=-3000, grid_changed=True)["c_t"] is True
+    pulse_until = sim.cstate("t")["pulse_until"]
+    before = sim.now
+    sim.now -= 3600 + 30  # NTP corrects the clock by −1 h (the tick below adds 30 s back)
+    sim.tick(grid=-3000, grid_changed=False)
+    # the jump counts as no time passed: every timer keeps its remaining time
+    assert sim.cstate("t")["pulse_until"] - sim.now == pulse_until - before
+    assert sim.state["last_cycle"] == sim.now
+    out = sim.tick(advance=61, grid=-3000, grid_changed=False)
+    assert out["c_t"] is False  # the pulse ends on time, not an hour late
+    assert out["status"] == "ok"  # control cycles continue
 
 
 def test_feed_in_only_returning_feed_in_resets_the_zero_timer():

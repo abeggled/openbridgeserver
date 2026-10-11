@@ -45,6 +45,8 @@ _EPS = 1e-9
 # and the one after it, so a load that needs a moment to ramp up is not
 # immediately handed to a lower priority.
 _TRIGGER_RESERVE_CYCLES = 1
+# Smallest reduction step (%) of a percent consumer at 0 W feed-in.
+_MIN_SHED_PCT = 10.0
 # The scheduler wakes this long after a meter value's age limit has passed.
 _STALE_WAKE_MARGIN_S = 0.05
 
@@ -176,15 +178,6 @@ def grid_input_names(mode: str) -> tuple[str, ...]:
     if mode == "feed_in_only":
         return ("feed_in",)
     return ("grid",)
-
-
-def output_handles(data: dict[str, Any]) -> set[str]:
-    """Every output handle the block may emit for this configuration."""
-    handles = {"grid_power", "surplus", "budget", "allocated", "remaining", "status", "warning"}
-    for consumer in load_consumers(data.get("consumers")):
-        handles.add(f"c_{consumer['id']}")
-        handles.add(f"c_{consumer['id']}_status")
-    return handles
 
 
 def trigger_output_handles(data: dict[str, Any]) -> set[str]:
@@ -340,13 +333,44 @@ def evaluate(
     """
     consumers = load_consumers(data.get("consumers"))
     states: dict[str, dict[str, Any]] = state.setdefault("consumers", {})
+    _follow_clock_jump_back(state, now)
     removed = _forget_removed_consumers(consumers, states, state.setdefault("last_out", {}))
     for consumer in consumers:
-        states.setdefault(consumer["id"], _new_consumer_state())
+        cs = states.get(consumer["id"])
+        if cs is None or cs.get("mode", consumer["mode"]) != consumer["mode"]:
+            # A changed control type starts from scratch: an on/off state, a
+            # setpoint or an armed trigger of the old type means nothing for the new one.
+            cs = states[consumer["id"]] = _new_consumer_state()
+        cs["mode"] = consumer["mode"]
 
     result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
     state["next_wake"] = _next_wake(data, consumers, states, state, now)
     return result
+
+
+_CONSUMER_TIMESTAMPS = ("since", "on_pending", "off_pending", "trigger_pending", "pulse_until", "lockout_until")
+
+
+def _follow_clock_jump_back(state: dict[str, Any], now: float) -> None:
+    """Shift every stored timestamp when the wall clock was set back.
+
+    The timers are relative: after a correction by e.g. −1 h they would
+    otherwise stop the control cycle and hold a running pulse for that hour.
+    """
+    last_now = state.get("last_now")
+    state["last_now"] = now
+    if last_now is None or now >= last_now:
+        return
+    delta = now - last_now
+    for key in ("last_cycle", "zero_since"):
+        if state.get(key) is not None:
+            state[key] += delta
+    for name in state.get("last_seen", {}):
+        state["last_seen"][name] += delta
+    for cs in state.get("consumers", {}).values():
+        for key in _CONSUMER_TIMESTAMPS:
+            if cs.get(key) is not None:
+                cs[key] += delta
 
 
 def _forget_removed_consumers(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], last_out: dict[str, Any]) -> dict[str, Any]:
@@ -489,8 +513,9 @@ def _tick(
 
     if feed_in_w is not None and feed_in_w <= 0:
         # Feed-in-only meter reading 0 W: balanced or already importing — unknown.
-        # Hold the current allocation, and shed one step of the lowest-priority
-        # running consumer only after the off-delay has passed without feed-in.
+        # Hold the current allocation; once the off-delay has passed without
+        # feed-in, shed one step of the lowest-priority running consumer per
+        # control cycle until feed-in shows up again.
         # The hold is the *commanded* allocation, not the measured draw: a
         # consumer drawing more than its setpoint must not raise the setpoint.
         # A requested step stays requested until the consumer has actually
@@ -519,8 +544,7 @@ def _tick(
     if commanded_w is not None and state["zero_shed_w"]:
         new_commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
         if new_commanded_w <= commanded_w - state["zero_shed_w"] + _EPS:
-            state["zero_shed_w"] = 0.0
-            state["zero_since"] = now
+            state["zero_shed_w"] = 0.0  # done; with the off-delay over, the next step follows next cycle
 
     emit("grid_power", round(grid_w, 2) + 0.0)
     emit("surplus", round(max(0.0, -grid_w - target_w), 2) + 0.0)
@@ -564,14 +588,18 @@ def _apply_safe_state(consumers: list[dict[str, Any]], states: dict[str, dict[st
 
 
 def _shed_step_w(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], rated: dict[str, float | None]) -> float:
-    """Power of one reduction step of the lowest-priority running consumer."""
+    """Power of one reduction step of the lowest-priority running consumer.
+
+    A percent consumer gives up at least ``_MIN_SHED_PCT`` per step, so a fine
+    setpoint step does not stretch a reduction over hours of possible import.
+    """
     for consumer in reversed(consumers):
         cs = states[consumer["id"]]
         if not cs["on"] or consumer["mode"] == "trigger":
             continue
         power = rated[consumer["id"]] or 0.0
         if consumer["mode"] == "percent":
-            return power * consumer["step"] / 100.0
+            return power * max(consumer["step"], _MIN_SHED_PCT) / 100.0
         return power
     return 0.0
 

@@ -461,7 +461,7 @@ const summary = computed(() => {
     return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
   }
   if (props.type === 'hems_surplus') {
-    return t('logic.summary.consumers', { n: parseRowList(d.consumers).length })
+    return t('logic.summary.consumers', { n: hemsConsumers(d.consumers).length })
   }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)

@@ -2656,10 +2656,8 @@ class LogicManager:
             # That absence is a boundary, not a failed producer — without this a
             # synchronous node between one of them and a Change Filter would log
             # "Missing upstream output" on every single save.
+            # (hems_surplus handles are covered by GraphExecutor.execute itself.)
             init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
-            for node in flow.nodes:
-                if node.type == "hems_surplus":
-                    init_retained_boundary_handles[node.id] = hems_surplus.output_handles(node.data)
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)

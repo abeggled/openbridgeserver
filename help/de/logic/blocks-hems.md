@@ -26,10 +26,11 @@ zusätzlich auf neue Zählerwerte; ein Regelzyklus läuft aber höchstens einmal
 **Einschränkung bei „Nur Einspeiseleistung":** Bei `0 W` kann der Block nicht unterscheiden, ob
 ein exaktes Gleichgewicht oder bereits Netzbezug vorliegt. Er reagiert deshalb konservativ: Solange
 keine Einspeisung gemeldet wird, wird die aktuelle Leistung gehalten (nie erhöht). Bleibt die
-Einspeisung länger als die **Ausschaltverzögerung** aus, wird schrittweise je ein Schritt des
-Verbrauchers mit der niedrigsten Priorität abgebaut. Die Abbau-Anforderung bleibt bestehen, bis der
-Verbraucher sie umgesetzt hat (ein Ein/Aus-Verbraucher durchläuft dabei seine eigene
-Ausschaltverzögerung und Mindestlaufzeit); erst danach beginnt die Wartezeit für den nächsten Schritt.
+Einspeisung länger als die **Ausschaltverzögerung** aus, wird danach in jedem Regelzyklus ein Schritt
+des Verbrauchers mit der niedrigsten Priorität abgebaut (bei Prozent-Verbrauchern mindestens 10 %),
+bis wieder Einspeisung gemeldet wird. Ein Schritt gilt erst als erledigt, wenn der Verbraucher ihn
+umgesetzt hat — ein Ein/Aus-Verbraucher durchläuft dabei seine eigene Ausschaltverzögerung und
+Mindestlaufzeit.
 Frei werdende Leistung geht dabei an keinen anderen Verbraucher, und eine positive Einspeisereserve
 wird sofort abgezogen, da sie bei 0 W Einspeisung sicher nicht erreicht ist.
 
@@ -83,7 +84,9 @@ bestimmter Netzbezug toleriert.
 Schwellwert zwischenzeitlich unterschritten wurde (Standard) oder über den **Reset**-Eingang. Eine
 optionale **Reservierte Leistung** wird im Auslöse- und im folgenden Zyklus vom Budget der
 niedrigeren Prioritäten abgezogen, damit die anlaufende Last nicht schon verteilt ist. Die **Impulsdauer** beträgt
-0,1 s bis 1 h. Ein Trigger wird nie bei jedem Regelzyklus erneut ausgelöst.
+0,1 s bis 1 h. Ein Trigger löst nie wegen eines bloß anhaltenden Überschusses erneut aus, sondern
+erst nach seiner erneuten Freigabe; bei „nach Ablauf der Sperrzeit“ mit Sperrzeit 0 also bei jedem
+Regelzyklus, solange der Überschuss reicht.
 
 ### Ausgänge
 

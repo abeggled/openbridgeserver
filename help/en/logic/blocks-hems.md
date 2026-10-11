@@ -25,10 +25,10 @@ a control cycle runs at most once per interval.
 
 **Limitation of "Feed-in power only":** at `0 W` the block cannot tell an exact balance from grid
 import. It therefore reacts conservatively: while no feed-in is reported the current power is held
-(never increased). If feed-in stays absent for longer than the **switch-off delay**, one step of
-the lowest-priority consumer is removed at a time. The reduction request stands until the consumer
-has carried it out (an on/off consumer still runs its own switch-off delay and minimum run time);
-only then does the wait for the next step begin. Power freed in the process goes to no other
+(never increased). If feed-in stays absent for longer than the **switch-off delay**, one step of the
+lowest-priority consumer is removed per control cycle from then on (at least 10 % for percentage
+consumers) until feed-in is reported again. A step counts as done only once the consumer has carried
+it out — an on/off consumer still runs its own switch-off delay and minimum run time. Power freed in the process goes to no other
 consumer, and a positive feed-in reserve is deducted straight away, since 0 W feed-in certainly falls
 short of it.
 
@@ -80,7 +80,8 @@ the **lockout time**. **Re-arm**: after the lockout has expired, only after the 
 undershot in between (default), or via the **Reset** input. An optional **reserved power** is
 deducted from the budget of lower priorities in the firing cycle and the next one, so the starting
 load's power is not handed out already. The **pulse duration** ranges from 0.1 s to 1 h. A trigger
-never fires again on every control cycle.
+never fires again merely because the surplus persists, only once it has been re-armed; with "after
+the lockout" and a lockout of 0 that is every control cycle while the surplus suffices.
 
 ### Outputs
 
