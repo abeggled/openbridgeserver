@@ -22,6 +22,26 @@ individually, same as the AND block.
 Output is **true** when EXACTLY ONE input is true (with more than two inputs: an odd number of
 true inputs). Inputs (2–30) and the output can be negated individually.
 
+## Binary statistics {#logic-block-binary-stats}
+
+Counts how many binary inputs are TRUE and FALSE — for example "how many windows are open?" or
+"at least 2 of 3 smoke detectors". The number of inputs (2–30) and per-input negation work like
+AND/OR; negation is applied **before** counting. The block is purely combinational, keeps no
+state and sends all outputs on every run.
+
+- **Count TRUE / Count FALSE** — number of inputs that are TRUE or FALSE.
+- **Majority TRUE** — true when more inputs are TRUE than FALSE (strictly greater).
+- **Total** — number of inputs that were evaluated.
+- **TRUE %** — share of TRUE inputs in percent (one decimal place, rounded half up).
+- **Tie** — true when TRUE and FALSE counts are equal (only when Total > 0).
+- **Threshold reached** — true when Count TRUE ≥ "Threshold". With threshold 0 the feature is off
+  and the output is always false.
+
+**Unwired inputs** are controlled by the setting of the same name. With *Ignore* (default) only
+inputs that are actually wired are counted; with *Count as FALSE* the AND/OR behaviour applies
+(unwired = FALSE). A wired input that delivers no value in this run always counts as FALSE. With
+no input wired, all counts and the percentage are 0 and all boolean outputs are false.
+
 ## NOT {#logic-block-not}
 
 Inverts the input — a single input and output, no further configuration.

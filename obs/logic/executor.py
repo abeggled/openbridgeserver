@@ -31,6 +31,16 @@ from obs.logic.variables import ResolvedTemplate, TimeSnapshot, make_obs_resolve
 
 logger = logging.getLogger(__name__)
 _AVG_MULTI_MAX_SAMPLES = 100_000
+# Plain decimal literal; shared with gui/src/utils/binaryStatsInputCount.js.
+_DECIMAL_NUMBER_RE = re.compile(r"[ \t\n\r\f\v]*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?[ \t\n\r\f\v]*")
+
+
+def _plain_decimal(value: Any) -> float:
+    """``float()`` restricted to plain decimal strings, like the Admin GUI (no "1_0")."""
+    if isinstance(value, str) and not _DECIMAL_NUMBER_RE.fullmatch(value):
+        raise ValueError(value)
+    return float(value)
+
 
 # json_extractor `_preview` snapshot (config-panel path picker, issue #1104):
 # the full document up to this size; larger documents are pruned
@@ -217,6 +227,14 @@ class GraphExecutor:
         datapoint_lookup: Callable[[str], Any] | None = None,
     ):
         self.flow = flow
+        node_ids = {n.id for n in flow.nodes}
+        # Wired input handles per node: like the edge map the last edge into a
+        # handle wins, and an edge whose source node no longer exists is not wired.
+        last_source = {(edge.target, edge.targetHandle or "in"): edge.source for edge in flow.edges}
+        self._wired_handles: dict[str, set[str]] = {}
+        for (target, handle), source in last_source.items():
+            if source in node_ids:
+                self._wired_handles.setdefault(target, set()).add(handle)
         # NOTE: use `is not None` instead of `or {}` — an empty dict {} is falsy,
         # so `hysteresis_state or {}` would silently create a *new* dict instead of
         # using the passed-in reference, breaking state persistence between runs.
@@ -410,6 +428,10 @@ class GraphExecutor:
                             value = not value
                         resolved_values.append(value)
                     absorbed = any(resolved_values) if node.type == "or" else any(not value for value in resolved_values)
+                elif unresolved and node.type == "binary_stats":
+                    # A wired input without a value is defined as FALSE for
+                    # Binary Statistics, so every output stays well-defined.
+                    absorbed = True
                 if unresolved and not absorbed and node.id in change_filter_ancestors and node.type not in {"change_filter", "memory"}:
                     details = ", ".join(f"{handle} <- {src_id}.{src_handle}" for handle, src_id, src_handle in unresolved)
                     raise ExecutionError(f"Missing upstream output: {details}")
@@ -1649,6 +1671,46 @@ class GraphExecutor:
                 if d.get("negate_out"):
                     result = not result
                 return {"out": result}
+
+            case "binary_stats":
+                try:
+                    # Rounded like the Admin GUI does for integer fields.
+                    count = max(2, min(30, int(self._round_half_up(_plain_decimal(d.get("input_count", 2))))))
+                except (TypeError, ValueError, OverflowError):
+                    count = 2  # cleared/null/non-finite field: fall back to the declared default
+                d = {**d, "input_count": count}
+                names = {f"in{i}" for i in range(1, count + 1)}
+                # Debug/manual overrides arrive in ``inputs`` and count as supplied.
+                supplied = (self._wired_handles.get(node.id, set()) | set(inputs)) & names
+                # A wired input that delivered no value this run is FALSE and is
+                # not negated: negating "no value" would invent a TRUE vote.
+                vals: list[bool] = []
+                if supplied:
+                    with_value = {name for name in names if inputs.get(name) is not None}
+                    vals = self._collect_gate_inputs(inputs, d, only_ports=with_value)
+                    vals += [False] * len(supplied - with_value)
+                    if str(d.get("unwired_inputs", "ignore")).strip().lower() == "count_false":
+                        vals += self._collect_gate_inputs(inputs, d, only_ports=names - supplied)
+                count_true = sum(vals)
+                total = len(vals)
+                count_false = total - count_true
+                raw_threshold = d.get("threshold_count", 0)
+                try:
+                    # A boolean is no count (float(True) would be a threshold of 1).
+                    threshold_value = 0.0 if isinstance(raw_threshold, bool) else _plain_decimal(raw_threshold or 0)
+                except (TypeError, ValueError, OverflowError):
+                    threshold_value = 0.0
+                # A fractional threshold is invalid config: treat it as "off" rather than truncating.
+                threshold = int(threshold_value) if threshold_value.is_integer() else 0
+                return {
+                    "count_true": count_true,
+                    "count_false": count_false,
+                    "majority_true": count_true > count_false,
+                    "total": total,
+                    "percent_true": self._round_half_up(count_true * 100 / total, 1) if total else 0.0,
+                    "tie": total > 0 and count_true == count_false,
+                    "threshold_reached": threshold > 0 and count_true >= threshold,
+                }
 
             case "gate":
                 enable = self._to_bool(inputs.get("enable"))
@@ -3069,16 +3131,20 @@ class GraphExecutor:
         }
         return inputs.get(active) if active is not None else None
 
-    def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any]) -> list[bool]:
+    def _collect_gate_inputs(self, inputs: dict[str, Any], d: dict[str, Any], only_ports: set[str] | None = None) -> list[bool]:
         """Collect all active gate inputs with per-input negation applied.
 
         Port naming: in1, in2, in3, … up to input_count.
         Negation config: "negate_in1", "negate_in2", …
+        ``only_ports`` restricts the result to the named ports (used by blocks
+        that count only wired inputs instead of treating them as False).
         """
         count = max(2, min(30, int(d.get("input_count", 2))))
         vals: list[bool] = []
         for i in range(1, count + 1):
             port_id = f"in{i}"
+            if only_ports is not None and port_id not in only_ports:
+                continue
             v = self._to_bool(inputs.get(port_id))
             if d.get(f"negate_{port_id}"):
                 v = not v

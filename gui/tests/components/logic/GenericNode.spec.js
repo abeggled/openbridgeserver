@@ -106,3 +106,49 @@ describe('GenericNode string_replace rendering', () => {
     expect(wrapper.text()).toContain('0 Regeln')
   })
 })
+
+describe('GenericNode binary_stats rendering', () => {
+  function mountStats(data) {
+    return mount(GenericNode, { props: { id: 'stats', type: 'binary_stats', data } })
+  }
+
+  it('generates in1..inN inputs from input_count and renders all seven outputs', () => {
+    const wrapper = mountStats({ input_count: 3 })
+
+    expect(wrapper.text()).toContain('Binärstatistik')
+    for (const id of ['in1', 'in2', 'in3']) {
+      expect(wrapper.find(`[data-id="${id}"][data-type="target"]`).exists()).toBe(true)
+    }
+    expect(wrapper.find('[data-id="in4"]').exists()).toBe(false)
+    for (const id of ['count_true', 'count_false', 'majority_true', 'total', 'percent_true', 'tie', 'threshold_reached']) {
+      expect(wrapper.find(`[data-id="${id}"][data-type="source"]`).exists()).toBe(true)
+    }
+    expect(wrapper.text()).toContain('3 Eingänge')
+  })
+
+  it('defaults to two inputs without a summary and clamps to 30', () => {
+    const two = mountStats({})
+    expect(two.findAll('[data-type="target"]')).toHaveLength(2)
+    expect(two.text()).not.toContain('Eingänge')
+
+    const many = mountStats({ input_count: 99 })
+    expect(many.findAll('[data-type="target"]')).toHaveLength(30)
+  })
+
+  it('offers per-input negation but no output negation', () => {
+    const wrapper = mountStats({ input_count: 2, negate_in1: true })
+
+    const buttons = wrapper.findAll('button.gn-port-negate')
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0].text()).toBe('¬IN 1')
+    expect(buttons[1].text()).toBe('IN 2')
+    expect(wrapper.find('.gn-port-negate--right').exists()).toBe(false)
+  })
+
+  it('rounds an imported fractional input_count like the executor', () => {
+    const wrapper = mountStats({ input_count: 2.5 })
+
+    expect(wrapper.findAll('[data-type="target"]')).toHaveLength(3)
+    expect(wrapper.text()).toContain('3 Eingänge')
+  })
+})
