@@ -1549,3 +1549,22 @@ def test_renaming_the_block_does_not_run_a_cycle_early():
     sim.config["label"] = "Überschuss Haus"
     sim.tick(advance=1, grid=-3000)
     assert sim.state["last_cycle"] == cycle
+
+
+def test_the_reserve_cut_at_zero_feed_in_respects_the_switch_off_delay():
+    sim = Sim([onoff("a", power_w=2000, on_delay_s=0)], grid_mode="feed_in_only", target_w=200, off_delay_s=180)
+    sim.tick(feed_in=2500)
+    sim.tick(feed_in=500)
+    assert sim.cstate("a")["on"] is True
+    out = sim.tick(feed_in=0)  # a short dip: the reserve is cut, but a/off waits its delay
+    assert out["c_a_status"] == "off_delay"
+    assert sim.cstate("a")["on"] is True
+    assert out["remaining"] == 0.0  # holding: nothing to hand out
+
+
+def test_the_reserve_cut_keeps_a_hold_min_consumer_at_its_minimum_for_the_delay():
+    sim = Sim([pct("a", power_w=3000, min_power_w=2100, below_min="hold_min", on_delay_s=0)], grid_mode="feed_in_only", target_w=200, off_delay_s=180)
+    sim.tick(feed_in=2400)  # 2200 W after the reserve: 73 %
+    assert sim.cstate("a")["setpoint"] == 73
+    out = sim.tick(feed_in=0)  # the reserve cut leaves too little: hold the minimum for the delay
+    assert (out["c_a_status"], sim.cstate("a")["setpoint"]) == ("off_delay", 70)

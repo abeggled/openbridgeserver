@@ -555,8 +555,7 @@ def _tick(
     elif not plant_ok:
         status = "plant_not_ok"
 
-    meter_detail = f"mode={mode}, " + ", ".join(f"{name}={inputs.get(name)!r}" for name in grid_input_names(mode))
-    _log_status_change(state, node_id, status, meter_detail)
+    _log_status_change(state, node_id, status, mode, inputs)
 
     if grid_w is None or status != "ok":
         # Safe state applies immediately, not at the next cycle, and the next
@@ -669,7 +668,12 @@ def _tick(
         used_w = sum(_consumer_power(c, states[c["id"]], inputs, rated[c["id"]] or 0.0) for c in consumers)
         budget_w = used_w - grid_w - target_w
 
-    allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps, inputs)
+    # Only an actual shed step skips a consumer's own switch-off delay (it has
+    # waited it out already); the reserve cut and the plain hold do not.
+    shedding = caps is not None and bool(state["zero_shed_w"])
+    allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps, inputs, shedding)
+    if caps is not None:
+        remaining_w = 0.0  # holding: nothing can be switched on, so nothing is left to hand out
     if commanded_w is not None and state["zero_shed_w"]:
         new_commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
         if new_commanded_w <= commanded_w - state["zero_shed_w"] + _EPS:
@@ -685,10 +689,11 @@ def _tick(
     return result
 
 
-def _log_status_change(state: dict[str, Any], node_id: str, status: str, detail: str = "") -> None:
+def _log_status_change(state: dict[str, Any], node_id: str, status: str, mode: str, inputs: dict[str, Any]) -> None:
     previous = state.get("status")
     if previous == status:
         return
+    detail = f"mode={mode}, " + ", ".join(f"{name}={inputs.get(name)!r}" for name in grid_input_names(mode))
     state["status"] = status
     label = node_id[:8] if node_id else "?"
     if status == "ok":
@@ -751,6 +756,7 @@ def _allocate(
     emit: Any,
     caps: dict[str, float] | None = None,
     measured: dict[str, Any] | None = None,
+    shedding: bool = False,
 ) -> tuple[float, float]:
     """Serve the consumers top-down and emit their setpoints; returns (allocated, remaining).
 
@@ -781,10 +787,10 @@ def _allocate(
         drawn = _num(measured.get(f"c_{cid}_power")) if measured else None
         was_on, previous_setpoint = cs["on"], cs["setpoint"]
         if consumer["mode"] == "percent":
-            consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=caps is not None)
+            consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=shedding)
             emit(f"c_{cid}", _pct_out(cs["setpoint"]) if cs["on"] else 0)
         elif consumer["mode"] == "onoff":
-            consumed, label = _step_onoff(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=caps is not None)
+            consumed, label = _step_onoff(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=shedding)
             emit(f"c_{cid}", cs["on"])
         else:
             consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
