@@ -1742,7 +1742,8 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
-        self._cancel_hems_wakes()
+        # Pending HEMS early wakes are kept: they re-read the graph when they
+        # fire, and a reload restarts every loop only at its planned wake.
         await self._load_graphs()
         live_graph_ids = set(self._graphs)
         # A reload restarts all schedulers, but it must not invalidate work for
@@ -2278,7 +2279,7 @@ class LogicManager:
                 raise
             except Exception:
                 logger.exception("HEMS surplus loop error graph=%s node=%s", graph_id[:8], node_id[:8])
-                await asyncio.sleep(60)  # back-off on unexpected errors
+                await asyncio.sleep(hems_surplus.MIN_INTERVAL_S)  # back-off, short: the safe state depends on this loop
 
     # ── Event Handler ─────────────────────────────────────────────────────
 
@@ -7708,7 +7709,9 @@ class LogicManager:
             # without writing them: every hems_surplus level is sent once more.
             for node in previous[2].nodes:
                 if node.type == "hems_surplus":
-                    self._hysteresis.get(graph_id, {}).get(node.id, {})["resend"] = True
+                    hems_state = self._hysteresis.get(graph_id, {}).get(node.id, {})
+                    hems_state["resend"] = True
+                    hems_state.pop("config", None)  # forces a cycle, which does the resend
         # NOTE: _hysteresis is intentionally NOT cleared here.
         # When a graph is saved (PUT/PATCH), invalidate_cache + reload() are called.
         # Clearing _hysteresis would reset statistics accumulators on every save.

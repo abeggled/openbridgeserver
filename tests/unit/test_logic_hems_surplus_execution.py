@@ -225,7 +225,7 @@ async def test_loop_skips_a_disabled_graph_and_a_missing_node():
 async def test_loop_backs_off_after_an_unexpected_error():
     manager = _loop_manager()
     manager._execute_graph = AsyncMock(side_effect=RuntimeError("boom"))
-    assert await _run_loop(manager) == [60]
+    assert await _run_loop(manager) == [5.0]  # short: the safe state depends on this loop
 
 
 # ── Persistence and initialization ──────────────────────────────────────
@@ -630,17 +630,19 @@ async def test_invalidating_a_graph_forgets_its_planned_and_pending_wakes():
 
 
 @pytest.mark.asyncio
-async def test_stop_and_reload_cancel_every_pending_wake():
+async def test_stop_cancels_every_pending_wake_but_a_reload_keeps_them():
     manager = _manager()
     manager._load_graphs = AsyncMock()
     manager._event_bus.unsubscribe = MagicMock()
-    for method in (manager.stop, manager.reload):
-        sleeper = asyncio.create_task(asyncio.sleep(60))
-        manager._hems_wake_tasks["g"] = {sleeper}
-        await method()
-        await asyncio.sleep(0)
-        assert sleeper.cancelled()
-        assert manager._hems_wake_tasks == {}
+    sleeper = asyncio.create_task(asyncio.sleep(60))
+    manager._hems_wake_tasks["g"] = {sleeper}
+    await manager.reload()  # saving any graph must not drop another graph's pulse end
+    await asyncio.sleep(0)
+    assert not sleeper.cancelled()
+    await manager.stop()
+    await asyncio.sleep(0)
+    assert sleeper.cancelled()
+    assert manager._hems_wake_tasks == {}
 
 
 @pytest.mark.asyncio
@@ -800,8 +802,10 @@ def test_invalidating_a_graph_asks_its_blocks_to_resend_their_levels():
     flow = FlowData.model_validate({"nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("n", "not", {})], "edges": []})
     manager._graphs["g"] = ("G", True, flow)
     manager._hysteresis["g"] = {"h": {"last_out": {}}}
+    manager._hysteresis["g"]["h"]["config"] = "fingerprint"
     manager.invalidate_cache("g")
     assert manager._hysteresis["g"]["h"]["resend"] is True
+    assert "config" not in manager._hysteresis["g"]["h"]  # forces the cycle that resends
     manager.invalidate_cache("unknown")  # nothing cached: nothing to do
 
 

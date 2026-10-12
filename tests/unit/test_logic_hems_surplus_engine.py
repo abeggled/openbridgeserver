@@ -1475,3 +1475,30 @@ def test_a_removed_consumer_takes_its_held_inputs_with_it():
     sim.config["consumers"] = []
     sim.tick(grid=-3000)
     assert not any(key.startswith("c_n2_") for key in sim.state["held"])
+
+
+def test_holding_a_hold_min_percent_consumer_gives_its_step_up_without_a_second_delay():
+    sim = Sim([pct("a", power_w=3000, min_power_w=1500, below_min="hold_min", on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=100)
+    sim.tick(feed_in=1600)
+    assert sim.cstate("a")["setpoint"] == 53
+    sim.tick(feed_in=0)
+    sim.tick(advance=100, feed_in=0)  # the step below the minimum: off at once
+    assert sim.cstate("a")["on"] is False
+
+
+def test_removing_a_consumer_keeps_the_held_inputs_of_one_whose_id_starts_alike():
+    consumers = [onoff("a", on_delay_s=0), onoff("a_b", power_source="input", on_delay_s=0)]
+    sim = Sim(consumers)
+    sim.tick(grid=-3000, c_a_power=0, c_a_b_max_power=1000)
+    sim.config["consumers"] = [consumers[1]]
+    sim.tick(grid=-3000)
+    assert "c_a_b_max_power" in sim.state["held"]
+    assert "c_a_power" not in sim.state["held"]
+
+
+def test_a_requested_resend_with_an_unchanged_configuration_runs_a_cycle_at_once():
+    sim = Sim([onoff("a", on_delay_s=0)], interval_s=600, only_on_change=True)
+    assert sim.tick(grid=-3000)["c_a"] is True
+    sim.state["resend"] = True
+    sim.state.pop("config")  # what LogicManager.invalidate_cache does
+    assert sim.tick(advance=1, grid=-3000)["c_a"] is True

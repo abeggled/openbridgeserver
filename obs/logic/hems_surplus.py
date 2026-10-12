@@ -420,8 +420,8 @@ def _forget_removed_consumers(
     result: dict[str, Any] = {}
     for stale_id in set(states) - {c["id"] for c in consumers}:
         del states[stale_id]
-        for key in [k for k in held if k.startswith(f"c_{stale_id}_")]:
-            del held[key]  # its held measured / maximum power must not pass to a new consumer of that id
+        for key in (f"c_{stale_id}_power", f"c_{stale_id}_max_power"):
+            held.pop(key, None)  # its held measured / maximum power must not pass to a new consumer of that id
         last = last_out.pop(f"c_{stale_id}", None)
         last_out.pop(f"c_{stale_id}_status", None)
         if isinstance(last, bool):
@@ -749,7 +749,7 @@ def _allocate(
         drawn = _num(measured.get(f"c_{cid}_power")) if measured else None
         was_on, previous_setpoint = cs["on"], cs["setpoint"]
         if consumer["mode"] == "percent":
-            consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
+            consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=caps is not None)
             emit(f"c_{cid}", _pct_out(cs["setpoint"]) if cs["on"] else 0)
         elif consumer["mode"] == "onoff":
             consumed, label = _step_onoff(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=caps is not None)
@@ -773,7 +773,15 @@ def _allocate(
 
 
 def _step_percent(
-    consumer: dict[str, Any], cs: dict[str, Any], power: float, available: float, now: float, on_delay_s: float, off_delay_s: float
+    consumer: dict[str, Any],
+    cs: dict[str, Any],
+    power: float,
+    available: float,
+    now: float,
+    on_delay_s: float,
+    off_delay_s: float,
+    *,
+    holding: bool = False,
 ) -> tuple[float, str]:
     step = consumer["step"]
     max_pct = consumer["max_setpoint"]
@@ -796,7 +804,8 @@ def _step_percent(
         if protected:
             cs["setpoint"] = hold_pct
             return power * hold_pct / 100.0, "min_runtime"
-        if consumer["below_min"] == "hold_min":
+        # Holding at 0 W feed-in, the shed request has already waited out the delay.
+        if consumer["below_min"] == "hold_min" and not holding:
             if cs["off_pending"] is None:
                 cs["off_pending"] = now
             if now - cs["off_pending"] < _delay(consumer["off_delay_s"], off_delay_s):
