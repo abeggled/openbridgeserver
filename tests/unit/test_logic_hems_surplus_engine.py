@@ -1292,3 +1292,42 @@ def test_hold_does_not_turn_an_inactive_consumer_into_safe_hold():
     out = sim.tick(grid="bad")
     assert out["c_a_status"] == "safe_hold"
     assert out["c_b_status"] == "safe"
+
+
+def test_feed_in_zero_passes_over_a_consumer_whose_step_is_worth_nothing():
+    sim = Sim(
+        [pct("heat", power_w=2000, on_delay_s=0), onoff("relay", power_w=0, on_threshold_w=0, on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60
+    )
+    sim.tick(feed_in=3000)
+    assert sim.cstate("relay")["on"] is True
+    sim.tick(feed_in=0)
+    sim.tick(advance=60, feed_in=0)
+    assert sim.cstate("heat")["setpoint"] == 90
+
+
+def test_a_pending_shed_step_is_void_once_its_consumer_is_deactivated():
+    consumers = [pct("heat", power_w=2000, on_delay_s=0), onoff("pump", power_w=3000, on_delay_s=0)]
+    sim = Sim(consumers, grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=5000)
+    sim.tick(feed_in=0)
+    sim.tick(advance=60, feed_in=0)
+    assert (sim.state["zero_shed_id"], sim.state["zero_shed_w"]) == ("pump", 3000)
+    consumers[1]["active"] = False
+    sim.tick(feed_in=0)
+    assert sim.cstate("heat")["setpoint"] == 90  # one 10 % step, not the pump's 3000 W
+
+
+def test_a_tick_that_fails_half_way_records_nothing_as_sent(monkeypatch):
+    sim = Sim([onoff("a", on_delay_s=0)], only_on_change=True)
+    sim.tick(grid=0)
+    before = dict(sim.state["last_out"])
+
+    def boom(*args, **kwargs):
+        raise OverflowError("boom")
+
+    monkeypatch.setattr(hs, "_step_onoff", boom)
+    with pytest.raises(OverflowError):
+        sim.tick(grid=-3000)
+    assert sim.state["last_out"] == before
+    monkeypatch.undo()
+    assert sim.tick(grid=-3000)["c_a"] is True  # the change is still sent afterwards

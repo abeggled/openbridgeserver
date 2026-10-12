@@ -1664,6 +1664,8 @@ class LogicManager:
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         # When each hems_surplus loop next wakes on its own (epoch seconds).
         self._hems_planned_wake: dict[tuple[str, str], float] = {}
+        # (graph id, node id) of early-wake runs executing right now.
+        self._hems_waking: set[tuple[str, str]] = set()
         # Coalesce concurrent refreshes per iCalendar node.  Keep this lock
         # scoped to the fetch itself: graph execution may synchronously publish
         # an event that re-enters the same graph.
@@ -3152,16 +3154,18 @@ class LogicManager:
         before the loop's own planned wake.
         """
         for node in flow.nodes:
-            if node.type != "hems_surplus" or overrides == {node.id: {}}:  # the loop's own run plans itself
+            if node.type != "hems_surplus":
                 continue
+            if overrides == {node.id: {}} and (graph_id, node.id) not in self._hems_waking:
+                continue  # the loop's own run plans itself
             next_wake = self._hysteresis.get(graph_id, {}).get(node.id, {}).get("next_wake")
             planned = self._hems_planned_wake.get((graph_id, node.id))
             now_ts = datetime.now(UTC).timestamp()
             if next_wake is None or planned is None or not now_ts < next_wake < planned - _HEMS_WAKE_SLACK_S:
                 continue
             key = (graph_id, f"{node.id}:wake")
-            if key in self._cron_tasks:
-                self._cron_tasks[key].cancel()
+            if key in self._cron_tasks and (graph_id, node.id) not in self._hems_waking:
+                self._cron_tasks[key].cancel()  # still sleeping: superseded (a running one finishes)
             self._cron_tasks[key] = asyncio.create_task(
                 self._hems_wake_once(graph_id, node.id, next_wake - now_ts), name=f"hems-wake-{graph_id[:8]}-{node.id[:8]}"
             )
@@ -3170,7 +3174,13 @@ class LogicManager:
         await asyncio.sleep(delay_s)
         entry = self._graphs.get(graph_id)
         if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
-            await self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}})
+            # Marked while running: it must not be cancelled half-way by an
+            # event run, and it schedules a follow-up wake itself.
+            self._hems_waking.add((graph_id, node_id))
+            try:
+                await self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}})
+            finally:
+                self._hems_waking.discard((graph_id, node_id))
 
     async def _execute_graph_impl(
         self,

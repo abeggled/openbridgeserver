@@ -15,6 +15,12 @@ priority, e.g. wallbox, water heater, heating element, heat pump or pool pump. T
 own internal scheduler (**control interval**, default 30 s) and also reacts to new meter values, but
 a control cycle runs at most once per interval.
 
+::: tip Own logic sheet
+Like schedules and the Sensor Watchdog, the scheduler runs the whole logic sheet. Put the block on a
+sheet of its own so other Write Objects are not written again every control interval (or enable
+*Only on change* on them).
+:::
+
 ### Measurement modes at the grid connection point
 
 | Mode | Inputs | Meaning |

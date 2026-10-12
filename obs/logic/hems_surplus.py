@@ -368,6 +368,7 @@ def evaluate(
         cs["mode"] = consumer["mode"]
 
     result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
+    state["last_out"].update({key: value for key, value in result.items() if key not in removed})
     state["next_wake"] = _next_wake(data, consumers, states, state, now)
     return result
 
@@ -459,10 +460,15 @@ def _tick(
     def emit(key: str, value: Any, *, event: bool = False) -> None:
         # ``event``: a trigger pulse is sent once per firing even without "only
         # on change" — repeating True each cycle would read as a new firing.
+        # ``last_out`` is only updated by ``evaluate`` once the tick completed,
+        # so a tick that fails half-way records nothing as sent.
         last = state.setdefault("last_out", {})
-        if (only_on_change or event) and key in last and last[key] == value and type(last[key]) is type(value):
+        if key in result:
+            previous, known = result[key], True
+        else:
+            previous, known = last.get(key), key in last
+        if (only_on_change or event) and known and previous == value and type(previous) is type(value):
             return
-        last[key] = value
         result[key] = value
 
     # Everything that depends on a *signal* rather than on the state of a value
@@ -577,11 +583,14 @@ def _tick(
         zero_since = state.get("zero_since")
         caps = {c["id"]: _consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers}
         commanded_w = sum(caps.values())
+        target = next((c for c in consumers if c["id"] == state.get("zero_shed_id")), None)
+        if state.get("zero_shed_w") and (target is None or not target["active"] or not states[target["id"]]["on"]):
+            state["zero_shed_w"] = 0.0  # its consumer is gone, inactive or off: that step is void
         if zero_since is None:
             state["zero_since"] = now
             state["zero_shed_w"] = 0.0
         elif not state.get("zero_shed_w") and now - zero_since >= off_delay_s:
-            state["zero_shed_w"] = _shed_step_w(consumers, states, rated)
+            state["zero_shed_id"], state["zero_shed_w"] = _shed_step(consumers, states, rated)
         budget_w = commanded_w - max(0.0, target_w) - (state.get("zero_shed_w") or 0.0)
     else:
         state["zero_since"] = None
@@ -639,21 +648,23 @@ def _reset_consumer(consumer: dict[str, Any], cs: dict[str, Any], now: float, em
     emit(f"c_{consumer['id']}_status", label)
 
 
-def _shed_step_w(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], rated: dict[str, float | None]) -> float:
-    """Power of one reduction step of the lowest-priority running consumer.
+def _shed_step(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], rated: dict[str, float | None]) -> tuple[str | None, float]:
+    """``(consumer id, W)`` of one reduction step of the lowest-priority running consumer.
 
     A percent consumer gives up at least ``_MIN_SHED_PCT`` per step, so a fine
     setpoint step does not stretch a reduction over hours of possible import.
+    A consumer whose step is worth nothing (0 W) is passed over, or it would
+    block every consumer above it.
     """
     for consumer in reversed(consumers):
         cs = states[consumer["id"]]
-        if not cs["on"] or consumer["mode"] == "trigger":
+        if not cs["on"] or not consumer["active"] or consumer["mode"] == "trigger":
             continue
         power = rated[consumer["id"]] or 0.0
-        if consumer["mode"] == "percent":
-            return power * max(consumer["step"], _MIN_SHED_PCT) / 100.0
-        return power
-    return 0.0
+        step_w = power * max(consumer["step"], _MIN_SHED_PCT) / 100.0 if consumer["mode"] == "percent" else power
+        if step_w > 0:
+            return consumer["id"], step_w
+    return None, 0.0
 
 
 def _allocate(

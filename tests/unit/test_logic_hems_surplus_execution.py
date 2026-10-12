@@ -673,3 +673,39 @@ def test_invalidating_a_graph_forgets_its_planned_wakes():
     manager._hems_planned_wake[("other", "h")] = 2.0
     manager.invalidate_cache("g")
     assert manager._hems_planned_wake == {("other", "h"): 2.0}
+
+
+@pytest.mark.asyncio
+async def test_an_early_wake_run_schedules_its_own_follow_up_and_is_never_cancelled_half_way():
+    flow = _flow(interval_s=3600)
+    manager = _manager()
+    now = datetime.now(UTC).timestamp()
+    manager._hems_planned_wake[("g", "h")] = now + 3000
+    manager._hysteresis["g"] = {"h": {"next_wake": now + 4}}
+    running = MagicMock()
+    manager._cron_tasks[("g", "h:wake")] = running
+    manager._hems_waking.add(("g", "h"))  # the wake run itself is executing
+    with patch.object(manager, "_hems_wake_once", new=AsyncMock()) as wake:
+        manager._schedule_hems_early_wakes("g", flow, {"h": {}})
+        await asyncio.sleep(0)
+    running.cancel.assert_not_called()
+    wake.assert_called_once()
+    manager._cron_tasks.pop(("g", "h:wake")).cancel()
+
+
+@pytest.mark.asyncio
+async def test_a_wake_run_is_marked_only_while_it_executes():
+    flow = _flow()
+    manager = _manager()
+    seen: list[bool] = []
+
+    async def fake_execute(*args, **kwargs):
+        seen.append(("g", "h") in manager._hems_waking)
+        raise RuntimeError("boom")
+
+    manager._execute_graph = fake_execute
+    manager._graphs["g"] = ("G", True, flow)
+    with pytest.raises(RuntimeError):
+        await manager._hems_wake_once("g", "h", 0)
+    assert seen == [True]
+    assert ("g", "h") not in manager._hems_waking

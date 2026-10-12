@@ -15,6 +15,12 @@ Verbraucher, z. B. Wallbox, Warmwassererhitzer, Heizstab, Wärmepumpe oder Poolp
 regelt sich selbst über einen internen Scheduler (**Regelintervall**, Standard 30 s) und reagiert
 zusätzlich auf neue Zählerwerte; ein Regelzyklus läuft aber höchstens einmal pro Intervall.
 
+::: tip Eigenes Logikblatt
+Der Scheduler führt — wie Zeitsteuerung und Sensor Watchdog — das ganze Logikblatt aus. Den Block
+deshalb auf ein eigenes Blatt legen, damit andere Write-Objekte nicht bei jedem Regelintervall
+erneut schreiben (oder dort *Nur bei Änderung* aktivieren).
+:::
+
 ### Messarten am Netzanschlusspunkt
 
 | Messart | Eingänge | Bedeutung |
