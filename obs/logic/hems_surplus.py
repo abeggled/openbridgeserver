@@ -496,9 +496,12 @@ def _tick(
     status = problem or "ok"
     # A wired interlock fails safe: once no value is known (unseeded Read
     # Object, failed producer, beyond hold_s) it counts as false.
-    if "enable" in inputs and not to_bool(_held(state, "enable", inputs["enable"], now, hold_s)):
+    # Both are read on every tick, so a held value never ages out unseen.
+    enabled = to_bool(_held(state, "enable", inputs["enable"], now, hold_s)) if "enable" in inputs else True
+    plant_ok = to_bool(_held(state, "plant_ok", inputs["plant_ok"], now, hold_s)) if "plant_ok" in inputs else True
+    if not enabled:
         status = "disabled"
-    elif "plant_ok" in inputs and not to_bool(_held(state, "plant_ok", inputs["plant_ok"], now, hold_s)):
+    elif not plant_ok:
         status = "plant_not_ok"
 
     meter_detail = f"mode={mode}, " + ", ".join(f"{name}={inputs.get(name)!r}" for name in grid_input_names(mode))
@@ -523,7 +526,7 @@ def _tick(
             # e.g. right after a restart — the actuator may still carry a value
             # from before, so that consumer falls back to the safe state.
             last_out = state.setdefault("last_out", {})
-            held = [c for c in consumers if f"c_{c['id']}" in last_out]
+            held = [c for c in consumers if c["active"] and f"c_{c['id']}" in last_out]
             for consumer in held:
                 emit(f"c_{consumer['id']}_status", "safe_hold")
             _apply_safe_state([c for c in consumers if c not in held], states, now, emit)
@@ -687,6 +690,7 @@ def _allocate(
 
         offer = available if caps is None else min(available, caps[cid])
         drawn = _num(measured.get(f"c_{cid}_power")) if measured else None
+        was_on, previous_setpoint = cs["on"], cs["setpoint"]
         if consumer["mode"] == "percent":
             consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
             emit(f"c_{cid}", _pct_out(cs["setpoint"]) if cs["on"] else 0)
@@ -697,9 +701,11 @@ def _allocate(
             consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
             emit(f"c_{cid}", cs["pulse_until"] is not None, event=True)
         emit(f"c_{cid}_status", label)
-        if drawn is not None and consumer["mode"] != "trigger" and cs["on"]:
+        if drawn is not None and consumer["mode"] != "trigger" and was_on and cs["on"] and cs["setpoint"] <= previous_setpoint:
             # A running consumer drawing less than its share (thermostat off,
-            # car full) leaves the rest to lower priorities.
+            # car full) leaves the rest to lower priorities — but not on the
+            # cycle it was switched on or raised: the meter still shows the
+            # old draw, and that power is already promised to it.
             consumed = min(consumed, max(0.0, drawn))
         available -= consumed
         allocated += consumed

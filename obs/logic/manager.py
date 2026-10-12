@@ -230,11 +230,11 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # them must not read the "no pulse this pass" placeholder as a real value.
 # hems_surplus counts with its trigger outputs only (``_hems_trigger_handles``);
 # its other outputs are levels.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
+
 # An event run wakes a hems_surplus node early only when this much earlier
 # than its loop would anyway.
 _HEMS_WAKE_SLACK_S = 0.5
-
-_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on

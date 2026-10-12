@@ -209,22 +209,25 @@ class ExecutionError(Exception):
     pass
 
 
-def _write_filters_itself(data: dict[str, Any]) -> bool:
-    """Whether a Write Object has an effective write-side filter of its own.
+def _write_filters_itself(data: dict[str, Any], value: Any) -> bool:
+    """Whether a Write Object has a write-side filter of its own that applies to ``value``.
 
     Mirrors what ``LogicManager._write_filters_allow`` actually applies: only
-    on change for True/"true", a minimum change or throttle only above 0.
+    on change for True/"true", a throttle above 0, and a minimum change above
+    0 only for a value it can compare as a number.
     """
     ooc = data.get("only_on_change")
     if ooc is True or ooc == "true":
         return True
-    for key in ("min_delta", "throttle_value"):
-        try:
-            if float(data.get(key)) > 0:
-                return True
-        except (TypeError, ValueError):
-            pass
-    return False
+    try:
+        if float(data.get("throttle_value")) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    try:
+        return float(data.get("min_delta")) > 0 and math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 class GraphExecutor:
@@ -399,7 +402,7 @@ class GraphExecutor:
                     and src_id in hems_ids
                     and node.type == "datapoint_write"
                     and "trigger" not in edge_map.get(node.id, {})
-                    and not _write_filters_itself(node.data)
+                    and not _write_filters_itself(node.data, value)
                     and src_handle not in src_out.get("_emitted", ())
                 ):
                     # hems_surplus outputs always carry their current level, so

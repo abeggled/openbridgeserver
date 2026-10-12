@@ -1260,3 +1260,35 @@ def test_a_meter_fault_raises_the_warning_even_while_disabled():
     out = sim.tick(grid=None, enable=False)
     assert (out["status"], out["warning"]) == ("disabled", True)
     assert sim.tick(grid=-100, enable=False)["warning"] is False
+
+
+def test_a_consumer_switched_on_this_cycle_keeps_its_share_although_the_meter_shows_the_old_draw():
+    sim = Sim([onoff("a", power_w=2000, on_delay_s=0), onoff("b", power_w=2000, on_delay_s=0)])
+    out = sim.tick(grid=-2000, c_a_power=0)
+    assert (out["c_a"], out["c_b"], out["allocated"]) == (True, False, 2000)
+
+
+def test_a_percent_consumer_raised_this_cycle_keeps_its_share():
+    sim = Sim([pct("a", power_w=3000, on_delay_s=0), onoff("b", power_w=1000, on_delay_s=0)])
+    sim.tick(grid=-1500)
+    assert sim.cstate("a")["setpoint"] == 50
+    out = sim.tick(grid=-1500, c_a_power=1500)  # budget 3000 → a goes to 100 %
+    assert out["c_a"] == 100
+    assert out["c_b"] is False
+
+
+def test_plant_ok_is_held_while_disabled_so_re_enabling_does_not_trip_it():
+    sim = Sim([onoff("a", on_delay_s=0)], interval_s=30)
+    sim.tick(grid=-3000, enable=True, plant_ok=True)
+    for _ in range(4):
+        sim.tick(grid=-3000, enable=False, plant_ok=True)
+    assert sim.tick(grid=-3000, enable=True, plant_ok=None)["status"] == "ok"
+
+
+def test_hold_does_not_turn_an_inactive_consumer_into_safe_hold():
+    consumers = [onoff("a", on_delay_s=0), onoff("b", active=False)]
+    sim = Sim(consumers, invalid_behavior="hold", only_on_change=True)
+    sim.tick(grid=-3000)
+    out = sim.tick(grid="bad")
+    assert out["c_a_status"] == "safe_hold"
+    assert out["c_b_status"] == "safe"

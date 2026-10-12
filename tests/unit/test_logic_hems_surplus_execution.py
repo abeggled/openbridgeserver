@@ -587,7 +587,14 @@ def test_a_write_with_its_own_filter_gets_the_level_on_every_run(write_filter):
 def test_a_write_counts_as_self_filtering_exactly_when_the_manager_filters_it(write_filter, own):
     from obs.logic.executor import _write_filters_itself
 
-    assert _write_filters_itself(write_filter) is own
+    assert _write_filters_itself(write_filter, 50) is own
+
+
+@pytest.mark.parametrize(("value", "own"), [(50, True), ("50", True), ("active", False), (None, False), (float("nan"), False), (10**400, False)])
+def test_a_minimum_change_only_filters_values_it_can_compare_as_numbers(value, own):
+    from obs.logic.executor import _write_filters_itself
+
+    assert _write_filters_itself({"min_delta": 1}, value) is own
 
 
 @pytest.mark.asyncio
