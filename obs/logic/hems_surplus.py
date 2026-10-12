@@ -570,11 +570,8 @@ def _tick(
                 cs["on_pending"] = cs["off_pending"] = cs["trigger_pending"] = None
                 # The held value itself is sent again too (once per interval without
                 # "only on change"), e.g. for an actuator with a keep-alive watchdog.
-                held_value = state["last_out"][f"c_{consumer['id']}"]
-                if consumer["mode"] == "trigger":
-                    emit(f"c_{consumer['id']}", held_value, event=True)
-                else:  # no explicit event=False: it would override the partial's event=True
-                    emit(f"c_{consumer['id']}", held_value)
+                if consumer["mode"] != "trigger":  # a trigger is an event, not a level to repeat
+                    emit(f"c_{consumer['id']}", state["last_out"][f"c_{consumer['id']}"])
                 emit(f"c_{consumer['id']}_status", "safe_hold")
             _apply_safe_state([c for c in consumers if c not in held], states, now, emit)
         else:

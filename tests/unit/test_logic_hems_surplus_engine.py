@@ -1520,3 +1520,12 @@ def test_hold_sends_a_held_trigger_value_as_an_event():
     out = sim.tick(grid="bad")
     assert "c_t" not in out  # an event: its True is not sent a second time
     assert out["c_t_status"] == "safe_hold"
+
+
+def test_hold_never_repeats_a_trigger_and_lets_its_pulse_end():
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=10)], invalid_behavior="hold", interval_s=5)
+    assert sim.tick(grid=-3000)["c_t"] is True
+    sim.tick(advance=6, grid="bad")  # outage during the pulse
+    out = sim.tick(advance=9, grid="bad")  # the pulse ends during the outage
+    assert out["c_t"] is False
+    assert sim.state["last_out"]["c_t"] is False

@@ -224,11 +224,12 @@ today, so it is deliberately left as an explicit table.
      `_hems_level_edge`) and is written only when it differs from its `last_write_val`; with the
      block's "only on change" off it gets a value only when `_emitted`. Action-node freshness
      (`_event_fresh_inputs`) honours `_emitted`. Its *trigger* outputs are events: present
-     only on the run that sent them, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
+     only on the run that sent them, a firing being the run that sent True, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
      `_hems_trigger_handles`) like Edge Detection's. In `GraphExecutor.execute` an absent trigger
      output or a removed consumer's handle is a boundary; an absent *level* (or any handle of a
      failed block) is a failed producer. `initialize_graph` excludes the block and treats every
-     wired handle of it as a boundary.
+     wired handle of it as a boundary. A run made obsolete by a save undoes its ticks of the block
+     (`run_tag`, `undo_hems_run`).
    - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
      state copy, so a block whose output depends on persisted state needs a decision. Listing it in
      `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass

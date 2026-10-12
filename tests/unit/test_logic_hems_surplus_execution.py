@@ -362,9 +362,10 @@ async def test_logic_behind_a_withheld_output_never_sees_a_placeholder(consumer)
     assert written() == ([] if consumer["mode"] == "trigger" else [False])
 
     if consumer["mode"] == "trigger":
+        # the pulse end's False is no new event either: nothing is written
         manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0
         await manager._execute_graph("g", "G", flow, {"h": {}})
-        assert written() == [True]
+        assert written() == []
 
 
 @pytest.mark.asyncio
@@ -1092,15 +1093,34 @@ async def test_a_run_made_obsolete_by_a_save_leaves_the_block_as_it_was():
     flow = _flow()
     manager = _manager()
     manager._graphs["g"] = ("G", True, flow)
-    manager._hysteresis["g"] = {"h": {"consumers": {"wash": {"armed": True}}, "last_out": {}}}
+    manager._hysteresis["g"] = {}
 
-    async def obsolete_run(*args, **kwargs):
-        manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] = False  # fired in pass 1 …
+    async def obsolete_run(*args, run_tag=None, **kwargs):
+        executor = GraphExecutor(flow, manager._hysteresis["g"])
+        executor.run_tag = run_tag
+        executor.execute(input_overrides={"h": {"grid": -5000}})  # fires the trigger …
+        assert manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] is False
         raise _ObsoleteGraphExecution  # … then a save made the run obsolete before any write
 
     manager._execute_graph_impl = obsolete_run
     assert await manager._execute_graph("g", "G", flow, {}) == {}
-    assert manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] is True
+    assert manager._hysteresis["g"]["h"] == {}  # created by that run: gone again
+
+
+def test_an_obsolete_run_is_not_undone_over_a_newer_run():
+    from obs.logic.executor import undo_hems_run
+
+    flow = _flow()
+    state: dict = {}
+    mine, theirs = object(), object()
+    for tag in (mine, theirs):
+        executor = GraphExecutor(flow, state)
+        executor.run_tag = tag
+        executor.execute(input_overrides={"h": {"grid": -5000}})
+    undo_hems_run(state["h"], mine)  # another run ticked after it: keep the newer state
+    assert state["h"]["consumers"]["wash"]["armed"] is False
+    undo_hems_run(state["h"], theirs)
+    assert state["h"]["consumers"]["wash"]["armed"] is False  # undone to after "mine", which fired
 
 
 @pytest.mark.asyncio
@@ -1117,3 +1137,36 @@ async def test_a_failed_write_restores_the_value_written_before():
     await _writes(manager, flow, dp_out, 1)
     assert manager._node_state["g"]["w"]["last_write_val"] is True
     assert manager._node_state["g"]["w"]["last_write_ts"] == written_at
+
+
+@pytest.mark.asyncio
+async def test_a_notification_on_a_trigger_is_sent_per_firing_not_at_the_pulse_end():
+    dp_grid = uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        None,
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 1},
+        [edge("h", "ma", "c_wash", "message")],
+        [node("ma", "message_archive", {"archive_id": "Alerts", "title": "Wash"})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+    service = MagicMock()
+    service.record = AsyncMock(return_value={"id": "entry-1"})
+    with patch("obs.message_archive.get_message_archive_service", return_value=service):
+        await manager._execute_graph("g", "G", flow, {})
+        manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0  # the pulse ends
+        await manager._execute_graph("g", "G", flow, {"h": {}})
+    assert service.record.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_planned_wakes_are_forgotten_on_stop_and_while_idle():
+    manager = _loop_manager(enabled=False)
+    manager._hems_planned_wake[("g", "h")] = 1.0
+    await _run_loop(manager)
+    assert ("g", "h") not in manager._hems_planned_wake
+    manager._hems_planned_wake[("x", "y")] = 1.0
+    manager._event_bus.unsubscribe = MagicMock()
+    await manager.stop()
+    assert manager._hems_planned_wake == {}

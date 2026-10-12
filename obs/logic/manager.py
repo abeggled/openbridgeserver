@@ -38,7 +38,15 @@ import httpx
 
 from obs.core.json import jsonable
 from obs.logic import hems_surplus
-from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value, hems_clock
+from obs.logic.executor import (
+    GraphExecutor,
+    _OpaqueRecoveredDict,
+    _OpaqueRecoveredSet,
+    _OpaqueRecoveredStr,
+    _replay_known_output_value,
+    hems_clock,
+    undo_hems_run,
+)
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
 from obs.logic.variables import (
@@ -1740,6 +1748,7 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._hems_planned_wake.clear()
         self._hems_stopping = True
         self._cancel_hems_wakes()
         # A HEMS run in flight is never cut short (see _hems_run): let it finish
@@ -2269,6 +2278,8 @@ class LogicManager:
                 entry = self._graphs.get(graph_id)
                 sleep_s = hems_surplus.DEFAULT_INTERVAL_S
                 node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry and entry[1] else None
+                if not (entry and node is not None):
+                    self._hems_planned_wake.pop((graph_id, node_id), None)  # nothing planned while idle
                 if entry and node is not None:  # graph still exists and is enabled, block still on it
                     g_name, _, flow = entry
                     sleep_s = hems_surplus.interval_s(node.data)
@@ -3163,8 +3174,7 @@ class LogicManager:
         # A run a save makes obsolete publishes no write; a hems_surplus block
         # must not keep what it decided in it (a fired trigger would be locked
         # out without its pulse ever reaching the actuator).
-        hyst = self._hysteresis.get(graph_id, {})
-        hems_before = {n.id: _safe_deepcopy_state(hyst[n.id]) for n in flow.nodes if n.type == "hems_surplus" and n.id in hyst}
+        run_tag = object()
         try:
             result = await self._execute_graph_impl(
                 graph_id,
@@ -3174,9 +3184,13 @@ class LogicManager:
                 logic_depth,
                 debug_overrides,
                 debug_input_capture,
+                run_tag=run_tag,
             )
         except _ObsoleteGraphExecution:
-            self._hysteresis.get(graph_id, {}).update(hems_before)
+            hyst = self._hysteresis.get(graph_id, {})
+            for node in flow.nodes:
+                if node.type == "hems_surplus" and node.id in hyst:
+                    undo_hems_run(hyst[node.id], run_tag)
             return {}
         self._schedule_hems_early_wakes(graph_id, flow, overrides)
         return result
@@ -3264,6 +3278,8 @@ class LogicManager:
         logic_depth: int = 0,
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
+        *,
+        run_tag: object | None = None,
     ) -> dict[str, Any]:
         execute_now = datetime.now(UTC)
         execution_started = perf_counter()
@@ -3409,6 +3425,7 @@ class LogicManager:
                     datapoint_lookup=self._datapoint_value_lookup,
                 )
 
+            executor.run_tag = run_tag
             if not ical_nodes or execution_ical_prepared:
                 return executor
 
@@ -4487,14 +4504,9 @@ class LogicManager:
             on that node fired.
             """
             origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
-            if origin_id in _hems_trigger_handles:
-                # A trigger output is present exactly on the run that sent it.
-                return (
-                    handle in outputs.get(origin_id, {})
-                    if handle is not None
-                    else any(_ph in outputs.get(origin_id, {}) for _ph in _hems_trigger_handles[origin_id])
-                )
-            if _node_type_by_id.get(origin_id) == "edge_detect":
+            if origin_id in _hems_trigger_handles or _node_type_by_id.get(origin_id) == "edge_detect":
+                # hems_surplus: a firing is the run that sent True — the pulse
+                # end's False is no new event (as in _discrete_pulse_handles).
                 pulses = _discrete_pulse_handles({origin_id})
                 return (origin_id, handle) in pulses if handle is not None else bool(pulses)
             return GraphExecutor._to_bool(outputs.get(origin_id, {}).get("changed"))

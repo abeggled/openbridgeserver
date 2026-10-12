@@ -210,6 +210,23 @@ class ExecutionError(Exception):
     pass
 
 
+# Keys of a hems_surplus node state that belong to the executor, not the engine.
+_HEMS_RUN = "_run"
+_HEMS_UNDO = "_undo"
+
+
+def undo_hems_run(state: dict[str, Any], run_tag: object) -> None:
+    """Restore a hems_surplus node state to before ``run_tag``'s first tick.
+
+    Only when that run made the last tick: if another run ticked after it,
+    that run's state is newer and is kept.
+    """
+    if state.get(_HEMS_RUN) is run_tag and _HEMS_UNDO in state:
+        before = state[_HEMS_UNDO]
+        state.clear()
+        state.update(before)
+
+
 def hems_clock() -> float:
     """The hems_surplus time base: monotonic seconds.
 
@@ -257,6 +274,9 @@ class GraphExecutor:
         # so `hysteresis_state or {}` would silently create a *new* dict instead of
         # using the passed-in reference, breaking state persistence between runs.
         self.hysteresis_state = hysteresis_state if hysteresis_state is not None else {}
+        # Set by LogicManager per graph run: lets a run made obsolete undo what
+        # it changed in a hems_surplus block (see _HEMS_UNDO).
+        self.run_tag: object | None = None
         self.app_config = app_config or {}
         self.input_capture = input_capture
         # Parsed/filtered calendar results are runtime-only and intentionally
@@ -2924,6 +2944,11 @@ class GraphExecutor:
                 # every level output at its current value plus which ones were
                 # sent. A trigger output is an event: present only when sent.
                 state = self.hysteresis_state.setdefault(node.id, {})
+                if self.run_tag is not None and state.get(_HEMS_RUN) is not self.run_tag:
+                    # The state before this run's first tick, to be restored if
+                    # the run is made obsolete before it could write anything.
+                    state[_HEMS_UNDO] = copy.deepcopy({k: v for k, v in state.items() if k not in (_HEMS_UNDO, _HEMS_RUN)})
+                    state[_HEMS_RUN] = self.run_tag
                 emitted = hems_surplus.evaluate(d, inputs, state, hems_clock(), node.id)
                 triggers = hems_surplus.trigger_output_handles(d)
                 levels = {k: v for k, v in state.get("last_out", {}).items() if k not in triggers}
