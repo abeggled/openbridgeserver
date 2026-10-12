@@ -581,6 +581,7 @@ def test_a_write_with_its_own_filter_gets_the_level_on_every_run(write_filter):
         ({"min_delta": "0"}, False),
         ({"min_delta": "x"}, False),
         ({"throttle_value": "5"}, True),
+        ({"throttle_value": 0}, False),
         ({}, False),
     ],
 )
