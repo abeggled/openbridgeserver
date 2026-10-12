@@ -482,7 +482,7 @@ def test_percent_waits_for_the_on_delay_then_starts():
     assert out["c_a_status"] == "on_delay"
     out = sim.tick(advance=30, grid=-4000)
     assert out["c_a"] == 40
-    assert out["c_a_status"] == "active"
+    assert out["c_a_status"] == "reduced"  # on, below its maximum
     assert sim.cstate("a")["since"] == sim.now
 
 
@@ -590,7 +590,7 @@ def test_percent_minimum_off_time_blocks_a_quick_restart():
 def test_percent_reduced_status_when_the_budget_is_below_the_maximum():
     sim = Sim([pct(on_delay_s=0)])
     out = sim.tick(grid=-5000)
-    assert out["c_a_status"] == "active"
+    assert out["c_a_status"] == "reduced"  # switched on at 50 %: the same label as the next cycles
     out = sim.tick(grid=0, c_a_power=5000)  # keeps 5 kW of 10 kW
     assert out["c_a_status"] == "reduced"
     out = sim.tick(grid=-15000, c_a_power=5000)
@@ -1494,3 +1494,29 @@ def test_a_silent_feed_in_meter_at_zero_watt_is_not_stale():
     assert sim.cstate("a")["on"] is False  # 0 W never switches anything on
     out = sim.tick(advance=600, feed_in=1500, feed_in_changed=False)  # a non-zero value that old is stale
     assert out["status"] == "stale_input"
+
+
+def test_a_shed_step_never_reaches_into_a_higher_priority():
+    sim = Sim([pct("a", power_w=2000, on_delay_s=0), pct("b", power_w=2000, step=1, on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=2100)
+    assert (sim.cstate("a")["setpoint"], sim.cstate("b")["setpoint"]) == (100, 5)
+    sim.tick(feed_in=0)
+    out = sim.tick(advance=60, feed_in=0)  # the step is 10 % = 200 W, but b only has 100 W
+    assert out["c_b"] == 0
+    assert sim.cstate("a")["setpoint"] == 100
+
+
+def test_hold_repeats_the_held_value_once_per_interval_without_only_on_change():
+    sim = Sim([pct("a", on_delay_s=0)], invalid_behavior="hold", interval_s=30)
+    assert sim.tick(grid=-20000)["c_a"] == 100
+    assert sim.tick(grid=None, advance=61)["c_a"] == 100  # held (beyond the None hold time: invalid)
+    assert "c_a" not in sim.tick(grid="bad", advance=1)  # not on every run
+    assert sim.tick(grid="bad", advance=30)["c_a"] == 100  # once per interval
+
+
+def test_hold_sends_a_held_trigger_value_as_an_event():
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=600)], invalid_behavior="hold", interval_s=30)
+    assert sim.tick(grid=-3000)["c_t"] is True
+    out = sim.tick(grid="bad")
+    assert "c_t" not in out  # an event: its True is not sent a second time
+    assert out["c_t_status"] == "safe_hold"

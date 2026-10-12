@@ -3160,6 +3160,11 @@ class LogicManager:
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
+        # A run a save makes obsolete publishes no write; a hems_surplus block
+        # must not keep what it decided in it (a fired trigger would be locked
+        # out without its pulse ever reaching the actuator).
+        hyst = self._hysteresis.get(graph_id, {})
+        hems_before = {n.id: _safe_deepcopy_state(hyst[n.id]) for n in flow.nodes if n.type == "hems_surplus" and n.id in hyst}
         try:
             result = await self._execute_graph_impl(
                 graph_id,
@@ -3171,6 +3176,7 @@ class LogicManager:
                 debug_input_capture,
             )
         except _ObsoleteGraphExecution:
+            self._hysteresis.get(graph_id, {}).update(hems_before)
             return {}
         self._schedule_hems_early_wakes(graph_id, flow, overrides)
         return result
@@ -7554,6 +7560,7 @@ class LogicManager:
                 continue
 
             # All filters passed — update state and publish
+            previous_write = (ns.get("last_write_val", _MISSING_STATE), ns.get("last_write_ts", _MISSING_STATE))
             ns["last_write_val"] = write_val
             ns["last_write_ts"] = write_now
             try:
@@ -7571,6 +7578,14 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception:
                 logger.exception("Graph %s: failed to write dp %s", graph_id, dp_id_str)
+                if node_out.get("_skip_unchanged"):
+                    # Not written: a hems_surplus level must be tried again, not
+                    # skipped as "already written" while it stays unchanged.
+                    for key, value in zip(("last_write_val", "last_write_ts"), previous_write, strict=True):
+                        if value is _MISSING_STATE:
+                            ns.pop(key, None)
+                        else:
+                            ns[key] = value
         return published
 
     @staticmethod

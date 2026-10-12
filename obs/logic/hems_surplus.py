@@ -568,6 +568,13 @@ def _tick(
                 # The outage interrupts any "continuously for the delay" condition.
                 cs = states[consumer["id"]]
                 cs["on_pending"] = cs["off_pending"] = cs["trigger_pending"] = None
+                # The held value itself is sent again too (once per interval without
+                # "only on change"), e.g. for an actuator with a keep-alive watchdog.
+                held_value = state["last_out"][f"c_{consumer['id']}"]
+                if consumer["mode"] == "trigger":
+                    emit(f"c_{consumer['id']}", held_value, event=True)
+                else:  # no explicit event=False: it would override the partial's event=True
+                    emit(f"c_{consumer['id']}", held_value)
                 emit(f"c_{consumer['id']}_status", "safe_hold")
             _apply_safe_state([c for c in consumers if c not in held], states, now, emit)
         else:
@@ -634,6 +641,8 @@ def _tick(
             # concerns (its own, or the global one) has passed without feed-in;
             # holding, that consumer then gives it up without a second delay.
             shed_id, shed_w = _shed_step(consumers, states, rated)
+            # Never more than that consumer has: the rest would be cut from a higher priority.
+            shed_w = min(shed_w, caps.get(shed_id, 0.0)) if shed_id is not None else 0.0
             target = next((c for c in consumers if c["id"] == shed_id), None)
             if target is not None and now - zero_since >= _delay(target["off_delay_s"], off_delay_s):
                 state["zero_shed_id"], state["zero_shed_w"] = shed_id, shed_w
@@ -827,6 +836,8 @@ def _step_percent(
         return 0.0, "off"
 
     label = _step_off_consumer(consumer, cs, eligible, wanted_pct, now, on_delay_s)
+    if label == "active" and wanted_pct < cap_pct - _EPS:
+        label = "reduced"  # switched on below its maximum: the same label the next cycles give
     return (power * cs["setpoint"] / 100.0 if cs["on"] else 0.0), label
 
 

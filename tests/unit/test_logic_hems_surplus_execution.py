@@ -1051,3 +1051,53 @@ async def test_a_trigger_edge_to_a_write_is_a_pulse_when_the_block_sends_every_c
     manager = _manager({str(dp_grid): -5000})
     manager._graphs["g"] = ("G", True, flow)
     assert await _writes(manager, flow, dp_out, 2) == [True]  # once per firing, not per run
+
+
+@pytest.mark.asyncio
+async def test_a_level_whose_write_failed_is_tried_again():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out)
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+
+    async def flaky(event):
+        if str(event.datapoint_id) == str(dp_out) and not flaky.failed:
+            flaky.failed = True
+            raise RuntimeError("bus down")
+
+    flaky.failed = False
+    manager._event_bus.publish.side_effect = flaky
+    assert await _writes(manager, flow, dp_out, 1) == [True]  # attempted, failed
+    assert "last_write_val" not in manager._node_state["g"]["w"]
+    assert await _writes(manager, flow, dp_out, 1) == [True]  # tried again, written
+    assert await _writes(manager, flow, dp_out, 1) == []  # and then not repeated
+
+
+@pytest.mark.asyncio
+async def test_a_failed_publish_of_an_ordinary_write_keeps_its_filter_state():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out, hems_data={"only_on_change": False})
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    manager._node_state["g"] = {"w": {"last_write_val": False}}
+    manager._event_bus.publish.side_effect = RuntimeError("bus down")
+    await _writes(manager, flow, dp_out, 1)
+    assert manager._node_state["g"]["w"]["last_write_val"] is True  # unchanged behaviour outside HEMS levels
+
+
+@pytest.mark.asyncio
+async def test_a_run_made_obsolete_by_a_save_leaves_the_block_as_it_was():
+    from obs.logic.manager import _ObsoleteGraphExecution
+
+    flow = _flow()
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"h": {"consumers": {"wash": {"armed": True}}, "last_out": {}}}
+
+    async def obsolete_run(*args, **kwargs):
+        manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] = False  # fired in pass 1 …
+        raise _ObsoleteGraphExecution  # … then a save made the run obsolete before any write
+
+    manager._execute_graph_impl = obsolete_run
+    assert await manager._execute_graph("g", "G", flow, {}) == {}
+    assert manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] is True
