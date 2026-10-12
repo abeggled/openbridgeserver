@@ -531,3 +531,22 @@ async def test_saving_logs_no_failed_producer_for_logic_behind_the_block(caplog)
     manager._graphs["g"] = ("G", True, flow)
     await manager.initialize_graph("g")
     assert "Missing upstream output" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_level_output_starts_a_value_sequence_on_its_rising_edge_only():
+    # A level is no pulse: an unchanged True must not restart the sequence.
+    dp_grid = uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        None,
+        {"id": "boiler", "mode": "onoff", "power_w": 1000, "on_delay_s": 0},
+        [edge("h", "seq", "c_boiler", "trigger")],
+        [node("seq", "value_sequence", {"steps": []})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+    with patch.object(manager, "_start_value_sequence") as start:
+        for _ in range(3):
+            await manager._execute_graph("g", "G", flow, {"read": {"value": -2000}})
+    assert start.call_count == 1
