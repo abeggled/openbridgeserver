@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from obs.logic.executor import GraphExecutor
+from obs.logic.executor import GraphExecutor, hems_clock
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
 from tests.unit.conftest import edge, node
@@ -185,8 +184,7 @@ async def test_loop_wakes_early_for_a_pending_pulse_end():
     manager = _loop_manager()
     now = 1_000_000.0
     manager._hysteresis = {"g": {"h": {"next_wake": now + 2}}}
-    with patch("obs.logic.manager.datetime") as fake_datetime:
-        fake_datetime.now.return_value.timestamp.return_value = now
+    with patch("obs.logic.manager.hems_clock", return_value=now):
         sleeps = await _run_loop(manager)
     assert sleeps == [2.0]
 
@@ -196,8 +194,7 @@ async def test_loop_never_sleeps_less_than_a_tenth_of_a_second():
     manager = _loop_manager()
     now = 1_000_000.0
     manager._hysteresis = {"g": {"h": {"next_wake": now + 0.01}}}
-    with patch("obs.logic.manager.datetime") as fake_datetime:
-        fake_datetime.now.return_value.timestamp.return_value = now
+    with patch("obs.logic.manager.hems_clock", return_value=now):
         assert await _run_loop(manager) == [0.1]
 
 
@@ -208,8 +205,7 @@ async def test_loop_ignores_a_wake_time_the_run_did_not_refresh():
     manager = _loop_manager()
     now = 1_000_000.0
     manager._hysteresis = {"g": {"h": {"next_wake": now - 50}}}
-    with patch("obs.logic.manager.datetime") as fake_datetime:
-        fake_datetime.now.return_value.timestamp.return_value = now
+    with patch("obs.logic.manager.hems_clock", return_value=now):
         assert await _run_loop(manager) == [45.0]
 
 
@@ -221,7 +217,7 @@ async def test_loop_skips_a_disabled_graph_and_a_missing_node():
 
     manager = _loop_manager(FlowData.model_validate({"nodes": [node("other", "const_value", {})], "edges": []}))
     assert await _run_loop(manager) == [30.0]
-    manager._execute_graph.assert_awaited_once()
+    manager._execute_graph.assert_not_awaited()  # the block is gone: nothing to regulate
 
 
 @pytest.mark.asyncio
@@ -603,7 +599,7 @@ async def test_an_event_run_wakes_the_block_early_for_a_pulse_its_loop_would_mis
     flow = _flow(interval_s=3600)
     manager = _manager()
     manager._graphs["g"] = ("G", True, flow)
-    now = datetime.now(UTC).timestamp()
+    now = hems_clock()
     manager._hems_planned_wake[("g", "h")] = now + 3000
     manager._hysteresis["g"] = {"h": {"next_wake": now + 1}}
     with patch.object(manager, "_hems_wake_once", new=AsyncMock()) as wake:
@@ -632,7 +628,7 @@ async def test_an_event_run_wakes_the_block_early_for_a_pulse_its_loop_would_mis
 async def test_no_early_wake_when_the_loop_covers_it(overrides, planned, next_wake):
     flow = _flow()
     manager = _manager()
-    now = datetime.now(UTC).timestamp()
+    now = hems_clock()
     if planned is not None:
         manager._hems_planned_wake[("g", "h")] = now + planned
     manager._hysteresis["g"] = {"h": {"next_wake": None if next_wake is None else now + next_wake}}
@@ -661,8 +657,7 @@ async def test_the_early_wake_runs_the_block_unless_the_graph_is_gone_or_disable
 async def test_the_loop_records_when_it_will_wake_next():
     manager = _loop_manager()
     now = 1_000_000.0
-    with patch("obs.logic.manager.datetime") as fake_datetime:
-        fake_datetime.now.return_value.timestamp.return_value = now
+    with patch("obs.logic.manager.hems_clock", return_value=now):
         await _run_loop(manager)
     assert manager._hems_planned_wake[("g", "h")] == now + 45
 
@@ -679,7 +674,7 @@ def test_invalidating_a_graph_forgets_its_planned_wakes():
 async def test_an_early_wake_run_schedules_its_own_follow_up_and_is_never_cancelled_half_way():
     flow = _flow(interval_s=3600)
     manager = _manager()
-    now = datetime.now(UTC).timestamp()
+    now = hems_clock()
     manager._hems_planned_wake[("g", "h")] = now + 3000
     manager._hysteresis["g"] = {"h": {"next_wake": now + 4}}
     running = MagicMock()
@@ -709,3 +704,37 @@ async def test_a_wake_run_is_marked_only_while_it_executes():
         await manager._hems_wake_once("g", "h", 0)
     assert seen == [True]
     assert ("g", "h") not in manager._hems_waking
+
+
+@pytest.mark.asyncio
+async def test_a_firing_is_an_event_for_an_action_node_whatever_started_the_run():
+    # The run is started by an unrelated Read Object; the block's cycle is due
+    # and fires — the archive entry must still be written.
+    dp_grid, dp_other = uuid.uuid4(), uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        None,
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 1},
+        [edge("h", "ma", "c_wash", "trigger")],
+        [
+            node("other", "datapoint_read", {"datapoint_id": str(dp_other)}),
+            node("ma", "message_archive", {"archive_id": "Alerts", "title": "Wash", "message": "started"}),
+        ],
+    )
+    manager = _manager({str(dp_grid): -2000, str(dp_other): 1})
+    manager._graphs["g"] = ("G", True, flow)
+    service = MagicMock()
+    service.record = AsyncMock(return_value={"id": "entry-1"})
+    with patch("obs.message_archive.get_message_archive_service", return_value=service):
+        await manager._execute_graph("g", "G", flow, {"other": {"value": 1}})
+        service.record.assert_awaited_once()
+        # a later unrelated run without a firing records nothing more
+        await manager._execute_graph("g", "G", flow, {"other": {"value": 2}})
+    service.record.assert_awaited_once()
+
+
+def test_the_executor_runs_the_block_on_the_monotonic_hems_clock():
+    flow = _flow()
+    with patch("obs.logic.executor.hems_clock", return_value=12345.0):
+        GraphExecutor(flow, (state := {})).execute(input_overrides={"h": {"grid": -2500}})
+    assert state["h"]["last_cycle"] == 12345.0

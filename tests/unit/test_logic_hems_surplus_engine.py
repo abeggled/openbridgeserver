@@ -830,7 +830,7 @@ def test_trigger_does_not_fire_in_the_safe_state():
     out = sim.tick(grid=None)
     assert out["c_a"] is False
     out = sim.tick(grid=-5000, enable=False)
-    assert out["c_a"] is False
+    assert "c_a" not in out  # its False was sent once already
     assert sim.cstate("a")["armed"] is True
 
 
@@ -918,21 +918,6 @@ def test_changing_the_control_type_starts_the_consumer_from_scratch():
     out = sim.tick(grid=-100)
     assert (out["c_a"], out["c_a_status"]) == (False, "off")
     assert out["budget"] == 100  # the switched-off actuator is not counted
-
-
-def test_a_clock_set_back_shifts_every_timer_with_it():
-    sim = Sim([trig("t", on_delay_s=0, pulse_s=60)], max_age_s=600)
-    assert sim.tick(grid=-3000, grid_changed=True)["c_t"] is True
-    pulse_until = sim.cstate("t")["pulse_until"]
-    before = sim.now
-    sim.now -= 3600 + 30  # NTP corrects the clock by −1 h (the tick below adds 30 s back)
-    sim.tick(grid=-3000, grid_changed=False)
-    # the jump counts as no time passed: every timer keeps its remaining time
-    assert sim.cstate("t")["pulse_until"] - sim.now == pulse_until - before
-    assert sim.state["last_cycle"] == sim.now
-    out = sim.tick(advance=61, grid=-3000, grid_changed=False)
-    assert out["c_t"] is False  # the pulse ends on time, not an hour late
-    assert out["status"] == "ok"  # control cycles continue
 
 
 def test_feed_in_only_returning_feed_in_resets_the_zero_timer():
@@ -1158,7 +1143,23 @@ def test_a_pulse_end_after_a_mode_change_sends_no_boolean_to_the_new_output():
     assert type(out["c_x"]) is int
 
 
-@pytest.mark.parametrize(("raw", "expected"), [(2.0, "c_2"), (2.5, "c_25"), (7, "c_7"), (True, "c_true"), (False, "c_n1"), (0, "c_n1")])
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (2.0, "c_2"),
+        (2.5, "c_25"),
+        (7, "c_7"),
+        (True, "c_true"),
+        (False, "c_n1"),
+        (0, "c_n1"),
+        (0.0, "c_n1"),
+        (1e21, "c_1e21"),
+        (1e-7, "c_1e7"),
+        (float("inf"), "c_n1"),
+        ({"x": 1}, "c_n1"),
+        ([1, 2], "c_n1"),
+    ],
+)
 def test_non_text_ids_are_spelled_like_the_editor_spells_them(raw, expected):
     assert hs.load_consumers([{"id": raw}])[0]["id"] == expected[2:]
 
@@ -1193,20 +1194,6 @@ def test_a_dynamic_reserve_that_stops_arriving_is_held_briefly():
     assert sim.tick(grid=-3000, target=1000)["surplus"] == 2000
     assert sim.tick(grid=-3000, target=None)["surplus"] == 2000
     assert sim.tick(advance=61, grid=-3000, target=None)["surplus"] == 3000  # back to the configured reserve
-
-
-def test_a_clock_set_back_also_shifts_held_values_and_the_safe_repeat():
-    sim = Sim([onoff("a", on_delay_s=0)], interval_s=30)
-    sim.tick(grid=-3000)
-    sim.tick(grid="bad")  # safe state: safe_cycle set
-    seen = sim.state["held"]["grid"][1]
-    safe_cycle = sim.state["safe_cycle"]
-    before = sim.now
-    sim.now -= 3600 + 30
-    sim.tick(grid="bad")
-    delta = sim.now - before
-    assert sim.state["held"]["grid"][1] == seen + delta
-    assert sim.state["safe_cycle"] == safe_cycle + delta
 
 
 def test_feed_in_zero_sheds_an_onoff_consumer_with_a_switch_off_threshold_of_zero():
@@ -1331,3 +1318,29 @@ def test_a_tick_that_fails_half_way_records_nothing_as_sent(monkeypatch):
     assert sim.state["last_out"] == before
     monkeypatch.undo()
     assert sim.tick(grid=-3000)["c_a"] is True  # the change is still sent afterwards
+
+
+def test_holding_at_zero_feed_in_counts_the_commanded_share_not_the_measured_draw():
+    consumers = [onoff("a", power_w=2000, on_delay_s=0), onoff("b", power_w=1000, on_delay_s=0)]
+    sim = Sim(consumers, grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=3000)
+    assert sim.cstate("b")["on"] is True
+    sim.tick(feed_in=0, c_a_power=500, c_b_power=1000)
+    sim.tick(advance=60, feed_in=0, c_a_power=500, c_b_power=1000)  # step requested for b
+    sim.tick(advance=60, feed_in=0, c_a_power=500, c_b_power=1000)  # b's own off-delay over
+    assert sim.cstate("b")["on"] is False
+
+
+def test_an_inactive_trigger_sends_its_false_once_even_without_only_on_change():
+    sim = Sim([trig("t", active=False)])
+    assert sim.tick(grid=-3000)["c_t"] is False
+    assert "c_t" not in sim.tick(grid=-3000)
+
+
+def test_a_mode_change_forgets_the_value_last_sent_under_the_old_type():
+    consumers = [trig("x", on_delay_s=0, pulse_s=60)]
+    sim = Sim(consumers, only_on_change=True)
+    assert sim.tick(grid=-3000)["c_x"] is True
+    consumers[0] = onoff("x", on_delay_s=600)
+    sim.tick(advance=1, grid=-3000)  # inside the interval: no cycle yet
+    assert "c_x" not in sim.state["last_out"]

@@ -31,7 +31,9 @@ export function hemsConsumers(raw) {
   const consumers = []
   list.forEach((c, index) => {
     if (!c || typeof c !== 'object' || Array.isArray(c)) return
-    let id = String(c.id || '').replace(/[^A-Za-z0-9_]/g, '') || `n${index + 1}`
+    // Only text, finite numbers and booleans count as an id (like _raw_id).
+    const usable = typeof c.id === 'string' || typeof c.id === 'boolean' || (typeof c.id === 'number' && Number.isFinite(c.id))
+    let id = String((usable && c.id) || '').replace(/[^A-Za-z0-9_]/g, '') || `n${index + 1}`
     if (RESERVED_ID_ENDINGS.some(end => id.endsWith(end))) id = `${id}_`
     while (seen.has(id)) id = `${id}_`
     seen.add(id)

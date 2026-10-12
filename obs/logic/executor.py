@@ -14,6 +14,7 @@ import math
 import operator
 import re
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC as _UTC
 from datetime import date as _date
@@ -207,6 +208,16 @@ _REGEX_OPS = {"regex", "regexp"}
 
 class ExecutionError(Exception):
     pass
+
+
+def hems_clock() -> float:
+    """The hems_surplus time base: monotonic seconds.
+
+    Its timers are relative and its state is never persisted, so a process-local
+    monotonic clock is enough — and unlike the wall clock it cannot jump when
+    NTP or a user corrects the time.
+    """
+    return time.monotonic()
 
 
 def _write_filters_itself(data: dict[str, Any], value: Any) -> bool:
@@ -2923,7 +2934,7 @@ class GraphExecutor:
                 # every level output at its current value plus which ones were
                 # sent. A trigger output is an event: present only when sent.
                 state = self.hysteresis_state.setdefault(node.id, {})
-                emitted = hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id)
+                emitted = hems_surplus.evaluate(d, inputs, state, hems_clock(), node.id)
                 triggers = hems_surplus.trigger_output_handles(d)
                 levels = {k: v for k, v in state.get("last_out", {}).items() if k not in triggers}
                 return {**levels, **emitted, "_emitted": sorted(emitted)}

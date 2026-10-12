@@ -42,6 +42,8 @@ describe('hemsConsumers', () => {
 
   it('spells non-text ids like the engine (true, 2 not 2.0)', () => {
     expect(hemsConsumers([{ id: 2.0 }, { id: 2.5 }, { id: true }, { id: false }, { id: 0 }]).map(c => c.id)).toEqual(['2', '25', 'true', 'n4', 'n5'])
+    const odd = hemsConsumers([{ id: 1e21 }, { id: 1e-7 }, { id: Infinity }, { id: { x: 1 } }, { id: [1, 2] }]).map(c => c.id)
+    expect(odd).toEqual(['1e21', '1e7', 'n3', 'n4', 'n5'])
   })
 
   it('moves an id ending in a port suffix off another consumer\'s ports, like the engine', () => {

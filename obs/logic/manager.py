@@ -38,7 +38,7 @@ import httpx
 
 from obs.core.json import jsonable
 from obs.logic import hems_surplus
-from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value
+from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value, hems_clock
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
 from obs.logic.variables import (
@@ -1662,7 +1662,7 @@ class LogicManager:
         self._bulk_init_pending: set[str] = set()
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
-        # When each hems_surplus loop next wakes on its own (epoch seconds).
+        # When each hems_surplus loop next wakes on its own (hems_clock seconds).
         self._hems_planned_wake: dict[tuple[str, str], float] = {}
         # (graph id, node id) of early-wake runs executing right now.
         self._hems_waking: set[tuple[str, str]] = set()
@@ -2238,14 +2238,13 @@ class LogicManager:
             try:
                 entry = self._graphs.get(graph_id)
                 sleep_s = hems_surplus.DEFAULT_INTERVAL_S
-                if entry and entry[1]:  # still exists and enabled
+                node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry and entry[1] else None
+                if entry and node is not None:  # graph still exists and is enabled, block still on it
                     g_name, _, flow = entry
-                    node = next((n for n in flow.nodes if n.id == node_id), None)
-                    if node is not None:
-                        sleep_s = hems_surplus.interval_s(node.data)
+                    sleep_s = hems_surplus.interval_s(node.data)
                     await self._execute_graph(graph_id, g_name, flow, {node_id: {}})
                     next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
-                    now_ts = datetime.now(UTC).timestamp()
+                    now_ts = hems_clock()
                     # A wake time already past was not refreshed by this run — the
                     # node was skipped or failed — so it must not spin the loop.
                     if next_wake is not None and next_wake > now_ts:
@@ -3160,7 +3159,7 @@ class LogicManager:
                 continue  # the loop's own run plans itself
             next_wake = self._hysteresis.get(graph_id, {}).get(node.id, {}).get("next_wake")
             planned = self._hems_planned_wake.get((graph_id, node.id))
-            now_ts = datetime.now(UTC).timestamp()
+            now_ts = hems_clock()
             if next_wake is None or planned is None or not now_ts < next_wake < planned - _HEMS_WAKE_SLACK_S:
                 continue
             key = (graph_id, f"{node.id}:wake")
@@ -6616,6 +6615,12 @@ class LogicManager:
             event_sources = {node_id: dict(values) for node_id, values in overrides.items()}
             for node_id in refreshed_ical_nodes:
                 event_sources.setdefault(node_id, {})
+            # A hems_surplus block that sent something ran a control cycle, which
+            # is an event of its own, whatever started this run; blocked_outputs
+            # below keeps its unsent handles stale.
+            for node_id in _hems_trigger_handles:
+                if outputs.get(node_id, {}).get("_emitted"):
+                    event_sources.setdefault(node_id, {})
             blocked_sources = {node.id for node in flow.nodes if node.type == "memory"}
             blocked_sources.update(api_client_ids - triggered_api_clients)
             blocked_sources.update(host_check_ids - executed_host_check_nodes)

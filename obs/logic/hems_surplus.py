@@ -3,7 +3,7 @@
 The dispatcher branch in ``GraphExecutor._eval_node`` is a thin call into
 :func:`evaluate`; the algorithm lives here because it is several hundred lines of
 pure, time-driven decision logic. Nothing in this module performs I/O or reads
-the clock — the caller passes ``now`` (epoch seconds) and the per-node ``state``
+the clock — the caller passes ``now`` (seconds of a monotonic clock) and the per-node ``state``
 dict, which makes every timing rule directly testable.
 
 Sign convention: the grid power is *positive for import* and *negative for
@@ -100,16 +100,21 @@ def _raw_id(value: Any) -> str:
     """A configured id as text, spelled the way the editor's ``String()`` spells it.
 
     The editor builds the ports from the same id (``hemsConsumers`` in
-    logicHemsOutputs.js), so a non-text id from an import must give the same
-    port name on both sides: ``true`` not ``True``, ``2`` not ``2.0``.
+    logicHemsOutputs.js), so an imported non-text id must give the same port
+    name on both sides: ``true`` not ``True``, ``2`` not ``2.0``, ``1e-7`` not
+    ``1e-07``. Anything but text, numbers and booleans counts as no id.
     """
-    if not value:
-        return ""
     if isinstance(value, bool):
-        return "true"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
+        return "true" if value else ""
+    if isinstance(value, int):
+        return str(value) if value else ""
+    if isinstance(value, float):
+        if not value or not math.isfinite(value):
+            return ""
+        if value.is_integer() and abs(value) < 1e21:
+            return str(int(value))
+        return re.sub(r"e([+-])0*(\d)", r"e\1\2", repr(value))
+    return value if isinstance(value, str) else ""
 
 
 def load_consumers(raw: Any) -> list[dict[str, Any]]:
@@ -357,13 +362,16 @@ def evaluate(
     """
     consumers = load_consumers(data.get("consumers"))
     states: dict[str, dict[str, Any]] = state.setdefault("consumers", {})
-    _follow_clock_jump_back(state, now)
     removed = _forget_removed_consumers(consumers, states, state.setdefault("last_out", {}))
     for consumer in consumers:
         cs = states.get(consumer["id"])
         if cs is None or cs.get("mode", consumer["mode"]) != consumer["mode"]:
             # A changed control type starts from scratch: an on/off state, a
-            # setpoint or an armed trigger of the old type means nothing for the new one.
+            # setpoint or an armed trigger of the old type means nothing for
+            # the new one — nor does the value last sent under the old type.
+            if cs is not None:
+                state["last_out"].pop(f"c_{consumer['id']}", None)
+                state["last_out"].pop(f"c_{consumer['id']}_status", None)
             cs = states[consumer["id"]] = _new_consumer_state()
         cs["mode"] = consumer["mode"]
 
@@ -371,33 +379,6 @@ def evaluate(
     state["last_out"].update({key: value for key, value in result.items() if key not in removed})
     state["next_wake"] = _next_wake(data, consumers, states, state, now)
     return result
-
-
-_CONSUMER_TIMESTAMPS = ("since", "on_pending", "off_pending", "trigger_pending", "pulse_until", "lockout_until")
-
-
-def _follow_clock_jump_back(state: dict[str, Any], now: float) -> None:
-    """Shift every stored timestamp when the wall clock was set back.
-
-    The timers are relative: after a correction by e.g. −1 h they would
-    otherwise stop the control cycle and hold a running pulse for that hour.
-    """
-    last_now = state.get("last_now")
-    state["last_now"] = now
-    if last_now is None or now >= last_now:
-        return
-    delta = now - last_now
-    for key in ("last_cycle", "zero_since", "safe_cycle"):
-        if state.get(key) is not None:
-            state[key] += delta
-    for name in state.get("last_seen", {}):
-        state["last_seen"][name] += delta
-    for entry in state.get("held", {}).values():
-        entry[1] += delta
-    for cs in state.get("consumers", {}).values():
-        for key in _CONSUMER_TIMESTAMPS:
-            if cs.get(key) is not None:
-                cs[key] += delta
 
 
 def _forget_removed_consumers(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], last_out: dict[str, Any]) -> dict[str, Any]:
@@ -644,7 +625,10 @@ def _reset_consumer(consumer: dict[str, Any], cs: dict[str, Any], now: float, em
     cs["trigger_pending"] = None
     cs["pulse_until"] = None
     cs["reserve_cycles"] = 0
-    emit(f"c_{consumer['id']}", 0 if consumer["mode"] == "percent" else False)
+    if consumer["mode"] == "trigger":
+        emit(f"c_{consumer['id']}", False, event=True)  # an event: sent once, not every interval
+    else:
+        emit(f"c_{consumer['id']}", 0 if consumer["mode"] == "percent" else False)
     emit(f"c_{consumer['id']}_status", label)
 
 
@@ -712,11 +696,12 @@ def _allocate(
             consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
             emit(f"c_{cid}", cs["pulse_until"] is not None, event=True)
         emit(f"c_{cid}_status", label)
-        if drawn is not None and consumer["mode"] != "trigger" and was_on and cs["on"] and cs["setpoint"] <= previous_setpoint:
+        if caps is None and drawn is not None and consumer["mode"] != "trigger" and was_on and cs["on"] and cs["setpoint"] <= previous_setpoint:
             # A running consumer drawing less than its share (thermostat off,
             # car full) leaves the rest to lower priorities — but not on the
             # cycle it was switched on or raised: the meter still shows the
-            # old draw, and that power is already promised to it.
+            # old draw, and that power is already promised to it. Not while
+            # holding at 0 W feed-in either: there the commanded share counts.
             consumed = min(consumed, max(0.0, drawn))
         available -= consumed
         allocated += consumed
