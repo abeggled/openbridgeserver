@@ -191,6 +191,19 @@ def grid_input_names(mode: str) -> tuple[str, ...]:
     return ("grid",)
 
 
+DIAGNOSTIC_OUTPUTS = ("grid_power", "surplus", "budget", "allocated", "remaining", "status", "warning")
+
+
+def level_output_handles(data: dict[str, Any]) -> set[str]:
+    """Output handles that carry a level (every output but the trigger pulses)."""
+    handles = set(DIAGNOSTIC_OUTPUTS)
+    for consumer in load_consumers(data.get("consumers")):
+        handles.add(f"c_{consumer['id']}_status")
+        if consumer["mode"] != "trigger":
+            handles.add(f"c_{consumer['id']}")
+    return handles
+
+
 def trigger_output_handles(data: dict[str, Any]) -> set[str]:
     """Output handles that carry a discrete trigger pulse (one per trigger consumer)."""
     return {f"c_{c['id']}" for c in load_consumers(data.get("consumers")) if c["mode"] == "trigger"}
@@ -418,7 +431,11 @@ def _next_wake(
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
     if max_age_s > 0:
         # Stale once the freshest input is strictly older than max_age_s, so wake just after it.
-        freshest = max(state.get("last_seen", {}).values(), default=None)
+        # Only the meter inputs of the current mode count (a mode change leaves
+        # the old inputs' timestamps behind).
+        mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
+        last_seen = state.get("last_seen", {})
+        freshest = max((last_seen[name] for name in grid_input_names(mode) if name in last_seen), default=None)
         if freshest is not None and freshest + max_age_s >= now:
             wakes.append(freshest + max_age_s + _STALE_WAKE_MARGIN_S)
     return min(wakes) if wakes else None

@@ -349,10 +349,10 @@ class GraphExecutor:
         # must treat it as a normal missing input instead of reporting the
         # producer as broken on every single run.
         retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
-        # An absent hems_surplus handle — never sent yet, or a removed consumer
-        # whose edge is still in the graph — is a defined outcome, not a failed
-        # producer, unless the block itself failed.
+        # Which hems_surplus handles are levels: only an absent level counts as
+        # a failed producer (see the unresolved filter below).
         hems_ids = {node.id for node in self.flow.nodes if node.type == "hems_surplus"}
+        hems_levels = {node.id: hems_surplus.level_output_handles(node.data) for node in self.flow.nodes if node.type == "hems_surplus"}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
         # Only failed-output paths that can influence a Change Filter need to
@@ -449,7 +449,11 @@ class GraphExecutor:
                     for item in missing_inputs
                     if item[0] not in node_overrides
                     and item[2] not in retained_boundary_handles.get(item[1], set())
-                    and (item[1] not in hems_ids or "__error__" in outputs.get(item[1], {}))
+                    # Absent on purpose: a trigger output between firings (the
+                    # manager's pulse provenance handles it like Edge
+                    # Detection's) or the handle of a removed consumer. An
+                    # absent *level* is a failed producer like any other.
+                    and (item[1] not in hems_ids or "__error__" in outputs.get(item[1], {}) or item[2] in hems_levels[item[1]])
                 ]
                 if node.type == "hysteresis":
                     # An absent value deliberately means "emit retained

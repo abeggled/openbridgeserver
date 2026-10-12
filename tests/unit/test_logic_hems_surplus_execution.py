@@ -605,13 +605,20 @@ async def test_an_event_run_wakes_the_block_early_for_a_pulse_its_loop_would_mis
     with patch.object(manager, "_hems_wake_once", new=AsyncMock()) as wake:
         manager._schedule_hems_early_wakes("g", flow, {"read": {"value": 1}})
         await asyncio.sleep(0)
-        wake.assert_called_once()
-        assert 0 < wake.call_args.args[2] <= 1
-        # a second event run replaces the pending wake instead of stacking it
+        wake.assert_called_once_with("g", "h", now + 1)
+        # an already pending wake at that time is not stacked …
         manager._schedule_hems_early_wakes("g", flow, {"read": {"value": 2}})
         await asyncio.sleep(0)
+        assert wake.call_count == 1
+        # … but an earlier one is added (the later one is never cancelled)
+        manager._hysteresis["g"]["h"]["next_wake"] = now + 0.2
+        manager._schedule_hems_early_wakes("g", flow, {"read": {"value": 3}})
+        await asyncio.sleep(0)
         assert wake.call_count == 2
-    manager._cron_tasks.pop(("g", "h:wake")).cancel()
+        assert manager._hems_wake_at[("g", "h")] == now + 0.2
+    manager._cancel_hems_wakes("g")
+    assert manager._hems_wake_tasks == {}
+    assert manager._hems_wake_at == {}
 
 
 @pytest.mark.asyncio
@@ -633,7 +640,7 @@ async def test_no_early_wake_when_the_loop_covers_it(overrides, planned, next_wa
         manager._hems_planned_wake[("g", "h")] = now + planned
     manager._hysteresis["g"] = {"h": {"next_wake": None if next_wake is None else now + next_wake}}
     manager._schedule_hems_early_wakes("g", flow, overrides)
-    assert ("g", "h:wake") not in manager._cron_tasks
+    assert ("g", "h") not in manager._hems_wake_at
 
 
 @pytest.mark.asyncio
@@ -642,15 +649,21 @@ async def test_the_early_wake_runs_the_block_unless_the_graph_is_gone_or_disable
     manager = _manager()
     manager._execute_graph = AsyncMock(return_value={})
     manager._graphs["g"] = ("G", True, flow)
-    await manager._hems_wake_once("g", "h", 0)
+    manager._hems_wake_at[("g", "h")] = 0.0
+    await manager._hems_wake_once("g", "h", 0.0)
     manager._execute_graph.assert_awaited_once_with("g", "G", flow, {"h": {}})
+    assert ("g", "h") not in manager._hems_wake_at  # its own pending entry is cleared
+    manager._hems_wake_at[("g", "h")] = 99.0  # a newer pending wake is left alone
+    await manager._hems_wake_once("g", "h", 0.0)
+    assert manager._hems_wake_at[("g", "h")] == 99.0
+    manager._execute_graph.reset_mock()
     manager._graphs["g"] = ("G", False, flow)
     await manager._hems_wake_once("g", "h", 0)
     manager._graphs["g"] = ("G", True, FlowData(nodes=[], edges=[]))  # node deleted
     await manager._hems_wake_once("g", "h", 0)
     del manager._graphs["g"]
     await manager._hems_wake_once("g", "h", 0)
-    assert manager._execute_graph.await_count == 1
+    assert manager._execute_graph.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -662,30 +675,48 @@ async def test_the_loop_records_when_it_will_wake_next():
     assert manager._hems_planned_wake[("g", "h")] == now + 45
 
 
-def test_invalidating_a_graph_forgets_its_planned_wakes():
+@pytest.mark.asyncio
+async def test_invalidating_a_graph_forgets_its_planned_and_pending_wakes():
     manager = _manager()
     manager._hems_planned_wake[("g", "h")] = 1.0
     manager._hems_planned_wake[("other", "h")] = 2.0
+    manager._hems_wake_at[("g", "h")] = 1.0
+    sleeper = asyncio.create_task(asyncio.sleep(60))
+    manager._hems_wake_tasks["g"] = {sleeper}
     manager.invalidate_cache("g")
+    await asyncio.sleep(0)
     assert manager._hems_planned_wake == {("other", "h"): 2.0}
+    assert manager._hems_wake_at == {}
+    assert sleeper.cancelled()
 
 
 @pytest.mark.asyncio
-async def test_an_early_wake_run_schedules_its_own_follow_up_and_is_never_cancelled_half_way():
+async def test_stop_and_reload_cancel_every_pending_wake():
+    manager = _manager()
+    manager._load_graphs = AsyncMock()
+    manager._event_bus.unsubscribe = MagicMock()
+    for method in (manager.stop, manager.reload):
+        sleeper = asyncio.create_task(asyncio.sleep(60))
+        manager._hems_wake_tasks["g"] = {sleeper}
+        await method()
+        await asyncio.sleep(0)
+        assert sleeper.cancelled()
+        assert manager._hems_wake_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_an_early_wake_run_schedules_its_own_follow_up():
     flow = _flow(interval_s=3600)
     manager = _manager()
     now = hems_clock()
     manager._hems_planned_wake[("g", "h")] = now + 3000
     manager._hysteresis["g"] = {"h": {"next_wake": now + 4}}
-    running = MagicMock()
-    manager._cron_tasks[("g", "h:wake")] = running
     manager._hems_waking.add(("g", "h"))  # the wake run itself is executing
     with patch.object(manager, "_hems_wake_once", new=AsyncMock()) as wake:
         manager._schedule_hems_early_wakes("g", flow, {"h": {}})
         await asyncio.sleep(0)
-    running.cancel.assert_not_called()
-    wake.assert_called_once()
-    manager._cron_tasks.pop(("g", "h:wake")).cancel()
+    wake.assert_called_once_with("g", "h", now + 4)
+    manager._cancel_hems_wakes()
 
 
 @pytest.mark.asyncio
@@ -738,3 +769,41 @@ def test_the_executor_runs_the_block_on_the_monotonic_hems_clock():
     with patch("obs.logic.executor.hems_clock", return_value=12345.0):
         GraphExecutor(flow, (state := {})).execute(input_overrides={"h": {"grid": -2500}})
     assert state["h"]["last_cycle"] == 12345.0
+
+
+@pytest.mark.asyncio
+async def test_a_change_filter_behind_a_trigger_never_commits_the_missing_pulse_as_a_value():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        dp_out,
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 60},
+        [edge("h", "n", "c_wash", "in1"), edge("n", "cf", "out", "in"), edge("cf", "w", "out", "value")],
+        [node("n", "not", {}), node("cf", "change_filter", {}), node("w", "datapoint_write", {"datapoint_id": str(dp_out)})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+    await manager._execute_graph("g", "G", flow, {})  # fires: NOT → False
+    assert manager._hysteresis["g"]["cf"]["value"] is False
+    manager._event_bus.publish.reset_mock()
+    for _ in range(2):  # pulse still running, trigger output absent
+        await manager._execute_graph("g", "G", flow, {"read": {"value": -2000}})
+    assert manager._hysteresis["g"]["cf"]["value"] is False
+    # cf.out keeps carrying its held False; the inverted missing pulse (True) never appears
+    assert True not in [c.args[0].value for c in manager._event_bus.publish.await_args_list if str(c.args[0].datapoint_id) == str(dp_out)]
+
+
+def test_an_absent_level_output_is_a_failed_producer_for_a_change_filter():
+    # A consumer added inside the control interval has not sent its level yet.
+    consumers = [dict(CONSUMERS[0])]
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("h", "hems_surplus", {"consumers": consumers}), node("n", "not", {}), node("cf", "change_filter", {})],
+            "edges": [edge("h", "n", "c_new", "in1"), edge("n", "cf", "out", "in")],
+        }
+    )
+    state: dict = {}
+    GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    flow.nodes[0].data["consumers"] = [*consumers, {"id": "new", "mode": "onoff"}]
+    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    assert "Missing upstream output" in out["n"]["__error__"]

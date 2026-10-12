@@ -1344,3 +1344,12 @@ def test_a_mode_change_forgets_the_value_last_sent_under_the_old_type():
     consumers[0] = onoff("x", on_delay_s=600)
     sim.tick(advance=1, grid=-3000)  # inside the interval: no cycle yet
     assert "c_x" not in sim.state["last_out"]
+
+
+def test_next_wake_ignores_the_age_of_meter_inputs_of_a_previous_mode():
+    sim = Sim([], grid_mode="split", max_age_s=100, interval_s=3600)
+    sim.tick(grid_import=0, grid_export=500, grid_import_changed=True, grid_export_changed=True)
+    sim.config["grid_mode"] = "bidirectional"
+    out = sim.tick(grid=-500, grid_changed=False)  # no telegram on the new input yet
+    assert out["status"] == "stale_input"
+    assert sim.state["next_wake"] is None  # nothing left to wait for, whatever split reported

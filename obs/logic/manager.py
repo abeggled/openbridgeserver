@@ -1666,6 +1666,10 @@ class LogicManager:
         self._hems_planned_wake: dict[tuple[str, str], float] = {}
         # (graph id, node id) of early-wake runs executing right now.
         self._hems_waking: set[tuple[str, str]] = set()
+        # Earliest pending early wake per (graph id, node id), and every
+        # early-wake task per graph so they can be cancelled with it.
+        self._hems_wake_at: dict[tuple[str, str], float] = {}
+        self._hems_wake_tasks: dict[str, set[asyncio.Task]] = {}  # type: ignore[type-arg]
         # Coalesce concurrent refreshes per iCalendar node.  Keep this lock
         # scoped to the fetch itself: graph execution may synchronously publish
         # an event that re-enters the same graph.
@@ -1724,6 +1728,7 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._cancel_hems_wakes()
         self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
@@ -1732,6 +1737,7 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._cancel_hems_wakes()
         await self._load_graphs()
         live_graph_ids = set(self._graphs)
         # A reload restarts all schedulers, but it must not invalidate work for
@@ -3162,19 +3168,32 @@ class LogicManager:
             now_ts = hems_clock()
             if next_wake is None or planned is None or not now_ts < next_wake < planned - _HEMS_WAKE_SLACK_S:
                 continue
-            key = (graph_id, f"{node.id}:wake")
-            if key in self._cron_tasks and (graph_id, node.id) not in self._hems_waking:
-                self._cron_tasks[key].cancel()  # still sleeping: superseded (a running one finishes)
-            self._cron_tasks[key] = asyncio.create_task(
-                self._hems_wake_once(graph_id, node.id, next_wake - now_ts), name=f"hems-wake-{graph_id[:8]}-{node.id[:8]}"
-            )
+            pending = self._hems_wake_at.get((graph_id, node.id))
+            if pending is not None and pending <= next_wake + _HEMS_WAKE_SLACK_S:
+                continue  # a wake at (or before) that time is already pending
+            # Never cancelled or replaced: a superseded later wake only costs one
+            # extra run, and a running one must not be interrupted half-way.
+            self._hems_wake_at[(graph_id, node.id)] = next_wake
+            task = asyncio.create_task(self._hems_wake_once(graph_id, node.id, next_wake), name=f"hems-wake-{graph_id[:8]}-{node.id[:8]}")
+            tasks = self._hems_wake_tasks.setdefault(graph_id, set())
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
-    async def _hems_wake_once(self, graph_id: str, node_id: str, delay_s: float) -> None:
-        await asyncio.sleep(delay_s)
+    def _cancel_hems_wakes(self, graph_id: str | None = None) -> None:
+        for gid in [graph_id] if graph_id is not None else list(self._hems_wake_tasks):
+            for task in self._hems_wake_tasks.pop(gid, set()):
+                task.cancel()
+        for key in [k for k in self._hems_wake_at if graph_id is None or k[0] == graph_id]:
+            del self._hems_wake_at[key]
+
+    async def _hems_wake_once(self, graph_id: str, node_id: str, wake_at: float) -> None:
+        await asyncio.sleep(max(0.0, wake_at - hems_clock()))
+        if self._hems_wake_at.get((graph_id, node_id)) == wake_at:
+            del self._hems_wake_at[(graph_id, node_id)]
         entry = self._graphs.get(graph_id)
         if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
-            # Marked while running: it must not be cancelled half-way by an
-            # event run, and it schedules a follow-up wake itself.
+            # Marked while running, so this run schedules a follow-up wake
+            # itself (the loop's own runs do not).
             self._hems_waking.add((graph_id, node_id))
             try:
                 await self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}})
@@ -7679,6 +7698,7 @@ class LogicManager:
             del self._cron_tasks[k]
         for k in [k for k in self._hems_planned_wake if k[0] == graph_id]:
             del self._hems_planned_wake[k]
+        self._cancel_hems_wakes(graph_id)
 
     def _prune_graph_executor_lock(self, graph_id: str) -> None:
         """Release an idle worker lock after its graph has disappeared."""
