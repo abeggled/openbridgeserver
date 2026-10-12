@@ -1104,7 +1104,7 @@ async def test_a_run_made_obsolete_by_a_save_leaves_the_block_as_it_was():
 
     manager._execute_graph_impl = obsolete_run
     assert await manager._execute_graph("g", "G", flow, {}) == {}
-    assert manager._hysteresis["g"]["h"] == {}  # created by that run: gone again
+    assert set(manager._hysteresis["g"]["h"]) <= {"held", "last_seen"}  # its decisions are gone, the meter readings stay
 
 
 def test_an_obsolete_run_is_not_undone_over_a_newer_run():
@@ -1296,7 +1296,7 @@ async def test_a_run_whose_first_pass_failed_undoes_its_ticks():
 
     with patch.object(GraphExecutor, "execute", tick_then_fail):
         assert await manager._execute_graph("g", "G", flow, {}) == {}
-    assert manager._hysteresis["g"]["h"] == {}
+    assert set(manager._hysteresis["g"]["h"]) <= {"held", "last_seen"}
 
 
 def test_a_run_that_acted_is_not_undone_after_an_error():
@@ -1350,7 +1350,7 @@ def test_a_run_tag_survives_deep_copies_of_the_state():
     again.run_tag = 7
     again.execute(input_overrides={"h": {"grid": -5000}})
     undo_hems_run(copied["h"], 7)
-    assert copied["h"] == {}  # back to before the run's first tick, not to after it
+    assert set(copied["h"]) <= {"held", "last_seen"}  # back to before the run's first tick, not to after it
 
 
 @pytest.mark.asyncio
@@ -1369,4 +1369,52 @@ async def test_a_run_cancelled_before_it_acted_undoes_its_ticks():
     manager._execute_graph_impl = tick_then_cancelled
     with pytest.raises(asyncio.CancelledError):
         await manager._execute_graph("g", "G", flow, {})
-    assert manager._hysteresis["g"]["h"] == {}
+    assert set(manager._hysteresis["g"]["h"]) <= {"held", "last_seen"}
+
+
+def test_undoing_a_run_keeps_what_the_meter_reported():
+    from obs.logic.executor import undo_hems_run
+
+    state = {
+        "_run": 3,
+        "_undo": {"last_seen": {"grid": 1.0}, "consumers": {}},
+        "last_seen": {"grid": 9.0},
+        "held": {"grid": [-1, 9.0]},
+        "consumers": {"x": {}},
+    }
+    undo_hems_run(state, 3)
+    assert state == {"last_seen": {"grid": 9.0}, "held": {"grid": [-1, 9.0]}, "consumers": {}}
+
+
+@pytest.mark.asyncio
+async def test_a_completed_run_leaves_no_undo_snapshot_behind():
+    flow = _flow()
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    await manager._execute_graph("g", "G", flow, {"h": {"grid": -5000}})
+    assert "_undo" not in manager._hysteresis["g"]["h"]
+    assert "_run" not in manager._hysteresis["g"]["h"]
+
+
+def test_forgetting_another_runs_undo_leaves_it_alone():
+    from obs.logic.executor import forget_hems_undo
+
+    state = {"_run": 2, "_undo": {}}
+    forget_hems_undo(state, 1)
+    assert state == {"_run": 2, "_undo": {}}
+
+
+@pytest.mark.asyncio
+async def test_a_run_cancelled_after_its_writes_keeps_its_ticks():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out)
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+
+    async def cancel_after_write(event):
+        raise asyncio.CancelledError  # e.g. a reload cancels the loop while it publishes
+
+    manager._event_bus.publish.side_effect = cancel_after_write
+    with pytest.raises(asyncio.CancelledError):
+        await manager._execute_graph("g", "G", flow, {})
+    assert manager._hysteresis["g"]["h"]["last_out"]["c_boiler"] is True  # the run had started writing

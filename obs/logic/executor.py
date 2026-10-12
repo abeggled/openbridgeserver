@@ -213,6 +213,8 @@ class ExecutionError(Exception):
 # Keys of a hems_surplus node state that belong to the executor, not the engine.
 _HEMS_RUN = "_run"
 _HEMS_UNDO = "_undo"
+# Engine state keys that record what the meter reported, not what the block decided.
+_HEMS_OBSERVATIONS = ("last_seen", "held")
 
 
 def undo_hems_run(state: dict[str, Any], run_tag: object) -> None:
@@ -223,8 +225,19 @@ def undo_hems_run(state: dict[str, Any], run_tag: object) -> None:
     """
     if state.get(_HEMS_RUN) == run_tag and _HEMS_UNDO in state:
         before = state[_HEMS_UNDO]
+        # What the meter reported (telegram times, last values) did happen:
+        # only the block's decisions are undone.
+        observed = {key: state[key] for key in _HEMS_OBSERVATIONS if key in state}
         state.clear()
         state.update(before)
+        state.update(observed)
+
+
+def forget_hems_undo(state: dict[str, Any], run_tag: object) -> None:
+    """Drop ``run_tag``'s undo snapshot once that run is through (committed or undone)."""
+    if state.get(_HEMS_RUN) == run_tag:
+        state.pop(_HEMS_UNDO, None)
+        state.pop(_HEMS_RUN, None)
 
 
 def hems_clock() -> float:

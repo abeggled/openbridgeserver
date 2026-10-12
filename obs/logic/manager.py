@@ -44,6 +44,7 @@ from obs.logic.executor import (
     _OpaqueRecoveredSet,
     _OpaqueRecoveredStr,
     _replay_known_output_value,
+    forget_hems_undo,
     hems_clock,
     undo_hems_run,
 )
@@ -3204,6 +3205,10 @@ class LogicManager:
             raise
         finally:
             self._hems_acted_runs.discard(run_tag)
+            hyst = self._hysteresis.get(graph_id, {})
+            for node in flow.nodes:
+                if node.type == "hems_surplus" and node.id in hyst:
+                    forget_hems_undo(hyst[node.id], run_tag)
         self._schedule_hems_early_wakes(graph_id, flow, overrides)
         return result
 
@@ -7424,6 +7429,7 @@ class LogicManager:
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
+        _mark_side_effect()  # from the writes on, the run has acted (value sequences follow them)
         await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, execute_now, logic_depth)
 
         # Value sequences are intentionally started after synchronous graph
