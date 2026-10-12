@@ -1101,3 +1101,19 @@ async def test_a_run_made_obsolete_by_a_save_leaves_the_block_as_it_was():
     manager._execute_graph_impl = obsolete_run
     assert await manager._execute_graph("g", "G", flow, {}) == {}
     assert manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_failed_write_restores_the_value_written_before():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out)
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert await _writes(manager, flow, dp_out, 1) == [True]
+    written_at = manager._node_state["g"]["w"]["last_write_ts"]
+    manager._event_bus.publish.side_effect = RuntimeError("bus down")
+    manager._hysteresis["g"]["h"]["last_out"]["c_boiler"] = False  # a new level that fails to publish
+    manager._hysteresis["g"]["h"]["last_cycle"] = hems_clock()  # no cycle: the level stays False
+    await _writes(manager, flow, dp_out, 1)
+    assert manager._node_state["g"]["w"]["last_write_val"] is True
+    assert manager._node_state["g"]["w"]["last_write_ts"] == written_at
