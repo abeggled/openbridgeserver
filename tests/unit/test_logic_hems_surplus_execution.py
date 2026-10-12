@@ -1218,7 +1218,8 @@ async def test_a_loop_restarted_during_a_run_plans_its_next_wake_after_it():
     manager._execute_graph = slow_run
     first = asyncio.create_task(manager._hems_loop("g", "h"))
     await asyncio.sleep(0.01)
-    first.cancel()  # a save reloads mid-run
+    first.cancel()  # saving another sheet reloads mid-run; this sheet's plan is kept
+    manager._hems_planned_wake[("g", "h")] = hems_clock() - 1
     second = asyncio.create_task(manager._hems_loop("g", "h"))
     await asyncio.sleep(0.01)
     release.set()
@@ -1244,6 +1245,7 @@ async def test_a_restarted_loop_plans_from_the_runs_next_wake_even_if_the_graph_
     await asyncio.sleep(0.01)
     first.cancel()
     del manager._graphs["g"]  # deleted meanwhile
+    manager._hems_planned_wake[("g", "h")] = hems_clock() - 1  # a plan from before the reload
     second = asyncio.create_task(manager._hems_loop("g", "h"))
     await asyncio.sleep(0.01)
     release.set()
@@ -1305,3 +1307,47 @@ def test_a_run_that_acted_is_not_undone_after_an_error():
     manager._undo_hems_run("g", flow, tag)
     assert manager._hysteresis["g"]["h"]["consumers"] == {}
     manager._undo_hems_run("g", flow, None)  # an untagged run has nothing to undo
+
+
+@pytest.mark.asyncio
+async def test_a_loop_restarted_after_its_own_sheet_was_saved_runs_the_new_config_right_away():
+    manager = _loop_manager()
+    release = asyncio.Event()
+    calls = []
+
+    async def slow_run(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            await release.wait()
+        return {}
+
+    manager._execute_graph = slow_run
+    first = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    first.cancel()
+    manager._hems_planned_wake.pop(("g", "h"), None)  # what invalidate_cache does on this sheet's save
+    second = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    release.set()
+    await asyncio.sleep(0.02)
+    second.cancel()
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert calls == [1, 1]  # the new configuration ran right after the old run
+
+
+def test_a_run_tag_survives_deep_copies_of_the_state():
+    import copy
+
+    from obs.logic.executor import undo_hems_run
+
+    flow = _flow()
+    state: dict = {}
+    executor = GraphExecutor(flow, state)
+    executor.run_tag = 7
+    executor.execute(input_overrides={"h": {"grid": -5000}})
+    copied = copy.deepcopy(state)  # as a replay pass works on
+    again = GraphExecutor(flow, copied)
+    again.run_tag = 7
+    again.execute(input_overrides={"h": {"grid": -5000}})
+    undo_hems_run(copied["h"], 7)
+    assert copied["h"] == {}  # back to before the run's first tick, not to after it

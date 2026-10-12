@@ -1685,6 +1685,7 @@ class LogicManager:
         self._hems_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
         # Runs (by run tag) that acted outside the graph; see _undo_hems_run.
         self._hems_acted_runs: set[object] = set()
+        self._hems_run_ids = itertools.count(1)
         # Set by stop(): runs still finishing must not schedule new wakes.
         self._hems_stopping = False
         # Earliest pending early wake per (graph id, node id), and every
@@ -2274,16 +2275,16 @@ class LogicManager:
         # saved has no planned wake left (invalidate_cache) and runs straight away.
         in_flight = self._hems_runs.get((graph_id, node_id))
         if in_flight is not None and not in_flight.done():
-            # The loop this one replaces was cancelled mid-run: that run counts
-            # as this loop's first, so wait for it and then plan as after a run.
+            # The loop this one replaces was cancelled mid-run. After a reload
+            # for another sheet (its plan is kept) that run counts as this
+            # loop's first; after this sheet was saved (invalidate_cache cleared
+            # the plan) the new configuration runs right after it.
+            replanning = (graph_id, node_id) in self._hems_planned_wake
             await asyncio.wait({in_flight})
-            entry = self._graphs.get(graph_id)
-            node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry else None
-            sleep_s = hems_surplus.interval_s(node.data) if node is not None else hems_surplus.DEFAULT_INTERVAL_S
-            next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
-            if next_wake is not None and next_wake > hems_clock():
-                sleep_s = min(sleep_s, max(0.1, next_wake - hems_clock()))
-            self._hems_planned_wake[(graph_id, node_id)] = hems_clock() + sleep_s
+            if replanning:
+                entry = self._graphs.get(graph_id)
+                node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry else None
+                self._plan_hems_wake(graph_id, node_id, hems_surplus.interval_s(node.data) if node is not None else hems_surplus.DEFAULT_INTERVAL_S)
         planned = self._hems_planned_wake.get((graph_id, node_id))
         if planned is not None and planned > hems_clock():
             await asyncio.sleep(planned - hems_clock())
@@ -2298,13 +2299,7 @@ class LogicManager:
                     g_name, _, flow = entry
                     sleep_s = hems_surplus.interval_s(node.data)
                     await self._hems_run(graph_id, node_id, g_name, flow, waking=False)
-                    next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
-                    now_ts = hems_clock()
-                    # A wake time already past was not refreshed by this run — the
-                    # node was skipped or failed — so it must not spin the loop.
-                    if next_wake is not None and next_wake > now_ts:
-                        sleep_s = min(sleep_s, max(0.1, next_wake - now_ts))
-                    self._hems_planned_wake[(graph_id, node_id)] = now_ts + sleep_s
+                    sleep_s = self._plan_hems_wake(graph_id, node_id, sleep_s)
                     logger.debug("HEMS surplus graph %s (%s) node %s evaluated", graph_id[:8], g_name, node_id[:8])
 
                 await asyncio.sleep(sleep_s)
@@ -3188,7 +3183,7 @@ class LogicManager:
         # A run a save makes obsolete publishes no write; a hems_surplus block
         # must not keep what it decided in it (a fired trigger would be locked
         # out without its pulse ever reaching the actuator).
-        run_tag = object()
+        run_tag = next(self._hems_run_ids)  # an int: survives the deep copies of replay passes
         try:
             result = await self._execute_graph_impl(
                 graph_id,
@@ -3207,6 +3202,20 @@ class LogicManager:
             self._hems_acted_runs.discard(run_tag)
         self._schedule_hems_early_wakes(graph_id, flow, overrides)
         return result
+
+    def _plan_hems_wake(self, graph_id: str, node_id: str, interval_s: float) -> float:
+        """Plan a loop's next wake after a run: the interval, or the block's earlier ``next_wake``.
+
+        A wake time already past was not refreshed by the run — the node was
+        skipped or failed — so it must not spin the loop. Returns the sleep.
+        """
+        sleep_s = interval_s
+        next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
+        now_ts = hems_clock()
+        if next_wake is not None and next_wake > now_ts:
+            sleep_s = min(sleep_s, max(0.1, next_wake - now_ts))
+        self._hems_planned_wake[(graph_id, node_id)] = now_ts + sleep_s
+        return sleep_s
 
     def _undo_hems_run(self, graph_id: str, flow: FlowData, run_tag: object | None) -> None:
         """Undo a failed or obsolete run's hems_surplus ticks — unless it already acted.

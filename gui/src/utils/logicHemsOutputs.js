@@ -13,7 +13,7 @@ const GRID_MODES = ['bidirectional', 'split', 'feed_in_only']
 
 // An enum setting as the engine reads it (`_enum` in hems_surplus.py):
 // text compared case- and whitespace-insensitively.
-function hemsEnum(value) {
+export function hemsEnum(value) {
   return typeof value === 'string' ? trimLikeStrip(value).toLowerCase() : value
 }
 

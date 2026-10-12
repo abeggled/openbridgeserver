@@ -221,7 +221,7 @@ def undo_hems_run(state: dict[str, Any], run_tag: object) -> None:
     Only when that run made the last tick: if another run ticked after it,
     that run's state is newer and is kept.
     """
-    if state.get(_HEMS_RUN) is run_tag and _HEMS_UNDO in state:
+    if state.get(_HEMS_RUN) == run_tag and _HEMS_UNDO in state:
         before = state[_HEMS_UNDO]
         state.clear()
         state.update(before)
@@ -2944,7 +2944,7 @@ class GraphExecutor:
                 # every level output at its current value plus which ones were
                 # sent. A trigger output is an event: present only when sent.
                 state = self.hysteresis_state.setdefault(node.id, {})
-                if self.run_tag is not None and state.get(_HEMS_RUN) is not self.run_tag:
+                if self.run_tag is not None and state.get(_HEMS_RUN) != self.run_tag:
                     # The state before this run's first tick, to be restored if
                     # the run is made obsolete before it could write anything.
                     state[_HEMS_UNDO] = copy.deepcopy({k: v for k, v in state.items() if k not in (_HEMS_UNDO, _HEMS_RUN)})

@@ -35,7 +35,7 @@
         />
         <select
           v-else-if="f.type === 'select'"
-          :value="data[f.key] ?? f.default"
+          :value="selectValue(data[f.key], f)"
           class="input text-xs"
           :data-testid="'hems-global-' + f.key"
           @change="setGlobal(f.key, $event.target.value)"
@@ -129,7 +129,7 @@
             <label class="label">{{ $t(fieldLabelKey(c, f)) }}</label>
             <select
               v-if="f.type === 'select'"
-              :value="c[f.key] ?? f.default"
+              :value="selectValue(c[f.key], f)"
               class="input text-xs"
               :data-testid="'hems-consumer-' + f.key + '-' + i"
               @change="setConsumer(i, f.key, $event.target.value)"
@@ -156,7 +156,7 @@
 <script setup>
 import { computed } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
-import { hemsConsumers, hemsFlag, hemsGridMode } from '@/utils/logicHemsOutputs'
+import { hemsConsumers, hemsEnum, hemsFlag, hemsGridMode } from '@/utils/logicHemsOutputs'
 
 // Editor of the hems_surplus block (HEMS Lite, issue #1327). The consumer list
 // order *is* the priority: it is edited by drag-and-drop only, the position
@@ -234,6 +234,13 @@ function saveConsumers(rows) {
 
 function setGlobal(key, value) {
   emit('update', { ...props.data, [key]: value })
+}
+
+// What the engine makes of a stored choice: case- and whitespace-insensitive,
+// an unknown value falls back to the default — so the select shows what runs.
+function selectValue(raw, field) {
+  const value = hemsEnum(raw)
+  return field.options.includes(value) ? value : field.default
 }
 
 function toNumber(raw, fallback, min, max) {

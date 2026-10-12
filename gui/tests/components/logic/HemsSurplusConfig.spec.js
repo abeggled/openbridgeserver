@@ -259,6 +259,13 @@ describe('HemsSurplusConfig — fields per control type', () => {
     expect(lastConsumers(w)[0].power_w).toBe(500)
   })
 
+  it('shows a choice the way the engine reads it', () => {
+    const w = mountCfg({ invalid_behavior: ' HOLD ', consumers: JSON.stringify([C('a', { mode: 'trigger', rearm: 'After_Lockout' }), C('b', { below_min: 'bogus' })]) })
+    expect(w.find('[data-testid="hems-global-invalid_behavior"]').element.value).toBe('hold')
+    expect(w.find('[data-testid="hems-consumer-rearm-0"]').element.value).toBe('after_lockout')
+    expect(w.find('[data-testid="hems-consumer-below_min-1"]').element.value).toBe('off')
+  })
+
   it('caps the trigger pulse at the one hour the engine allows', async () => {
     const w = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'trigger' })]) })
     expect(w.find('[data-testid="hems-consumer-pulse_s-0"]').attributes('max')).toBe('3600')
