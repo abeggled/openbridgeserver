@@ -1097,6 +1097,8 @@ def test_returning_feed_in_cancels_a_pending_shed_request():
     sim.tick(feed_in=0)
     sim.tick(advance=60, feed_in=0)
     assert sim.state["zero_shed_w"] == 2000
+    out = sim.tick(feed_in=0)  # still pending: no second step is requested on top
+    assert (sim.state["zero_shed_w"], out["c_a_status"]) == (2000, "min_runtime")
     sim.tick(feed_in=500)
     assert sim.state["zero_shed_w"] == 0.0
     assert sim.cstate("a")["on"] is True
