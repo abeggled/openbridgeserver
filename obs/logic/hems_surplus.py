@@ -111,7 +111,10 @@ def _raw_id(value: Any) -> str:
     if isinstance(value, int) and abs(value) < 2**53:  # exact in a JS number
         return str(value) if value else ""
     if isinstance(value, int | float):
-        number = float(value)
+        try:
+            number = float(value)
+        except OverflowError:  # beyond any JS number: the editor reads Infinity, i.e. no id
+            return ""
         return _js_number(number) if number and math.isfinite(number) else ""
     return value if isinstance(value, str) else ""
 
@@ -402,8 +405,6 @@ def evaluate(
 
     result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
     state["last_out"].update({key: value for key, value in result.items() if key not in removed})
-    if now in (state.get("last_cycle"), state.get("safe_cycle")):
-        state.pop("resend", None)  # a full (or full safe) cycle has sent every level
     state["next_wake"] = _next_wake(data, consumers, states, state, now)
     return result
 
@@ -471,7 +472,6 @@ def _tick(
     mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
     cycle_s = interval_s(data)
     sends_changes_only = only_on_change(data)
-    resend = bool(state.get("resend"))
     result: dict[str, Any] = {}
 
     def emit(key: str, value: Any, *, event: bool = False) -> None:
@@ -484,9 +484,7 @@ def _tick(
             previous, known = result[key], True
         else:
             previous, known = last.get(key), key in last
-        # After a save every level is sent once more (``resend``): a run the
-        # save made obsolete may have recorded values that were never written.
-        if (sends_changes_only or event) and not (resend and not event) and known and previous == value and type(previous) is type(value):
+        if (sends_changes_only or event) and known and previous == value and type(previous) is type(value):
             return
         result[key] = value
 

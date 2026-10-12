@@ -393,6 +393,16 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
+                if node.type == "datapoint_write" and handle == "value" and src_id in hems_ids and "trigger" not in edge_map.get(node.id, {}):
+                    if src_id in hems_only_on_change:
+                        # Its last value, even for a trigger output between firings:
+                        # the manager writes only what differs from the value last
+                        # actually written, so a pulse end a filter dropped is not lost.
+                        retained = self.hysteresis_state.get(src_id, {}).get("last_out", {})
+                        if not has_value and "__error__" not in src_out and src_handle in retained:
+                            has_value, value = True, retained[src_handle]
+                    elif src_handle not in src_out.get("_emitted", ()):
+                        has_value = False  # "send every cycle": once per cycle, not on every run of the sheet
                 if has_value:
                     inputs[handle] = value
                 else:

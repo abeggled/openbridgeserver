@@ -1671,6 +1671,8 @@ class LogicManager:
         self._hems_planned_wake: dict[tuple[str, str], float] = {}
         # (graph id, node id) of early-wake runs executing right now.
         self._hems_waking: set[tuple[str, str]] = set()
+        # The sheet run currently executing for each (graph id, node id).
+        self._hems_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
         # Earliest pending early wake per (graph id, node id), and every
         # early-wake task per graph so they can be cancelled with it.
         self._hems_wake_at: dict[tuple[str, str], float] = {}
@@ -2260,10 +2262,7 @@ class LogicManager:
                 if entry and node is not None:  # graph still exists and is enabled, block still on it
                     g_name, _, flow = entry
                     sleep_s = hems_surplus.interval_s(node.data)
-                    # Shielded: a save (reload/invalidate) cancels this loop, but a
-                    # run must finish — the block records its outputs as sent
-                    # before the Write Objects publish them.
-                    await asyncio.shield(self._execute_graph(graph_id, g_name, flow, {node_id: {}}))
+                    await self._hems_run(graph_id, node_id, g_name, flow, waking=False)
                     next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
                     now_ts = hems_clock()
                     # A wake time already past was not refreshed by this run — the
@@ -3207,17 +3206,41 @@ class LogicManager:
             del self._hems_wake_at[(graph_id, node_id)]
         entry = self._graphs.get(graph_id)
         if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
-            # Marked while running, so this run schedules a follow-up wake
-            # itself (the loop's own runs do not).
-            self._hems_waking.add((graph_id, node_id))
             try:
-                await asyncio.shield(self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}}))  # see _hems_loop
+                await self._hems_run(graph_id, node_id, entry[0], entry[2], waking=True)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("HEMS surplus early wake error graph=%s node=%s", graph_id[:8], node_id[:8])
-            finally:
-                self._hems_waking.discard((graph_id, node_id))
+
+    async def _hems_run(self, graph_id: str, node_id: str, name: str, flow: FlowData, *, waking: bool) -> None:
+        """Run the sheet for a hems_surplus node — one run per node at a time, never cut short.
+
+        Shielded: a save (reload/invalidate) cancels the loop or wake that
+        started it, but the run itself must finish — the block records its
+        outputs as sent before the Write Objects publish them. A loop restarted
+        meanwhile waits for it instead of running the sheet a second time in
+        parallel. An early-wake run stays marked (``_hems_waking``) until it
+        has finished, so it schedules its own follow-up wake.
+        """
+        key = (graph_id, node_id)
+        previous = self._hems_runs.get(key)
+        if previous is not None and not previous.done():
+            await asyncio.shield(previous)
+        if waking:
+            self._hems_waking.add(key)
+        run = asyncio.ensure_future(self._execute_graph(graph_id, name, flow, {node_id: {}}))
+        self._hems_runs[key] = run
+        run.add_done_callback(lambda done: self._hems_run_finished(key, done, waking))
+        await asyncio.shield(run)
+
+    def _hems_run_finished(self, key: tuple[str, str], run: asyncio.Future, waking: bool) -> None:  # type: ignore[type-arg]
+        if waking:
+            self._hems_waking.discard(key)
+        if self._hems_runs.get(key) is run:
+            del self._hems_runs[key]
+        if not run.cancelled():
+            run.exception()  # retrieved here: its caller may have been cancelled (and logs it if not)
 
     async def _execute_graph_impl(
         self,
@@ -4384,9 +4407,25 @@ class LogicManager:
         # run that sent them), unlike its level outputs. Parsed once per run.
         _hems_trigger_handles = {n.id: hems_surplus.trigger_output_handles(n.data) for n in flow.nodes if n.type == "hems_surplus"}
 
+        _write_ids_with_trigger = {e.target for e in _effective_edges if (e.targetHandle or "in") == "trigger"}
+
         def _hems_level_edge(edge: Any) -> bool:
-            """An edge from a hems_surplus level output — sustained data, never a pulse."""
-            return edge.source in _hems_trigger_handles and (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]
+            """An edge from a hems_surplus output that carries a level — sustained data, never a pulse.
+
+            Every output but a trigger, and a trigger output too where it feeds the
+            value of a Write Object without its own trigger: the executor hands
+            that one the last value (see ``_skip_unchanged``), and it is written
+            only when it differs from the value last written.
+            """
+            if edge.source not in _hems_trigger_handles:
+                return False
+            if (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]:
+                return True
+            return (
+                _node_type_by_id.get(edge.target) == "datapoint_write"
+                and (edge.targetHandle or "in") == "value"
+                and edge.target not in _write_ids_with_trigger
+            )
 
         def _discrete_pulse_handles(node_ids: set[str] | None = None) -> set[tuple[str, str]]:
             """(node id, handle) pairs carrying a discrete event pulse this pass.
@@ -7703,15 +7742,7 @@ class LogicManager:
 
     def invalidate_cache(self, graph_id: str) -> None:
         self._ical_cache_generations[graph_id] = object()
-        previous = self._graphs.pop(graph_id, None)
-        if previous is not None:
-            # A run this save makes obsolete may have recorded outputs as sent
-            # without writing them: every hems_surplus level is sent once more.
-            for node in previous[2].nodes:
-                if node.type == "hems_surplus":
-                    hems_state = self._hysteresis.get(graph_id, {}).get(node.id, {})
-                    hems_state["resend"] = True
-                    hems_state.pop("config", None)  # forces a cycle, which does the resend
+        self._graphs.pop(graph_id, None)
         # NOTE: _hysteresis is intentionally NOT cleared here.
         # When a graph is saved (PUT/PATCH), invalidate_cache + reload() are called.
         # Clearing _hysteresis would reset statistics accumulators on every save.

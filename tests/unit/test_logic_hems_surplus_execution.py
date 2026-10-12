@@ -797,18 +797,6 @@ async def test_cancelling_an_early_wake_never_interrupts_its_run_half_way():
     assert finished == [True]
 
 
-def test_invalidating_a_graph_asks_its_blocks_to_resend_their_levels():
-    manager = _manager()
-    flow = FlowData.model_validate({"nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("n", "not", {})], "edges": []})
-    manager._graphs["g"] = ("G", True, flow)
-    manager._hysteresis["g"] = {"h": {"last_out": {}}}
-    manager._hysteresis["g"]["h"]["config"] = "fingerprint"
-    manager.invalidate_cache("g")
-    assert manager._hysteresis["g"]["h"]["resend"] is True
-    assert "config" not in manager._hysteresis["g"]["h"]  # forces the cycle that resends
-    manager.invalidate_cache("unknown")  # nothing cached: nothing to do
-
-
 def _write_flow(dp_grid, dp_out, write_data=None, hems_data=None, extra_edges=(), extra_nodes=()):
     return FlowData.model_validate(
         {
@@ -853,7 +841,7 @@ async def test_a_change_the_writes_throttle_dropped_is_written_later():
 
 
 @pytest.mark.asyncio
-async def test_a_write_with_its_own_trigger_or_a_block_sending_every_cycle_writes_every_time():
+async def test_a_write_with_its_own_trigger_writes_every_time_and_every_cycle_sends_once_per_cycle():
     dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
     flow = _write_flow(
         dp_grid,
@@ -865,10 +853,13 @@ async def test_a_write_with_its_own_trigger_or_a_block_sending_every_cycle_write
     manager._graphs["g"] = ("G", True, flow)
     assert await _writes(manager, flow, dp_out, 2) == [True, True]
 
+    # "send every cycle": once per cycle, not on every run of the sheet
     flow = _write_flow(dp_grid, dp_out, hems_data={"only_on_change": False})
     manager = _manager({str(dp_grid): -5000})
     manager._graphs["g"] = ("G", True, flow)
-    assert len(await _writes(manager, flow, dp_out, 2)) == 2
+    assert await _writes(manager, flow, dp_out, 2) == [True]
+    manager._hysteresis["g"]["h"]["last_cycle"] -= 60  # the next cycle is due
+    assert await _writes(manager, flow, dp_out, 1) == [True]
 
 
 def test_a_value_counts_as_written_only_with_the_same_type():
@@ -893,3 +884,83 @@ async def test_a_restarted_loop_resumes_at_its_planned_wake():
         await manager._hems_loop("g", "h")
     assert 99 < sleeps[0] <= 100
     manager._execute_graph.assert_not_awaited()  # nothing ran before the planned wake
+
+
+@pytest.mark.asyncio
+async def test_a_pulse_end_the_writes_throttle_dropped_is_written_later():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("h", "hems_surplus", {"consumers": CONSUMERS}),
+                node("w", "datapoint_write", {"datapoint_id": str(dp_out), "throttle_value": 5}),
+            ],
+            "edges": [edge("read", "h", "value", "grid"), edge("h", "w", "c_wash", "value")],
+        }
+    )
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert await _writes(manager, flow, dp_out, 1) == [True]
+    manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0  # the pulse ends …
+    assert await _writes(manager, flow, dp_out, 1) == []  # … but the throttle drops its False
+    manager._node_state["g"]["w"]["last_write_ts"] = datetime.now(UTC) - timedelta(minutes=1)
+    assert await _writes(manager, flow, dp_out, 2) == [False]  # written later, once
+
+
+@pytest.mark.asyncio
+async def test_a_restarted_loop_never_runs_the_sheet_alongside_a_run_still_going():
+    manager = _loop_manager()
+    running, overlaps, release = 0, [], asyncio.Event()
+
+    async def slow_run(*args, **kwargs):
+        nonlocal running
+        running += 1
+        overlaps.append(running)
+        await release.wait()
+        running -= 1
+        return {}
+
+    manager._execute_graph = slow_run
+    first = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    first.cancel()  # a save reloads: the loop is cancelled, its run goes on
+    second = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    release.set()
+    await asyncio.sleep(0.01)
+    second.cancel()
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert max(overlaps) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_early_wake_stays_marked_until_its_run_has_finished():
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, _flow())
+    release = asyncio.Event()
+
+    async def slow_run(*args, **kwargs):
+        await release.wait()
+        return {}
+
+    manager._execute_graph = slow_run
+    wake = asyncio.create_task(manager._hems_wake_once("g", "h", 0.0))
+    await asyncio.sleep(0.01)
+    wake.cancel()
+    await asyncio.gather(wake, return_exceptions=True)
+    assert ("g", "h") in manager._hems_waking  # its run still schedules the follow-up wake
+    release.set()
+    await asyncio.sleep(0.01)
+    assert ("g", "h") not in manager._hems_waking
+    assert ("g", "h") not in manager._hems_runs
+
+
+@pytest.mark.asyncio
+async def test_a_finished_run_leaves_a_newer_run_registered():
+    manager = _manager()
+    old, new = asyncio.get_running_loop().create_future(), asyncio.get_running_loop().create_future()
+    manager._hems_runs[("g", "h")] = new
+    old.cancel()
+    manager._hems_run_finished(("g", "h"), old, waking=False)
+    assert manager._hems_runs[("g", "h")] is new

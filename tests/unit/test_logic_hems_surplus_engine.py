@@ -1442,31 +1442,6 @@ def test_frequent_meter_telegrams_do_not_shorten_the_interval():
     assert sim.state["last_cycle"] == sim.now
 
 
-def test_after_a_save_every_level_is_sent_once_more():
-    sim = Sim([onoff("a", on_delay_s=0)], only_on_change=True)
-    assert sim.tick(grid=-3000)["c_a"] is True
-    sim.state["resend"] = True  # set by LogicManager.invalidate_cache
-    out = sim.tick(grid=-3000)
-    assert out["c_a"] is True  # unchanged, but sent again
-    assert "resend" not in sim.state
-    assert "c_a" not in sim.tick(grid=-3000)  # and only once
-
-
-def test_after_a_save_a_running_pulse_is_not_sent_again():
-    sim = Sim([trig("t", on_delay_s=0, pulse_s=600)], only_on_change=True)
-    assert sim.tick(grid=-3000)["c_t"] is True
-    sim.state["resend"] = True
-    assert "c_t" not in sim.tick(grid=-3000)  # an event, not a level: no second firing
-
-
-def test_in_the_safe_state_a_resend_happens_once_not_on_every_run():
-    sim = Sim([onoff("a")], interval_s=30, only_on_change=True)
-    sim.tick(grid="bad")
-    sim.state["resend"] = True
-    assert sim.tick(grid="bad")["c_a"] is False
-    assert sim.tick(advance=1, grid="bad") == {}
-
-
 def test_a_removed_consumer_takes_its_held_inputs_with_it():
     consumers = [onoff("n2", power_source="input", on_delay_s=0)]
     sim = Sim(consumers)
@@ -1496,9 +1471,5 @@ def test_removing_a_consumer_keeps_the_held_inputs_of_one_whose_id_starts_alike(
     assert "c_a_power" not in sim.state["held"]
 
 
-def test_a_requested_resend_with_an_unchanged_configuration_runs_a_cycle_at_once():
-    sim = Sim([onoff("a", on_delay_s=0)], interval_s=600, only_on_change=True)
-    assert sim.tick(grid=-3000)["c_a"] is True
-    sim.state["resend"] = True
-    sim.state.pop("config")  # what LogicManager.invalidate_cache does
-    assert sim.tick(advance=1, grid=-3000)["c_a"] is True
+def test_an_integer_id_beyond_any_float_counts_as_no_id():
+    assert hs.load_consumers([{"id": 10**400}])[0]["id"] == "n1"
