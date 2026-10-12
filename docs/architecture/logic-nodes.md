@@ -222,8 +222,10 @@ today, so it is deliberately left as an explicit table.
      the level; a directly wired Write Object without its own trigger or filter honours `_emitted`, and so
      does action-node freshness (`_event_fresh_inputs`). Its *trigger* outputs are events: present
      only on the run that sent them, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
-     `_hems_trigger_handles`) like Edge Detection's. Every handle of it counts as a boundary in
-     `GraphExecutor.execute` (and in `initialize_graph`) unless the block failed.
+     `_hems_trigger_handles`) like Edge Detection's. In `GraphExecutor.execute` an absent trigger
+     output or a removed consumer's handle is a boundary; an absent *level* (or any handle of a
+     failed block) is a failed producer. `initialize_graph` excludes the block and treats every
+     wired handle of it as a boundary.
    - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
      state copy, so a block whose output depends on persisted state needs a decision. Listing it in
      `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass

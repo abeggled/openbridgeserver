@@ -2248,7 +2248,10 @@ class LogicManager:
                 if entry and node is not None:  # graph still exists and is enabled, block still on it
                     g_name, _, flow = entry
                     sleep_s = hems_surplus.interval_s(node.data)
-                    await self._execute_graph(graph_id, g_name, flow, {node_id: {}})
+                    # Shielded: a save (reload/invalidate) cancels this loop, but a
+                    # run must finish — the block records its outputs as sent
+                    # before the Write Objects publish them.
+                    await asyncio.shield(self._execute_graph(graph_id, g_name, flow, {node_id: {}}))
                     next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
                     now_ts = hems_clock()
                     # A wake time already past was not refreshed by this run — the
@@ -3196,7 +3199,7 @@ class LogicManager:
             # itself (the loop's own runs do not).
             self._hems_waking.add((graph_id, node_id))
             try:
-                await self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}})
+                await asyncio.shield(self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}}))  # see _hems_loop
             finally:
                 self._hems_waking.discard((graph_id, node_id))
 

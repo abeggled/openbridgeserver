@@ -807,3 +807,54 @@ def test_an_absent_level_output_is_a_failed_producer_for_a_change_filter():
     flow.nodes[0].data["consumers"] = [*consumers, {"id": "new", "mode": "onoff"}]
     out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
     assert "Missing upstream output" in out["n"]["__error__"]
+
+
+@pytest.mark.parametrize("transform", [{"value_formula": "x * 10"}, {"value_map": {"true": "ON", "false": "OFF"}}])
+def test_a_minimum_change_on_a_transformed_write_is_not_its_own_filter(transform):
+    from obs.logic.executor import _write_filters_itself
+
+    assert _write_filters_itself({"min_delta": 1, **transform}, 50) is False
+    assert _write_filters_itself({"min_delta": 1, "only_on_change": True, **transform}, 50) is True
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_loop_never_interrupts_a_run_half_way():
+    manager = _loop_manager()
+    started, finished = asyncio.Event(), []
+
+    async def slow_run(*args, **kwargs):
+        started.set()
+        await asyncio.sleep(0.05)
+        finished.append(True)
+        return {}
+
+    manager._execute_graph = slow_run
+    loop = asyncio.create_task(manager._hems_loop("g", "h"))
+    await started.wait()
+    loop.cancel()  # e.g. a save reloads the graphs
+    with pytest.raises(asyncio.CancelledError):
+        await loop
+    await asyncio.sleep(0.1)
+    assert finished == [True]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_early_wake_never_interrupts_its_run_half_way():
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, _flow())
+    started, finished = asyncio.Event(), []
+
+    async def slow_run(*args, **kwargs):
+        started.set()
+        await asyncio.sleep(0.05)
+        finished.append(True)
+        return {}
+
+    manager._execute_graph = slow_run
+    wake = asyncio.create_task(manager._hems_wake_once("g", "h", 0.0))
+    await started.wait()
+    wake.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await wake
+    await asyncio.sleep(0.1)
+    assert finished == [True]

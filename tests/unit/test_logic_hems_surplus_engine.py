@@ -1353,3 +1353,23 @@ def test_next_wake_ignores_the_age_of_meter_inputs_of_a_previous_mode():
     out = sim.tick(grid=-500, grid_changed=False)  # no telegram on the new input yet
     assert out["status"] == "stale_input"
     assert sim.state["next_wake"] is None  # nothing left to wait for, whatever split reported
+
+
+def test_a_meter_outage_on_hold_restarts_the_on_delay():
+    sim = Sim([trig("t", on_delay_s=300)], invalid_behavior="hold", interval_s=5)
+    sim.tick(grid=-2000)  # surplus: on-delay starts
+    sim.tick(advance=295, grid=-2000)
+    sim.tick(advance=5, grid="bad")  # outage
+    out = sim.tick(advance=3000, grid=-2000)  # back: the surplus must hold for 300 s again
+    assert out["c_t_status"] == "on_delay"
+    assert out.get("c_t") is not True
+
+
+def test_holding_at_zero_feed_in_never_switches_on_a_zero_threshold_consumer():
+    consumers = [onoff("a", power_w=2000, on_threshold_w=0, on_delay_s=0), trig("t", min_surplus_w=0, on_delay_s=0)]
+    sim = Sim(consumers, grid_mode="feed_in_only")
+    for _ in range(3):
+        out = sim.tick(feed_in=0)
+    assert sim.cstate("a")["on"] is False
+    assert sim.cstate("t")["pulse_until"] is None
+    assert out["allocated"] == 0

@@ -532,6 +532,9 @@ def _tick(
             last_out = state.setdefault("last_out", {})
             held = [c for c in consumers if c["active"] and f"c_{c['id']}" in last_out]
             for consumer in held:
+                # The outage interrupts any "continuously for the delay" condition.
+                cs = states[consumer["id"]]
+                cs["on_pending"] = cs["off_pending"] = cs["trigger_pending"] = None
                 emit(f"c_{consumer['id']}_status", "safe_hold")
             _apply_safe_state([c for c in consumers if c not in held], states, now, emit)
         else:
@@ -700,7 +703,12 @@ def _allocate(
             emit(f"c_{cid}_status", "invalid_input")
             continue
 
-        offer = available if caps is None else min(available, caps[cid])
+        if caps is None:
+            offer = available
+        elif cs["on"]:
+            offer = min(available, caps[cid])
+        else:
+            offer = -math.inf  # holding: nothing may be switched on or fired, whatever its threshold
         drawn = _num(measured.get(f"c_{cid}_power")) if measured else None
         was_on, previous_setpoint = cs["on"], cs["setpoint"]
         if consumer["mode"] == "percent":

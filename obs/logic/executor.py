@@ -235,6 +235,8 @@ def _write_filters_itself(data: dict[str, Any], value: Any) -> bool:
             return True
     except (TypeError, ValueError):
         pass
+    if (data.get("value_formula") or "").strip() or data.get("value_map"):
+        return False  # min_delta compares the transformed value, which is not known here
     try:
         return float(data.get("min_delta")) > 0 and math.isfinite(float(value))
     except (TypeError, ValueError, OverflowError):
