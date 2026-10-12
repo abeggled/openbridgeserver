@@ -1418,3 +1418,43 @@ async def test_a_run_cancelled_after_its_writes_keeps_its_ticks():
     with pytest.raises(asyncio.CancelledError):
         await manager._execute_graph("g", "G", flow, {})
     assert manager._hysteresis["g"]["h"]["last_out"]["c_boiler"] is True  # the run had started writing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_state", [True, False])
+async def test_a_restored_node_state_never_brings_back_hems_state(other_state):
+    flow = FlowData.model_validate({"nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("cf", "change_filter", {})], "edges": []})
+    saved = {"h": {"last_cycle": 123456.0, "consumers": {"boiler": {"on": True}}}}
+    if other_state:
+        saved["cf"] = {"value": 1}
+    manager = _manager()
+    manager._db.fetchall = AsyncMock(
+        return_value=[{"id": "g", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": json.dumps(saved)}]
+    )
+    await manager._load_graphs()
+    assert "h" not in manager._hysteresis.get("g", {})
+    assert ("cf" in manager._hysteresis.get("g", {})) is other_state
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_a_run_still_going_after_its_bound():
+    manager = _manager()
+    manager._event_bus.unsubscribe = MagicMock()
+    hung = asyncio.ensure_future(asyncio.sleep(60))
+    manager._hems_runs[("g", "h")] = hung
+    with patch("obs.logic.manager._HEMS_STOP_TIMEOUT_S", 0.01):
+        await manager.stop()
+    await asyncio.sleep(0)
+    assert hung.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_a_reload_drops_the_plans_of_sheets_that_are_gone():
+    manager = _manager()
+    manager._load_graphs = AsyncMock()
+    manager._graphs["kept"] = ("K", True, _flow())
+    manager._hems_planned_wake.update({("kept", "h"): 1.0, ("gone", "h"): 2.0})
+    manager._hems_wake_at[("gone", "h")] = 3.0
+    await manager.reload()
+    assert manager._hems_planned_wake == {("kept", "h"): 1.0}
+    assert manager._hems_wake_at == {}

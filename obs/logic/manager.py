@@ -1758,7 +1758,9 @@ class LogicManager:
         # A HEMS run in flight is never cut short (see _hems_run): let it finish
         # before the bus goes away, within a bound.
         if runs := [run for run in self._hems_runs.values() if not run.done()]:
-            await asyncio.wait(runs, timeout=_HEMS_STOP_TIMEOUT_S)
+            _done, pending = await asyncio.wait(runs, timeout=_HEMS_STOP_TIMEOUT_S)
+            for run in pending:
+                run.cancel()  # past the bound: it must not publish once the bus is gone
         self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
@@ -1771,6 +1773,10 @@ class LogicManager:
         # fire, and a reload restarts every loop only at its planned wake.
         await self._load_graphs()
         live_graph_ids = set(self._graphs)
+        # Plans of sheets that are gone (e.g. a config restore) must not outlive them.
+        for plans in (self._hems_planned_wake, self._hems_wake_at):
+            for key in [k for k in plans if k[0] not in live_graph_ids]:
+                del plans[key]
         # A reload restarts all schedulers, but it must not invalidate work for
         # unrelated graphs.  Rotate only configurations that actually changed
         # (or disappeared); save paths that called invalidate_cache() already
@@ -7826,6 +7832,13 @@ class LogicManager:
                                     _node_state["_recovered_str"] = True
                         else:
                             saved = saved_raw
+                        if isinstance(saved, dict):
+                            # hems_surplus is never restored, whatever a row holds:
+                            # it always starts in the safe state, and its timestamps
+                            # come from a monotonic clock that restarts with the process.
+                            for _hems_node in flow.nodes:
+                                if _hems_node.type == "hems_surplus":
+                                    saved.pop(_hems_node.id, None)
                         if isinstance(saved, dict) and saved:
                             self._hysteresis[row["id"]] = saved
                             logger.debug(
