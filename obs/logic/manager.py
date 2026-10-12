@@ -3315,8 +3315,8 @@ class LogicManager:
         def _mark_side_effect() -> None:
             # From here on the run has acted outside the graph: undoing its
             # hems_surplus ticks (undo_hems_run) would repeat what it started.
-            if run_tag is not None:
-                self._hems_acted_runs.add(run_tag)
+            # (Untagged runs add None, which _undo_hems_run never undoes anyway.)
+            self._hems_acted_runs.add(run_tag)
 
         ical_app_config = dict(self._app_config)
         # One instant for every ###VAR### of this logic run (#1301).
