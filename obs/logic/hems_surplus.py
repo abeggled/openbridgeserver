@@ -430,20 +430,21 @@ def _forget_removed_consumers(
 
     The edge of a removed consumer's output stays in the graph, so the last value
     it carried would otherwise stay on the actuator: an output last sent as
-    on / a non-zero setpoint is answered with off / 0 once before it is forgotten.
+    on / a non-zero setpoint is answered with off / 0 once. That off value then
+    stays its level, so a Write Object whose own filter dropped it still gets it.
     """
     result: dict[str, Any] = {}
     for stale_id in set(states) - {c["id"] for c in consumers}:
         del states[stale_id]
         for key in (f"c_{stale_id}_power", f"c_{stale_id}_max_power"):
             held.pop(key, None)  # its held measured / maximum power must not pass to a new consumer of that id
-        last = last_out.pop(f"c_{stale_id}", None)
         last_out.pop(f"c_{stale_id}_status", None)
-        if isinstance(last, bool):
-            if last:
-                result[f"c_{stale_id}"] = False
-        elif last:
-            result[f"c_{stale_id}"] = 0
+        if f"c_{stale_id}" not in last_out:
+            continue
+        off = False if isinstance(last_out[f"c_{stale_id}"], bool) else 0
+        if last_out[f"c_{stale_id}"]:
+            result[f"c_{stale_id}"] = off
+        last_out[f"c_{stale_id}"] = off
     return result
 
 

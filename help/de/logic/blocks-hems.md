@@ -106,7 +106,8 @@ verbleibendes Budget, Status des Blocks (`ok`, `disabled`, `plant_not_ok`, `inva
 Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet: Ein solches Write-Objekt schreibt
 nur, wenn sich der Wert von dem unterscheidet, den es zuletzt tatsächlich geschrieben hat — so geht
 auch ein Wert, den seine eigene Drosselung verworfen hat, nicht verloren (ein Write-Objekt mit eigenem
-Trigger schreibt dagegen bei jedem Auslösen). Nachgeschaltete Logikbausteine (z. B. NICHT, UND)
+Trigger schreibt dagegen bei jedem Auslösen). Das gilt für Zustände; an einem Trigger-Ausgang keine
+Drosselung verwenden — ein verworfener Impuls lässt sich nach seinem Ende nicht nachholen. Nachgeschaltete Logikbausteine (z. B. NICHT, UND)
 rechnen immer mit dem aktuellen Wert eines Ein/Aus-, Prozent-, Status- oder Diagnose-Ausgangs — er
 ist ein Zustand. Ein Trigger-Ausgang ist dagegen ein Ereignis: Er existiert nur in dem Lauf, in dem
 er gesendet wurde, sodass z. B. ein API-Aufruf daran genau einmal pro Auslösung erfolgt. Wird ein Verbraucher aus

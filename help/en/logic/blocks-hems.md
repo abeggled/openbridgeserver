@@ -101,7 +101,8 @@ block status (`ok`, `disabled`, `plant_not_ok`, `invalid_input`, `stale_input`) 
 **Output only on change** (default) unchanged outputs are not sent again to directly wired Write
 Objects: such a Write Object writes only when the value differs from the one it last actually wrote
 — so a value its own throttle dropped is not lost either (a Write Object with its own trigger writes
-on every firing instead). Logic blocks behind an
+on every firing instead). This holds for states; do not throttle a trigger output — a dropped pulse
+cannot be made up for once it has ended. Logic blocks behind an
 output (e.g. NOT, AND) always compute with the current value of an on/off, percentage, status or
 diagnostic output — it is a state. A trigger output, by contrast, is an event: it exists only on
 the run it was sent, so e.g. an API call on it is made exactly once per firing. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator

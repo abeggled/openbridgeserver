@@ -1170,3 +1170,85 @@ async def test_planned_wakes_are_forgotten_on_stop_and_while_idle():
     manager._event_bus.unsubscribe = MagicMock()
     await manager.stop()
     assert manager._hems_planned_wake == {}
+
+
+@pytest.mark.asyncio
+async def test_the_off_of_a_removed_consumer_reaches_a_throttled_write_later():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out, {"throttle_value": 60})
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert await _writes(manager, flow, dp_out, 1) == [True]
+    flow.nodes[1].data["consumers"] = [CONSUMERS[1]]  # the boiler is removed; its edge stays
+    assert await _writes(manager, flow, dp_out, 1) == []  # its one False is dropped by the throttle
+    manager._node_state["g"]["w"]["last_write_ts"] = datetime.now(UTC) - timedelta(minutes=5)
+    assert await _writes(manager, flow, dp_out, 2) == [False]  # but written once the throttle allows
+
+
+@pytest.mark.asyncio
+async def test_a_pulse_end_does_not_bypass_rising_edge_dedup_of_an_action():
+    dp_grid = uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        None,
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 1},
+        [edge("h", "seq", "c_wash", "trigger")],
+        [node("seq", "value_sequence", {"steps": []})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+    with patch.object(manager, "_start_value_sequence") as start:
+        await manager._execute_graph("g", "G", flow, {})
+        manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0
+        await manager._execute_graph("g", "G", flow, {"h": {}})
+    assert start.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_loop_restarted_during_a_run_plans_its_next_wake_after_it():
+    manager = _loop_manager()
+    release = asyncio.Event()
+    calls = []
+
+    async def slow_run(*args, **kwargs):
+        calls.append(1)
+        await release.wait()
+        return {}
+
+    manager._execute_graph = slow_run
+    first = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    first.cancel()  # a save reloads mid-run
+    second = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    release.set()
+    await asyncio.sleep(0.02)
+    second.cancel()
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert calls == [1]  # the restarted loop did not run the sheet again right away
+    assert manager._hems_planned_wake[("g", "h")] > hems_clock() + 40  # it planned one interval (45 s) on
+
+
+@pytest.mark.asyncio
+async def test_a_restarted_loop_plans_from_the_runs_next_wake_even_if_the_graph_is_gone():
+    manager = _loop_manager()
+    release = asyncio.Event()
+
+    async def slow_run(*args, **kwargs):
+        await release.wait()
+        manager._hysteresis.setdefault("g", {})["h"] = {"next_wake": hems_clock() + 3}
+        return {}
+
+    manager._execute_graph = slow_run
+    first = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    first.cancel()
+    del manager._graphs["g"]  # deleted meanwhile
+    second = asyncio.create_task(manager._hems_loop("g", "h"))
+    await asyncio.sleep(0.01)
+    release.set()
+    await asyncio.sleep(0.02)
+    planned = manager._hems_planned_wake[("g", "h")]
+    second.cancel()
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert planned <= hems_clock() + 3  # the pending wake, not the 30 s default

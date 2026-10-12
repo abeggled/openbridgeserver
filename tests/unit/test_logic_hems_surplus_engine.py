@@ -652,7 +652,8 @@ def test_a_removed_consumer_is_switched_off_before_it_is_forgotten():
     assert (out["c_load"], out["c_heat"]) == (False, 0)
     assert type(out["c_heat"]) is int
     assert sim.state["consumers"] == {}
-    assert not any(key.startswith(("c_load", "c_heat")) for key in sim.state["last_out"])
+    # the off value stays their level (a filtered Write Object still gets it); the status goes
+    assert {k: v for k, v in sim.state["last_out"].items() if k.startswith(("c_load", "c_heat"))} == {"c_load": False, "c_heat": 0}
     # forgotten for good: nothing is sent again
     out = sim.tick(grid=-20000)
     assert "c_load" not in out

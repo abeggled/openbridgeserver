@@ -2270,6 +2270,18 @@ class LogicManager:
         # A restart by a reload (any graph saved) resumes at the planned wake
         # instead of re-running the whole sheet at once; a sheet that was itself
         # saved has no planned wake left (invalidate_cache) and runs straight away.
+        in_flight = self._hems_runs.get((graph_id, node_id))
+        if in_flight is not None and not in_flight.done():
+            # The loop this one replaces was cancelled mid-run: that run counts
+            # as this loop's first, so wait for it and then plan as after a run.
+            await asyncio.wait({in_flight})
+            entry = self._graphs.get(graph_id)
+            node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry else None
+            sleep_s = hems_surplus.interval_s(node.data) if node is not None else hems_surplus.DEFAULT_INTERVAL_S
+            next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
+            if next_wake is not None and next_wake > hems_clock():
+                sleep_s = min(sleep_s, max(0.1, next_wake - hems_clock()))
+            self._hems_planned_wake[(graph_id, node_id)] = hems_clock() + sleep_s
         planned = self._hems_planned_wake.get((graph_id, node_id))
         if planned is not None and planned > hems_clock():
             await asyncio.sleep(planned - hems_clock())
@@ -4551,9 +4563,9 @@ class LogicManager:
             if (
                 edge.source in _hems_trigger_handles
                 and require_fired_change_filter
-                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {})
+                and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
             ):
-                return False
+                return False  # only the run that sent True carries a pulse
             if _node_type_by_id.get(edge.source) == "change_filter":
                 if (edge.sourceHandle or "out") != "changed":
                     return False
