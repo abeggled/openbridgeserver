@@ -1483,3 +1483,14 @@ def test_enum_settings_are_read_like_the_config_validator_reads_them():
     sim = Sim([onoff("a", on_delay_s=0)], invalid_behavior=" HOLD", only_on_change=True)
     sim.tick(grid=-3000)
     assert sim.tick(grid="bad")["c_a_status"] == "safe_hold"
+
+
+def test_a_silent_feed_in_meter_at_zero_watt_is_not_stale():
+    # A send-on-change meter reports nothing all night at 0 W feed-in.
+    sim = Sim([onoff("a", on_delay_s=0)], grid_mode="feed_in_only", max_age_s=300)
+    sim.tick(feed_in=0, feed_in_changed=True)
+    out = sim.tick(advance=600, feed_in=0, feed_in_changed=False)
+    assert (out["status"], out["warning"]) == ("ok", False)
+    assert sim.cstate("a")["on"] is False  # 0 W never switches anything on
+    out = sim.tick(advance=600, feed_in=1500, feed_in_changed=False)  # a non-zero value that old is stale
+    assert out["status"] == "stale_input"

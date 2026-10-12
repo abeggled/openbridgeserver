@@ -1014,3 +1014,40 @@ async def test_stop_lets_a_run_in_flight_finish():
     manager._hems_runs[("g", "h")] = asyncio.ensure_future(slow_run())
     await manager.stop()
     assert finished == [True]
+
+
+@pytest.mark.asyncio
+async def test_after_stop_no_new_early_wake_is_scheduled():
+    flow = _flow(interval_s=3600)
+    manager = _manager()
+    manager._event_bus.unsubscribe = MagicMock()
+    await manager.stop()
+    now = hems_clock()
+    manager._hems_planned_wake[("g", "h")] = now + 3000
+    manager._hysteresis["g"] = {"h": {"next_wake": now + 1}}
+    manager._schedule_hems_early_wakes("g", flow, {"read": {"value": 1}})
+    assert manager._hems_wake_tasks == {}
+    manager._load_app_config = AsyncMock()
+    manager._load_graphs = AsyncMock()
+    manager._event_bus.subscribe = MagicMock()
+    await manager.start()
+    assert manager._hems_stopping is False
+    await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_trigger_edge_to_a_write_is_a_pulse_when_the_block_sends_every_cycle():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("h", "hems_surplus", {"consumers": CONSUMERS, "only_on_change": False}),
+                node("w", "datapoint_write", {"datapoint_id": str(dp_out)}),
+            ],
+            "edges": [edge("read", "h", "value", "grid"), edge("h", "w", "c_wash", "value")],
+        }
+    )
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert await _writes(manager, flow, dp_out, 2) == [True]  # once per firing, not per run

@@ -353,7 +353,10 @@ def _read_meter(
 
     # The meter is stale only when *no* judged input has reported in time: a
     # send-on-change export side sitting at 0 W says nothing about the meter.
-    if judged and all(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
+    # Feed-in-only at 0 W is the same case: a send-on-change meter is silent all
+    # night, and 0 W is handled conservatively anyway (hold, then shed).
+    silent_zero_feed_in = mode == "feed_in_only" and values["feed_in"] == 0
+    if judged and not silent_zero_feed_in and all(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
         return None, None, "stale_input"
 
     if mode == "split":

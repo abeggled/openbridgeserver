@@ -1675,6 +1675,8 @@ class LogicManager:
         self._hems_waking: set[tuple[str, str]] = set()
         # The sheet run currently executing for each (graph id, node id).
         self._hems_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
+        # Set by stop(): runs still finishing must not schedule new wakes.
+        self._hems_stopping = False
         # Earliest pending early wake per (graph id, node id), and every
         # early-wake task per graph so they can be cancelled with it.
         self._hems_wake_at: dict[tuple[str, str], float] = {}
@@ -1720,6 +1722,7 @@ class LogicManager:
 
     async def start(self) -> None:
         """Subscribe to EventBus, load all graphs and start cron schedulers."""
+        self._hems_stopping = False
         await self._load_app_config()
         await self._load_graphs()
         from obs.core.event_bus import DataPointRenamedEvent, DataValueEvent
@@ -1737,6 +1740,7 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._hems_stopping = True
         self._cancel_hems_wakes()
         # A HEMS run in flight is never cut short (see _hems_run): let it finish
         # before the bus goes away, within a bound.
@@ -3178,6 +3182,8 @@ class LogicManager:
         trigger there; its pulse end, or the next due cycle, may then come
         before the loop's own planned wake.
         """
+        if self._hems_stopping:
+            return
         for node in flow.nodes:
             if node.type != "hems_surplus":
                 continue
@@ -4407,6 +4413,7 @@ class LogicManager:
         # Trigger outputs of each hems_surplus node: events (present only on the
         # run that sent them), unlike its level outputs. Parsed once per run.
         _hems_trigger_handles = {n.id: hems_surplus.trigger_output_handles(n.data) for n in flow.nodes if n.type == "hems_surplus"}
+        _hems_only_on_change = {n.id for n in flow.nodes if n.type == "hems_surplus" and hems_surplus.only_on_change(n.data)}
 
         _write_ids_with_trigger = {e.target for e in _effective_edges if (e.targetHandle or "in") == "trigger"}
 
@@ -4423,7 +4430,8 @@ class LogicManager:
             if (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]:
                 return True
             return (
-                _node_type_by_id.get(edge.target) == "datapoint_write"
+                edge.source in _hems_only_on_change
+                and _node_type_by_id.get(edge.target) == "datapoint_write"
                 and (edge.targetHandle or "in") == "value"
                 and edge.target not in _write_ids_with_trigger
             )
