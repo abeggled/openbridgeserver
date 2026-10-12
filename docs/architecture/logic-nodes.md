@@ -217,10 +217,13 @@ today, so it is deliberately left as an explicit table.
      `retained_boundary_handles` (`GraphExecutor.execute`) and `init_retained_boundary_handles`
      (`LogicManager.initialize_graph`) so the deliberate absence is not reported as a failed
      upstream producer on every run. `hems_surplus` takes the other route for *level* outputs that
-     are merely unchanged: its dispatcher branch returns every output at its current level plus
-     `_emitted`, the handles actually sent this tick. Downstream logic always computes with the
-     level; only a directly wired Write Object and `_discrete_pulse_handles` honour `_emitted`.
-     Every handle of it counts as a boundary in `GraphExecutor.execute` unless the block failed.
+     are merely unchanged: its dispatcher branch returns every level output at its current value
+     plus `_emitted`, the handles actually sent this tick. Downstream logic always computes with
+     the level; a directly wired Write Object without its own trigger honours `_emitted`, and so
+     does action-node freshness (`_event_fresh_inputs`). Its *trigger* outputs are events: present
+     only on the run that sent them, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
+     `_hems_trigger_handles`) like Edge Detection's. Every handle of it counts as a boundary in
+     `GraphExecutor.execute` (and in `initialize_graph`) unless the block failed.
    - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
      state copy, so a block whose output depends on persisted state needs a decision. Listing it in
      `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass

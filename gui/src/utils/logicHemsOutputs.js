@@ -7,6 +7,9 @@ import { isBackendFalse } from '@/utils/logicBooleans'
 export const HEMS_DIAGNOSTICS = ['grid_power', 'surplus', 'budget', 'allocated', 'remaining', 'status', 'warning']
 
 const CONSUMER_MODES = ['percent', 'onoff', 'trigger']
+// Mirrors _RESERVED_ID_ENDINGS in hems_surplus.py: an id ending in a port suffix
+// would take another consumer's port.
+const RESERVED_ID_ENDINGS = ['_status', '_power', '_max', '_reset']
 
 /**
  * The consumer list exactly as the engine reads it (obs/logic/hems_surplus.py
@@ -29,6 +32,7 @@ export function hemsConsumers(raw) {
   list.forEach((c, index) => {
     if (!c || typeof c !== 'object' || Array.isArray(c)) return
     let id = String(c.id || '').replace(/[^A-Za-z0-9_]/g, '') || `n${index + 1}`
+    if (RESERVED_ID_ENDINGS.some(end => id.endsWith(end))) id = `${id}_`
     while (seen.has(id)) id = `${id}_`
     seen.add(id)
     consumers.push({ ...c, id, mode: CONSUMER_MODES.includes(c.mode) ? c.mode : 'percent' })

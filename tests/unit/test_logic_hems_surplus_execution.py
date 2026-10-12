@@ -327,7 +327,7 @@ def _relay_flow(dp_grid, dp_out, consumer, relay_edges, extra_nodes):
         {"id": "wash", "mode": "onoff", "power_w": 1000, "on_delay_s": 0},
     ],
 )
-async def test_logic_behind_a_withheld_output_computes_with_the_value_last_sent(consumer):
+async def test_logic_behind_a_withheld_output_never_sees_a_placeholder(consumer):
     # Between two emissions the HEMS output is unchanged, not False: a NOT
     # behind it keeps inverting the level last sent instead of a placeholder.
     dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
@@ -349,7 +349,9 @@ async def test_logic_behind_a_withheld_output_computes_with_the_value_last_sent(
     await manager._execute_graph("g", "G", flow, {})
     assert written() == [False]
     await manager._execute_graph("g", "G", flow, {"h": {}})
-    assert written() == [False]  # never the spurious True of a missing input
+    # never the spurious True of a missing input: a level keeps its value,
+    # an unsent trigger (an event) produces nothing at all
+    assert written() == ([] if consumer["mode"] == "trigger" else [False])
 
     if consumer["mode"] == "trigger":
         manager._hysteresis["g"]["h"]["consumers"]["wash"]["pulse_until"] = 0.0
@@ -483,3 +485,49 @@ def test_a_failed_block_is_a_failed_producer_for_a_change_filter():
         out = GraphExecutor(flow, {}).execute(input_overrides={"h": {"grid": -5000}})
     assert "Missing upstream output" in out["n"]["__error__"]
     assert out["cf"].get("changed") is not True
+
+
+@pytest.mark.asyncio
+async def test_an_api_call_on_a_trigger_output_runs_once_per_firing():
+    # Start a washing machine through an API: further meter telegrams during the
+    # pulse must not send the request again.
+    from tests.unit.test_host_check import _MockResponse
+
+    dp_grid = uuid.uuid4()
+    flow = _relay_flow(
+        dp_grid,
+        None,
+        {"id": "wash", "mode": "trigger", "min_surplus_w": 1000, "on_delay_s": 0, "pulse_s": 60},
+        [edge("h", "ac", "c_wash", "trigger")],
+        [node("ac", "api_client", {"url": "http://93.184.216.34/", "method": "GET", "response_type": "text/plain"})],
+    )
+    manager = _manager({str(dp_grid): -2000})
+    manager._graphs["g"] = ("G", True, flow)
+    with patch("obs.logic.manager.httpx.AsyncClient") as client_cls:
+        client = AsyncMock()
+        client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+        client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        for _ in range(4):
+            await manager._execute_graph("g", "G", flow, {"read": {"value": -2000}})
+    assert client.request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_saving_logs_no_failed_producer_for_logic_behind_the_block(caplog):
+    dp_grid = uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("h", "hems_surplus", {"consumers": CONSUMERS}),
+                node("n", "not", {}),
+                node("cf", "change_filter", {}),
+            ],
+            "edges": [edge("read", "h", "value", "grid"), edge("h", "n", "c_boiler", "in1"), edge("n", "cf", "out", "in")],
+        }
+    )
+    manager = _manager({str(dp_grid): -3000})
+    manager._graphs["g"] = ("G", True, flow)
+    await manager.initialize_graph("g")
+    assert "Missing upstream output" not in caplog.text

@@ -228,7 +228,9 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
 # They are the roots of the pulse-provenance trace: a consumer fed from one of
 # them must not read the "no pulse this pass" placeholder as a real value.
-_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
+# hems_surplus counts with its trigger outputs only (``_hems_trigger_handles``);
+# its other outputs are levels.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on
@@ -2656,8 +2658,12 @@ class LogicManager:
             # That absence is a boundary, not a failed producer — without this a
             # synchronous node between one of them and a Change Filter would log
             # "Missing upstream output" on every single save.
-            # (hems_surplus handles are covered by GraphExecutor.execute itself.)
             init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
+            # hems_surplus is excluded as well, so the executor no longer sees it
+            # as one: every handle wired from it is such a boundary.
+            for edge in flow.edges:
+                if node_type_by_id.get(edge.source) == "hems_surplus":
+                    init_retained_boundary_handles.setdefault(edge.source, set()).add(edge.sourceHandle or "out")
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
@@ -4286,6 +4292,13 @@ class LogicManager:
         # fresh rising edge, so nodes that fire on sustained truthy inputs from
         # cron are not suppressed by the rising-edge deduplication below.
         _node_type_by_id = {n.id: n.type for n in flow.nodes}
+        # Trigger outputs of each hems_surplus node: events (present only on the
+        # run that sent them), unlike its level outputs. Parsed once per run.
+        _hems_trigger_handles = {n.id: hems_surplus.trigger_output_handles(n.data) for n in flow.nodes if n.type == "hems_surplus"}
+
+        def _hems_level_edge(edge: Any) -> bool:
+            """An edge from a hems_surplus level output — sustained data, never a pulse."""
+            return edge.source in _hems_trigger_handles and (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]
 
         def _discrete_pulse_handles(node_ids: set[str] | None = None) -> set[tuple[str, str]]:
             """(node id, handle) pairs carrying a discrete event pulse this pass.
@@ -4307,10 +4320,9 @@ class LogicManager:
                     if GraphExecutor._to_bool(_pout.get("changed")):
                         pulses.add((_pn.id, "changed"))
                 elif _pn.type == "hems_surplus":
-                    # A trigger consumer's output is an event per firing, not a
-                    # level: it pulses only on the run that actually sent True.
-                    for _ph in hems_surplus.trigger_output_handles(_pn.data):
-                        if GraphExecutor._to_bool(_pout.get(_ph)) and _ph in _pout.get("_emitted", ()):
+                    # A trigger output exists only on the run that sent it.
+                    for _ph in _hems_trigger_handles[_pn.id]:
+                        if GraphExecutor._to_bool(_pout.get(_ph)):
                             pulses.add((_pn.id, _ph))
                 elif _pn.type == "edge_detect":
                     for _ph in ("rising", "falling"):
@@ -4333,6 +4345,13 @@ class LogicManager:
             on that node fired.
             """
             origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
+            if origin_id in _hems_trigger_handles:
+                # A trigger output is present exactly on the run that sent it.
+                return (
+                    handle in outputs.get(origin_id, {})
+                    if handle is not None
+                    else any(_ph in outputs.get(origin_id, {}) for _ph in _hems_trigger_handles[origin_id])
+                )
             if _node_type_by_id.get(origin_id) == "edge_detect":
                 pulses = _discrete_pulse_handles({origin_id})
                 return (origin_id, handle) in pulses if handle is not None else bool(pulses)
@@ -4371,6 +4390,14 @@ class LogicManager:
                 _node_type_by_id.get(edge.source) == "edge_detect"
                 and require_fired_change_filter
                 and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
+            ):
+                return False
+            if _hems_level_edge(edge):
+                return False
+            if (
+                edge.source in _hems_trigger_handles
+                and require_fired_change_filter
+                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {})
             ):
                 return False
             if _node_type_by_id.get(edge.source) == "change_filter":
@@ -4570,9 +4597,11 @@ class LogicManager:
                     return False
 
             def _pulse_input_edge(edge: Any) -> bool:
-                # change_filter.out is a sustained value, not a pulse.
-                return edge.source in relay_origins and not (
-                    _node_type_by_id.get(edge.source) == "change_filter" and (edge.sourceHandle or "out") != "changed"
+                # change_filter.out and hems_surplus level outputs are sustained values, not pulses.
+                return (
+                    edge.source in relay_origins
+                    and not (_node_type_by_id.get(edge.source) == "change_filter" and (edge.sourceHandle or "out") != "changed")
+                    and not _hems_level_edge(edge)
                 )
 
             queue = list(relay_origins)
@@ -4595,6 +4624,8 @@ class LogicManager:
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
                         continue
                     if _node_type_by_id.get(source_id) == "change_filter" and (pulse_edge.sourceHandle or "out") != "changed":
+                        continue
+                    if _hems_level_edge(pulse_edge):
                         continue
                     # A handle that can never fire is not a pulse origin. With
                     # both directions set to "off"/"trigger", "out" never
@@ -6556,6 +6587,14 @@ class LogicManager:
                 for edge in _effective_edges
                 if edge.source in no_result_mapping_ids and (edge.sourceHandle or "out") in {"out", "result"}
             }
+            # hems_surplus carries every output at its level, but only what it
+            # actually sent this run is news for an action node downstream.
+            blocked_outputs.update(
+                (edge.source, edge.sourceHandle or "out")
+                for edge in _effective_edges
+                if _node_type_by_id.get(edge.source) == "hems_surplus"
+                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {}).get("_emitted", ())
+            )
             while True:
                 cache_key = (frozenset(blocked_sources), frozenset(blocked_outputs))
                 if cache_key not in freshness_cache:

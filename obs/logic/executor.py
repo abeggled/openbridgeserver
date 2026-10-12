@@ -376,11 +376,19 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
-                if has_value and src_id in hems_ids and node.type == "datapoint_write" and src_handle not in src_out.get("_emitted", ()):
+                if (
+                    has_value
+                    and src_id in hems_ids
+                    and node.type == "datapoint_write"
+                    and "trigger" not in edge_map.get(node.id, {})
+                    and src_handle not in src_out.get("_emitted", ())
+                ):
                     # hems_surplus outputs always carry their current level, so
                     # all logic computes with it; only a directly wired Write
                     # Object stays silent for a level that did not change — that
-                    # is what the block's "output only on change" is for.
+                    # is what the block's "output only on change" is for. A Write
+                    # Object with its own trigger writes the current level when
+                    # that trigger fires.
                     has_value = False
                 if has_value:
                     inputs[handle] = value
@@ -2888,10 +2896,13 @@ class GraphExecutor:
                 # Control engine lives in obs/logic/hems_surplus.py; the per-node
                 # state is volatile (never persisted) so a restart begins safe.
                 # The engine returns only what it sends this tick; the graph sees
-                # every output at its current level plus which ones were sent.
+                # every level output at its current value plus which ones were
+                # sent. A trigger output is an event: present only when sent.
                 state = self.hysteresis_state.setdefault(node.id, {})
                 emitted = hems_surplus.evaluate(d, inputs, state, _datetime.now(_UTC).timestamp(), node.id)
-                return {**state.get("last_out", {}), **emitted, "_emitted": sorted(emitted)}
+                triggers = hems_surplus.trigger_output_handles(d)
+                levels = {k: v for k, v in state.get("last_out", {}).items() if k not in triggers}
+                return {**levels, **emitted, "_emitted": sorted(emitted)}
 
             case "ical":
                 # The raw iCal text is pre-fetched by LogicManager and stored in

@@ -274,7 +274,7 @@ function setConsumerNumber(i, field, raw) {
 }
 
 function fieldsFor(c) {
-  const fields = FIELDS[c.mode] ?? FIELDS.percent
+  const fields = FIELDS[c.mode]
   return fields.filter(f => !(f.needsFixedPower && c.power_source === 'input'))
 }
 

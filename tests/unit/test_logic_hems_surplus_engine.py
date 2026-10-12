@@ -1132,3 +1132,10 @@ def test_a_pulse_end_after_a_mode_change_sends_no_boolean_to_the_new_output():
 @pytest.mark.parametrize(("raw", "expected"), [(2.0, "c_2"), (2.5, "c_25"), (7, "c_7"), (True, "c_true"), (False, "c_n1"), (0, "c_n1")])
 def test_non_text_ids_are_spelled_like_the_editor_spells_them(raw, expected):
     assert hs.load_consumers([{"id": raw}])[0]["id"] == expected[2:]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("a_status", "a_status_"), ("a_max", "a_max_"), ("x_power", "x_power_"), ("r_reset", "r_reset_"), ("a_maxi", "a_maxi")]
+)
+def test_an_id_ending_in_a_port_suffix_cannot_take_another_consumers_port(raw, expected):
+    assert hs.load_consumers([{"id": "a"}, {"id": raw}])[1]["id"] == expected

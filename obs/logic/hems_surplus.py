@@ -51,6 +51,9 @@ _MIN_SHED_PCT = 10.0
 _STALE_WAKE_MARGIN_S = 0.05
 
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_]")
+# Port names are c_<id> plus these suffixes ("_max" because c_<id>_max + "_power"
+# is the max-power port of <id>); an id ending in one would take another's port.
+_RESERVED_ID_ENDINGS = ("_status", "_power", "_max", "_reset")
 
 
 # ── Configuration parsing ────────────────────────────────────────────────
@@ -130,6 +133,8 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         cid = _ID_SAFE.sub("", _raw_id(item.get("id"))) or f"n{index + 1}"
+        if cid.endswith(_RESERVED_ID_ENDINGS):
+            cid = f"{cid}_"  # "a_status" would collide with the status port of consumer "a"
         while cid in seen:
             cid = f"{cid}_"
         seen.add(cid)
