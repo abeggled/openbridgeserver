@@ -51,7 +51,9 @@ inzwischen verringert hat. Als „verwendete Leistung" dient die gemessene Leist
 (Eingang *Gemessene Leistung*), sonst die aus Sollwert und Maximalleistung geschätzte. Gezählt
 werden nur Verbraucher, die der Block selbst eingeschaltet hat: Ein inaktiver oder vom Block
 ausgeschalteter Verbraucher, der trotzdem Leistung bezieht (Handbetrieb, eigener Thermostat), ist
-normale Hauslast und wird nicht an andere verteilt.
+normale Hauslast und wird nicht an andere verteilt. Bezieht ein eingeschalteter Verbraucher laut
+*Gemessener Leistung* weniger als ihm zusteht (Thermostat aus, Auto voll), geht der Rest an die
+niedrigeren Prioritäten.
 
 Beispiel: 2 000 W geregelte Last, Zähler −1 000 W, Reserve 200 W → Budget 2 800 W.
 
@@ -117,6 +119,8 @@ Aktor nicht eingeschaltet bleibt. Im Debug-Tab erscheinen alle Ausgänge mit dem
   vermerkt.
 - **Veraltete Werte** werden nur geprüft, wenn **Maximales Alter der Zählerwerte** größer als 0 ist
   *und* der Ausgang *Geändert* des Read-Objekts am Block angeschlossen ist (siehe Sensor Watchdog).
+  Bei getrennten Eingängen gilt der Zähler erst als veraltet, wenn keine der beiden Seiten rechtzeitig
+  gemeldet hat — eine nur bei Änderung sendende Einspeiseseite, die bei 0 W stehen bleibt, genügt nicht.
   Der Block reagiert, sobald das Alter überschritten ist, nicht erst beim nächsten Regelzyklus. Ein
   nach einem Neustart wiederhergestellter Wert gilt als veraltet, bis der Zähler ein neues Telegramm
   meldet.

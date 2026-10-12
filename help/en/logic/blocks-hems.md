@@ -48,7 +48,9 @@ This keeps power that was already allocated, even though it has reduced the prev
 export. The "used power" is the consumer's measured power (input *Measured power*), otherwise the
 value estimated from setpoint and maximum power. Only consumers the block itself switched on count:
 an inactive consumer, or one the block switched off, that still draws power (manual operation, own
-thermostat) is ordinary house load and is not handed to others.
+thermostat) is ordinary house load and is not handed to others. If a switched-on consumer draws less
+than its share according to *Measured power* (thermostat off, car full), the rest goes to lower
+priorities.
 
 Example: 2 000 W controlled load, meter −1 000 W, reserve 200 W → budget 2 800 W.
 
@@ -108,7 +110,9 @@ that is still wired does not stay on. The debug tab lists every output with its 
   sent is held; a consumer without one, e.g. right after a restart, goes to the safe state). The
   event is written to the log.
 - **Stale values** are only checked when **Maximum age of meter values** is greater than 0 *and* the
-  Read Object's *Changed* output is wired to the block (see Sensor Watchdog). The block reacts as soon
+  Read Object's *Changed* output is wired to the block (see Sensor Watchdog). With separate inputs the
+  meter counts as stale only when neither side has reported in time — a send-on-change export side
+  that stays at 0 W is not enough. The block reacts as soon
   as the age is exceeded, not only at the next control cycle. A value restored after a restart counts
   as stale until the meter reports a new telegram.
 - After a restart the block always begins in the safe state; its state is not persisted, and a

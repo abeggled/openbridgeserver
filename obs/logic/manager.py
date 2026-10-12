@@ -7662,6 +7662,8 @@ class LogicManager:
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]
+        for k in [k for k in self._hems_planned_wake if k[0] == graph_id]:
+            del self._hems_planned_wake[k]
 
     def _prune_graph_executor_lock(self, graph_id: str) -> None:
         """Release an idle worker lock after its graph has disappeared."""

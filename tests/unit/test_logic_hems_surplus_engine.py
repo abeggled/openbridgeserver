@@ -322,12 +322,15 @@ def test_stale_check_needs_the_changed_signal_and_a_positive_max_age():
     assert sim.tick(advance=500, grid=-100, grid_changed=False)["status"] == "ok"
 
 
-def test_stale_check_in_split_mode_judges_each_input():
+def test_split_mode_is_stale_only_when_neither_side_reports():
+    # A send-on-change export side sitting at 0 W says nothing about the meter.
     sim = Sim([], grid_mode="split", max_age_s=50)
     sim.tick(grid_import=0, grid_export=100, grid_import_changed=True, grid_export_changed=True)
     out = sim.tick(advance=40, grid_import=0, grid_export=100, grid_import_changed=True, grid_export_changed=False)
     assert out["status"] == "ok"
     out = sim.tick(advance=40, grid_import=0, grid_export=100, grid_import_changed=True, grid_export_changed=False)
+    assert out["status"] == "ok"  # export silent for 80 s, import fresh
+    out = sim.tick(advance=51, grid_import=0, grid_export=100, grid_import_changed=False, grid_export_changed=False)
     assert out["status"] == "stale_input"
 
 
@@ -1049,11 +1052,9 @@ def test_a_restored_meter_value_is_stale_until_its_first_telegram():
 def test_split_mode_refreshes_every_changed_input_before_judging_age():
     sim = Sim([], grid_mode="split", max_age_s=50)
     sim.tick(grid_import=0, grid_export=2000, grid_import_changed=True, grid_export_changed=True)
-    # import is stale, but the export telegram of this tick is still recorded
-    assert sim.tick(advance=60, grid_import=0, grid_export=2000, grid_import_changed=False, grid_export_changed=True)["status"] == "stale_input"
+    # import silent too long, but the export telegram of this tick is recorded
+    assert sim.tick(advance=60, grid_import=0, grid_export=2000, grid_import_changed=False, grid_export_changed=True)["status"] == "ok"
     assert sim.state["last_seen"]["grid_export"] == sim.now
-    out = sim.tick(advance=1, grid_import=0, grid_export=2000, grid_import_changed=True, grid_export_changed=False)
-    assert out["status"] == "ok"
 
 
 def test_a_trigger_ignores_a_leftover_measured_power_wire():
@@ -1234,3 +1235,28 @@ def test_an_unknown_grid_power_is_not_left_standing_as_the_current_level():
     sim.tick(grid="bad")
     assert "grid_power" not in sim.state["last_out"]
     assert sim.tick(grid=-1000)["grid_power"] == -1000
+
+
+def test_a_pulse_ending_on_a_cycle_tick_sends_its_false_before_firing_again():
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=28, lockout_s=0, rearm="after_lockout")], interval_s=30, only_on_change=True)
+    assert sim.tick(grid=-2000)["c_t"] is True
+    out = sim.tick(advance=28, grid=-2000)  # pulse end and a due cycle on the same tick
+    assert (out["c_t"], out["c_t_status"]) == (False, "on_delay")
+    assert sim.tick(advance=28, grid=-2000)["c_t"] is True  # the next rising edge
+
+
+@pytest.mark.parametrize("mode", ["onoff", "percent"])
+def test_a_running_consumer_drawing_less_than_its_share_leaves_the_rest_to_lower_priorities(mode):
+    top = onoff("heater", power_w=2000, on_delay_s=0) if mode == "onoff" else pct("heater", power_w=2000, on_delay_s=0)
+    sim = Sim([top, onoff("pool", power_w=1000, on_delay_s=0)])
+    sim.tick(grid=-2000)
+    assert sim.cstate("heater")["on"] is True
+    out = sim.tick(grid=-2000, c_heater_power=0)  # thermostat off, 2 kW exported
+    assert out["c_pool"] is True
+
+
+def test_a_meter_fault_raises_the_warning_even_while_disabled():
+    sim = Sim([pct()])
+    out = sim.tick(grid=None, enable=False)
+    assert (out["status"], out["warning"]) == ("disabled", True)
+    assert sim.tick(grid=-100, enable=False)["warning"] is False

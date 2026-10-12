@@ -307,7 +307,9 @@ def _read_meter(
         return None, None, "invalid_input"
     values: dict[str, float] = {name: value for name, value in read.items() if value is not None}
 
-    if any(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
+    # The meter is stale only when *no* judged input has reported in time: a
+    # send-on-change export side sitting at 0 W says nothing about the meter.
+    if judged and all(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
         return None, None, "stale_input"
 
     if mode == "split":
@@ -433,8 +435,10 @@ def _next_wake(
         wakes.append(state["last_cycle"] + interval_s(data))
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
     if max_age_s > 0:
-        # Stale means strictly older than max_age_s, so wake just after it.
-        wakes.extend(seen + max_age_s + _STALE_WAKE_MARGIN_S for seen in state.get("last_seen", {}).values() if seen + max_age_s >= now)
+        # Stale once the freshest input is strictly older than max_age_s, so wake just after it.
+        freshest = max(state.get("last_seen", {}).values(), default=None)
+        if freshest is not None and freshest + max_age_s >= now:
+            wakes.append(freshest + max_age_s + _STALE_WAKE_MARGIN_S)
     return min(wakes) if wakes else None
 
 
@@ -469,6 +473,7 @@ def _tick(
         cs = states[consumer["id"]]
         if cs["pulse_until"] is not None and now >= cs["pulse_until"]:
             cs["pulse_until"] = None  # only a trigger has one: a mode change resets the state
+            cs["pulse_ended"] = now  # no new firing on this tick, or its True would swallow this False
             emit(f"c_{consumer['id']}", False)
         if consumer["mode"] == "trigger":
             reset_now = to_bool(inputs.get(f"c_{consumer['id']}_reset"))
@@ -534,7 +539,7 @@ def _tick(
         for key in ("surplus", "budget", "allocated", "remaining"):
             emit(key, 0.0)
         emit("status", status)
-        emit("warning", status in ("invalid_input", "stale_input"))
+        emit("warning", problem is not None)  # a meter fault shows even while disabled
         return result
 
     state["safe_cycle"] = None
@@ -582,7 +587,7 @@ def _tick(
         caps = None
         budget_w = used_w - grid_w - target_w
 
-    allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps)
+    allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps, inputs)
     if commanded_w is not None and state["zero_shed_w"]:
         new_commanded_w = sum(_consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers)
         if new_commanded_w <= commanded_w - state["zero_shed_w"] + _EPS:
@@ -658,6 +663,7 @@ def _allocate(
     off_delay_s: float,
     emit: Any,
     caps: dict[str, float] | None = None,
+    measured: dict[str, Any] | None = None,
 ) -> tuple[float, float]:
     """Serve the consumers top-down and emit their setpoints; returns (allocated, remaining).
 
@@ -680,6 +686,7 @@ def _allocate(
             continue
 
         offer = available if caps is None else min(available, caps[cid])
+        drawn = _num(measured.get(f"c_{cid}_power")) if measured else None
         if consumer["mode"] == "percent":
             consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
             emit(f"c_{cid}", _pct_out(cs["setpoint"]) if cs["on"] else 0)
@@ -690,6 +697,10 @@ def _allocate(
             consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
             emit(f"c_{cid}", cs["pulse_until"] is not None, event=True)
         emit(f"c_{cid}_status", label)
+        if drawn is not None and consumer["mode"] != "trigger" and cs["on"]:
+            # A running consumer drawing less than its share (thermostat off,
+            # car full) leaves the rest to lower priorities.
+            consumed = min(consumed, max(0.0, drawn))
         available -= consumed
         allocated += consumed
     return allocated, available
@@ -810,7 +821,8 @@ def _step_trigger(consumer: dict[str, Any], cs: dict[str, Any], available: float
         return reserved, "off"
     if cs["trigger_pending"] is None:
         cs["trigger_pending"] = now
-    if now - cs["trigger_pending"] < _delay(consumer["on_delay_s"], on_delay_s):
+    if now - cs["trigger_pending"] < _delay(consumer["on_delay_s"], on_delay_s) or cs.get("pulse_ended") == now:
+        # (A pulse that ended on this very tick first sends its False.)
         return reserved, "on_delay"
 
     cs["armed"] = False

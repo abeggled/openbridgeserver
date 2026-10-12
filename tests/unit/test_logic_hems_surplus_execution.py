@@ -657,3 +657,11 @@ async def test_the_loop_records_when_it_will_wake_next():
         fake_datetime.now.return_value.timestamp.return_value = now
         await _run_loop(manager)
     assert manager._hems_planned_wake[("g", "h")] == now + 45
+
+
+def test_invalidating_a_graph_forgets_its_planned_wakes():
+    manager = _manager()
+    manager._hems_planned_wake[("g", "h")] = 1.0
+    manager._hems_planned_wake[("other", "h")] = 2.0
+    manager.invalidate_cache("g")
+    assert manager._hems_planned_wake == {("other", "h"): 2.0}
