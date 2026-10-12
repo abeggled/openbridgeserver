@@ -1568,3 +1568,23 @@ def test_the_reserve_cut_keeps_a_hold_min_consumer_at_its_minimum_for_the_delay(
     assert sim.cstate("a")["setpoint"] == 73
     out = sim.tick(feed_in=0)  # the reserve cut leaves too little: hold the minimum for the delay
     assert (out["c_a_status"], sim.cstate("a")["setpoint"]) == ("off_delay", 70)
+
+
+def test_renaming_a_consumer_does_not_run_a_cycle_early():
+    consumers = [onoff("a", on_delay_s=0, name="Boiler")]
+    sim = Sim(consumers, interval_s=600, only_on_change=True)
+    sim.tick(grid=-3000)
+    cycle = sim.state["last_cycle"]
+    consumers[0]["name"] = "Warmwasser"
+    sim.tick(advance=1, grid=-3000)
+    assert sim.state["last_cycle"] == cycle
+
+
+def test_a_meter_age_without_its_changed_input_is_reported_once(caplog):
+    sim = Sim([], max_age_s=60)
+    with caplog.at_level("WARNING", logger="obs.logic.hems_surplus"):
+        sim.tick(grid=-100)
+        sim.tick(grid=-100)
+    assert caplog.text.count("no 'Changed' input is wired") == 1
+    sim.tick(grid=-100, grid_changed=True)  # wired now: the note is reset
+    assert "age_unchecked_logged" not in sim.state

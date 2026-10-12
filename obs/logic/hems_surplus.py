@@ -352,6 +352,12 @@ def _read_meter(
     # recorded before any input is judged, so in split mode a fresh telegram on
     # one side is never lost because the other side is stale or invalid.
     judged = [name for name in names if f"{name}_changed" in inputs] if max_age_s > 0 else []  # no signal → age not judged
+    if max_age_s > 0 and not judged and not state.get("age_unchecked_logged"):
+        # Configured, but it cannot work: say so once instead of silently trusting a dead meter.
+        state["age_unchecked_logged"] = True
+        logger.warning("hems_surplus: a maximum meter age is set, but no 'Changed' input is wired — the age is not checked")
+    elif judged:
+        state.pop("age_unchecked_logged", None)
     last_seen = state.setdefault("last_seen", {}) if judged else {}
     for name in judged:
         if to_bool(inputs.get(f"{name}_changed")):
@@ -606,7 +612,9 @@ def _tick(
     state["safe_cycle"] = None
     # A saved configuration change (consumers, modes, Active, limits) takes
     # effect straight away, not only at the next due cycle.
-    fingerprint = json.dumps({key: data.get(key) for key in _CONTROL_KEYS}, sort_keys=True, default=str)
+    control = {key: data.get(key) for key in _CONTROL_KEYS}
+    control["consumers"] = [{k: v for k, v in c.items() if k != "name"} for c in consumers]  # a rename changes nothing
+    fingerprint = json.dumps(control, sort_keys=True, default=str)
     if state.get("config") != fingerprint:
         state["config"] = fingerprint
         state["last_cycle"] = None
