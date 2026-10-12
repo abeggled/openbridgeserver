@@ -1683,6 +1683,8 @@ class LogicManager:
         self._hems_waking: set[tuple[str, str]] = set()
         # The sheet run currently executing for each (graph id, node id).
         self._hems_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
+        # Runs (by run tag) that acted outside the graph; see _undo_hems_run.
+        self._hems_acted_runs: set[object] = set()
         # Set by stop(): runs still finishing must not schedule new wakes.
         self._hems_stopping = False
         # Earliest pending early wake per (graph id, node id), and every
@@ -3199,13 +3201,27 @@ class LogicManager:
                 run_tag=run_tag,
             )
         except _ObsoleteGraphExecution:
-            hyst = self._hysteresis.get(graph_id, {})
-            for node in flow.nodes:
-                if node.type == "hems_surplus" and node.id in hyst:
-                    undo_hems_run(hyst[node.id], run_tag)
+            self._undo_hems_run(graph_id, flow, run_tag)
             return {}
+        finally:
+            self._hems_acted_runs.discard(run_tag)
         self._schedule_hems_early_wakes(graph_id, flow, overrides)
         return result
+
+    def _undo_hems_run(self, graph_id: str, flow: FlowData, run_tag: object | None) -> None:
+        """Undo a failed or obsolete run's hems_surplus ticks — unless it already acted.
+
+        Such a run wrote nothing, so a trigger it fired would otherwise be locked
+        out without its pulse ever reaching the actuator. Once the run has acted
+        outside the graph (API call, notification, …), its ticks stand: undoing
+        them would re-arm a trigger whose action already ran.
+        """
+        if run_tag is None or run_tag in self._hems_acted_runs:
+            return
+        hyst = self._hysteresis.get(graph_id, {})
+        for node in flow.nodes:
+            if node.type == "hems_surplus" and node.id in hyst:
+                undo_hems_run(hyst[node.id], run_tag)
 
     def _schedule_hems_early_wakes(self, graph_id: str, flow: FlowData, overrides: dict[str, dict[str, Any]]) -> None:
         """Wake a hems_surplus node before its loop would, when an event run needs it.
@@ -3295,6 +3311,13 @@ class LogicManager:
     ) -> dict[str, Any]:
         execute_now = datetime.now(UTC)
         execution_started = perf_counter()
+
+        def _mark_side_effect() -> None:
+            # From here on the run has acted outside the graph: undoing its
+            # hems_surplus ticks (undo_hems_run) would repeat what it started.
+            if run_tag is not None:
+                self._hems_acted_runs.add(run_tag)
+
         ical_app_config = dict(self._app_config)
         # One instant for every ###VAR### of this logic run (#1301).
         api_time_snapshot = make_time_snapshot(ical_app_config, execute_now)
@@ -3979,6 +4002,7 @@ class LogicManager:
             raise
         except Exception:
             logger.exception("Graph %s (%s) execution error", graph_id, name)
+            self._undo_hems_run(graph_id, flow, run_tag)  # nothing was published
             return {}
 
         for ical_error_id, ical_error in ical_variable_errors.items():
@@ -4448,6 +4472,7 @@ class LogicManager:
         # Trigger outputs of each hems_surplus node: events (present only on the
         # run that sent them), unlike its level outputs. Parsed once per run.
         _hems_trigger_handles = {n.id: hems_surplus.trigger_output_handles(n.data) for n in flow.nodes if n.type == "hems_surplus"}
+        _hems_node_ids = set(_hems_trigger_handles)  # every hems_surplus node, with or without triggers
         _hems_only_on_change = {n.id for n in flow.nodes if n.type == "hems_surplus" and hems_surplus.only_on_change(n.data)}
 
         _write_ids_with_trigger = {e.target for e in _effective_edges if (e.targetHandle or "in") == "trigger"}
@@ -4460,7 +4485,7 @@ class LogicManager:
             that one the last value (see ``_skip_unchanged``), and it is written
             only when it differs from the value last written.
             """
-            if edge.source not in _hems_trigger_handles:
+            if edge.source not in _hems_node_ids:
                 return False
             if (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]:
                 return True
@@ -5262,6 +5287,7 @@ class LogicManager:
                 target_set.add(node.id)
                 return True
             try:
+                _mark_side_effect()
                 reachable, latency_ms = await _ping_host(host, count, timeout_s)
                 hyst_hc["hc_prev_trigger"] = True
                 hyst_hc["hc_last_reachable"] = reachable
@@ -5522,6 +5548,7 @@ class LogicManager:
                     ipaddress.IPv4Address(broadcast)
                 except ValueError:
                     raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
+                _mark_side_effect()
                 await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
                 # Record the consumed rising edge only after a successful send so
                 # that a transient failure does not silently suppress the next attempt.
@@ -5871,6 +5898,7 @@ class LogicManager:
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     for request_url in request_urls:
                         try:
+                            _mark_side_effect()
                             resp = await client.request(method, request_url, **req_kwargs)
                             break
                         except httpx.RequestError as req_exc:
@@ -6371,6 +6399,7 @@ class LogicManager:
                     async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                         for request_url in request_urls:
                             try:
+                                _mark_side_effect()
                                 resp = await client.request(method, request_url, **req_kwargs)
                                 break
                             except httpx.RequestError as req_exc:
@@ -6702,6 +6731,7 @@ class LogicManager:
                 }
                 source = f"logic.graph.{graph_id}.node.{node.id}"
                 record_kwargs = {"type": message_type, "severity": severity, "source": source, "title": title, "message": msg, "payload": payload}
+                _mark_side_effect()
                 await get_message_archive_service().record(archive_id, **record_kwargs)
                 outputs[node.id]["stored"] = True
                 target_set.add(node.id)
@@ -6734,7 +6764,7 @@ class LogicManager:
             # A hems_surplus block that sent something ran a control cycle, which
             # is an event of its own, whatever started this run; blocked_outputs
             # below keeps its unsent handles stale.
-            for node_id in _hems_trigger_handles:
+            for node_id in _hems_node_ids:
                 if outputs.get(node_id, {}).get("_emitted"):
                     event_sources.setdefault(node_id, {})
             blocked_sources = {node.id for node in flow.nodes if node.type == "memory"}
@@ -6845,6 +6875,7 @@ class LogicManager:
                 _freshness_settled_async_ids.add(node.id)
                 return False
 
+            _mark_side_effect()  # a notification is about to be sent
             if node.type == "notify_message":
                 instance_id = str(node.data.get("adapter_instance_id") or "").strip()
                 providers = node.data.get("providers") or []

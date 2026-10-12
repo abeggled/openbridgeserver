@@ -1252,3 +1252,56 @@ async def test_a_restarted_loop_plans_from_the_runs_next_wake_even_if_the_graph_
     second.cancel()
     await asyncio.gather(first, second, return_exceptions=True)
     assert planned <= hems_clock() + 3  # the pending wake, not the 30 s default
+
+
+@pytest.mark.asyncio
+async def test_an_obsolete_run_that_already_acted_keeps_its_ticks():
+    from obs.logic.manager import _ObsoleteGraphExecution
+
+    flow = _flow()
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {}
+
+    async def acted_then_obsolete(*args, run_tag=None, **kwargs):
+        executor = GraphExecutor(flow, manager._hysteresis["g"])
+        executor.run_tag = run_tag
+        executor.execute(input_overrides={"h": {"grid": -5000}})  # fires the trigger
+        manager._hems_acted_runs.add(run_tag)  # e.g. the API call already went out
+        raise _ObsoleteGraphExecution
+
+    manager._execute_graph_impl = acted_then_obsolete
+    await manager._execute_graph("g", "G", flow, {})
+    assert manager._hysteresis["g"]["h"]["consumers"]["wash"]["armed"] is False  # no second start
+    assert manager._hems_acted_runs == set()
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_first_pass_failed_undoes_its_ticks():
+    flow = FlowData.model_validate(
+        {
+            "nodes": [node("read", "datapoint_read", {"datapoint_id": str(uuid.uuid4())}), node("h", "hems_surplus", {"consumers": CONSUMERS})],
+            "edges": [edge("read", "h", "value", "grid")],
+        }
+    )
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    original = GraphExecutor.execute
+
+    def tick_then_fail(self, *args, **kwargs):
+        original(self, input_overrides={"h": {"grid": -5000}})  # the block ticks and fires …
+        raise RuntimeError("boom")  # … then the pass fails before anything is published
+
+    with patch.object(GraphExecutor, "execute", tick_then_fail):
+        assert await manager._execute_graph("g", "G", flow, {}) == {}
+    assert manager._hysteresis["g"]["h"] == {}
+
+
+def test_a_run_that_acted_is_not_undone_after_an_error():
+    manager = _manager()
+    flow = _flow()
+    manager._hysteresis["g"] = {"h": {"consumers": {}, "_run": (tag := object()), "_undo": {}}}
+    manager._hems_acted_runs.add(tag)
+    manager._undo_hems_run("g", flow, tag)
+    assert manager._hysteresis["g"]["h"]["consumers"] == {}
+    manager._undo_hems_run("g", flow, None)  # an untagged run has nothing to undo

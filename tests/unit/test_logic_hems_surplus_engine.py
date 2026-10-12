@@ -1530,3 +1530,12 @@ def test_hold_never_repeats_a_trigger_and_lets_its_pulse_end():
     out = sim.tick(advance=9, grid="bad")  # the pulse ends during the outage
     assert out["c_t"] is False
     assert sim.state["last_out"]["c_t"] is False
+
+
+def test_renaming_the_block_does_not_run_a_cycle_early():
+    sim = Sim([onoff("a", on_delay_s=0)], interval_s=600, only_on_change=True)
+    sim.tick(grid=-3000)
+    cycle = sim.state["last_cycle"]
+    sim.config["label"] = "Überschuss Haus"
+    sim.tick(advance=1, grid=-3000)
+    assert sim.state["last_cycle"] == cycle

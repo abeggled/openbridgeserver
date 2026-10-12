@@ -48,6 +48,19 @@ _EPS = 1e-9
 # and the one after it, so a load that needs a moment to ramp up is not
 # immediately handed to a lower priority.
 _TRIGGER_RESERVE_CYCLES = 1
+# The settings a control cycle depends on; changing any of them runs a cycle at
+# once (renaming the block does not).
+_CONTROL_KEYS = (
+    "grid_mode",
+    "interval_s",
+    "target_w",
+    "on_delay_s",
+    "off_delay_s",
+    "max_age_s",
+    "invalid_behavior",
+    "only_on_change",
+    "consumers",
+)
 # Smallest reduction step (%) of a percent consumer at 0 W feed-in.
 _MIN_SHED_PCT = 10.0
 # The scheduler wakes this long after a meter value's age limit has passed.
@@ -594,7 +607,7 @@ def _tick(
     state["safe_cycle"] = None
     # A saved configuration change (consumers, modes, Active, limits) takes
     # effect straight away, not only at the next due cycle.
-    fingerprint = json.dumps(data, sort_keys=True, default=str)
+    fingerprint = json.dumps({key: data.get(key) for key in _CONTROL_KEYS}, sort_keys=True, default=str)
     if state.get("config") != fingerprint:
         state["config"] = fingerprint
         state["last_cycle"] = None
