@@ -413,19 +413,19 @@ async def test_a_withheld_trigger_does_not_restart_a_value_sequence():
         assert start.call_count == 1
 
 
-def test_logic_behind_an_unknown_level_gets_no_value():
-    # An invalid meter leaves the grid power unknown: no last value stands in.
+def test_logic_behind_an_unknown_level_gets_none():
+    # An invalid meter leaves the grid power unknown: None, not the last value.
     flow = FlowData.model_validate(
         {
-            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("cmp", "compare", {"operator": "lt", "operand": "0"})],
-            "edges": [edge("h", "cmp", "grid_power", "in1")],
+            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("cf", "change_filter", {})],
+            "edges": [edge("h", "cf", "grid_power", "in")],
         }
     )
     state: dict = {}
-    assert GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})["cmp"]["out"] is True
+    assert GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})["cf"]["out"] == -2500
     out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": "bad"}})
-    assert "grid_power" not in out["h"]
-    assert out["cmp"]["out"] is not True
+    assert out["h"]["grid_power"] is None
+    assert "__error__" not in out["cf"]  # no failed producer either
 
 
 def test_a_wired_interlock_that_delivers_nothing_puts_the_block_into_the_safe_state():
@@ -792,7 +792,7 @@ async def test_a_change_filter_behind_a_trigger_never_commits_the_missing_pulse_
 
 
 def test_an_absent_level_output_is_a_failed_producer_for_a_change_filter():
-    # An invalid meter leaves the grid power unknown (absent level).
+    # A level the block has no value for (never sent, or lost).
     flow = FlowData.model_validate(
         {
             "nodes": [
@@ -805,7 +805,8 @@ def test_an_absent_level_output_is_a_failed_producer_for_a_change_filter():
     )
     state: dict = {}
     GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": "bad"}})
+    del state["h"]["last_out"]["grid_power"]  # e.g. a level whose value was lost
+    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})  # inside the interval
     assert "Missing upstream output" in out["cmp"]["__error__"]
 
 
@@ -858,3 +859,13 @@ async def test_cancelling_an_early_wake_never_interrupts_its_run_half_way():
         await wake
     await asyncio.sleep(0.1)
     assert finished == [True]
+
+
+def test_invalidating_a_graph_asks_its_blocks_to_resend_their_levels():
+    manager = _manager()
+    flow = FlowData.model_validate({"nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("n", "not", {})], "edges": []})
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {"h": {"last_out": {}}}
+    manager.invalidate_cache("g")
+    assert manager._hysteresis["g"]["h"]["resend"] is True
+    manager.invalidate_cache("unknown")  # nothing cached: nothing to do

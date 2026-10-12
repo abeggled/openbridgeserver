@@ -39,9 +39,10 @@ DEFAULT_TARGET_W = 0.0
 DEFAULT_ON_DELAY_S = 60.0
 DEFAULT_OFF_DELAY_S = 180.0
 
-# A cycle may start slightly early so scheduler jitter of the periodic loop does
-# not silently stretch the interval to two periods.
-_CYCLE_TOLERANCE = 0.9
+# A cycle may start this much early (s), so scheduler jitter of the periodic
+# loop does not stretch the interval to two periods — an absolute margin, so
+# frequent meter telegrams cannot shorten the interval noticeably.
+_CYCLE_SLACK_S = 0.5
 _EPS = 1e-9
 # A fired trigger keeps its optional nominal power reserved for the firing cycle
 # and the one after it, so a load that needs a moment to ramp up is not
@@ -396,6 +397,8 @@ def evaluate(
 
     result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
     state["last_out"].update({key: value for key, value in result.items() if key not in removed})
+    if now in (state.get("last_cycle"), state.get("safe_cycle")):
+        state.pop("resend", None)  # a full (or full safe) cycle has sent every level
     state["next_wake"] = _next_wake(data, consumers, states, state, now)
     return result
 
@@ -459,6 +462,7 @@ def _tick(
     mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
     cycle_s = interval_s(data)
     only_on_change = data.get("only_on_change") is None or to_bool(data.get("only_on_change"))
+    resend = bool(state.get("resend"))
     result: dict[str, Any] = {}
 
     def emit(key: str, value: Any, *, event: bool = False) -> None:
@@ -471,7 +475,9 @@ def _tick(
             previous, known = result[key], True
         else:
             previous, known = last.get(key), key in last
-        if (only_on_change or event) and known and previous == value and type(previous) is type(value):
+        # After a save every level is sent once more (``resend``): a run the
+        # save made obsolete may have recorded values that were never written.
+        if (only_on_change or event) and not (resend and not event) and known and previous == value and type(previous) is type(value):
             return
         result[key] = value
 
@@ -527,7 +533,7 @@ def _tick(
         # Without "only on change" the safe values are repeated once per
         # interval, like healthy ones — not on every run of the sheet.
         safe_cycle = state.get("safe_cycle")
-        if safe_cycle is None or now - safe_cycle >= cycle_s * _CYCLE_TOLERANCE:
+        if safe_cycle is None or now - safe_cycle >= cycle_s - _CYCLE_SLACK_S:
             state["safe_cycle"] = now
         else:
             emit = functools.partial(emit, event=True)
@@ -550,8 +556,9 @@ def _tick(
         if grid_w is not None:
             emit("grid_power", round(grid_w, 2) + 0.0)
         else:
-            # Unknown: no last value may stand in for it as the current level.
-            state.setdefault("last_out", {}).pop("grid_power", None)
+            # Unknown: reported as None ("no value"), so neither a last value
+            # stands in for it nor does logic behind it fail on a missing input.
+            emit("grid_power", None)
         for key in ("surplus", "budget", "allocated", "remaining"):
             emit(key, 0.0)
         emit("status", status)
@@ -566,7 +573,7 @@ def _tick(
         state["config"] = fingerprint
         state["last_cycle"] = None
     last_cycle = state.get("last_cycle")
-    if last_cycle is not None and now - last_cycle < cycle_s * _CYCLE_TOLERANCE:
+    if last_cycle is not None and now - last_cycle < cycle_s - _CYCLE_SLACK_S:
         return result
     state["last_cycle"] = now
 
@@ -735,6 +742,8 @@ def _allocate(
         else:
             consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
             emit(f"c_{cid}", cs["pulse_until"] is not None, event=True)
+            if caps is not None:
+                consumed = 0.0  # holding: the commanded shares never included the reservation
         emit(f"c_{cid}_status", label)
         if caps is None and drawn is not None and consumer["mode"] != "trigger" and was_on and cs["on"] and cs["setpoint"] <= previous_setpoint:
             # A running consumer drawing less than its share (thermostat off,

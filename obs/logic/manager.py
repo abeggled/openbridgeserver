@@ -7689,7 +7689,13 @@ class LogicManager:
 
     def invalidate_cache(self, graph_id: str) -> None:
         self._ical_cache_generations[graph_id] = object()
-        self._graphs.pop(graph_id, None)
+        previous = self._graphs.pop(graph_id, None)
+        if previous is not None:
+            # A run this save makes obsolete may have recorded outputs as sent
+            # without writing them: every hems_surplus level is sent once more.
+            for node in previous[2].nodes:
+                if node.type == "hems_surplus":
+                    self._hysteresis.get(graph_id, {}).get(node.id, {})["resend"] = True
         # NOTE: _hysteresis is intentionally NOT cleared here.
         # When a graph is saved (PUT/PATCH), invalidate_cache + reload() are called.
         # Clearing _hysteresis would reset statistics accumulators on every save.

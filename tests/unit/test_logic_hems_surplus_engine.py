@@ -1017,7 +1017,7 @@ def test_diagnostics_are_reported_in_the_safe_state_too():
     assert (out["surplus"], out["budget"], out["allocated"], out["remaining"]) == (0.0, 0.0, 0.0, 0.0)
     out = sim.tick(grid="bad")  # invalid meter: nothing to report for the grid power
     assert out["status"] == "invalid_input"
-    assert "grid_power" not in out
+    assert out["grid_power"] is None
     assert out["budget"] == 0.0
 
 
@@ -1220,16 +1220,16 @@ def test_an_unknown_grid_power_is_not_left_standing_as_the_current_level():
     sim.tick(grid=-2500)
     assert sim.state["last_out"]["grid_power"] == -2500
     sim.tick(grid="bad")
-    assert "grid_power" not in sim.state["last_out"]
+    assert sim.state["last_out"]["grid_power"] is None  # unknown, not the old -2500
     assert sim.tick(grid=-1000)["grid_power"] == -1000
 
 
 def test_a_pulse_ending_on_a_cycle_tick_sends_its_false_before_firing_again():
-    sim = Sim([trig("t", on_delay_s=0, pulse_s=28, lockout_s=0, rearm="after_lockout")], interval_s=30, only_on_change=True)
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=29.6, lockout_s=0, rearm="after_lockout")], interval_s=30, only_on_change=True)
     assert sim.tick(grid=-2000)["c_t"] is True
-    out = sim.tick(advance=28, grid=-2000)  # pulse end and a due cycle on the same tick
+    out = sim.tick(advance=29.6, grid=-2000)  # pulse end and a due cycle on the same tick
     assert (out["c_t"], out["c_t_status"]) == (False, "on_delay")
-    assert sim.tick(advance=28, grid=-2000)["c_t"] is True  # the next rising edge
+    assert sim.tick(advance=29.6, grid=-2000)["c_t"] is True  # the next rising edge
 
 
 @pytest.mark.parametrize("mode", ["onoff", "percent"])
@@ -1411,3 +1411,50 @@ def test_holding_at_zero_feed_in_never_switches_on_a_zero_threshold_consumer():
 )
 def test_large_and_tiny_ids_are_spelled_like_javascript(raw, expected):
     assert hs.load_consumers([{"id": raw}])[0]["id"] == expected
+
+
+def test_holding_at_zero_feed_in_does_not_deduct_a_trigger_reservation():
+    consumers = [trig("t", on_delay_s=0, min_surplus_w=1500, reserve_w=2000), pct("p", power_w=3000, on_delay_s=0)]
+    sim = Sim(consumers, grid_mode="feed_in_only", off_delay_s=600)
+    sim.tick(feed_in=3000)
+    held = sim.cstate("p")["setpoint"]
+    assert held > 0
+    sim.tick(feed_in=0)  # the machine starts: 0 W feed-in, reservation still running
+    assert sim.cstate("p")["setpoint"] == held
+    assert sim.cstate("p")["on"] is True
+
+
+def test_frequent_meter_telegrams_do_not_shorten_the_interval():
+    sim = Sim([], interval_s=30)
+    sim.tick(grid=0)
+    cycle = sim.state["last_cycle"]
+    for _ in range(28):
+        sim.tick(advance=1, grid=0)
+    assert sim.state["last_cycle"] == cycle  # 28 s later: no new cycle yet
+    sim.tick(advance=2, grid=0)
+    assert sim.state["last_cycle"] == sim.now
+
+
+def test_after_a_save_every_level_is_sent_once_more():
+    sim = Sim([onoff("a", on_delay_s=0)], only_on_change=True)
+    assert sim.tick(grid=-3000)["c_a"] is True
+    sim.state["resend"] = True  # set by LogicManager.invalidate_cache
+    out = sim.tick(grid=-3000)
+    assert out["c_a"] is True  # unchanged, but sent again
+    assert "resend" not in sim.state
+    assert "c_a" not in sim.tick(grid=-3000)  # and only once
+
+
+def test_after_a_save_a_running_pulse_is_not_sent_again():
+    sim = Sim([trig("t", on_delay_s=0, pulse_s=600)], only_on_change=True)
+    assert sim.tick(grid=-3000)["c_t"] is True
+    sim.state["resend"] = True
+    assert "c_t" not in sim.tick(grid=-3000)  # an event, not a level: no second firing
+
+
+def test_in_the_safe_state_a_resend_happens_once_not_on_every_run():
+    sim = Sim([onoff("a")], interval_s=30, only_on_change=True)
+    sim.tick(grid="bad")
+    sim.state["resend"] = True
+    assert sim.tick(grid="bad")["c_a"] is False
+    assert sim.tick(advance=1, grid="bad") == {}
