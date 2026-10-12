@@ -1342,8 +1342,31 @@ def test_a_mode_change_forgets_the_value_last_sent_under_the_old_type():
     sim = Sim(consumers, only_on_change=True)
     assert sim.tick(grid=-3000)["c_x"] is True
     consumers[0] = onoff("x", on_delay_s=600)
-    sim.tick(advance=1, grid=-3000)  # inside the interval: no cycle yet
-    assert "c_x" not in sim.state["last_out"]
+    out = sim.tick(advance=1, grid=-3000)  # the change runs a cycle straight away
+    assert (out["c_x"], out["c_x_status"]) == (False, "on_delay")  # sent anew under the new type
+    assert sim.state["last_out"]["c_x"] is False
+
+
+def test_a_saved_configuration_change_takes_effect_without_waiting_for_the_interval():
+    consumers = [pct("a", on_delay_s=0)]
+    sim = Sim(consumers, interval_s=3600, only_on_change=True)
+    assert sim.tick(grid=-10000)["c_a"] == 100
+    assert sim.tick(advance=1, grid=-10000) == {}  # unchanged config: still gated
+    consumers[0]["active"] = False
+    out = sim.tick(advance=1, grid=-10000)
+    assert (out["c_a"], out["c_a_status"]) == (0, "inactive")
+
+
+def test_feed_in_zero_cuts_the_reserve_once_then_holds():
+    sim = Sim([pct("a", power_w=3000, on_delay_s=0)], grid_mode="feed_in_only", target_w=200, off_delay_s=600)
+    sim.tick(feed_in=3000)
+    first = sim.cstate("a")["setpoint"]
+    sim.tick(feed_in=0)
+    cut = sim.cstate("a")["setpoint"]
+    assert cut < first
+    for _ in range(5):
+        sim.tick(feed_in=0)
+    assert sim.cstate("a")["setpoint"] == cut  # held until the off-delay is over
 
 
 def test_next_wake_ignores_the_age_of_meter_inputs_of_a_previous_mode():
@@ -1373,3 +1396,18 @@ def test_holding_at_zero_feed_in_never_switches_on_a_zero_threshold_consumer():
     assert sim.cstate("a")["on"] is False
     assert sim.cstate("t")["pulse_until"] is None
     assert out["allocated"] == 0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (12345678901234567890, "12345678901234567000"),
+        (10**21, "1e21"),
+        (2**53 - 1, "9007199254740991"),
+        (1.5e-7, "15e7"),
+        (0.000001, "0000001"),
+        (123.456, "123456"),
+    ],
+)
+def test_large_and_tiny_ids_are_spelled_like_javascript(raw, expected):
+    assert hs.load_consumers([{"id": raw}])[0]["id"] == expected

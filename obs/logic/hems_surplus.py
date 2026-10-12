@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import re
+from decimal import Decimal
 from typing import Any
 
 from obs.logic.booleans import to_bool
@@ -106,15 +107,20 @@ def _raw_id(value: Any) -> str:
     """
     if isinstance(value, bool):
         return "true" if value else ""
-    if isinstance(value, int):
+    if isinstance(value, int) and abs(value) < 2**53:  # exact in a JS number
         return str(value) if value else ""
-    if isinstance(value, float):
-        if not value or not math.isfinite(value):
-            return ""
-        if value.is_integer() and abs(value) < 1e21:
-            return str(int(value))
-        return re.sub(r"e([+-])0*(\d)", r"e\1\2", repr(value))
+    if isinstance(value, int | float):
+        number = float(value)
+        return _js_number(number) if number and math.isfinite(number) else ""
     return value if isinstance(value, str) else ""
+
+
+def _js_number(number: float) -> str:
+    """``String(number)`` of JavaScript: shortest digits, positional from 1e-6 up to 1e21."""
+    if 1e-6 <= abs(number) < 1e21:
+        text = format(Decimal(repr(number)), "f")
+        return text.rstrip("0").rstrip(".") if "." in text else text
+    return re.sub(r"e([+-])0*(\d)", r"e\1\2", repr(number))
 
 
 def load_consumers(raw: Any) -> list[dict[str, Any]]:
@@ -553,6 +559,12 @@ def _tick(
         return result
 
     state["safe_cycle"] = None
+    # A saved configuration change (consumers, modes, Active, limits) takes
+    # effect straight away, not only at the next due cycle.
+    fingerprint = json.dumps(data, sort_keys=True, default=str)
+    if state.get("config") != fingerprint:
+        state["config"] = fingerprint
+        state["last_cycle"] = None
     last_cycle = state.get("last_cycle")
     if last_cycle is not None and now - last_cycle < cycle_s * _CYCLE_TOLERANCE:
         return result
@@ -592,7 +604,10 @@ def _tick(
             state["zero_shed_w"] = 0.0
         elif not state.get("zero_shed_w") and now - zero_since >= off_delay_s:
             state["zero_shed_id"], state["zero_shed_w"] = _shed_step(consumers, states, rated)
-        budget_w = commanded_w - max(0.0, target_w) - (state.get("zero_shed_w") or 0.0)
+        # The reserve is cut once, on entering 0 W (as if feed-in had just
+        # dropped from the reserve to 0); after that the allocation is held.
+        reserve_cut_w = max(0.0, target_w) if zero_since is None else 0.0
+        budget_w = commanded_w - reserve_cut_w - (state.get("zero_shed_w") or 0.0)
     else:
         state["zero_since"] = None
         state["zero_shed_w"] = 0.0

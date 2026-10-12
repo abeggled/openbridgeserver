@@ -35,7 +35,7 @@ import. It therefore reacts conservatively: while no feed-in is reported the cur
 lowest-priority consumer is removed per control cycle from then on (at least 10 % for percentage
 consumers) until feed-in is reported again. A step counts as done only once the consumer has carried
 it out — an on/off consumer still runs its own switch-off delay and minimum run time. Power freed in the process goes to no other
-consumer, and a positive feed-in reserve is deducted straight away, since 0 W feed-in certainly falls
+consumer, and a positive feed-in reserve is deducted once, straight away on reaching 0 W, since 0 W feed-in certainly falls
 short of it.
 
 Optional global inputs: **Enable** (false = everything safely off), **Feed-in reserve (dyn.)**

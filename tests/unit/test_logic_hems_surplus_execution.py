@@ -413,22 +413,19 @@ async def test_a_withheld_trigger_does_not_restart_a_value_sequence():
         assert start.call_count == 1
 
 
-def test_logic_behind_a_never_sent_output_gets_no_value():
-    # A consumer added inside the control interval has sent nothing yet, so
-    # there is no last value to compute with.
-    consumers = [dict(CONSUMERS[0])]
+def test_logic_behind_an_unknown_level_gets_no_value():
+    # An invalid meter leaves the grid power unknown: no last value stands in.
     flow = FlowData.model_validate(
         {
-            "nodes": [node("h", "hems_surplus", {"consumers": consumers}), node("n", "not", {})],
-            "edges": [edge("h", "n", "c_new", "in1")],
+            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("cmp", "compare", {"operator": "lt", "operand": "0"})],
+            "edges": [edge("h", "cmp", "grid_power", "in1")],
         }
     )
     state: dict = {}
-    GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    flow.nodes[0].data["consumers"] = [*consumers, {"id": "new", "mode": "onoff"}]
-    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    assert "c_new" not in state["h"]["last_out"]
-    assert out["n"]["out"] is True  # the executor's ordinary missing-input default
+    assert GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})["cmp"]["out"] is True
+    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": "bad"}})
+    assert "grid_power" not in out["h"]
+    assert out["cmp"]["out"] is not True
 
 
 def test_a_wired_interlock_that_delivers_nothing_puts_the_block_into_the_safe_state():
@@ -731,8 +728,9 @@ async def test_a_wake_run_is_marked_only_while_it_executes():
 
     manager._execute_graph = fake_execute
     manager._graphs["g"] = ("G", True, flow)
-    with pytest.raises(RuntimeError):
-        await manager._hems_wake_once("g", "h", 0)
+    with patch("obs.logic.manager.logger") as log:
+        await manager._hems_wake_once("g", "h", 0)  # a failing run is logged, not raised into nowhere
+    log.exception.assert_called_once()
     assert seen == [True]
     assert ("g", "h") not in manager._hems_waking
 
@@ -794,19 +792,21 @@ async def test_a_change_filter_behind_a_trigger_never_commits_the_missing_pulse_
 
 
 def test_an_absent_level_output_is_a_failed_producer_for_a_change_filter():
-    # A consumer added inside the control interval has not sent its level yet.
-    consumers = [dict(CONSUMERS[0])]
+    # An invalid meter leaves the grid power unknown (absent level).
     flow = FlowData.model_validate(
         {
-            "nodes": [node("h", "hems_surplus", {"consumers": consumers}), node("n", "not", {}), node("cf", "change_filter", {})],
-            "edges": [edge("h", "n", "c_new", "in1"), edge("n", "cf", "out", "in")],
+            "nodes": [
+                node("h", "hems_surplus", {"consumers": CONSUMERS}),
+                node("cmp", "compare", {"operator": "lt", "operand": "0"}),
+                node("cf", "change_filter", {}),
+            ],
+            "edges": [edge("h", "cmp", "grid_power", "in1"), edge("cmp", "cf", "out", "in")],
         }
     )
     state: dict = {}
     GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    flow.nodes[0].data["consumers"] = [*consumers, {"id": "new", "mode": "onoff"}]
-    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    assert "Missing upstream output" in out["n"]["__error__"]
+    out = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": "bad"}})
+    assert "Missing upstream output" in out["cmp"]["__error__"]
 
 
 @pytest.mark.parametrize("transform", [{"value_formula": "x * 10"}, {"value_map": {"true": "ON", "false": "OFF"}}])

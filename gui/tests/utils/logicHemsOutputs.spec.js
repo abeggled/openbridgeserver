@@ -44,6 +44,9 @@ describe('hemsConsumers', () => {
     expect(hemsConsumers([{ id: 2.0 }, { id: 2.5 }, { id: true }, { id: false }, { id: 0 }]).map(c => c.id)).toEqual(['2', '25', 'true', 'n4', 'n5'])
     const odd = hemsConsumers([{ id: 1e21 }, { id: 1e-7 }, { id: Infinity }, { id: { x: 1 } }, { id: [1, 2] }]).map(c => c.id)
     expect(odd).toEqual(['1e21', '1e7', 'n3', 'n4', 'n5'])
+    // the same spellings tests/unit/test_logic_hems_surplus_engine.py expects from the engine
+    const big = hemsConsumers([{ id: 12345678901234567890 }, { id: 9007199254740991 }, { id: 0.000001 }, { id: 123.456 }]).map(c => c.id)
+    expect(big).toEqual(['12345678901234567000', '9007199254740991', '0000001', '123456'])
   })
 
   it('moves an id ending in a port suffix off another consumer\'s ports, like the engine', () => {

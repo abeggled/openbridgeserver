@@ -38,7 +38,7 @@ bis wieder Einspeisung gemeldet wird. Ein Schritt gilt erst als erledigt, wenn d
 umgesetzt hat — ein Ein/Aus-Verbraucher durchläuft dabei seine eigene Ausschaltverzögerung und
 Mindestlaufzeit.
 Frei werdende Leistung geht dabei an keinen anderen Verbraucher, und eine positive Einspeisereserve
-wird sofort abgezogen, da sie bei 0 W Einspeisung sicher nicht erreicht ist.
+wird beim Übergang auf 0 W einmal sofort abgezogen, da sie dann sicher nicht erreicht ist.
 
 Optionale globale Eingänge: **Freigabe** (false = alles sicher aus), **Einspeisereserve (dyn.)**
 (überschreibt den konfigurierten Wert) und **Anlage OK** (false = alles sicher aus). Unverbundene

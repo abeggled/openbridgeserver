@@ -3200,6 +3200,10 @@ class LogicManager:
             self._hems_waking.add((graph_id, node_id))
             try:
                 await asyncio.shield(self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}}))  # see _hems_loop
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("HEMS surplus early wake error graph=%s node=%s", graph_id[:8], node_id[:8])
             finally:
                 self._hems_waking.discard((graph_id, node_id))
 
