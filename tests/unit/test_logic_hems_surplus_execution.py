@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -569,3 +570,90 @@ def test_a_write_with_its_own_filter_gets_the_level_on_every_run(write_filter):
     GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
     again = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
     assert again["w"]["_write_value"] is True
+
+
+@pytest.mark.parametrize(
+    ("write_filter", "own"),
+    [
+        ({"only_on_change": "yes"}, False),  # the manager honours only True / "true"
+        ({"only_on_change": "true"}, True),
+        ({"min_delta": 0}, False),
+        ({"min_delta": "0"}, False),
+        ({"min_delta": "x"}, False),
+        ({"throttle_value": "5"}, True),
+        ({}, False),
+    ],
+)
+def test_a_write_counts_as_self_filtering_exactly_when_the_manager_filters_it(write_filter, own):
+    from obs.logic.executor import _write_filters_itself
+
+    assert _write_filters_itself(write_filter) is own
+
+
+@pytest.mark.asyncio
+async def test_an_event_run_wakes_the_block_early_for_a_pulse_its_loop_would_miss():
+    flow = _flow(interval_s=3600)
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    now = datetime.now(UTC).timestamp()
+    manager._hems_planned_wake[("g", "h")] = now + 3000
+    manager._hysteresis["g"] = {"h": {"next_wake": now + 1}}
+    with patch.object(manager, "_hems_wake_once", new=AsyncMock()) as wake:
+        manager._schedule_hems_early_wakes("g", flow, {"read": {"value": 1}})
+        await asyncio.sleep(0)
+        wake.assert_called_once()
+        assert 0 < wake.call_args.args[2] <= 1
+        # a second event run replaces the pending wake instead of stacking it
+        manager._schedule_hems_early_wakes("g", flow, {"read": {"value": 2}})
+        await asyncio.sleep(0)
+        assert wake.call_count == 2
+    manager._cron_tasks.pop(("g", "h:wake")).cancel()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "planned", "next_wake"),
+    [
+        ({"h": {}}, 3000, 1),  # the loop's own run plans itself
+        ({"read": {"value": 1}}, None, 1),  # no loop running
+        ({"read": {"value": 1}}, 3000, None),  # nothing pending
+        ({"read": {"value": 1}}, 3000, 2999.8),  # not meaningfully earlier
+        ({"read": {"value": 1}}, 3000, -5),  # already past
+    ],
+)
+async def test_no_early_wake_when_the_loop_covers_it(overrides, planned, next_wake):
+    flow = _flow()
+    manager = _manager()
+    now = datetime.now(UTC).timestamp()
+    if planned is not None:
+        manager._hems_planned_wake[("g", "h")] = now + planned
+    manager._hysteresis["g"] = {"h": {"next_wake": None if next_wake is None else now + next_wake}}
+    manager._schedule_hems_early_wakes("g", flow, overrides)
+    assert ("g", "h:wake") not in manager._cron_tasks
+
+
+@pytest.mark.asyncio
+async def test_the_early_wake_runs_the_block_unless_the_graph_is_gone_or_disabled():
+    flow = _flow()
+    manager = _manager()
+    manager._execute_graph = AsyncMock(return_value={})
+    manager._graphs["g"] = ("G", True, flow)
+    await manager._hems_wake_once("g", "h", 0)
+    manager._execute_graph.assert_awaited_once_with("g", "G", flow, {"h": {}})
+    manager._graphs["g"] = ("G", False, flow)
+    await manager._hems_wake_once("g", "h", 0)
+    manager._graphs["g"] = ("G", True, FlowData(nodes=[], edges=[]))  # node deleted
+    await manager._hems_wake_once("g", "h", 0)
+    del manager._graphs["g"]
+    await manager._hems_wake_once("g", "h", 0)
+    assert manager._execute_graph.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_the_loop_records_when_it_will_wake_next():
+    manager = _loop_manager()
+    now = 1_000_000.0
+    with patch("obs.logic.manager.datetime") as fake_datetime:
+        fake_datetime.now.return_value.timestamp.return_value = now
+        await _run_loop(manager)
+    assert manager._hems_planned_wake[("g", "h")] == now + 45

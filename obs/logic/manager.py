@@ -230,6 +230,10 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # them must not read the "no pulse this pass" placeholder as a real value.
 # hems_surplus counts with its trigger outputs only (``_hems_trigger_handles``);
 # its other outputs are levels.
+# An event run wakes a hems_surplus node early only when this much earlier
+# than its loop would anyway.
+_HEMS_WAKE_SLACK_S = 0.5
+
 _PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
@@ -1658,6 +1662,8 @@ class LogicManager:
         self._bulk_init_pending: set[str] = set()
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # When each hems_surplus loop next wakes on its own (epoch seconds).
+        self._hems_planned_wake: dict[tuple[str, str], float] = {}
         # Coalesce concurrent refreshes per iCalendar node.  Keep this lock
         # scoped to the fetch itself: graph execution may synchronously publish
         # an event that re-enters the same graph.
@@ -2242,6 +2248,7 @@ class LogicManager:
                     # node was skipped or failed — so it must not spin the loop.
                     if next_wake is not None and next_wake > now_ts:
                         sleep_s = min(sleep_s, max(0.1, next_wake - now_ts))
+                    self._hems_planned_wake[(graph_id, node_id)] = now_ts + sleep_s
                     logger.debug("HEMS surplus graph %s (%s) node %s evaluated", graph_id[:8], g_name, node_id[:8])
 
                 await asyncio.sleep(sleep_s)
@@ -3123,7 +3130,7 @@ class LogicManager:
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         try:
-            return await self._execute_graph_impl(
+            result = await self._execute_graph_impl(
                 graph_id,
                 name,
                 flow,
@@ -3134,6 +3141,36 @@ class LogicManager:
             )
         except _ObsoleteGraphExecution:
             return {}
+        self._schedule_hems_early_wakes(graph_id, flow, overrides)
+        return result
+
+    def _schedule_hems_early_wakes(self, graph_id: str, flow: FlowData, overrides: dict[str, dict[str, Any]]) -> None:
+        """Wake a hems_surplus node before its loop would, when an event run needs it.
+
+        A control cycle can also run on an event (a meter telegram) and fire a
+        trigger there; its pulse end, or the next due cycle, may then come
+        before the loop's own planned wake.
+        """
+        for node in flow.nodes:
+            if node.type != "hems_surplus" or overrides == {node.id: {}}:  # the loop's own run plans itself
+                continue
+            next_wake = self._hysteresis.get(graph_id, {}).get(node.id, {}).get("next_wake")
+            planned = self._hems_planned_wake.get((graph_id, node.id))
+            now_ts = datetime.now(UTC).timestamp()
+            if next_wake is None or planned is None or not now_ts < next_wake < planned - _HEMS_WAKE_SLACK_S:
+                continue
+            key = (graph_id, f"{node.id}:wake")
+            if key in self._cron_tasks:
+                self._cron_tasks[key].cancel()
+            self._cron_tasks[key] = asyncio.create_task(
+                self._hems_wake_once(graph_id, node.id, next_wake - now_ts), name=f"hems-wake-{graph_id[:8]}-{node.id[:8]}"
+            )
+
+    async def _hems_wake_once(self, graph_id: str, node_id: str, delay_s: float) -> None:
+        await asyncio.sleep(delay_s)
+        entry = self._graphs.get(graph_id)
+        if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
+            await self._execute_graph(graph_id, entry[0], entry[2], {node_id: {}})
 
     async def _execute_graph_impl(
         self,

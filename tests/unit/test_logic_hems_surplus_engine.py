@@ -598,7 +598,9 @@ def test_percent_reduced_status_when_the_budget_is_below_the_maximum():
 def test_percent_dynamic_maximum_power_input():
     sim = Sim([pct(power_source="input", on_delay_s=0)])
     assert sim.tick(grid=-4000, c_a_max_power=8000)["c_a"] == 50
-    out = sim.tick(grid=-4000, c_a_max_power=None)
+    out = sim.tick(grid=-4000, c_a_max_power=None)  # nothing arrived this run: held
+    assert out["c_a_status"] != "invalid_input"
+    out = sim.tick(advance=61, grid=-4000, c_a_max_power=None)  # longer than two intervals
     assert out["c_a"] == 0
     assert out["c_a_status"] == "invalid_input"
     out = sim.tick(grid=-4000, c_a_max_power=0)
@@ -1183,3 +1185,52 @@ def test_the_safe_state_restarts_zero_feed_in_tracking():
     assert sim.state["zero_since"] is not None
     sim.tick(feed_in="bad")
     assert (sim.state["zero_since"], sim.state["zero_shed_w"]) == (None, 0.0)
+
+
+def test_a_dynamic_reserve_that_stops_arriving_is_held_briefly():
+    sim = Sim([], interval_s=30, target_w=0)
+    assert sim.tick(grid=-3000, target=1000)["surplus"] == 2000
+    assert sim.tick(grid=-3000, target=None)["surplus"] == 2000
+    assert sim.tick(advance=61, grid=-3000, target=None)["surplus"] == 3000  # back to the configured reserve
+
+
+def test_a_clock_set_back_also_shifts_held_values_and_the_safe_repeat():
+    sim = Sim([onoff("a", on_delay_s=0)], interval_s=30)
+    sim.tick(grid=-3000)
+    sim.tick(grid="bad")  # safe state: safe_cycle set
+    seen = sim.state["held"]["grid"][1]
+    safe_cycle = sim.state["safe_cycle"]
+    before = sim.now
+    sim.now -= 3600 + 30
+    sim.tick(grid="bad")
+    delta = sim.now - before
+    assert sim.state["held"]["grid"][1] == seen + delta
+    assert sim.state["safe_cycle"] == safe_cycle + delta
+
+
+def test_feed_in_zero_sheds_an_onoff_consumer_with_a_switch_off_threshold_of_zero():
+    sim = Sim([pct("a", on_delay_s=0), onoff("b", power_w=1000, on_delay_s=0, off_threshold_w=0)], grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=11000)
+    assert sim.cstate("b")["on"] is True
+    sim.tick(feed_in=0)
+    for _ in range(4):
+        sim.tick(feed_in=0)
+    assert sim.cstate("b")["on"] is False
+
+
+def test_split_mode_keeps_a_value_that_arrived_while_the_other_side_was_invalid():
+    sim = Sim([], grid_mode="split", interval_s=30)
+    sim.tick(grid_import=0, grid_export=1000)
+    out = sim.tick(advance=61, grid_import=None, grid_export=2000)  # import held too long → invalid
+    assert out["status"] == "invalid_input"
+    out = sim.tick(advance=10, grid_import=100, grid_export=None)  # export of the last run still held
+    assert (out["status"], out["grid_power"]) == ("ok", -1900)
+
+
+def test_an_unknown_grid_power_is_not_left_standing_as_the_current_level():
+    sim = Sim([], only_on_change=True)
+    sim.tick(grid=-2500)
+    assert sim.state["last_out"]["grid_power"] == -2500
+    sim.tick(grid="bad")
+    assert "grid_power" not in sim.state["last_out"]
+    assert sim.tick(grid=-1000)["grid_power"] == -1000

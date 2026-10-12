@@ -300,12 +300,12 @@ def _read_meter(
         if to_bool(inputs.get(f"{name}_changed")):
             last_seen[name] = now
 
-    values: dict[str, float] = {}
-    for name in names:
-        value = _num(_held(state, name, inputs.get(name), now, hold_s))
-        if value is None:
-            return None, None, "invalid_input"
-        values[name] = value
+    # Every input is passed through _held before any is judged, so a value
+    # that arrived on one side is kept even when the other side is invalid.
+    read = {name: _num(_held(state, name, inputs.get(name), now, hold_s)) for name in names}
+    if any(value is None for value in read.values()):
+        return None, None, "invalid_input"
+    values: dict[str, float] = {name: value for name, value in read.items() if value is not None}
 
     if any(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
         return None, None, "stale_input"
@@ -384,11 +384,13 @@ def _follow_clock_jump_back(state: dict[str, Any], now: float) -> None:
     if last_now is None or now >= last_now:
         return
     delta = now - last_now
-    for key in ("last_cycle", "zero_since"):
+    for key in ("last_cycle", "zero_since", "safe_cycle"):
         if state.get(key) is not None:
             state[key] += delta
     for name in state.get("last_seen", {}):
         state["last_seen"][name] += delta
+    for entry in state.get("held", {}).values():
+        entry[1] += delta
     for cs in state.get("consumers", {}).values():
         for key in _CONSUMER_TIMESTAMPS:
             if cs.get(key) is not None:
@@ -482,6 +484,9 @@ def _tick(
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
     # How long a value that stops arriving (None) is still trusted.
     hold_s = max_age_s if max_age_s > 0 else 2 * cycle_s
+    inputs = dict(inputs)
+    for key in [k for k in inputs if k == "target" or (k.startswith("c_") and k.endswith("_power"))]:
+        inputs[key] = _held(state, key, inputs[key], now, hold_s)  # dynamic reserve, measured and maximum power
     grid_w, feed_in_w, problem = _read_meter(mode, inputs, state, now, max_age_s, hold_s)
     status = problem or "ok"
     # A wired interlock fails safe: once no value is known (unseeded Read
@@ -523,6 +528,9 @@ def _tick(
         # is reported when it is known.
         if grid_w is not None:
             emit("grid_power", round(grid_w, 2) + 0.0)
+        else:
+            # Unknown: no last value may stand in for it as the current level.
+            state.setdefault("last_out", {}).pop("grid_power", None)
         for key in ("surplus", "budget", "allocated", "remaining"):
             emit(key, 0.0)
         emit("status", status)
@@ -554,7 +562,7 @@ def _tick(
         # consumer drawing more than its setpoint must not raise the setpoint.
         # A requested step stays requested until the consumer has actually
         # given it up — an on/off consumer still runs its own off-delay — and
-        # only then does the next off-delay towards another step begin.
+        # the next step follows in the cycle after that.
         # No consumer may get more than it has now (``caps``), so power freed
         # by one is never handed to another, and a positive feed-in reserve —
         # which 0 W feed-in certainly falls short of — is cut straight away.
@@ -676,7 +684,7 @@ def _allocate(
             consumed, label = _step_percent(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
             emit(f"c_{cid}", _pct_out(cs["setpoint"]) if cs["on"] else 0)
         elif consumer["mode"] == "onoff":
-            consumed, label = _step_onoff(consumer, cs, power, offer, now, on_delay_s, off_delay_s)
+            consumed, label = _step_onoff(consumer, cs, power, offer, now, on_delay_s, off_delay_s, holding=caps is not None)
             emit(f"c_{cid}", cs["on"])
         else:
             consumed, label = _step_trigger(consumer, cs, offer, now, on_delay_s)
@@ -725,10 +733,22 @@ def _step_percent(
 
 
 def _step_onoff(
-    consumer: dict[str, Any], cs: dict[str, Any], power: float, available: float, now: float, on_delay_s: float, off_delay_s: float
+    consumer: dict[str, Any],
+    cs: dict[str, Any],
+    power: float,
+    available: float,
+    now: float,
+    on_delay_s: float,
+    off_delay_s: float,
+    *,
+    holding: bool = False,
 ) -> tuple[float, str]:
     on_threshold = consumer["on_threshold_w"] if consumer["on_threshold_w"] is not None else power
     off_threshold = min(consumer["off_threshold_w"] if consumer["off_threshold_w"] is not None else power, on_threshold)
+    if holding:
+        # 0 W feed-in: the tolerated import of a lower switch-off threshold
+        # cannot be judged, so any cut of this consumer's share means off.
+        off_threshold = power
 
     if cs["on"]:
         if available >= off_threshold - _EPS:

@@ -210,8 +210,21 @@ class ExecutionError(Exception):
 
 
 def _write_filters_itself(data: dict[str, Any]) -> bool:
-    """Whether a Write Object has a write-side filter of its own configured."""
-    return to_bool(data.get("only_on_change")) or data.get("min_delta") not in (None, "") or data.get("throttle_value") not in (None, "", 0)
+    """Whether a Write Object has an effective write-side filter of its own.
+
+    Mirrors what ``LogicManager._write_filters_allow`` actually applies: only
+    on change for True/"true", a minimum change or throttle only above 0.
+    """
+    ooc = data.get("only_on_change")
+    if ooc is True or ooc == "true":
+        return True
+    for key in ("min_delta", "throttle_value"):
+        try:
+            if float(data.get(key)) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
 
 
 class GraphExecutor:
