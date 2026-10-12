@@ -209,6 +209,11 @@ class ExecutionError(Exception):
     pass
 
 
+def _write_filters_itself(data: dict[str, Any]) -> bool:
+    """Whether a Write Object has a write-side filter of its own configured."""
+    return to_bool(data.get("only_on_change")) or data.get("min_delta") not in (None, "") or data.get("throttle_value") not in (None, "", 0)
+
+
 class GraphExecutor:
     """Executes a logic graph with given input overrides.
 
@@ -381,6 +386,7 @@ class GraphExecutor:
                     and src_id in hems_ids
                     and node.type == "datapoint_write"
                     and "trigger" not in edge_map.get(node.id, {})
+                    and not _write_filters_itself(node.data)
                     and src_handle not in src_out.get("_emitted", ())
                 ):
                     # hems_surplus outputs always carry their current level, so
@@ -388,7 +394,9 @@ class GraphExecutor:
                     # Object stays silent for a level that did not change — that
                     # is what the block's "output only on change" is for. A Write
                     # Object with its own trigger writes the current level when
-                    # that trigger fires.
+                    # that trigger fires, and one with its own filter (only on
+                    # change, minimum change, throttle) gets the level on every
+                    # run, so a value its throttle dropped is written later.
                     has_value = False
                 if has_value:
                     inputs[handle] = value

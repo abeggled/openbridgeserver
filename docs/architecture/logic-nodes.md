@@ -219,7 +219,7 @@ today, so it is deliberately left as an explicit table.
      upstream producer on every run. `hems_surplus` takes the other route for *level* outputs that
      are merely unchanged: its dispatcher branch returns every level output at its current value
      plus `_emitted`, the handles actually sent this tick. Downstream logic always computes with
-     the level; a directly wired Write Object without its own trigger honours `_emitted`, and so
+     the level; a directly wired Write Object without its own trigger or filter honours `_emitted`, and so
      does action-node freshness (`_event_fresh_inputs`). Its *trigger* outputs are events: present
      only on the run that sent them, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
      `_hems_trigger_handles`) like Edge Detection's. Every handle of it counts as a boundary in

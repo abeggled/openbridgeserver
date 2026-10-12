@@ -34,8 +34,8 @@ short of it.
 
 Optional global inputs: **Enable** (false = everything safely off), **Feed-in reserve (dyn.)**
 (overrides the configured value) and **Plant OK** (false = everything safely off). Unconnected
-inputs count as "clear"; a connected input without a value (e.g. a Read Object not yet seeded after
-a restart) counts as false. Text values are read as in every logic block: only `0`, `false`, `no`,
+inputs count as "clear"; a connected input without a known value (e.g. a Read Object not yet seeded
+after a restart) counts as false. Text values are read as in every logic block: only `0`, `false`, `no`,
 `off` and empty are false.
 
 ### Power budget
@@ -90,13 +90,18 @@ Per consumer: one output (percentage / on-off / trigger pulse) and a status (`in
 `safe_hold`, `invalid_input`). Diagnostics: grid power, surplus, power budget, allocated power, remaining budget,
 block status (`ok`, `disabled`, `plant_not_ok`, `invalid_input`, `stale_input`) and warning. With
 **Output only on change** (default) unchanged outputs are not sent again to directly wired Write
-Objects. Logic blocks behind an output (e.g. NOT, AND) always compute with the value it last sent —
-it is a state, not an event; the Write Object's own *Only on change* option prevents repeated writes
-behind them if needed. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator
+Objects (a Write Object with its own trigger or its own filter — *Only on change*, minimum change,
+throttle — gets the current value on every run instead and filters itself). Logic blocks behind an
+output (e.g. NOT, AND) always compute with the current value of an on/off, percentage, status or
+diagnostic output — it is a state. A trigger output, by contrast, is an event: it exists only on
+the run it was sent, so e.g. an API call on it is made exactly once per firing. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator
 that is still wired does not stay on. The debug tab lists every output with its last emitted value; in the safe state the diagnostics stay visible (grid power when known; surplus, budget, allocated and remaining = 0).
 
 ### Error and restart behaviour
 
+- If a value does not arrive (e.g. a meter read through an API Client on a run that did not trigger
+  the API Client), the last value received still counts for the **maximum age of meter values**, or
+  for two control intervals without one; after that it is missing.
 - Missing, non-numeric, `NaN` or stale meter values, as well as *Enable* = false or *Plant OK* =
   false, never activate anything. By default all percentages go to 0 %, all switching outputs to
   `false` and no trigger fires (alternative: hold the last outputs — only an output that was already

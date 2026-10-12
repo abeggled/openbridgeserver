@@ -17,6 +17,7 @@ shrinking budget therefore cuts from the bottom up.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import math
@@ -280,7 +281,7 @@ def _rated_power(consumer: dict[str, Any], inputs: dict[str, Any]) -> float | No
 
 
 def _read_meter(
-    mode: str, inputs: dict[str, Any], state: dict[str, Any], now: float, max_age_s: float
+    mode: str, inputs: dict[str, Any], state: dict[str, Any], now: float, max_age_s: float, hold_s: float
 ) -> tuple[float | None, float | None, str | None]:
     """Return ``(grid_w, feed_in_w, problem)``.
 
@@ -301,7 +302,7 @@ def _read_meter(
 
     values: dict[str, float] = {}
     for name in names:
-        value = _num(inputs.get(name))
+        value = _num(_held(state, name, inputs.get(name), now, hold_s))
         if value is None:
             return None, None, "invalid_input"
         values[name] = value
@@ -318,6 +319,22 @@ def _read_meter(
             return None, None, "invalid_input"
         return -values["feed_in"], values["feed_in"], None
     return values["grid"], None, None
+
+
+def _held(state: dict[str, Any], name: str, raw: Any, now: float, hold_s: float) -> Any:
+    """An input's value, keeping the last one that arrived while ``None`` arrives.
+
+    ``None`` means "nothing arrived this run" — e.g. a meter read through an
+    API Client that the scheduler's own run did not trigger. The last value
+    is kept for ``hold_s``; after that (or before any value ever arrived) the
+    input is unknown and ``None`` is returned.
+    """
+    held = state.setdefault("held", {})
+    if raw is not None:
+        held[name] = [raw, now]
+        return raw
+    last = held.get(name)
+    return last[0] if last is not None and now - last[1] <= hold_s else None
 
 
 # ── Evaluation ───────────────────────────────────────────────────────────
@@ -463,13 +480,15 @@ def _tick(
     # The meter is read on every tick, even when the block is disabled, so the
     # diagnostics keep showing the measured grid power in the safe state too.
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
-    grid_w, feed_in_w, problem = _read_meter(mode, inputs, state, now, max_age_s)
+    # How long a value that stops arriving (None) is still trusted.
+    hold_s = max_age_s if max_age_s > 0 else 2 * cycle_s
+    grid_w, feed_in_w, problem = _read_meter(mode, inputs, state, now, max_age_s, hold_s)
     status = problem or "ok"
-    # A wired interlock fails safe: no value (unseeded Read Object, failed
-    # producer) counts as "not enabled" / "plant not OK", just like false.
-    if "enable" in inputs and not to_bool(inputs.get("enable")):
+    # A wired interlock fails safe: once no value is known (unseeded Read
+    # Object, failed producer, beyond hold_s) it counts as false.
+    if "enable" in inputs and not to_bool(_held(state, "enable", inputs["enable"], now, hold_s)):
         status = "disabled"
-    elif "plant_ok" in inputs and not to_bool(inputs.get("plant_ok")):
+    elif "plant_ok" in inputs and not to_bool(_held(state, "plant_ok", inputs["plant_ok"], now, hold_s)):
         status = "plant_not_ok"
 
     meter_detail = f"mode={mode}, " + ", ".join(f"{name}={inputs.get(name)!r}" for name in grid_input_names(mode))
@@ -477,8 +496,18 @@ def _tick(
 
     if grid_w is None or status != "ok":
         # Safe state applies immediately, not at the next cycle, and the next
-        # healthy tick starts a fresh cycle straight away.
+        # healthy tick starts a fresh cycle straight away — with fresh 0 W
+        # feed-in tracking, so no shedding delay is skipped afterwards.
         state["last_cycle"] = None
+        state["zero_since"] = None
+        state["zero_shed_w"] = 0.0
+        # Without "only on change" the safe values are repeated once per
+        # interval, like healthy ones — not on every run of the sheet.
+        safe_cycle = state.get("safe_cycle")
+        if safe_cycle is None or now - safe_cycle >= cycle_s * _CYCLE_TOLERANCE:
+            state["safe_cycle"] = now
+        else:
+            emit = functools.partial(emit, event=True)
         if status in ("invalid_input", "stale_input") and data.get("invalid_behavior") == "hold":
             # Only an output that was actually sent can be held. Without one —
             # e.g. right after a restart — the actuator may still carry a value
@@ -500,6 +529,7 @@ def _tick(
         emit("warning", status in ("invalid_input", "stale_input"))
         return result
 
+    state["safe_cycle"] = None
     last_cycle = state.get("last_cycle")
     if last_cycle is not None and now - last_cycle < cycle_s * _CYCLE_TOLERANCE:
         return result
@@ -579,16 +609,18 @@ def _log_status_change(state: dict[str, Any], node_id: str, status: str, detail:
 
 def _apply_safe_state(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], now: float, emit: Any) -> None:
     """Percent 0 %, switches off, no trigger — and every running timer restarts."""
-    state_label = "safe"
     for consumer in consumers:
-        cid = consumer["id"]
-        cs = states[cid]
-        _set_off(cs, now)
-        cs["trigger_pending"] = None
-        cs["pulse_until"] = None
-        cs["reserve_cycles"] = 0
-        emit(f"c_{cid}", 0 if consumer["mode"] == "percent" else False)
-        emit(f"c_{cid}_status", state_label)
+        _reset_consumer(consumer, states[consumer["id"]], now, emit, "safe")
+
+
+def _reset_consumer(consumer: dict[str, Any], cs: dict[str, Any], now: float, emit: Any, label: str) -> None:
+    """Switch one consumer off (0 %, off, no trigger), drop its pending timers and emit ``label``."""
+    _set_off(cs, now)
+    cs["trigger_pending"] = None
+    cs["pulse_until"] = None
+    cs["reserve_cycles"] = 0
+    emit(f"c_{consumer['id']}", 0 if consumer["mode"] == "percent" else False)
+    emit(f"c_{consumer['id']}_status", label)
 
 
 def _shed_step_w(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], rated: dict[str, float | None]) -> float:
@@ -631,12 +663,7 @@ def _allocate(
         cs = states[cid]
         power = rated[cid]
         if not consumer["active"]:
-            _set_off(cs, now)
-            cs["trigger_pending"] = None
-            cs["pulse_until"] = None
-            cs["reserve_cycles"] = 0
-            emit(f"c_{cid}", 0 if consumer["mode"] == "percent" else False)
-            emit(f"c_{cid}_status", "inactive")
+            _reset_consumer(consumer, cs, now, emit, "inactive")
             continue
         if power is None:
             _set_off(cs, now)

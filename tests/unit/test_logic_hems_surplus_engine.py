@@ -134,7 +134,7 @@ def test_handle_helpers():
 # ── Meter modes and safe state ──────────────────────────────────────────
 
 
-@pytest.mark.parametrize("bad", [None, "abc", True, float("nan"), math.inf])
+@pytest.mark.parametrize("bad", ["abc", True, float("nan"), math.inf])
 def test_invalid_bidirectional_meter_puts_everything_in_the_safe_state(bad):
     sim = Sim([pct("a"), onoff("b")], on_delay_s=0)
     sim.tick(grid=-12000)  # healthy: starts both
@@ -144,6 +144,32 @@ def test_invalid_bidirectional_meter_puts_everything_in_the_safe_state(bad):
     assert out["status"] == "invalid_input"
     assert out["warning"] is True
     assert out["c_a_status"] == "safe"
+
+
+def test_a_meter_that_stops_delivering_is_held_briefly_then_goes_safe():
+    # None = nothing arrived this run (e.g. an API Client the scheduler's run
+    # did not trigger): the last value is kept for 2 intervals, then it is invalid.
+    sim = Sim([onoff("b", on_delay_s=0)], interval_s=30)
+    assert sim.tick(grid=-3000)["c_b"] is True
+    out = sim.tick(grid=None)
+    assert out["status"] == "ok"
+    assert out["grid_power"] == -3000
+    out = sim.tick(advance=31, grid=None)  # 61 s without a value > 60 s
+    assert (out["status"], out["c_b"]) == ("invalid_input", False)
+
+
+def test_the_hold_time_of_a_missing_value_is_the_meter_age_limit_when_set():
+    sim = Sim([], max_age_s=300)
+    sim.tick(grid=-1000)
+    assert sim.tick(advance=290, grid=None)["status"] == "ok"
+    assert sim.tick(advance=20, grid=None)["status"] == "invalid_input"
+
+
+def test_an_interlock_that_stops_delivering_is_held_briefly_then_fails_safe():
+    sim = Sim([onoff("b", on_delay_s=0)], interval_s=30)
+    sim.tick(grid=-3000, plant_ok=True)
+    assert sim.tick(grid=-3000, plant_ok=None)["status"] == "ok"
+    assert sim.tick(advance=31, grid=-3000, plant_ok=None)["status"] == "plant_not_ok"
 
 
 def test_missing_meter_input_is_invalid():
@@ -156,8 +182,8 @@ def test_split_inputs_are_netted_and_both_must_be_valid():
     assert sim.tick(grid_import=800, grid_export=0)["grid_power"] == 800
     assert sim.tick(grid_import=0, grid_export=2500)["grid_power"] == -2500
     assert sim.tick(grid_import=100, grid_export=80)["grid_power"] == 20
-    assert sim.tick(grid_import=100)["status"] == "invalid_input"
-    assert sim.tick(grid_import=100, grid_export=None)["status"] == "invalid_input"
+    assert sim.tick(advance=61, grid_import=100)["status"] == "invalid_input"  # export held too long
+    assert sim.tick(advance=61, grid_import=100, grid_export=None)["status"] == "invalid_input"
     assert sim.tick(grid_import=-1, grid_export=0)["status"] == "invalid_input"
     assert sim.tick(grid_import=0, grid_export=-1)["status"] == "invalid_input"
 
@@ -283,7 +309,7 @@ def test_next_wake_is_the_next_due_cycle_even_after_an_event_driven_one():
     cycle = sim.now
     sim.tick(advance=2, grid=0)  # an event inside the interval does not start a cycle
     assert sim.state["next_wake"] == cycle + 30
-    sim.tick(grid=None)  # safe state: no cycle is pending
+    sim.tick(grid="bad")  # safe state: no cycle is pending
     assert sim.state["next_wake"] is None
 
 
@@ -999,7 +1025,7 @@ def test_diagnostics_are_reported_in_the_safe_state_too():
     assert out["status"] == "disabled"
     assert out["grid_power"] == 800
     assert (out["surplus"], out["budget"], out["allocated"], out["remaining"]) == (0.0, 0.0, 0.0, 0.0)
-    out = sim.tick(grid=None)  # invalid meter: nothing to report for the grid power
+    out = sim.tick(grid="bad")  # invalid meter: nothing to report for the grid power
     assert out["status"] == "invalid_input"
     assert "grid_power" not in out
     assert out["budget"] == 0.0
@@ -1139,3 +1165,21 @@ def test_non_text_ids_are_spelled_like_the_editor_spells_them(raw, expected):
 )
 def test_an_id_ending_in_a_port_suffix_cannot_take_another_consumers_port(raw, expected):
     assert hs.load_consumers([{"id": "a"}, {"id": raw}])[1]["id"] == expected
+
+
+def test_without_only_on_change_the_safe_state_repeats_once_per_interval_not_per_run():
+    sim = Sim([onoff("a")], interval_s=30)
+    first = sim.tick(grid="bad")
+    assert first["c_a"] is False
+    assert sim.tick(advance=1, grid="bad") == {}  # another run of the sheet
+    again = sim.tick(advance=30, grid="bad")
+    assert again["c_a"] is False  # once per interval
+
+
+def test_the_safe_state_restarts_zero_feed_in_tracking():
+    sim = Sim([pct(on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=100)
+    sim.tick(feed_in=5000)
+    sim.tick(feed_in=0)
+    assert sim.state["zero_since"] is not None
+    sim.tick(feed_in="bad")
+    assert (sim.state["zero_since"], sim.state["zero_shed_w"]) == (None, 0.0)

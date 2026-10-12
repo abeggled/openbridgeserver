@@ -3775,7 +3775,11 @@ class LogicManager:
         # pass for a consumer fed by a non-firing pulse restores state from
         # this snapshot, so without it the placeholder the first pass already
         # committed is simply re-committed.
-        _pulse_origin_ids = {n.id for n in flow.nodes if n.type in _PULSE_ORIGIN_NODE_TYPES}
+        _pulse_origin_ids = {
+            n.id
+            for n in flow.nodes
+            if n.type in _PULSE_ORIGIN_NODE_TYPES and (n.type != "hems_surplus" or hems_surplus.trigger_output_handles(n.data))
+        }
         _needs_cf_pulse_correction_snapshot = any(
             bool(
                 (_downstream_closure({_pid}, _effective_edges) - {_pid})
@@ -4496,7 +4500,12 @@ class LogicManager:
             # trigger handle is taken for a real level by a stateful consumer,
             # and a synchronous node can invert it into a truthy value that
             # fires an action node (issue #1090's machinery, generalized).
-            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type in _PULSE_ORIGIN_NODE_TYPES}
+            # A hems_surplus node is an origin only through its trigger outputs.
+            relay_origins = {
+                node.id: {node.id}
+                for node in flow.nodes
+                if node.type in _PULSE_ORIGIN_NODE_TYPES and (node.type != "hems_surplus" or _hems_trigger_handles[node.id])
+            }
             # Parallel to relay_origins, but keyed by (origin, source handle).
             # relay_origins itself must stay node-keyed: _has_independent_fresh_trigger
             # subtracts it against fresh_origins, which is node-keyed too.

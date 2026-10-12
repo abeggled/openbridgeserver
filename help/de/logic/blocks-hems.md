@@ -36,8 +36,8 @@ wird sofort abgezogen, da sie bei 0 W Einspeisung sicher nicht erreicht ist.
 
 Optionale globale Eingänge: **Freigabe** (false = alles sicher aus), **Einspeisereserve (dyn.)**
 (überschreibt den konfigurierten Wert) und **Anlage OK** (false = alles sicher aus). Unverbundene
-Eingänge gelten als „frei"; ein verbundener Eingang ohne Wert (z. B. ein noch nicht befülltes
-Read-Objekt nach einem Neustart) gilt dagegen als false. Text-Werte werden wie bei allen
+Eingänge gelten als „frei"; ein verbundener Eingang ohne bekannten Wert (z. B. ein noch nicht
+befülltes Read-Objekt nach einem Neustart) gilt dagegen als false. Text-Werte werden wie bei allen
 Logikbausteinen gelesen: nur `0`, `false`, `no`, `off` und leer sind false.
 
 ### Leistungsbudget
@@ -95,15 +95,20 @@ Pro Verbraucher: ein Ausgang (Prozentwert / Ein-Aus / Triggerimpuls) und ein Sta
 `safe`, `safe_hold`, `invalid_input`). Diagnose: Netzleistung, Überschuss, Leistungsbudget, verteilte Leistung,
 verbleibendes Budget, Status des Blocks (`ok`, `disabled`, `plant_not_ok`, `invalid_input`,
 `stale_input`) und Warnung. Mit **Nur bei Änderung ausgeben** (Standard) werden unveränderte
-Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet. Nachgeschaltete Logikbausteine
-(z. B. NICHT, UND) rechnen dagegen immer mit dem zuletzt gesendeten Wert des Ausgangs weiter — er ist
-ein Zustand, kein Ereignis; doppelte Schreibvorgänge dahinter verhindert bei Bedarf die Option *Nur bei
-Änderung* des Write-Objekts. Wird ein Verbraucher aus
+Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet (ein Write-Objekt mit eigenem
+Trigger oder eigenem Filter — *Nur bei Änderung*, Mindeständerung, Drosselung — erhält den aktuellen
+Wert dagegen bei jedem Lauf und filtert selbst). Nachgeschaltete Logikbausteine (z. B. NICHT, UND)
+rechnen immer mit dem aktuellen Wert eines Ein/Aus-, Prozent-, Status- oder Diagnose-Ausgangs — er
+ist ein Zustand. Ein Trigger-Ausgang ist dagegen ein Ereignis: Er existiert nur in dem Lauf, in dem
+er gesendet wurde, sodass z. B. ein API-Aufruf daran genau einmal pro Auslösung erfolgt. Wird ein Verbraucher aus
 der Liste entfernt, geht sein Ausgang einmalig auf 0 % bzw. `false`, damit ein noch verbundener
 Aktor nicht eingeschaltet bleibt. Im Debug-Tab erscheinen alle Ausgänge mit dem zuletzt ausgegebenen Wert; im sicheren Zustand bleiben die Diagnosewerte sichtbar (Netzleistung, soweit bekannt; Überschuss, Budget, verteilt und Rest = 0).
 
 ### Fehler- und Neustartverhalten
 
+- Kommt ein Wert nicht an (z. B. ein über einen API-Client gelesener Zähler in einem Lauf, der den
+  API-Client nicht ausgelöst hat), gilt der zuletzt empfangene Wert noch für das **Maximale Alter der
+  Zählerwerte** bzw. ohne dieses für zwei Regelintervalle; danach ist der Wert fehlend.
 - Fehlende, nicht numerische, `NaN`- oder veraltete Zählerwerte sowie *Freigabe* = false oder
   *Anlage OK* = false lösen **keine** Aktivierung aus. Standardmäßig gehen alle Prozentwerte auf 0 %,
   alle Schaltausgänge auf `false`, und es werden keine Trigger ausgelöst (Alternative: letzte

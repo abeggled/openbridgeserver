@@ -550,3 +550,22 @@ async def test_a_level_output_starts_a_value_sequence_on_its_rising_edge_only():
         for _ in range(3):
             await manager._execute_graph("g", "G", flow, {"read": {"value": -2000}})
     assert start.call_count == 1
+
+
+@pytest.mark.parametrize("write_filter", [{"only_on_change": True}, {"min_delta": 1}, {"throttle_value": 60}])
+def test_a_write_with_its_own_filter_gets_the_level_on_every_run(write_filter):
+    # Its own throttle may drop the one run the block sent a change on, so the
+    # level must reach it again later.
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("h", "hems_surplus", {"consumers": CONSUMERS}),
+                node("w", "datapoint_write", {"datapoint_id": str(uuid.uuid4()), **write_filter}),
+            ],
+            "edges": [edge("h", "w", "c_boiler", "value")],
+        }
+    )
+    state: dict = {}
+    GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    again = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
+    assert again["w"]["_write_value"] is True
