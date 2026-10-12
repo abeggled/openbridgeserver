@@ -33,8 +33,9 @@ sheet of its own so other Write Objects are not written again every control inte
 import. It therefore reacts conservatively: while no feed-in is reported the current power is held
 (never increased). If feed-in stays absent for longer than the **switch-off delay**, one step of the
 lowest-priority consumer is removed per control cycle from then on (at least 10 % for percentage
-consumers) until feed-in is reported again. A step counts as done only once the consumer has carried
-it out — an on/off consumer still runs its own switch-off delay and minimum run time. Power freed in the process goes to no other
+consumers) until feed-in is reported again. The switch-off delay that counts is the one of the
+consumer concerned (its own or the global one); after it the consumer gives the step up at once,
+only a minimum run time is still awaited. Power freed in the process goes to no other
 consumer, and a positive feed-in reserve is deducted once, straight away on reaching 0 W, since 0 W feed-in certainly falls
 short of it.
 
@@ -98,8 +99,9 @@ Per consumer: one output (percentage / on-off / trigger pulse) and a status (`in
 `safe_hold`, `invalid_input`). Diagnostics: grid power, surplus, power budget, allocated power, remaining budget,
 block status (`ok`, `disabled`, `plant_not_ok`, `invalid_input`, `stale_input`) and warning. With
 **Output only on change** (default) unchanged outputs are not sent again to directly wired Write
-Objects (a Write Object with its own trigger or its own filter — *Only on change*, minimum change,
-throttle — gets the current value on every run instead and filters itself). Logic blocks behind an
+Objects: such a Write Object writes only when the value differs from the one it last actually wrote
+— so a value its own throttle dropped is not lost either (a Write Object with its own trigger writes
+on every firing instead). Logic blocks behind an
 output (e.g. NOT, AND) always compute with the current value of an on/off, percentage, status or
 diagnostic output — it is a state. A trigger output, by contrast, is an event: it exists only on
 the run it was sent, so e.g. an API call on it is made exactly once per firing. Removing a consumer from the list sets its output to 0 % or `false` once, so an actuator

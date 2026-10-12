@@ -184,6 +184,11 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
     return consumers
 
 
+def only_on_change(data: dict[str, Any]) -> bool:
+    """Whether unchanged outputs are withheld ("output only on change", default on)."""
+    return data.get("only_on_change") is None or to_bool(data.get("only_on_change"))
+
+
 def interval_s(data: dict[str, Any]) -> float:
     """The configured control interval in seconds, clamped to its supported range."""
     return _cfg_num(data.get("interval_s"), DEFAULT_INTERVAL_S, MIN_INTERVAL_S, MAX_INTERVAL_S)
@@ -382,7 +387,7 @@ def evaluate(
     """
     consumers = load_consumers(data.get("consumers"))
     states: dict[str, dict[str, Any]] = state.setdefault("consumers", {})
-    removed = _forget_removed_consumers(consumers, states, state.setdefault("last_out", {}))
+    removed = _forget_removed_consumers(consumers, states, state.setdefault("last_out", {}), state.setdefault("held", {}))
     for consumer in consumers:
         cs = states.get(consumer["id"])
         if cs is None or cs.get("mode", consumer["mode"]) != consumer["mode"]:
@@ -403,7 +408,9 @@ def evaluate(
     return result
 
 
-def _forget_removed_consumers(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], last_out: dict[str, Any]) -> dict[str, Any]:
+def _forget_removed_consumers(
+    consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], last_out: dict[str, Any], held: dict[str, Any]
+) -> dict[str, Any]:
     """Drop the state of consumers no longer configured, switching them off first.
 
     The edge of a removed consumer's output stays in the graph, so the last value
@@ -413,6 +420,8 @@ def _forget_removed_consumers(consumers: list[dict[str, Any]], states: dict[str,
     result: dict[str, Any] = {}
     for stale_id in set(states) - {c["id"] for c in consumers}:
         del states[stale_id]
+        for key in [k for k in held if k.startswith(f"c_{stale_id}_")]:
+            del held[key]  # its held measured / maximum power must not pass to a new consumer of that id
         last = last_out.pop(f"c_{stale_id}", None)
         last_out.pop(f"c_{stale_id}_status", None)
         if isinstance(last, bool):
@@ -461,7 +470,7 @@ def _tick(
 ) -> dict[str, Any]:
     mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
     cycle_s = interval_s(data)
-    only_on_change = data.get("only_on_change") is None or to_bool(data.get("only_on_change"))
+    sends_changes_only = only_on_change(data)
     resend = bool(state.get("resend"))
     result: dict[str, Any] = {}
 
@@ -477,7 +486,7 @@ def _tick(
             previous, known = last.get(key), key in last
         # After a save every level is sent once more (``resend``): a run the
         # save made obsolete may have recorded values that were never written.
-        if (only_on_change or event) and not (resend and not event) and known and previous == value and type(previous) is type(value):
+        if (sends_changes_only or event) and not (resend and not event) and known and previous == value and type(previous) is type(value):
             return
         result[key] = value
 
@@ -585,7 +594,6 @@ def _tick(
         target_w = dynamic_target
 
     rated: dict[str, float | None] = {c["id"]: _rated_power(c, inputs) for c in consumers}
-    used_w = sum(_consumer_power(c, states[c["id"]], inputs, rated[c["id"]] or 0.0) for c in consumers)
 
     if feed_in_w is not None and feed_in_w <= 0:
         # Feed-in-only meter reading 0 W: balanced or already importing — unknown.
@@ -609,8 +617,14 @@ def _tick(
         if zero_since is None:
             state["zero_since"] = now
             state["zero_shed_w"] = 0.0
-        elif not state.get("zero_shed_w") and now - zero_since >= off_delay_s:
-            state["zero_shed_id"], state["zero_shed_w"] = _shed_step(consumers, states, rated)
+        elif not state.get("zero_shed_w"):
+            # The step is requested once the switch-off delay of the consumer it
+            # concerns (its own, or the global one) has passed without feed-in;
+            # holding, that consumer then gives it up without a second delay.
+            shed_id, shed_w = _shed_step(consumers, states, rated)
+            target = next((c for c in consumers if c["id"] == shed_id), None)
+            if target is not None and now - zero_since >= _delay(target["off_delay_s"], off_delay_s):
+                state["zero_shed_id"], state["zero_shed_w"] = shed_id, shed_w
         # The reserve is cut once, on entering 0 W (as if feed-in had just
         # dropped from the reserve to 0); after that the allocation is held.
         reserve_cut_w = max(0.0, target_w) if zero_since is None else 0.0
@@ -620,6 +634,7 @@ def _tick(
         state["zero_shed_w"] = 0.0
         commanded_w = None
         caps = None
+        used_w = sum(_consumer_power(c, states[c["id"]], inputs, rated[c["id"]] or 0.0) for c in consumers)
         budget_w = used_w - grid_w - target_w
 
     allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps, inputs)
@@ -820,7 +835,8 @@ def _step_onoff(
             return power, "min_runtime"
         if cs["off_pending"] is None:
             cs["off_pending"] = now
-        if now - cs["off_pending"] < _delay(consumer["off_delay_s"], off_delay_s):
+        # Holding at 0 W feed-in, the shed request has already waited out the delay.
+        if not holding and now - cs["off_pending"] < _delay(consumer["off_delay_s"], off_delay_s):
             return power, "off_delay"
         _set_off(cs, now)
         return 0.0, "off"

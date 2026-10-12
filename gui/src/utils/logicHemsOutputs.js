@@ -1,4 +1,5 @@
 import { isBackendFalse } from '@/utils/logicBooleans'
+import { toBackendNumberText } from '@/utils/logicNumbers'
 
 // Debug-tab labels of the hems_surplus block: its outputs are addressed by the
 // stable consumer id (c_<id>), which means nothing to a user, so they are shown
@@ -52,6 +53,18 @@ export function hemsConsumers(raw) {
 export function hemsFlag(value) {
   if (value === undefined || value === null) return true
   return !isBackendFalse(value)
+}
+
+/**
+ * Whether the meter age check is on, read like the engine reads max_age_s
+ * (`_cfg_num`: Python float(), a boolean is no number).
+ *
+ * @param {unknown} value  stored max_age_s
+ * @returns {boolean}
+ */
+export function hemsAgeCheckActive(value) {
+  if (typeof value === 'boolean') return false
+  return Number(toBackendNumberText(value, '0')) > 0
 }
 
 /**

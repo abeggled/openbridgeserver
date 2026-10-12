@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -380,20 +381,6 @@ async def test_a_held_level_combines_with_another_live_signal():
     assert written == [True]
 
 
-def test_a_directly_wired_write_stays_silent_while_the_output_is_withheld():
-    flow = FlowData.model_validate(
-        {
-            "nodes": [node("h", "hems_surplus", {"consumers": CONSUMERS}), node("w", "datapoint_write", {"datapoint_id": str(uuid.uuid4())})],
-            "edges": [edge("h", "w", "c_boiler", "value")],
-        }
-    )
-    state: dict = {}
-    first = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    assert first["w"]["_write_value"] is True
-    again = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    assert again["w"].get("_write_value") is None
-
-
 @pytest.mark.asyncio
 async def test_a_withheld_trigger_does_not_restart_a_value_sequence():
     dp_grid = uuid.uuid4()
@@ -544,51 +531,6 @@ async def test_a_level_output_starts_a_value_sequence_on_its_rising_edge_only():
         for _ in range(3):
             await manager._execute_graph("g", "G", flow, {"read": {"value": -2000}})
     assert start.call_count == 1
-
-
-@pytest.mark.parametrize("write_filter", [{"only_on_change": True}, {"min_delta": 1}, {"throttle_value": 60}])
-def test_a_write_with_its_own_filter_gets_the_level_on_every_run(write_filter):
-    # Its own throttle may drop the one run the block sent a change on, so the
-    # level must reach it again later.
-    flow = FlowData.model_validate(
-        {
-            "nodes": [
-                node("h", "hems_surplus", {"consumers": CONSUMERS}),
-                node("w", "datapoint_write", {"datapoint_id": str(uuid.uuid4()), **write_filter}),
-            ],
-            "edges": [edge("h", "w", "c_boiler", "value")],
-        }
-    )
-    state: dict = {}
-    GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    again = GraphExecutor(flow, state).execute(input_overrides={"h": {"grid": -2500}})
-    assert again["w"]["_write_value"] is True
-
-
-@pytest.mark.parametrize(
-    ("write_filter", "own"),
-    [
-        ({"only_on_change": "yes"}, False),  # the manager honours only True / "true"
-        ({"only_on_change": "true"}, True),
-        ({"min_delta": 0}, False),
-        ({"min_delta": "0"}, False),
-        ({"min_delta": "x"}, False),
-        ({"throttle_value": "5"}, True),
-        ({"throttle_value": 0}, False),
-        ({}, False),
-    ],
-)
-def test_a_write_counts_as_self_filtering_exactly_when_the_manager_filters_it(write_filter, own):
-    from obs.logic.executor import _write_filters_itself
-
-    assert _write_filters_itself(write_filter, 50) is own
-
-
-@pytest.mark.parametrize(("value", "own"), [(50, True), ("50", True), ("active", False), (None, False), (float("nan"), False), (10**400, False)])
-def test_a_minimum_change_only_filters_values_it_can_compare_as_numbers(value, own):
-    from obs.logic.executor import _write_filters_itself
-
-    assert _write_filters_itself({"min_delta": 1}, value) is own
 
 
 @pytest.mark.asyncio
@@ -810,14 +752,6 @@ def test_an_absent_level_output_is_a_failed_producer_for_a_change_filter():
     assert "Missing upstream output" in out["cmp"]["__error__"]
 
 
-@pytest.mark.parametrize("transform", [{"value_formula": "x * 10"}, {"value_map": {"true": "ON", "false": "OFF"}}])
-def test_a_minimum_change_on_a_transformed_write_is_not_its_own_filter(transform):
-    from obs.logic.executor import _write_filters_itself
-
-    assert _write_filters_itself({"min_delta": 1, **transform}, 50) is False
-    assert _write_filters_itself({"min_delta": 1, "only_on_change": True, **transform}, 50) is True
-
-
 @pytest.mark.asyncio
 async def test_cancelling_the_loop_never_interrupts_a_run_half_way():
     manager = _loop_manager()
@@ -869,3 +803,89 @@ def test_invalidating_a_graph_asks_its_blocks_to_resend_their_levels():
     manager.invalidate_cache("g")
     assert manager._hysteresis["g"]["h"]["resend"] is True
     manager.invalidate_cache("unknown")  # nothing cached: nothing to do
+
+
+def _write_flow(dp_grid, dp_out, write_data=None, hems_data=None, extra_edges=(), extra_nodes=()):
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("h", "hems_surplus", {"consumers": CONSUMERS, **(hems_data or {})}),
+                node("w", "datapoint_write", {"datapoint_id": str(dp_out), **(write_data or {})}),
+                *extra_nodes,
+            ],
+            "edges": [edge("read", "h", "value", "grid"), edge("h", "w", "c_boiler", "value"), *extra_edges],
+        }
+    )
+
+
+async def _writes(manager, flow, dp_out, runs):
+    manager._event_bus.publish.reset_mock()
+    for _ in range(runs):
+        await manager._execute_graph("g", "G", flow, {"read": {"value": -5000}})
+    return [c.args[0].value for c in manager._event_bus.publish.await_args_list if str(c.args[0].datapoint_id) == str(dp_out)]
+
+
+@pytest.mark.asyncio
+async def test_a_direct_write_is_not_repeated_while_the_level_is_unchanged():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out)
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert await _writes(manager, flow, dp_out, 3) == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_change_the_writes_throttle_dropped_is_written_later():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(dp_grid, dp_out, {"throttle_value": 60})
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    # the Write Object wrote False a moment ago: its throttle blocks the change to True
+    manager._node_state["g"] = {"w": {"last_write_val": False, "last_write_ts": datetime.now(UTC)}}
+    assert await _writes(manager, flow, dp_out, 1) == []
+    manager._node_state["g"]["w"]["last_write_ts"] = datetime.now(UTC) - timedelta(minutes=5)
+    assert await _writes(manager, flow, dp_out, 2) == [True]  # unchanged level, but never written: now it is
+
+
+@pytest.mark.asyncio
+async def test_a_write_with_its_own_trigger_or_a_block_sending_every_cycle_writes_every_time():
+    dp_grid, dp_out = uuid.uuid4(), uuid.uuid4()
+    flow = _write_flow(
+        dp_grid,
+        dp_out,
+        extra_nodes=[node("on", "const_value", {"value": "true", "data_type": "bool"})],
+        extra_edges=[edge("on", "w", "value", "trigger")],
+    )
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert await _writes(manager, flow, dp_out, 2) == [True, True]
+
+    flow = _write_flow(dp_grid, dp_out, hems_data={"only_on_change": False})
+    manager = _manager({str(dp_grid): -5000})
+    manager._graphs["g"] = ("G", True, flow)
+    assert len(await _writes(manager, flow, dp_out, 2)) == 2
+
+
+def test_a_value_counts_as_written_only_with_the_same_type():
+    from obs.logic.manager import _same_value
+
+    assert _same_value(True, True)
+    assert not _same_value(True, 1)
+    assert not _same_value(50, 50.5)
+
+
+@pytest.mark.asyncio
+async def test_a_restarted_loop_resumes_at_its_planned_wake():
+    manager = _loop_manager()
+    manager._hems_planned_wake[("g", "h")] = hems_clock() + 100
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        raise asyncio.CancelledError()
+
+    with patch("obs.logic.manager.asyncio.sleep", fake_sleep), pytest.raises(asyncio.CancelledError):
+        await manager._hems_loop("g", "h")
+    assert 99 < sleeps[0] <= 100
+    manager._execute_graph.assert_not_awaited()  # nothing ran before the planned wake

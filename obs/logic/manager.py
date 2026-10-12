@@ -111,6 +111,11 @@ def _copy_graph_worker_state(state: dict[str, Any]) -> tuple[dict[str, Any], dic
     return base, _safe_deepcopy_state(base)
 
 
+def _same_value(a: Any, b: Any) -> bool:
+    """Equal and of the same type — so True is not taken for an already written 1."""
+    return type(a) is type(b) and a == b
+
+
 def _serialize_logic_debug_payload(
     graph_id: str,
     outputs: dict[str, Any],
@@ -2240,6 +2245,12 @@ class LogicManager:
         the moment a meter value exceeds its maximum age. The interval is re-read every iteration, so an edited value
         applies without a graph reload.
         """
+        # A restart by a reload (any graph saved) resumes at the planned wake
+        # instead of re-running the whole sheet at once; a sheet that was itself
+        # saved has no planned wake left (invalidate_cache) and runs straight away.
+        planned = self._hems_planned_wake.get((graph_id, node_id))
+        if planned is not None and planned > hems_clock():
+            await asyncio.sleep(planned - hems_clock())
         while True:
             try:
                 entry = self._graphs.get(graph_id)
@@ -7488,6 +7499,8 @@ class LogicManager:
                 continue
 
             ns = graph_state.setdefault(node.id, {})
+            if node_out.get("_skip_unchanged") and "last_write_val" in ns and _same_value(ns["last_write_val"], write_val):
+                continue  # a hems_surplus level this Write Object already wrote
             if not self._write_filters_allow(node.data, ns, write_val, write_now):
                 continue
 

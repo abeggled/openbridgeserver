@@ -1067,27 +1067,32 @@ def test_disabling_a_fired_trigger_releases_its_reservation():
     assert sim.cstate("t")["reserve_cycles"] == 0
 
 
-def test_feed_in_zero_sheds_an_onoff_consumer_despite_its_own_off_delay():
+def test_feed_in_zero_sheds_an_onoff_consumer_after_one_off_delay_not_two():
     sim = Sim([onoff("a", on_delay_s=0), onoff("b", on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60)
     sim.tick(feed_in=4000)
     assert sim.cstate("b")["on"] is True
     sim.tick(feed_in=0)  # zero starts: hold
-    sim.tick(advance=60, feed_in=0)  # block off-delay over: shed b → b's own off-delay starts
-    assert sim.state["zero_shed_w"] == 2000
-    assert sim.tick(advance=30, feed_in=0)["c_b_status"] == "off_delay"  # the request is kept
-    out = sim.tick(advance=30, feed_in=0)
+    assert sim.tick(advance=30, feed_in=0).get("c_b") is not False  # still within the off-delay
+    out = sim.tick(advance=30, feed_in=0)  # off-delay over: b goes off at once
     assert out["c_b"] is False
     assert sim.cstate("a")["on"] is True
-    assert sim.state["zero_shed_w"] == 0.0  # done; the next step waits for a new off-delay
-    sim.tick(advance=30, feed_in=0)
-    assert sim.cstate("a")["on"] is True
-    sim.tick(advance=30, feed_in=0)  # 60 s after b went off: a is requested now
-    sim.tick(advance=60, feed_in=0)
+    sim.tick(feed_in=0)  # … then a, in the next cycle
+    assert sim.cstate("a")["on"] is False
+
+
+def test_feed_in_zero_waits_for_the_off_delay_of_the_consumer_it_sheds():
+    sim = Sim([onoff("a", on_delay_s=0, off_delay_s=600)], grid_mode="feed_in_only", off_delay_s=60)
+    sim.tick(feed_in=3000)
+    sim.tick(feed_in=0)
+    sim.tick(advance=120, feed_in=0)
+    assert sim.cstate("a")["on"] is True  # its own 600 s apply, not the global 60 s
+    sim.tick(advance=480, feed_in=0)
     assert sim.cstate("a")["on"] is False
 
 
 def test_returning_feed_in_cancels_a_pending_shed_request():
-    sim = Sim([onoff("a", on_delay_s=0)], grid_mode="feed_in_only", off_delay_s=60)
+    # The minimum run time keeps the requested step pending.
+    sim = Sim([onoff("a", on_delay_s=0, min_runtime_s=3600)], grid_mode="feed_in_only", off_delay_s=60)
     sim.tick(feed_in=3000)
     sim.tick(feed_in=0)
     sim.tick(advance=60, feed_in=0)
@@ -1293,12 +1298,12 @@ def test_feed_in_zero_passes_over_a_consumer_whose_step_is_worth_nothing():
 
 
 def test_a_pending_shed_step_is_void_once_its_consumer_is_deactivated():
-    consumers = [pct("heat", power_w=2000, on_delay_s=0), onoff("pump", power_w=3000, on_delay_s=0)]
+    consumers = [pct("heat", power_w=2000, on_delay_s=0), onoff("pump", power_w=3000, on_delay_s=0, min_runtime_s=3600)]
     sim = Sim(consumers, grid_mode="feed_in_only", off_delay_s=60)
     sim.tick(feed_in=5000)
     sim.tick(feed_in=0)
     sim.tick(advance=60, feed_in=0)
-    assert (sim.state["zero_shed_id"], sim.state["zero_shed_w"]) == ("pump", 3000)
+    assert (sim.state["zero_shed_id"], sim.state["zero_shed_w"]) == ("pump", 3000)  # pending: minimum run time
     consumers[1]["active"] = False
     sim.tick(feed_in=0)
     assert sim.cstate("heat")["setpoint"] == 90  # one 10 % step, not the pump's 3000 W
@@ -1458,3 +1463,13 @@ def test_in_the_safe_state_a_resend_happens_once_not_on_every_run():
     sim.state["resend"] = True
     assert sim.tick(grid="bad")["c_a"] is False
     assert sim.tick(advance=1, grid="bad") == {}
+
+
+def test_a_removed_consumer_takes_its_held_inputs_with_it():
+    consumers = [onoff("n2", power_source="input", on_delay_s=0)]
+    sim = Sim(consumers)
+    sim.tick(grid=-3000, c_n2_power=1000, c_n2_max_power=2000)
+    assert {"c_n2_power", "c_n2_max_power"} <= set(sim.state["held"])
+    sim.config["consumers"] = []
+    sim.tick(grid=-3000)
+    assert not any(key.startswith("c_n2_") for key in sim.state["held"])

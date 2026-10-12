@@ -34,9 +34,9 @@ ein exaktes Gleichgewicht oder bereits Netzbezug vorliegt. Er reagiert deshalb k
 keine Einspeisung gemeldet wird, wird die aktuelle Leistung gehalten (nie erhöht). Bleibt die
 Einspeisung länger als die **Ausschaltverzögerung** aus, wird danach in jedem Regelzyklus ein Schritt
 des Verbrauchers mit der niedrigsten Priorität abgebaut (bei Prozent-Verbrauchern mindestens 10 %),
-bis wieder Einspeisung gemeldet wird. Ein Schritt gilt erst als erledigt, wenn der Verbraucher ihn
-umgesetzt hat — ein Ein/Aus-Verbraucher durchläuft dabei seine eigene Ausschaltverzögerung und
-Mindestlaufzeit.
+bis wieder Einspeisung gemeldet wird. Maßgebend ist die Ausschaltverzögerung des betroffenen
+Verbrauchers (seine eigene oder die globale); danach gibt er den Schritt sofort ab, nur eine
+Mindestlaufzeit wird noch abgewartet.
 Frei werdende Leistung geht dabei an keinen anderen Verbraucher, und eine positive Einspeisereserve
 wird beim Übergang auf 0 W einmal sofort abgezogen, da sie dann sicher nicht erreicht ist.
 
@@ -103,9 +103,10 @@ Pro Verbraucher: ein Ausgang (Prozentwert / Ein-Aus / Triggerimpuls) und ein Sta
 `safe`, `safe_hold`, `invalid_input`). Diagnose: Netzleistung, Überschuss, Leistungsbudget, verteilte Leistung,
 verbleibendes Budget, Status des Blocks (`ok`, `disabled`, `plant_not_ok`, `invalid_input`,
 `stale_input`) und Warnung. Mit **Nur bei Änderung ausgeben** (Standard) werden unveränderte
-Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet (ein Write-Objekt mit eigenem
-Trigger oder eigenem Filter — *Nur bei Änderung*, Mindeständerung, Drosselung — erhält den aktuellen
-Wert dagegen bei jedem Lauf und filtert selbst). Nachgeschaltete Logikbausteine (z. B. NICHT, UND)
+Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet: Ein solches Write-Objekt schreibt
+nur, wenn sich der Wert von dem unterscheidet, den es zuletzt tatsächlich geschrieben hat — so geht
+auch ein Wert, den seine eigene Drosselung verworfen hat, nicht verloren (ein Write-Objekt mit eigenem
+Trigger schreibt dagegen bei jedem Auslösen). Nachgeschaltete Logikbausteine (z. B. NICHT, UND)
 rechnen immer mit dem aktuellen Wert eines Ein/Aus-, Prozent-, Status- oder Diagnose-Ausgangs — er
 ist ein Zustand. Ein Trigger-Ausgang ist dagegen ein Ereignis: Er existiert nur in dem Lauf, in dem
 er gesendet wurde, sodass z. B. ein API-Aufruf daran genau einmal pro Auslösung erfolgt. Wird ein Verbraucher aus

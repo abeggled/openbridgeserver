@@ -220,27 +220,9 @@ def hems_clock() -> float:
     return time.monotonic()
 
 
-def _write_filters_itself(data: dict[str, Any], value: Any) -> bool:
-    """Whether a Write Object has a write-side filter of its own that applies to ``value``.
-
-    Mirrors what ``LogicManager._write_filters_allow`` actually applies: only
-    on change for True/"true", a throttle above 0, and a minimum change above
-    0 only for a value it can compare as a number.
-    """
-    ooc = data.get("only_on_change")
-    if ooc is True or ooc == "true":
-        return True
-    try:
-        if float(data.get("throttle_value")) > 0:
-            return True
-    except (TypeError, ValueError):
-        pass
-    if (data.get("value_formula") or "").strip() or data.get("value_map"):
-        return False  # min_delta compares the transformed value, which is not known here
-    try:
-        return float(data.get("min_delta")) > 0 and math.isfinite(float(value))
-    except (TypeError, ValueError, OverflowError):
-        return False
+def _skips_unchanged(wired: dict[str, tuple[str, str]], hems_only_on_change: set[str]) -> bool:
+    """Whether a Write Object's value comes straight from a hems_surplus block that sends only changes."""
+    return "trigger" not in wired and "value" in wired and wired["value"][0] in hems_only_on_change
 
 
 class GraphExecutor:
@@ -353,8 +335,9 @@ class GraphExecutor:
         retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
         # Which hems_surplus handles are levels: only an absent level counts as
         # a failed producer (see the unresolved filter below).
-        hems_ids = {node.id for node in self.flow.nodes if node.type == "hems_surplus"}
         hems_levels = {node.id: hems_surplus.level_output_handles(node.data) for node in self.flow.nodes if node.type == "hems_surplus"}
+        hems_ids = set(hems_levels)
+        hems_only_on_change = {node.id for node in self.flow.nodes if node.type == "hems_surplus" and hems_surplus.only_on_change(node.data)}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
         # Only failed-output paths that can influence a Change Filter need to
@@ -410,23 +393,6 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
-                if (
-                    has_value
-                    and src_id in hems_ids
-                    and node.type == "datapoint_write"
-                    and "trigger" not in edge_map.get(node.id, {})
-                    and not _write_filters_itself(node.data, value)
-                    and src_handle not in src_out.get("_emitted", ())
-                ):
-                    # hems_surplus outputs always carry their current level, so
-                    # all logic computes with it; only a directly wired Write
-                    # Object stays silent for a level that did not change — that
-                    # is what the block's "output only on change" is for. A Write
-                    # Object with its own trigger writes the current level when
-                    # that trigger fires, and one with its own filter (only on
-                    # change, minimum change, throttle) gets the level on every
-                    # run, so a value its throttle dropped is written later.
-                    has_value = False
                 if has_value:
                     inputs[handle] = value
                 else:
@@ -533,6 +499,14 @@ class GraphExecutor:
                 if node.type == "python_script":
                     inputs = {port: _replay_known_output_value(val) for port, val in inputs.items()}
                 result = self._eval_node(node, inputs)
+                if node.type == "datapoint_write" and _skips_unchanged(edge_map.get(node.id, {}), hems_only_on_change):
+                    # A Write Object fed straight from a hems_surplus block with
+                    # "output only on change" (and no trigger of its own) gets the
+                    # level on every run; the manager writes it only when it
+                    # differs from the value it last actually wrote. So an
+                    # unchanged level is not repeated, and a change a filter of
+                    # the Write Object dropped is still written later.
+                    result["_skip_unchanged"] = True
             except Exception as exc:
                 logger.exception("Node %s (%s) error", node.id, node.type)
                 result = {"__error__": str(exc)}

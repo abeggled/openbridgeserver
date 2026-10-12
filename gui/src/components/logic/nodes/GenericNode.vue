@@ -79,7 +79,7 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
-import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers } from '@/utils/logicHemsOutputs'
+import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -260,7 +260,7 @@ const def = computed(() => {
     const d = props.data
     const gridMode = ['split', 'feed_in_only'].includes(d.grid_mode) ? d.grid_mode : 'bidirectional'
     const meters = { bidirectional: ['grid'], split: ['grid_import', 'grid_export'], feed_in_only: ['feed_in'] }[gridMode]
-    const withAge = Number(d.max_age_s) > 0
+    const withAge = hemsAgeCheckActive(d.max_age_s)
     const inputs = []
     for (const m of meters) {
       const meterLabel = t(`logic.portLabels.hems.${m}`)
