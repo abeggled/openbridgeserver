@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsFlag, hemsOutputLabels } from '@/utils/logicHemsOutputs'
+import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsFlag, hemsGridMode, hemsOutputLabels } from '@/utils/logicHemsOutputs'
 
 const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key)
 const node = data => ({ type: 'hems_surplus', data })
@@ -95,5 +95,16 @@ describe('hemsAgeCheckActive', () => {
   it('reads max_age_s like the engine', () => {
     for (const on of [60, '60', '1_000', ' 5 ']) expect(hemsAgeCheckActive(on)).toBe(true)
     for (const off of [0, '0', '', null, undefined, true, false, '0x3c', 'Infinity', -5, [60]]) expect(hemsAgeCheckActive(off)).toBe(false)
+  })
+})
+
+describe('enum settings', () => {
+  it('are read case- and whitespace-insensitively, like the engine', () => {
+    const [c] = hemsConsumers([{ id: 'a', mode: ' Trigger ', power_source: 'Input' }])
+    expect([c.mode, c.power_source]).toEqual(['trigger', 'input'])
+    expect(hemsConsumers([{ id: 'a', power_source: 'fixed' }])[0].power_source).toBe('fixed')
+    expect(hemsGridMode({ grid_mode: 'Split' })).toBe('split')
+    expect(hemsGridMode({ grid_mode: 3 })).toBe('bidirectional')
+    expect(hemsGridMode(undefined)).toBe('bidirectional')
   })
 })

@@ -240,6 +240,8 @@ _PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surp
 # An event run wakes a hems_surplus node early only when this much earlier
 # than its loop would anyway.
 _HEMS_WAKE_SLACK_S = 0.5
+# How long stop() waits for HEMS runs still in flight.
+_HEMS_STOP_TIMEOUT_S = 10.0
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on
@@ -1736,6 +1738,10 @@ class LogicManager:
             task.cancel()
         self._cron_tasks.clear()
         self._cancel_hems_wakes()
+        # A HEMS run in flight is never cut short (see _hems_run): let it finish
+        # before the bus goes away, within a bound.
+        if runs := [run for run in self._hems_runs.values() if not run.done()]:
+            await asyncio.wait(runs, timeout=_HEMS_STOP_TIMEOUT_S)
         self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
@@ -3206,12 +3212,7 @@ class LogicManager:
             del self._hems_wake_at[(graph_id, node_id)]
         entry = self._graphs.get(graph_id)
         if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
-            try:
-                await self._hems_run(graph_id, node_id, entry[0], entry[2], waking=True)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("HEMS surplus early wake error graph=%s node=%s", graph_id[:8], node_id[:8])
+            await self._hems_run(graph_id, node_id, entry[0], entry[2], waking=True)
 
     async def _hems_run(self, graph_id: str, node_id: str, name: str, flow: FlowData, *, waking: bool) -> None:
         """Run the sheet for a hems_surplus node — one run per node at a time, never cut short.
@@ -3224,23 +3225,23 @@ class LogicManager:
         has finished, so it schedules its own follow-up wake.
         """
         key = (graph_id, node_id)
-        previous = self._hems_runs.get(key)
-        if previous is not None and not previous.done():
-            await asyncio.shield(previous)
+        # Re-checked after every wait: another waiter may have started a run meanwhile.
+        while (previous := self._hems_runs.get(key)) is not None and not previous.done():
+            await asyncio.wait({previous})  # its outcome is logged by _hems_run_finished
         if waking:
             self._hems_waking.add(key)
         run = asyncio.ensure_future(self._execute_graph(graph_id, name, flow, {node_id: {}}))
         self._hems_runs[key] = run
         run.add_done_callback(lambda done: self._hems_run_finished(key, done, waking))
-        await asyncio.shield(run)
+        await asyncio.wait({run})  # never cancels the run; a failure is logged once, by the callback
 
     def _hems_run_finished(self, key: tuple[str, str], run: asyncio.Future, waking: bool) -> None:  # type: ignore[type-arg]
         if waking:
             self._hems_waking.discard(key)
         if self._hems_runs.get(key) is run:
             del self._hems_runs[key]
-        if not run.cancelled():
-            run.exception()  # retrieved here: its caller may have been cancelled (and logs it if not)
+        if not run.cancelled() and (exc := run.exception()) is not None:
+            logger.error("HEMS surplus run error graph=%s node=%s", key[0][:8], key[1][:8], exc_info=exc)
 
     async def _execute_graph_impl(
         self,

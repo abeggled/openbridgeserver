@@ -1473,3 +1473,13 @@ def test_removing_a_consumer_keeps_the_held_inputs_of_one_whose_id_starts_alike(
 
 def test_an_integer_id_beyond_any_float_counts_as_no_id():
     assert hs.load_consumers([{"id": 10**400}])[0]["id"] == "n1"
+
+
+def test_enum_settings_are_read_like_the_config_validator_reads_them():
+    consumer = hs.load_consumers([{"mode": " Trigger ", "rearm": "AFTER_LOCKOUT", "power_source": "Input", "below_min": "Hold_Min"}])[0]
+    assert (consumer["mode"], consumer["rearm"], consumer["power_source"], consumer["below_min"]) == ("trigger", "after_lockout", "input", "hold_min")
+    assert hs.grid_mode({"grid_mode": "Split"}) == "split"
+    assert hs.grid_mode({"grid_mode": 3}) == "bidirectional"
+    sim = Sim([onoff("a", on_delay_s=0)], invalid_behavior=" HOLD", only_on_change=True)
+    sim.tick(grid=-3000)
+    assert sim.tick(grid="bad")["c_a_status"] == "safe_hold"

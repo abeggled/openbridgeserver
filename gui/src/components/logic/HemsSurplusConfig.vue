@@ -156,7 +156,7 @@
 <script setup>
 import { computed } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
-import { hemsConsumers, hemsFlag } from '@/utils/logicHemsOutputs'
+import { hemsConsumers, hemsFlag, hemsGridMode } from '@/utils/logicHemsOutputs'
 
 // Editor of the hems_surplus block (HEMS Lite, issue #1327). The consumer list
 // order *is* the priority: it is edited by drag-and-drop only, the position
@@ -219,7 +219,7 @@ const FIELDS = {
   ],
 }
 
-const gridMode = computed(() => (GRID_MODES.includes(props.data.grid_mode) ? props.data.grid_mode : 'bidirectional'))
+const gridMode = computed(() => hemsGridMode(props.data))
 
 // Rows carry the ids the engine uses (and names the ports after), so keys are
 // unique and the next save repairs an imported list with odd or duplicate ids.

@@ -62,6 +62,11 @@ _RESERVED_ID_ENDINGS = ("_status", "_power", "_max", "_reset")
 # ── Configuration parsing ────────────────────────────────────────────────
 
 
+def _enum(value: Any) -> Any:
+    """An enum setting as the config validator compares it: text case- and whitespace-insensitive."""
+    return value.strip().lower() if isinstance(value, str) else value
+
+
 def _num(value: Any) -> float | None:
     """Finite float from a numeric-like value; ``None`` for everything else.
 
@@ -154,14 +159,14 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
         while cid in seen:
             cid = f"{cid}_"
         seen.add(cid)
-        mode = item.get("mode") if item.get("mode") in CONSUMER_MODES else "percent"
+        mode = _enum(item.get("mode")) if _enum(item.get("mode")) in CONSUMER_MODES else "percent"
         consumers.append(
             {
                 "id": cid,
                 "name": str(item.get("name") or "").strip() or f"#{index + 1}",
                 "active": item.get("active") is None or to_bool(item.get("active")),
                 "mode": mode,
-                "power_source": "input" if item.get("power_source") == "input" else "fixed",
+                "power_source": "input" if _enum(item.get("power_source")) == "input" else "fixed",
                 "power_w": _cfg_num(item.get("power_w"), 1000.0, 0.0),
                 "min_runtime_s": _cfg_num(item.get("min_runtime_s"), 0.0, 0.0),
                 "min_off_s": _cfg_num(item.get("min_off_s"), 0.0, 0.0),
@@ -172,7 +177,7 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
                 "min_setpoint": _cfg_num(item.get("min_setpoint"), 0.0, 0.0, 100.0),
                 "max_setpoint": _cfg_num(item.get("max_setpoint"), 100.0, 0.0, 100.0),
                 "step": _cfg_num(item.get("step"), 1.0, 0.1, 100.0),
-                "below_min": "hold_min" if item.get("below_min") == "hold_min" else "off",
+                "below_min": "hold_min" if _enum(item.get("below_min")) == "hold_min" else "off",
                 # onoff
                 "on_threshold_w": _opt_num(item.get("on_threshold_w"), 0.0),
                 "off_threshold_w": _opt_num(item.get("off_threshold_w"), 0.0),
@@ -180,7 +185,7 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
                 "min_surplus_w": _cfg_num(item.get("min_surplus_w"), 1000.0, 0.0),
                 "pulse_s": _cfg_num(item.get("pulse_s"), 1.0, 0.1, 3600.0),
                 "lockout_s": _cfg_num(item.get("lockout_s"), 3600.0, 0.0),
-                "rearm": item.get("rearm") if item.get("rearm") in ("after_lockout", "after_drop", "reset_input") else "after_drop",
+                "rearm": _enum(item.get("rearm")) if _enum(item.get("rearm")) in ("after_lockout", "after_drop", "reset_input") else "after_drop",
                 "reserve_w": _cfg_num(item.get("reserve_w"), 0.0, 0.0),
             }
         )
@@ -190,6 +195,12 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
 def only_on_change(data: dict[str, Any]) -> bool:
     """Whether unchanged outputs are withheld ("output only on change", default on)."""
     return data.get("only_on_change") is None or to_bool(data.get("only_on_change"))
+
+
+def grid_mode(data: dict[str, Any]) -> str:
+    """The configured measurement mode (see ``MODES``), ``bidirectional`` when unknown."""
+    mode = _enum(data.get("grid_mode"))
+    return mode if mode in MODES else "bidirectional"
 
 
 def interval_s(data: dict[str, Any]) -> float:
@@ -452,7 +463,7 @@ def _next_wake(
         # Stale once the freshest input is strictly older than max_age_s, so wake just after it.
         # Only the meter inputs of the current mode count (a mode change leaves
         # the old inputs' timestamps behind).
-        mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
+        mode = grid_mode(data)
         last_seen = state.get("last_seen", {})
         freshest = max((last_seen[name] for name in grid_input_names(mode) if name in last_seen), default=None)
         if freshest is not None and freshest + max_age_s >= now:
@@ -469,7 +480,7 @@ def _tick(
     consumers: list[dict[str, Any]],
     states: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    mode = data.get("grid_mode") if data.get("grid_mode") in MODES else "bidirectional"
+    mode = grid_mode(data)
     cycle_s = interval_s(data)
     sends_changes_only = only_on_change(data)
     result: dict[str, Any] = {}
@@ -544,7 +555,7 @@ def _tick(
             state["safe_cycle"] = now
         else:
             emit = functools.partial(emit, event=True)
-        if status in ("invalid_input", "stale_input") and data.get("invalid_behavior") == "hold":
+        if status in ("invalid_input", "stale_input") and _enum(data.get("invalid_behavior")) == "hold":
             # Only an output that was actually sent can be held. Without one —
             # e.g. right after a restart — the actuator may still carry a value
             # from before, so that consumer falls back to the safe state.

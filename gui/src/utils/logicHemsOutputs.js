@@ -1,5 +1,6 @@
 import { isBackendFalse } from '@/utils/logicBooleans'
 import { toBackendNumberText } from '@/utils/logicNumbers'
+import { trimLikeStrip } from '@/utils/pythonWhitespace'
 
 // Debug-tab labels of the hems_surplus block: its outputs are addressed by the
 // stable consumer id (c_<id>), which means nothing to a user, so they are shown
@@ -8,6 +9,24 @@ import { toBackendNumberText } from '@/utils/logicNumbers'
 export const HEMS_DIAGNOSTICS = ['grid_power', 'surplus', 'budget', 'allocated', 'remaining', 'status', 'warning']
 
 const CONSUMER_MODES = ['percent', 'onoff', 'trigger']
+const GRID_MODES = ['bidirectional', 'split', 'feed_in_only']
+
+// An enum setting as the engine reads it (`_enum` in hems_surplus.py):
+// text compared case- and whitespace-insensitively.
+function hemsEnum(value) {
+  return typeof value === 'string' ? trimLikeStrip(value).toLowerCase() : value
+}
+
+/**
+ * The configured measurement mode, read like the engine (`grid_mode`).
+ *
+ * @param {object} data  node data
+ * @returns {'bidirectional'|'split'|'feed_in_only'}
+ */
+export function hemsGridMode(data) {
+  const mode = hemsEnum(data?.grid_mode)
+  return GRID_MODES.includes(mode) ? mode : 'bidirectional'
+}
 // Mirrors _RESERVED_ID_ENDINGS in hems_surplus.py: an id ending in a port suffix
 // would take another consumer's port.
 const RESERVED_ID_ENDINGS = ['_status', '_power', '_max', '_reset']
@@ -38,7 +57,13 @@ export function hemsConsumers(raw) {
     if (RESERVED_ID_ENDINGS.some(end => id.endsWith(end))) id = `${id}_`
     while (seen.has(id)) id = `${id}_`
     seen.add(id)
-    consumers.push({ ...c, id, mode: CONSUMER_MODES.includes(c.mode) ? c.mode : 'percent' })
+    const mode = hemsEnum(c.mode)
+    consumers.push({
+      ...c,
+      id,
+      mode: CONSUMER_MODES.includes(mode) ? mode : 'percent',
+      power_source: hemsEnum(c.power_source) === 'input' ? 'input' : c.power_source,
+    })
   })
   return consumers
 }

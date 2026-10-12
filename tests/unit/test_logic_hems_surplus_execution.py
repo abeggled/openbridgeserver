@@ -224,8 +224,18 @@ async def test_loop_skips_a_disabled_graph_and_a_missing_node():
 @pytest.mark.asyncio
 async def test_loop_backs_off_after_an_unexpected_error():
     manager = _loop_manager()
+    with patch("obs.logic.manager.hems_surplus.interval_s", side_effect=RuntimeError("boom")):
+        assert await _run_loop(manager) == [5.0]  # short: the safe state depends on this loop
+
+
+@pytest.mark.asyncio
+async def test_a_failing_run_is_logged_once_and_costs_no_cycle():
+    manager = _loop_manager()
     manager._execute_graph = AsyncMock(side_effect=RuntimeError("boom"))
-    assert await _run_loop(manager) == [5.0]  # short: the safe state depends on this loop
+    with patch("obs.logic.manager.logger") as log:
+        assert await _run_loop(manager) == [45.0]
+        await asyncio.sleep(0)
+    log.error.assert_called_once()
 
 
 # ── Persistence and initialization ──────────────────────────────────────
@@ -674,7 +684,8 @@ async def test_a_wake_run_is_marked_only_while_it_executes():
     manager._graphs["g"] = ("G", True, flow)
     with patch("obs.logic.manager.logger") as log:
         await manager._hems_wake_once("g", "h", 0)  # a failing run is logged, not raised into nowhere
-    log.exception.assert_called_once()
+        await asyncio.sleep(0)
+    log.error.assert_called_once()
     assert seen == [True]
     assert ("g", "h") not in manager._hems_waking
 
@@ -964,3 +975,42 @@ async def test_a_finished_run_leaves_a_newer_run_registered():
     old.cancel()
     manager._hems_run_finished(("g", "h"), old, waking=False)
     assert manager._hems_runs[("g", "h")] is new
+
+
+@pytest.mark.asyncio
+async def test_two_waiters_never_start_runs_in_parallel():
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, _flow())
+    running, peak, release = 0, 0, asyncio.Event()
+
+    async def slow_run(*args, **kwargs):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await release.wait()
+        running -= 1
+        return {}
+
+    manager._execute_graph = slow_run
+    first = asyncio.create_task(manager._hems_run("g", "h", "G", _flow(), waking=False))
+    await asyncio.sleep(0.01)
+    waiters = [asyncio.create_task(manager._hems_run("g", "h", "G", _flow(), waking=w)) for w in (False, True)]
+    await asyncio.sleep(0.01)
+    release.set()
+    await asyncio.gather(first, *waiters)
+    assert peak == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_lets_a_run_in_flight_finish():
+    manager = _manager()
+    manager._event_bus.unsubscribe = MagicMock()
+    finished = []
+
+    async def slow_run():
+        await asyncio.sleep(0.02)
+        finished.append(True)
+
+    manager._hems_runs[("g", "h")] = asyncio.ensure_future(slow_run())
+    await manager.stop()
+    assert finished == [True]
