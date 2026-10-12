@@ -1458,3 +1458,14 @@ async def test_a_reload_drops_the_plans_of_sheets_that_are_gone():
     await manager.reload()
     assert manager._hems_planned_wake == {("kept", "h"): 1.0}
     assert manager._hems_wake_at == {}
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_node_state_restores_nothing():
+    flow = _flow()
+    manager = _manager()
+    manager._db.fetchall = AsyncMock(
+        return_value=[{"id": "g", "name": "G", "enabled": 1, "flow_data": flow.model_dump_json(), "node_state": "[1, 2]"}]
+    )
+    await manager._load_graphs()
+    assert "g" not in manager._hysteresis
