@@ -57,7 +57,8 @@ value estimated from setpoint and maximum power. Only consumers the block itself
 an inactive consumer, or one the block switched off, that still draws power (manual operation, own
 thermostat) is ordinary house load and is not handed to others. If a switched-on consumer draws less
 than its share according to *Measured power* (thermostat off, car full), the rest goes to lower
-priorities.
+priorities — after a switch-on or raise only once its switch-off delay has passed, so a slowly
+ramping load (e.g. a car) keeps its share.
 
 Example: 2 000 W controlled load, meter −1 000 W, reserve 200 W → budget 2 800 W.
 

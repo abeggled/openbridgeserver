@@ -792,12 +792,16 @@ def _allocate(
             if caps is not None:
                 consumed = 0.0  # holding: the commanded shares never included the reservation
         emit(f"c_{cid}_status", label)
-        if caps is None and drawn is not None and consumer["mode"] != "trigger" and was_on and cs["on"] and cs["setpoint"] <= previous_setpoint:
+        if cs["on"] and (not was_on or cs["setpoint"] > previous_setpoint):
+            cs["raised_at"] = now
+        settled = cs.get("raised_at") is None or now - cs["raised_at"] >= _delay(consumer["off_delay_s"], off_delay_s)
+        if caps is None and drawn is not None and consumer["mode"] != "trigger" and cs["on"] and settled:
             # A running consumer drawing less than its share (thermostat off,
-            # car full) leaves the rest to lower priorities — but not on the
-            # cycle it was switched on or raised: the meter still shows the
-            # old draw, and that power is already promised to it. Not while
-            # holding at 0 W feed-in either: there the commanded share counts.
+            # car full) leaves the rest to lower priorities — but only once it
+            # has had its switch-off delay to take up a share it was switched
+            # on to or raised to: a slow load (a car ramping up) is not robbed
+            # meanwhile. Not while holding at 0 W feed-in either: there the
+            # commanded share counts.
             consumed = min(consumed, max(0.0, drawn))
         available -= consumed
         allocated += consumed

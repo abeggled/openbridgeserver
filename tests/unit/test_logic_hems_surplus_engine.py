@@ -1246,8 +1246,18 @@ def test_a_running_consumer_drawing_less_than_its_share_leaves_the_rest_to_lower
     sim = Sim([top, onoff("pool", power_w=1000, on_delay_s=0)])
     sim.tick(grid=-2000)
     assert sim.cstate("heater")["on"] is True
-    out = sim.tick(grid=-2000, c_heater_power=0)  # thermostat off, 2 kW exported
+    out = sim.tick(advance=180, grid=-2000, c_heater_power=0)  # thermostat off, 2 kW exported
     assert out["c_pool"] is True
+
+
+def test_a_slowly_ramping_consumer_keeps_its_share_during_its_off_delay():
+    # A car takes a while to draw what the wallbox was set to.
+    sim = Sim([pct("car", power_w=10000, on_delay_s=0), onoff("heater", power_w=2000, on_delay_s=0)])
+    sim.tick(grid=-5000)
+    assert sim.cstate("car")["setpoint"] == 50
+    out = sim.tick(grid=-5000, c_car_power=0)  # 30 s later: not ramped yet
+    assert out.get("c_heater") is not True
+    assert sim.cstate("heater")["on"] is False
 
 
 def test_a_meter_fault_raises_the_warning_even_while_disabled():

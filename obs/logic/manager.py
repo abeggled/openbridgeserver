@@ -2293,9 +2293,9 @@ class LogicManager:
                 entry = self._graphs.get(graph_id)
                 sleep_s = hems_surplus.DEFAULT_INTERVAL_S
                 node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry and entry[1] else None
-                if not (entry and node is not None):
+                if node is None:  # graph gone or disabled, or the block removed
                     self._hems_planned_wake.pop((graph_id, node_id), None)  # nothing planned while idle
-                if entry and node is not None:  # graph still exists and is enabled, block still on it
+                else:
                     g_name, _, flow = entry
                     sleep_s = hems_surplus.interval_s(node.data)
                     await self._hems_run(graph_id, node_id, g_name, flow, waking=False)
@@ -3198,6 +3198,10 @@ class LogicManager:
         except _ObsoleteGraphExecution:
             self._undo_hems_run(graph_id, flow, run_tag)
             return {}
+        except BaseException:
+            # Any later failure or a cancellation: nothing published, so the same rule.
+            self._undo_hems_run(graph_id, flow, run_tag)
+            raise
         finally:
             self._hems_acted_runs.discard(run_tag)
         self._schedule_hems_early_wakes(graph_id, flow, overrides)

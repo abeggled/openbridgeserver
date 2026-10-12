@@ -1351,3 +1351,22 @@ def test_a_run_tag_survives_deep_copies_of_the_state():
     again.execute(input_overrides={"h": {"grid": -5000}})
     undo_hems_run(copied["h"], 7)
     assert copied["h"] == {}  # back to before the run's first tick, not to after it
+
+
+@pytest.mark.asyncio
+async def test_a_run_cancelled_before_it_acted_undoes_its_ticks():
+    flow = _flow()
+    manager = _manager()
+    manager._graphs["g"] = ("G", True, flow)
+    manager._hysteresis["g"] = {}
+
+    async def tick_then_cancelled(*args, run_tag=None, **kwargs):
+        executor = GraphExecutor(flow, manager._hysteresis["g"])
+        executor.run_tag = run_tag
+        executor.execute(input_overrides={"h": {"grid": -5000}})
+        raise asyncio.CancelledError
+
+    manager._execute_graph_impl = tick_then_cancelled
+    with pytest.raises(asyncio.CancelledError):
+        await manager._execute_graph("g", "G", flow, {})
+    assert manager._hysteresis["g"]["h"] == {}

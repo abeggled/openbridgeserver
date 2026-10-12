@@ -59,7 +59,8 @@ werden nur Verbraucher, die der Block selbst eingeschaltet hat: Ein inaktiver od
 ausgeschalteter Verbraucher, der trotzdem Leistung bezieht (Handbetrieb, eigener Thermostat), ist
 normale Hauslast und wird nicht an andere verteilt. Bezieht ein eingeschalteter Verbraucher laut
 *Gemessener Leistung* weniger als ihm zusteht (Thermostat aus, Auto voll), geht der Rest an die
-niedrigeren Prioritäten.
+niedrigeren Prioritäten — nach dem Einschalten oder Erhöhen erst, wenn seine Ausschaltverzögerung
+verstrichen ist, damit eine langsam hochfahrende Last (z. B. ein Auto) ihren Anteil behält.
 
 Beispiel: 2 000 W geregelte Last, Zähler −1 000 W, Reserve 200 W → Budget 2 800 W.
 
