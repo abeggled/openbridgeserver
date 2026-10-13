@@ -19,8 +19,19 @@ beforeEach(() => {
   vi.doMock('@vue-flow/core', () => ({
     VueFlow: {
       name: 'VueFlow',
-      props: ['snapToGrid', 'snapGrid'],
-      emits: ['connect', 'edgeUpdate', 'edgesChange', 'nodesChange'],
+      props: ['snapToGrid', 'snapGrid', 'nodes'],
+      emits: ['connect', 'edgeUpdate', 'edgesChange', 'nodesChange', 'update:nodes'],
+      // Like the real v-model, Vue Flow may hand back its own normalised
+      // copy of freshly set nodes (e.g. snapped to the grid).
+      watch: {
+        nodes: {
+          immediate: true,
+          handler(nodes) {
+            const normalised = globalThis.__vueFlowNormalise?.(nodes)
+            if (normalised) this.$emit('update:nodes', normalised)
+          },
+        },
+      },
       template: '<div data-testid="vue-flow"><slot /></div>',
     },
     Handle: { template: '<span />' },
@@ -44,6 +55,7 @@ beforeEach(() => {
 const mounted = []
 
 afterEach(() => {
+  delete globalThis.__vueFlowNormalise
   // Some tests unmount on purpose; a second unmount is harmless to skip.
   for (const wrapper of mounted.splice(0)) {
     try { wrapper.unmount() } catch { /* already unmounted */ }
@@ -285,7 +297,7 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
 
     wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
     await elapse(500)
-    expect(wrapper.vm.statusMsg).toEqual({ ok: false, text: 'disk full' })
+    expect(wrapper.vm.statusMsg).toMatchObject({ ok: false, text: 'disk full' })
 
     wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'b' })
     await elapse(500)
@@ -1050,7 +1062,7 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       await wrapper.vm.requestGraphRun()
 
       expect(logicRunAuthzApi.preflight).not.toHaveBeenCalled()
-      expect(wrapper.vm.statusMsg).toEqual({ ok: false, text: 'busy' })
+      expect(wrapper.vm.statusMsg).toMatchObject({ ok: false, text: 'busy' })
     })
 
     it('lets a re-pick discard a validation-blocked edit', async () => {
@@ -1370,5 +1382,90 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
 
     expect(second.wrapper.vm.statusMsg.ok).toBe(false)
     expect(second.wrapper.vm.nodes).toHaveLength(3)
+  })
+
+  it('does not save Vue Flow\'s own normalisation of a freshly loaded sheet', async () => {
+    const offGrid = makeGraph('graph-b', [])
+    offGrid.flow_data.nodes[0].position = { x: 3, y: 7 }
+    const snap = v => Math.round(v / 10) * 10
+    globalThis.__vueFlowNormalise = (nodes) => nodes?.some(n => n.position.x !== snap(n.position.x) || n.position.y !== snap(n.position.y))
+      ? nodes.map(n => ({ ...n, position: { x: snap(n.position.x), y: snap(n.position.y) } }))
+      : null
+    const { wrapper, logicApi } = await mountLogicView()
+    logicApi.getGraph.mockResolvedValueOnce({ data: structuredClone(offGrid) })
+
+    await wrapper.vm.onGraphPicked('graph-b')
+    await flushPromises()
+    expect(wrapper.vm.nodes[0].position).toEqual({ x: 0, y: 10 })
+    await elapse(1000)
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+
+    // Settled: a real edit afterwards is saved as usual.
+    wrapper.vm.nodes = wrapper.vm.nodes.map(n => n.id === 'n2' ? { ...n, position: { x: 300, y: 0 } } : n)
+    await flushPromises()
+    await elapse(500)
+    expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps an auto-save refused by validation quiet; the Save button reports it', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+
+    wrapper.vm.edges = [...wrapper.vm.edges, { id: 'back', source: 'n2', target: 'n1', sourceHandle: 'out', targetHandle: 'a' }]
+    await flushPromises()
+    await elapse(500)
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    expect(wrapper.vm.statusMsg).toBe(null)
+
+    await wrapper.find('[data-testid="btn-save"]').trigger('click')
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('confirms an auto-save over a previous save result, but not over other news', async () => {
+    const saveGraph = vi.fn().mockRejectedValueOnce(new Error('down'))
+      .mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } }))
+    const { wrapper } = await mountLogicView({ saveGraph })
+
+    wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+    await elapse(500)
+    expect(wrapper.vm.statusMsg).toMatchObject({ ok: false, kind: 'save' })
+    wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'b' })
+    await elapse(500)
+    // The failure is cleared by the save that went through.
+    expect(wrapper.vm.statusMsg).toMatchObject({ ok: true, kind: 'save' })
+
+    wrapper.vm.nodes = wrapper.vm.nodes.map(n => ({ ...n, selected: n.id === 'n1' }))
+    wrapper.vm.copySelection()
+    wrapper.vm.pasteClipboard()
+    const pasted = wrapper.vm.statusMsg.text
+    await elapse(500)
+    expect(saveGraph).toHaveBeenCalledTimes(3)
+    expect(wrapper.vm.statusMsg.text).toBe(pasted)
+  })
+
+  it('duplicates only once a save of the source sheet still queued went through', async () => {
+    const pending = []
+    const saveGraph = vi.fn().mockImplementation((id, payload) => new Promise((resolve, reject) => {
+      pending.push({ ok: () => resolve({ data: { id, ...payload } }), fail: () => reject(new Error('down')) })
+    }))
+    for (const outcome of ['fail', 'ok']) {
+      const first = await mountLogicView({ saveGraph })
+      first.wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      mounted.splice(mounted.indexOf(first.wrapper), 1)
+      first.wrapper.unmount()
+      await flushPromises()
+
+      // Reopened: its own load waits for that save, the canvas is still empty.
+      const second = await mountLogicView({ saveGraph, pinia: first.pinia })
+      second.wrapper.vm.activeGraphId = 'graph-a'
+      second.wrapper.vm.duplicateName = 'Copy'
+      const duplicating = second.wrapper.vm.doDuplicate()
+      await flushPromises()
+      expect(first.logicApi.duplicateGraph).not.toHaveBeenCalled()
+
+      pending.at(-1)[outcome]()
+      await duplicating
+      expect(first.logicApi.duplicateGraph).toHaveBeenCalledTimes(outcome === 'ok' ? 1 : 0)
+      vi.resetModules()
+    }
   })
 })

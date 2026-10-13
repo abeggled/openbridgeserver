@@ -306,7 +306,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, watchEffect, markRaw } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, onUnmounted, watch, watchEffect, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
@@ -559,13 +559,14 @@ const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
 
 let _statusTimer = null
-function showStatus(ok, text, ms = 3000) {
+// `kind: 'save'` marks a save's own result, which a later save may replace.
+function showStatus(ok, text, ms = 3000, kind = null) {
   // Without cancelling the previous timer, a quick Copy → Paste → Save
   // sequence leaves multiple independent timeouts running; the earliest one
   // (e.g. from Copy) can then null out a later, still-relevant status (e.g.
   // Save's result) almost immediately instead of after its own `ms`.
   clearTimeout(_statusTimer)
-  statusMsg.value = { ok, text }
+  statusMsg.value = kind ? { ok, text, kind } : { ok, text }
   _statusTimer = setTimeout(() => { statusMsg.value = null }, ms)
 }
 
@@ -728,7 +729,7 @@ async function loadGraph() {
     if (superseded()) return
     // A save this view did not start (the previous instance's unmount flush)
     // failed: its own error message went with it, so report it here.
-    if (!saved && _canvasGraphId !== graphId) showStatus(false, t('logic.errorSave'))
+    if (!saved && _canvasGraphId !== graphId) showStatus(false, t('logic.errorSave'), 3000, 'save')
     const { data } = await logicApi.getGraph(graphId)
     if (superseded()) return
     replaceCanvas(graphId, (data.flow_data.nodes || []).map(n => {
@@ -788,8 +789,16 @@ function replaceCanvas(graphId, flowNodes = [], flowEdges = [], { discard = fals
   _savedRev = 0
   nodes.value = flowNodes
   edges.value = flowEdges
-  // New content, not an edit — the content watcher must not count it.
+  // New content, not an edit — the content watcher must not count it, nor
+  // Vue Flow's own normalisation of it during the next ticks.
   _persistedSignature = persistedSignature()
+  _contentSettling = true
+  const epoch = _canvasEpoch
+  nextTick().then(nextTick).then(() => {
+    if (epoch !== _canvasEpoch) return
+    _persistedSignature = persistedSignature()
+    _contentSettling = false
+  })
   // The config panel would otherwise keep editing a block of the old canvas.
   selectedNode.value = null
 }
@@ -814,14 +823,19 @@ async function saveGraph({ manual = false } = {}) {
   clearTimeout(_autoSaveTimer)
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
-    const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
-    showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000)
-    applyDebugValues(Object.fromEntries(
-      graphWarnings.map(w => [w.node_id, {
-        __error__: t(w.code === 'duplicate_target_handle' ? 'logic.graphValidationNodeErrorDuplicateHandle' : 'logic.graphValidationNodeError'),
-        __diagnostic__: w.code,
-      }])
-    ))
+    // An auto-save stays quiet: the warning banner already names the problem,
+    // and repeating the error (and overwriting the debug bands) on every
+    // move of a legacy sheet's blocks would only get in the way.
+    if (manual) {
+      const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
+      showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000)
+      applyDebugValues(Object.fromEntries(
+        graphWarnings.map(w => [w.node_id, {
+          __error__: t(w.code === 'duplicate_target_handle' ? 'logic.graphValidationNodeErrorDuplicateHandle' : 'logic.graphValidationNodeError'),
+          __diagnostic__: w.code,
+        }])
+      ))
+    }
     // Refused for good: counts as sent, so neither a flush, a canvas swap
     // nor the reload prompt keeps re-trying it.
     _sentRev = Math.max(_sentRev, _editRev)
@@ -844,7 +858,9 @@ async function saveGraph({ manual = false } = {}) {
       if (graph) {
         await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
         if (sameCanvas()) _savedRev = Math.max(_savedRev, rev)
-        if (manual || statusMsg.value?.ok !== false) showStatus(true, t('logic.saved'))
+        // An auto-save confirms itself only over nothing or an earlier
+        // save's result (clearing a past failure), never over other news.
+        if (manual || !statusMsg.value || statusMsg.value.kind === 'save') showStatus(true, t('logic.saved'), 3000, 'save')
         result = true
       } else {
         // Deleted meanwhile (e.g. from the graph picker) — nothing to save
@@ -852,7 +868,7 @@ async function saveGraph({ manual = false } = {}) {
         result = null
       }
     } catch (err) {
-      showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
+      showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'), 3000, 'save')
       if (PERMANENT_SAVE_REJECTIONS.has(err.response?.status)) result = null
     } finally {
       saving.value = false
@@ -872,11 +888,11 @@ async function saveGraph({ manual = false } = {}) {
 const AUTO_SAVE_DELAY_MS = 500
 let _autoSaveTimer = null
 
-function scheduleAutoSave() {
+function scheduleAutoSave(signature = persistedSignature()) {
   if (!auth.isAdmin || !_canvasGraphId) return
   // Counted here — the content watcher must not count (and re-debounce) the
   // same change again when it runs.
-  _persistedSignature = persistedSignature()
+  _persistedSignature = signature
   _editRev += 1
   clearTimeout(_autoSaveTimer)
   _autoSaveTimer = setTimeout(saveGraph, AUTO_SAVE_DELAY_MS)
@@ -891,8 +907,13 @@ let _persistedSignature = ''
 function persistedSignature() {
   return JSON.stringify(currentFlowData())
 }
+// Right after a canvas swap, Vue Flow normalises the new content itself
+// (snapping positions to the grid, dropping edges to missing blocks); that is
+// not a user edit and must not be saved. The baseline is taken once it is
+// done.
+let _contentSettling = false
 watch(persistedSignature, (signature) => {
-  if (signature !== _persistedSignature) scheduleAutoSave()
+  if (!_contentSettling && signature !== _persistedSignature) scheduleAutoSave(signature)
 })
 
 // Saves an unsent edit right away instead of waiting for the debounce.
@@ -1349,8 +1370,9 @@ async function doDuplicate() {
   const graphId = activeGraphId.value
   const name = duplicateName.value.trim()
   try {
-    // Persists the source sheet (normally the canvas) before it is copied.
-    if (!await leaveCanvas()) return
+    // Persists the canvas, and waits for any save of the source sheet still
+    // queued (e.g. from a just-unmounted editor), before it is copied.
+    if (!await leaveCanvas() || !await persistPendingChanges(graphId)) return
     sheetSwitching.value = true
     const copy = await store.duplicateGraph(graphId, name)
     showDuplicate.value = false
