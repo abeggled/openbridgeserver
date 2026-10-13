@@ -78,7 +78,7 @@ function makeGraph(id, edges = [{ id: 'e1', source: 'n1', target: 'n2', sourceHa
 const GRAPH_A = makeGraph('graph-a')
 const GRAPH_B = makeGraph('graph-b', [])
 
-async function mountLogicView({ isAdmin = true, saveGraph } = {}) {
+async function mountLogicView({ isAdmin = true, saveGraph, pinia = createPinia() } = {}) {
   vi.doMock('vue-router', () => ({
     useRoute: () => ({ query: { graph: 'graph-a' } }),
     useRouter: () => ({ push: vi.fn() }),
@@ -103,7 +103,6 @@ async function mountLogicView({ isAdmin = true, saveGraph } = {}) {
   vi.doMock('@/api/client', () => ({ logicApi, hierarchyApi: {} }))
   vi.doMock('@/api/logicAuthz', () => ({ logicRunAuthzApi }))
 
-  const pinia = createPinia()
   setActivePinia(pinia)
   const { useAuthStore } = await import('@/stores/auth')
   useAuthStore().user = { id: 'u1', username: isAdmin ? 'admin' : 'viewer', is_admin: isAdmin }
@@ -127,7 +126,7 @@ async function mountLogicView({ isAdmin = true, saveGraph } = {}) {
   mounted.push(wrapper)
   await flushPromises()
   const { useLogicStore } = await import('@/stores/logic')
-  return { wrapper, logicApi, logicRunAuthzApi, store: useLogicStore() }
+  return { wrapper, logicApi, logicRunAuthzApi, store: useLogicStore(), pinia }
 }
 
 const savedEdges = (logicApi, call = 0) => logicApi.saveGraph.mock.calls[call][1].flow_data.edges
@@ -1054,21 +1053,21 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(wrapper.vm.statusMsg).toEqual({ ok: false, text: 'busy' })
     })
 
-    it('keeps a validation-blocked edit unsaved instead of reloading over it', async () => {
+    it('lets a re-pick discard a validation-blocked edit', async () => {
       const { wrapper, logicApi } = await mountLogicView()
       const loads = logicApi.getGraph.mock.calls.length
 
       wrapper.vm.edges = [...wrapper.vm.edges, { id: 'back', source: 'n2', target: 'n1', sourceHandle: 'out', targetHandle: 'a' }]
       wrapper.vm.onElementsChange([{ type: 'remove', id: 'x' }])
       await elapse(500)
-      wrapper.vm.onGraphPicked('graph-a')
+      // It can never be saved, so a reload prompt could not help.
+      expect(unloadPrevented()).toBe(false)
+      await wrapper.vm.onGraphPicked('graph-a')
       await flushPromises()
 
       expect(logicApi.saveGraph).not.toHaveBeenCalled()
-      expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
-      expect(wrapper.vm.edges).toHaveLength(2)
-      // It can never be saved, so a reload prompt could not help.
-      expect(unloadPrevented()).toBe(false)
+      expect(logicApi.getGraph).toHaveBeenCalledTimes(loads + 1)
+      expect(wrapper.vm.edges).toEqual(GRAPH_A.flow_data.edges)
     })
 
     it('ignores the late result of a save for a canvas replaced since', async () => {
@@ -1183,6 +1182,7 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       [429, false],
       [404, true],
       [400, true],
+      [401, true],
     ])('treats a %i answer as %s permanent', async (status, permanent) => {
       const saveGraph = vi.fn().mockRejectedValue({ response: { status, data: { detail: 'no' } } })
       const { wrapper } = await mountLogicView({ saveGraph })
@@ -1204,5 +1204,43 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
 
       expect(wrapper.vm.selectedNode).toBe(null)
     })
+  })
+
+  it('makes a remounted editor wait for the save its predecessor started', async () => {
+    let finishSave
+    const saveGraph = vi.fn().mockImplementation((id, payload) => new Promise(resolve => {
+      finishSave = () => resolve({ data: { id, ...payload } })
+    }))
+    const first = await mountLogicView({ saveGraph })
+    first.wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+    mounted.splice(mounted.indexOf(first.wrapper), 1)
+    first.wrapper.unmount()
+    await flushPromises()
+    expect(saveGraph).toHaveBeenCalledTimes(1)
+
+    const loads = first.logicApi.getGraph.mock.calls.length
+
+    // Same pinia (and cached modules) as the app keeps across route changes.
+    await mountLogicView({ saveGraph, pinia: first.pinia })
+    expect(first.logicApi.getGraph).toHaveBeenCalledTimes(loads)
+
+    finishSave()
+    await flushPromises()
+    expect(first.logicApi.getGraph).toHaveBeenCalledTimes(loads + 1)
+    expect(first.logicApi.getGraph).toHaveBeenLastCalledWith('graph-a')
+  })
+
+  it('keeps a canvas whose save failed even when reloaded directly', async () => {
+    const saveGraph = vi.fn().mockRejectedValue(new Error('down'))
+    const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+    const loads = logicApi.getGraph.mock.calls.length
+
+    wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+    await wrapper.vm.loadGraph()
+
+    expect(saveGraph).toHaveBeenCalledTimes(1)
+    expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
+    expect(wrapper.vm.edges).toHaveLength(2)
+    expect(wrapper.vm.graphLoading).toBe(false)
   })
 })

@@ -721,10 +721,10 @@ async function loadGraph() {
     // the state before it. Saves of the sheet being loaded settle first.
     await persistPendingChanges(graphId)
     if (superseded()) return
-    // The canvas holds this very sheet with an edit the server does not
-    // have (its save failed or was refused): keep it rather than replacing
-    // it with the older server state.
-    if (hasUnsavedEdits(graphId)) return
+    // The canvas holds this very sheet with an edit whose save failed: keep
+    // it rather than replacing it with the older server state. A refused
+    // edit can never be saved — re-picking is how it gets discarded.
+    if (_canvasGraphId === graphId && hasUnsentEdits()) return
     const { data } = await logicApi.getGraph(graphId)
     if (superseded()) return
     replaceCanvas(graphId, (data.flow_data.nodes || []).map(n => {
@@ -732,7 +732,6 @@ async function loadGraph() {
       const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
       return { ...n, position: n.position || { x: 100, y: 100 }, data: nodeData }
     }), data.flow_data.edges || [])
-    selectedNode.value = null
   } catch (err) {
     if (superseded()) return
     // A failed load must not leave an editable (but never actually loaded)
@@ -743,7 +742,6 @@ async function loadGraph() {
     // selection entirely instead of presenting a stale or blank editor.
     activeGraphId.value = ''
     replaceCanvas('')
-    selectedNode.value = null
     showStatus(false, err.response?.data?.detail ?? t('logic.errorLoad'))
   } finally {
     if (requestId === _loadGraphRequestId) graphLoading.value = false
@@ -788,29 +786,16 @@ function replaceCanvas(graphId, flowNodes = [], flowEdges = [], { discard = fals
   edges.value = flowEdges
 }
 
-// Saves run one after another: an auto-save and a manual save fired close
-// together would otherwise race as two concurrent PUTs, and the older
-// payload landing last would silently undo the newer change.
-let _saveQueue = Promise.resolve()
-// Toggle and rename write the same sheet record (name, enabled) a queued
-// full-sheet PUT also carries, so they join the same queue.
-function enqueueSave(task) {
-  const run = _saveQueue.then(task)
-  _saveQueue = run.catch(() => {})
-  return run
-}
-// Latest queued sheet save per sheet id — lets readers of that sheet wait
-// for exactly that save, not the whole queue.
-const _lastSaveByGraph = new Map()
-
 // Saves the canvas into the sheet it belongs to. Resolves to true when
 // saved, false when the save failed, and null when it was refused for good:
 // by the graph validation or by a 4xx from the server. A refused edit stays
 // unsaved but does not block run/export/duplicate — retrying cannot help, so
 // those act on the server's state as they did before auto-save.
 // Server answers that retrying the same payload cannot change; anything else
-// (5xx, network, 401 before refresh, 408/409/429) is a failure to retry.
-const PERMANENT_SAVE_REJECTIONS = new Set([400, 403, 404, 413, 422])
+// (5xx, network, 408/409/429) is a failure to retry.
+// A 401 only reaches here once the token refresh failed and the API client
+// is already redirecting to /login — prompting for a retry would block that.
+const PERMANENT_SAVE_REJECTIONS = new Set([400, 401, 403, 404, 413, 422])
 
 async function saveGraph() {
   const graphId = _canvasGraphId
@@ -839,7 +824,9 @@ async function saveGraph() {
   const rev = _editRev
   const sameCanvas = () => epoch === _canvasEpoch
   _sentRev = rev
-  const run = enqueueSave(async () => {
+  // Queued in the store, shared with the graph picker and with the next
+  // instance of this view: a remount must not load before this save lands.
+  return store.enqueueWrite(async () => {
     saving.value = true
     let result = false
     try {
@@ -864,12 +851,9 @@ async function saveGraph() {
       // flush, the reload prompt and run/export/duplicate retry or guard
       // it. A newer save already underway keeps its claim.
       if (result === false && sameCanvas() && _sentRev === rev) _sentRev = _savedRev
-      if (_lastSaveByGraph.get(graphId) === run) _lastSaveByGraph.delete(graphId)
     }
     return result
-  })
-  _lastSaveByGraph.set(graphId, run)
-  return run
+  }, graphId)
 }
 
 // ── Auto-save ──────────────────────────────────────────────────────────────
@@ -912,7 +896,7 @@ async function leaveCanvas() {
 async function persistPendingChanges(graphId) {
   if (_canvasGraphId === graphId) flushUnsentEdits()
   // The flushed save queues behind any earlier one, so it settles last.
-  return (await _lastSaveByGraph.get(graphId)) !== false
+  return (await store.pendingSave(graphId)) !== false
 }
 
 // ── Node selection & config ────────────────────────────────────────────────
@@ -1292,7 +1276,7 @@ async function doToggleEnabled() {
   try {
     // Captured now: the queued task may run after the user switched sheets.
     const graphId = activeGraphId.value
-    const updated = await enqueueSave(() => store.toggleEnabled(graphId))
+    const updated = await store.enqueueWrite(() => store.toggleEnabled(graphId))
     showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorToggle'))
@@ -1312,7 +1296,7 @@ async function doDeleteGraph() {
   // and so must its edit. Every queued write (save, toggle, rename) has to
   // land before the DELETE, or it fails afterwards with a spurious error.
   await persistPendingChanges(graphId)
-  await enqueueSave(() => store.deleteGraph(graphId))
+  await store.enqueueWrite(() => store.deleteGraph(graphId))
   // The user may have opened another sheet meanwhile — leave that one open.
   if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
@@ -1388,7 +1372,7 @@ async function doRenameGraph() {
     const graphId = activeGraphId.value
     const name = renameGraphName.value.trim()
     const description = renameGraphDesc.value
-    await enqueueSave(() => store.renameGraph(graphId, name, description))
+    await store.enqueueWrite(() => store.renameGraph(graphId, name, description))
     showRenameGraph.value = false
     showStatus(true, t('logic.renamed'))
   } catch (err) {
