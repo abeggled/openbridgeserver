@@ -36,8 +36,9 @@ lowest-priority consumer is removed per control cycle from then on (at least 10 
 consumers) until feed-in is reported again. The switch-off delay that counts is the one of the
 consumer concerned (its own or the global one); after it the consumer gives the step up at once,
 only a minimum run time is still awaited. Power freed in the process goes to no other
-consumer, and a positive feed-in reserve is deducted once, straight away on reaching 0 W, since 0 W feed-in certainly falls
-short of it.
+consumer. A positive feed-in reserve is certainly not met at 0 W: on reaching 0 W it is requested as
+a reduction and stays requested until the consumers have given it up, with their normal switch-off
+delays.
 
 Optional global inputs: **Enable** (false = everything safely off), **Feed-in reserve (dyn.)**
 (overrides the configured value) and **Plant OK** (false = everything safely off). Unconnected

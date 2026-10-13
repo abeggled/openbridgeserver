@@ -1588,3 +1588,15 @@ def test_a_meter_age_without_its_changed_input_is_reported_once(caplog):
     assert caplog.text.count("no 'Changed' input is wired") == 1
     sim.tick(grid=-100, grid_changed=True)  # wired now: the note is reset
     assert "age_unchecked_logged" not in sim.state
+
+
+def test_the_reserve_at_zero_feed_in_stays_requested_until_an_onoff_consumer_gave_it_up():
+    sim = Sim([pct("p", power_w=1000, on_delay_s=0), onoff("a", power_w=1000, on_delay_s=0)], grid_mode="feed_in_only", target_w=500, off_delay_s=180)
+    sim.tick(feed_in=2500)
+    assert sim.cstate("a")["on"] is True
+    assert sim.tick(feed_in=0)["c_a_status"] == "off_delay"
+    out = sim.tick(feed_in=0)  # the next cycle: still requested, a stays in its off-delay
+    assert out["c_a_status"] == "off_delay"
+    sim.tick(advance=150, feed_in=0)
+    assert sim.cstate("a")["on"] is False  # gave the reserve up after its delay
+    assert sim.state["zero_shed_w"] == 0.0

@@ -37,8 +37,9 @@ des Verbrauchers mit der niedrigsten Priorität abgebaut (bei Prozent-Verbrauche
 bis wieder Einspeisung gemeldet wird. Maßgebend ist die Ausschaltverzögerung des betroffenen
 Verbrauchers (seine eigene oder die globale); danach gibt er den Schritt sofort ab, nur eine
 Mindestlaufzeit wird noch abgewartet.
-Frei werdende Leistung geht dabei an keinen anderen Verbraucher, und eine positive Einspeisereserve
-wird beim Übergang auf 0 W einmal sofort abgezogen, da sie dann sicher nicht erreicht ist.
+Frei werdende Leistung geht dabei an keinen anderen Verbraucher. Eine positive Einspeisereserve ist
+bei 0 W sicher nicht erreicht: Sie wird beim Übergang auf 0 W als Abbau angefordert und bleibt
+angefordert, bis die Verbraucher sie — mit ihren normalen Ausschaltverzögerungen — abgegeben haben.
 
 Optionale globale Eingänge: **Freigabe** (false = alles sicher aus), **Einspeisereserve (dyn.)**
 (überschreibt den konfigurierten Wert) und **Anlage OK** (false = alles sicher aus). Unverbundene

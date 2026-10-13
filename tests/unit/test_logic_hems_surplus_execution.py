@@ -1469,3 +1469,27 @@ async def test_a_malformed_node_state_restores_nothing():
     )
     await manager._load_graphs()
     assert "g" not in manager._hysteresis
+
+
+@pytest.mark.asyncio
+async def test_a_missing_pulse_does_not_reach_the_block_as_a_value():
+    # change_filter.changed -> plant_ok: on a run where the filter did not fire,
+    # its False is a no-pulse placeholder, not "plant not OK".
+    dp_grid, dp_plant = uuid.uuid4(), uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(dp_grid)}),
+                node("plant", "datapoint_read", {"datapoint_id": str(dp_plant)}),
+                node("cf", "change_filter", {}),
+                node("h", "hems_surplus", {"consumers": CONSUMERS}),
+            ],
+            "edges": [edge("read", "h", "value", "grid"), edge("plant", "cf", "value", "in"), edge("cf", "h", "changed", "plant_ok")],
+        }
+    )
+    manager = _manager({str(dp_grid): -5000, str(dp_plant): 1})
+    manager._graphs["g"] = ("G", True, flow)
+    await manager._execute_graph("g", "G", flow, {"plant": {"value": 1}})  # the filter fires: plant_ok True
+    assert manager._hysteresis["g"]["h"]["status"] == "ok"
+    await manager._execute_graph("g", "G", flow, {"read": {"value": -5000}})  # unrelated run
+    assert manager._hysteresis["g"]["h"]["status"] == "ok"

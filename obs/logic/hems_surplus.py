@@ -643,17 +643,23 @@ def _tick(
         # given it up — an on/off consumer still runs its own off-delay — and
         # the next step follows in the cycle after that.
         # No consumer may get more than it has now (``caps``), so power freed
-        # by one is never handed to another, and a positive feed-in reserve —
-        # which 0 W feed-in certainly falls short of — is cut straight away.
+        # by one is never handed to another.
         zero_since = state.get("zero_since")
         caps = {c["id"]: _consumer_power(c, states[c["id"]], {}, rated[c["id"]] or 0.0) for c in consumers}
         commanded_w = sum(caps.values())
         target = next((c for c in consumers if c["id"] == state.get("zero_shed_id")), None)
-        if state.get("zero_shed_w") and (target is None or not target["active"] or not states[target["id"]]["on"]):
+        if (
+            state.get("zero_shed_w")
+            and state.get("zero_shed_id") is not None
+            and (target is None or not target["active"] or not states[target["id"]]["on"])
+        ):
             state["zero_shed_w"] = 0.0  # its consumer is gone, inactive or off: that step is void
         if zero_since is None:
+            # Entering 0 W: a positive feed-in reserve is certainly not met, so it
+            # stands as a reduction request (no consumer of its own: id None) until
+            # the allocation has dropped by it — each consumer with its own delays.
             state["zero_since"] = now
-            state["zero_shed_w"] = 0.0
+            state["zero_shed_id"], state["zero_shed_w"] = None, min(max(0.0, target_w), commanded_w)
         elif not state.get("zero_shed_w"):
             # The step is requested once the switch-off delay of the consumer it
             # concerns (its own, or the global one) has passed without feed-in;
@@ -664,10 +670,7 @@ def _tick(
             target = next((c for c in consumers if c["id"] == shed_id), None)
             if target is not None and now - zero_since >= _delay(target["off_delay_s"], off_delay_s):
                 state["zero_shed_id"], state["zero_shed_w"] = shed_id, shed_w
-        # The reserve is cut once, on entering 0 W (as if feed-in had just
-        # dropped from the reserve to 0); after that the allocation is held.
-        reserve_cut_w = max(0.0, target_w) if zero_since is None else 0.0
-        budget_w = commanded_w - reserve_cut_w - (state.get("zero_shed_w") or 0.0)
+        budget_w = commanded_w - (state.get("zero_shed_w") or 0.0)
     else:
         state["zero_since"] = None
         state["zero_shed_w"] = 0.0
@@ -678,7 +681,7 @@ def _tick(
 
     # Only an actual shed step skips a consumer's own switch-off delay (it has
     # waited it out already); the reserve cut and the plain hold do not.
-    shedding = caps is not None and bool(state["zero_shed_w"])
+    shedding = caps is not None and bool(state["zero_shed_w"]) and state.get("zero_shed_id") is not None
     allocated_w, remaining_w = _allocate(consumers, states, rated, budget_w, now, on_delay_s, off_delay_s, emit, caps, inputs, shedding)
     if caps is not None:
         remaining_w = 0.0  # holding: nothing can be switched on, so nothing is left to hand out

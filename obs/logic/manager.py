@@ -3965,7 +3965,17 @@ class LogicManager:
             node.id
             for node in flow.nodes
             if node.type
-            in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write", "edge_detect"}
+            in {
+                "gate",
+                "hysteresis",
+                "avg_multi",
+                "min_max_tracker",
+                "consumption_counter",
+                "heating_circuit",
+                "datapoint_write",
+                "edge_detect",
+                "hems_surplus",
+            }
         }
         # Keyed on every pulse origin, not just change_filter: the correction
         # pass for a consumer fed by a non-firing pulse restores state from
@@ -4917,6 +4927,10 @@ class LogicManager:
                         # the block relay the placeholder on the next unrelated
                         # event.
                         or (target_type_name == "merge" and _MERGE_INPUT_HANDLE_RE.fullmatch(target_handle) is not None)
+                        # hems_surplus keeps state from every input (held values,
+                        # telegram times, timers): a no-pulse placeholder must not
+                        # reach any of them.
+                        or target_type_name == "hems_surplus"
                     )
                     if stateful_data_handle:
                         stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
