@@ -378,12 +378,15 @@ def _read_meter(
         return None, None, "invalid_input"
     values: dict[str, float] = {name: value for name, value in read.items() if value is not None}
 
-    # The meter is stale only when *no* judged input has reported in time: a
-    # send-on-change export side sitting at 0 W says nothing about the meter.
-    # Feed-in-only at 0 W is the same case: a send-on-change meter is silent all
-    # night, and 0 W is handled conservatively anyway (hold, then shed).
+    # A silent input is stale when it still claims a non-zero value: the control
+    # would keep computing with power that may no longer flow. A send-on-change
+    # side sitting at 0 W says nothing about the meter, so it is stale only when
+    # no judged input has reported in time. Feed-in-only at 0 W is the same case:
+    # a send-on-change meter is silent all night, and 0 W is handled
+    # conservatively anyway (hold, then shed).
+    silent = [name for name in judged if name not in last_seen or now - last_seen[name] > max_age_s]
     silent_zero_feed_in = mode == "feed_in_only" and values["feed_in"] == 0
-    if judged and not silent_zero_feed_in and all(name not in last_seen or now - last_seen[name] > max_age_s for name in judged):
+    if any(values[name] != 0 for name in silent) or (judged and len(silent) == len(judged) and not silent_zero_feed_in):
         return None, None, "stale_input"
 
     if mode == "split":
@@ -509,14 +512,16 @@ def _next_wake(
         wakes.append(state["last_cycle"] + interval_s(data))
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
     if max_age_s > 0:
-        # Stale once the freshest input is strictly older than max_age_s, so wake just after it.
-        # Only the meter inputs of the current mode count (a mode change leaves
-        # the old inputs' timestamps behind).
+        # An input is stale once it is strictly older than max_age_s, so wake just
+        # after the next still-fresh input expires: a silent non-zero side alone
+        # already makes the meter stale. Only the meter inputs of the current mode
+        # count (a mode change leaves the old inputs' timestamps behind).
         mode = grid_mode(data)
         last_seen = state.get("last_seen", {})
-        freshest = max((last_seen[name] for name in grid_input_names(mode) if name in last_seen), default=None)
-        if freshest is not None and freshest + max_age_s >= now:
-            wakes.append(freshest + max_age_s + _STALE_WAKE_MARGIN_S)
+        expiring = [last_seen[name] + max_age_s for name in grid_input_names(mode) if name in last_seen]
+        upcoming = [moment for moment in expiring if moment >= now]
+        if upcoming:
+            wakes.append(min(upcoming) + _STALE_WAKE_MARGIN_S)
     return min(wakes) if wakes else None
 
 

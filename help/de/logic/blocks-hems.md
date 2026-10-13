@@ -129,9 +129,10 @@ Aktor nicht eingeschaltet bleibt. Im Debug-Tab erscheinen alle Ausgänge mit dem
   vermerkt.
 - **Veraltete Werte** werden nur geprüft, wenn **Maximales Alter der Zählerwerte** größer als 0 ist
   *und* der Ausgang *Geändert* des Read-Objekts am Block angeschlossen ist (siehe Sensor Watchdog).
-  Bei getrennten Eingängen gilt der Zähler erst als veraltet, wenn keine der beiden Seiten rechtzeitig
-  gemeldet hat — eine nur bei Änderung sendende Einspeiseseite, die bei 0 W stehen bleibt, genügt nicht.
-  Ebenso gilt bei „Nur Einspeiseleistung“ ein schweigender Zähler bei 0 W nicht als veraltet (0 W wird
+  Bei getrennten Eingängen müssen beide Werte aktuell sein: Schweigt eine Seite länger als erlaubt,
+  während sie noch einen Wert ungleich 0 meldet, gilt der Zähler als veraltet — auch wenn die andere
+  Seite weiter frisch meldet. Eine nur bei Änderung sendende Seite, die bei 0 W stehen bleibt, macht
+  den Zähler dagegen nicht veraltet; erst wenn keine der beiden Seiten rechtzeitig meldet. Ebenso gilt bei „Nur Einspeiseleistung“ ein schweigender Zähler bei 0 W nicht als veraltet (0 W wird
   ohnehin konservativ behandelt).
   Der Block reagiert, sobald das Alter überschritten ist, nicht erst beim nächsten Regelzyklus. Ein
   nach einem Neustart wiederhergestellter Wert gilt als veraltet, bis der Zähler ein neues Telegramm

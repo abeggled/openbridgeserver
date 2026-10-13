@@ -322,16 +322,44 @@ def test_stale_check_needs_the_changed_signal_and_a_positive_max_age():
     assert sim.tick(advance=500, grid=-100, grid_changed=False)["status"] == "ok"
 
 
-def test_split_mode_is_stale_only_when_neither_side_reports():
+def test_split_mode_with_a_silent_side_at_zero_watt_is_stale_only_when_neither_side_reports():
     # A send-on-change export side sitting at 0 W says nothing about the meter.
     sim = Sim([], grid_mode="split", max_age_s=50)
-    sim.tick(grid_import=0, grid_export=100, grid_import_changed=True, grid_export_changed=True)
-    out = sim.tick(advance=40, grid_import=0, grid_export=100, grid_import_changed=True, grid_export_changed=False)
+    sim.tick(grid_import=0, grid_export=0, grid_import_changed=True, grid_export_changed=True)
+    out = sim.tick(advance=40, grid_import=0, grid_export=0, grid_import_changed=True, grid_export_changed=False)
     assert out["status"] == "ok"
-    out = sim.tick(advance=40, grid_import=0, grid_export=100, grid_import_changed=True, grid_export_changed=False)
+    out = sim.tick(advance=40, grid_import=0, grid_export=0, grid_import_changed=True, grid_export_changed=False)
     assert out["status"] == "ok"  # export silent for 80 s, import fresh
-    out = sim.tick(advance=51, grid_import=0, grid_export=100, grid_import_changed=False, grid_export_changed=False)
+    out = sim.tick(advance=51, grid_import=0, grid_export=0, grid_import_changed=False, grid_export_changed=False)
     assert out["status"] == "stale_input"
+
+
+@pytest.mark.parametrize("frozen", ["grid_import", "grid_export"])
+def test_split_mode_a_silent_side_with_a_non_zero_value_is_stale(frozen):
+    # #1327: both values must be current. A frozen non-zero side would keep
+    # steering with power that may no longer flow, even while the other side reports.
+    fresh = "grid_export" if frozen == "grid_import" else "grid_import"
+    sim = Sim([onoff("a", power_w=2000, on_delay_s=0, off_delay_s=0)], grid_mode="split", max_age_s=60, off_delay_s=0)
+    values = {frozen: 3000, fresh: 0}
+    sim.tick(**values, grid_import_changed=True, grid_export_changed=True)
+    out = sim.tick(advance=60, **values, **{f"{fresh}_changed": True, f"{frozen}_changed": False})
+    assert out["status"] == "ok"  # exactly max_age_s old is still fresh
+    out = sim.tick(advance=1, **values, **{f"{fresh}_changed": True, f"{frozen}_changed": False})
+    assert (out["status"], out["warning"]) == ("stale_input", True)
+    assert sim.cstate("a")["on"] is False
+    # a fresh telegram on the frozen side recovers
+    assert sim.tick(advance=30, **values, grid_import_changed=True, grid_export_changed=True)["status"] == "ok"
+
+
+def test_split_mode_next_wake_is_when_the_first_side_turns_stale():
+    sim = Sim([], grid_mode="split", max_age_s=60, interval_s=300)
+    sim.tick(grid_import=0, grid_export=3000, grid_import_changed=True, grid_export_changed=True)
+    sim.tick(advance=20, grid_import=0, grid_export=3000, grid_import_changed=True, grid_export_changed=False)
+    # the export side expires 40 s from now, before the import side
+    assert sim.state["next_wake"] == pytest.approx(sim.now + 40 + hs._STALE_WAKE_MARGIN_S)
+    sim.tick(advance=41, grid_import=0, grid_export=3000, grid_import_changed=False, grid_export_changed=False)
+    # the export side has expired; the import side still turns stale 19 s from now
+    assert sim.state["next_wake"] == pytest.approx(sim.now + 19 + hs._STALE_WAKE_MARGIN_S)
 
 
 # ── Cycle gating and output filtering ───────────────────────────────────

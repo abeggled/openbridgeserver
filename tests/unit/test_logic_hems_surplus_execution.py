@@ -1512,3 +1512,74 @@ def test_a_failed_tick_keeps_the_executors_undo_keys(monkeypatch):
     with pytest.raises(RuntimeError):
         hs.evaluate({"consumers": []}, {"grid": 0}, state, 1.0)
     assert state == {"_run": 5, "_undo": {"x": 1}}
+
+
+def _value_event(dp_id, value):
+    return SimpleNamespace(datapoint_id=dp_id, value=value, suppress_action_triggers=False, logic_depth=0, initialization=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("frozen_export_w", "fresh_import_w", "expect_safe"), [(3000, 2500, True), (0, 300, False)])
+async def test_a_frozen_export_meter_in_split_mode(frozen_export_w, fresh_import_w, expect_safe):
+    """Split mode must notice a frozen export meter (review of PR #1334).
+
+    Read Object (Import) ─value/changed─┐
+                                        ├─> hems_surplus (split, max_age_s=60) ─c_boiler─> Write Object
+    Read Object (Export) ─value/changed─┘
+
+    Values arrive through ``LogicManager._on_value_event`` and the control loop
+    runs through ``LogicManager._hems_run``; only ``hems_clock`` is driven.
+    """
+    dp_imp, dp_exp, dp_out = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    consumers = [{"id": "boiler", "name": "Boiler", "mode": "onoff", "power_w": 2000, "on_delay_s": 0, "off_delay_s": 0}]
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                node("ri", "datapoint_read", {"datapoint_id": str(dp_imp)}),
+                node("re", "datapoint_read", {"datapoint_id": str(dp_exp)}),
+                node("h", "hems_surplus", {"grid_mode": "split", "max_age_s": 60, "off_delay_s": 0, "consumers": consumers}),
+                node("w", "datapoint_write", {"datapoint_id": str(dp_out)}),
+            ],
+            "edges": [
+                edge("ri", "h", "value", "grid_import"),
+                edge("ri", "h", "changed", "grid_import_changed"),
+                edge("re", "h", "value", "grid_export"),
+                edge("re", "h", "changed", "grid_export_changed"),
+                edge("h", "w", "c_boiler", "value"),
+            ],
+        }
+    )
+    values: dict[str, object] = {str(dp_imp): 0}  # the import value is already in the registry
+    manager = _manager(values)
+    manager._graphs["g"] = ("G", True, flow)
+    clock = [1000.0]
+
+    async def publish(dp_id, value):
+        values[str(dp_id)] = value
+        await manager._on_value_event(_value_event(dp_id, value))
+
+    ws = MagicMock()
+    ws.has_logic_debug_subscribers.return_value = False
+    with (
+        patch("obs.api.v1.websocket.get_ws_manager", return_value=ws),
+        patch("obs.logic.executor.hems_clock", side_effect=lambda: clock[0]),
+        patch("obs.logic.manager.hems_clock", side_effect=lambda: clock[0]),
+    ):
+        # t = 0 s: both meters report 3000 W export, the boiler (2000 W) switches on.
+        await publish(dp_exp, 3000)
+        await publish(dp_imp, 0)
+        # The export meter falls silent; its Read Object keeps delivering frozen_export_w,
+        # while the import meter reports a fresh value every 30 s.
+        values[str(dp_exp)] = frozen_export_w
+        for _ in range(20):  # 600 s
+            clock[0] += 30
+            await publish(dp_imp, fresh_import_w)
+            await manager._hems_run("g", "h", "G", flow, waking=False)
+
+    writes = [c.args[0].value for c in manager._event_bus.publish.await_args_list if str(c.args[0].datapoint_id) == str(dp_out)]
+    block = manager._hysteresis["g"]["h"]
+    assert writes and writes[0] is True
+    assert writes[-1] is False  # the boiler is off again
+    assert block["consumers"]["boiler"]["on"] is False
+    # A frozen non-zero export is stale; a send-on-change export silent at 0 W is not.
+    assert block["status"] == ("stale_input" if expect_safe else "ok")

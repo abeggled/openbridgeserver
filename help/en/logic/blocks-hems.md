@@ -121,9 +121,10 @@ that is still wired does not stay on. The debug tab lists every output with its 
   sent is held; a consumer without one, e.g. right after a restart, goes to the safe state). The
   event is written to the log.
 - **Stale values** are only checked when **Maximum age of meter values** is greater than 0 *and* the
-  Read Object's *Changed* output is wired to the block (see Sensor Watchdog). With separate inputs the
-  meter counts as stale only when neither side has reported in time — a send-on-change export side
-  that stays at 0 W is not enough. Likewise, with "Feed-in power only" a silent meter at 0 W does not
+  Read Object's *Changed* output is wired to the block (see Sensor Watchdog). With separate inputs both
+  values must be current: when one side stays silent for too long while still reporting a non-zero
+  value, the meter counts as stale — even if the other side keeps reporting. A send-on-change side
+  that stays at 0 W does not make the meter stale; only when neither side reports in time. Likewise, with "Feed-in power only" a silent meter at 0 W does not
   count as stale (0 W is handled conservatively anyway). The block reacts as soon
   as the age is exceeded, not only at the next control cycle. A value restored after a restart counts
   as stale until the meter reports a new telegram.
