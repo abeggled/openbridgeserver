@@ -21,7 +21,7 @@
           @graph-deleted="onGraphDeletedFromPicker"
         />
         <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm flex-shrink-0">{{ $t('logic.newGraphBtn') }}</button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph()" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving" data-testid="btn-save">
+        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph()" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving || graphLoading" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
@@ -706,8 +706,12 @@ async function loadGraph() {
     // switch flush never ran: persist first, or the GET returns the state
     // before the edit and the canvas silently loses it.
     // A switch to another sheet waits for nothing here: the previous sheet's
-    // save has its own queue entry and does not affect this GET.
-    if (!await persistPendingChanges(activeGraphId.value)) return
+    // save has its own queue entry and does not affect this GET. A failed
+    // save still loads: the canvas may already hold another sheet, and
+    // keeping that under this sheet's id would let the next save overwrite
+    // it. The save error stays visible.
+    await persistPendingChanges(activeGraphId.value)
+    if (requestId !== _loadGraphRequestId) return
     const { data } = await logicApi.getGraph(activeGraphId.value)
     if (requestId !== _loadGraphRequestId) return
     nodes.value = (data.flow_data.nodes || []).map(n => {
@@ -753,7 +757,8 @@ const _lastSaveByGraph = new Map()
 // `graphId` defaults to the open sheet; the auto-save flush on a sheet switch
 // passes the previous sheet explicitly, because by then activeGraphId already
 // names the next one while nodes/edges still hold the previous sheet.
-// Resolves to whether the sheet was saved.
+// Resolves to true when saved, false when the save failed, and null when the
+// graph validation refused to send it.
 async function saveGraph(graphId = activeGraphId.value) {
   if (!auth.isAdmin || !graphId) return false
   // A save supersedes any pending auto-save of the same sheet — it carries
@@ -769,7 +774,7 @@ async function saveGraph(graphId = activeGraphId.value) {
         __diagnostic__: w.code,
       }])
     ))
-    return false
+    return null
   }
   // Snapshot synchronously: by the time a queued save runs, the canvas may
   // already show another sheet.
@@ -835,12 +840,14 @@ function flushAutoSave() {
 
 // Actions that read the sheet back from the server (run, export, duplicate,
 // reload) must see the last edit, not the state before the debounce elapsed.
-// Resolves to false when the last edit could not be saved, so the caller
-// stops instead of acting on the server's older state.
+// Resolves to false when the last edit failed to save, so the caller stops
+// instead of acting on the server's older state. A validation-blocked edit
+// (a legacy sheet with existing warnings) never reaches the server either
+// way; those sheets stay runnable and exportable as before auto-save.
 async function persistPendingChanges(graphId) {
   // The flushed save queues behind any earlier one, so it settles last.
-  if (_autoSaveGraphId === graphId) return flushAutoSave()
-  return _lastSaveByGraph.get(graphId) ?? true
+  const saved = await (_autoSaveGraphId === graphId ? flushAutoSave() : _lastSaveByGraph.get(graphId))
+  return saved !== false
 }
 
 // `sync`: must run at the assignment itself, before callers such as
@@ -1240,21 +1247,15 @@ function confirmDeleteGraph() {
 }
 async function doDeleteGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
-  // A pending auto-save firing while the delete is in flight would PUT into
-  // the sheet being removed — but if the delete fails, the sheet stays and
-  // so must its unsaved edit.
   const graphId = activeGraphId.value
-  const hadPendingSave = _autoSaveGraphId === graphId
-  cancelAutoSave()
-  try {
-    // A save already in flight would otherwise land after the DELETE and
-    // report a spurious "save failed".
-    await _lastSaveByGraph.get(graphId)
-    await store.deleteGraph(graphId)
-  } catch (err) {
-    if (hadPendingSave) scheduleAutoSave()
-    throw err
-  }
+  // Persist a pending edit first: should the delete fail, the sheet stays
+  // and so must its edit. Every queued write (save, toggle, rename) has to
+  // land before the DELETE, or it fails afterwards with a spurious error.
+  flushAutoSave()
+  await _saveQueue
+  await store.deleteGraph(graphId)
+  // The user may have opened another sheet meanwhile — leave that one open.
+  if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
   nodes.value = []; edges.value = []
 }

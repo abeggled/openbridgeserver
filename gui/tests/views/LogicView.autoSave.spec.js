@@ -325,15 +325,19 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
   })
 
-  it('drops a pending auto-save of a sheet that is deleted', async () => {
+  it('saves a pending change before deleting the sheet, then closes it', async () => {
     const { wrapper, logicApi } = await mountLogicView()
+    const order = []
+    logicApi.saveGraph.mockImplementation((id, payload) => { order.push('save'); return Promise.resolve({ data: { id, ...payload } }) })
+    logicApi.deleteGraph.mockImplementation(() => { order.push('delete'); return Promise.resolve({}) })
 
     wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
     await wrapper.vm.doDeleteGraph()
     await elapse(1000)
 
-    expect(logicApi.deleteGraph).toHaveBeenCalledWith('graph-a')
-    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    expect(order).toEqual(['save', 'delete'])
+    expect(wrapper.vm.activeGraphId).toBe('')
+    expect(wrapper.vm.edges).toEqual([])
   })
 
   it('drops a pending auto-save of a sheet deleted from the graph picker', async () => {
@@ -520,16 +524,29 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     const { wrapper, logicApi } = await mountLogicView()
     logicApi.deleteGraph.mockRejectedValue(new Error('forbidden'))
 
-    await expect(wrapper.vm.doDeleteGraph()).rejects.toThrow('forbidden')
-    await elapse(1000)
-    expect(logicApi.saveGraph).not.toHaveBeenCalled()
-
     wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
     await expect(wrapper.vm.doDeleteGraph()).rejects.toThrow('forbidden')
-    await elapse(500)
+    await elapse(1000)
+
     expect(wrapper.vm.activeGraphId).toBe('graph-a')
     expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
     expect(savedEdges(logicApi)).toHaveLength(2)
+  })
+
+  it('leaves a sheet opened while the delete was in flight open', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    let finishDelete
+    logicApi.deleteGraph.mockReturnValue(new Promise(resolve => { finishDelete = resolve }))
+
+    const deleting = wrapper.vm.doDeleteGraph()
+    await flushPromises()
+    wrapper.vm.onGraphPicked('graph-b')
+    await flushPromises()
+    finishDelete({})
+    await deleting
+
+    expect(wrapper.vm.activeGraphId).toBe('graph-b')
+    expect(wrapper.vm.nodes).toHaveLength(3)
   })
 
   it('queues toggle and rename behind an in-flight save', async () => {
@@ -612,7 +629,27 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-a')
     })
 
-    it('keeps the canvas when re-loading the open sheet after its save failed', async () => {
+    it('still loads a sheet whose save failed, so the canvas never shows another sheet under its id', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      expect(wrapper.vm.edges).toEqual([])
+      // Back to graph-a while its save is in flight; that save then fails.
+      wrapper.vm.onGraphPicked('graph-a')
+      await flushPromises()
+      release[0].fail()
+      await flushPromises()
+
+      expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-a')
+      expect(wrapper.vm.edges).toEqual(GRAPH_A.flow_data.edges)
+      expect(wrapper.vm.graphLoading).toBe(false)
+      expect(wrapper.vm.statusMsg.ok).toBe(false)
+    })
+
+    it('skips the GET of a load superseded while it waited for a save', async () => {
       const { saveGraph, release } = heldSaves()
       const { wrapper, logicApi } = await mountLogicView({ saveGraph })
       const loads = logicApi.getGraph.mock.calls.length
@@ -620,13 +657,26 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
       wrapper.vm.onGraphPicked('graph-a')
       await flushPromises()
-      release[0].fail()
+      wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      release[0].ok()
       await flushPromises()
 
-      expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
-      expect(wrapper.vm.edges).toHaveLength(2)
-      expect(wrapper.vm.graphLoading).toBe(false)
-      expect(wrapper.vm.statusMsg.ok).toBe(false)
+      expect(logicApi.getGraph.mock.calls.slice(loads)).toEqual([['graph-b']])
+    })
+
+    it('disables the Save button while a sheet is loading', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+      let finishLoad
+      logicApi.getGraph.mockReturnValueOnce(new Promise(resolve => { finishLoad = resolve }))
+
+      wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="btn-save"]').attributes('disabled')).toBeDefined()
+
+      finishLoad({ data: structuredClone(GRAPH_B) })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="btn-save"]').attributes('disabled')).toBeUndefined()
     })
 
     it('stops run, export and duplicate when the pending change could not be saved', async () => {
@@ -648,16 +698,17 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(logicApi.duplicateGraph).not.toHaveBeenCalled()
     })
 
-    it('stops when a validation-blocked change cannot be saved', async () => {
+    it('keeps legacy sheets with validation warnings exportable', async () => {
       const { wrapper, logicApi } = await mountLogicView()
 
-      // A legacy cycle: the save is refused before any request is sent.
+      // A legacy cycle: the save is refused before any request is sent, so
+      // there is nothing to wait for — export works as before auto-save.
       wrapper.vm.edges = [...wrapper.vm.edges, { id: 'back', source: 'n2', target: 'n1', sourceHandle: 'out', targetHandle: 'a' }]
       wrapper.vm.onElementsChange([{ type: 'remove', id: 'x' }])
       await wrapper.vm.doExportGraph()
 
       expect(logicApi.saveGraph).not.toHaveBeenCalled()
-      expect(logicApi.exportGraph).not.toHaveBeenCalled()
+      expect(logicApi.exportGraph).toHaveBeenCalledWith('graph-a')
     })
 
     it('runs and exports the sheet that was open when clicked', async () => {
