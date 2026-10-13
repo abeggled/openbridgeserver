@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsFlag, hemsGridMode, hemsOutputLabels } from '@/utils/logicHemsOutputs'
+import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsFlag, hemsGridMode, hemsInputPorts, hemsOutputLabels } from '@/utils/logicHemsOutputs'
 
 const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key)
 const node = data => ({ type: 'hems_surplus', data })
@@ -106,5 +106,18 @@ describe('enum settings', () => {
     expect(hemsGridMode({ grid_mode: 'Split' })).toBe('split')
     expect(hemsGridMode({ grid_mode: 3 })).toBe('bidirectional')
     expect(hemsGridMode(undefined)).toBe('bidirectional')
+  })
+})
+
+describe('hemsInputPorts', () => {
+  it('lists the meter, interlock and consumer inputs in card order', () => {
+    const ids = data => hemsInputPorts(data, t).map(p => p.id)
+    expect(ids({})).toEqual(['grid', 'enable', 'target', 'plant_ok'])
+    expect(ids(undefined)).toEqual(['grid', 'enable', 'target', 'plant_ok'])
+    expect(ids({ grid_mode: 'feed_in_only', max_age_s: 30 })).toEqual(['feed_in', 'feed_in_changed', 'enable', 'target', 'plant_ok'])
+    expect(ids({ consumers: [{ id: 'a', mode: 'onoff' }, { id: 'b', mode: 'percent', power_source: 'input' }, { id: 'w', mode: 'trigger' }] })).toEqual([
+      'grid', 'enable', 'target', 'plant_ok', 'c_a_power', 'c_b_power', 'c_b_max_power', 'c_w_reset',
+    ])
+    expect(hemsInputPorts({ consumers: [{ id: 'a', name: 'Boiler', mode: 'onoff' }] }, t).at(-1).label).toBe('Boiler: logic.portLabels.hems.measuredPower')
   })
 })

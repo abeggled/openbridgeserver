@@ -343,6 +343,7 @@ import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { hemsInputPorts } from '@/utils/logicHemsOutputs'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const { t, locale } = useI18n()
@@ -1002,6 +1003,8 @@ const debugInputs = computed(() => {
     ports = Array.from({ length: Math.max(2, Math.min(20, stringCount)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'python_script') {
     ports = ['a', 'b', 'c'].map(id => ({ id, label: id }))
+  } else if (selectedNode.value.type === 'hems_surplus') {
+    ports = hemsInputPorts(selectedNode.value.data, t)
   }
   const known = new Set(ports.map(port => port.id))
   for (const edge of edges.value.filter(item => item.target === selectedNode.value.id)) {

@@ -79,7 +79,7 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
-import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsGridMode } from '@/utils/logicHemsOutputs'
+import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsInputPorts } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -258,27 +258,10 @@ const def = computed(() => {
   }
   if (props.type === 'hems_surplus') {
     const d = props.data
-    const gridMode = hemsGridMode(d)
-    const meters = { bidirectional: ['grid'], split: ['grid_import', 'grid_export'], feed_in_only: ['feed_in'] }[gridMode]
-    const withAge = hemsAgeCheckActive(d.max_age_s)
-    const inputs = []
-    for (const m of meters) {
-      const meterLabel = t(`logic.portLabels.hems.${m}`)
-      inputs.push({ id: m, label: meterLabel })
-      const changedLabel = `${meterLabel}: ${t('logic.ports.changed')}`
-      if (withAge) inputs.push({ id: `${m}_changed`, label: changedLabel })
-    }
-    inputs.push(
-      { id: 'enable',   label: t('logic.portLabels.hems.enable') },
-      { id: 'target',   label: t('logic.portLabels.hems.target') },
-      { id: 'plant_ok', label: t('logic.portLabels.hems.plant_ok') },
-    )
+    const inputs = hemsInputPorts(d, t)
     const outputs = []
     hemsConsumers(d.consumers).forEach((c, i) => {
       const name = hemsConsumerName(c, i, t)
-      if (c.mode !== 'trigger') inputs.push({ id: `c_${c.id}_power`, label: `${name}: ${t('logic.portLabels.hems.measuredPower')}` })
-      if (c.mode !== 'trigger' && c.power_source === 'input') inputs.push({ id: `c_${c.id}_max_power`, label: `${name}: ${t('logic.portLabels.hems.maxPower')}` })
-      if (c.mode === 'trigger') inputs.push({ id: `c_${c.id}_reset`, label: `${name}: ${t('logic.portLabels.hems.reset')}` })
       outputs.push(
         { id: `c_${c.id}`, label: name },
         { id: `c_${c.id}_status`, label: `${name}: ${t('logic.portLabels.hems.status')}` },

@@ -80,6 +80,42 @@ export function hemsFlag(value) {
   return !isBackendFalse(value)
 }
 
+// Meter input ports per measurement mode (`grid_input_names` in hems_surplus.py).
+const METER_INPUTS = { bidirectional: ['grid'], split: ['grid_import', 'grid_export'], feed_in_only: ['feed_in'] }
+
+/**
+ * The input ports of a hems_surplus block, in card order — shared by the
+ * block card and the debug inspector, which must offer the same ports.
+ *
+ * @param {object} data  node data
+ * @param {(key: string, params?: object) => string} t  vue-i18n translate function
+ * @returns {Array<{id: string, label: string}>}
+ */
+export function hemsInputPorts(data, t) {
+  const inputs = []
+  const withAge = hemsAgeCheckActive(data?.max_age_s)
+  for (const m of METER_INPUTS[hemsGridMode(data)]) {
+    const meterLabel = t(`logic.portLabels.hems.${m}`)
+    inputs.push({ id: m, label: meterLabel })
+    if (withAge) inputs.push({ id: `${m}_changed`, label: `${meterLabel}: ${t('logic.ports.changed')}` })
+  }
+  inputs.push(
+    { id: 'enable', label: t('logic.portLabels.hems.enable') },
+    { id: 'target', label: t('logic.portLabels.hems.target') },
+    { id: 'plant_ok', label: t('logic.portLabels.hems.plant_ok') },
+  )
+  hemsConsumers(data?.consumers).forEach((c, i) => {
+    const name = hemsConsumerName(c, i, t)
+    if (c.mode === 'trigger') {
+      inputs.push({ id: `c_${c.id}_reset`, label: `${name}: ${t('logic.portLabels.hems.reset')}` })
+      return
+    }
+    inputs.push({ id: `c_${c.id}_power`, label: `${name}: ${t('logic.portLabels.hems.measuredPower')}` })
+    if (c.power_source === 'input') inputs.push({ id: `c_${c.id}_max_power`, label: `${name}: ${t('logic.portLabels.hems.maxPower')}` })
+  })
+  return inputs
+}
+
 /**
  * Whether the meter age check is on, read like the engine reads max_age_s
  * (`_cfg_num`: Python float(), a boolean is no number).
