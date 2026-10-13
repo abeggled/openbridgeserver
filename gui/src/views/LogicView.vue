@@ -342,6 +342,7 @@ import DatapointNode    from '@/components/logic/nodes/DatapointNode.vue'
 import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const { t, locale } = useI18n()
@@ -446,7 +447,7 @@ const nodeTypeComponents = {
   // Comment (issue #1043)
   comment: _comment,
   // Logic
-  and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic, merge: _generic,
+  and: _generic, or: _generic, not: _generic, xor: _generic, binary_stats: _generic, gate: _generic, memory: _generic, merge: _generic,
   change_filter: _generic, edge_detect: _generic,
   compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,
   // Math
@@ -987,8 +988,11 @@ const debugInputs = computed(() => {
   const definition = store.nodeTypes.find(type => type.type === selectedNode.value.type)
   let ports = definition?.inputs || []
   const count = Number(selectedNode.value.data?.input_count) || 2
-  if (['and', 'or', 'xor'].includes(selectedNode.value.type)) {
-    ports = Array.from({ length: Math.max(2, Math.min(30, count)) }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
+  if (['and', 'or', 'xor', 'binary_stats'].includes(selectedNode.value.type)) {
+    const gateCount = selectedNode.value.type === 'binary_stats'
+      ? binaryStatsInputCount(selectedNode.value.data?.input_count)
+      : Math.max(2, Math.min(30, count))
+    ports = Array.from({ length: gateCount }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'avg_multi') {
     ports = Array.from({ length: Math.max(2, Math.min(20, count)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'string_concat') {

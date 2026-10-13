@@ -1104,6 +1104,9 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.selectedNode = { id: 'gate', type: 'and', data: { input_count: 3 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in1', 'in2', 'in3'])
 
+    wrapper.vm.selectedNode = { id: 'stats', type: 'binary_stats', data: { input_count: 2.5 } }
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in1', 'in2', 'in3'])
+
     wrapper.vm.selectedNode = { id: 'average', type: 'avg_multi', data: { input_count: 4 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
 

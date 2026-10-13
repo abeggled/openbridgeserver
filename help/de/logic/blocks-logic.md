@@ -23,6 +23,27 @@ sich wie beim AND-Block einzeln über Klick auf den Port-Namen negieren.
 Ausgang ist **true**, wenn GENAU EIN Eingang true ist (bei mehr als zwei Eingängen: eine ungerade
 Anzahl true). Eingänge (2–30) und Ausgang lassen sich einzeln negieren.
 
+## Binärstatistik {#logic-block-binary-stats}
+
+Zählt, wie viele der Binäreingänge TRUE und FALSE sind — etwa „wie viele Fenster sind offen?" oder
+„mindestens 2 von 3 Rauchmeldern". Die Anzahl der Eingänge (2–30) und die Negation je Eingang
+funktionieren wie bei AND/OR; die Negation wird **vor** der Zählung angewendet. Der Block ist rein
+kombinatorisch, hat keinen Zustand und sendet bei jedem Lauf alle Ausgänge.
+
+- **Anzahl TRUE / Anzahl FALSE** — Zahl der Eingänge mit TRUE bzw. FALSE.
+- **Mehrheit TRUE** — true, wenn mehr Eingänge TRUE als FALSE sind (echtes „größer").
+- **Gesamt** — Zahl der ausgewerteten Eingänge.
+- **Anteil TRUE %** — Anteil TRUE in Prozent (eine Nachkommastelle, kaufmännisch gerundet).
+- **Gleichstand** — true bei gleich vielen TRUE und FALSE (nur bei Gesamt > 0).
+- **Schwelle erreicht** — true, wenn Anzahl TRUE ≥ „Schwelle". Bei Schwelle 0 ist die Funktion
+  aus und der Ausgang immer false.
+
+**Unverbundene Eingänge** legt die gleichnamige Einstellung fest. Bei *Ignorieren* (Standard)
+zählen nur tatsächlich verdrahtete Eingänge; bei *Als FALSE zählen* gilt das Verhalten von AND/OR
+(unverbunden = FALSE). Ein verbundener Eingang, der in diesem Lauf keinen Wert liefert, zählt
+immer als FALSE. Ist kein Eingang verdrahtet, sind alle Zähl- und Prozentwerte 0 und alle
+Boolean-Ausgänge false.
+
 ## NOT {#logic-block-not}
 
 Invertiert den Eingang — ein einzelner Ein- und Ausgang, keine weitere Konfiguration.
