@@ -10,7 +10,7 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="$t('logic.nodeTypes.python_script')"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['gn-label', customLabel && 'gn-label--custom']"
           @rename="renameNode"
         />
@@ -61,7 +61,8 @@ const shortScript = computed(() => {
 
 const hovered = ref(false)
 const { removeNodes, updateNodeData } = useVueFlow()
-// Hidden while the editor holds the canvas read-only (a sheet is loading).
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
 const canvasEditable = useCanvasEditable()
 function remove() { removeNodes([props.id]) }
 

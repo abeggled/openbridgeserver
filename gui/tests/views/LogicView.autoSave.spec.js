@@ -1263,4 +1263,112 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     await duplicating
     expect(wrapper.vm.canvasEditable).toBe(true)
   })
+
+  describe('any change to the persisted content counts as an edit', () => {
+    const withData = (wrapper, id, data) => wrapper.vm.nodes.map(n => n.id === id ? { ...n, data: { ...n.data, ...data } } : n)
+
+    it('auto-saves an edit made on a block card (updateNodeData)', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+
+      wrapper.vm.nodes = withData(wrapper, 'n1', { negate_a: true })
+      // The watcher runs on the next flush and starts the debounce there.
+      await flushPromises()
+      await elapse(500)
+
+      expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
+      expect(logicApi.saveGraph.mock.calls[0][1].flow_data.nodes[0].data.negate_a).toBe(true)
+    })
+
+    it('auto-saves moved blocks', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+
+      wrapper.vm.nodes = wrapper.vm.nodes.map(n => n.id === 'n2' ? { ...n, position: { x: 400, y: 80 } } : n)
+      // The watcher runs on the next flush and starts the debounce there.
+      await flushPromises()
+      await elapse(500)
+
+      expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
+      expect(logicApi.saveGraph.mock.calls[0][1].flow_data.nodes[1].position).toEqual({ x: 400, y: 80 })
+    })
+
+    it('ignores debug values and selection, which are not persisted', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+
+      wrapper.vm.nodes = withData(wrapper, 'n1', { _dbg: '42', _dbg_title: '42' }).map(n => ({ ...n, selected: true }))
+      await elapse(1000)
+
+      expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    })
+
+    it('ignores changes a read-only user cannot make anyway', async () => {
+      const { wrapper, logicApi } = await mountLogicView({ isAdmin: false })
+
+      wrapper.vm.nodes = withData(wrapper, 'n1', { value: 5 })
+      await elapse(1000)
+
+      expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    })
+  })
+
+  it('keeps an error visible over an auto-save\'s "saved", but not over a manual save', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+
+    wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+    // Rejected connection (cycle): its error must survive the auto-save.
+    wrapper.vm.onConnect({ source: 'n3', target: 'n1', sourceHandle: 'out', targetHandle: 'a' })
+    await elapse(500)
+    expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+
+    await wrapper.find('[data-testid="btn-save"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.statusMsg.ok).toBe(true)
+  })
+
+  it('refuses a paste while a sheet is being swapped', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    let finishDuplicate
+    logicApi.duplicateGraph.mockReturnValueOnce(new Promise(resolve => { finishDuplicate = resolve }))
+    wrapper.vm.nodes = wrapper.vm.nodes.map(n => ({ ...n, selected: n.id === 'n1' }))
+    wrapper.vm.copySelection()
+    await elapse(500)
+    logicApi.saveGraph.mockClear()
+
+    wrapper.vm.duplicateName = 'Copy'
+    const duplicating = wrapper.vm.doDuplicate()
+    await flushPromises()
+    wrapper.vm.pasteClipboard()
+    expect(wrapper.vm.nodes).toHaveLength(3)
+
+    finishDuplicate({ data: makeGraph('graph-copy') })
+    await duplicating
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+  })
+
+  it('closes the config panel when the canvas is swapped', async () => {
+    const { wrapper } = await mountLogicView()
+
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+    wrapper.vm.newGraphName = 'Fresh'
+    await wrapper.vm.doCreateGraph()
+
+    expect(wrapper.vm.selectedNode).toBe(null)
+  })
+
+  it('reports a failed save its predecessor started when the editor is reopened', async () => {
+    let failSave
+    const saveGraph = vi.fn().mockImplementation(() => new Promise((_resolve, reject) => { failSave = reject }))
+    const first = await mountLogicView({ saveGraph })
+    first.wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+    mounted.splice(mounted.indexOf(first.wrapper), 1)
+    first.wrapper.unmount()
+    await flushPromises()
+
+    const second = await mountLogicView({ saveGraph, pinia: first.pinia })
+    failSave(new Error('down'))
+    await flushPromises()
+
+    expect(second.wrapper.vm.statusMsg.ok).toBe(false)
+    expect(second.wrapper.vm.nodes).toHaveLength(3)
+  })
 })

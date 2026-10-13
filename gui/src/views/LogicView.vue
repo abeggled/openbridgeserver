@@ -21,7 +21,7 @@
           @graph-deleted="onGraphDeletedFromPicker"
         />
         <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm flex-shrink-0">{{ $t('logic.newGraphBtn') }}</button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph()" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving || graphLoading" data-testid="btn-save">
+        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph({ manual: true })" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving || graphLoading" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
@@ -724,8 +724,11 @@ async function loadGraph() {
   try {
     // Re-picking the open sheet: persist its edit first, or the GET returns
     // the state before it. Saves of the sheet being loaded settle first.
-    await persistPendingChanges(graphId)
+    const saved = await persistPendingChanges(graphId)
     if (superseded()) return
+    // A save this view did not start (the previous instance's unmount flush)
+    // failed: its own error message went with it, so report it here.
+    if (!saved && _canvasGraphId !== graphId) showStatus(false, t('logic.errorSave'))
     const { data } = await logicApi.getGraph(graphId)
     if (superseded()) return
     replaceCanvas(graphId, (data.flow_data.nodes || []).map(n => {
@@ -785,6 +788,10 @@ function replaceCanvas(graphId, flowNodes = [], flowEdges = [], { discard = fals
   _savedRev = 0
   nodes.value = flowNodes
   edges.value = flowEdges
+  // New content, not an edit — the content watcher must not count it.
+  _persistedSignature = persistedSignature()
+  // The config panel would otherwise keep editing a block of the old canvas.
+  selectedNode.value = null
 }
 
 // Saves the canvas into the sheet it belongs to. Resolves to true when
@@ -798,7 +805,9 @@ function replaceCanvas(graphId, flowNodes = [], flowEdges = [], { discard = fals
 // is already redirecting to /login — prompting for a retry would block that.
 const PERMANENT_SAVE_REJECTIONS = new Set([400, 401, 403, 404, 413, 422])
 
-async function saveGraph() {
+// `manual`: the Save button — its confirmation always shows, while an
+// auto-save's "saved" must not replace an error the user still has to read.
+async function saveGraph({ manual = false } = {}) {
   const graphId = _canvasGraphId
   if (!auth.isAdmin || !graphId) return false
   // Any save carries the latest canvas, so a pending auto-save is redundant.
@@ -835,7 +844,7 @@ async function saveGraph() {
       if (graph) {
         await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
         if (sameCanvas()) _savedRev = Math.max(_savedRev, rev)
-        showStatus(true, t('logic.saved'))
+        if (manual || statusMsg.value?.ok !== false) showStatus(true, t('logic.saved'))
         result = true
       } else {
         // Deleted meanwhile (e.g. from the graph picker) — nothing to save
@@ -865,10 +874,26 @@ let _autoSaveTimer = null
 
 function scheduleAutoSave() {
   if (!auth.isAdmin || !_canvasGraphId) return
+  // Counted here — the content watcher must not count (and re-debounce) the
+  // same change again when it runs.
+  _persistedSignature = persistedSignature()
   _editRev += 1
   clearTimeout(_autoSaveTimer)
   _autoSaveTimer = setTimeout(saveGraph, AUTO_SAVE_DELAY_MS)
 }
+
+// Every change to what a save would persist counts as an edit, wherever it
+// comes from: edits on the block cards themselves (inline rename, negation
+// toggle, comment resize — Vue Flow's updateNodeData emits no change event)
+// and moved blocks included. The handlers above still schedule directly, so
+// a run/export right after them already sees the edit synchronously.
+let _persistedSignature = ''
+function persistedSignature() {
+  return JSON.stringify(currentFlowData())
+}
+watch(persistedSignature, (signature) => {
+  if (signature !== _persistedSignature) scheduleAutoSave()
+})
 
 // Saves an unsent edit right away instead of waiting for the debounce.
 function flushUnsentEdits() {
@@ -1563,7 +1588,7 @@ function pasteClipboard() {
   // graphLoading guards against a slow getGraph() from an earlier sheet
   // switch resolving after this paste and overwriting nodes/edges with the
   // just-loaded (pre-paste) sheet, silently dropping the pasted blocks.
-  if (!auth.isAdmin || !clipboard.value || !activeGraphId.value || graphLoading.value) return
+  if (!canvasEditable.value || !clipboard.value || !activeGraphId.value) return
   // Anchor the pasted group at the center of the currently visible canvas
   // (converted to flow coordinates, same technique as onDrop) only when
   // pasting into a *different* sheet than the one it was copied from —

@@ -3,7 +3,7 @@
     <NodeResizer
       :min-width="160"
       :min-height="80"
-      :is-visible="selected || hovered"
+      :is-visible="canvasEditable && (selected || hovered)"
       line-class-name="cn-resize-line"
       handle-class-name="cn-resize-handle"
       @resize="onResize"
@@ -14,7 +14,7 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="defaultLabel"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['cn-title', customLabel && 'cn-title--custom']"
           @rename="renameNode"
         />
@@ -39,7 +39,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData, removeNodes } = useVueFlow()
-// Hidden while the editor holds the canvas read-only (a sheet is loading).
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
 const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 

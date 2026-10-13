@@ -1,17 +1,41 @@
-// The delete button on every block card follows the editor's read-only state
-// (issue #1333): while a sheet loads, a deletion would land on the outgoing
-// canvas.
-import { describe, it, expect, vi } from 'vitest'
+// Edits on the block cards follow the editor's read-only state (issue #1333):
+// while a sheet loads or is being swapped, an edit would land on the outgoing
+// canvas. Delete, inline rename, negation toggle and comment resize pause.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import { CANVAS_EDITABLE_KEY } from '@/components/logic/nodes/canvasEditable'
+
+const { updateNodeDataMock, NODE_RESIZER_STUB } = vi.hoisted(() => ({
+  updateNodeDataMock: vi.fn(),
+  NODE_RESIZER_STUB: { name: 'NodeResizer', props: ['minWidth', 'minHeight', 'isVisible', 'lineClassName', 'handleClassName'], template: '<div />' },
+}))
 
 vi.mock('@vue-flow/core', () => ({
   Handle: { template: '<span />' },
   Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
-  useVueFlow: () => ({ removeNodes: vi.fn(), updateNodeData: vi.fn() }),
+  useVueFlow: () => ({ removeNodes: vi.fn(), updateNodeData: updateNodeDataMock }),
 }))
-vi.mock('@vue-flow/node-resizer', () => ({ NodeResizer: { template: '<div />' } }))
+vi.mock('@vue-flow/node-resizer', () => ({ NodeResizer: NODE_RESIZER_STUB }))
+
+beforeEach(() => {
+  updateNodeDataMock.mockClear()
+  useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+})
+
+async function mountCard(name, props, editable) {
+  const { default: Card } = await import(`@/components/logic/nodes/${name}.vue`)
+  const wrapper = mount(Card, {
+    props: { id: 'n-1', data: {}, ...props },
+    global: {
+      provide: editable === undefined ? {} : { [CANVAS_EDITABLE_KEY]: ref(editable) },
+      stubs: { NodeResizer: NODE_RESIZER_STUB },
+    },
+  })
+  await flushPromises()
+  return wrapper
+}
 
 const CARDS = [
   ['GenericNode', { type: 'and' }, '.gn-del'],
@@ -20,34 +44,52 @@ const CARDS = [
   ['PythonScriptNode', { type: 'python_script' }, '.gn-delete'],
 ]
 
-describe.each(CARDS)('%s delete button', (name, props, selector) => {
-  async function mountCard(editable) {
-    const { default: Card } = await import(`@/components/logic/nodes/${name}.vue`)
-    const wrapper = mount(Card, {
-      props: { id: 'n-1', data: {}, ...props },
-      global: { provide: { [CANVAS_EDITABLE_KEY]: ref(editable) } },
-    })
-    await flushPromises()
-    return wrapper
-  }
-
-  it('is offered while the canvas is editable', async () => {
-    expect((await mountCard(true)).find(selector).exists()).toBe(true)
+describe.each(CARDS)('%s', (name, props, deleteSelector) => {
+  it('offers delete and inline rename while the canvas is editable', async () => {
+    const wrapper = await mountCard(name, props, true)
+    expect(wrapper.find(deleteSelector).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'NodeTitleEditor' }).props('editable')).toBe(true)
   })
 
-  it('is hidden while the canvas is read-only', async () => {
-    expect((await mountCard(false)).find(selector).exists()).toBe(false)
+  it('offers neither while the canvas is read-only', async () => {
+    const wrapper = await mountCard(name, props, false)
+    expect(wrapper.find(deleteSelector).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'NodeTitleEditor' }).props('editable')).toBe(false)
+  })
+
+  it('counts as editable outside the editor', async () => {
+    const wrapper = await mountCard(name, props)
+    expect(wrapper.find(deleteSelector).exists()).toBe(true)
   })
 })
 
-describe('GenericNode delete button visibility', () => {
-  it('shows only while the card is hovered', async () => {
-    const { default: GenericNode } = await import('@/components/logic/nodes/GenericNode.vue')
-    const wrapper = mount(GenericNode, { props: { id: 'n-1', type: 'and', data: {} } })
-    await flushPromises()
-    expect(wrapper.find('.gn-del').attributes('style')).toContain('visibility: hidden')
+describe('GenericNode negation toggle', () => {
+  it('toggles while editable and ignores clicks while read-only', async () => {
+    const readOnly = await mountCard('GenericNode', { type: 'and' }, false)
+    await readOnly.find('.gn-port-negate').trigger('click')
+    expect(updateNodeDataMock).not.toHaveBeenCalled()
 
+    const editable = await mountCard('GenericNode', { type: 'and' }, true)
+    await editable.find('.gn-port-negate').trigger('click')
+    expect(updateNodeDataMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the delete button only while the card is hovered', async () => {
+    const wrapper = await mountCard('GenericNode', { type: 'and' }, true)
+    expect(wrapper.find('.gn-del').attributes('style')).toContain('visibility: hidden')
     await wrapper.trigger('mouseenter')
     expect(wrapper.find('.gn-del').attributes('style')).toContain('visibility: visible')
+  })
+})
+
+describe('CommentNode resizer', () => {
+  it('stays hidden on hover while the canvas is read-only', async () => {
+    const readOnly = await mountCard('CommentNode', { type: 'comment' }, false)
+    await readOnly.trigger('mouseenter')
+    expect(readOnly.findComponent({ name: 'NodeResizer' }).props('isVisible')).toBe(false)
+
+    const editable = await mountCard('CommentNode', { type: 'comment' }, true)
+    await editable.trigger('mouseenter')
+    expect(editable.findComponent({ name: 'NodeResizer' }).props('isVisible')).toBe(true)
   })
 })
