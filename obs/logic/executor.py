@@ -14,6 +14,7 @@ import math
 import operator
 import re
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC as _UTC
 from datetime import date as _date
@@ -25,6 +26,8 @@ from zoneinfo import ZoneInfo as _ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
 
 from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
+from obs.logic import hems_surplus
+from obs.logic.booleans import to_bool
 from obs.logic.graph_analysis import analyze_topology
 from obs.logic.models import FlowData, LogicNode
 from obs.logic.variables import ResolvedTemplate, TimeSnapshot, make_obs_resolver, make_time_snapshot, resolve_template
@@ -207,6 +210,51 @@ class ExecutionError(Exception):
     pass
 
 
+# Keys of a hems_surplus node state that belong to the executor, not the engine.
+_HEMS_RUN = "_run"
+_HEMS_UNDO = "_undo"
+# Engine state keys that record what the meter reported, not what the block decided.
+_HEMS_OBSERVATIONS = ("last_seen", "held")
+
+
+def undo_hems_run(state: dict[str, Any], run_tag: object) -> None:
+    """Restore a hems_surplus node state to before ``run_tag``'s first tick.
+
+    Only when that run made the last tick: if another run ticked after it,
+    that run's state is newer and is kept.
+    """
+    if state.get(_HEMS_RUN) == run_tag and _HEMS_UNDO in state:
+        before = state[_HEMS_UNDO]
+        # What the meter reported (telegram times, last values) did happen:
+        # only the block's decisions are undone.
+        observed = {key: state[key] for key in _HEMS_OBSERVATIONS if key in state}
+        state.clear()
+        state.update(before)
+        state.update(observed)
+
+
+def forget_hems_undo(state: dict[str, Any], run_tag: object) -> None:
+    """Drop ``run_tag``'s undo snapshot once that run is through (committed or undone)."""
+    if state.get(_HEMS_RUN) == run_tag:
+        state.pop(_HEMS_UNDO, None)
+        state.pop(_HEMS_RUN, None)
+
+
+def hems_clock() -> float:
+    """The hems_surplus time base: monotonic seconds.
+
+    Its timers are relative and its state is never persisted, so a process-local
+    monotonic clock is enough — and unlike the wall clock it cannot jump when
+    NTP or a user corrects the time.
+    """
+    return time.monotonic()
+
+
+def _skips_unchanged(wired: dict[str, tuple[str, str]], hems_only_on_change: set[str]) -> bool:
+    """Whether a Write Object's value comes straight from a hems_surplus block that sends only changes."""
+    return "trigger" not in wired and "value" in wired and wired["value"][0] in hems_only_on_change
+
+
 class GraphExecutor:
     """Executes a logic graph with given input overrides.
 
@@ -239,6 +287,9 @@ class GraphExecutor:
         # so `hysteresis_state or {}` would silently create a *new* dict instead of
         # using the passed-in reference, breaking state persistence between runs.
         self.hysteresis_state = hysteresis_state if hysteresis_state is not None else {}
+        # Set by LogicManager per graph run: lets a run made obsolete undo what
+        # it changed in a hems_surplus block (see _HEMS_UNDO).
+        self.run_tag: object | None = None
         self.app_config = app_config or {}
         self.input_capture = input_capture
         # Parsed/filtered calendar results are runtime-only and intentionally
@@ -315,6 +366,11 @@ class GraphExecutor:
         # must treat it as a normal missing input instead of reporting the
         # producer as broken on every single run.
         retained_boundary_handles = {node.id: {"out"} for node in self.flow.nodes if node.type in ("memory", "edge_detect")}
+        # Which hems_surplus handles are levels: only an absent level counts as
+        # a failed producer (see the unresolved filter below).
+        hems_levels = {node.id: hems_surplus.level_output_handles(node.data) for node in self.flow.nodes if node.type == "hems_surplus"}
+        hems_ids = set(hems_levels)
+        hems_only_on_change = {node.id for node in self.flow.nodes if node.type == "hems_surplus" and hems_surplus.only_on_change(node.data)}
         for node_id, handles in self.retained_boundary_handles.items():
             retained_boundary_handles.setdefault(node_id, set()).update(handles)
         # Only failed-output paths that can influence a Change Filter need to
@@ -370,6 +426,16 @@ class GraphExecutor:
             for handle, (src_id, src_handle) in edge_map.get(node.id, {}).items():
                 src_out = outputs.get(src_id, {})
                 has_value, value = self._try_get_output_value(src_out, src_handle)
+                if node.type == "datapoint_write" and handle == "value" and src_id in hems_ids and "trigger" not in edge_map.get(node.id, {}):
+                    if src_id in hems_only_on_change:
+                        # Its last value, even for a trigger output between firings:
+                        # the manager writes only what differs from the value last
+                        # actually written, so a pulse end a filter dropped is not lost.
+                        retained = self.hysteresis_state.get(src_id, {}).get("last_out", {})
+                        if not has_value and "__error__" not in src_out and src_handle in retained:
+                            has_value, value = True, retained[src_handle]
+                    elif src_handle not in src_out.get("_emitted", ()):
+                        has_value = False  # "send every cycle": once per cycle, not on every run of the sheet
                 if has_value:
                     inputs[handle] = value
                 else:
@@ -390,7 +456,15 @@ class GraphExecutor:
                 # Change Filter would then commit. Keep the output absent so
                 # the missing state propagates through every intermediate hop.
                 unresolved = [
-                    item for item in missing_inputs if item[0] not in node_overrides and item[2] not in retained_boundary_handles.get(item[1], set())
+                    item
+                    for item in missing_inputs
+                    if item[0] not in node_overrides
+                    and item[2] not in retained_boundary_handles.get(item[1], set())
+                    # Absent on purpose: a trigger output between firings (the
+                    # manager's pulse provenance handles it like Edge
+                    # Detection's) or the handle of a removed consumer. An
+                    # absent *level* is a failed producer like any other.
+                    and (item[1] not in hems_ids or "__error__" in outputs.get(item[1], {}) or item[2] in hems_levels[item[1]])
                 ]
                 if node.type == "hysteresis":
                     # An absent value deliberately means "emit retained
@@ -428,6 +502,14 @@ class GraphExecutor:
                             value = not value
                         resolved_values.append(value)
                     absorbed = any(resolved_values) if node.type == "or" else any(not value for value in resolved_values)
+                elif node.type == "hems_surplus":
+                    # A wired input that delivered nothing is passed as None:
+                    # the block treats it as unknown — a missing meter or
+                    # interlock value puts it into the safe state — instead of
+                    # mistaking it for an unwired (permissive) input.
+                    for handle, _src_id, _src_handle in missing_inputs:
+                        inputs.setdefault(handle, None)
+                    absorbed = True
                 elif unresolved and node.type == "binary_stats":
                     # A wired input without a value is defined as FALSE for
                     # Binary Statistics, so every output stays well-defined.
@@ -460,6 +542,14 @@ class GraphExecutor:
                 if node.type == "python_script":
                     inputs = {port: _replay_known_output_value(val) for port, val in inputs.items()}
                 result = self._eval_node(node, inputs)
+                if node.type == "datapoint_write" and _skips_unchanged(edge_map.get(node.id, {}), hems_only_on_change):
+                    # A Write Object fed straight from a hems_surplus block with
+                    # "output only on change" (and no trigger of its own) gets the
+                    # level on every run; the manager writes it only when it
+                    # differs from the value it last actually wrote. So an
+                    # unchanged level is not repeated, and a change a filter of
+                    # the Write Object dropped is still written later.
+                    result["_skip_unchanged"] = True
             except Exception as exc:
                 logger.exception("Node %s (%s) error", node.id, node.type)
                 result = {"__error__": str(exc)}
@@ -1470,11 +1560,7 @@ class GraphExecutor:
     @staticmethod
     def _to_bool(v: Any) -> bool:
         """Coerce any value to bool. Strings '0'/'false'/'off' → False."""
-        if v is None:
-            return False
-        if isinstance(v, str):
-            return v.strip().lower() not in ("0", "false", "no", "off", "")
-        return bool(v)
+        return to_bool(v)
 
     def _memory_initial_value(self, node: LogicNode) -> Any:
         return self._coerce_typed_value(node, node.data.get("initial_value"))
@@ -2865,6 +2951,23 @@ class GraphExecutor:
                     "prev_monthly": state["prev_monthly"],
                     "prev_yearly": state["prev_yearly"],
                 }
+
+            case "hems_surplus":
+                # Control engine lives in obs/logic/hems_surplus.py; the per-node
+                # state is volatile (never persisted) so a restart begins safe.
+                # The engine returns only what it sends this tick; the graph sees
+                # every level output at its current value plus which ones were
+                # sent. A trigger output is an event: present only when sent.
+                state = self.hysteresis_state.setdefault(node.id, {})
+                if self.run_tag is not None and state.get(_HEMS_RUN) != self.run_tag:
+                    # The state before this run's first tick, to be restored if
+                    # the run is made obsolete before it could write anything.
+                    state[_HEMS_UNDO] = copy.deepcopy({k: v for k, v in state.items() if k not in (_HEMS_UNDO, _HEMS_RUN)})
+                    state[_HEMS_RUN] = self.run_tag
+                emitted = hems_surplus.evaluate(d, inputs, state, hems_clock(), node.id)
+                triggers = hems_surplus.trigger_output_handles(d)
+                levels = {k: v for k, v in state.get("last_out", {}).items() if k not in triggers}
+                return {**levels, **emitted, "_emitted": sorted(emitted)}
 
             case "ical":
                 # The raw iCal text is pre-fetched by LogicManager and stored in

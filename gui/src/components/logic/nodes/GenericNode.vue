@@ -79,6 +79,7 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsInputPorts } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -155,6 +156,12 @@ const NODE_DEFS = computed(() => ({
       {id:'fault_text',   label:t('logic.portLabels.faultText')},
       {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
     ]
+  },
+  // HEMS — hems_surplus: ports are generated from the grid mode and the consumer
+  // list (see the `def` computed below); this entry is the pre-config-load fallback.
+  hems_surplus:       { label: t('logic.nodeTypes.hems_surplus'), color: '#0d9488',
+    inputs: [{id:'grid',label:t('logic.portLabels.hems.grid')}],
+    outputs: [{id:'status',label:t('logic.portLabels.hems.status')}]
   },
   // Notification
   notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:t('logic.portLabels.url')},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
@@ -247,6 +254,22 @@ const def = computed(() => {
       { id: 'fault_text',    label: t('logic.portLabels.faultText') },
       { id: 'fault_trigger', label: t('logic.portLabels.faultTrigger') },
     )
+    return { ...base, label, inputs, outputs }
+  }
+  if (props.type === 'hems_surplus') {
+    const d = props.data
+    const inputs = hemsInputPorts(d, t)
+    const outputs = []
+    hemsConsumers(d.consumers).forEach((c, i) => {
+      const name = hemsConsumerName(c, i, t)
+      outputs.push(
+        { id: `c_${c.id}`, label: name },
+        { id: `c_${c.id}_status`, label: `${name}: ${t('logic.portLabels.hems.status')}` },
+      )
+    })
+    for (const k of HEMS_DIAGNOSTICS) {
+      outputs.push({ id: k, label: t(`logic.portLabels.hems.${k}`) })
+    }
     return { ...base, label, inputs, outputs }
   }
   if (props.type === 'ical') {
@@ -419,6 +442,9 @@ const summary = computed(() => {
   if (props.type === 'sensor_watchdog') {
     const rows = parseRowList(d.inputs)
     return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
+  }
+  if (props.type === 'hems_surplus') {
+    return t('logic.summary.consumers', { n: hemsConsumers(d.consumers).length })
   }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)
