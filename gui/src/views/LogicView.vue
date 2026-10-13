@@ -21,7 +21,7 @@
           @graph-deleted="onGraphDeletedFromPicker"
         />
         <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm flex-shrink-0">{{ $t('logic.newGraphBtn') }}</button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving" data-testid="btn-save">
+        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph()" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
@@ -175,6 +175,8 @@
           fit-view-on-init
           class="logic-canvas"
           @connect="onConnect"
+          @edge-update="onEdgeUpdate"
+          @edges-change="onEdgesChange"
           @node-click="onNodeClick"
           @node-drag-start="onNodeDragStart"
           @node-drag="onNodeDrag"
@@ -303,7 +305,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, watchEffect, markRaw } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, watchEffect, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
@@ -726,8 +728,19 @@ async function loadGraph() {
   }
 }
 
-async function saveGraph() {
-  if (!auth.isAdmin || !activeGraphId.value) return
+// Saves run one after another: an auto-save and a manual save fired close
+// together would otherwise race as two concurrent PUTs, and the older
+// payload landing last would silently undo the newer change.
+let _saveQueue = Promise.resolve()
+
+// `graphId` defaults to the open sheet; the auto-save flush on a sheet switch
+// passes the previous sheet explicitly, because by then activeGraphId already
+// names the next one while nodes/edges still hold the previous sheet.
+async function saveGraph(graphId = activeGraphId.value) {
+  if (!auth.isAdmin || !graphId) return
+  // A save supersedes any pending auto-save of the same sheet — it carries
+  // the same (or newer) state, so a second PUT would be redundant.
+  if (_autoSaveGraphId === graphId) cancelAutoSave()
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
     const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
@@ -740,17 +753,65 @@ async function saveGraph() {
     ))
     return
   }
-  saving.value = true
-  try {
-    const graph = store.graphs.find(g => g.id === activeGraphId.value)
-    await store.saveGraph(activeGraphId.value, graph.name, graph.description, graph.enabled, currentFlowData())
-    showStatus(true, t('logic.saved'))
-  } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
-  } finally {
-    saving.value = false
-  }
+  // Snapshot synchronously: by the time a queued save runs, the canvas may
+  // already show another sheet.
+  const flowData = currentFlowData()
+  const run = _saveQueue.then(async () => {
+    saving.value = true
+    try {
+      const graph = store.graphs.find(g => g.id === graphId)
+      if (!graph) throw new Error('graph not found')
+      await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
+      showStatus(true, t('logic.saved'))
+    } catch (err) {
+      showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
+    } finally {
+      saving.value = false
+    }
+  })
+  _saveQueue = run
+  return run
 }
+
+// ── Auto-save ──────────────────────────────────────────────────────────────
+// Structural edits (block config, connections created/removed/re-wired) are
+// persisted after a short idle period, so a burst of edits costs one PUT.
+const AUTO_SAVE_DELAY_MS = 500
+let _autoSaveTimer = null
+let _autoSaveGraphId = null
+
+function scheduleAutoSave() {
+  // While a sheet switch is loading, activeGraphId already names the next
+  // sheet but nodes/edges still hold the previous one — saving now would
+  // write the wrong sheet's content into it.
+  if (!auth.isAdmin || !activeGraphId.value || graphLoading.value) return
+  clearTimeout(_autoSaveTimer)
+  _autoSaveGraphId = activeGraphId.value
+  _autoSaveTimer = setTimeout(() => saveGraph(_autoSaveGraphId), AUTO_SAVE_DELAY_MS)
+}
+
+function cancelAutoSave() {
+  clearTimeout(_autoSaveTimer)
+  _autoSaveTimer = null
+  _autoSaveGraphId = null
+}
+
+// Saves a still-pending auto-save right away instead of dropping it — used
+// when the sheet is left before the debounce elapsed.
+function flushAutoSave() {
+  const graphId = _autoSaveGraphId
+  if (!graphId) return
+  cancelAutoSave()
+  // A sheet deleted meanwhile has nothing left to save into.
+  if (!store.graphs.some(g => g.id === graphId)) return
+  saveGraph(graphId)
+}
+
+// `sync`: must run at the assignment itself, before callers such as
+// doCreateGraph replace nodes/edges with the next sheet's content.
+watch(activeGraphId, (_id, previousId) => {
+  if (_autoSaveGraphId === previousId) flushAutoSave()
+}, { flush: 'sync' })
 
 // ── Node selection & config ────────────────────────────────────────────────
 // One selected block feeds both the settings and the debug values of the
@@ -1139,6 +1200,9 @@ function confirmDeleteGraph() {
 }
 async function doDeleteGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
+  // A pending auto-save firing while the delete is in flight would PUT into
+  // the sheet being removed.
+  cancelAutoSave()
   await store.deleteGraph(activeGraphId.value)
   activeGraphId.value = ''
   nodes.value = []; edges.value = []
@@ -1238,16 +1302,9 @@ async function onImportFile(event) {
   }
 }
 
-// ── Connect handler — REQUIRED to actually create edges ────────────────────
-function onConnect(params) {
-  if (!auth.isAdmin) return
-  const opts = defaultEdgeOptions.value
-  const nextEdges = addEdge({
-    ...params,
-    type: opts.type,
-    animated: opts.animated,
-    style: opts.style,
-  }, edges.value)
+// Rejects edge sets the graph validation refuses and reports why; only an
+// accepted set reaches the canvas and the auto-save.
+function applyValidatedEdges(nextEdges) {
   const graphWarnings = analyzeFlowWarnings(nodes.value, nextEdges)
   if (graphWarnings.length) {
     const connectBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationConnectBlockedDuplicateHandle' : 'logic.graphValidationConnectBlocked'
@@ -1255,6 +1312,51 @@ function onConnect(params) {
     return
   }
   edges.value = nextEdges
+  scheduleAutoSave()
+}
+
+// ── Connect handler — REQUIRED to actually create edges ────────────────────
+function onConnect(params) {
+  if (!auth.isAdmin) return
+  const opts = defaultEdgeOptions.value
+  // addEdge pushes into the array it is given — hand it a copy, or a
+  // connection the validation then rejects would already sit in `edges`.
+  const currentEdges = [...edges.value]
+  const nextEdges = addEdge({
+    ...params,
+    type: opts.type,
+    animated: opts.animated,
+    style: opts.style,
+  }, currentEdges)
+  // addEdge returns the input unchanged for an already existing connection.
+  if (nextEdges.length === edges.value.length) return
+  applyValidatedEdges(nextEdges)
+}
+
+// ── Re-wire an existing edge by dragging one of its ends ───────────────────
+// Vue Flow only reports the drop; without this handler the edge snaps back.
+function onEdgeUpdate({ edge, connection }) {
+  if (!auth.isAdmin) return
+  if (!connection?.source || !connection?.target) return
+  // Dropped back onto the same handles — nothing changed, nothing to save.
+  if (connection.source === edge.source && connection.target === edge.target
+    && connection.sourceHandle === edge.sourceHandle && connection.targetHandle === edge.targetHandle) return
+  applyValidatedEdges(edges.value.map(e => e.id === edge.id
+    ? {
+        ...e,
+        source: connection.source,
+        target: connection.target,
+        sourceHandle: connection.sourceHandle,
+        targetHandle: connection.targetHandle,
+      }
+    : e))
+}
+
+// Vue Flow applies removals itself (Delete key, or removing a block together
+// with its edges); only the persistence is left to do here. Selection
+// changes arrive through the same event and must not trigger a save.
+function onEdgesChange(changes) {
+  if (changes.some(change => change.type === 'remove')) scheduleAutoSave()
 }
 
 // ── Drop node from palette ─────────────────────────────────────────────────
@@ -1388,7 +1490,6 @@ function _onClipboardKeydown(event) {
   }
 }
 
-let _autoSaveTimer = null
 function onNodeDataUpdate(newData) {
   if (!auth.isAdmin || !selectedNode.value) return
   const rowsBefore = extractorRowCount(selectedNode.value)
@@ -1415,9 +1516,7 @@ function onNodeDataUpdate(newData) {
     }
   }
   if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
-  // Auto-save after 500 ms idle
-  clearTimeout(_autoSaveTimer)
-  _autoSaveTimer = setTimeout(() => saveGraph(), 500)
+  scheduleAutoSave()
 }
 
 // ── WebSocket — live debug updates ────────────────────────────────────────
@@ -1525,6 +1624,10 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => {
+  // Leaving the editor within the debounce window must not drop the edit.
+  flushAutoSave()
+})
 onUnmounted(() => {
   _wsDisconnect()
   window.removeEventListener('keydown', _onClipboardKeydown)
