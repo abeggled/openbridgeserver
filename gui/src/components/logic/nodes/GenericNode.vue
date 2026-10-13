@@ -23,7 +23,7 @@
           :title-class="['gn-title', customLabel && 'gn-title--custom']"
           @rename="renameNode"
         />
-        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
+        <button v-if="canvasEditable" class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
@@ -81,8 +81,11 @@ import { nodeTint } from '@/utils/logicNodeSurface'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData } = useVueFlow()
+// Hidden while the editor holds the canvas read-only (a sheet is loading).
+const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 
 const props = defineProps({

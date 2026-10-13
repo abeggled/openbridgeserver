@@ -18,7 +18,7 @@
           :title-class="['cn-title', customLabel && 'cn-title--custom']"
           @rename="renameNode"
         />
-        <button class="cn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
+        <button v-if="canvasEditable" class="cn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
       <div class="cn-body nowheel">
         <pre v-if="data.text" class="cn-text">{{ data.text }}</pre>
@@ -36,8 +36,11 @@ import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData, removeNodes } = useVueFlow()
+// Hidden while the editor holds the canvas read-only (a sheet is loading).
+const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 
 const props = defineProps({

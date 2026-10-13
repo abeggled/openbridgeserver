@@ -346,6 +346,7 @@ import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { provideCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const { t, locale } = useI18n()
@@ -545,10 +546,14 @@ const titleSpacerClass = computed(() => {
 
 const saving        = ref(false)
 const graphLoading  = ref(false)
-// Read-only while a sheet loads: the canvas still shows the previous sheet,
-// and an edit made now would either be dropped or overwritten by the
-// arriving content.
-const canvasEditable = computed(() => auth.isAdmin && !graphLoading.value)
+// Set while create/import/duplicate swap sheets after leaveCanvas() saved
+// the canvas: their server round trips happen before the swap.
+const sheetSwitching = ref(false)
+// Read-only while a sheet loads or is being swapped: the canvas still shows
+// the previous sheet, and an edit made now would either be dropped or
+// overwritten by the arriving content.
+const canvasEditable = computed(() => auth.isAdmin && !graphLoading.value && !sheetSwitching.value)
+provideCanvasEditable(canvasEditable)
 let _loadGraphRequestId = 0
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
@@ -721,10 +726,6 @@ async function loadGraph() {
     // the state before it. Saves of the sheet being loaded settle first.
     await persistPendingChanges(graphId)
     if (superseded()) return
-    // The canvas holds this very sheet with an edit whose save failed: keep
-    // it rather than replacing it with the older server state. A refused
-    // edit can never be saved — re-picking is how it gets discarded.
-    if (_canvasGraphId === graphId && hasUnsentEdits()) return
     const { data } = await logicApi.getGraph(graphId)
     if (superseded()) return
     replaceCanvas(graphId, (data.flow_data.nodes || []).map(n => {
@@ -762,8 +763,8 @@ let _sentRev = 0
 let _savedRev = 0
 
 // Edits the server has not confirmed: pending, in flight, failed or refused.
-function hasUnsavedEdits(graphId) {
-  return _canvasGraphId === graphId && _editRev > _savedRev
+function hasUnsavedEdits() {
+  return !!_canvasGraphId && _editRev > _savedRev
 }
 
 // Edits no save is underway for: pending, failed or refused.
@@ -838,8 +839,7 @@ async function saveGraph() {
         result = true
       } else {
         // Deleted meanwhile (e.g. from the graph picker) — nothing to save
-        // into, ever.
-        showStatus(false, t('logic.errorSave'))
+        // into, ever, and nothing to report: the user deleted it.
         result = null
       }
     } catch (err) {
@@ -881,7 +881,7 @@ function flushUnsentEdits() {
 // from. Edits made while the save was in flight are saved too; a refused
 // edit can never be saved and does not hold the switch up.
 async function leaveCanvas() {
-  while (hasUnsavedEdits(_canvasGraphId)) {
+  while (hasUnsavedEdits()) {
     const rev = _editRev
     if (!await persistPendingChanges(_canvasGraphId)) return false
     if (_editRev === rev) break
@@ -1253,21 +1253,26 @@ function newGraph() {
 async function doCreateGraph() {
   if (!auth.isAdmin) return
   if (!await leaveCanvas()) return
-  const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
-  // Optional: link the new graph into the picked hierarchy node(s) right away —
-  // matches the many-to-many model #1217 already established (0, 1 or several
-  // nodes). Best-effort: a link failure must not block the graph having been
-  // created, it would just stay reachable via "Nicht zugeordnet" instead.
-  await Promise.all(
-    newGraphHierarchyNodes.value.map((compositeId) => {
-      const parsed = parseHierarchyCompositeId(compositeId)
-      if (!parsed) return null
-      return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: g.id }).catch(() => {})
-    }),
-  )
-  showNewGraph.value = false
-  activeGraphId.value = g.id
-  replaceCanvas(g.id)
+  sheetSwitching.value = true
+  try {
+    const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
+    // Optional: link the new graph into the picked hierarchy node(s) right away —
+    // matches the many-to-many model #1217 already established (0, 1 or several
+    // nodes). Best-effort: a link failure must not block the graph having been
+    // created, it would just stay reachable via "Nicht zugeordnet" instead.
+    await Promise.all(
+      newGraphHierarchyNodes.value.map((compositeId) => {
+        const parsed = parseHierarchyCompositeId(compositeId)
+        if (!parsed) return null
+        return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: g.id }).catch(() => {})
+      }),
+    )
+    showNewGraph.value = false
+    activeGraphId.value = g.id
+    replaceCanvas(g.id)
+  } finally {
+    sheetSwitching.value = false
+  }
 }
 
 // ── Toggle enabled ─────────────────────────────────────────────────────────
@@ -1321,6 +1326,7 @@ async function doDuplicate() {
   try {
     // Persists the source sheet (normally the canvas) before it is copied.
     if (!await leaveCanvas()) return
+    sheetSwitching.value = true
     const copy = await store.duplicateGraph(graphId, name)
     showDuplicate.value = false
     activeGraphId.value = copy.id
@@ -1328,6 +1334,8 @@ async function doDuplicate() {
     showStatus(true, t('logic.duplicated', { name: copy.name }))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorDuplicate'))
+  } finally {
+    sheetSwitching.value = false
   }
 }
 
@@ -1391,6 +1399,7 @@ async function onImportFile(event) {
     const payload = JSON.parse(text)
     const namesBefore = new Set(store.graphs.map(g => g.name))
     if (!await leaveCanvas()) return
+    sheetSwitching.value = true
     const imported = await store.importGraph(payload)
     activeGraphId.value = imported.id
     await loadGraph()
@@ -1405,6 +1414,8 @@ async function onImportFile(event) {
     }
   } catch (err) {
     showStatus(false, err?.response?.data?.detail ?? t('logic.errorImport'))
+  } finally {
+    sheetSwitching.value = false
   }
 }
 
@@ -1747,8 +1758,9 @@ onBeforeUnmount(() => {
 })
 
 // A reload or tab close never unmounts the view: start the pending save and
-// ask the browser to confirm, which gives that save time to complete (unless
-// an earlier save still holds the queue — then the prompt at least warns). A save
+// ask the browser to confirm, which gives that save time to complete. A save
+// already queued counts as underway and is not prompted for; behind a slow
+// earlier save it may still be cut off by the unload. A save
 // already sent is left alone — prompting for it would also block the API
 // client's forced redirect to /login when that very save got a 401.
 function _onBeforeUnload(event) {

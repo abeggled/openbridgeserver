@@ -386,14 +386,14 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
   })
 
-  it('reports a save into a sheet that vanished from the list', async () => {
+  it('silently drops a save into a sheet the user deleted meanwhile', async () => {
     const { wrapper, logicApi, store } = await mountLogicView()
 
     store.graphs = store.graphs.filter(g => g.id !== 'graph-a')
-    await wrapper.vm.saveGraph()
+    await expect(wrapper.vm.saveGraph()).resolves.toBe(null)
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
-    expect(wrapper.vm.statusMsg.ok).toBe(false)
+    expect(wrapper.vm.statusMsg).toBe(null)
   })
 
   it('saves a pending change when the editor is left, and nothing otherwise', async () => {
@@ -1230,17 +1230,37 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     expect(first.logicApi.getGraph).toHaveBeenLastCalledWith('graph-a')
   })
 
-  it('keeps a canvas whose save failed even when reloaded directly', async () => {
-    const saveGraph = vi.fn().mockRejectedValue(new Error('down'))
-    const { wrapper, logicApi } = await mountLogicView({ saveGraph })
-    const loads = logicApi.getGraph.mock.calls.length
+  it('keeps the canvas read-only while create, import or duplicate swap sheets', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    const held = () => {
+      let release
+      const promise = new Promise(resolve => { release = resolve })
+      return { promise, release: (value) => release(value) }
+    }
 
-    wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
-    await wrapper.vm.loadGraph()
+    const create = held()
+    logicApi.createGraph.mockReturnValueOnce(create.promise)
+    wrapper.vm.newGraphName = 'Fresh'
+    const creating = wrapper.vm.doCreateGraph()
+    await flushPromises()
+    expect(wrapper.vm.canvasEditable).toBe(false)
+    create.release({ data: { id: 'graph-new', name: 'Fresh', description: '', enabled: true, flow_data: { nodes: [], edges: [] } } })
+    await creating
+    expect(wrapper.vm.canvasEditable).toBe(true)
 
-    expect(saveGraph).toHaveBeenCalledTimes(1)
-    expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
-    expect(wrapper.vm.edges).toHaveLength(2)
-    expect(wrapper.vm.graphLoading).toBe(false)
+    logicApi.importGraph = vi.fn().mockRejectedValue(new Error('bad file'))
+    const importing = wrapper.vm.onImportFile({ target: { files: [new File(['{}'], 'logic.json')], value: 'logic.json' } })
+    await importing
+    expect(wrapper.vm.canvasEditable).toBe(true)
+
+    const duplicate = held()
+    logicApi.duplicateGraph.mockReturnValueOnce(duplicate.promise)
+    wrapper.vm.duplicateName = 'Copy'
+    const duplicating = wrapper.vm.doDuplicate()
+    await flushPromises()
+    expect(wrapper.vm.canvasEditable).toBe(false)
+    duplicate.release({ data: makeGraph('graph-copy') })
+    await duplicating
+    expect(wrapper.vm.canvasEditable).toBe(true)
   })
 })
