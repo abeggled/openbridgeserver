@@ -340,6 +340,7 @@ import BindingFormMessage from '@/components/datapoints/binding-form/BindingForm
 import BindingFormWebhook from '@/components/datapoints/binding-form/BindingFormWebhook.vue'
 import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
 import { normalizeEntries } from '@/utils/ipAllowlist'
+import { hasPushoverTarget, normalizePriority, normalizePushoverOptions, pushoverOptionErrors, sendsNotification } from '@/utils/pushoverOptions'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -425,6 +426,7 @@ const cfg = reactive({
   title: '',
   providers: [],
   priority: null,
+  pushover: {},
   cooldown_seconds: 0,
   send_on_change: true,
   archive_id: '',
@@ -730,6 +732,13 @@ watch(() => props.initial, val => {
   if (cfg.title == null) cfg.title = ''
   if (cfg.providers == null) cfg.providers = []
   if (cfg.priority === undefined) cfg.priority = null
+  if (!cfg.pushover || typeof cfg.pushover !== 'object') cfg.pushover = {}
+  else cfg.pushover = { ...cfg.pushover }
+  // The form edits the top-level priority. A priority stored inside the
+  // Pushover options (API-created bindings) is the effective one on the
+  // backend, so it is shown — and saved back — as the top-level value.
+  if (normalizePriority(cfg.pushover.priority) != null) cfg.priority = normalizePriority(cfg.pushover.priority)
+  delete cfg.pushover.priority
   if (cfg.cooldown_seconds == null) cfg.cooldown_seconds = 0
   if (cfg.send_on_change == null) cfg.send_on_change = true
   if (cfg.archive_id == null) cfg.archive_id = ''
@@ -1441,7 +1450,15 @@ function buildConfig() {
       c.archive_id = cfg.archive_id.trim().toLowerCase()
     }
     if (cfg.title?.trim()) c.title = cfg.title.trim()
-    if (cfg.priority != null) c.priority = cfg.priority
+    const priority = normalizePriority(cfg.priority)
+    // The Pushover section (priority included) is hidden unless the binding
+    // sends to a Pushover target; hidden values must neither be saved nor
+    // block the save.
+    if (sendsNotification(strategy) && hasPushoverTarget(c.providers)) {
+      if (priority != null) c.priority = priority
+      const pushover = normalizePushoverOptions(cfg.pushover, priority)
+      if (Object.keys(pushover).length) c.pushover = pushover
+    }
     return c
   }
   return {}
@@ -1452,6 +1469,10 @@ async function submit() {
   saving.value = true
   try {
     const config     = buildConfig()
+    if (selectedAdapterType.value === 'MESSAGE' && form.enabled && sendsNotification(config.archive_strategy)
+      && hasPushoverTarget(config.providers) && Object.keys(pushoverOptionErrors(cfg.pushover, cfg.priority)).length) {
+      error.value = t('adapters.pushoverOptions.errors.invalid'); saving.value = false; return
+    }
     // Zeitschaltuhr: Schaltwert muss zum Objekttyp passen (Issue #1008) —
     // sonst antwortet die API mit 422.
     if (selectedAdapterType.value === 'ZEITSCHALTUHR' && config.timer_type !== 'meta') {

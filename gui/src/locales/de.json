@@ -1320,6 +1320,48 @@
         "method_not_allowed": "HTTP-Methode nicht erlaubt",
         "address_blocked": "Absenderadresse nicht in der Allowlist"
       }
+    },
+    "pushoverOptions": {
+      "section": "Pushover-Optionen",
+      "intro": "Gilt nur für die ausgewählten Pushover-Ziele; andere Provider senden unverändert. Leere Felder werden nicht an Pushover übertragen.",
+      "imageUrl": "Bild-URL",
+      "imageUrlHint": "OBS lädt das Bild (JPEG, PNG, GIF oder WebP, max. 5 MB) und hängt es an. Externe Quellen nur über HTTPS; interne Kameras (auch HTTP) müssen in der URL Target Allowlist freigegeben sein.",
+      "url": "URL",
+      "urlTitle": "URL-Titel",
+      "placeholderHint": "Bild-URL, URL und URL-Titel unterstützen ###DP### · ###DPU### · ###DPN### · ###DPI### · ###DATE### · ###TIME### · ###TS###",
+      "priority": "Priorität",
+      "priorityDefault": "Standard",
+      "priorities": {
+        "pm2": "-2 · sehr niedrig",
+        "pm1": "-1 · niedrig",
+        "p0": "0 · normal",
+        "p1": "1 · hoch",
+        "p2": "2 · Notfall (mit Bestätigung)"
+      },
+      "format": "Formatierung",
+      "formats": {
+        "text": "Nur Text",
+        "html": "HTML",
+        "monospace": "Monospace"
+      },
+      "retry": "Retry (Sekunden)",
+      "expire": "Expire (Sekunden)",
+      "sound": "Sound",
+      "soundDefault": "Standard des Ziels",
+      "ttl": "TTL (Sekunden)",
+      "timestamp": "Zeitstempel (Unix-Sekunden)",
+      "errors": {
+        "invalid": "Die Pushover-Optionen sind ungültig. Bitte die markierten Felder korrigieren.",
+        "integer": "Bitte eine ganze Zahl eingeben.",
+        "positive": "Der Wert muss grösser als 0 sein.",
+        "retryMin": "Retry muss mindestens 30 Sekunden betragen.",
+        "retryRequired": "Für die Notfall-Priorität ist Retry erforderlich.",
+        "expireRequired": "Für die Notfall-Priorität ist Expire erforderlich.",
+        "expireRange": "Expire muss zwischen 1 und 10800 Sekunden liegen.",
+        "urlTitleWithoutUrl": "Ein URL-Titel benötigt eine URL.",
+        "soundInvalid": "Sound-Namen bestehen nur aus Buchstaben, Ziffern, _ und -.",
+        "tooLong": "Höchstens {max} Zeichen."
+      }
     }
   },
   "history": {
@@ -2523,8 +2565,8 @@
         "title": "Titel",
         "fallback": "Nachricht (Fallback)",
         "placeholders": "Der Logikblock hat keinen Datenpunkt-Kontext; MESSAGE-Platzhalter werden unverändert gesendet.",
-        "priority": "Priorität",
-        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden."
+        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden.",
+        "pushoverInputsHint": "Verbundene Eingänge URL, URL-Titel und Bild-URL überschreiben die statischen Werte. Statische Werte unterstützen Variablen wie ###OBS1###."
       },
       "messageArchive": {
         "archive": "Meldungsarchiv",
@@ -2660,7 +2702,8 @@
       "total": "Gesamt",
       "percentTrue": "Anteil TRUE %",
       "tie": "Gleichstand",
-      "thresholdReached": "Schwelle erreicht"
+      "thresholdReached": "Schwelle erreicht",
+      "url": "URL"
     },
     "nodeDescriptions": {
       "datetime": "Gibt aktuelles Datum und Uhrzeit in der konfigurierten Zeitzone und im gewählten Format aus.",

@@ -232,6 +232,46 @@ Das Anlegen und Rotieren einer Verknüpfung bleibt dagegen eine normale Konfigur
 sie verlangt Schreibrechte (Rolle *operator*) auf der Adapter-Instanz und ist nur mit einem
 Benutzer-Login möglich, nicht mit einem API-Key.
 
+## MESSAGE: Pushover-Optionen {#adapters-message-pushover}
+
+Ist in einer MESSAGE-Verknüpfung oder im Logikbaustein **Benachrichtigung** mindestens ein
+Pushover-Ziel ausgewählt, erscheint der Abschnitt **Pushover-Optionen**. Die Optionen gelten
+ausschliesslich für die Pushover-Ziele — Telegram, seven.io und andere Provider senden
+unverändert. Leere Felder werden nicht an Pushover übertragen.
+
+| Option | Wirkung |
+|---|---|
+| **Bild-URL** | OBS lädt das Bild und hängt es als Anhang an (ein Bild, max. 5 MB, JPEG/PNG/GIF/WebP). |
+| **URL**, **URL-Titel** | Zusätzliche anklickbare URL mit eigenem Titel. Ein URL-Titel ohne URL ist ungültig; ergibt eine Vorlage zur Laufzeit eine leere URL, wird die Nachricht ohne Link gesendet. |
+| **Priorität** | `-2` sehr niedrig bis `2` Notfall. **Standard** entspricht der normalen Priorität `0`. |
+| **Retry**, **Expire** | Nur bei Priorität `2`, dann Pflicht: Retry mindestens 30 Sekunden, Expire höchstens 10800 Sekunden. |
+| **Sound** | Überschreibt den Standard-Sound des Ziels. Auswahl der Pushover-Sounds oder freier Name eines eigenen Sounds. |
+| **Formatierung** | Nur Text, HTML oder Monospace — immer nur eine davon. Bei HTML ist die Vorlage HTML; eingesetzte Werte werden für Pushover HTML-maskiert. |
+| **TTL** | Gültigkeitsdauer in Sekunden; danach löscht Pushover die Nachricht (bei Priorität `2` ignoriert). |
+| **Zeitstempel** | Abweichender Zeitpunkt der Nachricht als Unix-Zeit in Sekunden. |
+
+In einer Verknüpfung unterstützen Bild-URL, URL und URL-Titel dieselben Platzhalter wie die
+Nachrichtenvorlage (`###DP###`, `###DPN###`, `###DPU###`, `###DPI###`, `###TS###`,
+`###DATE###`, `###TIME###`). In Bild-URL und URL kodiert OBS Zeichen, die eine URL nicht direkt enthalten kann (Leerzeichen, `+`, Umlaute …); URL-Trennzeichen wie `/`, `?`, `&` und `#` bleiben erhalten, damit ein Objekt auch eine vollständige URL liefern kann. Werte mit `&` oder `#` gehören daher nicht in einen Query-Parameter. Im Logikbaustein überschreiben die verbundenen Eingänge **URL**,
+**URL-Titel** und **Bild-URL** die statischen Werte.
+
+### Bildquellen und URL Target Allowlist
+
+- **Externe Bildquellen** müssen HTTPS verwenden, z. B. `https://camera.example/snapshot.jpg`.
+- **Interne Kameras** in privaten Adressbereichen dürfen HTTP oder HTTPS verwenden, müssen aber
+  unter *Einstellungen → Sicherheit* in der **URL Target Allowlist** freigegeben sein — als
+  IP-Adresse oder Netz, z. B. `192.168.1.50/32` für `http://192.168.1.50/snapshot.jpg`. Bei
+  einem Hostnamen zählt die aufgelöste IP-Adresse; ein Eintrag nur mit dem Hostnamen genügt nicht.
+- Zugangsdaten in der Bild-URL (`http://benutzer:passwort@…`) werden erst gesendet, wenn die Kamera danach fragt — per Digest, wenn sie es anbietet, sonst per Basic.
+- Die Freigabe hebt nur die Sperre des Ziels auf. OBS verbindet sich weiterhin ausschliesslich
+  mit der geprüften IP-Adresse (Schutz vor DNS-Rebinding), prüft jede Weiterleitung erneut,
+  kontrolliert Content-Type, Bildinhalt und Grösse und bricht nach festen Zeitlimits ab.
+
+Kann das Bild nicht sicher geladen werden, gilt der Versand an dieses Ziel als fehlgeschlagen:
+Die Nachricht wird nicht ohne Bild versendet, der Fehler erscheint im Log, im Adapterstatus und
+am Logikbaustein, und dessen Ausgang **Gesendet** wird nicht ausgelöst. Zugangsdaten aus der
+Bild-URL, API-Token und User-Key erscheinen dabei nie in Fehlermeldungen.
+
 ## Zeitschaltuhr {#adapters-zeitschaltuhr}
 
 Die Zeitschaltuhr ist eine reine **Quelle**: sie schreibt zu definierten Zeitpunkten in

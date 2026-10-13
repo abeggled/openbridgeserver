@@ -295,7 +295,7 @@ Write commands create a SQLite backup next to the database before changing data 
 
 ### URL target allowlist for internal services
 
-Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.
+Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments (internal HTTP cameras need an allowlist entry; public image sources must use HTTPS), the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.
 
 By default, the YAML file is written to `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` when `OBS_SECRET_FILE_DIR` is set. Otherwise OBS writes it to `secrets/url-target-allowlist.yaml` next to the configured database file. For private targets, use an IP address or CIDR entry, for example `192.168.1.23/32` for a single LAN camera or `10.38.113.0/24` for an internal subnet.
 
@@ -1548,6 +1548,8 @@ Sends notifications when a linked data point changes and the binding condition i
 | `message` | Message template with placeholders |
 | `title` | Optional message title |
 | `providers` | List of provider and target name to send to |
+| `priority` | Optional Pushover priority (`-2` … `2`) |
+| `pushover` | Optional Pushover options for Pushover targets only: `image_url`, `url`, `url_title`, `sound`, `format` (`text`/`html`/`monospace`), `ttl`, `timestamp`, `retry`/`expire` (required for priority `2`). `image_url`, `url` and `url_title` support the placeholders below. |
 | `send_on_change` | Sends only when entering the fulfilled state; for `any`, only when the value changes |
 | `cooldown_seconds` | Minimum delay between two sent messages |
 | `enabled` | Enables/disables the binding |

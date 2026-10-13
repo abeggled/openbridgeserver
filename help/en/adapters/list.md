@@ -218,6 +218,46 @@ Creating and rotating a binding, on the other hand, stays an ordinary configurat
 it requires write permission (role *operator*) on the adapter instance and is only possible
 with a user login, never with an API key.
 
+## MESSAGE: Pushover options {#adapters-message-pushover}
+
+When a MESSAGE binding or the **Notification** logic block has at least one Pushover target
+selected, the **Pushover options** section appears. The options apply to the Pushover targets
+only — Telegram, seven.io and other providers send unchanged. Empty fields are not sent to
+Pushover.
+
+| Option | Effect |
+|---|---|
+| **Image URL** | OBS downloads the image and sends it as an attachment (one image, max. 5 MB, JPEG/PNG/GIF/WebP). |
+| **URL**, **URL title** | Additional clickable URL with its own title. A URL title without a URL is invalid; if a template renders an empty URL at runtime, the message is sent without a link. |
+| **Priority** | `-2` lowest up to `2` emergency. **Default** equals the normal priority `0`. |
+| **Retry**, **Expire** | Only for priority `2`, and then required: retry at least 30 seconds, expire at most 10800 seconds. |
+| **Sound** | Overrides the target's default sound. Pick one of the Pushover sounds or type the name of a custom sound. |
+| **Formatting** | Plain text, HTML or monospace — only one at a time. With HTML the template is HTML; inserted values are HTML-escaped for Pushover. |
+| **TTL** | Lifetime in seconds; Pushover deletes the message afterwards (ignored for priority `2`). |
+| **Timestamp** | A different message time as Unix time in seconds. |
+
+In a binding, image URL, URL and URL title support the same placeholders as the message template
+(`###DP###`, `###DPN###`, `###DPU###`, `###DPI###`, `###TS###`, `###DATE###`, `###TIME###`). In image URL and URL, OBS encodes characters a URL cannot carry directly (spaces, `+`, umlauts …); URL delimiters such as `/`, `?`, `&` and `#` are kept so that an object can also supply a complete URL. Values containing `&` or `#` therefore do not belong in a query parameter. In
+the logic block, the connected **URL**, **URL title** and **Image URL** inputs override the
+static values.
+
+### Image sources and the URL Target Allowlist
+
+- **External image sources** must use HTTPS, e.g. `https://camera.example/snapshot.jpg`.
+- **Internal cameras** in private address ranges may use HTTP or HTTPS but must be released in
+  the **URL Target Allowlist** under *Settings → Security* — as an IP address or network, e.g.
+  `192.168.1.50/32` for `http://192.168.1.50/snapshot.jpg`. For a hostname the resolved IP
+  address counts; an entry with only the hostname is not enough.
+- Credentials in the image URL (`http://user:password@…`) are only sent once the camera asks for them — via Digest when it offers Digest, otherwise via Basic.
+- The release only lifts the block on that target. OBS still connects only to the checked IP
+  address (DNS rebinding protection), re-checks every redirect, verifies content type, image
+  content and size, and aborts after fixed timeouts.
+
+If the image cannot be loaded safely, delivery to that target counts as failed: the message is
+not sent without the image, the error appears in the log, the adapter status and on the logic
+block, and its **Sent** output does not fire. Credentials from the image URL, the API token and
+the user key never appear in error messages.
+
 ## Scheduling {#adapters-zeitschaltuhr}
 
 The scheduling adapter is a pure **source**: it writes to objects at defined points in time
