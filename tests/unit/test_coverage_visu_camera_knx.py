@@ -93,6 +93,7 @@ def _make_db(fetchone_result=None, fetchall_result=None):
     db = MagicMock()
     db.fetchone = AsyncMock(return_value=fetchone_result)
     db.fetchall = AsyncMock(return_value=fetchall_result or [])
+    db.execute = AsyncMock()
     db.execute_and_commit = AsyncMock()
     db.executemany = AsyncMock()
     db.commit = AsyncMock()
@@ -987,6 +988,7 @@ class TestListGroupAddresses:
             fetchone_result=_Row({"n": 0}),
             fetchall_result=[],
         )
+        db.fetchone.side_effect = [None, _Row({"n": 0})]  # stored style (none → default), then count
         result = await list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
         assert result.total == 0
         assert result.items == []
@@ -998,6 +1000,8 @@ class TestListGroupAddresses:
             fetchone_result=_Row({"n": 1}),
             fetchall_result=rows,
         )
+        db.fetchone.side_effect = [None, _Row({"n": 1})]  # stored style (none → default), then count
+        db.fetchall.side_effect = [rows, []]  # addresses, then merge conflicts
         result = await list_group_addresses(q="", page=0, size=100, _user="admin", db=db)
         assert result.total == 1
         assert result.items[0].address == "1/1/1"
@@ -1009,6 +1013,8 @@ class TestListGroupAddresses:
             fetchone_result=_Row({"n": 1}),
             fetchall_result=rows,
         )
+        db.fetchone.side_effect = [None, _Row({"n": 1})]  # stored style (none → default), then count
+        db.fetchall.side_effect = [rows, []]  # addresses, then merge conflicts
         result = await list_group_addresses(q="Light", page=0, size=100, _user="admin", db=db)
         assert result.total == 1
 
@@ -1112,7 +1118,7 @@ class TestImportKnxprojFile:
         upload.read = AsyncMock(return_value=b"garbage")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", side_effect=ValueError("bad format")),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", side_effect=ValueError("bad format")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
         ):
             result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
@@ -1125,7 +1131,7 @@ class TestImportKnxprojFile:
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", side_effect=RuntimeError("parser exploded")),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", side_effect=RuntimeError("parser exploded")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
         ):
             result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
@@ -1138,7 +1144,7 @@ class TestImportKnxprojFile:
         upload.read = AsyncMock(return_value=b"data")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
         ):
             result = await import_knxproj_file(file=upload, password=None, adapter_name=None, direction="SOURCE", _user="admin", db=db)
@@ -1152,7 +1158,7 @@ class TestImportKnxprojFile:
         record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1167,7 +1173,7 @@ class TestImportKnxprojFile:
         record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
         db = _make_db()
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", side_effect=RuntimeError("locations broken")),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1187,7 +1193,7 @@ class TestImportKnxprojFile:
         db.execute_and_commit = AsyncMock(side_effect=[RuntimeError("location write failed")])
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1205,7 +1211,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", side_effect=RuntimeError("trades broken")),
         ):
@@ -1224,7 +1230,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[trade]),
         ):
@@ -1260,7 +1266,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [function])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[trade]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1306,7 +1312,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1352,7 +1358,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(1, 0)),
@@ -1393,7 +1399,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1422,7 +1428,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", side_effect=RuntimeError("optional parser failed")),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
         ):
@@ -1464,7 +1470,7 @@ class TestImportKnxprojFile:
             )
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
@@ -1494,7 +1500,7 @@ class TestImportKnxprojFile:
         create_hierarchy = AsyncMock()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", create_hierarchy),
@@ -1527,7 +1533,7 @@ class TestImportKnxprojFile:
         create_hierarchy = AsyncMock()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", create_hierarchy),
@@ -1580,7 +1586,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj._import_knx_devices_and_comm_objects", side_effect=RuntimeError("boom")),
@@ -1592,95 +1598,6 @@ class TestImportKnxprojFile:
         assert result.functions == 0
         assert result.trades == 0
         assert len(result.hierarchies) == 0
-
-
-# ===========================================================================
-# knxproj — import_ga_csv_file validation
-# ===========================================================================
-
-
-from obs.api.v1.knxproj import import_ga_csv_file
-
-
-class TestImportGaCsvFile:
-    @pytest.mark.asyncio
-    async def test_wrong_extension_raises_400(self):
-        upload = AsyncMock()
-        upload.filename = "data.xlsx"
-        db = _make_db()
-        with pytest.raises(HTTPException) as exc:
-            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_empty_file_raises_400(self):
-        upload = AsyncMock()
-        upload.filename = "data.csv"
-        upload.read = AsyncMock(return_value=b"")
-        db = _make_db()
-        with pytest.raises(HTTPException) as exc:
-            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_parse_error_raises_400(self):
-        upload = AsyncMock()
-        upload.filename = "data.csv"
-        upload.read = AsyncMock(return_value=b"garbage")
-        db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=ValueError("bad csv")), pytest.raises(HTTPException) as exc:
-            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_no_records_raises_422(self):
-        upload = AsyncMock()
-        upload.filename = "data.csv"
-        upload.read = AsyncMock(return_value=b"data")
-        db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[]), pytest.raises(HTTPException) as exc:
-            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_unexpected_parse_error_raises_500(self):
-        upload = AsyncMock()
-        upload.filename = "data.csv"
-        upload.read = AsyncMock(return_value=b"data")
-        db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", side_effect=RuntimeError("parser broken")), pytest.raises(HTTPException) as exc:
-            await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert exc.value.status_code == 500
-
-    @pytest.mark.asyncio
-    async def test_successful_csv_import_without_adapter(self):
-        upload = AsyncMock()
-        upload.filename = "data.csv"
-        upload.read = AsyncMock(return_value=b"data")
-        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt=None, main_group_name="G1", mid_group_name="M1")
-        db = _make_db()
-        with patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[record]):
-            result = await import_ga_csv_file(file=upload, adapter_name=None, direction="SOURCE", _user="admin", db=db)
-        assert result.imported == 1
-        assert "ohne DataPoints" in result.message
-
-    @pytest.mark.asyncio
-    async def test_successful_csv_import_with_adapter_imports_datapoints(self):
-        upload = AsyncMock()
-        upload.filename = "data.csv"
-        upload.read = AsyncMock(return_value=b"data")
-        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt=None, main_group_name="G1", mid_group_name="M1")
-        db = _make_db()
-        with (
-            patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[record]),
-            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(2, 1)),
-        ):
-            result = await import_ga_csv_file(file=upload, adapter_name="knx-main", direction="SOURCE", _user="admin", db=db)
-
-        assert result.imported == 3
-        assert result.created == 2
-        assert result.updated == 1
-        assert result.message == "2 DataPoints neu erstellt, 1 aktualisiert"
 
 
 # ===========================================================================
@@ -1696,7 +1613,9 @@ class TestBulkImportDatapoints:
     async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(self):
         db = _make_db(
             fetchone_result={"id": "inst-1", "adapter_type": "KNX"},
-            fetchall_result=[{"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}'}],
+            fetchall_result=[
+                {"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}', "data_type": "BOOLEAN", "unit": None},
+            ],
         )
 
         def _get_dpt(_dpt):

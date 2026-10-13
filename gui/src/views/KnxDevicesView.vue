@@ -226,6 +226,7 @@
             </span>
           </div>
 
+          <GaStyleNotice class="mt-4" />
           <h4 class="mt-5 text-sm font-semibold text-slate-700 dark:text-slate-200">
             {{ t('knxDevices.commObjectsTitle', { count: selectedDevice.comm_objects?.length ?? 0 }) }}
           </h4>
@@ -248,8 +249,9 @@
                   v-for="ga in co.ga_addresses"
                   :key="ga"
                   class="rounded bg-blue-500/10 px-2 py-0.5 font-mono text-xs text-blue-700 dark:text-blue-300"
+                  data-testid="knx-device-ga"
                 >
-                  {{ ga }}
+                  {{ formatGa(ga, knxProject.groupAddressStyle) }}
                 </span>
                 <span v-if="!co.ga_addresses?.length" class="text-xs text-slate-400">{{ t('knxDevices.noGaLinks') }}</span>
               </div>
@@ -269,7 +271,7 @@
                     <div class="mt-0.5 flex flex-wrap items-center gap-2 text-slate-500">
                       <span>{{ dp.data_type }}</span>
                       <span>{{ deviceDatapointDirectionLabel(dp.direction) }}</span>
-                      <span class="font-mono">{{ dp.ga_address }}</span>
+                      <span class="font-mono" data-testid="knx-device-bound-ga">{{ formatGa(dp.ga_address, knxProject.groupAddressStyle) }}</span>
                       <span :class="dp.enabled ? 'text-emerald-600 dark:text-emerald-300' : 'text-red-600 dark:text-red-300'">
                         {{ dp.enabled ? t('common.enabled') : t('knxDevices.bindingDisabled') }}
                       </span>
@@ -300,10 +302,14 @@ import HierarchyCombobox from '@/components/ui/HierarchyCombobox.vue'
 import PathLabel from '@/components/ui/PathLabel.vue'
 import QuickFilterInput from '@/components/ui/QuickFilterInput.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 import { hierarchyDisplayPath } from '@/utils/hierarchyDisplay'
 
 const { t } = useI18n()
 const auth = useAuthStore()
+const knxProject = useKnxProjectStore()
 
 const filters = reactive({
   q: '',
@@ -344,6 +350,7 @@ const requestParams = computed(() => ({
 
 onMounted(() => {
   loadDevices()
+  knxProject.load()
 })
 
 onBeforeUnmount(() => {

@@ -87,4 +87,37 @@ describe('BindingFormKnx', () => {
     await w.find('.ga-combobox').trigger('change')
     expect(w.emitted('ga-select')).toBeTruthy()
   })
+
+  describe('DPT main type without a subtype (#1260)', () => {
+    const WITH_MAIN_TYPE = [
+      {
+        family: 'DPT14',
+        label:  'DPT 14.x — 32-Bit IEEE Float',
+        dpts:   [
+          { dpt_id: 'DPT14', name: '32-Bit Float (no subtype)', unit: '' },
+          { dpt_id: 'DPT14.056', name: 'Power', unit: 'W' },
+        ],
+      },
+    ]
+
+    it('offers the main type as an option labelled as having no subtype, next to the subtypes', async () => {
+      const w = mk({ groupedDpts: WITH_MAIN_TYPE })
+      const option = w.find('option[value="DPT14"]')
+      expect(option.text()).toBe('DPT 14 (ohne Subtyp)')
+      expect(w.find('option[value="DPT14.056"]').text()).toBe('DPT14.056 — Power [W]')
+      w.vm.$i18n.locale = 'en'
+      await w.vm.$nextTick()
+      expect(option.text()).toBe('DPT 14 (no subtype)')
+      w.vm.$i18n.locale = 'de'
+    })
+
+    it('selecting the main type writes it into the binding config and shows it as selected', async () => {
+      const cfg = { group_address: '', dpt_id: '', respond_to_read: false }
+      const w = mk({ cfg, groupedDpts: WITH_MAIN_TYPE })
+      await w.find('select').setValue('DPT14')
+      expect(cfg.dpt_id).toBe('DPT14')
+      const select = w.find('select').element
+      expect(select.options[select.selectedIndex].text.trim()).toBe('DPT 14 (ohne Subtyp)')
+    })
+  })
 })

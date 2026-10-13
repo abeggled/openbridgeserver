@@ -156,7 +156,7 @@ async def test_group_mode_links_only_unique_bindings_in_current_import_scope(tmp
         await _insert_group_address(db, "1/2/3", name="Unique")
         await _insert_group_address(db, "1/2/4", name="Ambiguous")
         await _insert_group_address(db, "1/2/5", name="Missing")
-        await _insert_group_address(db, "9/9/9", name="Out of scope", main_group_name="Other", mid_group_name="Other")
+        await _insert_group_address(db, "9/7/9", name="Out of scope", main_group_name="Other", mid_group_name="Other")
         await _insert_knx_binding(db, "dp-unique", "binding-unique", "1/2/3")
         await _insert_knx_binding(db, "dp-a", "binding-a", "1/2/4")
         await _insert_knx_binding(
@@ -166,7 +166,7 @@ async def test_group_mode_links_only_unique_bindings_in_current_import_scope(tmp
             "8/8/8",
             state_group_address="1/2/4",
         )
-        await _insert_knx_binding(db, "dp-out", "binding-out", "9/9/9")
+        await _insert_knx_binding(db, "dp-out", "binding-out", "9/7/9")
 
         result = await create_ets_hierarchy(
             db,

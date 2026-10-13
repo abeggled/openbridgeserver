@@ -33,6 +33,7 @@ from uuid import uuid4
 
 import aiosqlite
 
+from obs.adapters.knx.group_address import GROUP_ADDRESS_STYLES, format_ga, try_normalize_ga
 from obs.core.json import json_dumps
 
 logger = logging.getLogger(__name__)
@@ -1894,7 +1895,7 @@ class RingBuffer:
         normalized_binding_filters = {
             "adapter_type": _normalize_string_filters(metadata_adapter_types_any_of),
             "adapter_instance_id": _normalize_string_filters(metadata_adapter_instance_ids_any_of),
-            "group_address": _normalize_string_filters(metadata_group_addresses_any_of),
+            "group_address": _group_address_filter_variants(metadata_group_addresses_any_of),
             "topic": _normalize_string_filters(metadata_topics_any_of),
             "entity_id": _normalize_string_filters(metadata_entity_ids_any_of),
             "register_type": _normalize_string_filters(metadata_register_types_any_of),
@@ -2061,7 +2062,7 @@ class RingBuffer:
             for column, values in {
                 "adapter_type": _normalize_string_filters(metadata_adapter_types_any_of),
                 "adapter_instance_id": _normalize_string_filters(metadata_adapter_instance_ids_any_of),
-                "group_address": _normalize_string_filters(metadata_group_addresses_any_of),
+                "group_address": _group_address_filter_variants(metadata_group_addresses_any_of),
                 "topic": _normalize_string_filters(metadata_topics_any_of),
                 "entity_id": _normalize_string_filters(metadata_entity_ids_any_of),
                 "register_type": _normalize_string_filters(metadata_register_types_any_of),
@@ -2651,6 +2652,22 @@ def _source_adapter_filter_variants(values: list[str] | None) -> list[str]:
     return variants
 
 
+def _group_address_filter_variants(values: list[str] | None) -> list[str]:
+    """Group address filter values in every notation (#1296).
+
+    New entries carry the internal three-level address; entries written before
+    #1296 carry the binding text in the project's notation. Expanding each
+    valid address to its three notations finds both, whatever notation the
+    filter was typed in. Other values stay as they are.
+    """
+    variants: list[str] = []
+    for value in _normalize_string_filters(values):
+        address = try_normalize_ga(value)
+        candidates = [format_ga(address, style) for style in GROUP_ADDRESS_STYLES] if address else [value]
+        variants.extend(candidate for candidate in candidates if candidate not in variants)
+    return variants
+
+
 def _normalize_binding_metadata(config: dict[str, Any]) -> dict[str, Any]:
     def _str_or_empty(value: Any) -> str:
         if value is None:
@@ -2658,8 +2675,9 @@ def _normalize_binding_metadata(config: dict[str, Any]) -> dict[str, Any]:
         return str(value).strip()
 
     return {
-        "group_address": _str_or_empty(config.get("group_address")),
-        "state_group_address": _str_or_empty(config.get("state_group_address")),
+        # Group addresses in the internal notation (#1296); anything else verbatim.
+        "group_address": try_normalize_ga(config.get("group_address")) or _str_or_empty(config.get("group_address")),
+        "state_group_address": try_normalize_ga(config.get("state_group_address")) or _str_or_empty(config.get("state_group_address")),
         "topic": _str_or_empty(config.get("topic")),
         "entity_id": _str_or_empty(config.get("entity_id")),
         "register_type": _str_or_empty(config.get("register_type")),

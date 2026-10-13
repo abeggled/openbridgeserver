@@ -1,7 +1,6 @@
 """KNX Project Import API
 
 POST /api/v1/knxproj/import          — .knxproj hochladen, GAs importieren
-POST /api/v1/knxproj/import-csv      — ETS GA-CSV hochladen (optional: DataPoints+Bindings anlegen)
 GET  /api/v1/knxproj/group-addresses — importierte GAs abfragen (Suche)
 DELETE /api/v1/knxproj/group-addresses — alle GAs löschen
 """
@@ -30,6 +29,13 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from obs.adapters.knx.group_address import (
+    DEFAULT_GROUP_ADDRESS_STYLE,
+    InvalidGroupAddress,
+    format_ga,
+    normalize_ga,
+    try_normalize_ga,
+)
 from obs.api.audit import AuditOutcome, contract_audit, set_contract_audit_outcome, set_contract_audit_summary
 from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction
@@ -41,12 +47,11 @@ from obs.api.v1.services.knx_traceability import (
     build_device_datapoints_context,
 )
 from obs.db.database import Database, get_db
-from obs.knxproj.csv_parser import parse_ga_csv
 from obs.knxproj.parser import (
-    parse_knxproj,
     parse_knxproj_devices,
     parse_knxproj_locations,
     parse_knxproj_trades,
+    parse_knxproj_with_style,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +91,7 @@ class ImportResult(BaseModel):
     functions: int = 0
     trades: int = 0
     hierarchies: list[HierarchyImportResult] = []
+    group_address_style: str | None = None  # nur .knxproj-Import: ThreeLevel/TwoLevel/Free
     message: str
 
 
@@ -97,9 +103,22 @@ class GroupAddressOut(BaseModel):
     imported_at: str
 
 
+class GroupAddressMergeConflict(BaseModel):
+    """Two spellings of one address disagreed when migration V56 merged them (#1296)."""
+
+    address: str
+    spelling: str
+    field: str
+    kept: str
+    dropped: str
+
+
 class GroupAddressPage(BaseModel):
     total: int
     items: list[GroupAddressOut]
+    merge_conflicts: list[GroupAddressMergeConflict] = Field(default_factory=list)
+    # Adressen sind intern dreistufig; der Stil sagt der GUI, wie sie anzuzeigen sind.
+    group_address_style: str = DEFAULT_GROUP_ADDRESS_STYLE
 
 
 class KnxCommObjectOut(BaseModel):
@@ -163,7 +182,7 @@ async def _bulk_import_datapoints(
 
     Returns: (created, updated)
     """
-    from obs.adapters.knx.dpt_registry import DPTRegistry
+    from obs.adapters.knx.dpt_registry import DPTRegistry, keeps_stored_subtype
     from obs.core.registry import ValueState, _row_to_datapoint, get_registry
 
     # --- Adapter-Instanz ermitteln ---
@@ -181,18 +200,23 @@ async def _bulk_import_datapoints(
 
     # --- Bestehende Bindings laden (group_address → {binding_id, dp_id}) ---
     existing_rows = await db.fetchall(
-        "SELECT id, datapoint_id, config FROM adapter_bindings WHERE adapter_instance_id=?",
+        """SELECT ab.id, ab.datapoint_id, ab.config, dp.data_type, dp.unit
+           FROM adapter_bindings ab LEFT JOIN datapoints dp ON dp.id = ab.datapoint_id
+           WHERE ab.adapter_instance_id=?""",
         (adapter_instance_id,),
     )
     existing_map: dict[str, dict[str, str]] = {}
     for row in existing_rows:
         try:
             cfg = json.loads(row["config"])
-            ga = cfg.get("group_address")
+            ga = try_normalize_ga(cfg.get("group_address"))
             if ga:
                 existing_map[ga] = {
                     "binding_id": row["id"],
                     "dp_id": row["datapoint_id"],
+                    "dpt_id": cfg.get("dpt_id"),
+                    "data_type": row["data_type"],
+                    "unit": row["unit"],
                 }
         except (json.JSONDecodeError, KeyError):
             pass
@@ -207,9 +231,15 @@ async def _bulk_import_datapoints(
     base_time = datetime.fromisoformat(now)
 
     for row_idx, record in enumerate(records):
+        existing = existing_map.get(record.address)
+        keep = existing is not None and keeps_stored_subtype(record.dpt, existing["dpt_id"])
+        dpt = existing["dpt_id"] if keep else record.dpt
         # DPT → data_type + unit aus Registry
-        dpt_def = DPTRegistry.get(record.dpt) if record.dpt else None
-        if dpt_def and dpt_def.dpt_id != "UNKNOWN":
+        dpt_def = DPTRegistry.get(dpt) if dpt else None
+        if keep:
+            data_type = existing["data_type"]
+            unit = existing["unit"]
+        elif dpt_def and dpt_def.dpt_id != "UNKNOWN":
             data_type = dpt_def.data_type
             unit = dpt_def.unit or None
         else:
@@ -217,15 +247,14 @@ async def _bulk_import_datapoints(
             unit = None
 
         config_dict = {"group_address": record.address}
-        if record.dpt:
-            config_dict["dpt_id"] = record.dpt
+        if dpt:
+            config_dict["dpt_id"] = dpt
         config_json = json.dumps(config_dict)
 
         # Jede Zeile bekommt einen eindeutigen Timestamp → CSV-Reihenfolge bleibt erhalten
         row_ts = (base_time + timedelta(microseconds=row_idx)).isoformat()
 
-        if record.address in existing_map:
-            existing = existing_map[record.address]
+        if existing is not None:
             dp_updates.append((record.name, data_type, unit, row_ts, existing["dp_id"]))
             binding_updates.append((config_json, direction, row_ts, existing["binding_id"]))
         else:
@@ -364,8 +393,8 @@ def _parse_binding_group_addresses(config: str | None) -> list[str]:
         return []
     addresses: list[str] = []
     for key in ("group_address", "state_group_address"):
-        value = parsed.get(key)
-        if isinstance(value, str) and value:
+        value = try_normalize_ga(parsed.get(key))
+        if value:
             addresses.append(value)
     return addresses
 
@@ -826,8 +855,8 @@ async def import_knxproj_file(
             return [], [], False
 
     try:
-        records, (loc_records, fn_records, locations_parse_ok) = await asyncio.gather(
-            run_in_threadpool(parse_knxproj, content, pwd),
+        (records, group_address_style), (loc_records, fn_records, locations_parse_ok) = await asyncio.gather(
+            run_in_threadpool(parse_knxproj_with_style, content, pwd),
             _safe_parse_locations(),
         )
     except ValueError as e:
@@ -881,6 +910,11 @@ async def import_knxproj_file(
                mid_group_name  = excluded.mid_group_name,
                imported_at     = excluded.imported_at""",
         [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
+    )
+    # Gruppenadressstil des zuletzt importierten Projekts (#1296)
+    await db.execute(
+        "INSERT INTO knx_project (id, group_address_style) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET group_address_style=excluded.group_address_style",
+        (group_address_style,),
     )
     await db.commit()
 
@@ -1028,6 +1062,7 @@ async def import_knxproj_file(
         functions=functions_count,
         trades=trades_count,
         hierarchies=hierarchy_results,
+        group_address_style=group_address_style,
         message=msg,
     )
     if request is not None:
@@ -1038,107 +1073,6 @@ async def import_knxproj_file(
                 "group_addresses": sorted(record.address for record in records),
                 "hierarchy_modes": sorted(requested_hierarchy_modes),
             },
-        )
-    return result
-
-
-@router.post(
-    "/import-csv",
-    response_model=ImportResult,
-    dependencies=[Depends(contract_audit("POST", "/api/v1/knxproj/import-csv"))],
-)
-async def import_ga_csv_file(
-    file: UploadFile = File(...),
-    request: Request = None,
-    adapter_name: str | None = Query(
-        None,
-        description="Adapter-Instanzname — wenn angegeben, werden DataPoints und Bindings angelegt",
-    ),
-    direction: str = Query("SOURCE", pattern="^(SOURCE|DEST|BOTH)$", description="Verknüpfungsrichtung"),
-    _user: str = Depends(get_admin_user),
-    db: Database = Depends(get_db),
-) -> ImportResult:
-    """ETS GA-CSV hochladen.
-
-    Ohne adapter_name: nur knx_group_addresses Tabelle befüllen (schnelle Vorschau).
-    Mit adapter_name:  zusätzlich DataPoints + KNX-Bindings in einer Transaktion anlegen
-                       (Bulk-Import, deutlich schneller als Einzelrequests).
-
-    Bestehende DataPoints/Bindings für dieselbe Gruppenadresse werden aktualisiert.
-    """
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Nur .csv Dateien werden akzeptiert",
-        )
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Datei ist leer")
-
-    try:
-        records = parse_ga_csv(content)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
-    except Exception as e:
-        logger.exception("Unerwarteter Fehler beim Parsen der GA-CSV-Datei")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Unerwarteter Fehler beim Parsen: {e}",
-        )
-
-    if not records:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Keine Gruppenadressen gefunden. Bitte prüfe ob du den ETS GA-Export als CSV verwendet hast.",
-        )
-
-    now = datetime.now(UTC).isoformat()
-
-    # GA-Tabelle immer befüllen (für Vorschau / manuelle Bindung im GUI)
-    await db.executemany(
-        """INSERT INTO knx_group_addresses
-               (address, name, description, dpt, main_group_name, mid_group_name, imported_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(address) DO UPDATE SET
-               name            = excluded.name,
-               description     = excluded.description,
-               dpt             = excluded.dpt,
-               main_group_name = excluded.main_group_name,
-               mid_group_name  = excluded.mid_group_name,
-               imported_at     = excluded.imported_at""",
-        [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
-    )
-    await db.commit()
-
-    # Ohne Adapter: nur GA-Tabelle → fertig
-    if not adapter_name:
-        result = ImportResult(
-            imported=len(records),
-            message=f"{len(records)} Gruppenadressen importiert (ohne DataPoints — adapter_name fehlt)",
-        )
-        if request is not None:
-            set_contract_audit_summary(
-                request,
-                resource_count=result.imported,
-                payload={"group_addresses": sorted(record.address for record in records)},
-            )
-        return result
-
-    # Mit Adapter: DataPoints + Bindings bulk anlegen
-    created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
-
-    result = ImportResult(
-        imported=created + updated,
-        created=created,
-        updated=updated,
-        message=f"{created} DataPoints neu erstellt, {updated} aktualisiert",
-    )
-    if request is not None:
-        set_contract_audit_summary(
-            request,
-            resource_count=result.imported,
-            payload={"group_addresses": sorted(record.address for record in records)},
         )
     return result
 
@@ -1411,6 +1345,10 @@ async def list_knx_devices_for_group_address(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> KnxDevicePage:
+    try:
+        ga = normalize_ga(ga)
+    except InvalidGroupAddress as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if not await _knx_device_schema_ready(db):
         return KnxDevicePage(items=[], total=0, page=page, size=size, pages=1)
 
@@ -1456,6 +1394,24 @@ async def list_knx_devices_for_group_address(
     )
 
 
+async def _merge_conflicts(db: Database) -> list[GroupAddressMergeConflict]:
+    rows = await db.fetchall("SELECT address, spelling, field, kept, dropped FROM knx_ga_merge_conflicts ORDER BY address, spelling, field")
+    return [GroupAddressMergeConflict(**dict(row)) for row in rows]
+
+
+async def _group_address_style(db: Database) -> str:
+    row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
+    return row["group_address_style"] if row else DEFAULT_GROUP_ADDRESS_STYLE
+
+
+def _address_in_project_notation(q: str, style: str) -> str | None:
+    """Internal address for a search text written exactly in the project's notation, else None."""
+    address = try_normalize_ga(q)
+    if address is None or format_ga(address, style) != q.strip():
+        return None
+    return address
+
+
 @router.get("/group-addresses", response_model=GroupAddressPage)
 async def list_group_addresses(
     q: str = Query("", description="Suche in Adresse, Name oder Beschreibung"),
@@ -1464,17 +1420,23 @@ async def list_group_addresses(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(get_db),
 ) -> GroupAddressPage:
-    """Importierte KNX Gruppenadressen abfragen. Unterstützt Volltextsuche."""
+    """Importierte KNX Gruppenadressen abfragen. Unterstützt Volltextsuche.
+
+    Adressen sind intern dreistufig gespeichert; eine Suche in der Schreibweise
+    des Projektstils findet die Adresse zusätzlich exakt.
+    """
     principal = _principal_from_dependency(_user)
+    style = await _group_address_style(db)
+    exact = _address_in_project_notation(q, style)
     if not _is_admin_principal(principal):
         if q:
             like = f"%{q}%"
             candidate_rows = await db.fetchall(
                 """SELECT address, name, description, dpt, imported_at
                    FROM knx_group_addresses
-                   WHERE address LIKE ? OR name LIKE ? OR description LIKE ?
+                   WHERE address LIKE ? OR name LIKE ? OR description LIKE ? OR address = ?
                    ORDER BY address""",
-                (like, like, like),
+                (like, like, like, exact),
             )
         else:
             candidate_rows = await db.fetchall(
@@ -1492,6 +1454,7 @@ async def list_group_addresses(
         return GroupAddressPage(
             total=len(authorized_rows),
             items=[GroupAddressOut(**dict(row)) for row in authorized_rows[offset : offset + size]],
+            group_address_style=style,
         )
 
     if q:
@@ -1499,15 +1462,15 @@ async def list_group_addresses(
         rows = await db.fetchall(
             """SELECT address, name, description, dpt, imported_at
                FROM knx_group_addresses
-               WHERE address LIKE ? OR name LIKE ? OR description LIKE ?
+               WHERE address LIKE ? OR name LIKE ? OR description LIKE ? OR address = ?
                ORDER BY address
                LIMIT ? OFFSET ?""",
-            (like, like, like, size, page * size),
+            (like, like, like, exact, size, page * size),
         )
         count_row = await db.fetchone(
             """SELECT COUNT(*) AS n FROM knx_group_addresses
-               WHERE address LIKE ? OR name LIKE ? OR description LIKE ?""",
-            (like, like, like),
+               WHERE address LIKE ? OR name LIKE ? OR description LIKE ? OR address = ?""",
+            (like, like, like, exact),
         )
     else:
         rows = await db.fetchall(
@@ -1525,6 +1488,8 @@ async def list_group_addresses(
     return GroupAddressPage(
         total=total,
         items=[GroupAddressOut(**dict(r)) for r in rows],
+        group_address_style=style,
+        merge_conflicts=await _merge_conflicts(db),
     )
 
 

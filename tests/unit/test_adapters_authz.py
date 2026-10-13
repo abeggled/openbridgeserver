@@ -647,6 +647,6 @@ def test_adapter_creation_route_dependencies_match_closed_contract():
     type_config = next(route for route in adapters_api.router.routes if isinstance(route, APIRoute) and route.path == "/{adapter_type}/config")
     assert any(dependency.call is adapters_api.get_admin_user for dependency in type_config.dependant.dependencies)
 
-    knx_import_routes = [route for route in knxproj_api.router.routes if isinstance(route, APIRoute) and route.path in {"/import", "/import-csv"}]
-    assert len(knx_import_routes) == 2
+    knx_import_routes = [route for route in knxproj_api.router.routes if isinstance(route, APIRoute) and route.path == "/import"]
+    assert len(knx_import_routes) == 1
     assert all(any(dependency.call is knxproj_api.get_admin_user for dependency in route.dependant.dependencies) for route in knx_import_routes)

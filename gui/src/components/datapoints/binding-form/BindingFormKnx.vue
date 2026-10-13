@@ -2,15 +2,18 @@
   <div class="section-header">{{ $t('adapters.bindingForm.knxSection') }}</div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.groupAddressLabel') }}</label>
-    <GaCombobox v-model="cfg.group_address" :placeholder="$t('adapters.bindingForm.groupAddressPlaceholder')" @select="$emit('ga-select', $event)" />
+    <GaCombobox v-model="cfg.group_address" :invalid="gaInvalid" @select="$emit('ga-select', $event)" />
   </div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>
-    <select v-model="cfg.dpt_id" class="input" required>
+    <select v-model="cfg.dpt_id" class="input" required @change="$emit('dpt-change')">
       <option value="">{{ $t('adapters.bindingForm.selectDpt') }}</option>
       <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
         <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
-          {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+          <template v-if="dpt.dpt_id.includes('.')">
+            {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+          </template>
+          <template v-else>{{ $t('adapters.bindingForm.dptMainType', { main: dpt.dpt_id.replace('DPT', '') }) }}</template>
         </option>
       </optgroup>
     </select>
@@ -45,7 +48,8 @@ defineProps({
   form: { type: Object, required: true },
   groupedDpts: { type: Array, required: true },
   dpPersistValue: { type: Boolean, required: true },
+  gaInvalid: { type: Boolean, default: false },
 })
 
-defineEmits(['ga-select'])
+defineEmits(['ga-select', 'dpt-change'])
 </script>
