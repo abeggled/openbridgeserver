@@ -188,7 +188,7 @@ describe('LogicView auth gates', () => {
     wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
     expect(wrapper.vm.selectedNode).toBe(null)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     await wrapper.vm.runGraph()
     await wrapper.vm.doToggleEnabled()
     wrapper.vm.openDuplicate()
@@ -459,7 +459,7 @@ describe('LogicView auth gates', () => {
     await flushPromises()
     expect(wrapper.vm.nodes[0].data.value).toBe(7)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     expect(logicApi.saveGraph).toHaveBeenCalledWith('graph-1', expect.objectContaining({ name: 'Main Graph' }))
 
     await wrapper.vm.runGraph()
@@ -472,7 +472,7 @@ describe('LogicView auth gates', () => {
     expect(wrapper.vm.lastRunDebugOutputs.n1.value).toBe(42)
     expect(wrapper.vm.nodes[0].data._dbg).toBe('= 42')
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     const savedPayload = logicApi.saveGraph.mock.calls.at(-1)[1]
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg')
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg_title')
@@ -1358,7 +1358,7 @@ describe('LogicView graph cycle validation', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -1498,7 +1498,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -1560,7 +1560,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     // Two cycle warnings (a, b) plus one duplicate-handle warning (e) — the
@@ -1630,7 +1630,7 @@ describe('LogicView operation error handling', () => {
     })
     logicApi.saveGraph.mockRejectedValue({ response: { data: { detail: 'Save failed' } } })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(wrapper.vm.statusMsg.ok).toBe(false)
   })

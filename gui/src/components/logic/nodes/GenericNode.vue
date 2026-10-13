@@ -19,11 +19,11 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="def.label"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['gn-title', customLabel && 'gn-title--custom']"
           @rename="renameNode"
         />
-        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
+        <button v-if="canvasEditable" class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
@@ -82,8 +82,12 @@ import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsInputPorts } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 
 const props = defineProps({
@@ -363,6 +367,7 @@ const auth = useAuthStore()
 
 // ── Inline negation toggle (AND / OR / XOR / binary_stats) ─────
 function toggleNegate(portId) {
+  if (!canvasEditable.value) return
   const key = `negate_${portId}`
   updateNodeData(props.id, { [key]: !props.data[key] })
 }
