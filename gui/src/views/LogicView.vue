@@ -489,9 +489,11 @@ const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraph
 // wie bei der bisherigen <select @change="loadGraph"> genommen wird — nur
 // der Auslöser ändert sich.
 const showGraphPicker = ref(false)
-function onGraphPicked(graphId) {
+async function onGraphPicked(graphId) {
+  // Save the outgoing sheet before anything switches; if that fails, stay.
+  if (!await leaveCanvas()) return
   activeGraphId.value = graphId
-  loadGraph()
+  await loadGraph()
 }
 // The picker's own "Löschen" (unassigned pseudo-folder) deletes the graph
 // itself — if that happened to be the one currently open here, close it too.
@@ -711,16 +713,10 @@ async function loadGraph() {
   // (delete, create) while this load was waiting.
   const superseded = () => requestId !== _loadGraphRequestId || activeGraphId.value !== graphId
   graphLoading.value = true
+  // The config panel would keep editing a block of the outgoing canvas,
+  // whose edits the read-only load drops.
+  selectedNode.value = null
   try {
-    // Leaving a sheet: save its edit before its content is replaced. If
-    // that save fails, stay on it — switching would throw the edit away
-    // with nothing left to retry it from. A refused edit (validation, 4xx)
-    // can never be saved, so it does not hold the switch up.
-    const outgoing = _canvasGraphId
-    if (outgoing && outgoing !== graphId && !await persistPendingChanges(outgoing)) {
-      if (!superseded()) activeGraphId.value = outgoing
-      return
-    }
     // Re-picking the open sheet: persist its edit first, or the GET returns
     // the state before it. Saves of the sheet being loaded settle first.
     await persistPendingChanges(graphId)
@@ -812,6 +808,10 @@ const _lastSaveByGraph = new Map()
 // by the graph validation or by a 4xx from the server. A refused edit stays
 // unsaved but does not block run/export/duplicate — retrying cannot help, so
 // those act on the server's state as they did before auto-save.
+// Server answers that retrying the same payload cannot change; anything else
+// (5xx, network, 401 before refresh, 408/409/429) is a failure to retry.
+const PERMANENT_SAVE_REJECTIONS = new Set([400, 403, 404, 413, 422])
+
 async function saveGraph() {
   const graphId = _canvasGraphId
   if (!auth.isAdmin || !graphId) return false
@@ -827,6 +827,9 @@ async function saveGraph() {
         __diagnostic__: w.code,
       }])
     ))
+    // Refused for good: counts as sent, so neither a flush, a canvas swap
+    // nor the reload prompt keeps re-trying it.
+    _sentRev = Math.max(_sentRev, _editRev)
     return null
   }
   // Snapshot synchronously: by the time a queued save runs, the canvas may
@@ -847,19 +850,20 @@ async function saveGraph() {
         showStatus(true, t('logic.saved'))
         result = true
       } else {
-        // Deleted meanwhile (e.g. from the graph picker) — nothing to save into.
+        // Deleted meanwhile (e.g. from the graph picker) — nothing to save
+        // into, ever.
         showStatus(false, t('logic.errorSave'))
+        result = null
       }
     } catch (err) {
       showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
-      const status = err.response?.status ?? 0
-      if (status >= 400 && status < 500) result = null
+      if (PERMANENT_SAVE_REJECTIONS.has(err.response?.status)) result = null
     } finally {
       saving.value = false
-      // Not saved: the edit counts as unsent again, so the next flush, the
-      // reload prompt and run/export/duplicate retry or guard it.
-      // A newer save already underway keeps its claim.
-      if (!result && sameCanvas() && _sentRev === rev) _sentRev = _savedRev
+      // Failed (not refused): the edit counts as unsent again, so the next
+      // flush, the reload prompt and run/export/duplicate retry or guard
+      // it. A newer save already underway keeps its claim.
+      if (result === false && sameCanvas() && _sentRev === rev) _sentRev = _savedRev
       if (_lastSaveByGraph.get(graphId) === run) _lastSaveByGraph.delete(graphId)
     }
     return result
@@ -885,6 +889,20 @@ function scheduleAutoSave() {
 // Saves an unsent edit right away instead of waiting for the debounce.
 function flushUnsentEdits() {
   if (hasUnsentEdits()) saveGraph()
+}
+
+// Saves the canvas before it is left (another sheet, a new or imported
+// sheet). Resolves to false when that save failed — the caller then stays,
+// because switching would discard the edit with nothing left to retry it
+// from. Edits made while the save was in flight are saved too; a refused
+// edit can never be saved and does not hold the switch up.
+async function leaveCanvas() {
+  while (hasUnsavedEdits(_canvasGraphId)) {
+    const rev = _editRev
+    if (!await persistPendingChanges(_canvasGraphId)) return false
+    if (_editRev === rev) break
+  }
+  return true
 }
 
 // Actions that read the sheet back from the server (run, export, duplicate,
@@ -1250,6 +1268,7 @@ function newGraph() {
 }
 async function doCreateGraph() {
   if (!auth.isAdmin) return
+  if (!await leaveCanvas()) return
   const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
   // Optional: link the new graph into the picked hierarchy node(s) right away —
   // matches the many-to-many model #1217 already established (0, 1 or several
@@ -1316,7 +1335,8 @@ async function doDuplicate() {
   const graphId = activeGraphId.value
   const name = duplicateName.value.trim()
   try {
-    if (!await persistPendingChanges(graphId)) return
+    // Persists the source sheet (normally the canvas) before it is copied.
+    if (!await leaveCanvas()) return
     const copy = await store.duplicateGraph(graphId, name)
     showDuplicate.value = false
     activeGraphId.value = copy.id
@@ -1386,6 +1406,7 @@ async function onImportFile(event) {
     const text = await file.text()
     const payload = JSON.parse(text)
     const namesBefore = new Set(store.graphs.map(g => g.name))
+    if (!await leaveCanvas()) return
     const imported = await store.importGraph(payload)
     activeGraphId.value = imported.id
     await loadGraph()

@@ -269,6 +269,8 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
     wrapper.vm.onEdgeUpdate({ edge, connection: { source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'a' } })
     wrapper.vm.onElementsChange([{ type: 'remove', id: 'e1' }])
+    await wrapper.vm.doCreateGraph()
+    expect(logicApi.createGraph).not.toHaveBeenCalled()
     wrapper.unmount()
     await elapse(1000)
 
@@ -652,10 +654,12 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       await flushPromises()
       expect(saveGraph).toHaveBeenCalledWith('graph-a', expect.anything())
       expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
-      expect(wrapper.vm.graphLoading).toBe(true)
+      // Nothing has switched yet — not even the selection.
+      expect(wrapper.vm.activeGraphId).toBe('graph-a')
 
       release[0].ok()
       await flushPromises()
+      expect(wrapper.vm.activeGraphId).toBe('graph-b')
       expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-b')
       expect(wrapper.vm.graphLoading).toBe(false)
     })
@@ -770,8 +774,10 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       await run
       await exported
 
-      expect(logicRunAuthzApi.preflight).not.toHaveBeenCalled()
+      // The switch waits for the same save, so both still act on graph-a.
+      expect(logicRunAuthzApi.preflight).toHaveBeenCalledWith('graph-a')
       expect(logicApi.exportGraph).toHaveBeenCalledWith('graph-a')
+      expect(wrapper.vm.activeGraphId).toBe('graph-b')
     })
 
     it('waits for an in-flight save before deleting the sheet', async () => {
@@ -1022,7 +1028,7 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(unloadPrevented()).toBe(true)
     })
 
-    it('lets run and export go on after a permanent 4xx rejection, still marked unsaved', async () => {
+    it('lets run and export go on after a permanent 4xx rejection without re-trying it', async () => {
       const saveGraph = vi.fn().mockRejectedValue({ response: { status: 422, data: { detail: 'timer too long' } } })
       const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({ saveGraph })
 
@@ -1032,7 +1038,9 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
 
       expect(logicApi.exportGraph).toHaveBeenCalledWith('graph-a')
       expect(logicRunAuthzApi.preflight).toHaveBeenCalledWith('graph-a')
-      expect(unloadPrevented()).toBe(true)
+      // Retrying a refused payload cannot help: no second PUT, no prompt.
+      expect(saveGraph).toHaveBeenCalledTimes(1)
+      expect(unloadPrevented()).toBe(false)
     })
 
     it('stops run on a 5xx failure', async () => {
@@ -1059,7 +1067,8 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(logicApi.saveGraph).not.toHaveBeenCalled()
       expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
       expect(wrapper.vm.edges).toHaveLength(2)
-      expect(unloadPrevented()).toBe(true)
+      // It can never be saved, so a reload prompt could not help.
+      expect(unloadPrevented()).toBe(false)
     })
 
     it('ignores the late result of a save for a canvas replaced since', async () => {
@@ -1074,16 +1083,18 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       }
 
       for (const outcome of ['fail', 'ok']) {
-        const { wrapper } = await mountLogicView({ saveGraph })
+        const { wrapper, store } = await mountLogicView({ saveGraph })
         wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
         await elapse(500)
-        wrapper.vm.newGraphName = 'Fresh'
-        await wrapper.vm.doCreateGraph()
+        store.graphs = store.graphs.filter(g => g.id !== 'graph-a')
+        wrapper.vm.onGraphDeletedFromPicker('graph-a')
+        // A new sheet with an edit of its own must not inherit the result.
+        wrapper.vm.activeGraphId = 'graph-b'
+        await wrapper.vm.loadGraph()
         pending.at(-1)[outcome]()
         await flushPromises()
 
-        // The new, empty sheet has no edits of its own.
-        expect(wrapper.vm.activeGraphId).toBe('graph-new')
+        expect(wrapper.vm.edges).toEqual([])
         expect(unloadPrevented()).toBe(false)
         mounted.splice(mounted.indexOf(wrapper), 1)
         wrapper.unmount()
@@ -1126,5 +1137,72 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     expect(wrapper.vm.edges).toEqual([])
     expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
     expect(logicApi.saveGraph.mock.calls[0][0]).toBe('graph-a')
+  })
+
+  describe('leaving a sheet', () => {
+    it('also saves edits made while the outgoing save was in flight', async () => {
+      const pending = []
+      const saveGraph = vi.fn().mockImplementation((id, payload) => new Promise(resolve => {
+        pending.push(() => resolve({ data: { id, ...payload } }))
+      }))
+      const { wrapper } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      const picking = wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'b' })
+      pending[0]()
+      await flushPromises()
+      expect(saveGraph).toHaveBeenCalledTimes(2)
+      expect(wrapper.vm.activeGraphId).toBe('graph-a')
+
+      pending[1]()
+      await picking
+      expect(saveGraph.mock.calls[1][1].flow_data.edges).toHaveLength(3)
+      expect(wrapper.vm.activeGraphId).toBe('graph-b')
+    })
+
+    it('creates and imports nothing while the open sheet cannot be saved', async () => {
+      const saveGraph = vi.fn().mockRejectedValue(new Error('down'))
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+      logicApi.importGraph = vi.fn()
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      wrapper.vm.newGraphName = 'Fresh'
+      await wrapper.vm.doCreateGraph()
+      await wrapper.vm.onImportFile({ target: { files: [new File(['{}'], 'logic.json')], value: 'logic.json' } })
+
+      expect(logicApi.createGraph).not.toHaveBeenCalled()
+      expect(logicApi.importGraph).not.toHaveBeenCalled()
+      expect(wrapper.vm.activeGraphId).toBe('graph-a')
+      expect(wrapper.vm.edges).toHaveLength(2)
+    })
+
+    it.each([
+      [409, false],
+      [429, false],
+      [404, true],
+      [400, true],
+    ])('treats a %i answer as %s permanent', async (status, permanent) => {
+      const saveGraph = vi.fn().mockRejectedValue({ response: { status, data: { detail: 'no' } } })
+      const { wrapper } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await wrapper.vm.onGraphPicked('graph-b')
+
+      expect(wrapper.vm.activeGraphId).toBe(permanent ? 'graph-b' : 'graph-a')
+    })
+
+    it('closes the config panel while a sheet loads', async () => {
+      const { wrapper } = await mountLogicView()
+
+      wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+      expect(wrapper.vm.selectedNode).not.toBe(null)
+      const picking = wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      await picking
+
+      expect(wrapper.vm.selectedNode).toBe(null)
+    })
   })
 })
