@@ -1407,17 +1407,20 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps an auto-save refused by validation quiet; the Save button reports it', async () => {
+  it('reports an auto-save refused by validation; only the Save button marks the blocks', async () => {
     const { wrapper, logicApi } = await mountLogicView()
 
     wrapper.vm.edges = [...wrapper.vm.edges, { id: 'back', source: 'n2', target: 'n1', sourceHandle: 'out', targetHandle: 'a' }]
     await flushPromises()
     await elapse(500)
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
-    expect(wrapper.vm.statusMsg).toBe(null)
+    // Never silent: the edit must not look saved.
+    expect(wrapper.vm.statusMsg).toMatchObject({ ok: false, kind: 'save' })
+    expect(wrapper.vm.lastRunOutputs).toEqual({})
 
     await wrapper.find('[data-testid="btn-save"]').trigger('click')
     expect(wrapper.vm.statusMsg.ok).toBe(false)
+    expect(Object.keys(wrapper.vm.lastRunOutputs)).toEqual(expect.arrayContaining(['n1', 'n2']))
   })
 
   it('confirms an auto-save over a previous save result, but not over other news', async () => {

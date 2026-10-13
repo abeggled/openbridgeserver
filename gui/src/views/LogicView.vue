@@ -823,12 +823,13 @@ async function saveGraph({ manual = false } = {}) {
   clearTimeout(_autoSaveTimer)
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
-    // An auto-save stays quiet: the warning banner already names the problem,
-    // and repeating the error (and overwriting the debug bands) on every
-    // move of a legacy sheet's blocks would only get in the way.
+    // Always say that nothing was saved — an edit must never look saved.
+    // Only the Save button also marks the blocks: an auto-save overwriting
+    // the debug bands on every move of a legacy sheet's blocks would get in
+    // the way.
+    const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
+    showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000, 'save')
     if (manual) {
-      const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
-      showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000)
       applyDebugValues(Object.fromEntries(
         graphWarnings.map(w => [w.node_id, {
           __error__: t(w.code === 'duplicate_target_handle' ? 'logic.graphValidationNodeErrorDuplicateHandle' : 'logic.graphValidationNodeError'),
