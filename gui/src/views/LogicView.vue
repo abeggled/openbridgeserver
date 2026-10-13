@@ -176,7 +176,8 @@
           class="logic-canvas"
           @connect="onConnect"
           @edge-update="onEdgeUpdate"
-          @edges-change="onEdgesChange"
+          @edges-change="onElementsChange"
+          @nodes-change="onElementsChange"
           @node-click="onNodeClick"
           @node-drag-start="onNodeDragStart"
           @node-drag="onNodeDrag"
@@ -701,6 +702,10 @@ async function loadGraph() {
   const requestId = ++_loadGraphRequestId
   graphLoading.value = true
   try {
+    // Re-picking the open sheet does not change activeGraphId, so the
+    // switch flush never ran: persist first, or the GET returns the state
+    // before the edit and the canvas silently loses it.
+    await persistPendingChanges()
     const { data } = await logicApi.getGraph(activeGraphId.value)
     if (requestId !== _loadGraphRequestId) return
     nodes.value = (data.flow_data.nodes || []).map(n => {
@@ -732,6 +737,13 @@ async function loadGraph() {
 // together would otherwise race as two concurrent PUTs, and the older
 // payload landing last would silently undo the newer change.
 let _saveQueue = Promise.resolve()
+// Toggle and rename write the same sheet record (name, enabled) a queued
+// full-sheet PUT also carries, so they join the same queue.
+function enqueueSave(task) {
+  const run = _saveQueue.then(task)
+  _saveQueue = run.catch(() => {})
+  return run
+}
 
 // `graphId` defaults to the open sheet; the auto-save flush on a sheet switch
 // passes the previous sheet explicitly, because by then activeGraphId already
@@ -756,11 +768,15 @@ async function saveGraph(graphId = activeGraphId.value) {
   // Snapshot synchronously: by the time a queued save runs, the canvas may
   // already show another sheet.
   const flowData = currentFlowData()
-  const run = _saveQueue.then(async () => {
+  return enqueueSave(async () => {
     saving.value = true
     try {
       const graph = store.graphs.find(g => g.id === graphId)
-      if (!graph) throw new Error('graph not found')
+      // Deleted meanwhile (e.g. from the graph picker) — nothing to save into.
+      if (!graph) {
+        showStatus(false, t('logic.errorSave'))
+        return
+      }
       await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
       showStatus(true, t('logic.saved'))
     } catch (err) {
@@ -769,8 +785,6 @@ async function saveGraph(graphId = activeGraphId.value) {
       saving.value = false
     }
   })
-  _saveQueue = run
-  return run
 }
 
 // ── Auto-save ──────────────────────────────────────────────────────────────
@@ -805,6 +819,13 @@ function flushAutoSave() {
   // A sheet deleted meanwhile has nothing left to save into.
   if (!store.graphs.some(g => g.id === graphId)) return
   saveGraph(graphId)
+}
+
+// Actions that read the sheet back from the server (run, export, duplicate,
+// reload) must see the last edit, not the state before the debounce elapsed.
+async function persistPendingChanges() {
+  flushAutoSave()
+  await _saveQueue
 }
 
 // `sync`: must run at the assignment itself, before callers such as
@@ -991,6 +1012,7 @@ async function runApprovedGraph(graphId) {
 async function requestGraphRun() {
   if (!activeGraphId.value || !activeGraph.value?.enabled) return
   const graphId = activeGraphId.value
+  await persistPendingChanges()
   const requestId = ++preflightRequestId
   runPreflightLoading.value = true
   runPreflightError.value = ''
@@ -1185,7 +1207,7 @@ async function doCreateGraph() {
 async function doToggleEnabled() {
   if (!auth.isAdmin || !activeGraphId.value) return
   try {
-    const updated = await store.toggleEnabled(activeGraphId.value)
+    const updated = await enqueueSave(() => store.toggleEnabled(activeGraphId.value))
     showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorToggle'))
@@ -1201,9 +1223,16 @@ function confirmDeleteGraph() {
 async function doDeleteGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
   // A pending auto-save firing while the delete is in flight would PUT into
-  // the sheet being removed.
+  // the sheet being removed — but if the delete fails, the sheet stays and
+  // so must its unsaved edit.
+  const hadPendingSave = _autoSaveGraphId === activeGraphId.value
   cancelAutoSave()
-  await store.deleteGraph(activeGraphId.value)
+  try {
+    await store.deleteGraph(activeGraphId.value)
+  } catch (err) {
+    if (hadPendingSave) scheduleAutoSave()
+    throw err
+  }
   activeGraphId.value = ''
   nodes.value = []; edges.value = []
 }
@@ -1222,6 +1251,7 @@ function openDuplicate() {
 async function doDuplicate() {
   if (!auth.isAdmin || !activeGraphId.value || !duplicateName.value.trim()) return
   try {
+    await persistPendingChanges()
     const copy = await store.duplicateGraph(activeGraphId.value, duplicateName.value.trim())
     showDuplicate.value = false
     activeGraphId.value = copy.id
@@ -1236,6 +1266,7 @@ async function doDuplicate() {
 async function doExportGraph() {
   if (!activeGraphId.value) return
   try {
+    await persistPendingChanges()
     const { data } = await logicApi.exportGraph(activeGraphId.value)
     const g = store.graphs.find(g => g.id === activeGraphId.value)
     const filename = g ? `${g.name.replace(/ /g, '_')}.json` : 'logic_graph.json'
@@ -1267,7 +1298,7 @@ function openRenameGraph() {
 async function doRenameGraph() {
   if (!auth.isAdmin || !activeGraphId.value || !renameGraphName.value.trim()) return
   try {
-    await store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value)
+    await enqueueSave(() => store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value))
     showRenameGraph.value = false
     showStatus(true, t('logic.renamed'))
   } catch (err) {
@@ -1318,19 +1349,24 @@ function applyValidatedEdges(nextEdges) {
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
   if (!auth.isAdmin) return
+  if (edges.value.some(e => sameConnection(e, params))) return
   const opts = defaultEdgeOptions.value
   // addEdge pushes into the array it is given — hand it a copy, or a
   // connection the validation then rejects would already sit in `edges`.
-  const currentEdges = [...edges.value]
-  const nextEdges = addEdge({
+  applyValidatedEdges(addEdge({
     ...params,
     type: opts.type,
     animated: opts.animated,
     style: opts.style,
-  }, currentEdges)
-  // addEdge returns the input unchanged for an already existing connection.
-  if (nextEdges.length === edges.value.length) return
-  applyValidatedEdges(nextEdges)
+  }, [...edges.value]))
+}
+
+// A handle stored as `undefined` (dropped from JSON) and Vue Flow's `null`
+// for "no handle" name the same port.
+function sameConnection(a, b) {
+  return a.source === b.source && a.target === b.target
+    && (a.sourceHandle ?? null) === (b.sourceHandle ?? null)
+    && (a.targetHandle ?? null) === (b.targetHandle ?? null)
 }
 
 // ── Re-wire an existing edge by dragging one of its ends ───────────────────
@@ -1339,11 +1375,13 @@ function onEdgeUpdate({ edge, connection }) {
   if (!auth.isAdmin) return
   if (!connection?.source || !connection?.target) return
   // Dropped back onto the same handles — nothing changed, nothing to save.
-  if (connection.source === edge.source && connection.target === edge.target
-    && connection.sourceHandle === edge.sourceHandle && connection.targetHandle === edge.targetHandle) return
+  if (sameConnection(edge, connection)) return
   applyValidatedEdges(edges.value.map(e => e.id === edge.id
     ? {
         ...e,
+        // Same id scheme as Vue Flow's own updateEdge: an id still naming the
+        // old connection would collide once that connection is drawn again.
+        id: `vueflow__edge-${connection.source}${connection.sourceHandle ?? ''}-${connection.target}${connection.targetHandle ?? ''}`,
         source: connection.source,
         target: connection.target,
         sourceHandle: connection.sourceHandle,
@@ -1353,9 +1391,9 @@ function onEdgeUpdate({ edge, connection }) {
 }
 
 // Vue Flow applies removals itself (Delete key, or removing a block together
-// with its edges); only the persistence is left to do here. Selection
-// changes arrive through the same event and must not trigger a save.
-function onEdgesChange(changes) {
+// with its edges); only the persistence is left to do here. Selection and
+// drag changes arrive through the same events and must not trigger a save.
+function onElementsChange(changes) {
   if (changes.some(change => change.type === 'remove')) scheduleAutoSave()
 }
 
@@ -1385,6 +1423,7 @@ function onDrop(event) {
     },
   }
   nodes.value = [...nodes.value, newNode]
+  scheduleAutoSave()
 }
 
 // ── Node selection ─────────────────────────────────────────────────────────
@@ -1467,6 +1506,7 @@ function pasteClipboard() {
   // would silently update the wrong node instead of the pasted selection.
   selectedNode.value = null
   showStatus(true, t('logic.pastedNodes', { count: pasted.nodes.length }))
+  scheduleAutoSave()
 }
 
 function _isEditableTarget(el) {
