@@ -498,7 +498,7 @@ function onGraphPicked(graphId) {
 function onGraphDeletedFromPicker(graphId) {
   if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
-  nodes.value = []; edges.value = []
+  replaceCanvas('', [], [], { discard: true })
 }
 
 // ── Edge options — animated only when graph is enabled ─────────────────────
@@ -695,7 +695,7 @@ function findCyclicNodeIds(adj, candidates) {
 }
 
 async function loadGraph() {
-  if (!activeGraphId.value) { nodes.value = []; edges.value = []; return }
+  if (!activeGraphId.value) { replaceCanvas(''); return }
   // Tag this request so overlapping sheet switches don't let an earlier
   // response's `finally` clear graphLoading (or apply its stale data) after a
   // newer request has already taken over.
@@ -704,34 +704,24 @@ async function loadGraph() {
   // A newer load took over, or the sheet was closed/replaced without one
   // (delete, create) while this load was waiting.
   const superseded = () => requestId !== _loadGraphRequestId || activeGraphId.value !== graphId
-  // A pending edit for this sheet means the canvas holds this sheet (edits
-  // are never scheduled during a load), i.e. it is being re-picked.
-  const canvasHoldsSheet = _autoSaveGraphId === graphId
   graphLoading.value = true
   try {
-    // Re-picking the open sheet does not change activeGraphId, so the
-    // switch flush never ran: persist first, or the GET returns the state
-    // before the edit and the canvas silently loses it.
-    // A switch to another sheet waits for nothing here: the previous sheet's
-    // save has its own queue entry and does not affect this GET.
-    const saved = await persistPendingChanges(graphId)
+    // Re-picking the open sheet: persist its edit first, or the GET returns
+    // the state before it. A switch to another sheet waits only for saves
+    // of the sheet being loaded.
+    await persistPendingChanges(graphId)
     if (superseded()) return
-    // A re-pick whose save failed keeps the canvas (and its unsaved mark)
-    // rather than replacing the edit with the server's older state. When
-    // the canvas held another sheet, keeping it under this sheet's id would
-    // let the next save overwrite this sheet, so that case loads anyway.
-    if (!saved && canvasHoldsSheet) {
-      _autoSaveGraphId = graphId
-      return
-    }
+    // The canvas holds this very sheet with an edit the server does not
+    // have (its save failed or was refused): keep it rather than replacing
+    // it with the older server state.
+    if (hasUnsavedEdits(graphId)) return
     const { data } = await logicApi.getGraph(graphId)
     if (superseded()) return
-    nodes.value = (data.flow_data.nodes || []).map(n => {
+    replaceCanvas(graphId, (data.flow_data.nodes || []).map(n => {
       // eslint-disable-next-line no-unused-vars
       const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
       return { ...n, position: n.position || { x: 100, y: 100 }, data: nodeData }
-    })
-    edges.value = data.flow_data.edges || []
+    }), data.flow_data.edges || [])
     selectedNode.value = null
   } catch (err) {
     if (superseded()) return
@@ -742,13 +732,50 @@ async function loadGraph() {
     // the real, unrelated graph on the server with nothing. Revert the
     // selection entirely instead of presenting a stale or blank editor.
     activeGraphId.value = ''
-    nodes.value = []
-    edges.value = []
+    replaceCanvas('')
     selectedNode.value = null
     showStatus(false, err.response?.data?.detail ?? t('logic.errorLoad'))
   } finally {
     if (requestId === _loadGraphRequestId) graphLoading.value = false
   }
+}
+
+// ── Canvas ownership & unsaved edits ───────────────────────────────────────
+// `nodes`/`edges` always hold exactly one sheet's content, _canvasGraphId —
+// which lags behind activeGraphId while a sheet switch is loading, so edits
+// and saves in that window still belong to the sheet actually shown. Every
+// edit bumps _editRev; _sentRev and _savedRev record how far saves got. A
+// canvas replacement resets all three and bumps _canvasEpoch, so the late
+// result of a save for an earlier canvas cannot touch them.
+let _canvasGraphId = ''
+let _canvasEpoch = 0
+let _editRev = 0
+let _sentRev = 0
+let _savedRev = 0
+
+// Edits the server has not confirmed: pending, in flight, failed or refused.
+function hasUnsavedEdits(graphId) {
+  return _canvasGraphId === graphId && _editRev > _savedRev
+}
+
+// Edits no save is underway for: pending, failed or refused.
+function hasUnsentEdits() {
+  return !!_canvasGraphId && _editRev > _sentRev
+}
+
+// The only way to swap the canvas to another sheet's content (or clear it).
+// An unsent edit of the outgoing sheet is saved first, from the snapshot
+// saveGraph takes right now — unless that sheet is gone (`discard`).
+function replaceCanvas(graphId, flowNodes = [], flowEdges = [], { discard = false } = {}) {
+  clearTimeout(_autoSaveTimer)
+  if (!discard && hasUnsentEdits()) saveGraph()
+  _canvasGraphId = graphId
+  _canvasEpoch += 1
+  _editRev = 0
+  _sentRev = 0
+  _savedRev = 0
+  nodes.value = flowNodes
+  edges.value = flowEdges
 }
 
 // Saves run one after another: an auto-save and a manual save fired close
@@ -762,20 +789,20 @@ function enqueueSave(task) {
   _saveQueue = run.catch(() => {})
   return run
 }
-// Latest queued sheet save per sheet id, resolving to whether it succeeded —
-// lets readers of that sheet wait for exactly that save, not the whole queue.
+// Latest queued sheet save per sheet id — lets readers of that sheet wait
+// for exactly that save, not the whole queue.
 const _lastSaveByGraph = new Map()
 
-// `graphId` defaults to the open sheet; the auto-save flush on a sheet switch
-// passes the previous sheet explicitly, because by then activeGraphId already
-// names the next one while nodes/edges still hold the previous sheet.
-// Resolves to true when saved, false when the save failed, and null when the
-// graph validation refused to send it.
-async function saveGraph(graphId = activeGraphId.value) {
+// Saves the canvas into the sheet it belongs to. Resolves to true when
+// saved, false when the save failed, and null when it was refused for good:
+// by the graph validation or by a 4xx from the server. A refused edit stays
+// unsaved but does not block run/export/duplicate — retrying cannot help, so
+// those act on the server's state as they did before auto-save.
+async function saveGraph() {
+  const graphId = _canvasGraphId
   if (!auth.isAdmin || !graphId) return false
-  // A save supersedes any pending auto-save of the same sheet — it carries
-  // the same (or newer) state, so a second PUT would be redundant.
-  if (_autoSaveGraphId === graphId) cancelAutoSave()
+  // Any save carries the latest canvas, so a pending auto-save is redundant.
+  clearTimeout(_autoSaveTimer)
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
     const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
@@ -791,94 +818,70 @@ async function saveGraph(graphId = activeGraphId.value) {
   // Snapshot synchronously: by the time a queued save runs, the canvas may
   // already show another sheet.
   const flowData = currentFlowData()
+  const epoch = _canvasEpoch
+  const rev = _editRev
+  const sameCanvas = () => epoch === _canvasEpoch
+  _sentRev = rev
   const run = enqueueSave(async () => {
     saving.value = true
+    let result = false
     try {
       const graph = store.graphs.find(g => g.id === graphId)
-      // Deleted meanwhile (e.g. from the graph picker) — nothing to save into.
-      if (!graph) {
+      if (graph) {
+        await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
+        if (sameCanvas()) _savedRev = Math.max(_savedRev, rev)
+        showStatus(true, t('logic.saved'))
+        result = true
+      } else {
+        // Deleted meanwhile (e.g. from the graph picker) — nothing to save into.
         showStatus(false, t('logic.errorSave'))
-        return false
       }
-      await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
-      showStatus(true, t('logic.saved'))
-      return true
     } catch (err) {
       showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
-      markUnsaved(graphId)
-      return false
+      const status = err.response?.status ?? 0
+      if (status >= 400 && status < 500) result = null
     } finally {
       saving.value = false
+      // Not saved: the edit counts as unsent again, so the next flush, the
+      // reload prompt and run/export/duplicate retry or guard it.
+      // A newer save already underway keeps its claim.
+      if (!result && sameCanvas() && _sentRev === rev) _sentRev = _savedRev
       if (_lastSaveByGraph.get(graphId) === run) _lastSaveByGraph.delete(graphId)
     }
+    return result
   })
   _lastSaveByGraph.set(graphId, run)
   return run
 }
 
 // ── Auto-save ──────────────────────────────────────────────────────────────
-// Structural edits (block config, connections created/removed/re-wired) are
-// persisted after a short idle period, so a burst of edits costs one PUT.
+// Structural edits (block config, connections created/removed/re-wired,
+// blocks dropped/pasted/removed) are persisted after a short idle period,
+// so a burst of edits costs one PUT.
 const AUTO_SAVE_DELAY_MS = 500
 let _autoSaveTimer = null
-let _autoSaveGraphId = null
 
 function scheduleAutoSave() {
-  // While a sheet switch is loading, activeGraphId already names the next
-  // sheet but nodes/edges still hold the previous one — saving now would
-  // write the wrong sheet's content into it.
-  if (!auth.isAdmin || !activeGraphId.value || graphLoading.value) return
+  if (!auth.isAdmin || !_canvasGraphId) return
+  _editRev += 1
   clearTimeout(_autoSaveTimer)
-  _autoSaveGraphId = activeGraphId.value
-  _autoSaveTimer = setTimeout(() => saveGraph(_autoSaveGraphId), AUTO_SAVE_DELAY_MS)
+  _autoSaveTimer = setTimeout(saveGraph, AUTO_SAVE_DELAY_MS)
 }
 
-// A failed save leaves the edit only on the canvas: keep the sheet marked as
-// pending (without a timer — the next edit or flush retries), so a sheet
-// switch, leaving the editor, a reload prompt and run/export/duplicate still
-// treat it as unsaved instead of silently dropping it.
-function markUnsaved(graphId) {
-  // Only while the canvas still holds that sheet's content; during a load,
-  // loadGraph decides itself.
-  if (_autoSaveGraphId || activeGraphId.value !== graphId || graphLoading.value) return
-  _autoSaveGraphId = graphId
-}
-
-function cancelAutoSave() {
-  clearTimeout(_autoSaveTimer)
-  _autoSaveTimer = null
-  _autoSaveGraphId = null
-}
-
-// Saves a still-pending auto-save right away instead of dropping it — used
-// when the sheet is left before the debounce elapsed. Resolves like
-// saveGraph; with nothing (left) to save, that counts as success.
-function flushAutoSave() {
-  const graphId = _autoSaveGraphId
-  if (!graphId) return Promise.resolve(true)
-  cancelAutoSave()
-  // A sheet deleted meanwhile has nothing left to save into.
-  if (!store.graphs.some(g => g.id === graphId)) return Promise.resolve(true)
-  return saveGraph(graphId)
+// Saves an unsent edit right away instead of waiting for the debounce.
+function flushUnsentEdits() {
+  if (hasUnsentEdits()) saveGraph()
 }
 
 // Actions that read the sheet back from the server (run, export, duplicate,
 // reload) must see the last edit, not the state before the debounce elapsed.
-// Resolves to false when the last edit failed to save, so the caller stops
-// instead of acting on the server's older state. A validation-blocked edit
-// (a legacy sheet with existing warnings) never reaches the server either
-// way; those sheets stay runnable and exportable as before auto-save.
+// Resolves to false when that edit failed to save, so the caller stops
+// instead of acting on the server's older state.
 async function persistPendingChanges(graphId) {
+  if (_canvasGraphId === graphId) flushUnsentEdits()
   // The flushed save queues behind any earlier one, so it settles last.
-  const saved = await (_autoSaveGraphId === graphId ? flushAutoSave() : _lastSaveByGraph.get(graphId))
-  return saved !== false
+  return (await _lastSaveByGraph.get(graphId)) !== false
 }
-
-// `sync`: must run at the assignment itself, before callers such as
-// doCreateGraph replace nodes/edges with the next sheet's content.
-watch(activeGraphId, (_id, previousId) => {
-  if (_autoSaveGraphId === previousId) flushAutoSave()
-}, { flush: 'sync' })
 
 // ── Node selection & config ────────────────────────────────────────────────
 // One selected block feeds both the settings and the debug values of the
@@ -1247,7 +1250,7 @@ async function doCreateGraph() {
   )
   showNewGraph.value = false
   activeGraphId.value = g.id
-  nodes.value = []; edges.value = []
+  replaceCanvas(g.id)
 }
 
 // ── Toggle enabled ─────────────────────────────────────────────────────────
@@ -1275,13 +1278,13 @@ async function doDeleteGraph() {
   // Persist a pending edit first: should the delete fail, the sheet stays
   // and so must its edit. Every queued write (save, toggle, rename) has to
   // land before the DELETE, or it fails afterwards with a spurious error.
-  flushAutoSave()
+  await persistPendingChanges(graphId)
   await _saveQueue
   await store.deleteGraph(graphId)
   // The user may have opened another sheet meanwhile — leave that one open.
   if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
-  nodes.value = []; edges.value = []
+  replaceCanvas('', [], [], { discard: true })
 }
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
@@ -1722,7 +1725,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   // Leaving the editor within the debounce window must not drop the edit.
-  flushAutoSave()
+  flushUnsentEdits()
 })
 
 // A reload or tab close never unmounts the view: start the pending save and
@@ -1730,8 +1733,8 @@ onBeforeUnmount(() => {
 // already sent is left alone — prompting for it would also block the API
 // client's forced redirect to /login when that very save got a 401.
 function _onBeforeUnload(event) {
-  if (!_autoSaveGraphId) return
-  flushAutoSave()
+  if (!hasUnsentEdits()) return
+  flushUnsentEdits()
   event.preventDefault()
   event.returnValue = ''
 }
