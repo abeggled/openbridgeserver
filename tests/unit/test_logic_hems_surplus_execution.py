@@ -1493,3 +1493,22 @@ async def test_a_missing_pulse_does_not_reach_the_block_as_a_value():
     assert manager._hysteresis["g"]["h"]["status"] == "ok"
     await manager._execute_graph("g", "G", flow, {"read": {"value": -5000}})  # unrelated run
     assert manager._hysteresis["g"]["h"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_a_reload_drops_emptied_wake_task_sets():
+    manager = _manager()
+    manager._load_graphs = AsyncMock()
+    manager._hems_wake_tasks.update({"old": set(), "busy": {MagicMock()}})
+    await manager.reload()
+    assert set(manager._hems_wake_tasks) == {"busy"}
+
+
+def test_a_failed_tick_keeps_the_executors_undo_keys(monkeypatch):
+    from obs.logic import hems_surplus as hs
+
+    state = {"_run": 5, "_undo": {"x": 1}}
+    monkeypatch.setattr(hs, "_evaluate", MagicMock(side_effect=RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        hs.evaluate({"consumers": []}, {"grid": 0}, state, 1.0)
+    assert state == {"_run": 5, "_undo": {"x": 1}}

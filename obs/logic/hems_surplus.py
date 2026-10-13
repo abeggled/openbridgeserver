@@ -431,11 +431,13 @@ def evaluate(
     """
     # A tick either completes or leaves the state as it was: a failure half-way
     # must not keep, e.g., a fired trigger whose pulse was never sent.
-    before = copy.deepcopy(state)
+    # (The executor's run-level undo keys are not the engine's: kept as they are.)
+    before = copy.deepcopy({key: value for key, value in state.items() if key not in ("_undo", "_run")})
     try:
         return _evaluate(data, inputs, state, now, node_id)
     except Exception:
-        state.clear()
+        for key in [key for key in state if key not in ("_undo", "_run")]:
+            del state[key]
         state.update(before)
         raise
 

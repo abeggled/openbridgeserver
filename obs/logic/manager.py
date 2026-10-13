@@ -1777,6 +1777,8 @@ class LogicManager:
         for plans in (self._hems_planned_wake, self._hems_wake_at):
             for key in [k for k in plans if k[0] not in live_graph_ids]:
                 del plans[key]
+        for graph_id in [gid for gid, tasks in self._hems_wake_tasks.items() if not tasks]:
+            del self._hems_wake_tasks[graph_id]  # emptied by their tasks finishing
         # A reload restarts all schedulers, but it must not invalidate work for
         # unrelated graphs.  Rotate only configurations that actually changed
         # (or disappeared); save paths that called invalidate_cache() already
