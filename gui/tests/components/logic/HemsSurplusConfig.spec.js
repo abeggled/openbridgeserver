@@ -266,6 +266,32 @@ describe('HemsSurplusConfig — fields per control type', () => {
     expect(w.find('[data-testid="hems-consumer-below_min-1"]').element.value).toBe('off')
   })
 
+  it('keeps the switch-off threshold of an on/off consumer at or below its switch-on threshold', async () => {
+    const w = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'onoff', power_w: 2000, on_threshold_w: 1000 })]) })
+    await setValue(w, 'hems-consumer-off_threshold_w-0', '2000')
+    expect(lastConsumers(w)[0].off_threshold_w).toBe(1000)
+    await setValue(w, 'hems-consumer-off_threshold_w-0', '800')
+    expect(lastConsumers(w)[0].off_threshold_w).toBe(800)
+  })
+
+  it('pulls the switch-off threshold down with a lowered switch-on threshold or rated power', async () => {
+    const w = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'onoff', power_w: 2000, off_threshold_w: 1500 })]) })
+    await setValue(w, 'hems-consumer-power_w-0', '1200')
+    expect(lastConsumers(w)[0].off_threshold_w).toBe(1200)
+    const fixedDefault = mountCfg({ consumers: JSON.stringify([C('b', { mode: 'onoff', power_w: undefined })]) })
+    await setValue(fixedDefault, 'hems-consumer-off_threshold_w-0', '5000')
+    expect(lastConsumers(fixedDefault)[0].off_threshold_w).toBe(1000)  // the default rated power
+  })
+
+  it('leaves the thresholds alone where the switch-on threshold is not known in the editor', async () => {
+    const dynamic = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'onoff', power_source: 'input' })]) })
+    await setValue(dynamic, 'hems-consumer-off_threshold_w-0', '5000')
+    expect(lastConsumers(dynamic)[0].off_threshold_w).toBe(5000)  // the maximum power comes from an input
+    const percent = mountCfg({ consumers: JSON.stringify([C('p', { off_threshold_w: 9000 })]) })
+    await setValue(percent, 'hems-consumer-power_w-0', '100')
+    expect(lastConsumers(percent)[0].off_threshold_w).toBe(9000)  // only on/off consumers have thresholds
+  })
+
   it('caps the trigger pulse at the one hour the engine allows', async () => {
     const w = mountCfg({ consumers: JSON.stringify([C('a', { mode: 'trigger' })]) })
     expect(w.find('[data-testid="hems-consumer-pulse_s-0"]').attributes('max')).toBe('3600')

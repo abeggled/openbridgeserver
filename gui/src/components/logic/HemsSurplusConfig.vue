@@ -268,7 +268,17 @@ function removeConsumer(i) {
 }
 
 function setConsumer(i, key, value) {
-  saveConsumers(consumers.value.map((c, idx) => (idx === i ? { ...c, [key]: value } : c)))
+  saveConsumers(consumers.value.map((c, idx) => (idx === i ? withConsistentThresholds({ ...c, [key]: value }) : c)))
+}
+
+// The engine never switches an on/off consumer off above its switch-on
+// threshold (it uses the lower of the two), so a higher switch-off threshold
+// is stored as the switch-on threshold — what is saved is what runs.
+function withConsistentThresholds(c) {
+  if (c.mode !== 'onoff' || c.off_threshold_w == null) return c
+  const on = c.on_threshold_w ?? (c.power_source === 'input' ? null : (c.power_w ?? 1000))
+  if (on == null || Number(c.off_threshold_w) <= Number(on)) return c
+  return { ...c, off_threshold_w: Number(on) }
 }
 
 function setConsumerNumber(i, field, raw) {
