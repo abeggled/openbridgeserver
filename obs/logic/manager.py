@@ -37,7 +37,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from obs.core.json import jsonable
-from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value
+from obs.logic import hems_surplus
+from obs.logic.executor import (
+    GraphExecutor,
+    _OpaqueRecoveredDict,
+    _OpaqueRecoveredSet,
+    _OpaqueRecoveredStr,
+    _replay_known_output_value,
+    forget_hems_undo,
+    hems_clock,
+    undo_hems_run,
+)
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
 from obs.logic.variables import (
@@ -108,6 +118,11 @@ def _copy_graph_worker_state(state: dict[str, Any]) -> tuple[dict[str, Any], dic
     """Create the worker baseline and mutable state away from the event loop."""
     base = _safe_deepcopy_state(state)
     return base, _safe_deepcopy_state(base)
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """Equal and of the same type — so True is not taken for an already written 1."""
+    return type(a) is type(b) and a == b
 
 
 def _serialize_logic_debug_payload(
@@ -185,6 +200,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "min_max_tracker",
         "consumption_counter",
         "heating_circuit",
+        "hems_surplus",
         "random_value",
         "memory",
     }
@@ -226,7 +242,15 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
 # They are the roots of the pulse-provenance trace: a consumer fed from one of
 # them must not read the "no pulse this pass" placeholder as a real value.
-_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
+# hems_surplus counts with its trigger outputs only (``_hems_trigger_handles``);
+# its other outputs are levels.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus"})
+
+# An event run wakes a hems_surplus node early only when this much earlier
+# than its loop would anyway.
+_HEMS_WAKE_SLACK_S = 0.5
+# How long stop() waits for HEMS runs still in flight.
+_HEMS_STOP_TIMEOUT_S = 10.0
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on
@@ -1654,6 +1678,21 @@ class LogicManager:
         self._bulk_init_pending: set[str] = set()
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # When each hems_surplus loop next wakes on its own (hems_clock seconds).
+        self._hems_planned_wake: dict[tuple[str, str], float] = {}
+        # (graph id, node id) of early-wake runs executing right now.
+        self._hems_waking: set[tuple[str, str]] = set()
+        # The sheet run currently executing for each (graph id, node id).
+        self._hems_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
+        # Runs (by run tag) that acted outside the graph; see _undo_hems_run.
+        self._hems_acted_runs: set[object] = set()
+        self._hems_run_ids = itertools.count(1)
+        # Set by stop(): runs still finishing must not schedule new wakes.
+        self._hems_stopping = False
+        # Earliest pending early wake per (graph id, node id), and every
+        # early-wake task per graph so they can be cancelled with it.
+        self._hems_wake_at: dict[tuple[str, str], float] = {}
+        self._hems_wake_tasks: dict[str, set[asyncio.Task]] = {}  # type: ignore[type-arg]
         # Coalesce concurrent refreshes per iCalendar node.  Keep this lock
         # scoped to the fetch itself: graph execution may synchronously publish
         # an event that re-enters the same graph.
@@ -1695,6 +1734,7 @@ class LogicManager:
 
     async def start(self) -> None:
         """Subscribe to EventBus, load all graphs and start cron schedulers."""
+        self._hems_stopping = False
         await self._load_app_config()
         await self._load_graphs()
         from obs.core.event_bus import DataPointRenamedEvent, DataValueEvent
@@ -1712,6 +1752,15 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._hems_planned_wake.clear()
+        self._hems_stopping = True
+        self._cancel_hems_wakes()
+        # A HEMS run in flight is never cut short (see _hems_run): let it finish
+        # before the bus goes away, within a bound.
+        if runs := [run for run in self._hems_runs.values() if not run.done()]:
+            _done, pending = await asyncio.wait(runs, timeout=_HEMS_STOP_TIMEOUT_S)
+            for run in pending:
+                run.cancel()  # past the bound: it must not publish once the bus is gone
         self._cancel_sequence_tasks()
 
     async def reload(self) -> None:
@@ -1720,8 +1769,16 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        # Pending HEMS early wakes are kept: they re-read the graph when they
+        # fire, and a reload restarts every loop only at its planned wake.
         await self._load_graphs()
         live_graph_ids = set(self._graphs)
+        # Plans of sheets that are gone (e.g. a config restore) must not outlive them.
+        for plans in (self._hems_planned_wake, self._hems_wake_at):
+            for key in [k for k in plans if k[0] not in live_graph_ids]:
+                del plans[key]
+        for graph_id in [gid for gid, tasks in self._hems_wake_tasks.items() if not tasks]:
+            del self._hems_wake_tasks[graph_id]  # emptied by their tasks finishing
         # A reload restarts all schedulers, but it must not invalidate work for
         # unrelated graphs.  Rotate only configurations that actually changed
         # (or disappeared); save paths that called invalidate_cache() already
@@ -2089,6 +2146,21 @@ class LogicManager:
                         name,
                         node.id[:8],
                     )
+                elif node.type == "hems_surplus":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    task = asyncio.create_task(
+                        self._hems_loop(graph_id, node.id),
+                        name=f"hems-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "HEMS surplus control scheduled: graph=%s (%s) node=%s",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                    )
 
     async def _cron_loop(self, graph_id: str, node_id: str, cron_expr: str) -> None:
         """Fires a timer_cron graph node on its cron schedule — runs indefinitely.
@@ -2196,6 +2268,56 @@ class LogicManager:
             except Exception:
                 logger.exception("Sensor watchdog loop error graph=%s node=%s", graph_id[:8], node_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _hems_loop(self, graph_id: str, node_id: str) -> None:
+        """Periodically re-evaluates a hems_surplus node so it regulates without any event.
+
+        The block gates its own control cycle by the configured interval (see
+        ``obs.logic.hems_surplus``), so this loop only has to wake the graph at
+        least that often — and earlier when the block reports ``next_wake``: a
+        pending trigger pulse end, which can be shorter than the interval, or
+        the moment a meter value exceeds its maximum age. The interval is re-read every iteration, so an edited value
+        applies without a graph reload.
+        """
+        # A restart by a reload (any graph saved) resumes at the planned wake
+        # instead of re-running the whole sheet at once; a sheet that was itself
+        # saved has no planned wake left (invalidate_cache) and runs straight away.
+        in_flight = self._hems_runs.get((graph_id, node_id))
+        if in_flight is not None and not in_flight.done():
+            # The loop this one replaces was cancelled mid-run. After a reload
+            # for another sheet (its plan is kept) that run counts as this
+            # loop's first; after this sheet was saved (invalidate_cache cleared
+            # the plan) the new configuration runs right after it.
+            replanning = (graph_id, node_id) in self._hems_planned_wake
+            await asyncio.wait({in_flight})
+            if replanning:
+                entry = self._graphs.get(graph_id)
+                node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry else None
+                self._plan_hems_wake(graph_id, node_id, hems_surplus.interval_s(node.data) if node is not None else hems_surplus.DEFAULT_INTERVAL_S)
+        planned = self._hems_planned_wake.get((graph_id, node_id))
+        if planned is not None and planned > hems_clock():
+            await asyncio.sleep(planned - hems_clock())
+        while True:
+            try:
+                entry = self._graphs.get(graph_id)
+                sleep_s = hems_surplus.DEFAULT_INTERVAL_S
+                node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry and entry[1] else None
+                if node is None:  # graph gone or disabled, or the block removed
+                    self._hems_planned_wake.pop((graph_id, node_id), None)  # nothing planned while idle
+                else:
+                    g_name, _, flow = entry
+                    sleep_s = hems_surplus.interval_s(node.data)
+                    await self._hems_run(graph_id, node_id, g_name, flow, waking=False)
+                    sleep_s = self._plan_hems_wake(graph_id, node_id, sleep_s)
+                    logger.debug("HEMS surplus graph %s (%s) node %s evaluated", graph_id[:8], g_name, node_id[:8])
+
+                await asyncio.sleep(sleep_s)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("HEMS surplus loop error graph=%s node=%s", graph_id[:8], node_id[:8])
+                await asyncio.sleep(hems_surplus.MIN_INTERVAL_S)  # back-off, short: the safe state depends on this loop
 
     # ── Event Handler ─────────────────────────────────────────────────────
 
@@ -2604,6 +2726,11 @@ class LogicManager:
             # synchronous node between one of them and a Change Filter would log
             # "Missing upstream output" on every single save.
             init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
+            # hems_surplus is excluded as well, so the executor no longer sees it
+            # as one: every handle wired from it is such a boundary.
+            for edge in flow.edges:
+                if node_type_by_id.get(edge.source) == "hems_surplus":
+                    init_retained_boundary_handles.setdefault(edge.source, set()).add(edge.sourceHandle or "out")
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
@@ -3062,8 +3189,12 @@ class LogicManager:
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
+        # A run a save makes obsolete publishes no write; a hems_surplus block
+        # must not keep what it decided in it (a fired trigger would be locked
+        # out without its pulse ever reaching the actuator).
+        run_tag = next(self._hems_run_ids)  # an int: survives the deep copies of replay passes
         try:
-            return await self._execute_graph_impl(
+            result = await self._execute_graph_impl(
                 graph_id,
                 name,
                 flow,
@@ -3071,9 +3202,126 @@ class LogicManager:
                 logic_depth,
                 debug_overrides,
                 debug_input_capture,
+                run_tag=run_tag,
             )
         except _ObsoleteGraphExecution:
+            self._undo_hems_run(graph_id, flow, run_tag)
             return {}
+        except BaseException:
+            # Any later failure or a cancellation: nothing published, so the same rule.
+            self._undo_hems_run(graph_id, flow, run_tag)
+            raise
+        finally:
+            self._hems_acted_runs.discard(run_tag)
+            hyst = self._hysteresis.get(graph_id, {})
+            for node in flow.nodes:
+                if node.type == "hems_surplus" and node.id in hyst:
+                    forget_hems_undo(hyst[node.id], run_tag)
+        self._schedule_hems_early_wakes(graph_id, flow, overrides)
+        return result
+
+    def _plan_hems_wake(self, graph_id: str, node_id: str, interval_s: float) -> float:
+        """Plan a loop's next wake after a run: the interval, or the block's earlier ``next_wake``.
+
+        A wake time already past was not refreshed by the run — the node was
+        skipped or failed — so it must not spin the loop. Returns the sleep.
+        """
+        sleep_s = interval_s
+        next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
+        now_ts = hems_clock()
+        if next_wake is not None and next_wake > now_ts:
+            sleep_s = min(sleep_s, max(0.1, next_wake - now_ts))
+        self._hems_planned_wake[(graph_id, node_id)] = now_ts + sleep_s
+        return sleep_s
+
+    def _undo_hems_run(self, graph_id: str, flow: FlowData, run_tag: object | None) -> None:
+        """Undo a failed or obsolete run's hems_surplus ticks — unless it already acted.
+
+        Such a run wrote nothing, so a trigger it fired would otherwise be locked
+        out without its pulse ever reaching the actuator. Once the run has acted
+        outside the graph (API call, notification, …), its ticks stand: undoing
+        them would re-arm a trigger whose action already ran.
+        """
+        if run_tag is None or run_tag in self._hems_acted_runs:
+            return
+        hyst = self._hysteresis.get(graph_id, {})
+        for node in flow.nodes:
+            if node.type == "hems_surplus" and node.id in hyst:
+                undo_hems_run(hyst[node.id], run_tag)
+
+    def _schedule_hems_early_wakes(self, graph_id: str, flow: FlowData, overrides: dict[str, dict[str, Any]]) -> None:
+        """Wake a hems_surplus node before its loop would, when an event run needs it.
+
+        A control cycle can also run on an event (a meter telegram) and fire a
+        trigger there; its pulse end, or the next due cycle, may then come
+        before the loop's own planned wake.
+        """
+        if self._hems_stopping:
+            return
+        for node in flow.nodes:
+            if node.type != "hems_surplus":
+                continue
+            if overrides == {node.id: {}} and (graph_id, node.id) not in self._hems_waking:
+                continue  # the loop's own run plans itself
+            next_wake = self._hysteresis.get(graph_id, {}).get(node.id, {}).get("next_wake")
+            planned = self._hems_planned_wake.get((graph_id, node.id))
+            now_ts = hems_clock()
+            if next_wake is None or planned is None or not now_ts < next_wake < planned - _HEMS_WAKE_SLACK_S:
+                continue
+            pending = self._hems_wake_at.get((graph_id, node.id))
+            if pending is not None and pending <= next_wake + _HEMS_WAKE_SLACK_S:
+                continue  # a wake at (or before) that time is already pending
+            # Never cancelled or replaced: a superseded later wake only costs one
+            # extra run, and a running one must not be interrupted half-way.
+            self._hems_wake_at[(graph_id, node.id)] = next_wake
+            task = asyncio.create_task(self._hems_wake_once(graph_id, node.id, next_wake), name=f"hems-wake-{graph_id[:8]}-{node.id[:8]}")
+            tasks = self._hems_wake_tasks.setdefault(graph_id, set())
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    def _cancel_hems_wakes(self, graph_id: str | None = None) -> None:
+        for gid in [graph_id] if graph_id is not None else list(self._hems_wake_tasks):
+            for task in self._hems_wake_tasks.pop(gid, set()):
+                task.cancel()
+        for key in [k for k in self._hems_wake_at if graph_id is None or k[0] == graph_id]:
+            del self._hems_wake_at[key]
+
+    async def _hems_wake_once(self, graph_id: str, node_id: str, wake_at: float) -> None:
+        await asyncio.sleep(max(0.0, wake_at - hems_clock()))
+        if self._hems_wake_at.get((graph_id, node_id)) == wake_at:
+            del self._hems_wake_at[(graph_id, node_id)]
+        entry = self._graphs.get(graph_id)
+        if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
+            await self._hems_run(graph_id, node_id, entry[0], entry[2], waking=True)
+
+    async def _hems_run(self, graph_id: str, node_id: str, name: str, flow: FlowData, *, waking: bool) -> None:
+        """Run the sheet for a hems_surplus node — one run per node at a time, never cut short.
+
+        Shielded: a save (reload/invalidate) cancels the loop or wake that
+        started it, but the run itself must finish — the block records its
+        outputs as sent before the Write Objects publish them. A loop restarted
+        meanwhile waits for it instead of running the sheet a second time in
+        parallel. An early-wake run stays marked (``_hems_waking``) until it
+        has finished, so it schedules its own follow-up wake.
+        """
+        key = (graph_id, node_id)
+        # Re-checked after every wait: another waiter may have started a run meanwhile.
+        while (previous := self._hems_runs.get(key)) is not None and not previous.done():
+            await asyncio.wait({previous})  # its outcome is logged by _hems_run_finished
+        if waking:
+            self._hems_waking.add(key)
+        run = asyncio.ensure_future(self._execute_graph(graph_id, name, flow, {node_id: {}}))
+        self._hems_runs[key] = run
+        run.add_done_callback(lambda done: self._hems_run_finished(key, done, waking))
+        await asyncio.wait({run})  # never cancels the run; a failure is logged once, by the callback
+
+    def _hems_run_finished(self, key: tuple[str, str], run: asyncio.Future, waking: bool) -> None:  # type: ignore[type-arg]
+        if waking:
+            self._hems_waking.discard(key)
+        if self._hems_runs.get(key) is run:
+            del self._hems_runs[key]
+        if not run.cancelled() and (exc := run.exception()) is not None:
+            logger.error("HEMS surplus run error graph=%s node=%s", key[0][:8], key[1][:8], exc_info=exc)
 
     async def _execute_graph_impl(
         self,
@@ -3084,9 +3332,18 @@ class LogicManager:
         logic_depth: int = 0,
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
+        *,
+        run_tag: object | None = None,
     ) -> dict[str, Any]:
         execute_now = datetime.now(UTC)
         execution_started = perf_counter()
+
+        def _mark_side_effect() -> None:
+            # From here on the run has acted outside the graph: undoing its
+            # hems_surplus ticks (undo_hems_run) would repeat what it started.
+            # (Untagged runs add None, which _undo_hems_run never undoes anyway.)
+            self._hems_acted_runs.add(run_tag)
+
         ical_app_config = dict(self._app_config)
         # One instant for every ###VAR### of this logic run (#1301).
         api_time_snapshot = make_time_snapshot(ical_app_config, execute_now)
@@ -3229,6 +3486,7 @@ class LogicManager:
                     datapoint_lookup=self._datapoint_value_lookup,
                 )
 
+            executor.run_tag = run_tag
             if not ical_nodes or execution_ical_prepared:
                 return executor
 
@@ -3709,13 +3967,27 @@ class LogicManager:
             node.id
             for node in flow.nodes
             if node.type
-            in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write", "edge_detect"}
+            in {
+                "gate",
+                "hysteresis",
+                "avg_multi",
+                "min_max_tracker",
+                "consumption_counter",
+                "heating_circuit",
+                "datapoint_write",
+                "edge_detect",
+                "hems_surplus",
+            }
         }
         # Keyed on every pulse origin, not just change_filter: the correction
         # pass for a consumer fed by a non-firing pulse restores state from
         # this snapshot, so without it the placeholder the first pass already
         # committed is simply re-committed.
-        _pulse_origin_ids = {n.id for n in flow.nodes if n.type in _PULSE_ORIGIN_NODE_TYPES}
+        _pulse_origin_ids = {
+            n.id
+            for n in flow.nodes
+            if n.type in _PULSE_ORIGIN_NODE_TYPES and (n.type != "hems_surplus" or hems_surplus.trigger_output_handles(n.data))
+        }
         _needs_cf_pulse_correction_snapshot = any(
             bool(
                 (_downstream_closure({_pid}, _effective_edges) - {_pid})
@@ -3766,6 +4038,7 @@ class LogicManager:
             raise
         except Exception:
             logger.exception("Graph %s (%s) execution error", graph_id, name)
+            self._undo_hems_run(graph_id, flow, run_tag)  # nothing was published
             return {}
 
         for ical_error_id, ical_error in ical_variable_errors.items():
@@ -4232,6 +4505,32 @@ class LogicManager:
         # fresh rising edge, so nodes that fire on sustained truthy inputs from
         # cron are not suppressed by the rising-edge deduplication below.
         _node_type_by_id = {n.id: n.type for n in flow.nodes}
+        # Trigger outputs of each hems_surplus node: events (present only on the
+        # run that sent them), unlike its level outputs. Parsed once per run.
+        _hems_trigger_handles = {n.id: hems_surplus.trigger_output_handles(n.data) for n in flow.nodes if n.type == "hems_surplus"}
+        _hems_node_ids = set(_hems_trigger_handles)  # every hems_surplus node, with or without triggers
+        _hems_only_on_change = {n.id for n in flow.nodes if n.type == "hems_surplus" and hems_surplus.only_on_change(n.data)}
+
+        _write_ids_with_trigger = {e.target for e in _effective_edges if (e.targetHandle or "in") == "trigger"}
+
+        def _hems_level_edge(edge: Any) -> bool:
+            """An edge from a hems_surplus output that carries a level — sustained data, never a pulse.
+
+            Every output but a trigger, and a trigger output too where it feeds the
+            value of a Write Object without its own trigger: the executor hands
+            that one the last value (see ``_skip_unchanged``), and it is written
+            only when it differs from the value last written.
+            """
+            if edge.source not in _hems_node_ids:
+                return False
+            if (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]:
+                return True
+            return (
+                edge.source in _hems_only_on_change
+                and _node_type_by_id.get(edge.target) == "datapoint_write"
+                and (edge.targetHandle or "in") == "value"
+                and edge.target not in _write_ids_with_trigger
+            )
 
         def _discrete_pulse_handles(node_ids: set[str] | None = None) -> set[tuple[str, str]]:
             """(node id, handle) pairs carrying a discrete event pulse this pass.
@@ -4252,6 +4551,11 @@ class LogicManager:
                 if _pn.type == "change_filter":
                     if GraphExecutor._to_bool(_pout.get("changed")):
                         pulses.add((_pn.id, "changed"))
+                elif _pn.type == "hems_surplus":
+                    # A trigger output exists only on the run that sent it.
+                    for _ph in _hems_trigger_handles[_pn.id]:
+                        if GraphExecutor._to_bool(_pout.get(_ph)):
+                            pulses.add((_pn.id, _ph))
                 elif _pn.type == "edge_detect":
                     for _ph in ("rising", "falling"):
                         if GraphExecutor._to_bool(_pout.get(_ph)):
@@ -4273,7 +4577,9 @@ class LogicManager:
             on that node fired.
             """
             origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
-            if _node_type_by_id.get(origin_id) == "edge_detect":
+            if origin_id in _hems_trigger_handles or _node_type_by_id.get(origin_id) == "edge_detect":
+                # hems_surplus: a firing is the run that sent True — the pulse
+                # end's False is no new event (as in _discrete_pulse_handles).
                 pulses = _discrete_pulse_handles({origin_id})
                 return (origin_id, handle) in pulses if handle is not None else bool(pulses)
             return GraphExecutor._to_bool(outputs.get(origin_id, {}).get("changed"))
@@ -4313,6 +4619,14 @@ class LogicManager:
                 and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
             ):
                 return False
+            if _hems_level_edge(edge):
+                return False
+            if (
+                edge.source in _hems_trigger_handles
+                and require_fired_change_filter
+                and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
+            ):
+                return False  # only the run that sent True carries a pulse
             if _node_type_by_id.get(edge.source) == "change_filter":
                 if (edge.sourceHandle or "out") != "changed":
                     return False
@@ -4409,7 +4723,12 @@ class LogicManager:
             # trigger handle is taken for a real level by a stateful consumer,
             # and a synchronous node can invert it into a truthy value that
             # fires an action node (issue #1090's machinery, generalized).
-            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type in _PULSE_ORIGIN_NODE_TYPES}
+            # A hems_surplus node is an origin only through its trigger outputs.
+            relay_origins = {
+                node.id: {node.id}
+                for node in flow.nodes
+                if node.type in _PULSE_ORIGIN_NODE_TYPES and (node.type != "hems_surplus" or _hems_trigger_handles[node.id])
+            }
             # Parallel to relay_origins, but keyed by (origin, source handle).
             # relay_origins itself must stay node-keyed: _has_independent_fresh_trigger
             # subtracts it against fresh_origins, which is node-keyed too.
@@ -4510,9 +4829,11 @@ class LogicManager:
                     return False
 
             def _pulse_input_edge(edge: Any) -> bool:
-                # change_filter.out is a sustained value, not a pulse.
-                return edge.source in relay_origins and not (
-                    _node_type_by_id.get(edge.source) == "change_filter" and (edge.sourceHandle or "out") != "changed"
+                # change_filter.out and hems_surplus level outputs are sustained values, not pulses.
+                return (
+                    edge.source in relay_origins
+                    and not (_node_type_by_id.get(edge.source) == "change_filter" and (edge.sourceHandle or "out") != "changed")
+                    and not _hems_level_edge(edge)
                 )
 
             queue = list(relay_origins)
@@ -4535,6 +4856,8 @@ class LogicManager:
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
                         continue
                     if _node_type_by_id.get(source_id) == "change_filter" and (pulse_edge.sourceHandle or "out") != "changed":
+                        continue
+                    if _hems_level_edge(pulse_edge):
                         continue
                     # A handle that can never fire is not a pulse origin. With
                     # both directions set to "off"/"trigger", "out" never
@@ -4606,6 +4929,10 @@ class LogicManager:
                         # the block relay the placeholder on the next unrelated
                         # event.
                         or (target_type_name == "merge" and _MERGE_INPUT_HANDLE_RE.fullmatch(target_handle) is not None)
+                        # hems_surplus keeps state from every input (held values,
+                        # telegram times, timers): a no-pulse placeholder must not
+                        # reach any of them.
+                        or target_type_name == "hems_surplus"
                     )
                     if stateful_data_handle:
                         stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
@@ -5000,6 +5327,7 @@ class LogicManager:
                 target_set.add(node.id)
                 return True
             try:
+                _mark_side_effect()
                 reachable, latency_ms = await _ping_host(host, count, timeout_s)
                 hyst_hc["hc_prev_trigger"] = True
                 hyst_hc["hc_last_reachable"] = reachable
@@ -5260,6 +5588,7 @@ class LogicManager:
                     ipaddress.IPv4Address(broadcast)
                 except ValueError:
                     raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
+                _mark_side_effect()
                 await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
                 # Record the consumed rising edge only after a successful send so
                 # that a transient failure does not silently suppress the next attempt.
@@ -5609,6 +5938,7 @@ class LogicManager:
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     for request_url in request_urls:
                         try:
+                            _mark_side_effect()
                             resp = await client.request(method, request_url, **req_kwargs)
                             break
                         except httpx.RequestError as req_exc:
@@ -6109,6 +6439,7 @@ class LogicManager:
                     async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                         for request_url in request_urls:
                             try:
+                                _mark_side_effect()
                                 resp = await client.request(method, request_url, **req_kwargs)
                                 break
                             except httpx.RequestError as req_exc:
@@ -6440,6 +6771,7 @@ class LogicManager:
                 }
                 source = f"logic.graph.{graph_id}.node.{node.id}"
                 record_kwargs = {"type": message_type, "severity": severity, "source": source, "title": title, "message": msg, "payload": payload}
+                _mark_side_effect()
                 await get_message_archive_service().record(archive_id, **record_kwargs)
                 outputs[node.id]["stored"] = True
                 target_set.add(node.id)
@@ -6469,6 +6801,12 @@ class LogicManager:
             event_sources = {node_id: dict(values) for node_id, values in overrides.items()}
             for node_id in refreshed_ical_nodes:
                 event_sources.setdefault(node_id, {})
+            # A hems_surplus block that sent something ran a control cycle, which
+            # is an event of its own, whatever started this run; blocked_outputs
+            # below keeps its unsent handles stale.
+            for node_id in _hems_node_ids:
+                if outputs.get(node_id, {}).get("_emitted"):
+                    event_sources.setdefault(node_id, {})
             blocked_sources = {node.id for node in flow.nodes if node.type == "memory"}
             blocked_sources.update(api_client_ids - triggered_api_clients)
             blocked_sources.update(host_check_ids - executed_host_check_nodes)
@@ -6496,6 +6834,14 @@ class LogicManager:
                 for edge in _effective_edges
                 if edge.source in no_result_mapping_ids and (edge.sourceHandle or "out") in {"out", "result"}
             }
+            # hems_surplus carries every output at its level, but only what it
+            # actually sent this run is news for an action node downstream.
+            blocked_outputs.update(
+                (edge.source, edge.sourceHandle or "out")
+                for edge in _effective_edges
+                if _node_type_by_id.get(edge.source) == "hems_surplus"
+                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {}).get("_emitted", ())
+            )
             while True:
                 cache_key = (frozenset(blocked_sources), frozenset(blocked_outputs))
                 if cache_key not in freshness_cache:
@@ -6569,6 +6915,7 @@ class LogicManager:
                 _freshness_settled_async_ids.add(node.id)
                 return False
 
+            _mark_side_effect()  # a notification is about to be sent
             if node.type == "notify_message":
                 instance_id = str(node.data.get("adapter_instance_id") or "").strip()
                 providers = node.data.get("providers") or []
@@ -7104,6 +7451,7 @@ class LogicManager:
 
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
+        _mark_side_effect()  # from the writes on, the run has acted (value sequences follow them)
         await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, execute_now, logic_depth)
 
         # Value sequences are intentionally started after synchronous graph
@@ -7198,7 +7546,9 @@ class LogicManager:
             if graph_entry:
                 _, _, _flow = graph_entry
                 current_nodes = {node.id: node for node in _flow.nodes}
-                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
+                # hems_surplus never persists: its timers and on/off states must
+                # start from the safe state after a restart.
+                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False or n.type == "hems_surplus"}
                 state_to_save = {}
                 for node_id, node_state in hyst.items():
                     if node_id not in current_nodes or node_id in no_persist:
@@ -7300,10 +7650,13 @@ class LogicManager:
                 continue
 
             ns = graph_state.setdefault(node.id, {})
+            if node_out.get("_skip_unchanged") and "last_write_val" in ns and _same_value(ns["last_write_val"], write_val):
+                continue  # a hems_surplus level this Write Object already wrote
             if not self._write_filters_allow(node.data, ns, write_val, write_now):
                 continue
 
             # All filters passed — update state and publish
+            previous_write = (ns.get("last_write_val", _MISSING_STATE), ns.get("last_write_ts", _MISSING_STATE))
             ns["last_write_val"] = write_val
             ns["last_write_ts"] = write_now
             try:
@@ -7321,6 +7674,14 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception:
                 logger.exception("Graph %s: failed to write dp %s", graph_id, dp_id_str)
+                if node_out.get("_skip_unchanged"):
+                    # Not written: a hems_surplus level must be tried again, not
+                    # skipped as "already written" while it stays unchanged.
+                    for key, value in zip(("last_write_val", "last_write_ts"), previous_write, strict=True):
+                        if value is _MISSING_STATE:
+                            ns.pop(key, None)
+                        else:
+                            ns[key] = value
         return published
 
     @staticmethod
@@ -7487,6 +7848,13 @@ class LogicManager:
                                     _node_state["_recovered_str"] = True
                         else:
                             saved = saved_raw
+                        if isinstance(saved, dict):
+                            # hems_surplus is never restored, whatever a row holds:
+                            # it always starts in the safe state, and its timestamps
+                            # come from a monotonic clock that restarts with the process.
+                            for _hems_node in flow.nodes:
+                                if _hems_node.type == "hems_surplus":
+                                    saved.pop(_hems_node.id, None)
                         if isinstance(saved, dict) and saved:
                             self._hysteresis[row["id"]] = saved
                             logger.debug(
@@ -7515,6 +7883,9 @@ class LogicManager:
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]
+        for k in [k for k in self._hems_planned_wake if k[0] == graph_id]:
+            del self._hems_planned_wake[k]
+        self._cancel_hems_wakes(graph_id)
 
     def _prune_graph_executor_lock(self, graph_id: str) -> None:
         """Release an idle worker lock after its graph has disappeared."""

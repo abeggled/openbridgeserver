@@ -347,6 +347,7 @@ import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
 import { provideCanvasEditable } from '@/components/logic/nodes/canvasEditable'
+import { hemsInputPorts } from '@/utils/logicHemsOutputs'
 
 // ── Store ──────────────────────────────────────────────────────────────────
 const { t, locale } = useI18n()
@@ -468,6 +469,8 @@ const nodeTypeComponents = {
   heating_circuit: _generic, min_max_tracker: _generic, consumption_counter: _generic,
   // Timer extended
   operating_hours: _generic, sensor_watchdog: _generic,
+  // HEMS
+  hems_surplus: _generic,
   // String
   string_concat: _generic, string_replace: _generic,
   // Notification
@@ -1196,6 +1199,8 @@ const debugInputs = computed(() => {
     ports = Array.from({ length: Math.max(2, Math.min(20, stringCount)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'python_script') {
     ports = ['a', 'b', 'c'].map(id => ({ id, label: id }))
+  } else if (selectedNode.value.type === 'hems_surplus') {
+    ports = hemsInputPorts(selectedNode.value.data, t)
   }
   const known = new Set(ports.map(port => port.id))
   for (const edge of edges.value.filter(item => item.target === selectedNode.value.id)) {

@@ -1110,6 +1110,18 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.selectedNode = { id: 'average', type: 'avg_multi', data: { input_count: 4 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
 
+    // An unwired HEMS block offers the same inputs as its card, so the meter can be injected.
+    wrapper.vm.selectedNode = {
+      id: 'hems',
+      type: 'hems_surplus',
+      data: { grid_mode: 'split', max_age_s: 60, consumers: [{ id: 'load', mode: 'percent', power_source: 'input' }] },
+    }
+    wrapper.vm.edges = []
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual([
+      'grid_import', 'grid_import_changed', 'grid_export', 'grid_export_changed',
+      'enable', 'target', 'plant_ok', 'c_load_power', 'c_load_max_power',
+    ])
+
     wrapper.vm.selectedNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
     wrapper.vm.edges = [{ id: 'custom', source: 'n1', target: 'concat', sourceHandle: 'value', targetHandle: 'in_4' }]
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
