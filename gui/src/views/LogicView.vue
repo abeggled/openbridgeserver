@@ -166,10 +166,10 @@
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
           :default-edge-options="defaultEdgeOptions"
-          :delete-key-code="auth.isAdmin ? ['Backspace', 'Delete'] : []"
-          :nodes-draggable="auth.isAdmin"
-          :nodes-connectable="auth.isAdmin"
-          :edges-updatable="auth.isAdmin"
+          :delete-key-code="canvasEditable ? ['Backspace', 'Delete'] : []"
+          :nodes-draggable="canvasEditable"
+          :nodes-connectable="canvasEditable"
+          :edges-updatable="canvasEditable"
           :snap-to-grid="snapToGrid"
           :snap-grid="snapGrid"
           fit-view-on-init
@@ -498,7 +498,9 @@ function onGraphPicked(graphId) {
 function onGraphDeletedFromPicker(graphId) {
   if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
-  replaceCanvas('', [], [], { discard: true })
+  // While a switch to the deleted sheet loads, the canvas still holds the
+  // previous sheet — that one still exists, so its edit must be saved.
+  replaceCanvas('', [], [], { discard: _canvasGraphId === graphId })
 }
 
 // ── Edge options — animated only when graph is enabled ─────────────────────
@@ -541,6 +543,10 @@ const titleSpacerClass = computed(() => {
 
 const saving        = ref(false)
 const graphLoading  = ref(false)
+// Read-only while a sheet loads: the canvas still shows the previous sheet,
+// and an edit made now would either be dropped or overwritten by the
+// arriving content.
+const canvasEditable = computed(() => auth.isAdmin && !graphLoading.value)
 let _loadGraphRequestId = 0
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
@@ -706,9 +712,17 @@ async function loadGraph() {
   const superseded = () => requestId !== _loadGraphRequestId || activeGraphId.value !== graphId
   graphLoading.value = true
   try {
+    // Leaving a sheet: save its edit before its content is replaced. If
+    // that save fails, stay on it — switching would throw the edit away
+    // with nothing left to retry it from. A refused edit (validation, 4xx)
+    // can never be saved, so it does not hold the switch up.
+    const outgoing = _canvasGraphId
+    if (outgoing && outgoing !== graphId && !await persistPendingChanges(outgoing)) {
+      if (!superseded()) activeGraphId.value = outgoing
+      return
+    }
     // Re-picking the open sheet: persist its edit first, or the GET returns
-    // the state before it. A switch to another sheet waits only for saves
-    // of the sheet being loaded.
+    // the state before it. Saves of the sheet being loaded settle first.
     await persistPendingChanges(graphId)
     if (superseded()) return
     // The canvas holds this very sheet with an edit the server does not
@@ -1279,12 +1293,11 @@ async function doDeleteGraph() {
   // and so must its edit. Every queued write (save, toggle, rename) has to
   // land before the DELETE, or it fails afterwards with a spurious error.
   await persistPendingChanges(graphId)
-  await _saveQueue
-  await store.deleteGraph(graphId)
+  await enqueueSave(() => store.deleteGraph(graphId))
   // The user may have opened another sheet meanwhile — leave that one open.
   if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
-  replaceCanvas('', [], [], { discard: true })
+  replaceCanvas('', [], [], { discard: _canvasGraphId === graphId })
 }
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
@@ -1405,7 +1418,7 @@ function applyValidatedEdges(nextEdges) {
 
 // ── Connect handler — REQUIRED to actually create edges ────────────────────
 function onConnect(params) {
-  if (!auth.isAdmin) return
+  if (!canvasEditable.value) return
   if (edges.value.some(e => sameConnection(e, params))) return
   const opts = defaultEdgeOptions.value
   // addEdge pushes into the array it is given — hand it a copy, or a
@@ -1430,7 +1443,7 @@ function sameConnection(a, b) {
 // ── Re-wire an existing edge by dragging one of its ends ───────────────────
 // Vue Flow only reports the drop; without this handler the edge snaps back.
 function onEdgeUpdate({ edge, connection }) {
-  if (!auth.isAdmin) return
+  if (!canvasEditable.value) return
   if (!connection?.source || !connection?.target) return
   // Dropped back onto the same handles — nothing changed, nothing to save.
   if (sameConnection(edge, connection)) return
@@ -1457,7 +1470,7 @@ function onElementsChange(changes) {
 
 // ── Drop node from palette ─────────────────────────────────────────────────
 function onDrop(event) {
-  if (!auth.isAdmin) return
+  if (!canvasEditable.value) return
   const type = event.dataTransfer.getData('application/vueflow-node-type')
   if (!type || !activeGraphId.value) return
 
@@ -1589,7 +1602,7 @@ function _onClipboardKeydown(event) {
 }
 
 function onNodeDataUpdate(newData) {
-  if (!auth.isAdmin || !selectedNode.value) return
+  if (!canvasEditable.value || !selectedNode.value) return
   const rowsBefore = extractorRowCount(selectedNode.value)
   nodes.value = nodes.value.map(n =>
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
@@ -1729,7 +1742,8 @@ onBeforeUnmount(() => {
 })
 
 // A reload or tab close never unmounts the view: start the pending save and
-// ask the browser to confirm, which gives that save time to complete. A save
+// ask the browser to confirm, which gives that save time to complete (unless
+// an earlier save still holds the queue — then the prompt at least warns). A save
 // already sent is left alone — prompting for it would also block the API
 // client's forced redirect to /login when that very save got a 401.
 function _onBeforeUnload(event) {
