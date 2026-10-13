@@ -1563,7 +1563,9 @@ function onDrop(event) {
 
 // ── Node selection ─────────────────────────────────────────────────────────
 function onNodeClick({ node }) {
-  if (!auth.isAdmin) return
+  // During a load the panel would edit a block of the outgoing canvas,
+  // whose edits the read-only canvas drops.
+  if (!canvasEditable.value) return
   selectedNode.value = { ...node }
 }
 

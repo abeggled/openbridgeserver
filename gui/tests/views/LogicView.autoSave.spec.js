@@ -341,6 +341,8 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     wrapper.vm.onEdgeUpdate({ edge: wrapper.vm.edges[0], connection: { source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'a' } })
     wrapper.vm.canvasWrapper = { getBoundingClientRect: () => ({ left: 0, top: 0 }) }
     wrapper.vm.onDrop({ dataTransfer: { getData: () => 'const_value' }, clientX: 5, clientY: 5 })
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+    expect(wrapper.vm.selectedNode).toBe(null)
     wrapper.vm.selectedNode = wrapper.vm.nodes[0]
     wrapper.vm.onNodeDataUpdate({ value: 9 })
     expect(wrapper.vm.edges).toEqual(GRAPH_A.flow_data.edges)
