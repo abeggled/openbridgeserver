@@ -40,7 +40,14 @@ beforeEach(() => {
   vi.doMock('@vue-flow/minimap', () => ({ MiniMap: { template: '<div />' } }))
 })
 
+// Mounted views keep window listeners (beforeunload) until unmounted.
+const mounted = []
+
 afterEach(() => {
+  // Some tests unmount on purpose; a second unmount is harmless to skip.
+  for (const wrapper of mounted.splice(0)) {
+    try { wrapper.unmount() } catch { /* already unmounted */ }
+  }
   vi.useRealTimers()
   vi.doUnmock('@/api/client')
   vi.doUnmock('@/api/logicAuthz')
@@ -116,6 +123,7 @@ async function mountLogicView({ isAdmin = true, saveGraph } = {}) {
     },
     attachTo: document.body,
   })
+  mounted.push(wrapper)
   await flushPromises()
   const { useLogicStore } = await import('@/stores/logic')
   return { wrapper, logicApi, logicRunAuthzApi, store: useLogicStore() }
@@ -548,5 +556,202 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     await wrapper.vm.doToggleEnabled()
     expect(logicApi.patchGraph).toHaveBeenLastCalledWith('graph-a', { enabled: true })
     expect(wrapper.vm.statusMsg.ok).toBe(true)
+  })
+
+  describe('ordering against in-flight saves', () => {
+    // A save that stays in flight until the test releases it.
+    function heldSaves() {
+      const release = []
+      const saveGraph = vi.fn().mockImplementation((id, payload) => new Promise((resolve, reject) => {
+        release.push({ ok: () => resolve({ data: { id, ...payload } }), fail: () => reject(new Error('down')) })
+      }))
+      return { saveGraph, release }
+    }
+
+    it('toggles and renames the sheet that was open when clicked', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+      wrapper.vm.doToggleEnabled()
+      wrapper.vm.renameGraphName = 'Renamed'
+      wrapper.vm.renameGraphDesc = 'Desc'
+      wrapper.vm.doRenameGraph()
+      wrapper.vm.onGraphPicked('graph-b')
+      wrapper.vm.renameGraphName = 'Other'
+      await flushPromises()
+      expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-b')
+
+      release[0].ok()
+      await flushPromises()
+      expect(logicApi.patchGraph.mock.calls).toEqual([
+        ['graph-a', { enabled: false }],
+        ['graph-a', { name: 'Renamed', description: 'Desc' }],
+      ])
+    })
+
+    it('loads another sheet without waiting for the previous sheet\'s save', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      expect(saveGraph).toHaveBeenCalledWith('graph-a', expect.anything())
+      expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-b')
+      expect(wrapper.vm.graphLoading).toBe(false)
+
+      // Back to graph-a while its save is still in flight: that load waits.
+      wrapper.vm.onGraphPicked('graph-a')
+      await flushPromises()
+      expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-b')
+
+      release[0].ok()
+      await flushPromises()
+      expect(logicApi.getGraph).toHaveBeenLastCalledWith('graph-a')
+    })
+
+    it('keeps the canvas when re-loading the open sheet after its save failed', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+      const loads = logicApi.getGraph.mock.calls.length
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      wrapper.vm.onGraphPicked('graph-a')
+      await flushPromises()
+      release[0].fail()
+      await flushPromises()
+
+      expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
+      expect(wrapper.vm.edges).toHaveLength(2)
+      expect(wrapper.vm.graphLoading).toBe(false)
+      expect(wrapper.vm.statusMsg.ok).toBe(false)
+    })
+
+    it('stops run, export and duplicate when the pending change could not be saved', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({ saveGraph })
+      wrapper.vm.duplicateName = 'Copy'
+
+      for (const action of ['requestGraphRun', 'doExportGraph', 'doDuplicate']) {
+        wrapper.vm.onElementsChange([{ type: 'remove', id: 'x' }])
+        const done = wrapper.vm[action]()
+        await flushPromises()
+        release.at(-1).fail()
+        await done
+      }
+
+      expect(saveGraph).toHaveBeenCalledTimes(3)
+      expect(logicRunAuthzApi.preflight).not.toHaveBeenCalled()
+      expect(logicApi.exportGraph).not.toHaveBeenCalled()
+      expect(logicApi.duplicateGraph).not.toHaveBeenCalled()
+    })
+
+    it('stops when a validation-blocked change cannot be saved', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+
+      // A legacy cycle: the save is refused before any request is sent.
+      wrapper.vm.edges = [...wrapper.vm.edges, { id: 'back', source: 'n2', target: 'n1', sourceHandle: 'out', targetHandle: 'a' }]
+      wrapper.vm.onElementsChange([{ type: 'remove', id: 'x' }])
+      await wrapper.vm.doExportGraph()
+
+      expect(logicApi.saveGraph).not.toHaveBeenCalled()
+      expect(logicApi.exportGraph).not.toHaveBeenCalled()
+    })
+
+    it('runs and exports the sheet that was open when clicked', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+      const run = wrapper.vm.requestGraphRun()
+      const exported = wrapper.vm.doExportGraph()
+      wrapper.vm.onGraphPicked('graph-b')
+      release[0].ok()
+      await run
+      await exported
+
+      expect(logicRunAuthzApi.preflight).not.toHaveBeenCalled()
+      expect(logicApi.exportGraph).toHaveBeenCalledWith('graph-a')
+    })
+
+    it('waits for an in-flight save before deleting the sheet', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+      const deleting = wrapper.vm.doDeleteGraph()
+      await flushPromises()
+      expect(logicApi.deleteGraph).not.toHaveBeenCalled()
+
+      release[0].ok()
+      await deleting
+      expect(logicApi.deleteGraph).toHaveBeenCalledWith('graph-a')
+    })
+
+    it('asks before unloading the page while a change is pending or in flight', async () => {
+      const { saveGraph, release } = heldSaves()
+      const { wrapper } = await mountLogicView({ saveGraph })
+      const unload = () => {
+        const event = new Event('beforeunload', { cancelable: true })
+        window.dispatchEvent(event)
+        return event.defaultPrevented
+      }
+
+      expect(unload()).toBe(false)
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      expect(unload()).toBe(true)
+      await flushPromises()
+      expect(saveGraph).toHaveBeenCalledTimes(1)
+      // Still in flight.
+      expect(unload()).toBe(true)
+
+      release[0].ok()
+      await flushPromises()
+      expect(unload()).toBe(false)
+
+      mounted.splice(mounted.indexOf(wrapper), 1)
+      wrapper.unmount()
+      wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'b' })
+      expect(unload()).toBe(false)
+    })
+  })
+
+  it('treats an empty handle like a missing one', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    wrapper.vm.edges = [{ id: 'e1', source: 'n1', target: 'n2', sourceHandle: '', targetHandle: '' }]
+
+    wrapper.vm.onConnect({ source: 'n1', target: 'n2', sourceHandle: null, targetHandle: null })
+    await elapse(1000)
+
+    expect(wrapper.vm.edges).toHaveLength(1)
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+  })
+
+  it('exports under a fallback name once the sheet left the list, and not without a sheet', async () => {
+    const { wrapper, logicApi, store } = await mountLogicView()
+    const createObjectURL = vi.fn().mockReturnValue('blob:x')
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL: vi.fn() })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+      document.body.dataset.lastDownload = this.download
+    })
+    try {
+      store.graphs = store.graphs.filter(g => g.id !== 'graph-a')
+      await wrapper.vm.doExportGraph()
+      expect(logicApi.exportGraph).toHaveBeenCalledWith('graph-a')
+      expect(document.body.dataset.lastDownload).toBe('logic_graph.json')
+
+      wrapper.vm.activeGraphId = ''
+      await wrapper.vm.doExportGraph()
+      expect(logicApi.exportGraph).toHaveBeenCalledTimes(1)
+    } finally {
+      click.mockRestore()
+      vi.unstubAllGlobals()
+      delete document.body.dataset.lastDownload
+    }
   })
 })

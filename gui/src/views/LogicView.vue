@@ -705,7 +705,9 @@ async function loadGraph() {
     // Re-picking the open sheet does not change activeGraphId, so the
     // switch flush never ran: persist first, or the GET returns the state
     // before the edit and the canvas silently loses it.
-    await persistPendingChanges()
+    // A switch to another sheet waits for nothing here: the previous sheet's
+    // save has its own queue entry and does not affect this GET.
+    if (!await persistPendingChanges(activeGraphId.value)) return
     const { data } = await logicApi.getGraph(activeGraphId.value)
     if (requestId !== _loadGraphRequestId) return
     nodes.value = (data.flow_data.nodes || []).map(n => {
@@ -744,12 +746,16 @@ function enqueueSave(task) {
   _saveQueue = run.catch(() => {})
   return run
 }
+// Latest queued sheet save per sheet id, resolving to whether it succeeded —
+// lets readers of that sheet wait for exactly that save, not the whole queue.
+const _lastSaveByGraph = new Map()
 
 // `graphId` defaults to the open sheet; the auto-save flush on a sheet switch
 // passes the previous sheet explicitly, because by then activeGraphId already
 // names the next one while nodes/edges still hold the previous sheet.
+// Resolves to whether the sheet was saved.
 async function saveGraph(graphId = activeGraphId.value) {
-  if (!auth.isAdmin || !graphId) return
+  if (!auth.isAdmin || !graphId) return false
   // A save supersedes any pending auto-save of the same sheet — it carries
   // the same (or newer) state, so a second PUT would be redundant.
   if (_autoSaveGraphId === graphId) cancelAutoSave()
@@ -763,28 +769,33 @@ async function saveGraph(graphId = activeGraphId.value) {
         __diagnostic__: w.code,
       }])
     ))
-    return
+    return false
   }
   // Snapshot synchronously: by the time a queued save runs, the canvas may
   // already show another sheet.
   const flowData = currentFlowData()
-  return enqueueSave(async () => {
+  const run = enqueueSave(async () => {
     saving.value = true
     try {
       const graph = store.graphs.find(g => g.id === graphId)
       // Deleted meanwhile (e.g. from the graph picker) — nothing to save into.
       if (!graph) {
         showStatus(false, t('logic.errorSave'))
-        return
+        return false
       }
       await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
       showStatus(true, t('logic.saved'))
+      return true
     } catch (err) {
       showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
+      return false
     } finally {
       saving.value = false
+      if (_lastSaveByGraph.get(graphId) === run) _lastSaveByGraph.delete(graphId)
     }
   })
+  _lastSaveByGraph.set(graphId, run)
+  return run
 }
 
 // ── Auto-save ──────────────────────────────────────────────────────────────
@@ -811,21 +822,25 @@ function cancelAutoSave() {
 }
 
 // Saves a still-pending auto-save right away instead of dropping it — used
-// when the sheet is left before the debounce elapsed.
+// when the sheet is left before the debounce elapsed. Resolves like
+// saveGraph; with nothing (left) to save, that counts as success.
 function flushAutoSave() {
   const graphId = _autoSaveGraphId
-  if (!graphId) return
+  if (!graphId) return Promise.resolve(true)
   cancelAutoSave()
   // A sheet deleted meanwhile has nothing left to save into.
-  if (!store.graphs.some(g => g.id === graphId)) return
-  saveGraph(graphId)
+  if (!store.graphs.some(g => g.id === graphId)) return Promise.resolve(true)
+  return saveGraph(graphId)
 }
 
 // Actions that read the sheet back from the server (run, export, duplicate,
 // reload) must see the last edit, not the state before the debounce elapsed.
-async function persistPendingChanges() {
-  flushAutoSave()
-  await _saveQueue
+// Resolves to false when the last edit could not be saved, so the caller
+// stops instead of acting on the server's older state.
+async function persistPendingChanges(graphId) {
+  // The flushed save queues behind any earlier one, so it settles last.
+  if (_autoSaveGraphId === graphId) return flushAutoSave()
+  return _lastSaveByGraph.get(graphId) ?? true
 }
 
 // `sync`: must run at the assignment itself, before callers such as
@@ -1012,7 +1027,8 @@ async function runApprovedGraph(graphId) {
 async function requestGraphRun() {
   if (!activeGraphId.value || !activeGraph.value?.enabled) return
   const graphId = activeGraphId.value
-  await persistPendingChanges()
+  // Bail out if the sheet was switched while the save was in flight.
+  if (!await persistPendingChanges(graphId) || activeGraphId.value !== graphId) return
   const requestId = ++preflightRequestId
   runPreflightLoading.value = true
   runPreflightError.value = ''
@@ -1207,7 +1223,9 @@ async function doCreateGraph() {
 async function doToggleEnabled() {
   if (!auth.isAdmin || !activeGraphId.value) return
   try {
-    const updated = await enqueueSave(() => store.toggleEnabled(activeGraphId.value))
+    // Captured now: the queued task may run after the user switched sheets.
+    const graphId = activeGraphId.value
+    const updated = await enqueueSave(() => store.toggleEnabled(graphId))
     showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorToggle'))
@@ -1225,10 +1243,14 @@ async function doDeleteGraph() {
   // A pending auto-save firing while the delete is in flight would PUT into
   // the sheet being removed — but if the delete fails, the sheet stays and
   // so must its unsaved edit.
-  const hadPendingSave = _autoSaveGraphId === activeGraphId.value
+  const graphId = activeGraphId.value
+  const hadPendingSave = _autoSaveGraphId === graphId
   cancelAutoSave()
   try {
-    await store.deleteGraph(activeGraphId.value)
+    // A save already in flight would otherwise land after the DELETE and
+    // report a spurious "save failed".
+    await _lastSaveByGraph.get(graphId)
+    await store.deleteGraph(graphId)
   } catch (err) {
     if (hadPendingSave) scheduleAutoSave()
     throw err
@@ -1250,9 +1272,11 @@ function openDuplicate() {
 
 async function doDuplicate() {
   if (!auth.isAdmin || !activeGraphId.value || !duplicateName.value.trim()) return
+  const graphId = activeGraphId.value
+  const name = duplicateName.value.trim()
   try {
-    await persistPendingChanges()
-    const copy = await store.duplicateGraph(activeGraphId.value, duplicateName.value.trim())
+    if (!await persistPendingChanges(graphId)) return
+    const copy = await store.duplicateGraph(graphId, name)
     showDuplicate.value = false
     activeGraphId.value = copy.id
     await loadGraph()
@@ -1265,10 +1289,11 @@ async function doDuplicate() {
 // ── Exportieren (programmatisch mit Auth-Header) ───────────────────────────
 async function doExportGraph() {
   if (!activeGraphId.value) return
+  const graphId = activeGraphId.value
   try {
-    await persistPendingChanges()
-    const { data } = await logicApi.exportGraph(activeGraphId.value)
-    const g = store.graphs.find(g => g.id === activeGraphId.value)
+    if (!await persistPendingChanges(graphId)) return
+    const { data } = await logicApi.exportGraph(graphId)
+    const g = store.graphs.find(g => g.id === graphId)
     const filename = g ? `${g.name.replace(/ /g, '_')}.json` : 'logic_graph.json'
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url  = URL.createObjectURL(blob)
@@ -1298,7 +1323,11 @@ function openRenameGraph() {
 async function doRenameGraph() {
   if (!auth.isAdmin || !activeGraphId.value || !renameGraphName.value.trim()) return
   try {
-    await enqueueSave(() => store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value))
+    // Captured now: the queued task may run after the user switched sheets.
+    const graphId = activeGraphId.value
+    const name = renameGraphName.value.trim()
+    const description = renameGraphDesc.value
+    await enqueueSave(() => store.renameGraph(graphId, name, description))
     showRenameGraph.value = false
     showStatus(true, t('logic.renamed'))
   } catch (err) {
@@ -1361,12 +1390,13 @@ function onConnect(params) {
   }, [...edges.value]))
 }
 
-// A handle stored as `undefined` (dropped from JSON) and Vue Flow's `null`
-// for "no handle" name the same port.
+// A handle stored as `undefined` (dropped from JSON), '' and Vue Flow's
+// `null` for "no handle" name the same port — as in Vue Flow's own
+// duplicate check.
 function sameConnection(a, b) {
   return a.source === b.source && a.target === b.target
-    && (a.sourceHandle ?? null) === (b.sourceHandle ?? null)
-    && (a.targetHandle ?? null) === (b.targetHandle ?? null)
+    && (a.sourceHandle || null) === (b.sourceHandle || null)
+    && (a.targetHandle || null) === (b.targetHandle || null)
 }
 
 // ── Re-wire an existing edge by dragging one of its ends ───────────────────
@@ -1650,6 +1680,7 @@ watch(activeGraphId, (id, previousId) => {
 // ── Init ───────────────────────────────────────────────────────────────────
 onMounted(async () => {
   window.addEventListener('keydown', _onClipboardKeydown)
+  window.addEventListener('beforeunload', _onBeforeUnload)
   window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, _wsReconnectAfterTokenRefresh)
   await store.fetchNodeTypes()
   await store.fetchGraphs()
@@ -1668,9 +1699,19 @@ onBeforeUnmount(() => {
   // Leaving the editor within the debounce window must not drop the edit.
   flushAutoSave()
 })
+
+// A reload or tab close never unmounts the view: start the pending save and
+// ask the browser to confirm, which gives that save time to complete.
+function _onBeforeUnload(event) {
+  if (!_autoSaveGraphId && !_lastSaveByGraph.size) return
+  flushAutoSave()
+  event.preventDefault()
+  event.returnValue = ''
+}
 onUnmounted(() => {
   _wsDisconnect()
   window.removeEventListener('keydown', _onClipboardKeydown)
+  window.removeEventListener('beforeunload', _onBeforeUnload)
   window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, _wsReconnectAfterTokenRefresh)
   window.removeEventListener('mousemove', _onMinimapMouseMove, { capture: true })
   window.removeEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })
