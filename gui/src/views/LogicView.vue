@@ -704,18 +704,26 @@ async function loadGraph() {
   // A newer load took over, or the sheet was closed/replaced without one
   // (delete, create) while this load was waiting.
   const superseded = () => requestId !== _loadGraphRequestId || activeGraphId.value !== graphId
+  // A pending edit for this sheet means the canvas holds this sheet (edits
+  // are never scheduled during a load), i.e. it is being re-picked.
+  const canvasHoldsSheet = _autoSaveGraphId === graphId
   graphLoading.value = true
   try {
     // Re-picking the open sheet does not change activeGraphId, so the
     // switch flush never ran: persist first, or the GET returns the state
     // before the edit and the canvas silently loses it.
     // A switch to another sheet waits for nothing here: the previous sheet's
-    // save has its own queue entry and does not affect this GET. A failed
-    // save still loads: the canvas may already hold another sheet, and
-    // keeping that under this sheet's id would let the next save overwrite
-    // it. The save error stays visible.
-    await persistPendingChanges(graphId)
+    // save has its own queue entry and does not affect this GET.
+    const saved = await persistPendingChanges(graphId)
     if (superseded()) return
+    // A re-pick whose save failed keeps the canvas (and its unsaved mark)
+    // rather than replacing the edit with the server's older state. When
+    // the canvas held another sheet, keeping it under this sheet's id would
+    // let the next save overwrite this sheet, so that case loads anyway.
+    if (!saved && canvasHoldsSheet) {
+      _autoSaveGraphId = graphId
+      return
+    }
     const { data } = await logicApi.getGraph(graphId)
     if (superseded()) return
     nodes.value = (data.flow_data.nodes || []).map(n => {
@@ -797,6 +805,7 @@ async function saveGraph(graphId = activeGraphId.value) {
       return true
     } catch (err) {
       showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
+      markUnsaved(graphId)
       return false
     } finally {
       saving.value = false
@@ -822,6 +831,17 @@ function scheduleAutoSave() {
   clearTimeout(_autoSaveTimer)
   _autoSaveGraphId = activeGraphId.value
   _autoSaveTimer = setTimeout(() => saveGraph(_autoSaveGraphId), AUTO_SAVE_DELAY_MS)
+}
+
+// A failed save leaves the edit only on the canvas: keep the sheet marked as
+// pending (without a timer — the next edit or flush retries), so a sheet
+// switch, leaving the editor, a reload prompt and run/export/duplicate still
+// treat it as unsaved instead of silently dropping it.
+function markUnsaved(graphId) {
+  // Only while the canvas still holds that sheet's content; during a load,
+  // loadGraph decides itself.
+  if (_autoSaveGraphId || activeGraphId.value !== graphId || graphLoading.value) return
+  _autoSaveGraphId = graphId
 }
 
 function cancelAutoSave() {

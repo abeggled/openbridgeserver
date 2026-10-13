@@ -859,4 +859,108 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(wrapper.vm.statusMsg).toBe(null)
     })
   })
+
+  describe('an edit whose save failed stays unsaved', () => {
+    const unloadPrevented = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+
+    it('retries before a run and stops the run while it keeps failing', async () => {
+      const saveGraph = vi.fn().mockRejectedValue(new Error('down'))
+      const { wrapper, logicRunAuthzApi } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+      expect(saveGraph).toHaveBeenCalledTimes(1)
+      await elapse(5000)
+
+      await wrapper.vm.requestGraphRun()
+      expect(saveGraph).toHaveBeenCalledTimes(2)
+      expect(logicRunAuthzApi.preflight).not.toHaveBeenCalled()
+
+      saveGraph.mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } }))
+      await wrapper.vm.requestGraphRun()
+      expect(saveGraph).toHaveBeenCalledTimes(3)
+      expect(logicRunAuthzApi.preflight).toHaveBeenCalledWith('graph-a')
+    })
+
+    it('is retried on a sheet switch', async () => {
+      const saveGraph = vi.fn().mockRejectedValueOnce(new Error('down'))
+        .mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } }))
+      const { wrapper } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+
+      wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      expect(saveGraph).toHaveBeenCalledTimes(2)
+      expect(saveGraph.mock.calls[1][0]).toBe('graph-a')
+      expect(saveGraph.mock.calls[1][1].flow_data.edges).toHaveLength(2)
+      expect(unloadPrevented()).toBe(false)
+    })
+
+    it('prompts before unloading and retries the save right away', async () => {
+      const saveGraph = vi.fn().mockRejectedValueOnce(new Error('down'))
+        .mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } }))
+      const { wrapper } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+      expect(unloadPrevented()).toBe(true)
+      await flushPromises()
+      expect(saveGraph).toHaveBeenCalledTimes(2)
+      expect(unloadPrevented()).toBe(false)
+    })
+
+    it('keeps the canvas of a re-picked sheet whose save failed', async () => {
+      const saveGraph = vi.fn().mockRejectedValue(new Error('down'))
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+      const loads = logicApi.getGraph.mock.calls.length
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      wrapper.vm.onGraphPicked('graph-a')
+      await flushPromises()
+
+      expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
+      expect(wrapper.vm.edges).toHaveLength(2)
+      expect(wrapper.vm.graphLoading).toBe(false)
+      expect(unloadPrevented()).toBe(true)
+    })
+
+    it('is not marked onto a sheet the canvas no longer shows', async () => {
+      let failSave
+      const saveGraph = vi.fn().mockImplementation(() => new Promise((_resolve, reject) => { failSave = reject }))
+      const { wrapper } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      wrapper.vm.onGraphPicked('graph-b')
+      await flushPromises()
+      failSave(new Error('down'))
+      await flushPromises()
+
+      expect(wrapper.vm.activeGraphId).toBe('graph-b')
+      expect(unloadPrevented()).toBe(false)
+    })
+
+    it('leaves a newer pending edit in charge', async () => {
+      let failSave
+      const saveGraph = vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { failSave = reject }))
+        .mockImplementation((id, payload) => Promise.resolve({ data: { id, ...payload } }))
+      const { wrapper } = await mountLogicView({ saveGraph })
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      await elapse(500)
+      wrapper.vm.onConnect({ source: 'n1', target: 'n3', sourceHandle: 'out', targetHandle: 'b' })
+      failSave(new Error('down'))
+      await flushPromises()
+      await elapse(500)
+
+      expect(saveGraph).toHaveBeenCalledTimes(2)
+      expect(saveGraph.mock.calls[1][1].flow_data.edges).toHaveLength(3)
+      expect(unloadPrevented()).toBe(false)
+    })
+  })
 })
