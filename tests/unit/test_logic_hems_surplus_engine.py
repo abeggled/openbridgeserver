@@ -1600,3 +1600,55 @@ def test_the_reserve_at_zero_feed_in_stays_requested_until_an_onoff_consumer_gav
     sim.tick(advance=150, feed_in=0)
     assert sim.cstate("a")["on"] is False  # gave the reserve up after its delay
     assert sim.state["zero_shed_w"] == 0.0
+
+
+@pytest.mark.parametrize("reading", [{"grid": -1.7e308}, {"grid": 2e9}])
+def test_an_absurd_meter_reading_is_invalid_not_a_crash(reading):
+    sim = Sim([pct("a", power_w=50, on_delay_s=0)])
+    sim.tick(grid=-3000)
+    out = sim.tick(**reading)
+    assert (out["status"], out["c_a"]) == ("invalid_input", 0)
+
+
+def test_an_absurd_dynamic_value_is_capped_not_a_crash():
+    sim = Sim([pct("a", power_source="input", min_power_w=100, on_delay_s=0)])
+    out = sim.tick(grid=-3000, c_a_max_power=1e-320, target=-1e308)
+    assert out["c_a"] == 100  # an infinite share is capped at the maximum
+
+
+def test_a_tick_failing_half_way_leaves_every_consumer_as_it_was(monkeypatch):
+    sim = Sim([trig("t", on_delay_s=0), pct("p", on_delay_s=0)])
+    sim.tick(grid=0)
+    before = {cid: dict(cs) for cid, cs in sim.state["consumers"].items()}
+
+    def boom(*args, **kwargs):
+        raise OverflowError("boom")
+
+    monkeypatch.setattr(hs, "_step_percent", boom)  # fails after the trigger fired
+    with pytest.raises(OverflowError):
+        sim.tick(grid=-5000)
+    assert sim.state["consumers"]["t"]["armed"] is True
+    assert {cid: dict(cs) for cid, cs in sim.state["consumers"].items()} == before
+
+
+def test_a_mode_change_keeps_the_minimum_off_time():
+    consumers = [onoff("a", on_delay_s=0, min_off_s=900)]
+    sim = Sim(consumers)
+    sim.tick(grid=-3000)
+    sim.tick(grid=3000)  # needs no off-delay? it has the global 180 s
+    sim.tick(advance=180, grid=3000)
+    assert sim.cstate("a")["on"] is False
+    off_at = sim.cstate("a")["since"]
+    consumers[0] = pct("a", on_delay_s=0, min_off_s=900)
+    out = sim.tick(grid=-20000)
+    assert out["c_a_status"] == "locked"
+    assert sim.cstate("a")["since"] == off_at
+
+
+def test_a_mode_change_of_a_running_consumer_starts_its_off_time_now():
+    consumers = [onoff("a", on_delay_s=0, min_off_s=900)]
+    sim = Sim(consumers)
+    sim.tick(grid=-3000)
+    consumers[0] = pct("a", on_delay_s=0, min_off_s=900)
+    out = sim.tick(grid=-20000)
+    assert out["c_a_status"] == "locked"

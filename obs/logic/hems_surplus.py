@@ -17,6 +17,7 @@ shrinking budget therefore cuts from the bottom up.
 
 from __future__ import annotations
 
+import copy
 import functools
 import json
 import logging
@@ -61,6 +62,8 @@ _CONTROL_KEYS = (
     "only_on_change",
     "consumers",
 )
+# Largest meter reading taken as a measurement (1 GW); anything beyond is garbage.
+_MAX_PLAUSIBLE_W = 1e9
 # Smallest reduction step (%) of a percent consumer at 0 W feed-in.
 _MIN_SHED_PCT = 10.0
 # The scheduler wakes this long after a meter value's age limit has passed.
@@ -290,10 +293,14 @@ def _delay(consumer_value: float | None, global_value: float) -> float:
 
 
 def _quantize_down(value: float, step: float) -> float:
+    if not math.isfinite(value / step):
+        return value  # callers cap it (min with the maximum setpoint)
     return math.floor(value / step + _EPS) * step
 
 
 def _quantize_up(value: float, step: float) -> float:
+    if not math.isfinite(value / step):
+        return value
     return math.ceil(value / step - _EPS) * step
 
 
@@ -366,7 +373,8 @@ def _read_meter(
     # Every input is passed through _held before any is judged, so a value
     # that arrived on one side is kept even when the other side is invalid.
     read = {name: _num(_held(state, name, inputs.get(name), now, hold_s)) for name in names}
-    if any(value is None for value in read.values()):
+    # A reading beyond any real grid connection is a decoding error, not a measurement.
+    if any(value is None or abs(value) > _MAX_PLAUSIBLE_W for value in read.values()):
         return None, None, "invalid_input"
     values: dict[str, float] = {name: value for name, value in read.items() if value is not None}
 
@@ -421,6 +429,18 @@ def evaluate(
     ``state`` is mutated in place and is the only memory between ticks; its
     ``last_out`` holds the last value sent on every output.
     """
+    # A tick either completes or leaves the state as it was: a failure half-way
+    # must not keep, e.g., a fired trigger whose pulse was never sent.
+    before = copy.deepcopy(state)
+    try:
+        return _evaluate(data, inputs, state, now, node_id)
+    except Exception:
+        state.clear()
+        state.update(before)
+        raise
+
+
+def _evaluate(data: dict[str, Any], inputs: dict[str, Any], state: dict[str, Any], now: float, node_id: str) -> dict[str, Any]:
     consumers = load_consumers(data.get("consumers"))
     states: dict[str, dict[str, Any]] = state.setdefault("consumers", {})
     removed = _forget_removed_consumers(consumers, states, state.setdefault("last_out", {}), state.setdefault("held", {}))
@@ -430,10 +450,14 @@ def evaluate(
             # A changed control type starts from scratch: an on/off state, a
             # setpoint or an armed trigger of the old type means nothing for
             # the new one — nor does the value last sent under the old type.
+            fresh = _new_consumer_state()
             if cs is not None:
                 state["last_out"].pop(f"c_{consumer['id']}", None)
                 state["last_out"].pop(f"c_{consumer['id']}_status", None)
-            cs = states[consumer["id"]] = _new_consumer_state()
+                # The minimum off time still counts from when it last went off
+                # (or from now, as the new type starts off).
+                fresh["since"] = now if cs["on"] else cs["since"]
+            cs = states[consumer["id"]] = fresh
         cs["mode"] = consumer["mode"]
 
     result = {**removed, **_tick(data, inputs, state, now, node_id, consumers, states)}
