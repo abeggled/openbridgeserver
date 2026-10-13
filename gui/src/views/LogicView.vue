@@ -700,6 +700,10 @@ async function loadGraph() {
   // response's `finally` clear graphLoading (or apply its stale data) after a
   // newer request has already taken over.
   const requestId = ++_loadGraphRequestId
+  const graphId = activeGraphId.value
+  // A newer load took over, or the sheet was closed/replaced without one
+  // (delete, create) while this load was waiting.
+  const superseded = () => requestId !== _loadGraphRequestId || activeGraphId.value !== graphId
   graphLoading.value = true
   try {
     // Re-picking the open sheet does not change activeGraphId, so the
@@ -710,10 +714,10 @@ async function loadGraph() {
     // save still loads: the canvas may already hold another sheet, and
     // keeping that under this sheet's id would let the next save overwrite
     // it. The save error stays visible.
-    await persistPendingChanges(activeGraphId.value)
-    if (requestId !== _loadGraphRequestId) return
-    const { data } = await logicApi.getGraph(activeGraphId.value)
-    if (requestId !== _loadGraphRequestId) return
+    await persistPendingChanges(graphId)
+    if (superseded()) return
+    const { data } = await logicApi.getGraph(graphId)
+    if (superseded()) return
     nodes.value = (data.flow_data.nodes || []).map(n => {
       // eslint-disable-next-line no-unused-vars
       const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
@@ -722,7 +726,7 @@ async function loadGraph() {
     edges.value = data.flow_data.edges || []
     selectedNode.value = null
   } catch (err) {
-    if (requestId !== _loadGraphRequestId) return
+    if (superseded()) return
     // A failed load must not leave an editable (but never actually loaded)
     // sheet around: with only nodes/edges cleared, activeGraphId still
     // named this sheet and graphLoading still clears in `finally` below, so
@@ -1702,9 +1706,11 @@ onBeforeUnmount(() => {
 })
 
 // A reload or tab close never unmounts the view: start the pending save and
-// ask the browser to confirm, which gives that save time to complete.
+// ask the browser to confirm, which gives that save time to complete. A save
+// already sent is left alone — prompting for it would also block the API
+// client's forced redirect to /login when that very save got a 401.
 function _onBeforeUnload(event) {
-  if (!_autoSaveGraphId && !_lastSaveByGraph.size) return
+  if (!_autoSaveGraphId) return
   flushAutoSave()
   event.preventDefault()
   event.returnValue = ''

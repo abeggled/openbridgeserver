@@ -743,7 +743,7 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(logicApi.deleteGraph).toHaveBeenCalledWith('graph-a')
     })
 
-    it('asks before unloading the page while a change is pending or in flight', async () => {
+    it('asks before unloading the page only while a change is not yet sent', async () => {
       const { saveGraph, release } = heldSaves()
       const { wrapper } = await mountLogicView({ saveGraph })
       const unload = () => {
@@ -758,8 +758,9 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       expect(unload()).toBe(true)
       await flushPromises()
       expect(saveGraph).toHaveBeenCalledTimes(1)
-      // Still in flight.
-      expect(unload()).toBe(true)
+      // Already sent: no prompt, which would also block a forced /login
+      // redirect after that save got a 401.
+      expect(unload()).toBe(false)
 
       release[0].ok()
       await flushPromises()
@@ -804,5 +805,58 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
       vi.unstubAllGlobals()
       delete document.body.dataset.lastDownload
     }
+  })
+
+  describe('a load whose sheet was closed without a newer load', () => {
+    it('skips the GET when the sheet was deleted while waiting for its save', async () => {
+      let releaseSave
+      const saveGraph = vi.fn().mockImplementation((id, payload) => new Promise(resolve => {
+        releaseSave = () => resolve({ data: { id, ...payload } })
+      }))
+      const { wrapper, logicApi } = await mountLogicView({ saveGraph })
+      const loads = logicApi.getGraph.mock.calls.length
+
+      wrapper.vm.onConnect({ source: 'n2', target: 'n3', sourceHandle: 'out', targetHandle: 'a' })
+      const loading = wrapper.vm.loadGraph()
+      await flushPromises()
+      wrapper.vm.onGraphDeletedFromPicker('graph-a')
+      releaseSave()
+      await loading
+
+      expect(logicApi.getGraph).toHaveBeenCalledTimes(loads)
+      expect(wrapper.vm.activeGraphId).toBe('')
+      expect(wrapper.vm.nodes).toEqual([])
+    })
+
+    it('drops a response arriving after the sheet was closed', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+      let finishLoad
+      logicApi.getGraph.mockReturnValueOnce(new Promise(resolve => { finishLoad = resolve }))
+
+      const loading = wrapper.vm.loadGraph()
+      await flushPromises()
+      wrapper.vm.onGraphDeletedFromPicker('graph-a')
+      finishLoad({ data: structuredClone(GRAPH_A) })
+      await loading
+
+      expect(wrapper.vm.activeGraphId).toBe('')
+      expect(wrapper.vm.nodes).toEqual([])
+      expect(wrapper.vm.graphLoading).toBe(false)
+    })
+
+    it('reports no load error for a sheet that was replaced meanwhile', async () => {
+      const { wrapper, logicApi } = await mountLogicView()
+      let failLoad
+      logicApi.getGraph.mockReturnValueOnce(new Promise((_resolve, reject) => { failLoad = reject }))
+
+      const loading = wrapper.vm.loadGraph()
+      await flushPromises()
+      wrapper.vm.activeGraphId = 'graph-b'
+      failLoad({ response: { status: 404, data: { detail: 'gone' } } })
+      await loading
+
+      expect(wrapper.vm.activeGraphId).toBe('graph-b')
+      expect(wrapper.vm.statusMsg).toBe(null)
+    })
   })
 })
