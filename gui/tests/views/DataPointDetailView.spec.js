@@ -288,4 +288,54 @@ describe('DataPointDetailView', () => {
     expect(wrapper.find('[data-testid="datapoint-knx-context"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('2/3/4')
   })
+
+  describe('add binding after editing one (#1312)', () => {
+    const existing = { id: 'binding-1', enabled: true, direction: 'SOURCE', adapter_type: 'MQTT', config: {} }
+
+    function mountWithBindingFormProbe() {
+      return mount(DataPointDetailView, {
+        props: { id: 'dp-internal' },
+        global: {
+          stubs: {
+            RouterLink: { template: '<a><slot /></a>' },
+            DataPointHierarchyCard: { template: '<div />' },
+            DataPointForm: { template: '<div />' },
+            BindingForm: { name: 'BindingForm', props: ['initial'], emits: ['save', 'cancel'], template: '<div />' },
+            Modal: { template: '<div v-if="modelValue"><slot /></div>', props: ['modelValue'] },
+            ConfirmDialog: { template: '<div />' },
+          },
+        },
+      })
+    }
+
+    beforeEach(() => {
+      apiMocks.dpApi.listBindings.mockResolvedValue({ data: [existing] })
+    })
+
+    it.each(['cancel', 'save'])('opens an empty form after an edit was closed via %s', async (closeEvent) => {
+      const wrapper = mountWithBindingFormProbe()
+      await flushPromises()
+
+      await wrapper.find('[data-testid="btn-edit-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toEqual(existing)
+
+      wrapper.findComponent({ name: 'BindingForm' }).vm.$emit(closeEvent)
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'BindingForm' }).exists()).toBe(false)
+
+      await wrapper.find('[data-testid="btn-add-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toBeNull()
+    })
+
+    it('still opens the form prefilled when editing', async () => {
+      const wrapper = mountWithBindingFormProbe()
+      await flushPromises()
+
+      await wrapper.find('[data-testid="btn-add-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toBeNull()
+
+      await wrapper.find('[data-testid="btn-edit-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toEqual(existing)
+    })
+  })
 })
