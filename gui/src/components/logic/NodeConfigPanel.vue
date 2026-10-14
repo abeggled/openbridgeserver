@@ -1487,7 +1487,15 @@
         <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.title') }}</label><input v-model="localData.title" class="input text-sm" @change="emitUpdate" /><VariablePathHelper :path="localData.title || ''" :obs-slots="blockObsSlots" @insert="appendVariable('title', $event)" /></div>
         <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.fallback') }}</label><textarea v-model="localData.message" class="input text-sm min-h-24" @change="emitUpdate" /><VariablePathHelper :path="localData.message || ''" :obs-slots="blockObsSlots" @insert="appendVariable('message', $event)" /><p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.notification.placeholders') }}</p></div>
         <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="notify" :hint="$t('logic.variables.textHint')" @update:model-value="emitUpdate" />
-        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.priority') }}</label><input v-model.number="localData.priority" type="number" min="-2" max="1" class="input text-sm" @change="emitUpdate" /></div>
+        <PushoverOptionsFields
+          v-if="hasPushoverTarget(localData.providers)"
+          :key="`pushover-${node?.id}`"
+          v-model:priority="localData.priority"
+          :options="localData"
+          url-from-input
+          :hint="$t('logic.nodeConfig.notification.pushoverInputsHint')"
+          @change="emitUpdate"
+        />
       </div>
     </template>
 
@@ -1600,6 +1608,8 @@ import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import HelpButton from '@/components/ui/HelpButton.vue'
 import DebugInspector from './DebugInspector.vue'
+import PushoverOptionsFields from '@/components/notifications/PushoverOptionsFields.vue'
+import { hasPushoverTarget } from '@/utils/pushoverOptions'
 import HemsSurplusConfig from './HemsSurplusConfig.vue'
 
 const { t, te } = useI18n()

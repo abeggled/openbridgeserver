@@ -292,7 +292,7 @@ Schreibende Befehle erzeugen standardmäßig vor der Änderung ein SQLite-Backup
 
 ### URL-Ziel-Allowlist für interne Dienste
 
-Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen, dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.
+Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen (interne HTTP-Kameras brauchen einen Allowlist-Eintrag; öffentliche Bildquellen müssen HTTPS verwenden), dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.
 
 Standardmäßig wird die YAML-Datei nach `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` geschrieben, wenn `OBS_SECRET_FILE_DIR` gesetzt ist. Sonst schreibt OBS nach `secrets/url-target-allowlist.yaml` neben der konfigurierten Datenbankdatei. Für private Ziele sollte eine IP-Adresse oder ein CIDR-Eintrag verwendet werden, zum Beispiel `192.168.1.23/32` für eine einzelne LAN-Kamera oder `10.38.113.0/24` für ein internes Netz.
 
@@ -1553,6 +1553,8 @@ Sendet Benachrichtigungen, wenn sich ein verknüpfter Datenpunkt ändert und die
 | `message` | Nachrichtenvorlage mit Platzhaltern |
 | `title` | Optionaler Nachrichtentitel |
 | `providers` | Liste aus Provider und Zielname, an die gesendet wird |
+| `priority` | Optionale Pushover-Priorität (`-2` … `2`) |
+| `pushover` | Optionale Pushover-Optionen, nur für Pushover-Ziele: `image_url`, `url`, `url_title`, `sound`, `format` (`text`/`html`/`monospace`), `ttl`, `timestamp`, `retry`/`expire` (Pflicht bei Priorität `2`). `image_url`, `url` und `url_title` unterstützen die Platzhalter unten. |
 | `send_on_change` | Sendet nur beim Wechsel in den erfüllten Zustand; bei `any` nur bei geändertem Wert |
 | `cooldown_seconds` | Mindestabstand zwischen zwei gesendeten Nachrichten |
 | `enabled` | Aktiviert/deaktiviert die Verknüpfung |
