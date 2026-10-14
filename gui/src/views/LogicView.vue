@@ -177,7 +177,7 @@
           @connect="onConnect"
           @edge-update="onEdgeUpdate"
           @edges-change="onElementsChange"
-          @nodes-change="onElementsChange"
+          @nodes-change="onNodesChange"
           @node-click="onNodeClick"
           @node-drag-start="onNodeDragStart"
           @node-drag="onNodeDrag"
@@ -1535,6 +1535,20 @@ function onEdgeUpdate({ edge, connection }) {
 // drag changes arrive through the same events and must not trigger a save.
 function onElementsChange(changes) {
   if (changes.some(change => change.type === 'remove')) scheduleAutoSave()
+}
+
+// The properties panel works on its own copy of the selected block, so it
+// would stay open for a deleted block and its edits would go nowhere while
+// still triggering a save. Debug overrides of deleted blocks go too (#1159).
+function onNodesChange(changes) {
+  const removedIds = new Set(changes.filter(change => change.type === 'remove').map(change => change.id))
+  if (removedIds.size) {
+    if (removedIds.has(selectedNode.value?.id)) selectedNode.value = null
+    if (Object.keys(debugOverrides.value).some(id => removedIds.has(id))) {
+      debugOverrides.value = Object.fromEntries(Object.entries(debugOverrides.value).filter(([id]) => !removedIds.has(id)))
+    }
+  }
+  onElementsChange(changes)
 }
 
 // ── Drop node from palette ─────────────────────────────────────────────────

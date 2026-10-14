@@ -1382,7 +1382,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.bindings.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.bindings.desc') }}</p>
             </div>
-            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('bindings')" data-testid="dz-bindings" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- DataPoints -->
@@ -1391,7 +1391,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.datapoints.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.datapoints.desc') }}</p>
             </div>
-            <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('datapoints')" data-testid="dz-datapoints" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Logic -->
@@ -1400,7 +1400,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.logic.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.logic.desc') }}</p>
             </div>
-            <button @click="showConfirm('logic')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('logic')" data-testid="dz-logic" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Adapters -->
@@ -1409,7 +1409,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.adapters.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.adapters.desc') }}</p>
             </div>
-            <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('adapters')" data-testid="dz-adapters" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- KNX Group Addresses -->
@@ -1418,7 +1418,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.knxga.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.knxga.desc', { n: knxGaCount }) }}</p>
             </div>
-            <button @click="showConfirm('knxga')" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('knxga')" data-testid="dz-knxga" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Factory Reset -->
@@ -1427,7 +1427,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.factory.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.factory.desc') }}</p>
             </div>
-            <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
+            <button @click="showConfirm('factory')" data-testid="dz-factory" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
           </div>
 
           <!-- Feedback -->
@@ -2912,7 +2912,7 @@ const DZ_CONFIG = {
     },
     after: () => { knxGaCount.value = 0 },
   },
-  all: {
+  factory: {
     action: async () => {
       const { data } = await configApi.reset()
       const iconInfo = (data.icons_deleted ?? 0) > 0 ? t('settings.dangerzone.factory.resultIcons', { n: data.icons_deleted }) : ''
