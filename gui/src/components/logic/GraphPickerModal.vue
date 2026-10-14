@@ -498,7 +498,9 @@ function confirmDelete(graph) {
 async function doDelete() {
   const id = deleteTarget.value.id
   deleteTarget.value = null
-  await logicStore.deleteGraph(id)
+  // Through the shared write queue: a save of this sheet still queued in the
+  // editor must land before the DELETE, not fail with a 404 after it.
+  await logicStore.enqueueWrite(() => logicStore.deleteGraph(id))
   emit('graph-deleted', id)
   await browse()
 }
