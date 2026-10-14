@@ -31,6 +31,7 @@ from obs.api.auth import Principal, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
+from obs.api.v1.content_disposition import attachment_header
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
@@ -1302,5 +1303,5 @@ async def export_graph(
     safe_name = row["name"].replace(" ", "_").replace("/", "_")
     return JSONResponse(
         content=export_data,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.json"'},
+        headers={"Content-Disposition": attachment_header(f"{safe_name}.json")},
     )

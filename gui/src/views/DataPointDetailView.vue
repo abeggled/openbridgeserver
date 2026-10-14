@@ -115,7 +115,7 @@
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.adapterBindings') }}</h3>
         <div class="flex items-center gap-2">
           <HelpButton help-id="datapoints-detail-bindings" />
-          <button @click="showBindingForm = true" class="btn-primary btn-sm" data-testid="btn-add-binding">
+          <button @click="openNewBinding" class="btn-primary btn-sm" data-testid="btn-add-binding">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             {{ $t('datapoints.detail.addBinding') }}
           </button>
@@ -171,7 +171,7 @@
               <div v-else class="text-xs text-slate-500 font-mono mt-1 truncate">{{ JSON.stringify(b.config) }}</div>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')">
+              <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')" data-testid="btn-edit-binding">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
               </button>
               <button @click="confirmDeleteBinding(b)" class="btn-icon text-red-400" :title="$t('common.delete')">
@@ -359,6 +359,8 @@ async function onEditSave(payload) {
   showEdit.value = false   // only reached if no error thrown
 }
 
+// Clear any binding left over from a previous edit, else the form would update it instead of creating one (#1312).
+function openNewBinding() { editBinding.value = null; showBindingForm.value = true }
 function openEditBinding(b) { editBinding.value = b; showBindingForm.value = true }
 async function onBindingSave() { showBindingForm.value = false; await Promise.all([loadBindings(), loadKnxContext()]) }
 
