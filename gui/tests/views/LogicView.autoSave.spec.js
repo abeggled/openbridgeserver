@@ -1474,3 +1474,69 @@ describe('LogicView auto-saves connection changes (#1333)', () => {
     }
   })
 })
+
+describe('LogicView after deleting blocks (#1159)', () => {
+  async function removeBlocks(wrapper, ids) {
+    wrapper.vm.nodes = wrapper.vm.nodes.filter(n => !ids.includes(n.id))
+    wrapper.findComponent({ name: 'VueFlow' }).vm.$emit('nodesChange', ids.map(id => ({ type: 'remove', id })))
+    await flushPromises()
+  }
+
+  it('closes the properties panel when the selected block is deleted, so no edit runs into the void', async () => {
+    const { wrapper, logicApi } = await mountLogicView()
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+    expect(wrapper.vm.selectedNode?.id).toBe('n1')
+
+    await removeBlocks(wrapper, ['n1'])
+    expect(wrapper.vm.selectedNode).toBe(null)
+    await elapse(500)
+    expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
+
+    // The panel's update handler is a no-op now instead of re-saving the stale copy.
+    wrapper.vm.onNodeDataUpdate({ value: 9 })
+    await elapse(1000)
+    expect(logicApi.saveGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the panel open when another block is deleted', async () => {
+    const { wrapper } = await mountLogicView()
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+
+    await removeBlocks(wrapper, ['n3'])
+    expect(wrapper.vm.selectedNode?.id).toBe('n1')
+  })
+
+  it('drops the debug overrides of deleted blocks and keeps the others', async () => {
+    const { wrapper } = await mountLogicView()
+    for (const node of wrapper.vm.nodes) {
+      wrapper.vm.onNodeClick({ node })
+      wrapper.vm.setDebugOverride('a', `${node.id}-value`)
+    }
+    wrapper.vm.selectedNode = null
+
+    await removeBlocks(wrapper, ['n1', 'n3'])
+    expect(wrapper.vm.debugOverrides).toEqual({ n2: { a: 'n2-value' } })
+  })
+
+  it('keeps the canvas read-only for a user without write rights, which hides the cards\' delete button', async () => {
+    // The cards render their ✕ only while canvasEditable is true (canvasEditable.spec.js).
+    const { wrapper } = await mountLogicView({ isAdmin: false })
+    expect(wrapper.vm.canvasEditable).toBe(false)
+  })
+
+  it('leaves panel and debug overrides alone for changes other than a removal', async () => {
+    const { wrapper } = await mountLogicView()
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+    wrapper.vm.setDebugOverride('a', '1')
+    const overrides = wrapper.vm.debugOverrides
+
+    wrapper.findComponent({ name: 'VueFlow' }).vm.$emit('nodesChange', [{ type: 'select', id: 'n1', selected: false }])
+    await flushPromises()
+    expect(wrapper.vm.selectedNode?.id).toBe('n1')
+    expect(wrapper.vm.debugOverrides).toBe(overrides)
+
+    // A removal that touches no block carrying overrides keeps the very same object.
+    await removeBlocks(wrapper, ['n3'])
+    expect(wrapper.vm.debugOverrides).toBe(overrides)
+  })
+})
