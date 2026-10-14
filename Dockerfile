@@ -40,7 +40,7 @@ RUN npm run build
 
 
 # ── Stage 2: Python dependency builder ─────────────────────────────────────
-FROM python:3.14-slim AS py-builder
+FROM python:3.15-slim AS py-builder
 
 WORKDIR /build
 
@@ -55,7 +55,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
 # ── Stage 3: runtime image ──────────────────────────────────────────────────
-FROM python:3.14-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 # Version stamp — passed via --build-arg OBS_VERSION=<ver> by CI and build-local.sh.
 # Falls back to "dev-version" so plain `docker build .` still works.
