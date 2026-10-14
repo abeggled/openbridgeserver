@@ -1461,7 +1461,8 @@ async def _send_api_client_request(client: httpx.AsyncClient, method: str, url: 
     """
     async with client.stream(method, url, **kwargs) as resp:
         declared = resp.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > _API_CLIENT_MAX_RESPONSE_BYTES:
+        # 204 and 304 have no body; a 304 may still declare the length of the 200 it stands for (RFC 9110 §8.6).
+        if resp.status_code not in (204, 304) and declared.isdigit() and int(declared) > _API_CLIENT_MAX_RESPONSE_BYTES:
             return resp, None
         try:
             return resp, await _read_limited_response_body(resp, _API_CLIENT_MAX_RESPONSE_BYTES, label="API response")

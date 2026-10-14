@@ -2253,6 +2253,16 @@ class TestApiClientResponseSizeLimit:
         assert resp.status_code == 200
         assert pulled == []
 
+    @pytest.mark.parametrize("status", [204, 304])
+    async def test_declared_length_of_a_bodyless_status_is_ignored(self, status):
+        # RFC 9110 §8.6: a 304 may carry the Content-Length of the 200 it stands for,
+        # though it has no body — that must not count as an oversized response.
+        client, _ = _streaming_client([], headers={"Content-Length": str(_API_CLIENT_MAX_RESPONSE_BYTES + 1)}, status=status)
+        async with client:
+            resp, body = await _send_api_client_request(client, "GET", "http://example.test/")
+        assert resp.status_code == status
+        assert body == b""
+
     async def test_unparsable_content_length_falls_back_to_the_streamed_limit(self):
         client, _ = _streaming_client([b"ok"], headers={"Content-Length": "bogus"})
         async with client:
