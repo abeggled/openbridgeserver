@@ -12,6 +12,7 @@ import asyncio
 import base64
 import copy
 import email.utils
+import html
 import http.cookies
 import ipaddress
 import itertools
@@ -37,6 +38,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from obs.core.json import jsonable
+from obs.core.url_values import encode_url_value
 from obs.logic import hems_surplus
 from obs.logic.executor import (
     GraphExecutor,
@@ -4918,6 +4920,9 @@ class LogicManager:
                         ("notify_pushover", "image_url"),
                         ("notify_pushover", "url"),
                         ("notify_pushover", "url_title"),
+                        ("notify_message", "image_url"),
+                        ("notify_message", "url"),
+                        ("notify_message", "url_title"),
                         ("message_archive", "title"),
                         ("value_sequence", "condition"),
                     } or (
@@ -5800,8 +5805,11 @@ class LogicManager:
                 execution_values_by_datapoint_id[dp_id_str] = node_override["value"]
                 execution_value_priority_by_datapoint_id[dp_id_str] = priority
 
-        def _resolve_node_text(node: Any, text: str) -> ResolvedTemplate:
-            """Expand ###VAR### in a static text field (notification/archive fallbacks)."""
+        def _resolve_node_text(node: Any, text: str, quote: Any = None) -> ResolvedTemplate:
+            """Expand ###VAR### in a static text field (notification/archive fallbacks).
+
+            *quote* encodes each inserted value, e.g. for a URL template.
+            """
             resolver = _make_api_client_variable_resolver(
                 self._registry,
                 node.data.get("variables"),
@@ -5809,7 +5817,7 @@ class LogicManager:
                 api_time_snapshot,
                 subject="Variable",
             )
-            return resolve_template(text, api_time_snapshot, resolver)
+            return resolve_template(text, api_time_snapshot, resolver, quote)
 
         import json as _json
 
@@ -6936,28 +6944,87 @@ class LogicManager:
                 fallback_message = _resolve_node_text(node, str(node.data.get("message") or "")) if raw_message is None else None
                 resolved_title = _resolve_node_text(node, str(node.data.get("title") or ""))
                 variable_errors = [*(fallback_message.errors if fallback_message else []), *resolved_title.errors]
+                # Pushover options travel only when a Pushover target is
+                # selected: stale hidden values must never fail or alter the
+                # delivery through other providers.
+                # Unset options are dropped, so an unchanged block sends exactly as before.
+                pushover_options: dict[str, Any] = {}
+                pushover_refs = [ref for ref in providers if isinstance(ref, dict) and ref.get("provider") == "pushover"]
+                # A variable error in a Pushover-only field fails the Pushover
+                # targets only; the other providers still deliver.
+                option_errors: list[str] = []
+                if pushover_refs:
+                    pushover_options = {field: node.data.get(field) for field in ("sound", "format", "ttl", "timestamp", "retry", "expire")}
+                    for field in ("url", "url_title", "image_url"):
+                        connected_value = out.get(f"_{field}")
+                        if connected_value is not None:
+                            pushover_options[field] = _msg_to_str(connected_value)
+                            continue
+                        resolved_option = _resolve_node_text(
+                            node,
+                            str(node.data.get(field) or ""),
+                            None if field == "url_title" else encode_url_value,
+                        )
+                        option_errors.extend(resolved_option.errors)
+                        pushover_options[field] = resolved_option.text
+                    pushover_options = {field: value for field, value in pushover_options.items() if value not in (None, "")}
                 if variable_errors:
                     outputs[node.id]["__error__"] = "; ".join(variable_errors)
                     logger.warning("Graph %s: notification variable error: %s", graph_id[:8], outputs[node.id]["__error__"])
                     target_set.add(node.id)
                     return False
                 message = _msg_to_str(raw_message) if raw_message is not None else fallback_message.text
+                # With HTML formatting the fallback template is the author's HTML;
+                # inserted variable values — and a connected message, which is
+                # data — get escaped (Pushover only).
+                pushover_message = None
+                if str(pushover_options.get("format") or "").strip().lower() == "html":
+                    if raw_message is None:
+                        pushover_message = _resolve_node_text(node, str(node.data.get("message") or ""), html.escape).text
+                    else:
+                        pushover_message = html.escape(message)
                 try:
                     raw_priority = node.data.get("priority")
                     try:
                         priority = int(raw_priority) if raw_priority not in (None, "") else 0
                     except (TypeError, ValueError):
                         priority = 0
-                    priority = max(-2, min(1, priority))
-                    results = await adapter.send_notification(
-                        message=message,
-                        providers=providers,
-                        title=resolved_title.text or None,
-                        priority=priority,
-                    )
+                    priority = max(-2, priority)
+                    if priority > 2 or (priority == 2 and ("retry" not in pushover_options or "expire" not in pushover_options)):
+                        # Before #1328 the block clamped to 1. Existing graphs with
+                        # a stored 2+ and no retry/expire must keep delivering
+                        # (issue: existing logics work unchanged); the panel flags it.
+                        if pushover_refs:
+                            logger.warning(
+                                "Graph %s: notification priority %s without valid emergency settings is sent as priority 1",
+                                graph_id[:8],
+                                priority,
+                            )
+                        priority = 1
+                    if priority != 2:
+                        # retry/expire are hidden below emergency priority; a
+                        # leftover value must neither be sent nor fail validation.
+                        pushover_options.pop("retry", None)
+                        pushover_options.pop("expire", None)
+                    send_providers = providers
+                    skipped = []
+                    if option_errors:
+                        send_providers = [ref for ref in providers if not (isinstance(ref, dict) and ref.get("provider") == "pushover")]
+                        skipped = [f"pushover/{ref.get('target')}: {'; '.join(option_errors)}" for ref in pushover_refs]
+                        pushover_options = {}
+                    results = []
+                    if send_providers:
+                        results = await adapter.send_notification(
+                            message=message,
+                            providers=send_providers,
+                            title=resolved_title.text or None,
+                            priority=priority,
+                            **({"pushover": pushover_options} if pushover_options else {}),
+                            **({"pushover_message": pushover_message} if pushover_message is not None and pushover_options else {}),
+                        )
                     failures = [result for result in results if not result.ok]
-                    if not results or failures:
-                        detail = ", ".join(f"{result.provider}/{result.target}: {result.detail}" for result in failures)
+                    if skipped or not results or failures:
+                        detail = ", ".join([*skipped, *(f"{result.provider}/{result.target}: {result.detail}" for result in failures)])
                         outputs[node.id]["__error__"] = detail or "MESSAGE adapter did not process any targets"
                         logger.warning("Graph %s: notification failed: %s", graph_id[:8], outputs[node.id]["__error__"])
                         target_set.add(node.id)
@@ -6967,7 +7034,11 @@ class LogicManager:
                     return True
                 except Exception as exc:
                     outputs[node.id]["__error__"] = str(exc)
-                    logger.exception("Graph %s: notification failed", graph_id[:8])
+                    if isinstance(exc, ValueError):
+                        # send_notification's validation: secret-free, no traceback needed.
+                        logger.warning("Graph %s: notification rejected: %s", graph_id[:8], exc)
+                    else:
+                        logger.exception("Graph %s: notification failed", graph_id[:8])
                     target_set.add(node.id)
                     return False
 

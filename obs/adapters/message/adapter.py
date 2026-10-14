@@ -7,23 +7,31 @@ plugins when a per-binding value condition is fulfilled.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from obs.adapters.base import AdapterBase
 from obs.adapters.message import providers as message_providers
 from obs.adapters.message.providers.base import MessageSendResult
+from obs.adapters.message.providers.pushover import (
+    check_static_url_title,
+    parse_pushover_options,
+    validation_error_message,
+)
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps
+from obs.core.url_values import encode_url_value
 from obs.datetime_format import DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 from obs.db.database import get_db
 from obs.regional_format import (
@@ -68,12 +76,19 @@ class MessageAdapterConfig(BaseModel):
 
 
 class MessageBindingConfig(BaseModel):
+    # The binding API returns validation errors verbatim; Pushover options may
+    # hold an image URL with credentials, so errors must not echo the input.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     operator: MessageOperator = Field(default="==")
     compare_value: Any = None
     message: str = Field(default="###DPN###: ###DP### ###DPU###")
     title: str | None = None
     providers: list[ProviderTargetRef] = Field(default_factory=list)
     priority: int | None = None
+    # Kept raw and validated only where it applies (a sending binding with a
+    # Pushover target): leftover hidden values must never block other bindings.
+    pushover: dict[str, Any] | None = None
     send_on_change: bool = True
     cooldown_seconds: int = Field(default=0, ge=0)
     enabled: bool = True
@@ -96,11 +111,10 @@ class MessageBindingConfig(BaseModel):
             if key in seen_targets:
                 raise ValueError(f"Duplicate MESSAGE target: {ref.provider}/{ref.target}")
             seen_targets.add(key)
-        if self.priority is not None and any(ref.provider == "pushover" for ref in self.providers):
-            if self.priority == 2:
-                raise ValueError("Pushover emergency priority is not supported")
-            if self.priority not in {-2, -1, 0, 1}:
-                raise ValueError("Pushover priority must be one of -2, -1, 0 or 1")
+        if self.enabled and sends_notification and any(ref.provider == "pushover" for ref in self.providers):
+            # A legacy top-level priority still applies when the options leave it unset.
+            parse_pushover_options(self.pushover, priority=self.priority)
+            check_static_url_title(self.pushover)
         return self
 
 
@@ -246,7 +260,9 @@ def render_message(
     language: str = "de",
     region_format: str = DEFAULT_REGION_FORMAT,
     display_ts: datetime | None = None,
+    encode: Callable[[str], str] | None = None,
 ) -> str:
+    """Fill the binding placeholders; *encode* is applied to each inserted value."""
     display_ts = display_ts or ts
     replacements = {
         "###DP###": _format_value(value, resolve_region_format(region_format, language)),
@@ -257,6 +273,8 @@ def render_message(
         "###DATE###": format_datetime(display_ts, date_format, language),
         "###TIME###": format_datetime(display_ts, time_format, language),
     }
+    if encode is not None:
+        replacements = {placeholder: encode(text) for placeholder, text in replacements.items()}
     return _PLACEHOLDER_PATTERN.sub(lambda match: replacements[match.group(0)], template)
 
 
@@ -351,17 +369,60 @@ class MessageAdapter(AdapterBase):
         providers: list[dict[str, str] | ProviderTargetRef],
         title: str | None = None,
         priority: int | None = None,
+        pushover: dict[str, Any] | None = None,
+        pushover_message: str | None = None,
     ) -> list[MessageSendResult]:
-        """Send an already rendered notification through the shared provider path."""
-        refs = [ref if isinstance(ref, ProviderTargetRef) else ProviderTargetRef(**ref) for ref in providers]
-        cfg = MessageBindingConfig(message=message, providers=refs, title=title, priority=priority)
+        """Send an already rendered notification through the shared provider path.
+
+        ``pushover`` carries per-message Pushover options; only Pushover targets
+        receive them. Invalid options fail the Pushover targets only — other
+        providers still deliver. Malformed target refs raise ``ValueError``.
+        ``pushover_message`` replaces the text for Pushover targets only (e.g.
+        with HTML-escaped values for HTML formatting).
+        """
+        try:
+            refs = [ref if isinstance(ref, ProviderTargetRef) else ProviderTargetRef(**ref) for ref in providers]
+        except ValidationError as exc:
+            raise ValueError(validation_error_message(exc)) from None
+        options_error = None
+        if any(ref.provider == "pushover" for ref in refs):
+            try:
+                # Send-time normalisation (e.g. a title without URL is dropped)
+                # must reach the config below, or its static checks would
+                # reject what the provider accepts — for every target.
+                own_priority = (
+                    isinstance(pushover, dict) and str(pushover.get("priority") if pushover.get("priority") is not None else "").strip() != ""
+                )
+                parsed = parse_pushover_options(pushover, priority=priority)
+                pushover = parsed.model_dump(exclude_none=True, exclude=None if own_priority else {"priority"})
+            except ValueError as exc:
+                options_error = f"invalid Pushover options: {exc}"
+        sendable = [ref for ref in refs if options_error is None or ref.provider != "pushover"]
+        try:
+            cfg = MessageBindingConfig(
+                message=message,
+                providers=sendable,
+                title=title,
+                priority=priority,
+                pushover=pushover if options_error is None else None,
+                archive_strategy="send_only" if sendable else "none",
+            )
+        except ValidationError as exc:
+            raise ValueError(validation_error_message(exc)) from None
         event = DataValueEvent(
             datapoint_id=uuid.UUID(int=0),
             value=message,
             quality="good",
             source_adapter=self.adapter_type,
         )
-        return await self._send_to_targets(cfg, SimpleNamespace(id=uuid.uuid4()), event, message)
+        sent = iter(await self._send_to_targets(cfg, SimpleNamespace(id=uuid.uuid4()), event, message, pushover_message))
+        results = []
+        for ref in refs:
+            if options_error is not None and ref.provider == "pushover":
+                results.append(MessageSendResult(ref.provider, ref.target, False, options_error))
+            else:
+                results.append(next(sent))
+        return results
 
     async def _on_value_event(self, event: DataValueEvent) -> None:
         if event.quality != "good":
@@ -407,26 +468,43 @@ class MessageAdapter(AdapterBase):
             display_ts = event_ts.astimezone(ZoneInfo(app_settings["timezone"]))
         except (KeyError, ValueError):
             display_ts = event_ts
-        rendered = render_message(
-            cfg.message,
-            value=event.value,
-            unit=getattr(dp, "unit", None),
-            name=getattr(dp, "name", str(event.datapoint_id)),
-            datapoint_id=event.datapoint_id,
-            ts=event_ts,
-            date_format=app_settings["date_format"],
-            time_format=app_settings["time_format"],
-            language=app_settings["language"],
-            region_format=app_settings.get("region_format", DEFAULT_REGION_FORMAT),
-            display_ts=display_ts,
-        )
+        render_kwargs: dict[str, Any] = {
+            "value": event.value,
+            "unit": getattr(dp, "unit", None),
+            "name": getattr(dp, "name", str(event.datapoint_id)),
+            "datapoint_id": event.datapoint_id,
+            "ts": event_ts,
+            "date_format": app_settings["date_format"],
+            "time_format": app_settings["time_format"],
+            "language": app_settings["language"],
+            "region_format": app_settings.get("region_format", DEFAULT_REGION_FORMAT),
+            "display_ts": display_ts,
+        }
+        rendered = render_message(cfg.message, **render_kwargs)
         reset_version = state.reset_version
         if state.in_flight and not ignore_repetition:
             state.queue_pending_event(binding, event, _pending_coalesce_key(cfg, event))
             return
+        pushover_message = None
+        if (
+            cfg.pushover is not None
+            and cfg.archive_strategy in {"send_only", "send_and_archive"}
+            and any(ref.provider == "pushover" for ref in cfg.providers)
+        ):
+            rendered_options = {
+                field: render_message(text, **render_kwargs, encode=None if field == "url_title" else encode_url_value)
+                for field in ("image_url", "url", "url_title")
+                if isinstance(text := cfg.pushover.get(field), str) and text
+            }
+            # The provider validates the rendered texts again before sending.
+            cfg = cfg.model_copy(update={"pushover": {**cfg.pushover, **rendered_options}})
+            if str(cfg.pushover.get("format") or "").strip().lower() == "html":
+                # The template is the author's HTML; inserted values are data.
+                pushover_message = render_message(cfg.message, **render_kwargs, encode=html.escape)
+        # Flags are set only once nothing before the task can raise any more.
         state.in_flight = True
         state.in_flight_key = _pending_coalesce_key(cfg, event) if not ignore_repetition else _NO_PENDING_COALESCE
-        task = asyncio.create_task(self._send_and_record(binding, event, cfg, rendered, state, reset_version))
+        task = asyncio.create_task(self._send_and_record(binding, event, cfg, rendered, state, reset_version, pushover_message))
         self._send_tasks.add(task)
         task.add_done_callback(self._send_tasks.discard)
 
@@ -438,11 +516,12 @@ class MessageAdapter(AdapterBase):
         rendered: str,
         state: _BindingState,
         reset_version: int,
+        pushover_message: str | None = None,
     ) -> None:
         try:
             results = []
             if cfg.archive_strategy in {"send_only", "send_and_archive"}:
-                results = await self._send_to_targets(cfg, binding, event, rendered)
+                results = await self._send_to_targets(cfg, binding, event, rendered, pushover_message)
         except Exception as exc:  # pragma: no cover - defensive guard for unexpected task errors
             logger.exception("MESSAGE send task failed unexpectedly")
             results = [MessageSendResult("message", "internal", False, str(exc))]
@@ -490,8 +569,10 @@ class MessageAdapter(AdapterBase):
         binding: Any,
         event: DataValueEvent,
         rendered: str,
+        pushover_message: str | None = None,
     ) -> list[MessageSendResult]:
         results: list[MessageSendResult] = []
+        attachment_cache: dict[str, Any] = {}
         context = {
             "datapoint_id": str(event.datapoint_id),
             "binding_id": str(binding.id),
@@ -523,19 +604,32 @@ class MessageAdapter(AdapterBase):
             if target_config is None:
                 results.append(MessageSendResult(ref.provider, ref.target, False, "target not configured"))
                 continue
+            provider_context = context
+            message = rendered
+            if ref.provider == "pushover" and pushover_message is not None:
+                message = pushover_message
+            if ref.provider == "pushover" and cfg.pushover is not None:
+                provider_context = {
+                    **context,
+                    "pushover": {field: value for field, value in cfg.pushover.items() if value is not None},
+                    "attachment_cache": attachment_cache,
+                }
             try:
                 result = await provider.send(
                     provider_config=provider_config,
                     target_name=ref.target,
                     target_config=_model_dump(target_config),
                     title=cfg.title,
-                    message=rendered,
-                    context=context,
+                    message=message,
+                    context=provider_context,
                 )
                 results.append(result)
             except Exception:
                 logger.exception("MESSAGE provider '%s' target '%s' failed", ref.provider, ref.target)
                 results.append(MessageSendResult(ref.provider, ref.target, False, "send failed"))
+                continue
+            if not result.ok:
+                logger.warning("MESSAGE provider '%s' target '%s' failed: %s", ref.provider, ref.target, result.detail)
         return results
 
     async def _archive_notification(
