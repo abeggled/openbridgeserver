@@ -40,6 +40,7 @@ from obs.api.authz_service import (
 )
 from obs.api.capabilities import ConfigCapability, audit_config_capability_use, require_config_capability
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
+from obs.api.v1.content_disposition import attachment_header
 from obs.api.v1.datapoint_config import collect_datapoint_ids_from_config, is_uuid_str
 from obs.api.v1.sessions import create_session, validate_session
 from obs.db.database import Database, get_db
@@ -1059,7 +1060,7 @@ async def export_node(
     safe_name = nodes[0]["name"].replace(" ", "_").replace("/", "_")
     return JSONResponse(
         content=export_data,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}_visu.json"'},
+        headers={"Content-Disposition": attachment_header(f"{safe_name}_visu.json")},
     )
 
 
