@@ -365,7 +365,10 @@ describe('LogicView node copy/paste', () => {
       .mockReturnValueOnce(new Promise(resolve => { resolveFresh = resolve }))
 
     wrapper.vm.activeGraphId = 'graph-1'
+    const loadsBefore = logicApi.getGraph.mock.calls.length
     const stalePromise = wrapper.vm.loadGraph()
+    // Let the older request reach its GET before the newer switch starts.
+    await vi.waitFor(() => expect(logicApi.getGraph).toHaveBeenCalledTimes(loadsBefore + 1))
     wrapper.vm.activeGraphId = 'graph-2'
     const freshPromise = wrapper.vm.loadGraph()
 
@@ -393,7 +396,10 @@ describe('LogicView node copy/paste', () => {
       .mockReturnValueOnce(new Promise(resolve => { resolveFresh = resolve }))
 
     wrapper.vm.activeGraphId = 'graph-1'
+    const loadsBefore = logicApi.getGraph.mock.calls.length
     const stalePromise = wrapper.vm.loadGraph()
+    // Let the older request reach its GET before the newer switch starts.
+    await vi.waitFor(() => expect(logicApi.getGraph).toHaveBeenCalledTimes(loadsBefore + 1))
     wrapper.vm.activeGraphId = 'graph-2'
     const freshPromise = wrapper.vm.loadGraph()
 

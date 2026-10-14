@@ -19,11 +19,11 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="def.label"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['gn-title', customLabel && 'gn-title--custom']"
           @rename="renameNode"
         />
-        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
+        <button v-if="canvasEditable" class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
@@ -79,10 +79,15 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsInputPorts } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 
 const props = defineProps({
@@ -155,6 +160,12 @@ const NODE_DEFS = computed(() => ({
       {id:'fault_text',   label:t('logic.portLabels.faultText')},
       {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
     ]
+  },
+  // HEMS — hems_surplus: ports are generated from the grid mode and the consumer
+  // list (see the `def` computed below); this entry is the pre-config-load fallback.
+  hems_surplus:       { label: t('logic.nodeTypes.hems_surplus'), color: '#0d9488',
+    inputs: [{id:'grid',label:t('logic.portLabels.hems.grid')}],
+    outputs: [{id:'status',label:t('logic.portLabels.hems.status')}]
   },
   // Notification
   notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
@@ -249,6 +260,22 @@ const def = computed(() => {
     )
     return { ...base, label, inputs, outputs }
   }
+  if (props.type === 'hems_surplus') {
+    const d = props.data
+    const inputs = hemsInputPorts(d, t)
+    const outputs = []
+    hemsConsumers(d.consumers).forEach((c, i) => {
+      const name = hemsConsumerName(c, i, t)
+      outputs.push(
+        { id: `c_${c.id}`, label: name },
+        { id: `c_${c.id}_status`, label: `${name}: ${t('logic.portLabels.hems.status')}` },
+      )
+    })
+    for (const k of HEMS_DIAGNOSTICS) {
+      outputs.push({ id: k, label: t(`logic.portLabels.hems.${k}`) })
+    }
+    return { ...base, label, inputs, outputs }
+  }
   if (props.type === 'ical') {
     const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
     let filters = []
@@ -340,6 +367,7 @@ const auth = useAuthStore()
 
 // ── Inline negation toggle (AND / OR / XOR / binary_stats) ─────
 function toggleNegate(portId) {
+  if (!canvasEditable.value) return
   const key = `negate_${portId}`
   updateNodeData(props.id, { [key]: !props.data[key] })
 }
@@ -419,6 +447,9 @@ const summary = computed(() => {
   if (props.type === 'sensor_watchdog') {
     const rows = parseRowList(d.inputs)
     return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
+  }
+  if (props.type === 'hems_surplus') {
+    return t('logic.summary.consumers', { n: hemsConsumers(d.consumers).length })
   }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)

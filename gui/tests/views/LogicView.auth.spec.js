@@ -188,7 +188,7 @@ describe('LogicView auth gates', () => {
     wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
     expect(wrapper.vm.selectedNode).toBe(null)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     await wrapper.vm.runGraph()
     await wrapper.vm.doToggleEnabled()
     wrapper.vm.openDuplicate()
@@ -459,7 +459,7 @@ describe('LogicView auth gates', () => {
     await flushPromises()
     expect(wrapper.vm.nodes[0].data.value).toBe(7)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     expect(logicApi.saveGraph).toHaveBeenCalledWith('graph-1', expect.objectContaining({ name: 'Main Graph' }))
 
     await wrapper.vm.runGraph()
@@ -472,7 +472,7 @@ describe('LogicView auth gates', () => {
     expect(wrapper.vm.lastRunDebugOutputs.n1.value).toBe(42)
     expect(wrapper.vm.nodes[0].data._dbg).toBe('= 42')
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     const savedPayload = logicApi.saveGraph.mock.calls.at(-1)[1]
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg')
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg_title')
@@ -1110,6 +1110,18 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.selectedNode = { id: 'average', type: 'avg_multi', data: { input_count: 4 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
 
+    // An unwired HEMS block offers the same inputs as its card, so the meter can be injected.
+    wrapper.vm.selectedNode = {
+      id: 'hems',
+      type: 'hems_surplus',
+      data: { grid_mode: 'split', max_age_s: 60, consumers: [{ id: 'load', mode: 'percent', power_source: 'input' }] },
+    }
+    wrapper.vm.edges = []
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual([
+      'grid_import', 'grid_import_changed', 'grid_export', 'grid_export_changed',
+      'enable', 'target', 'plant_ok', 'c_load_power', 'c_load_max_power',
+    ])
+
     wrapper.vm.selectedNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
     wrapper.vm.edges = [{ id: 'custom', source: 'n1', target: 'concat', sourceHandle: 'value', targetHandle: 'in_4' }]
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
@@ -1346,7 +1358,7 @@ describe('LogicView graph cycle validation', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -1486,7 +1498,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -1548,7 +1560,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     // Two cycle warnings (a, b) plus one duplicate-handle warning (e) — the
@@ -1618,7 +1630,7 @@ describe('LogicView operation error handling', () => {
     })
     logicApi.saveGraph.mockRejectedValue({ response: { data: { detail: 'Save failed' } } })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(wrapper.vm.statusMsg.ok).toBe(false)
   })

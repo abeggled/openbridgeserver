@@ -17,9 +17,11 @@ module and its tests; shared infrastructure is only touched when the shared cont
 
 ```text
 obs/logic/
+├── booleans.py              # to_bool: the boolean rule shared by executor and engine modules
 ├── capabilities.py          # authorization capability identifiers per node type
 ├── executor.py              # shared execution dispatcher (see "Execution")
 ├── graph_analysis.py        # shared graph/topology helpers
+├── hems_surplus.py          # control engine called by the hems_surplus dispatcher branch
 ├── manager.py               # scheduling, persistence, runtime
 ├── models.py                # NodeTypeDef, NodeTypePort, FlowData, …
 ├── registry.py              # assembles the catalogue, lookup helpers
@@ -33,6 +35,7 @@ obs/logic/
     │   ├── and_node.py      # one module per function block: NODE_TYPE
     │   ├── …
     ├── datapoint/
+    ├── hems/
     ├── math/
     ├── string/
     ├── timer/
@@ -172,6 +175,11 @@ Two registered types are intentionally never executed and fall through the dispa
 no-op branch: `comment` (purely visual annotation) and `ai_logic` (placeholder). They are listed as
 `NON_EXECUTING_NODE_TYPES` in the guardrail test; every other registered type must have a branch.
 
+A block whose algorithm is too large for a `case` branch (`hems_surplus`) keeps the branch a thin
+call into a pure, I/O-free engine module next to the executor (`obs/logic/hems_surplus.py`): it
+reads neither the clock nor the graph — `now` and the per-node state dict are passed in — so the
+dispatcher remains the only place that decides *when* a node runs.
+
 ### Node-specific knowledge outside node modules
 
 Besides the two handlers above, these shared modules still key on individual node types. This is the
@@ -208,7 +216,20 @@ today, so it is deliberately left as an explicit table.
      not pulse, and a Write Object does not write. Register the handle in
      `retained_boundary_handles` (`GraphExecutor.execute`) and `init_retained_boundary_handles`
      (`LogicManager.initialize_graph`) so the deliberate absence is not reported as a failed
-     upstream producer on every run.
+     upstream producer on every run. `hems_surplus` takes the other route for *level* outputs that
+     are merely unchanged: its dispatcher branch returns every level output at its current value
+     plus `_emitted`, the handles actually sent this tick. Downstream logic always computes with
+     the level; a directly wired Write Object without its own trigger is marked `_skip_unchanged`,
+     gets the last value even of a trigger output between firings (that edge counts as a level in
+     `_hems_level_edge`) and is written only when it differs from its `last_write_val`; with the
+     block's "only on change" off it gets a value only when `_emitted`. Action-node freshness
+     (`_event_fresh_inputs`) honours `_emitted`. Its *trigger* outputs are events: present
+     only on the run that sent them, a firing being the run that sent True, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
+     `_hems_trigger_handles`) like Edge Detection's. In `GraphExecutor.execute` an absent trigger
+     output or a removed consumer's handle is a boundary; an absent *level* (or any handle of a
+     failed block) is a failed producer. `initialize_graph` excludes the block and treats every
+     wired handle of it as a boundary. A run made obsolete by a save undoes its ticks of the block
+     (`run_tag`, `undo_hems_run`).
    - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
      state copy, so a block whose output depends on persisted state needs a decision. Listing it in
      `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass
