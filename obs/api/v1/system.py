@@ -578,10 +578,10 @@ async def test_history_connection(
                     password=data["influx_password"],
                 )
                 ok = await plugin.ping()
-                result = HistoryTestResult(
-                    ok=ok,
-                    message=f"InfluxDB v{body.influx_version} {'reachable' if ok else 'not reachable'} at {body.influx_url}",
-                )
+                message = f"InfluxDB v{body.influx_version} {'reachable' if ok else 'not reachable'} at {body.influx_url}"
+                if not ok and plugin.last_ping_error:
+                    message = f"InfluxDB v{body.influx_version} at {body.influx_url}: {plugin.last_ping_error}"
+                result = HistoryTestResult(ok=ok, message=message)
             elif body.plugin == "timescaledb":
                 from obs.history.timescaledb_plugin import TimescaleDBHistoryPlugin
 

@@ -202,6 +202,7 @@ async function loadData() {
   seriesUnits.value = units
 
   const hasMultiple = defs.length > 1
+  const hasLeft     = defs.some(s => s.axis === 'y')
   const hasRight    = defs.some(s => s.axis === 'y1')
   const isBar       = chartType.value === 'bar'
 
@@ -272,10 +273,12 @@ async function loadData() {
     if (xAxis) { xAxis.min = fromDate.getTime(); xAxis.max = toDate.getTime() }
   }
 
-  // Linke Y-Achse
+  // Linke Y-Achse — wie die rechte nur anzeigen, wenn eine Reihe darauf liegt;
+  // sonst zeichnet Chart.js eine leere Standardskala 0–1 (#1111)
   const yLeft = chart.options.scales?.y as Record<string, unknown> | undefined
   if (yLeft) {
-    yLeft.title = { display: !!leftUnit, text: leftUnit, color: '#6b7280', font: { size: 11 } }
+    yLeft.display = hasLeft
+    yLeft.title   = { display: !!leftUnit, text: leftUnit, color: '#6b7280', font: { size: 11 } }
   }
 
   // Rechte Y-Achse — nur anzeigen wenn mindestens eine Reihe zugewiesen
