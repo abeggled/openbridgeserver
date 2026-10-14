@@ -74,6 +74,13 @@ class TestCoerceValueForType:
         with pytest.raises(ValueError):
             coerce_value_for_type("abc", "INTEGER")
 
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("data_type", ["INTEGER", "FLOAT", "UNKNOWN"])
+    def test_non_finite_float_rejected(self, value, data_type):
+        # int(inf) used to raise OverflowError (-> 500); NaN/inf on FLOAT were stored (#1153).
+        with pytest.raises(ValueError, match="is not a finite number"):
+            coerce_value_for_type(value, data_type)
+
 
 # ---------------------------------------------------------------------------
 # parse_text_value_heuristic — UNKNOWN fallback
