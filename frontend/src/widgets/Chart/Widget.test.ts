@@ -7,7 +7,7 @@
  * of the configured regional format. The tooltip values go through the same
  * formatter as every other widget.
  */
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -48,11 +48,11 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 let wrapper: VueWrapper | null = null
 
-async function mountChart() {
+async function mountChart(config: Record<string, unknown> = { label: 'Verlauf' }) {
   const mod = await import('./Widget.vue')
   wrapper = mount(mod.default, {
     props: {
-      config: { label: 'Verlauf' },
+      config,
       datapointId: 'dp-1',
       value: null,
       editorMode: false,
@@ -113,5 +113,47 @@ describe('Chart Widget.vue — regional number format (#1073)', () => {
     const label = config.options.plugins.tooltip.callbacks.label
 
     expect(label({ parsed: { y: null }, datasetIndex: 0, dataset: { label: 'L1' } })).toBe('')
+  })
+})
+
+describe('Chart Widget.vue — y axes follow the series assignment (#1111)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  async function axesAfterLoad(config: Record<string, unknown>) {
+    const chartConfig = await mountChart({ label: 'Verlauf', ...config })
+    await flushPromises()
+    return chartConfig.options.scales
+  }
+
+  it('hides the left axis when every series is on the right', async () => {
+    const scales = await axesAfterLoad({
+      primary_axis: 'right',
+      series: [{ dp_id: 'dp-2', axis: 'right' }],
+    })
+
+    expect(scales.y.display).toBe(false)
+    expect(scales.y1.display).toBe(true)
+  })
+
+  it('shows only the left axis when every series is on the left', async () => {
+    const scales = await axesAfterLoad({ series: [{ dp_id: 'dp-2' }] })
+
+    expect(scales.y.display).toBe(true)
+    expect(scales.y1.display).toBe(false)
+  })
+
+  it('shows both axes when series are split across them', async () => {
+    const scales = await axesAfterLoad({ series: [{ dp_id: 'dp-2', axis: 'right' }] })
+
+    expect(scales.y.display).toBe(true)
+    expect(scales.y1.display).toBe(true)
   })
 })
