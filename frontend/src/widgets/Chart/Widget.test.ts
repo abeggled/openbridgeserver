@@ -212,6 +212,10 @@ describe('Chart Widget.vue — tooltip swatches and legend (#1361)', () => {
     expect(items.map(i => i.text())).toEqual([bedroom, bath])
     expect((items[1].element as HTMLElement).style.borderBottomColor).toBe('rgb(239, 68, 68)')
     expect(items[0].attributes('aria-pressed')).toBe('true')
+    // Light- und Dark-Mode brauchen eigene Text-/Hover-Farben, sonst wird der Hover hell auf hell
+    expect(items[0].classes()).toEqual(expect.arrayContaining([
+      'text-gray-500', 'dark:text-gray-400', 'hover:text-gray-900', 'dark:hover:text-gray-200',
+    ]))
   })
 
   it('numbers unlabelled series in the legend', async () => {
