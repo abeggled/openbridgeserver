@@ -405,10 +405,67 @@ class TestInfluxDBPing:
         with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
             assert await _plugin(1).ping() is False
 
-    async def test_ping_v2_success(self):
-        ctx, _ = _make_httpx_mock(status=200)
+    @staticmethod
+    def _v2_ctx(*responses):
+        """AsyncClient mock whose successive GETs return /ping, then /api/v2/buckets."""
+        ctx, client = _make_httpx_mock()
+        resps = []
+        for status, json_body in responses:
+            r = mock.MagicMock()
+            r.status_code = status
+            r.json = mock.MagicMock(return_value=json_body)
+            resps.append(r)
+        client.get = mock.AsyncMock(side_effect=resps)
+        return ctx, client
+
+    async def test_ping_v2_success_checks_ping_then_bucket(self):
+        ctx, client = self._v2_ctx((204, None), (200, {"buckets": [{"name": "mybucket"}]}))
+        plugin = _plugin(2)
         with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
-            assert await _plugin(2).ping() is True
+            assert await plugin.ping() is True
+        assert plugin.last_ping_error is None
+        first, second = client.get.await_args_list
+        assert first.args == ("http://localhost:8086/ping",)
+        assert second.args == ("http://localhost:8086/api/v2/buckets",)
+        assert second.kwargs["params"] == {"org": "myorg", "name": "mybucket"}
+        assert second.kwargs["headers"]["Authorization"] == "Token mytoken"
+
+    async def test_ping_v2_unreachable_ping_endpoint(self):
+        ctx, client = self._v2_ctx((503, None))
+        plugin = _plugin(2)
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
+            assert await plugin.ping() is False
+        assert plugin.last_ping_error == "/ping returned HTTP 503"
+        assert client.get.await_count == 1
+
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_ping_v2_token_rejected(self, status):
+        ctx, _ = self._v2_ctx((204, None), (status, None))
+        plugin = _plugin(2)
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
+            assert await plugin.ping() is False
+        assert plugin.last_ping_error == f"token rejected (HTTP {status})"
+
+    async def test_ping_v2_org_not_found(self):
+        ctx, _ = self._v2_ctx((204, None), (404, None))
+        plugin = _plugin(2)
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
+            assert await plugin.ping() is False
+        assert plugin.last_ping_error == "organization 'myorg' not found"
+
+    async def test_ping_v2_bucket_lookup_other_error(self):
+        ctx, _ = self._v2_ctx((204, None), (500, None))
+        plugin = _plugin(2)
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
+            assert await plugin.ping() is False
+        assert plugin.last_ping_error == "bucket lookup returned HTTP 500"
+
+    async def test_ping_v2_bucket_not_found(self):
+        ctx, _ = self._v2_ctx((204, None), (200, {"buckets": []}))
+        plugin = _plugin(2)
+        with mock.patch("obs.history.influxdb_plugin.httpx.AsyncClient", return_value=ctx):
+            assert await plugin.ping() is False
+        assert plugin.last_ping_error == "bucket 'mybucket' not found in organization 'myorg'"
 
     async def test_ping_v3_success(self):
         ctx, _ = _make_httpx_mock(status=200, json_body={"results": []})

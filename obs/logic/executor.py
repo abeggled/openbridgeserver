@@ -2260,8 +2260,10 @@ class GraphExecutor:
                     "_reset": self._to_bool(inputs.get("reset")),
                 }
 
-            case "notify_pushover":
+            case "notify_pushover" | "notify_message":
                 # Fires when message arrives OR trigger is truthy (both optional).
+                # url/url_title/image_url are Pushover options; a connected input
+                # overrides the static value in the block configuration.
                 msg = inputs.get("message")
                 triggered = self._to_bool(inputs.get("trigger")) if "trigger" in inputs else False
                 return {
@@ -2273,7 +2275,7 @@ class GraphExecutor:
                     "sent": False,
                 }
 
-            case "notify_sms" | "notify_message":
+            case "notify_sms":
                 # Fires when message arrives OR trigger is truthy (both optional).
                 msg = inputs.get("message")
                 triggered = self._to_bool(inputs.get("trigger")) if "trigger" in inputs else False

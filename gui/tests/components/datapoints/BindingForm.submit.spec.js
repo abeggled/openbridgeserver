@@ -444,6 +444,160 @@ describe('BindingForm — MESSAGE create submit', () => {
     w.unmount()
   })
 
+  it('saves Pushover options only when they are set and a Pushover target exists', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-pushover',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: {
+          providers: [{ provider: 'pushover', target: 'phone' }],
+          pushover: { priority: 2, retry: 60, expire: 600, image_url: ' http://192.168.1.50/snap.jpg ', url: '', format: 'text' },
+        },
+      },
+    })
+    expect(w.find('[data-testid="pushover-priority"]').element.value).toBe('2')
+    await submit(w)
+
+    const config = updateBinding.mock.calls.at(-1)[2].config
+    expect(config.priority).toBe(2)
+    expect(config.pushover).toEqual({ image_url: 'http://192.168.1.50/snap.jpg', retry: 60, expire: 600 })
+    w.unmount()
+  })
+
+  it('omits empty Pushover options and options without a Pushover target', async () => {
+    for (const providers of [[{ provider: 'pushover', target: 'phone' }], [{ provider: 'telegram', target: 'family' }]]) {
+      updateBinding.mockClear()
+      const w = await mountForm({
+        initial: {
+          id: 'binding-plain',
+          adapter_type: 'MESSAGE',
+          adapter_instance_id: 'msg-1',
+          direction: 'SOURCE',
+          enabled: true,
+          config: { providers, priority: '', pushover: providers[0].provider === 'pushover' ? null : { sound: 'siren' } },
+        },
+      })
+      await submit(w)
+
+      const config = updateBinding.mock.calls.at(-1)[2].config
+      expect(config).not.toHaveProperty('pushover')
+      expect(config).not.toHaveProperty('priority')
+      w.unmount()
+    }
+  })
+
+  it('ignores hidden Pushover options when the binding only archives', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-archive',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: {
+          archive_strategy: 'archive_only',
+          archive_id: 'alarms',
+          providers: [{ provider: 'pushover', target: 'phone' }],
+          pushover: { url_title: 'Open without URL' },
+        },
+      },
+    })
+    await submit(w)
+
+    const config = updateBinding.mock.calls.at(-1)[2].config
+    expect(config).not.toHaveProperty('pushover')
+    w.unmount()
+  })
+
+  it('drops leftover retry and expire below emergency priority', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-leftover',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 1, pushover: { retry: 10, expire: 600, sound: 'siren' } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding.mock.calls.at(-1)[2].config.pushover).toEqual({ sound: 'siren' })
+    w.unmount()
+  })
+
+  it('keeps the top-level priority when the nested one is blank', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-blank-nested',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 1, pushover: { priority: '' } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding.mock.calls.at(-1)[2].config.priority).toBe(1)
+    w.unmount()
+  })
+
+  it('lets a disabled binding be saved with unfinished Pushover options', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-disabled',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: false,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 2, pushover: { retry: 10 } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('drops the hidden priority without a Pushover target', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-telegram',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'telegram', target: 'family' }], priority: 2 },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding.mock.calls.at(-1)[2].config).not.toHaveProperty('priority')
+    w.unmount()
+  })
+
+  it('blocks saving invalid Pushover options', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-invalid',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 2, pushover: { retry: 10 } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Pushover-Optionen sind ungültig')
+    w.unmount()
+  })
+
   it('preserves disabled MESSAGE archive strategy in edit mode', async () => {
     const w = await mountForm({
       initial: {

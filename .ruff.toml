@@ -13,6 +13,11 @@ line-length = 150
 #    "D203", # no-blank-line-before-class (incompatible with formatter)
 #]
 
+[lint]
+# ruff 0.17 dropped most flake8-datetimez rules from its default set; keep the
+# naive-datetime guard (and the justified `noqa: DTZ…` exemptions) in force.
+extend-select = ["DTZ"]
+
 # Relaxed rules for tests
 [lint.per-file-ignores]
 "tests/**" = [

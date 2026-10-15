@@ -1320,6 +1320,48 @@
         "method_not_allowed": "HTTP method not allowed",
         "address_blocked": "caller address not in the allowlist"
       }
+    },
+    "pushoverOptions": {
+      "section": "Pushover options",
+      "intro": "Applies to the selected Pushover targets only; other providers send unchanged. Empty fields are not sent to Pushover.",
+      "imageUrl": "Image URL",
+      "imageUrlHint": "OBS downloads the image (JPEG, PNG, GIF or WebP, max. 5 MB) and attaches it. External sources over HTTPS only; internal cameras (HTTP too) must be released in the URL Target Allowlist.",
+      "url": "URL",
+      "urlTitle": "URL title",
+      "placeholderHint": "Image URL, URL and URL title support ###DP### · ###DPU### · ###DPN### · ###DPI### · ###DATE### · ###TIME### · ###TS###",
+      "priority": "Priority",
+      "priorityDefault": "Default",
+      "priorities": {
+        "pm2": "-2 · lowest",
+        "pm1": "-1 · low",
+        "p0": "0 · normal",
+        "p1": "1 · high",
+        "p2": "2 · emergency (requires acknowledgement)"
+      },
+      "format": "Formatting",
+      "formats": {
+        "text": "Plain text",
+        "html": "HTML",
+        "monospace": "Monospace"
+      },
+      "retry": "Retry (seconds)",
+      "expire": "Expire (seconds)",
+      "sound": "Sound",
+      "soundDefault": "Target default",
+      "ttl": "TTL (seconds)",
+      "timestamp": "Timestamp (Unix seconds)",
+      "errors": {
+        "invalid": "The Pushover options are invalid. Please correct the highlighted fields.",
+        "integer": "Please enter a whole number.",
+        "positive": "The value must be greater than 0.",
+        "retryMin": "Retry must be at least 30 seconds.",
+        "retryRequired": "Emergency priority requires retry.",
+        "expireRequired": "Emergency priority requires expire.",
+        "expireRange": "Expire must be between 1 and 10800 seconds.",
+        "urlTitleWithoutUrl": "A URL title requires a URL.",
+        "soundInvalid": "Sound names consist of letters, digits, _ and - only.",
+        "tooLong": "At most {max} characters."
+      }
     }
   },
   "history": {
@@ -2526,8 +2568,8 @@
         "title": "Title",
         "fallback": "Message (fallback)",
         "placeholders": "The logic block has no datapoint context; MESSAGE placeholders are sent unchanged.",
-        "priority": "Priority",
-        "legacy": "Legacy block. Please use the Notification block for new notifications."
+        "legacy": "Legacy block. Please use the Notification block for new notifications.",
+        "pushoverInputsHint": "Connected URL, URL title and image URL inputs override the static values. Static values support variables such as ###OBS1###."
       },
       "messageArchive": {
         "archive": "Message archive",
@@ -2748,6 +2790,7 @@
       "percentTrue": "TRUE %",
       "tie": "Tie",
       "thresholdReached": "Threshold reached",
+      "url": "URL",
       "hems": {
         "grid": "Grid power (+import/−export)",
         "grid_import": "Grid import",

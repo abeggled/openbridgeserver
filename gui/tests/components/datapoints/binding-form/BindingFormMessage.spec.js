@@ -122,4 +122,32 @@ describe('BindingFormMessage', () => {
 
     expect(wrapper.findAll('button').find(button => button.text() === 'Ziel hinzufügen').attributes('disabled')).toBeDefined()
   })
+
+  it('shows Pushover options only while a Pushover target is selected', async () => {
+    const wrapper = mk({ cfg: { providers: [{ provider: 'telegram', target: 'family' }] } })
+    const cfg = wrapper.props('cfg')
+    expect(cfg.pushover).toEqual({})
+    expect(wrapper.find('[data-testid="pushover-options"]').exists()).toBe(false)
+
+    cfg.providers.push({ provider: 'pushover', target: 'phone' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="pushover-options"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('###DPI###')
+
+    await wrapper.find('[data-testid="pushover-image-url"]').setValue('http://192.168.1.50/snapshot.jpg')
+    expect(cfg.pushover.image_url).toBe('http://192.168.1.50/snapshot.jpg')
+  })
+
+  it('hides Pushover options when the binding only archives', () => {
+    const wrapper = mk({ cfg: { archive_strategy: 'archive_only', providers: [{ provider: 'pushover', target: 'phone' }], pushover: { url: 'x' } } })
+    expect(wrapper.find('[data-testid="pushover-options"]').exists()).toBe(false)
+  })
+
+  it('writes the selected Pushover priority to the binding', async () => {
+    const wrapper = mk({ cfg: { providers: [{ provider: 'pushover', target: 'phone' }], priority: null } })
+
+    await wrapper.find('[data-testid="pushover-priority"]').setValue('1')
+
+    expect(wrapper.props('cfg').priority).toBe(1)
+  })
 })
