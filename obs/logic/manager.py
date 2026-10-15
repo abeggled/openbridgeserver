@@ -787,6 +787,7 @@ _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_API_CLIENT_MAX_RESPONSE_BYTES = 1_000_000
 _API_CLIENT_VARIABLE_RE = VARIABLE_RE
 _API_CLIENT_URL_LEADING_STRIP_CHARS = "".join(chr(value) for value in range(0x21))
 _API_CLIENT_URL_REMOVE_CHARS = str.maketrans("", "", "\r\n\t")
@@ -1438,13 +1439,53 @@ def _is_public_http_url(url: str) -> bool:
     return True
 
 
-async def _read_limited_response_body(resp: httpx.Response, max_bytes: int) -> bytes:
+class _ResponseTooLargeError(ValueError):
+    pass
+
+
+async def _read_limited_response_body(resp: httpx.Response, max_bytes: int, *, label: str = "iCal response") -> bytes:
     body = bytearray()
     async for chunk in resp.aiter_bytes():
         body.extend(chunk)
         if len(body) > max_bytes:
-            raise ValueError(f"iCal response too large: {len(body)} bytes")
+            raise _ResponseTooLargeError(f"{label} too large: {len(body)} bytes")
     return bytes(body)
+
+
+async def _send_api_client_request(client: httpx.AsyncClient, method: str, url: str, **kwargs: Any) -> tuple[httpx.Response, bytes | None]:
+    """Send an api_client request and read at most the response size limit (#530).
+
+    The body is streamed and abandoned as soon as it exceeds the limit (or the
+    declared Content-Length already does), so an oversized response is never
+    materialized or JSON-parsed in full. ``None`` as body marks that case.
+    """
+    async with client.stream(method, url, **kwargs) as resp:
+        declared = resp.headers.get("content-length", "")
+        # 204 and 304 have no body; a 304 may still declare the length of the 200 it stands for (RFC 9110 §8.6).
+        if resp.status_code not in (204, 304) and declared.isdigit() and int(declared) > _API_CLIENT_MAX_RESPONSE_BYTES:
+            return resp, None
+        try:
+            return resp, await _read_limited_response_body(resp, _API_CLIENT_MAX_RESPONSE_BYTES, label="API response")
+        except _ResponseTooLargeError:
+            return resp, None
+
+
+def _api_client_response_output(resp: httpx.Response, body: bytes | None, resp_type: str) -> dict[str, Any]:
+    """Node output for a received api_client response; oversized bodies fail the node."""
+    if body is None:
+        return {
+            "response": f"Response exceeds the size limit of {_API_CLIENT_MAX_RESPONSE_BYTES} bytes",
+            "status": resp.status_code,
+            "success": False,
+        }
+    text = body.decode(resp.encoding or "utf-8", errors="replace")
+    data: Any = text
+    if resp_type in ("json", "application/json"):
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = text
+    return {"response": data, "status": resp.status_code, "success": 200 <= resp.status_code < 300}
 
 
 def _ical_payload_limit_bytes(node_data: dict[str, Any]) -> int:
@@ -5943,11 +5984,12 @@ class LogicManager:
                     req_kwargs["extensions"] = request_extensions
                 last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
                 resp: httpx.Response | Any | None = None
+                resp_body: bytes | None = None
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     for request_url in request_urls:
                         try:
                             _mark_side_effect()
-                            resp = await client.request(method, request_url, **req_kwargs)
+                            resp, resp_body = await _send_api_client_request(client, method, request_url, **req_kwargs)
                             break
                         except httpx.RequestError as req_exc:
                             last_transport_error = req_exc
@@ -5956,23 +5998,7 @@ class LogicManager:
                             continue
                 if resp is None:
                     raise last_transport_error
-                resp_text = resp.text
-                if len(resp_text) > 1_000_000:
-                    resp_text = resp_text[:1_000_000]
-                if resp_type in ("json", "application/json"):
-                    try:
-                        resp_data: Any = resp.json()
-                    except ValueError:
-                        resp_data = resp_text
-                else:
-                    resp_data = resp_text
-                outputs[node.id].update(
-                    {
-                        "response": resp_data,
-                        "status": resp.status_code,
-                        "success": 200 <= resp.status_code < 300,
-                    },
-                )
+                outputs[node.id].update(_api_client_response_output(resp, resp_body, resp_type))
                 logger.info(
                     "Graph %s: API %s %s → %d",
                     graph_id[:8],
@@ -6444,11 +6470,12 @@ class LogicManager:
                         req_kwargs["extensions"] = request_extensions
                     last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
                     resp: httpx.Response | Any | None = None
+                    resp_body: bytes | None = None
                     async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                         for request_url in request_urls:
                             try:
                                 _mark_side_effect()
-                                resp = await client.request(method, request_url, **req_kwargs)
+                                resp, resp_body = await _send_api_client_request(client, method, request_url, **req_kwargs)
                                 break
                             except httpx.RequestError as req_exc:
                                 last_transport_error = req_exc
@@ -6457,23 +6484,7 @@ class LogicManager:
                                 continue
                     if resp is None:
                         raise last_transport_error
-                    resp_text = resp.text
-                    if len(resp_text) > 1_000_000:
-                        resp_text = resp_text[:1_000_000]
-                    if resp_type in ("json", "application/json"):
-                        try:
-                            resp_data: Any = resp.json()
-                        except ValueError:
-                            resp_data = resp_text
-                    else:
-                        resp_data = resp_text
-                    outputs[node.id].update(
-                        {
-                            "response": resp_data,
-                            "status": resp.status_code,
-                            "success": 200 <= resp.status_code < 300,
-                        },
-                    )
+                    outputs[node.id].update(_api_client_response_output(resp, resp_body, resp_type))
                     logger.info(
                         "Graph %s: API %s %s → %d",
                         graph_id[:8],

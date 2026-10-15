@@ -20,6 +20,7 @@ import pytest
 from obs.logic.executor import GraphExecutor, hems_clock
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
+from tests.unit._api_client_fakes import serve_via_request
 from tests.unit.conftest import edge, node
 
 CONSUMERS = [
@@ -500,6 +501,7 @@ async def test_an_api_call_on_a_trigger_output_runs_once_per_firing():
         client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
         client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        serve_via_request(client)
         for _ in range(4):
             await manager._execute_graph("g", "G", flow, {"read": {"value": -2000}})
     assert client.request.await_count == 1
