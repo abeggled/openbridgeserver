@@ -1925,7 +1925,7 @@ def test_execute_graph_reports_an_obsolete_run_that_acted() -> None:
             manager._execute_graph_impl = obsolete_impl  # type: ignore[method-assign]
             report: dict[str, bool] = {}
             assert await manager._execute_graph("graph", "Graph", flow, {}, obsolete_report=report) == {}
-            reported.append(report)
+            reported.append({key: value for key, value in report.items() if key != "run_tag"})
         assert await manager._execute_graph("graph", "Graph", flow, {}) == {}  # nobody asking
 
         assert reported == [{"obsolete": True, "acted": False}, {"obsolete": True, "acted": True}]
@@ -2949,7 +2949,8 @@ def test_a_reload_leaves_the_retry_pause_of_a_short_delay(monkeypatch: pytest.Mo
     monkeypatch.setattr("obs.logic.manager._TIMER_RETRY_DELAY_S", 1.0)
     manager = _manager()
     manager._graphs["graph"] = ("Graph", True, _delay_flow(uuid.uuid4(), 0))
-    state = _pending("timer_delay", in_s=0.9)  # re-armed for a retry
+    state = _pending("timer_delay", in_s=0.9)
+    state.retry_at = state.deadline  # re-armed for a retry
     manager._timers["graph"] = {"delay": state}
     manager._timer_tasks[("graph", "delay")] = MagicMock(done=MagicMock(return_value=False))
     deadline = state.deadline
@@ -2957,6 +2958,91 @@ def test_a_reload_leaves_the_retry_pause_of_a_short_delay(monkeypatch: pytest.Mo
     manager._resume_timers()
 
     assert state.deadline == deadline
+
+
+@pytest.mark.parametrize("duration_s", [0, 0.2])
+def test_a_save_shortening_a_pending_delay_below_the_retry_pause_applies_it(monkeypatch: pytest.MonkeyPatch, duration_s: float) -> None:
+    monkeypatch.setattr("obs.logic.manager._TIMER_RETRY_DELAY_S", 1.0)
+
+    async def exercise() -> None:
+        manager = _manager()
+        flow = _delay_flow(uuid.uuid4(), 3600)
+        manager._graphs["graph"] = ("Graph", True, flow)
+        manager._start_timer("graph", flow.nodes[1], 0)
+        task = manager._timer_tasks[("graph", "delay")]
+        started = monotonic()
+
+        flow.nodes[1].data["delay_s"] = duration_s
+        manager._resume_timers()
+        await asyncio.wait_for(task, 0.8)
+
+        assert manager._event_bus.publish.await_count == 1
+        assert monotonic() - started < 0.8
+
+    asyncio.run(exercise())
+
+
+def test_a_pending_delay_from_an_earlier_retry_gets_the_saved_duration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("obs.logic.manager._TIMER_RETRY_DELAY_S", 1.0)
+    manager = _manager()
+    manager._graphs["graph"] = ("Graph", True, _delay_flow(uuid.uuid4(), 0))
+    state = _pending("timer_delay", in_s=0.9)
+    state.retry_at = monotonic() - 5  # retried once; retriggered since
+    manager._timers["graph"] = {"delay": state}
+    manager._timer_tasks[("graph", "delay")] = MagicMock(done=MagicMock(return_value=False))
+
+    manager._resume_timers()
+
+    assert state.deadline <= monotonic()
+
+
+@pytest.mark.parametrize("acted", [False, True])
+def test_stop_saves_a_timer_whose_run_will_not_settle_as_due_unless_it_acted(monkeypatch: pytest.MonkeyPatch, acted: bool) -> None:
+    monkeypatch.setattr("obs.logic.manager._HEMS_STOP_TIMEOUT_S", 0.01)
+    monkeypatch.setattr("obs.logic.manager._TIMER_STOP_CUT_WAIT_S", 0.01)
+
+    async def exercise() -> None:
+        manager = _manager()
+        manager._graphs["graph"] = ("Graph", True, _delay_flow(uuid.uuid4()))
+        manager._timers["graph"] = {"delay": _pending("timer_delay")}
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def stubborn(*_args, obsolete_report, **_kwargs) -> dict:
+            # Like a run waiting on a Python-script worker thread: it ignores cancellation.
+            obsolete_report["run_tag"] = tag = object()
+            if acted:
+                manager._hems_acted_runs.add(tag)
+            started.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+            return {"delay": {}}
+
+        manager._execute_graph = stubborn
+        manager._spawn_timer("graph", "delay", "timer_delay")
+        await started.wait()
+
+        await asyncio.wait_for(manager.stop(), 1)
+
+        saved = json.loads(manager._db.execute_and_commit.await_args.args[1][0])["state"]["delay"]
+        assert ("timer_deadline" in saved) is not acted
+        release.set()
+        await asyncio.gather(*manager._timer_runs.values(), return_exceptions=True)
+        assert manager._timer_cut_hooks == {}
+
+    asyncio.run(exercise())
+
+
+def test_a_timer_run_stopped_before_it_started_stays_due() -> None:
+    manager = _manager()
+    state = _TimerState("timer_delay")
+    manager._timers["graph"] = {"delay": state}
+
+    manager._timer_cut_unless_acted({}, lambda: manager._timer_cut("graph", state, "deadline"))
+
+    assert state.deadline is not None
 
 
 def test_the_debug_view_shows_the_trigger_level_of_a_timer() -> None:

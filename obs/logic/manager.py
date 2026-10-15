@@ -90,6 +90,8 @@ class _TimerState:
     depth: int = 0
     # Consecutive runs that failed before they acted (see _timer_retry_due).
     errors: int = 0
+    # The deadline a failed delay run was re-armed with: a save keeps that pause.
+    retry_at: float | None = None
     # Set when the deadline moves, so a task sleeping on it re-reads it.
     wake: asyncio.Event = field(default_factory=asyncio.Event, compare=False, repr=False)
 
@@ -196,6 +198,8 @@ _MAX_SEQUENCE_REPEAT_COUNT = 10_000
 _TIMER_RETRY_DELAY_S = 1.0
 # How long stop() waits for the runs it cut short to settle.
 _TIMER_STOP_CUT_WAIT_S = 1.0
+# The run tag of a timer run that has not started yet: in no acted set.
+_NOT_STARTED = object()
 # A timer run that fails before it acts is tried this often in all.
 _TIMER_MAX_ERROR_ATTEMPTS = 3
 # A delay or pulse at least this long starts a new logic cascade when it fires or ends.
@@ -1809,6 +1813,8 @@ class LogicManager:
         self._timers_stopping = False
         self._timer_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
         self._timer_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
+        # A timer run in flight -> marks its timer due if stop() gives up on it before it acted.
+        self._timer_cut_hooks: dict[asyncio.Future, Callable[[], None]] = {}  # type: ignore[type-arg]
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {
             "timezone": "Europe/Zurich",
@@ -1863,6 +1869,11 @@ class LogicManager:
                 # due. Bounded too: a run waiting on a script worker thread
                 # cannot be cancelled right away.
                 await asyncio.wait(pending, timeout=_TIMER_STOP_CUT_WAIT_S)
+                # Still not settled (a script worker thread): it can no longer
+                # publish, so one that had not acted yet stays due in what is saved.
+                for run in pending:
+                    if not run.done() and (cut := self._timer_cut_hooks.get(run)) is not None:
+                        cut()
         self._cancel_sequence_tasks()
         # Pending timers resume after the restart only from what is saved.
         await self._persist_dirty_timers()
@@ -2377,8 +2388,9 @@ class LogicManager:
                         del nodes[node_id]  # disabling drops a delay — and its level, so reactivation re-arms it
                         self._timer_dirty.add(graph_id)
                     continue  # a pulse's task finds the sheet inactive and keeps it for reactivation
-                # (At least the retry pause, which a re-armed timer may be waiting out.)
-                cap = monotonic() + max(self._timer_duration(nodes_by_id[node_id]), _TIMER_RETRY_DELAY_S)
+                # A delay re-armed for a retry keeps that pause; any other deadline gets the saved duration.
+                retrying = state.retry_at is not None and state.deadline == state.retry_at
+                cap = monotonic() + max(self._timer_duration(nodes_by_id[node_id]), _TIMER_RETRY_DELAY_S if retrying else 0.0)
                 if state.deadline is not None and state.deadline > cap:
                     # A save shortened the duration: it applies to a pending timer too.
                     state.deadline = cap
@@ -2428,7 +2440,7 @@ class LogicManager:
         if not any(node.id == node_id and node.type == node_type for node in flow.nodes):
             return "gone"
         self._timer_dirty.add(graph_id)  # the run persists what its timer changed before it
-        report: dict[str, bool] = {}
+        report: dict[str, Any] = {}
         run = asyncio.ensure_future(self._execute_graph(graph_id, name, flow, overrides, logic_depth=logic_depth, obsolete_report=report))
         self._timer_runs[key] = run
         # A run already started is never cut short: cancelling the timer (a
@@ -2439,6 +2451,7 @@ class LogicManager:
         abandoned = False
 
         def settled(done: asyncio.Future) -> None:  # type: ignore[type-arg]
+            self._timer_cut_hooks.pop(done, None)
             # A run cut short that had not acted yet, or one that failed after
             # its task was cancelled (nobody is left to retry it), stays due.
             if on_cut is None:
@@ -2448,6 +2461,8 @@ class LogicManager:
             if cut_before_acting or abandoned_and_failed:
                 on_cut()
 
+        if on_cut is not None:
+            self._timer_cut_hooks[run] = partial(self._timer_cut_unless_acted, report, on_cut)
         run.add_done_callback(settled)
         try:
             await asyncio.wait({run})
@@ -2458,8 +2473,13 @@ class LogicManager:
             raise
         return self._timer_outcome(run, report)
 
+    def _timer_cut_unless_acted(self, report: dict[str, Any], on_cut: Callable[[], None]) -> None:
+        """stop() gave up on a run in flight: it stays due unless it acted already."""
+        if report.get("run_tag", _NOT_STARTED) not in self._hems_acted_runs:
+            on_cut()
+
     @staticmethod
-    def _timer_outcome(run: asyncio.Future, report: dict[str, bool]) -> str:  # type: ignore[type-arg]
+    def _timer_outcome(run: asyncio.Future, report: dict[str, Any]) -> str:  # type: ignore[type-arg]
         if run.cancelled() or run.exception() is not None or run.result():
             return "ran"  # done — or raised, possibly after it acted: not repeated
         if report.get("obsolete"):
@@ -2564,7 +2584,7 @@ class LogicManager:
                     await self._drop_timer(graph_id, node_id, state)
                     return
                 elif self._timer_retry_due(graph_id, node_id, state, outcome) and state.deadline is None:
-                    state.deadline = monotonic() + _TIMER_RETRY_DELAY_S  # pending again (against the saved sheet)
+                    state.deadline = state.retry_at = monotonic() + _TIMER_RETRY_DELAY_S  # pending again (against the saved sheet)
                 # A retrigger during the run set a new deadline: the loop fires for it too.
         finally:
             self._release_timer_slot((graph_id, node_id))
@@ -3774,19 +3794,22 @@ class LogicManager:
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
         *,
-        obsolete_report: dict[str, bool] | None = None,
+        obsolete_report: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run a sheet; {} when a save made the run obsolete (or it failed).
 
         *obsolete_report* learns whether the run was obsolete ("obsolete") and
         whether it had acted outside the graph before that or before it was
         cancelled ("acted": an API call, a packet, a notification) — repeating
-        it would repeat that action.
+        it would repeat that action. While the run is in flight, its "run_tag"
+        is in _hems_acted_runs once it acted.
         """
         # A run a save makes obsolete publishes no write; a hems_surplus block
         # must not keep what it decided in it (a fired trigger would be locked
         # out without its pulse ever reaching the actuator).
         run_tag = next(self._hems_run_ids)  # an int: survives the deep copies of replay passes
+        if obsolete_report is not None:
+            obsolete_report["run_tag"] = run_tag
         try:
             result = await self._execute_graph_impl(
                 graph_id,
