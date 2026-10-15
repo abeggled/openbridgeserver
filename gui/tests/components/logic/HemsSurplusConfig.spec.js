@@ -16,8 +16,8 @@ import HemsSurplusConfig from '@/components/logic/HemsSurplusConfig.vue'
 
 const C = (id, extra = {}) => ({ id, name: id.toUpperCase(), active: true, mode: 'percent', power_w: 1000, ...extra })
 
-function mountCfg(data = {}, description = 'Beschreibung') {
-  return mount(HemsSurplusConfig, { props: { data, description } })
+function mountCfg(data = {}, description = 'Beschreibung', outputs = undefined) {
+  return mount(HemsSurplusConfig, { props: { data, description, ...(outputs ? { outputs } : {}) } })
 }
 
 function lastData(w) {
@@ -317,5 +317,42 @@ describe('HemsSurplusConfig — fields per control type', () => {
   it('shows the age-check hint only where it applies', () => {
     const w = mountCfg({})
     expect(w.text()).toContain('0 = keine Alterungsprüfung')
+  })
+})
+
+describe('HemsSurplusConfig — consumer release (issue #1359)', () => {
+  it('is released by default and locks on a fault by default', () => {
+    const w = mountCfg({ consumers: [C('a')] })
+    expect(w.find('[data-testid="hems-consumer-enable_default-0"]').element.checked).toBe(true)
+    expect(w.find('[data-testid="hems-consumer-enable_fault-0"]').element.value).toBe('lock')
+  })
+
+  it('shows a stored default and fault handling like the engine reads them', () => {
+    const w = mountCfg({ consumers: [C('a', { enable_default: 'false', enable_fault: ' Default ' }), C('b', { enable_fault: 'weird' })] })
+    expect(w.find('[data-testid="hems-consumer-enable_default-0"]').element.checked).toBe(false)
+    expect(w.find('[data-testid="hems-consumer-enable_fault-0"]').element.value).toBe('default')
+    expect(w.find('[data-testid="hems-consumer-enable_fault-1"]').element.value).toBe('lock')
+  })
+
+  it('saves the default release and the fault handling', async () => {
+    const w = mountCfg({ consumers: [C('a'), C('b')] })
+    const box = w.find('[data-testid="hems-consumer-enable_default-1"]')
+    box.element.checked = false
+    await box.trigger('change')
+    expect(lastConsumers(w)[1].enable_default).toBe(false)
+    await setValue(w, 'hems-consumer-enable_fault-0', 'default')
+    expect(lastConsumers(w)[0].enable_fault).toBe('default')
+  })
+
+  it('shows the live release state of the last run, and nothing without one', () => {
+    const consumers = [C('a'), C('b'), C('c', { active: false })]
+    const w = mountCfg({ consumers }, '', { c_a_status: 'blocked', c_b_status: 'active', c_c_status: 'inactive' })
+    expect(w.find('[data-testid="hems-consumer-release-state-0"]').text()).toBe('Gesperrt')
+    expect(w.find('[data-testid="hems-consumer-release-state-1"]').text()).toBe('Freigegeben')
+    expect(w.find('[data-testid="hems-consumer-release-state-2"]').exists()).toBe(false)
+    expect(mountCfg({ consumers }).find('[data-testid="hems-consumer-release-state-0"]').exists()).toBe(false)
+    // in the safe state an inactive consumer reports 'safe': still no badge
+    const safe = mountCfg({ consumers }, '', { c_c_status: 'safe' })
+    expect(safe.find('[data-testid="hems-consumer-release-state-2"]').exists()).toBe(false)
   })
 })

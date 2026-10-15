@@ -29,7 +29,7 @@ export function hemsGridMode(data) {
 }
 // Mirrors _RESERVED_ID_ENDINGS in hems_surplus.py: an id ending in a port suffix
 // would take another consumer's port.
-const RESERVED_ID_ENDINGS = ['_status', '_power', '_max', '_reset']
+const RESERVED_ID_ENDINGS = ['_status', '_power', '_max', '_reset', '_enable']
 
 /**
  * The consumer list exactly as the engine reads it (obs/logic/hems_surplus.py
@@ -106,6 +106,8 @@ export function hemsInputPorts(data, t) {
   )
   hemsConsumers(data?.consumers).forEach((c, i) => {
     const name = hemsConsumerName(c, i, t)
+    // Every consumer, whatever its control type, has its own release (issue #1359).
+    inputs.push({ id: `c_${c.id}_enable`, label: `${name}: ${t('logic.portLabels.hems.release')}` })
     if (c.mode === 'trigger') {
       inputs.push({ id: `c_${c.id}_reset`, label: `${name}: ${t('logic.portLabels.hems.reset')}` })
       return
@@ -114,6 +116,20 @@ export function hemsInputPorts(data, t) {
     if (c.power_source === 'input') inputs.push({ id: `c_${c.id}_max_power`, label: `${name}: ${t('logic.portLabels.hems.maxPower')}` })
   })
   return inputs
+}
+
+/**
+ * The release state a consumer had in the last run, read from its status
+ * output (`blocked` = locked by its release input or default).
+ *
+ * @param {Record<string, unknown>|undefined} outputs  last-run outputs of the block
+ * @param {string} id  normalised consumer id
+ * @returns {'released'|'blocked'|null} null when the block has not run or the consumer is inactive
+ */
+export function hemsReleaseState(outputs, id) {
+  const status = outputs?.[`c_${id}_status`]
+  if (status === undefined || status === null || status === 'inactive') return null
+  return status === 'blocked' ? 'blocked' : 'released'
 }
 
 /**
