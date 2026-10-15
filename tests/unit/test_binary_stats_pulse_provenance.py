@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.unit._api_client_fakes import serve_via_request
 from tests.unit.conftest import edge, node
 from tests.unit.test_host_check import _flow, _make_manager, _MockResponse
 
@@ -494,6 +495,7 @@ async def test_replay_probe_reads_the_real_async_output_and_holds_the_filter():
         client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
         client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        serve_via_request(client)
         out = await manager._execute_graph("g", "t", flow, {})
     assert out["cf"] == {"out": None, "changed": False}
     assert "cf" not in manager._hysteresis.get("g", {})
