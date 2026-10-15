@@ -11,6 +11,7 @@ import {
 import { history } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { useFormatStore } from '@/stores/format'
+import { useThemeStore } from '@/stores/theme'
 import type { DataPointValue } from '@/types'
 import type { WriteContext } from '@/api/client'
 import { aggregateBucketEndTimestamp, sortedUniqueTimestamps, weightedAverage, weightedValuesByTimestamp } from './aggregation'
@@ -77,6 +78,14 @@ const hiddenSeries = ref<Set<string>>(new Set())
 // Achsen-, Tooltip- und Wertformatierung folgen dem konfigurierten
 // Regionalformat (Issue #1073); die Rohdaten bleiben locale-neutral.
 const format = useFormatStore()
+
+// Gitterlinien folgen dem Visu-Theme — das dunkle Grau des Dark-Mode wirkt auf
+// hellem Grund wie fast schwarze Linien (#1361). Achsenbeschriftungen (gray-500)
+// sind in beiden Modi lesbar.
+const theme = useThemeStore()
+function gridColor(): string {
+  return theme.isDark ? '#1f2937' : '#e5e7eb'
+}
 
 function fmtMs(ms: number): string {
   return format.fmtDateTime(ms, {
@@ -151,7 +160,7 @@ function initChart() {
           ? {
               type:  'category',
               ticks: { color: '#6b7280', maxTicksLimit: 8, maxRotation: 0 },
-              grid:  { color: '#1f2937' },
+              grid:  { color: gridColor() },
             }
           : {
               type:  'linear',
@@ -161,13 +170,13 @@ function initChart() {
                 maxRotation:   0,
                 callback: (ms) => ms == null ? '' : fmtMs(Number(ms)),
               },
-              grid: { color: '#1f2937' },
+              grid: { color: gridColor() },
             },
         y: {
           type:     'linear',
           position: 'left',
           ticks:    { color: '#6b7280' },
-          grid:     { color: '#1f2937' },
+          grid:     { color: gridColor() },
           title:    { display: false, text: '', color: '#6b7280', font: { size: 11 } },
         },
         y1: {
@@ -175,7 +184,7 @@ function initChart() {
           position: 'right',
           display:  false,
           ticks:    { color: '#6b7280' },
-          grid:     { drawOnChartArea: false, color: '#1f2937' },
+          grid:     { drawOnChartArea: false, color: gridColor() },
           title:    { display: false, text: '', color: '#6b7280', font: { size: 11 } },
         },
       },
@@ -359,6 +368,14 @@ watch(selectedTimeRange, loadData)
 watch(() => format.regionFormat, (regionFormat) => {
   if (!chart) return
   chart.options.locale = regionFormat
+  chart.update()
+})
+
+watch(() => theme.isDark, () => {
+  if (!chart) return
+  for (const scale of Object.values(chart.options.scales ?? {})) {
+    (scale as { grid: { color: string } }).grid.color = gridColor()
+  }
   chart.update()
 })
 

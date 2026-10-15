@@ -12,6 +12,7 @@ import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFormatStore } from '@/stores/format'
+import { useThemeStore } from '@/stores/theme'
 import { history } from '@/api/client'
 
 const chartConfigs: any[] = []
@@ -50,6 +51,10 @@ vi.mock('@/composables/useWebSocket', () => ({
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 let wrapper: VueWrapper | null = null
+
+// Der Theme-Store fiele ohne gespeichertes Theme auf matchMedia zurück, das jsdom nicht kennt
+beforeEach(() => { localStorage.setItem('visu_theme', 'dark') })
+afterEach(() => { localStorage.clear() })
 
 async function mountChart(config: Record<string, unknown> = { label: 'Verlauf' }) {
   const mod = await import('./Widget.vue')
@@ -280,5 +285,58 @@ describe('Chart Widget.vue — tooltip swatches and legend (#1361)', () => {
     await flushPromises()
     const fresh = chartInstances[chartInstances.length - 1]
     expect(fresh.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+})
+
+describe('Chart Widget.vue — grid colour follows the Visu theme (#1361)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  const gridColors = (scales: any) => [scales.x.grid.color, scales.y.grid.color, scales.y1.grid.color]
+
+  it('uses the dark grid colour in dark mode', async () => {
+    const config = await mountChart()
+
+    expect(gridColors(config.options.scales)).toEqual(['#1f2937', '#1f2937', '#1f2937'])
+  })
+
+  it('uses a light grid colour in light mode', async () => {
+    localStorage.setItem('visu_theme', 'light')
+    const config = await mountChart()
+
+    expect(gridColors(config.options.scales)).toEqual(['#e5e7eb', '#e5e7eb', '#e5e7eb'])
+  })
+
+  it('recolours the grid when the theme is toggled', async () => {
+    const config = await mountChart()
+    const chart = chartInstances[chartInstances.length - 1]
+    chart.update.mockClear()
+
+    useThemeStore().toggle()
+    await nextTick()
+
+    expect(gridColors(config.options.scales)).toEqual(['#e5e7eb', '#e5e7eb', '#e5e7eb'])
+    expect(chart.update).toHaveBeenCalled()
+  })
+
+  it('ignores a theme toggle in the editor, where no chart is drawn', async () => {
+    const mod = await import('./Widget.vue')
+    wrapper = mount(mod.default, {
+      props: { config: { label: 'Verlauf' }, datapointId: 'dp-1', value: null, editorMode: true },
+      global: { mocks: { $t: (key: string) => key } },
+    })
+
+    useThemeStore().toggle()
+    await nextTick()
+
+    expect(chartInstances).toEqual([])
   })
 })
