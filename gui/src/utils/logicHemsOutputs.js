@@ -29,7 +29,7 @@ export function hemsGridMode(data) {
 }
 // Mirrors _RESERVED_ID_ENDINGS in hems_surplus.py: an id ending in a port suffix
 // would take another consumer's port.
-const RESERVED_ID_ENDINGS = ['_status', '_power', '_max', '_reset', '_enable']
+const RESERVED_ID_ENDINGS = ['_status', '_power', '_max', '_reset']
 
 /**
  * The consumer list exactly as the engine reads it (obs/logic/hems_surplus.py

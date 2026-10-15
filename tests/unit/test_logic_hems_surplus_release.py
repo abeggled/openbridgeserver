@@ -348,6 +348,21 @@ def test_a_held_release_wakes_the_block_only_when_its_expiry_changes_something(c
     assert (sim.state["next_wake"] == pytest.approx(expiry)) is wakes
 
 
+@pytest.mark.parametrize(
+    ("consumer", "wakes"),
+    [
+        (pct("a", enable_fault="default", enable_default=True), True),  # expiry releases: wake
+        (pct("a", enable_fault="default", enable_default=False), False),  # stays locked
+        (pct("a"), False),  # the fault locks: stays locked
+    ],
+)
+def test_a_held_lock_wakes_the_block_only_when_its_expiry_releases(consumer, wakes):
+    sim = Sim([consumer], interval_s=600, max_age_s=30)
+    sim.tick(grid=-5000, c_a_enable=False)
+    expiry = sim.now + 30 + hs._STALE_WAKE_MARGIN_S
+    assert (sim.state["next_wake"] == pytest.approx(expiry)) is wakes
+
+
 def test_an_inactive_consumer_does_not_log_a_release_fault(caplog):
     sim = Sim([pct("a", active=False)])
     with caplog.at_level(logging.WARNING, logger="obs.logic.hems_surplus"):
@@ -389,3 +404,40 @@ def test_a_mode_change_keeps_an_ongoing_lock():
     out = sim.tick(grid=-5000, c_a_enable=False)
     assert (out["c_a"], out["c_a_status"]) == (0, "blocked")
     assert sim.cstate("a")["blocked"] is True
+
+
+def test_an_expired_lock_falls_back_to_a_releasing_default_at_its_expiry():
+    sim = Sim([pct("a", on_delay_s=0, enable_fault="default")], interval_s=600, max_age_s=30)
+    assert sim.tick(grid=-5000, c_a_enable=False)["c_a_status"] == "blocked"
+    assert sim.state["next_wake"] == pytest.approx(sim.now + 30 + hs._STALE_WAKE_MARGIN_S)
+    out = sim.tick(advance=30 + hs._STALE_WAKE_MARGIN_S, grid=-5000, c_a_enable=None)
+    assert out["c_a_status"] == "off"  # released; it joins at the next cycle
+    assert sim.cstate("a")["blocked"] is False
+
+
+def test_a_release_held_from_a_removed_wire_is_not_used_by_a_wire_added_later():
+    sim = Sim([pct("a", on_delay_s=0, enable_default=False)])
+    sim.tick(grid=-5000, c_a_enable=True)
+    assert sim.cstate("a")["blocked"] is False
+    assert sim.tick(advance=1, grid=-5000)["c_a_status"] == "blocked"  # unwired: the default locks
+    assert "c_a_enable" not in sim.state["held"]
+    sim.tick(advance=1, grid=-5000, c_a_enable=None)  # rewired to a source without a value yet
+    assert sim.cstate("a")["blocked"] is True
+
+
+def test_a_stored_id_ending_in_enable_keeps_its_ports_beside_the_consumer_it_names():
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                {
+                    "id": "h",
+                    "type": "hems_surplus",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"consumers": [onoff("boiler", power_w=1000, on_delay_s=0), onoff("boiler_enable", power_w=1000, on_delay_s=0)]},
+                }
+            ]
+        }
+    )
+    out = GraphExecutor(flow, {}).execute(input_overrides={"h": {"grid": -5000, "c_boiler_enable": False}})["h"]
+    assert (out["c_boiler"], out["c_boiler_status"]) == (False, "blocked")
+    assert (out["c_boiler_enable"], out["c_boiler_enable_status"]) == (True, "active")

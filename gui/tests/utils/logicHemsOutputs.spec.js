@@ -51,7 +51,7 @@ describe('hemsConsumers', () => {
 
   it('moves an id ending in a port suffix off another consumer\'s ports, like the engine', () => {
     const ids = hemsConsumers([{ id: 'a' }, { id: 'a_status' }, { id: 'a_max' }, { id: 'x_power' }, { id: 'r_reset' }, { id: 'e_enable' }, { id: 'a_maxi' }]).map(c => c.id)
-    expect(ids).toEqual(['a', 'a_status_', 'a_max_', 'x_power_', 'r_reset_', 'e_enable_', 'a_maxi'])
+    expect(ids).toEqual(['a', 'a_status_', 'a_max_', 'x_power_', 'r_reset_', 'e_enable', 'a_maxi'])
   })
 
   it('keeps the other fields and reads JSON storage', () => {

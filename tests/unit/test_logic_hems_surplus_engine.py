@@ -1207,7 +1207,7 @@ def test_non_text_ids_are_spelled_like_the_editor_spells_them(raw, expected):
         ("a_max", "a_max_"),
         ("x_power", "x_power_"),
         ("r_reset", "r_reset_"),
-        ("e_enable", "e_enable_"),
+        ("e_enable", "e_enable"),  # an input suffix matching no other input port
         ("a_maxi", "a_maxi"),
     ],
 )

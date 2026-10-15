@@ -77,7 +77,9 @@ _STALE_WAKE_MARGIN_S = 0.05
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_]")
 # Port names are c_<id> plus these suffixes ("_max" because c_<id>_max + "_power"
 # is the max-power port of <id>); an id ending in one would take another's port.
-_RESERVED_ID_ENDINGS = ("_status", "_power", "_max", "_reset", "_enable")
+# "_enable" is not among them: c_<id>_enable is an input and matches no other
+# input port, so a stored id like "boiler_enable" keeps its ports.
+_RESERVED_ID_ENDINGS = ("_status", "_power", "_max", "_reset")
 
 
 # ── Configuration parsing ────────────────────────────────────────────────
@@ -382,6 +384,8 @@ def _released(consumer: dict[str, Any], state: dict[str, Any], inputs: dict[str,
     """
     key = f"c_{consumer['id']}_enable"
     if key not in inputs:
+        # A value held from a removed wire must not stand in for a wire added later.
+        state.get("held", {}).pop(key, None)
         return consumer["enable_default"], False
     value = _release_value(_held(state, key, inputs[key], now, hold_s))
     if value is not None:
@@ -567,17 +571,18 @@ def _next_wake(
         # one was started by an event rather than by the scheduler.
         wakes.append(state["last_cycle"] + interval_s(data))
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
-    # A released consumer whose wired release stopped arriving is locked once
-    # the held value expires — at that moment, not at the next cycle. Not
-    # needed where the expiry changes nothing: inactive, already locked, or
-    # falling back to a default that releases.
+    # A wired release that stopped arriving falls back to its fault behaviour
+    # once the held value expires — at that moment, not at the next cycle. Only
+    # needed where that changes something: an active consumer whose fallback
+    # (lock, or the configured default) differs from its current release.
     hold_s = _hold_s(data)
     held = state.get("held", {})
     for consumer in consumers:
         entry = held.get(f"c_{consumer['id']}_enable")
-        if entry is None or not consumer["active"] or states[consumer["id"]]["blocked"] or entry[1] + hold_s < now:
+        if entry is None or not consumer["active"] or entry[1] + hold_s < now:
             continue
-        if consumer["enable_fault"] == "lock" or not consumer["enable_default"]:
+        fallback = consumer["enable_fault"] == "default" and consumer["enable_default"]
+        if fallback == states[consumer["id"]]["blocked"]:
             wakes.append(entry[1] + hold_s + _STALE_WAKE_MARGIN_S)
     if max_age_s > 0:
         # An input is stale once it is strictly older than max_age_s, so wake just
