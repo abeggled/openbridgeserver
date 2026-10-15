@@ -6,7 +6,12 @@ export interface SeriesDef {
   axis: 'y' | 'y1'
 }
 
-export const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
+// Auf dunklem Hintergrund gut unterscheidbar; die letzten vier erweitern die
+// ursprünglichen acht, damit sich Farben erst ab der 13. Serie wiederholen (#1361).
+export const COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316',
+  '#84cc16', '#facc15', '#d1d5db', '#b45309',
+]
 
 interface ExtraSeriesConfig {
   dp_id?: string

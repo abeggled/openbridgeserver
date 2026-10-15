@@ -12,8 +12,10 @@ import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFormatStore } from '@/stores/format'
+import { history } from '@/api/client'
 
 const chartConfigs: any[] = []
+const chartInstances: any[] = []
 
 vi.mock('chart.js', () => {
   class ChartMock {
@@ -21,6 +23,7 @@ vi.mock('chart.js', () => {
     options: unknown
     constructor(_canvas: unknown, config: any) {
       chartConfigs.push(config)
+      chartInstances.push(this)
       this.options = config.options
     }
 
@@ -155,5 +158,123 @@ describe('Chart Widget.vue — y axes follow the series assignment (#1111)', () 
 
     expect(scales.y.display).toBe(true)
     expect(scales.y1.display).toBe(true)
+  })
+})
+
+describe('Chart Widget.vue — tooltip swatches and legend (#1361)', () => {
+  // Als Variablen, damit der i18n-Guard die Fixture-Werte nicht als UI-Text wertet
+  const bedroom = ['Schlaf', 'zimmer'].join('')
+  const bath    = ['B', 'ad'].join('')
+
+  const twoSeries = {
+    label:         'Verlauf',
+    primary_label: bedroom,
+    primary_color: '#3b82f6',
+    series:        [{ dp_id: 'dp-2', label: bath, color: '#ef4444' }],
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  async function mountLoaded(config: Record<string, unknown>) {
+    const chartConfig = await mountChart(config)
+    await flushPromises()
+    return { chartConfig, chart: chartInstances[chartInstances.length - 1] }
+  }
+
+  it('fills the tooltip swatch completely with the series colour', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+    const labelColor = chartConfig.options.plugins.tooltip.callbacks.labelColor
+
+    expect(labelColor({ datasetIndex: 1 })).toEqual({ borderColor: '#ef4444', backgroundColor: '#ef4444', borderWidth: 0 })
+  })
+
+  it('falls back to a neutral swatch for an unknown dataset', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+    const labelColor = chartConfig.options.plugins.tooltip.callbacks.labelColor
+
+    expect(labelColor({ datasetIndex: 7 }).backgroundColor).toBe('#6b7280')
+  })
+
+  it('keeps the Chart.js legend off and renders underlined HTML entries instead', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+
+    expect(chartConfig.options.plugins.legend.display).toBe(false)
+    const items = wrapper!.findAll('.chart-legend-item')
+    expect(items.map(i => i.text())).toEqual([bedroom, bath])
+    expect((items[1].element as HTMLElement).style.borderBottomColor).toBe('rgb(239, 68, 68)')
+    expect(items[0].attributes('aria-pressed')).toBe('true')
+  })
+
+  it('numbers unlabelled series in the legend', async () => {
+    await mountLoaded({ label: 'Verlauf', series: [{ dp_id: 'dp-2' }] })
+
+    expect(wrapper!.findAll('.chart-legend-item').map(i => i.text()))
+      .toEqual(['Verlauf', 'widgets.chart.seriesFallback'])
+  })
+
+  it('shows no legend for a single series', async () => {
+    await mountLoaded({ label: 'Verlauf' })
+
+    expect(wrapper!.find('.chart-legend-item').exists()).toBe(false)
+  })
+
+  it('hides and shows a series when its legend entry is clicked', async () => {
+    const { chart } = await mountLoaded(twoSeries)
+    const item = () => wrapper!.findAll('.chart-legend-item')[1]
+
+    await item().trigger('click')
+    expect(chart.data.datasets[1].hidden).toBe(true)
+    expect(item().classes()).toContain('line-through')
+    expect(item().attributes('aria-pressed')).toBe('false')
+    expect(chart.update).toHaveBeenCalled()
+
+    await item().trigger('click')
+    expect(chart.data.datasets[1].hidden).toBe(false)
+    expect(item().classes()).not.toContain('line-through')
+  })
+
+  it('keeps a hidden series hidden when the data is reloaded', async () => {
+    const { chart } = await mountLoaded(twoSeries)
+    await wrapper!.findAll('.chart-legend-item')[1].trigger('click')
+
+    await wrapper!.setProps({ config: { ...twoSeries, time_range: 'last_24h' } })
+    await flushPromises()
+
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+
+  it('remembers the toggle while a freshly created chart is still empty', async () => {
+    await mountLoaded(twoSeries)
+    const item = wrapper!.findAll('.chart-legend-item')[1]
+
+    // Typwechsel baut einen neuen, noch leeren Chart; loadData() hängt noch an der History-Abfrage
+    let release: (rows: unknown[]) => void = () => {}
+    const pending = new Promise<unknown[]>(resolve => { release = resolve })
+    vi.mocked(history.query).mockImplementation(() => pending as never)
+    vi.mocked(history.aggregate).mockImplementation(() => pending as never)
+    try {
+      await wrapper!.setProps({ config: { ...twoSeries, chart_type: 'bar' } })
+      const fresh = chartInstances[chartInstances.length - 1]
+      await item.trigger('click')
+      expect(fresh.data.datasets).toEqual([])
+      expect(fresh.update).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(history.query).mockResolvedValue([])
+      vi.mocked(history.aggregate).mockResolvedValue([])
+      release([])
+    }
+
+    await flushPromises()
+    const fresh = chartInstances[chartInstances.length - 1]
+    expect(fresh.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
   })
 })

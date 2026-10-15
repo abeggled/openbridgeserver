@@ -66,6 +66,14 @@ let wsOff:        (() => void) | null = null
 let reloadTimer:  ReturnType<typeof setTimeout> | null = null
 const seriesUnits = ref<string[]>([])
 
+// Eigene HTML-Legende statt der Chart.js-Legende: Serien werden durch eine
+// farbige Unterstreichung statt eines Kästchens gekennzeichnet (#1361).
+interface LegendItem { id: string; label: string; color: string }
+const legendItems = ref<LegendItem[]>([])
+// Über Serien-ID statt Dataset-Index gemerkt, damit ausgeblendete Serien das
+// periodische Neuladen (neue Dataset-Objekte) überstehen.
+const hiddenSeries = ref<Set<string>>(new Set())
+
 // Achsen-, Tooltip- und Wertformatierung folgen dem konfigurierten
 // Regionalformat (Issue #1073); die Rohdaten bleiben locale-neutral.
 const format = useFormatStore()
@@ -120,6 +128,12 @@ function initChart() {
             title: (items) => {
               if (chartType.value === 'bar') return items[0]?.label ?? ''
               return items[0]?.parsed.x != null ? fmtMs(items[0].parsed.x) : ''
+            },
+            // Kästchen vollflächig in der Serienfarbe — Chart.js nähme sonst den
+            // fast transparenten Flächen-Hintergrund der Linie (#1361)
+            labelColor: (ctx) => {
+              const color = legendItems.value[ctx.datasetIndex]?.color ?? '#6b7280'
+              return { borderColor: color, backgroundColor: color, borderWidth: 0 }
             },
             label: (ctx) => {
               const v    = ctx.parsed.y
@@ -205,6 +219,10 @@ async function loadData() {
   const hasLeft     = defs.some(s => s.axis === 'y')
   const hasRight    = defs.some(s => s.axis === 'y1')
   const isBar       = chartType.value === 'bar'
+  const labels      = defs.map((s, i) => s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''))
+  const hidden      = hiddenSeries.value
+
+  legendItems.value = defs.map((s, i) => ({ id: s.id, label: labels[i], color: s.color }))
 
   const leftUnit  = defs.reduce<string>((u, s, i) => u || (s.axis === 'y'  ? (seriesUnits.value[i] ?? '') : ''), '')
   const rightUnit = defs.reduce<string>((u, s, i) => u || (s.axis === 'y1' ? (seriesUnits.value[i] ?? '') : ''), '')
@@ -215,7 +233,8 @@ async function loadData() {
       chart.data.labels = bucketTimestamps.map(fmtMs)
       chart.data.datasets = defs.map((s, i) => ({
         yAxisID:         s.axis,
-        label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+        label:           labels[i],
+        hidden:          hidden.has(s.id),
         data:            weightedValuesByTimestamp(results[i], bucketTimestamps),
         backgroundColor: s.color + 'cc',
         borderWidth:     0,
@@ -241,7 +260,8 @@ async function loadData() {
         })
         return {
           yAxisID:         s.axis,
-          label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+          label:           labels[i],
+          hidden:          hidden.has(s.id),
           data,
           backgroundColor: s.color + 'cc',
           borderWidth:     0,
@@ -253,7 +273,8 @@ async function loadData() {
     chart.data.labels   = undefined
     chart.data.datasets = defs.map((s, i) => ({
       yAxisID:         s.axis,
-      label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+      label:           labels[i],
+      hidden:          hidden.has(s.id),
       data:            results[i].map(d => ({
         x: requestPlan.mode === 'aggregate'
           ? aggregateBucketEndTimestamp(d.ts, requestPlan.interval, fromDate.getTime(), toDate.getTime())
@@ -288,15 +309,20 @@ async function loadData() {
     yRight.title   = { display: !!rightUnit && hasRight, text: rightUnit, color: '#6b7280', font: { size: 11 } }
   }
 
-  // Legende
-  if (chart.options.plugins) {
-    (chart.options.plugins as Record<string, unknown>).legend = {
-      display: hasMultiple,
-      labels:  { color: '#9ca3af', boxWidth: 12, font: { size: 11 } },
-    }
-  }
-
   chart.update()
+}
+
+function toggleSeries(id: string, index: number) {
+  const next = new Set(hiddenSeries.value)
+  if (!next.delete(id)) next.add(id)
+  hiddenSeries.value = next
+
+  // Nach einem Wechsel des Diagrammtyps ist der neue Chart bis zum Ende von
+  // loadData() noch leer — dann greift der Zustand erst beim Befüllen.
+  const dataset = chart?.data.datasets[index]
+  if (!dataset) return
+  dataset.hidden = next.has(id)
+  chart!.update()
 }
 
 onMounted(() => {
@@ -357,6 +383,22 @@ onUnmounted(() => {
         <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ $t(p.label) }}</option>
       </select>
     </div>
+    <div
+      v-if="!editorMode && legendItems.length > 1"
+      class="flex flex-wrap justify-center gap-x-3 gap-y-0.5 mb-1 text-[11px] leading-4"
+    >
+      <button
+        v-for="(item, i) in legendItems"
+        :key="item.id"
+        type="button"
+        class="chart-legend-item text-gray-400 hover:text-gray-200"
+        :class="{ 'opacity-40 line-through': hiddenSeries.has(item.id) }"
+        :style="{ borderBottomColor: item.color }"
+        :aria-pressed="!hiddenSeries.has(item.id)"
+        :title="$t('widgets.chart.toggleSeries')"
+        @click="toggleSeries(item.id, i)"
+      >{{ item.label }}</button>
+    </div>
     <div class="flex-1 min-h-0">
       <canvas v-if="!editorMode" ref="canvas" />
       <div v-else class="flex items-center justify-center h-full text-gray-600 text-sm">
@@ -365,3 +407,10 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.chart-legend-item {
+  border-bottom-width: 2px;
+  border-bottom-style: solid;
+}
+</style>
