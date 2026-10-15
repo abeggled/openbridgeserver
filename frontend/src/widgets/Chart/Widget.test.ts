@@ -340,3 +340,38 @@ describe('Chart Widget.vue — grid colour follows the Visu theme (#1361)', () =
     expect(chartInstances).toEqual([])
   })
 })
+
+describe('Chart Widget.vue — closed while loading', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('drops the history response when the widget was unmounted meanwhile', async () => {
+    let release: (rows: unknown[]) => void = () => {}
+    const pending = new Promise<unknown[]>(resolve => { release = resolve })
+    vi.mocked(history.query).mockImplementation(() => pending as never)
+    vi.mocked(history.aggregate).mockImplementation(() => pending as never)
+    try {
+      await mountChart({ label: 'Verlauf' })
+      const chart = chartInstances[chartInstances.length - 1]
+      wrapper!.unmount()
+      wrapper = null
+
+      release([])
+      await flushPromises()
+
+      expect(chart.data.datasets).toEqual([])
+      expect(chart.update).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(history.query).mockResolvedValue([])
+      vi.mocked(history.aggregate).mockResolvedValue([])
+    }
+  })
+})

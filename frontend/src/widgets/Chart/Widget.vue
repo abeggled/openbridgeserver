@@ -223,6 +223,9 @@ async function loadData() {
     units = results.map(r => r[0]?.u ?? '')
   }
 
+  // Während der Abfrage geschlossen (z. B. Seitenwechsel): onUnmounted hat den Chart bereits entfernt
+  if (!chart) return
+
   seriesUnits.value = units
 
   const hasMultiple = defs.length > 1
