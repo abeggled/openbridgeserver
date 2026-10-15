@@ -61,9 +61,9 @@ Signal-Tor: lässt den Eingang durch, solange „Freigabe" true ist, und sperrt 
 ## Speicher {#logic-block-memory}
 
 Gibt den beim vorherigen Logiklauf gespeicherten Wert aus und speichert den aktuellen Eingangswert
-für den nächsten Lauf. Dieser Baustein ist die **explizite Tick-Grenze** für kontrollierte
-Rückkopplungen — ohne ihn würde ein rückgekoppelter Graph in einem einzigen Lauf in eine Endlosschleife
-laufen. Der **Reset**-Eingang setzt den gespeicherten Wert auf den konfigurierten Initialwert zurück.
+für den nächsten Lauf. Dieser Baustein ist eine **explizite Tick-Grenze** für kontrollierte
+Rückkopplungen (wie auch **Verzögerung** und **Impuls**) — ohne eine solche Grenze würde ein
+rückgekoppelter Graph in einem einzigen Lauf in eine Endlosschleife laufen. Der **Reset**-Eingang setzt den gespeicherten Wert auf den konfigurierten Initialwert zurück.
 „Zustand nach Neustart wiederherstellen" bestimmt, ob der Speicherinhalt einen Server-Neustart übersteht.
 
 ## Änderungsfilter {#logic-block-change-filter}

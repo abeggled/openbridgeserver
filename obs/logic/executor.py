@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfoNotFoundError
 from obs.datetime_format import DEFAULT_CUSTOM_FORMAT, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, format_datetime
 from obs.logic import hems_surplus
 from obs.logic.booleans import to_bool
-from obs.logic.graph_analysis import analyze_topology
+from obs.logic.graph_analysis import TICK_BOUNDARY_NODE_TYPES, analyze_topology
 from obs.logic.models import FlowData, LogicNode
 from obs.logic.variables import ResolvedTemplate, TimeSnapshot, make_obs_resolver, make_time_snapshot, resolve_template
 
@@ -290,6 +290,8 @@ class GraphExecutor:
         # Set by LogicManager per graph run: lets a run made obsolete undo what
         # it changed in a hems_surplus block (see _HEMS_UNDO).
         self.run_tag: object | None = None
+        # Set by LogicManager per graph run: the timer_pulse blocks that are on.
+        self.active_pulses: frozenset[str] = frozenset()
         self.app_config = app_config or {}
         self.input_capture = input_capture
         # Parsed/filtered calendar results are runtime-only and intentionally
@@ -483,6 +485,11 @@ class GraphExecutor:
                     # propagate: an unresolved "reset" would be read as
                     # "do not reset", which is a synthesized value.
                     unresolved = [item for item in unresolved if item[0] != "in"]
+                if node.type in TICK_BOUNDARY_NODE_TYPES:
+                    # A tick boundary (graph_analysis) may run before the blocks
+                    # feeding it, and its output never depends on them within
+                    # the run (a timer's level is read by the manager afterwards).
+                    unresolved = []
                 absorbed = False
                 if unresolved and node.type == "gate" and all(item[0] == "in" for item in unresolved):
                     enable = self._to_bool(inputs.get("enable"))
@@ -2545,9 +2552,18 @@ class GraphExecutor:
                     "custom": format_datetime(now, str(d.get("custom_format") or DEFAULT_CUSTOM_FORMAT), language),
                 }
 
-            case "timer_delay" | "timer_pulse":
-                # Async nodes — handled by manager, not executor
-                return {}
+            case "timer_delay":
+                # The manager owns the timer (issue #1166): it reads the trigger
+                # level once the run is complete (a tick boundary runs before
+                # its input) and fires the delayed run with the "_fire"
+                # override, which — like a cron tick — is the only run that
+                # carries a true "trigger".
+                return {"trigger": bool(inputs.get("_fire"))}
+
+            case "timer_pulse":
+                # The manager starts and ends the pulse and hands each run the
+                # pulses that are on, so every run in between sees the level.
+                return {"out": node.id in self.active_pulses}
 
             case "value_sequence":
                 # The manager owns the async task; execution only exposes the
