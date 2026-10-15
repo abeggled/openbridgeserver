@@ -305,7 +305,7 @@ describe('Chart Widget.vue — grid colour follows the Visu theme (#1361)', () =
   it('uses the dark grid colour in dark mode', async () => {
     const config = await mountChart()
 
-    expect(gridColors(config.options.scales)).toEqual(['#1f2937', '#1f2937', '#1f2937'])
+    expect(gridColors(config.options.scales)).toEqual(['#374151', '#374151', '#374151'])
   })
 
   it('uses a light grid colour in light mode', async () => {

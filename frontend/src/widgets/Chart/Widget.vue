@@ -79,12 +79,13 @@ const hiddenSeries = ref<Set<string>>(new Set())
 // Regionalformat (Issue #1073); die Rohdaten bleiben locale-neutral.
 const format = useFormatStore()
 
-// Gitterlinien folgen dem Visu-Theme — das dunkle Grau des Dark-Mode wirkt auf
-// hellem Grund wie fast schwarze Linien (#1361). Achsenbeschriftungen (gray-500)
-// sind in beiden Modi lesbar.
+// Gitterlinien folgen dem Visu-Theme und heben sich in beiden Modi leicht vom
+// Kartenhintergrund ab (dunkel #232d3b, hell #f3f4f6) — vorher lag das Dark-Grau
+// unter dem Hintergrund und wirkte im Light-Mode fast schwarz (#1361).
+// Achsenbeschriftungen (gray-500) sind in beiden Modi lesbar.
 const theme = useThemeStore()
 function gridColor(): string {
-  return theme.isDark ? '#1f2937' : '#e5e7eb'
+  return theme.isDark ? '#374151' : '#e5e7eb'
 }
 
 function fmtMs(ms: number): string {
