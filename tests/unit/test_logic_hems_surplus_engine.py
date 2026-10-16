@@ -1201,7 +1201,15 @@ def test_non_text_ids_are_spelled_like_the_editor_spells_them(raw, expected):
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"), [("a_status", "a_status_"), ("a_max", "a_max_"), ("x_power", "x_power_"), ("r_reset", "r_reset_"), ("a_maxi", "a_maxi")]
+    ("raw", "expected"),
+    [
+        ("a_status", "a_status_"),
+        ("a_max", "a_max_"),
+        ("x_power", "x_power_"),
+        ("r_reset", "r_reset_"),
+        ("e_enable", "e_enable"),  # an input suffix matching no other input port
+        ("a_maxi", "a_maxi"),
+    ],
 )
 def test_an_id_ending_in_a_port_suffix_cannot_take_another_consumers_port(raw, expected):
     assert hs.load_consumers([{"id": "a"}, {"id": raw}])[1]["id"] == expected

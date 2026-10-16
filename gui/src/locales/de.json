@@ -2730,8 +2730,20 @@
             "after_drop": "Erst nach zwischenzeitlichem Unterschreiten des Schwellwerts",
             "reset_input": "Über den Reset-Eingang"
           },
-          "reserve_w": "Reservierte Leistung bei Auslösung (W)"
-        }
+          "reserve_w": "Reservierte Leistung bei Auslösung (W)",
+          "enable_default": "Freigegeben (Vorgabewert)",
+          "enable_defaultHint": "Gilt, solange der Eingang „Freigabe“ dieses Verbrauchers nicht verbunden ist, und bei der Fehlerbehandlung „Vorgabewert verwenden“.",
+          "enable_fault": "Freigabe fehlend, ungültig oder veraltet",
+          "enable_faultOptions": {
+            "lock": "Verbraucher sperren (sicher, empfohlen bei verbundenem Eingang)",
+            "default": "Vorgabewert verwenden"
+          }
+        },
+        "releaseState": {
+          "released": "Freigegeben",
+          "blocked": "Gesperrt"
+        },
+        "releaseStateHint": "Zustand der Freigabe im letzten Lauf (nur im Debug-Modus, live aktualisiert)"
       }
     },
     "portLabels": {
@@ -2809,7 +2821,8 @@
         "budget": "Leistungsbudget",
         "allocated": "Verteilte Leistung",
         "remaining": "Verbleibendes Budget",
-        "warning": "Warnung"
+        "warning": "Warnung",
+        "release": "Freigabe"
       }
     },
     "nodeDescriptions": {
@@ -2862,7 +2875,7 @@
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
       "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
       "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung.",
-      "hems_surplus": "HEMS Lite: verteilt den am Netzanschlusspunkt gemessenen Überschuss nach Priorität auf mehrere Verbraucher — stufenlos (0–100 %), Ein/Aus oder als einmaliger Trigger. Die Reihenfolge der Liste ist die Priorität; sinkt das Budget, wird von unten nach oben reduziert. Bei ungültigem oder veraltetem Zählerwert gehen alle Ausgänge in den sicheren Zustand (0 %, aus, kein Trigger)."
+      "hems_surplus": "HEMS Lite: verteilt den am Netzanschlusspunkt gemessenen Überschuss nach Priorität auf mehrere Verbraucher — stufenlos (0–100 %), Ein/Aus oder als einmaliger Trigger. Die Reihenfolge der Liste ist die Priorität; sinkt das Budget, wird von unten nach oben reduziert. Bei ungültigem oder veraltetem Zählerwert gehen alle Ausgänge in den sicheren Zustand (0 %, aus, kein Trigger). Jeder Verbraucher hat einen eigenen Eingang „Freigabe“; ein gesperrter Verbraucher wird bei der Verteilung übersprungen und behält seine Position."
     },
     "graphPicker": {
       "title": "Logik öffnen",

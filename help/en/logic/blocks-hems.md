@@ -76,6 +76,37 @@ run time, minimum off time, and switch-on/off delay (empty = global value). A **
 prevents an immediate load shed: the consumer keeps running until it expires, the priority order
 stays intact.
 
+**Release** — Every consumer has its own boolean *Release* input through which higher-level logic
+can lock it temporarily (e.g. a wallbox only with a car plugged in, hot water only within operating
+hours, an external fault or interlock). A locked consumer is skipped in the distribution as if it
+were not in the list: its power (a reserved one too) goes to the released consumers below it — the drawn power once
+the meter shows it freed —, a
+percent output goes to 0 %, an on/off output to `false`, a trigger does not fire and a running pulse
+ends, and the status is `blocked`. The lock acts at once — also between two control cycles — and
+takes precedence over minimum run time, switch-on and switch-off delay and priority; it also applies
+with *Hold the last outputs*. With "Feed-in power only" at 0 W, a lock that switches a running
+consumer off counts as that control cycle's reduction step. Position and settings are kept. Once released again, the consumer takes
+part at its position from the next control cycle, never with its earlier setpoint: minimum off time,
+switch-on delay and the other switch-on conditions apply as usual.
+
+When the input is not connected, the default **Released** (default: yes) applies, so existing
+configurations behave unchanged. For a connected input without a valid value — no value yet, no
+value for longer than the hold time (see below; the block reacts as soon as it expires), or no yes/no value such as empty or arbitrary text,
+`NaN` — **Release missing, invalid or stale** chooses: lock the consumer (safe, default and
+recommended) or use the default. Valid are `true`/`false`, numbers and numeric texts (0 = locked)
+and the texts `true`/`false`, `yes`/`no`, `on`/`off`. The fault is written to the log once. In debug
+mode the consumer list in the properties panel shows the *Released*/*Blocked* state next to the name,
+updated live. A consumer released again reports the status `off` until the next control cycle.
+
+::: warning Release from a state source
+The release is a state: wire it straight from a Read Object or a logic block with a state output
+(AND, OR, NOT, Compare …), which deliver a value on every run. An event output — such as a change
+filter's *Changed*, an edge detection or a trigger — only delivers a value on the run of its event;
+after that the last value only counts for the hold time, then the release is stale and the consumer
+is locked (with the default setting). For such a source, route the release through a memory block or
+set *Release missing, invalid or stale* to "Use the default".
+:::
+
 **Percent** — setpoint 0–100 %. Settings: maximum power, minimum power, minimum/maximum setpoint,
 step size and the behaviour below the minimum power (set to 0 % or hold at the minimum while the
 switch-off delay runs). Example: 4 kW of 10 kW → 40 %.
@@ -96,9 +127,11 @@ the lockout" and a lockout of 0 that is every control cycle while the surplus su
 
 ### Outputs
 
-Per consumer: one output (percentage / on-off / trigger pulse) and a status (`inactive`, `off`,
+Per consumer: one output (percentage / on-off / trigger pulse) and a status (`inactive`, `blocked`, `off`,
 `on_delay`, `active`, `reduced`, `min_runtime`, `off_delay`, `locked`, `fired`, `safe`,
-`safe_hold`, `invalid_input`). Diagnostics: grid power, surplus, power budget, allocated power, remaining budget,
+`safe_hold`, `invalid_input`). `blocked` means "locked by its release" and is neither a missing
+surplus nor a waiting time nor a fault; `locked`, by contrast, is the minimum off time or a
+trigger's lockout. Diagnostics: grid power, surplus, power budget, allocated power, remaining budget,
 block status (`ok`, `disabled`, `plant_not_ok`, `invalid_input`, `stale_input`) and warning. With
 **Output only on change** (default) unchanged outputs are not sent again to directly wired Write
 Objects: such a Write Object writes only when the value differs from the one it last actually wrote

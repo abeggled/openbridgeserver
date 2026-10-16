@@ -78,6 +78,41 @@ Eingang), Mindestlaufzeit, Mindestauszeit sowie Ein-/Ausschaltverzögerung (leer
 Eine **Mindestlaufzeit** verhindert einen sofortigen Lastabwurf: der Verbraucher läuft bis zu ihrem
 Ablauf weiter, die Priorität bleibt bestehen.
 
+**Freigabe** — Jeder Verbraucher hat einen eigenen booleschen Eingang *Freigabe*, über den ihn eine
+übergeordnete Logik vorübergehend sperren kann (z. B. Wallbox nur mit angeschlossenem Fahrzeug,
+Warmwasser nur in Betriebszeiten, externe Störung oder Verriegelung). Ein gesperrter Verbraucher
+wird bei der Verteilung übersprungen, als stünde er nicht in der Liste: Seine Leistung (auch eine
+reservierte) geht an die freigegebenen Verbraucher darunter — die bezogene, sobald der Zähler sie
+als frei zeigt —, ein Prozent-Ausgang geht auf 0 %, ein
+Ein/Aus-Ausgang auf `false`, ein Trigger löst nicht aus und ein laufender Impuls endet, der Status
+ist `blocked`. Die Sperre wirkt sofort — auch zwischen zwei Regelzyklen — und hat Vorrang vor
+Mindestlaufzeit, Ein- und Ausschaltverzögerung und Priorität; sie gilt auch bei *Letzte Ausgaben
+halten*. Bei „Nur Einspeiseleistung“ und 0 W zählt das Abschalten eines laufenden Verbrauchers durch
+die Sperre als Abbauschritt dieses Regelzyklus. Position und Einstellungen bleiben erhalten. Nach der erneuten Freigabe nimmt der
+Verbraucher ab dem nächsten Regelzyklus wieder an seiner Position teil, nie mit seinem früheren
+Sollwert: Mindestauszeit, Einschaltverzögerung und die übrigen Einschaltbedingungen gelten normal.
+
+Ist der Eingang nicht verbunden, gilt der Vorgabewert **Freigegeben** (Standard: ja), sodass sich
+bestehende Konfigurationen unverändert verhalten. Für einen verbundenen Eingang ohne gültigen
+Wert — noch kein Wert, länger als die Haltezeit (siehe unten) kein Wert mehr (der Block reagiert
+sofort bei Ablauf), oder kein Ja/Nein-Wert
+wie leerer oder beliebiger Text, `NaN` — wählt **Freigabe fehlend, ungültig oder veraltet**: den
+Verbraucher sperren (sicher, Standard und empfohlen) oder den Vorgabewert verwenden. Gültig sind
+`true`/`false`, Zahlen und Zahlentexte (0 = gesperrt) sowie die Texte `true`/`false`, `yes`/`no`,
+`on`/`off`. Der Fehler wird einmal im Log vermerkt. Den Zustand *Freigegeben*/*Gesperrt* zeigt die
+Verbraucherliste im Eigenschaftenbereich im Debug-Modus neben dem Namen an, laufend aktualisiert.
+Ein wieder freigegebener Verbraucher meldet bis zum nächsten Regelzyklus den Status `off`.
+
+::: warning Freigabe aus einer Zustandsquelle
+Die Freigabe ist ein Zustand: Sie wird am besten direkt aus einem Read-Objekt oder einem
+Logikbaustein mit Zustandsausgang (UND, ODER, NICHT, Vergleich …) verbunden, die in jedem Lauf einen
+Wert liefern. Ein Ereignisausgang — etwa *Geändert* eines Änderungsfilters, eine Flankenerkennung
+oder ein Trigger — liefert nur im Lauf seines Ereignisses einen Wert; danach gilt der letzte Wert nur
+noch für die Haltezeit, dann ist die Freigabe veraltet und der Verbraucher wird (mit der
+Standardeinstellung) gesperrt. Für eine solche Quelle die Freigabe über einen Speicher-Baustein
+führen oder *Freigabe fehlend, ungültig oder veraltet* auf „Vorgabewert verwenden“ stellen.
+:::
+
 **Prozent** — Sollwert 0–100 %. Einstellungen: Maximalleistung, Mindestleistung, minimaler/maximaler
 Sollwert, Schrittweite und das Verhalten unterhalb der Mindestleistung (auf 0 % setzen oder auf dem
 Mindestwert halten, solange die Ausschaltverzögerung läuft). Beispiel: 4 kW von 10 kW → 40 %.
@@ -101,8 +136,10 @@ Regelzyklus, solange der Überschuss reicht.
 ### Ausgänge
 
 Pro Verbraucher: ein Ausgang (Prozentwert / Ein-Aus / Triggerimpuls) und ein Status
-(`inactive`, `off`, `on_delay`, `active`, `reduced`, `min_runtime`, `off_delay`, `locked`, `fired`,
-`safe`, `safe_hold`, `invalid_input`). Diagnose: Netzleistung, Überschuss, Leistungsbudget, verteilte Leistung,
+(`inactive`, `blocked`, `off`, `on_delay`, `active`, `reduced`, `min_runtime`, `off_delay`, `locked`, `fired`,
+`safe`, `safe_hold`, `invalid_input`). `blocked` bedeutet „durch die Freigabe gesperrt“ und ist
+weder fehlender Überschuss noch Wartezeit noch Fehler; `locked` ist dagegen die Mindestauszeit bzw.
+die Sperrzeit eines Triggers. Diagnose: Netzleistung, Überschuss, Leistungsbudget, verteilte Leistung,
 verbleibendes Budget, Status des Blocks (`ok`, `disabled`, `plant_not_ok`, `invalid_input`,
 `stale_input`) und Warnung. Mit **Nur bei Änderung ausgeben** (Standard) werden unveränderte
 Ausgänge nicht erneut an direkt verbundene Write-Objekte gesendet: Ein solches Write-Objekt schreibt
