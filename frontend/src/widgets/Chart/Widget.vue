@@ -69,11 +69,16 @@ const seriesUnits = ref<string[]>([])
 
 // Eigene HTML-Legende statt der Chart.js-Legende: Serien werden durch eine
 // farbige Unterstreichung statt eines Kästchens gekennzeichnet (#1361).
-interface LegendItem { id: string; label: string; color: string }
+interface LegendItem { key: string; label: string; color: string }
 const legendItems = ref<LegendItem[]>([])
-// Über Serien-ID statt Dataset-Index gemerkt, damit ausgeblendete Serien das
-// periodische Neuladen (neue Dataset-Objekte) überstehen.
+// Über einen Serien-Schlüssel statt des Dataset-Objekts gemerkt, damit
+// ausgeblendete Serien das periodische Neuladen (neue Dataset-Objekte)
+// überstehen. Die Datenpunkt-ID allein reicht nicht: derselbe Datenpunkt kann
+// als Haupt- und Zusatzserie (z. B. mit anderer Achse) konfiguriert sein.
 const hiddenSeries = ref<Set<string>>(new Set())
+function seriesKey(id: string, index: number): string {
+  return `${index}:${id}`
+}
 
 // Achsen-, Tooltip- und Wertformatierung folgen dem konfigurierten
 // Regionalformat (Issue #1073); die Rohdaten bleiben locale-neutral.
@@ -235,7 +240,7 @@ async function loadData() {
   const labels      = defs.map((s, i) => s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''))
   const hidden      = hiddenSeries.value
 
-  legendItems.value = defs.map((s, i) => ({ id: s.id, label: labels[i], color: s.color }))
+  legendItems.value = defs.map((s, i) => ({ key: seriesKey(s.id, i), label: labels[i], color: s.color }))
 
   const leftUnit  = defs.reduce<string>((u, s, i) => u || (s.axis === 'y'  ? (seriesUnits.value[i] ?? '') : ''), '')
   const rightUnit = defs.reduce<string>((u, s, i) => u || (s.axis === 'y1' ? (seriesUnits.value[i] ?? '') : ''), '')
@@ -247,7 +252,7 @@ async function loadData() {
       chart.data.datasets = defs.map((s, i) => ({
         yAxisID:         s.axis,
         label:           labels[i],
-        hidden:          hidden.has(s.id),
+        hidden:          hidden.has(seriesKey(s.id, i)),
         data:            weightedValuesByTimestamp(results[i], bucketTimestamps),
         backgroundColor: s.color + 'cc',
         borderWidth:     0,
@@ -274,7 +279,7 @@ async function loadData() {
         return {
           yAxisID:         s.axis,
           label:           labels[i],
-          hidden:          hidden.has(s.id),
+          hidden:          hidden.has(seriesKey(s.id, i)),
           data,
           backgroundColor: s.color + 'cc',
           borderWidth:     0,
@@ -287,7 +292,7 @@ async function loadData() {
     chart.data.datasets = defs.map((s, i) => ({
       yAxisID:         s.axis,
       label:           labels[i],
-      hidden:          hidden.has(s.id),
+      hidden:          hidden.has(seriesKey(s.id, i)),
       data:            results[i].map(d => ({
         x: requestPlan.mode === 'aggregate'
           ? aggregateBucketEndTimestamp(d.ts, requestPlan.interval, fromDate.getTime(), toDate.getTime())
@@ -325,16 +330,16 @@ async function loadData() {
   chart.update()
 }
 
-function toggleSeries(id: string, index: number) {
+function toggleSeries(key: string, index: number) {
   const next = new Set(hiddenSeries.value)
-  if (!next.delete(id)) next.add(id)
+  if (!next.delete(key)) next.add(key)
   hiddenSeries.value = next
 
   // Nach einem Wechsel des Diagrammtyps ist der neue Chart bis zum Ende von
   // loadData() noch leer — dann greift der Zustand erst beim Befüllen.
   const dataset = chart?.data.datasets[index]
   if (!dataset) return
-  dataset.hidden = next.has(id)
+  dataset.hidden = next.has(key)
   chart!.update()
 }
 
@@ -410,14 +415,14 @@ onUnmounted(() => {
     >
       <button
         v-for="(item, i) in legendItems"
-        :key="item.id"
+        :key="item.key"
         type="button"
         class="chart-legend-item text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
-        :class="{ 'opacity-50 line-through': hiddenSeries.has(item.id) }"
+        :class="{ 'opacity-50 line-through': hiddenSeries.has(item.key) }"
         :style="{ borderBottomColor: item.color }"
-        :aria-pressed="!hiddenSeries.has(item.id)"
+        :aria-pressed="!hiddenSeries.has(item.key)"
         :title="$t('widgets.chart.toggleSeries')"
-        @click="toggleSeries(item.id, i)"
+        @click="toggleSeries(item.key, i)"
       >{{ item.label }}</button>
     </div>
     <div class="flex-1 min-h-0">

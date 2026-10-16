@@ -261,6 +261,22 @@ describe('Chart Widget.vue — tooltip swatches and legend (#1361)', () => {
     expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
   })
 
+  it('toggles only the clicked entry when one datapoint is configured twice', async () => {
+    // Derselbe Datenpunkt als Haupt- und Zusatzserie: die ID allein ist kein eindeutiger Schlüssel
+    const sameDpTwice = { ...twoSeries, series: [{ dp_id: 'dp-1', label: bath, axis: 'right' }] }
+    const { chart } = await mountLoaded(sameDpTwice)
+    const items = () => wrapper!.findAll('.chart-legend-item')
+
+    await items()[1].trigger('click')
+    expect(items()[0].classes()).not.toContain('line-through')
+    expect(items()[1].classes()).toContain('line-through')
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+
+    await wrapper!.setProps({ config: { ...sameDpTwice, time_range: 'last_24h' } })
+    await flushPromises()
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+
   it('remembers the toggle while a freshly created chart is still empty', async () => {
     await mountLoaded(twoSeries)
     const item = wrapper!.findAll('.chart-legend-item')[1]
