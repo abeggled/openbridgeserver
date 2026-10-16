@@ -88,6 +88,13 @@
               :data-testid="'hems-consumer-handle-' + i"
             >⠿</span>
             <span class="text-xs font-mono text-slate-400 w-5 shrink-0" :data-testid="'hems-consumer-position-' + i">{{ i + 1 }}</span>
+            <span
+              v-if="releaseStates[c.id]"
+              class="text-xs px-1.5 py-0.5 rounded shrink-0"
+              :class="releaseStates[c.id] === 'blocked' ? 'bg-amber-500/20 text-amber-500' : 'bg-teal-500/20 text-teal-500'"
+              :title="$t('logic.nodeConfig.hemsSurplus.releaseStateHint')"
+              :data-testid="'hems-consumer-release-state-' + i"
+            >{{ $t('logic.nodeConfig.hemsSurplus.releaseState.' + releaseStates[c.id]) }}</span>
             <input
               :value="c.name"
               class="input text-xs flex-1"
@@ -112,6 +119,31 @@
             />
             <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.hemsSurplus.fields.active') }}</span>
           </label>
+
+          <!-- Release (issue #1359): the input c_<id>_enable, its default and its fault handling -->
+          <div class="form-group">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="hemsFlag(c.enable_default)"
+                :data-testid="'hems-consumer-enable_default-' + i"
+                @change="setConsumer(i, 'enable_default', $event.target.checked)"
+              />
+              <span class="text-xs text-slate-600 dark:text-slate-300">{{ $t('logic.nodeConfig.hemsSurplus.fields.enable_default') }}</span>
+            </label>
+            <p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.hemsSurplus.fields.enable_defaultHint') }}</p>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('logic.nodeConfig.hemsSurplus.fields.enable_fault') }}</label>
+            <select
+              :value="selectValue(c.enable_fault, ENABLE_FAULT_FIELD)"
+              class="input text-xs"
+              :data-testid="'hems-consumer-enable_fault-' + i"
+              @change="setConsumer(i, 'enable_fault', $event.target.value)"
+            >
+              <option v-for="o in ENABLE_FAULT_FIELD.options" :key="o" :value="o">{{ $t('logic.nodeConfig.hemsSurplus.fields.enable_faultOptions.' + o) }}</option>
+            </select>
+          </div>
 
           <div class="form-group">
             <label class="label">{{ $t('logic.nodeConfig.hemsSurplus.fields.mode') }}</label>
@@ -156,7 +188,7 @@
 <script setup>
 import { computed } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
-import { hemsConsumers, hemsEnum, hemsFlag, hemsGridMode } from '@/utils/logicHemsOutputs'
+import { hemsConsumers, hemsEnum, hemsFlag, hemsGridMode, hemsReleaseState } from '@/utils/logicHemsOutputs'
 
 // Editor of the hems_surplus block (HEMS Lite, issue #1327). The consumer list
 // order *is* the priority: it is edited by drag-and-drop only, the position
@@ -165,6 +197,8 @@ import { hemsConsumers, hemsEnum, hemsFlag, hemsGridMode } from '@/utils/logicHe
 const props = defineProps({
   data:        { type: Object, required: true },
   description: { type: String, default: '' },
+  // Outputs of the block's last run, for the live release state of each consumer.
+  outputs:     { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['update'])
 
@@ -180,6 +214,10 @@ const GLOBAL_FIELDS = [
   { key: 'invalid_behavior',  type: 'select', default: 'off', options: ['off', 'hold'] },
   { key: 'only_on_change',    type: 'boolean', default: true },
 ]
+
+// A missing, invalid or stale release locks the consumer unless set otherwise
+// (load_consumers in hems_surplus.py).
+const ENABLE_FAULT_FIELD = { key: 'enable_fault', type: 'select', default: 'lock', options: ['lock', 'default'] }
 
 const POWER_FIELDS = [
   { key: 'power_source', type: 'select', default: 'fixed', options: ['fixed', 'input'] },
@@ -227,6 +265,11 @@ const consumers = computed({
   get: () => hemsConsumers(props.data.consumers),
   set: rows => saveConsumers(rows),
 })
+
+// Live release state per consumer id, from the last run (debug mode).
+// An inactive consumer has none: its release does not matter (and in the safe
+// state its status is 'safe', which would read as released).
+const releaseStates = computed(() => Object.fromEntries(consumers.value.map(c => [c.id, hemsFlag(c.active) ? hemsReleaseState(props.outputs, c.id) : null])))
 
 function saveConsumers(rows) {
   emit('update', { ...props.data, consumers: JSON.stringify(rows) })

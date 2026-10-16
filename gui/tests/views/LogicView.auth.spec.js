@@ -1119,7 +1119,7 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.edges = []
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual([
       'grid_import', 'grid_import_changed', 'grid_export', 'grid_export_changed',
-      'enable', 'target', 'plant_ok', 'c_load_power', 'c_load_max_power',
+      'enable', 'target', 'plant_ok', 'c_load_enable', 'c_load_power', 'c_load_max_power',
     ])
 
     wrapper.vm.selectedNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }

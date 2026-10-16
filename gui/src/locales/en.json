@@ -2730,8 +2730,20 @@
             "after_drop": "Only after the threshold was undershot in between",
             "reset_input": "Via the reset input"
           },
-          "reserve_w": "Power reserved while firing (W)"
-        }
+          "reserve_w": "Power reserved while firing (W)",
+          "enable_default": "Released (default)",
+          "enable_defaultHint": "Applies while this consumer's “Release” input is not connected, and with the fault handling “Use the default”.",
+          "enable_fault": "Release missing, invalid or stale",
+          "enable_faultOptions": {
+            "lock": "Lock the consumer (safe, recommended with a connected input)",
+            "default": "Use the default"
+          }
+        },
+        "releaseState": {
+          "released": "Released",
+          "blocked": "Blocked"
+        },
+        "releaseStateHint": "Release state in the last run (debug mode only, updated live)"
       }
     },
     "portLabels": {
@@ -2809,7 +2821,8 @@
         "budget": "Power budget",
         "allocated": "Allocated power",
         "remaining": "Remaining budget",
-        "warning": "Warning"
+        "warning": "Warning",
+        "release": "Release"
       }
     },
     "nodeDescriptions": {
@@ -2862,7 +2875,7 @@
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",
       "ical": "Loads an iCal/ICS file from a URL and evaluates events. The RAW output delivers the raw calendar text. Each filter provides 4 outputs: Array (all events), Next date, Tomorrow (bool), Today (bool). Filters can be applied to Summary, Location and/or Description.",
       "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution.",
-      "hems_surplus": "HEMS Lite: distributes the surplus measured at the grid connection point across several consumers by priority — continuously (0–100 %), on/off, or as a one-shot trigger. The list order is the priority; when the budget shrinks, consumers are reduced from the bottom up. With an invalid or stale meter value all outputs go to the safe state (0 %, off, no trigger)."
+      "hems_surplus": "HEMS Lite: distributes the surplus measured at the grid connection point across several consumers by priority — continuously (0–100 %), on/off, or as a one-shot trigger. The list order is the priority; when the budget shrinks, consumers are reduced from the bottom up. With an invalid or stale meter value all outputs go to the safe state (0 %, off, no trigger). Every consumer has its own “Release” input; a locked consumer is skipped in the distribution and keeps its position."
     },
     "graphPicker": {
       "title": "Open Logic",

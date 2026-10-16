@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsFlag, hemsGridMode, hemsInputPorts, hemsOutputLabels } from '@/utils/logicHemsOutputs'
+import { HEMS_DIAGNOSTICS, hemsAgeCheckActive, hemsConsumerName, hemsConsumers, hemsFlag, hemsGridMode, hemsInputPorts, hemsOutputLabels, hemsReleaseState } from '@/utils/logicHemsOutputs'
 
 const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key)
 const node = data => ({ type: 'hems_surplus', data })
@@ -50,8 +50,8 @@ describe('hemsConsumers', () => {
   })
 
   it('moves an id ending in a port suffix off another consumer\'s ports, like the engine', () => {
-    const ids = hemsConsumers([{ id: 'a' }, { id: 'a_status' }, { id: 'a_max' }, { id: 'x_power' }, { id: 'r_reset' }, { id: 'a_maxi' }]).map(c => c.id)
-    expect(ids).toEqual(['a', 'a_status_', 'a_max_', 'x_power_', 'r_reset_', 'a_maxi'])
+    const ids = hemsConsumers([{ id: 'a' }, { id: 'a_status' }, { id: 'a_max' }, { id: 'x_power' }, { id: 'r_reset' }, { id: 'e_enable' }, { id: 'a_maxi' }]).map(c => c.id)
+    expect(ids).toEqual(['a', 'a_status_', 'a_max_', 'x_power_', 'r_reset_', 'e_enable', 'a_maxi'])
   })
 
   it('keeps the other fields and reads JSON storage', () => {
@@ -116,8 +116,25 @@ describe('hemsInputPorts', () => {
     expect(ids(undefined)).toEqual(['grid', 'enable', 'target', 'plant_ok'])
     expect(ids({ grid_mode: 'feed_in_only', max_age_s: 30 })).toEqual(['feed_in', 'feed_in_changed', 'enable', 'target', 'plant_ok'])
     expect(ids({ consumers: [{ id: 'a', mode: 'onoff' }, { id: 'b', mode: 'percent', power_source: 'input' }, { id: 'w', mode: 'trigger' }] })).toEqual([
-      'grid', 'enable', 'target', 'plant_ok', 'c_a_power', 'c_b_power', 'c_b_max_power', 'c_w_reset',
+      'grid', 'enable', 'target', 'plant_ok', 'c_a_enable', 'c_a_power', 'c_b_enable', 'c_b_power', 'c_b_max_power', 'c_w_enable', 'c_w_reset',
     ])
     expect(hemsInputPorts({ consumers: [{ id: 'a', name: 'Boiler', mode: 'onoff' }] }, t).at(-1).label).toBe('Boiler: logic.portLabels.hems.measuredPower')
+  })
+})
+
+describe('consumer release (issue #1359)', () => {
+  it('gives every consumer its own release input, labelled with its name', () => {
+    const ports = hemsInputPorts({ consumers: [{ id: 'a', name: 'Boiler', mode: 'trigger' }] }, t)
+    expect(ports.find(p => p.id === 'c_a_enable').label).toBe('Boiler: logic.portLabels.hems.release')
+  })
+
+  it('reads the release state from the last-run status output', () => {
+    expect(hemsReleaseState({ c_a_status: 'blocked' }, 'a')).toBe('blocked')
+    expect(hemsReleaseState({ c_a_status: 'active' }, 'a')).toBe('released')
+    expect(hemsReleaseState({ c_a_status: 'safe' }, 'a')).toBe('released')
+    expect(hemsReleaseState({ c_a_status: 'inactive' }, 'a')).toBe(null)
+    expect(hemsReleaseState({ c_a_status: null }, 'a')).toBe(null)
+    expect(hemsReleaseState({}, 'a')).toBe(null)
+    expect(hemsReleaseState(undefined, 'a')).toBe(null)
   })
 })
