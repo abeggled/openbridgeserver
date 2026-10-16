@@ -441,3 +441,30 @@ def test_a_stored_id_ending_in_enable_keeps_its_ports_beside_the_consumer_it_nam
     out = GraphExecutor(flow, {}).execute(input_overrides={"h": {"grid": -5000, "c_boiler_enable": False}})["h"]
     assert (out["c_boiler"], out["c_boiler_status"]) == (False, "blocked")
     assert (out["c_boiler_enable"], out["c_boiler_enable_status"]) == (True, "active")
+
+
+def test_a_lock_at_zero_feed_in_postpones_a_step_pending_for_another_consumer():
+    consumers = [onoff("hi", power_w=1000, on_delay_s=0), onoff("lo", power_w=500, on_delay_s=0, min_runtime_s=90)]
+    sim = Sim(consumers, grid_mode="feed_in_only", off_delay_s=0)
+    sim.tick(feed_in=2000)
+    sim.tick(feed_in=0)  # entering 0 W: hold
+    sim.tick(feed_in=0)  # a step of "lo" is requested; its minimum runtime keeps it pending
+    assert (sim.state["zero_shed_id"], sim.state["zero_shed_w"]) == ("lo", 500)
+    # lo's minimum runtime ends on the cycle "hi" is locked: the lock is that cycle's only reduction
+    out = sim.tick(feed_in=0, c_hi_enable=False)
+    assert (out["c_hi"], out["c_hi_status"]) == (False, "blocked")
+    assert sim.cstate("lo")["on"] is True
+    assert sim.state["zero_shed_w"] == 0.0
+    out = sim.tick(feed_in=0, c_hi_enable=False)  # the next step follows in the next cycle
+    assert out["c_lo"] is False
+
+
+def test_a_lock_at_zero_feed_in_keeps_the_feed_in_reserve_requested():
+    consumers = [onoff("hi", power_w=1000, on_delay_s=0), onoff("lo", power_w=500, on_delay_s=0, off_delay_s=600)]
+    sim = Sim(consumers, grid_mode="feed_in_only", off_delay_s=0, target_w=300)
+    sim.tick(feed_in=2000)
+    sim.tick(feed_in=0)  # entering 0 W: the reserve stands as a reduction request
+    assert (sim.state["zero_shed_id"], sim.state["zero_shed_w"]) == (None, 300)
+    sim.tick(feed_in=0, c_hi_enable=False)
+    assert sim.cstate("hi")["on"] is False
+    assert (sim.state["zero_shed_id"], sim.state["zero_shed_w"]) == (None, 300)

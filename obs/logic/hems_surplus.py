@@ -776,9 +776,14 @@ def _tick(
             # the allocation has dropped by it — each consumer with its own delays.
             state["zero_since"] = now
             state["zero_shed_id"], state["zero_shed_w"] = None, min(max(0.0, target_w), commanded_w)
-        elif not state.get("zero_shed_w") and not locked_running:
-            # (A lock that just switched a running consumer off is a reduction
-            # of its own: the next step follows in the next cycle.)
+        elif locked_running:
+            # A lock that just switched a running consumer off is this cycle's
+            # reduction: a step still pending for another consumer (e.g. one held
+            # by its minimum runtime) waits for the next cycle. A reserve cut
+            # (id None) is no step of its own and stays requested.
+            if state.get("zero_shed_id") is not None:
+                state["zero_shed_w"] = 0.0
+        elif not state.get("zero_shed_w"):
             # The step is requested once the switch-off delay of the consumer it
             # concerns (its own, or the global one) has passed without feed-in;
             # holding, that consumer then gives it up without a second delay.
