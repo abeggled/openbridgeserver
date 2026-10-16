@@ -713,7 +713,7 @@
 
     <!-- ── hems_surplus: grid measurement + priority-ordered consumer list ── -->
     <template v-else-if="isHemsSurplusNode">
-      <HemsSurplusConfig :data="localData" :description="nodeDescription(nodeDef)" @update="onHemsSurplusUpdate" />
+      <HemsSurplusConfig :data="localData" :description="nodeDescription(nodeDef)" :outputs="debugOutputs" @update="onHemsSurplusUpdate" />
     </template>
 
     <!-- ── decision / value_mapping ─────────────────────────────────────── -->

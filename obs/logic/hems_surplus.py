@@ -12,7 +12,9 @@ export*. The power budget the consumers may share is::
     budget = power currently used by the controlled consumers − grid power − reserve
 
 Consumers are served strictly in list order (index 0 = highest priority); a
-shrinking budget therefore cuts from the bottom up.
+shrinking budget therefore cuts from the bottom up. A consumer whose release
+(``c_<id>_enable``) is false is skipped as if it were not in the list, without
+losing its position.
 """
 
 from __future__ import annotations
@@ -26,12 +28,15 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from obs.logic.booleans import to_bool
+from obs.logic.booleans import FALSE_WORDS, to_bool
 
 logger = logging.getLogger(__name__)
 
 MODES = ("bidirectional", "split", "feed_in_only")
 CONSUMER_MODES = ("percent", "onoff", "trigger")
+# What a missing, invalid or stale release value means: lock the consumer (safe)
+# or fall back to the configured default release.
+ENABLE_FAULTS = ("lock", "default")
 
 MIN_INTERVAL_S = 5.0
 MAX_INTERVAL_S = 3600.0
@@ -72,6 +77,8 @@ _STALE_WAKE_MARGIN_S = 0.05
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_]")
 # Port names are c_<id> plus these suffixes ("_max" because c_<id>_max + "_power"
 # is the max-power port of <id>); an id ending in one would take another's port.
+# "_enable" is not among them: c_<id>_enable is an input and matches no other
+# input port, so a stored id like "boiler_enable" keeps its ports.
 _RESERVED_ID_ENDINGS = ("_status", "_power", "_max", "_reset")
 
 
@@ -203,6 +210,9 @@ def load_consumers(raw: Any) -> list[dict[str, Any]]:
                 "lockout_s": _cfg_num(item.get("lockout_s"), 3600.0, 0.0),
                 "rearm": _enum(item.get("rearm")) if _enum(item.get("rearm")) in ("after_lockout", "after_drop", "reset_input") else "after_drop",
                 "reserve_w": _cfg_num(item.get("reserve_w"), 0.0, 0.0),
+                # release (Freigabe)
+                "enable_default": item.get("enable_default") is None or to_bool(item.get("enable_default")),
+                "enable_fault": _enum(item.get("enable_fault")) if _enum(item.get("enable_fault")) in ENABLE_FAULTS else "lock",
             }
         )
     return consumers
@@ -268,6 +278,8 @@ def _new_consumer_state() -> dict[str, Any]:
         "lockout_until": None,
         "reserve_cycles": 0,
         "reset_prev": False,
+        "blocked": False,
+        "release_fault": False,
     }
 
 
@@ -315,7 +327,8 @@ def _consumer_power(consumer: dict[str, Any], cs: dict[str, Any], inputs: dict[s
     Only a consumer the block itself has switched on counts. One that is
     inactive or switched off by the block but still draws power — run by hand,
     or by its own thermostat — is ordinary house load: its draw is already in
-    the grid power and cannot be redistributed. A trigger consumer counts
+    the grid power and cannot be redistributed — so is one just locked by its
+    release (switched off on that very tick). A trigger consumer counts
     nothing here — its reservation is not a draw and is deducted only from what
     lower priorities get (see ``_step_trigger``); a measured-power wire left over
     from a previous mode is ignored.
@@ -339,6 +352,45 @@ def _rated_power(consumer: dict[str, Any], inputs: dict[str, Any]) -> float | No
         value = _num(inputs.get(f"c_{consumer['id']}_max_power"))
         return value if value is not None and value > 0 else None
     return consumer["power_w"]
+
+
+def _release_value(value: Any) -> bool | None:
+    """A release input as a boolean, or ``None`` when it is no usable yes/no value.
+
+    Stricter than ``to_bool``: a consumer whose release is unknown must not be
+    taken as released (or locked) by accident, so only booleans, finite
+    numbers and numeric text (0 = false) and the usual yes/no words count —
+    empty text, other text, ``NaN`` and anything structured are invalid.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in ("true", "yes", "on"):
+            return True
+        if word and word in FALSE_WORDS:
+            return False
+    number = _num(value)  # also numeric text ("1.0") and Decimal, like every other input of the block
+    return None if number is None else number != 0
+
+
+def _released(consumer: dict[str, Any], state: dict[str, Any], inputs: dict[str, Any], now: float, hold_s: float) -> tuple[bool, bool]:
+    """``(released, fault)`` of one consumer on this tick.
+
+    Unwired, the configured default applies. Wired, a value that stopped
+    arriving is still used for ``hold_s`` (like every other input); beyond that,
+    or when it is no yes/no value, ``fault`` is set and the configured fault
+    behaviour decides: lock (safe) or the configured default.
+    """
+    key = f"c_{consumer['id']}_enable"
+    if key not in inputs:
+        # A value held from a removed wire must not stand in for a wire added later.
+        state.get("held", {}).pop(key, None)
+        return consumer["enable_default"], False
+    value = _release_value(_held(state, key, inputs[key], now, hold_s))
+    if value is not None:
+        return value, False
+    return consumer["enable_fault"] == "default" and consumer["enable_default"], True
 
 
 # ── Meter evaluation ─────────────────────────────────────────────────────
@@ -398,6 +450,12 @@ def _read_meter(
             return None, None, "invalid_input"
         return -values["feed_in"], values["feed_in"], None
     return values["grid"], None, None
+
+
+def _hold_s(data: dict[str, Any]) -> float:
+    """How long a value that stops arriving (None) is still trusted: the meter age limit, else two intervals."""
+    max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
+    return max_age_s if max_age_s > 0 else 2 * interval_s(data)
 
 
 def _held(state: dict[str, Any], name: str, raw: Any, now: float, hold_s: float) -> Any:
@@ -462,6 +520,8 @@ def _evaluate(data: dict[str, Any], inputs: dict[str, Any], state: dict[str, Any
                 # The minimum off time still counts from when it last went off
                 # (or from now, as the new type starts off).
                 fresh["since"] = now if cs["on"] else cs["since"]
+                # An ongoing lock or fault is no new one.
+                fresh["blocked"], fresh["release_fault"] = cs["blocked"], cs["release_fault"]
             cs = states[consumer["id"]] = fresh
         cs["mode"] = consumer["mode"]
 
@@ -484,7 +544,7 @@ def _forget_removed_consumers(
     result: dict[str, Any] = {}
     for stale_id in set(states) - {c["id"] for c in consumers}:
         del states[stale_id]
-        for key in (f"c_{stale_id}_power", f"c_{stale_id}_max_power"):
+        for key in (f"c_{stale_id}_power", f"c_{stale_id}_max_power", f"c_{stale_id}_enable"):
             held.pop(key, None)  # its held measured / maximum power must not pass to a new consumer of that id
         last_out.pop(f"c_{stale_id}_status", None)
         if f"c_{stale_id}" not in last_out:
@@ -511,6 +571,19 @@ def _next_wake(
         # one was started by an event rather than by the scheduler.
         wakes.append(state["last_cycle"] + interval_s(data))
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
+    # A wired release that stopped arriving falls back to its fault behaviour
+    # once the held value expires — at that moment, not at the next cycle. Only
+    # needed where that changes something: an active consumer whose fallback
+    # (lock, or the configured default) differs from its current release.
+    hold_s = _hold_s(data)
+    held = state.get("held", {})
+    for consumer in consumers:
+        entry = held.get(f"c_{consumer['id']}_enable")
+        if entry is None or not consumer["active"] or entry[1] + hold_s < now:
+            continue
+        fallback = consumer["enable_fault"] == "default" and consumer["enable_default"]
+        if fallback == states[consumer["id"]]["blocked"]:
+            wakes.append(entry[1] + hold_s + _STALE_WAKE_MARGIN_S)
     if max_age_s > 0:
         # An input is stale once it is strictly older than max_age_s, so wake just
         # after the next still-fresh input expires: a silent non-zero side alone
@@ -575,13 +648,21 @@ def _tick(
     # The meter is read on every tick, even when the block is disabled, so the
     # diagnostics keep showing the measured grid power in the safe state too.
     max_age_s = _cfg_num(data.get("max_age_s"), 0.0, 0.0)
-    # How long a value that stops arriving (None) is still trusted.
-    hold_s = max_age_s if max_age_s > 0 else 2 * cycle_s
+    hold_s = _hold_s(data)
     inputs = dict(inputs)
     for key in [k for k in inputs if k == "target" or (k.startswith("c_") and k.endswith("_power"))]:
         inputs[key] = _held(state, key, inputs[key], now, hold_s)  # dynamic reserve, measured and maximum power
     grid_w, feed_in_w, problem = _read_meter(mode, inputs, state, now, max_age_s, hold_s)
     status = problem or "ok"
+    # The per-consumer release is read on every tick too: a lock takes effect at
+    # once — ahead of minimum runtime, delays and priority — not only at the next cycle.
+    newly_blocked, newly_released = _update_releases(consumers, states, state, inputs, now, hold_s, node_id)
+    # Switched off before anything else looks at it, so the budget, the 0 W
+    # hold and its shed step see it gone; the power it frees is handed out once
+    # the meter shows it, whether the lock came on a cycle or between cycles.
+    locked_running = any(states[c["id"]]["on"] for c in newly_blocked)
+    for consumer in newly_blocked:
+        _reset_consumer(consumer, states[consumer["id"]], now, emit, "blocked")
     # A wired interlock fails safe: once no value is known (unseeded Read
     # Object, failed producer, beyond hold_s) it counts as false.
     # Both are read on every tick, so a held value never ages out unseen.
@@ -613,7 +694,8 @@ def _tick(
             # e.g. right after a restart — the actuator may still carry a value
             # from before, so that consumer falls back to the safe state.
             last_out = state.setdefault("last_out", {})
-            held = [c for c in consumers if c["active"] and f"c_{c['id']}" in last_out]
+            # A locked consumer is never held: its release is an interlock.
+            held = [c for c in consumers if c["active"] and not states[c["id"]]["blocked"] and f"c_{c['id']}" in last_out]
             for consumer in held:
                 # The outage interrupts any "continuously for the delay" condition.
                 cs = states[consumer["id"]]
@@ -651,6 +733,9 @@ def _tick(
         state["last_cycle"] = None
     last_cycle = state.get("last_cycle")
     if last_cycle is not None and now - last_cycle < cycle_s - _CYCLE_SLACK_S:
+        # A consumer released again joins at the next cycle; until then it is plainly off.
+        for consumer in newly_released:
+            emit(f"c_{consumer['id']}_status", "off")
         return result
     state["last_cycle"] = now
 
@@ -691,6 +776,13 @@ def _tick(
             # the allocation has dropped by it — each consumer with its own delays.
             state["zero_since"] = now
             state["zero_shed_id"], state["zero_shed_w"] = None, min(max(0.0, target_w), commanded_w)
+        elif locked_running:
+            # A lock that just switched a running consumer off is this cycle's
+            # reduction: a step still pending for another consumer (e.g. one held
+            # by its minimum runtime) waits for the next cycle. A reserve cut
+            # (id None) is no step of its own and stays requested.
+            if state.get("zero_shed_id") is not None:
+                state["zero_shed_w"] = 0.0
         elif not state.get("zero_shed_w"):
             # The step is requested once the switch-off delay of the consumer it
             # concerns (its own, or the global one) has passed without feed-in;
@@ -731,6 +823,38 @@ def _tick(
     return result
 
 
+def _update_releases(
+    consumers: list[dict[str, Any]],
+    states: dict[str, dict[str, Any]],
+    state: dict[str, Any],
+    inputs: dict[str, Any],
+    now: float,
+    hold_s: float,
+    node_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Record each consumer's release in its state.
+
+    Returns the active consumers locked and released on this tick.
+    """
+    newly_blocked: list[dict[str, Any]] = []
+    newly_released: list[dict[str, Any]] = []
+    for consumer in consumers:
+        cs = states[consumer["id"]]
+        released, fault = _released(consumer, state, inputs, now, hold_s)
+        if fault and not cs["release_fault"] and consumer["active"]:  # an inactive consumer is off anyway
+            logger.warning(
+                "hems_surplus %s: release of consumer %r has no valid value — %s",
+                node_id[:8] if node_id else "?",
+                consumer["name"],
+                "using its default release" if consumer["enable_fault"] == "default" else "consumer locked",
+            )
+        cs["release_fault"] = fault and consumer["active"]  # activated with a fault, it is logged then
+        if consumer["active"] and released == cs["blocked"]:
+            (newly_released if released else newly_blocked).append(consumer)
+        cs["blocked"] = not released
+    return newly_blocked, newly_released
+
+
 def _log_status_change(state: dict[str, Any], node_id: str, status: str, mode: str, inputs: dict[str, Any]) -> None:
     previous = state.get("status")
     if previous == status:
@@ -752,7 +876,8 @@ def _log_status_change(state: dict[str, Any], node_id: str, status: str, mode: s
 def _apply_safe_state(consumers: list[dict[str, Any]], states: dict[str, dict[str, Any]], now: float, emit: Any) -> None:
     """Percent 0 %, switches off, no trigger — and every running timer restarts."""
     for consumer in consumers:
-        _reset_consumer(consumer, states[consumer["id"]], now, emit, "safe")
+        cs = states[consumer["id"]]
+        _reset_consumer(consumer, cs, now, emit, "blocked" if cs["blocked"] and consumer["active"] else "safe")
 
 
 def _reset_consumer(consumer: dict[str, Any], cs: dict[str, Any], now: float, emit: Any, label: str) -> None:
@@ -813,6 +938,11 @@ def _allocate(
         power = rated[cid]
         if not consumer["active"]:
             _reset_consumer(consumer, cs, now, emit, "inactive")
+            continue
+        if cs["blocked"]:
+            # Locked: left out of the distribution as if not listed, so whatever
+            # it was given (or had reserved) goes to the released consumers below.
+            _reset_consumer(consumer, cs, now, emit, "blocked")
             continue
         if power is None:
             _set_off(cs, now)
