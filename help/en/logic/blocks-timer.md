@@ -70,6 +70,9 @@ from before the pulse.
 
 - **Retrigger:** A new trigger during the pulse extends it — the output stays true until the
   duration has elapsed from the last trigger (retriggerable, e.g. for staircase lighting).
+- **Slow blocks:** The duration counts from the run that writes the start of the pulse. If a slow
+  block in that run (e.g. **API Client**) holds up its writes, the data point still stays true for
+  the full duration.
 - **Chains:** The end of the pulse begins a new logic cascade, like an elapsed **Delay** (not with a
   duration under one second).
 - **Triggering:** as for **Delay** — a rising edge, a single pulse or a repeated true telegram at the

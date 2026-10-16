@@ -3378,3 +3378,184 @@ def test_a_cut_run_of_a_forgotten_timer_marks_nothing_dirty() -> None:
     manager._timer_cut("graph", state, "deadline")
 
     assert state.deadline is None and manager._timer_dirty == set()
+
+
+@pytest.mark.parametrize("pending_before", [False, True])
+def test_a_slower_run_starts_no_delay_after_a_newer_run_saw_the_fall(pending_before: bool) -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("read", "datapoint_read", {"datapoint_id": str(source)}),
+                    node("delay", "timer_delay", {"delay_s": 60}),
+                    node("const", "const_value", {"value": "1", "data_type": "number"}),
+                    node("write", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
+                ],
+                "edges": [edge("read", "delay", "value", "trigger"), edge("const", "write", "value", "value")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        earlier = None
+        if pending_before:
+            # A delay still pending keeps its state through the fall.
+            manager._timers["graph"] = {"delay": _pending("timer_delay", in_s=60)}
+            earlier = manager._timers["graph"]["delay"].deadline
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def publish(_event: object) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+
+        manager._event_bus.publish.side_effect = publish
+
+        def value_event(value: bool) -> SimpleNamespace:
+            return SimpleNamespace(datapoint_id=source, value=value, logic_depth=0, initialization=False, suppress_action_triggers=False)
+
+        first = asyncio.create_task(manager._on_value_event(value_event(True)))
+        await entered.wait()
+        await manager._on_value_event(value_event(False))
+        release.set()
+        await first
+
+        state = manager._timers.get("graph", {}).get("delay")
+        if pending_before:
+            assert state is not None and state.deadline == earlier and state.prev_trigger is False
+        else:
+            assert state is None
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def test_a_pulse_is_held_for_its_duration_from_the_start_runs_writes_on() -> None:
+    import httpx
+
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("read", "datapoint_read", {"datapoint_id": str(uuid.uuid4())}),
+                    node("pulse", "timer_pulse", {"duration_s": 0.05}),
+                    node("api", "api_client", {"url": "http://93.184.216.34/", "method": "GET", "response_type": "text/plain"}),
+                    node("write", "datapoint_write", {"datapoint_id": str(target)}),
+                ],
+                "edges": [
+                    edge("read", "pulse", "changed", "trigger"),
+                    edge("pulse", "api", "out", "trigger"),
+                    edge("pulse", "write", "out", "value"),
+                ],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        seen: list[tuple[object, float]] = []
+
+        async def publish(event: object) -> None:
+            if str(event.datapoint_id) == str(target):  # type: ignore[attr-defined]
+                seen.append((event.value, monotonic()))  # type: ignore[attr-defined]
+
+        async def slow_request(*_args: object, **_kwargs: object) -> tuple[httpx.Response, bytes]:
+            await asyncio.sleep(0.15)  # longer than the pulse
+            return httpx.Response(200, content=b"OK", request=httpx.Request("GET", "http://93.184.216.34/")), b"OK"
+
+        manager._event_bus.publish.side_effect = publish
+        with (
+            patch("obs.logic.manager.httpx.AsyncClient") as client_cls,
+            patch("obs.logic.manager._send_api_client_request", side_effect=slow_request),
+        ):
+            client_cls.return_value.__aenter__ = AsyncMock()
+            client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await manager._execute_graph("graph", "Graph", flow, _event(1))
+            await manager._timer_tasks[("graph", "pulse")]
+
+        assert [value for value, _at in seen] == [True, False]
+        assert seen[1][1] - seen[0][1] >= 0.045
+
+    asyncio.run(exercise())
+
+
+def test_a_pulse_started_during_the_save_gap_keeps_its_deadline() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        flow = _pulse_flow(uuid.uuid4(), 60)
+        manager._graphs["graph"] = ("Graph", True, flow)
+        state = manager._timers.setdefault("graph", {})["pulse"] = _pending("timer_pulse", in_s=60, need_on=True)
+        deadline = state.deadline
+
+        async def unloading_run(*_args: object, **_kwargs: object) -> dict:
+            manager._graphs.pop("graph")  # a save unloads the sheet meanwhile
+            return {"pulse": {}}
+
+        manager._execute_graph = AsyncMock(side_effect=unloading_run)  # type: ignore[method-assign]
+        task = asyncio.create_task(manager._run_timer_pulse("graph", "pulse"))
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert state.need_on is False and state.deadline == deadline
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_a_run_records_no_level_for_a_delay_a_save_removed_meanwhile() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        empty = FlowData.model_validate({"nodes": [], "edges": []})
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("level", "const_value", {"value": "true", "data_type": "bool"}),
+                    node("delay", "timer_delay", {"delay_s": 60}),
+                    node(
+                        "notify",
+                        "notify_message",
+                        {"adapter_instance_id": "a", "providers": [{"provider": "x", "target": "y"}], "message": "x"},
+                    ),
+                ],
+                "edges": [edge("level", "delay", "value", "trigger"), edge("level", "notify", "value", "trigger")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        entered, release = asyncio.Event(), asyncio.Event()
+        adapter = SimpleNamespace(adapter_type="MESSAGE")
+
+        async def send(*_args: object, **_kwargs: object) -> list[SimpleNamespace]:
+            entered.set()
+            await release.wait()
+            return [SimpleNamespace(ok=True, provider="x", target="y", detail="")]
+
+        adapter.send_notification = send
+
+        def loading(loaded: FlowData):
+            async def load_graphs() -> None:
+                manager._graphs = {"graph": ("Graph", True, loaded)}
+
+            return load_graphs
+
+        with patch("obs.adapters.registry.get_instance_by_id", return_value=adapter):
+            old = asyncio.create_task(manager._execute_graph("graph", "Graph", flow, {}))
+            await entered.wait()
+            manager._load_graphs = loading(empty)  # type: ignore[method-assign]
+            await manager.reinitialize_graph("graph")
+            release.set()
+            await old
+
+        assert "delay" not in manager._timers.get("graph", {})
+
+        # Re-added with the same id, its first high level arms it.
+        manager._load_graphs = loading(flow)  # type: ignore[method-assign]
+        await manager.reinitialize_graph("graph")
+        flow.nodes[2].data["adapter_instance_id"] = ""
+        await manager._execute_graph("graph", "Graph", flow, {})
+        assert ("graph", "delay") in manager._timer_tasks
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())

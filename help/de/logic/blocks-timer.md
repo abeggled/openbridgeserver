@@ -78,6 +78,9 @@ im selben Lauf aus, der auch den Impuls startet, schreibt es noch den Zustand vo
 - **Erneuter Trigger:** Ein neuer Trigger während des Impulses verlängert ihn — der Ausgang bleibt
   wahr, bis die Dauer ab dem letzten Trigger abgelaufen ist (nachtriggerbar, z. B. für
   Treppenhauslicht).
+- **Langsame Blöcke:** Die Dauer zählt ab dem Lauf, der den Beginn des Impulses schreibt. Hält ein
+  langsamer Block in diesem Lauf (z. B. **API Client**) dessen Schreibvorgänge auf, bleibt der
+  Datenpunkt trotzdem die volle Dauer wahr.
 - **Ketten:** Das Ende des Impulses beginnt — wie der Ablauf einer **Verzögerung** — eine neue
   Logik-Kaskade (bei einer Dauer unter einer Sekunde nicht).
 - **Auslösung:** wie bei **Verzögerung** — steigende Flanke, einzelner Impuls oder erneutes

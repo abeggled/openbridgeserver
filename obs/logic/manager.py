@@ -82,6 +82,9 @@ class _TimerState:
     kind: str
     # The trigger level the block saw last, for its rising-edge detection.
     prev_trigger: bool = False
+    # Counts the changes of prev_trigger: a run's pending delay starts only if
+    # no newer run recorded another level meanwhile.
+    level_changes: int = 0
     # Monotonic time a pending delay fires or a pulse that is on ends; None when idle.
     deadline: float | None = None
     # timer_pulse: the run publishing the pulse's start is still due.
@@ -2250,6 +2253,8 @@ class LogicManager:
         # high and miss its next rise.
         if timer.prev_trigger and not level:
             self._timer_dirty.add(graph_id)
+        if timer.prev_trigger != level:
+            timer.level_changes += 1
         timer.prev_trigger = level
         task = self._timer_tasks.get((graph_id, node.id))
         if level or timer.deadline is not None or timer.need_on or (task is not None and not task.done()):
@@ -2501,6 +2506,11 @@ class LogicManager:
         state.errors = 0
         return False
 
+    def _timer_node(self, graph_id: str, node_id: str) -> Any | None:
+        """A timer block as the loaded sheet has it; None while it is unloaded or without it."""
+        entry = self._graphs.get(graph_id)
+        return next((node for node in entry[2].nodes if node.id == node_id), None) if entry is not None else None
+
     def _timer_run_depth(self, graph_id: str, node_id: str, state: _TimerState) -> int:
         """Cascade depth of a delay's firing or a pulse's end.
 
@@ -2510,8 +2520,7 @@ class LogicManager:
         of the run that triggered it — also within one sheet, where no data
         point event adds one — so _start_timer stops such a loop.
         """
-        entry = self._graphs.get(graph_id)
-        node = next((node for node in entry[2].nodes if node.id == node_id), None) if entry is not None else None
+        node = self._timer_node(graph_id, node_id)
         return state.depth + 1 if node is None or self._timer_duration(node) < _TIMER_NEW_CASCADE_S else 0
 
     def _timer_cut(self, graph_id: str, state: _TimerState, field: str) -> None:
@@ -2617,6 +2626,11 @@ class LogicManager:
                         # Not started after it ran out meanwhile: only its end is left.
                         state.need_on = state.deadline is not None and state.deadline > monotonic()
                         continue
+                    if outcome == "ran" and state.deadline is not None and (node := self._timer_node(graph_id, node_id)) is not None:
+                        # Held for its duration from the start run's writes on: a
+                        # slow action before them must not use the pulse up.
+                        state.deadline = max(state.deadline, monotonic() + self._timer_duration(node))
+                        self._timer_dirty.add(graph_id)
                 await self._sleep_until_deadline(state)
                 await self._wait_for_timer_run((graph_id, node_id))
                 if state.deadline is None or state.deadline > monotonic() or state.need_on:
@@ -8192,7 +8206,7 @@ class LogicManager:
         # ── Delay / pulse timers: started on a rising trigger or a fresh
         # discrete pulse. A pulse starts before the writes below, a delay
         # after them (like value sequences).
-        pending_delays: list[tuple[Any, bool, bool]] = []
+        pending_delays: list[tuple[Any, bool, bool, _TimerState, int]] = []
         # A manual test run of a disabled sheet neither starts a timer nor
         # records a level, so reactivation still re-arms a delay. While a save
         # briefly unloads the sheet it counts as enabled; a sheet deleted or
@@ -8204,6 +8218,8 @@ class LogicManager:
             # saw the old level: the run that changed it records the new one.
             if node.type not in TIMER_NODE_TYPES or not timers_live or _trigger_follows_stale_pulse(node.id):
                 continue
+            if self._current_timer_node(graph_id, node) is None:
+                continue  # a save removed the block meanwhile: a level kept for it would greet its re-adding
             # The level is kept beyond _node_state (and persisted): a trigger
             # still high after a save or restart is no new rising edge. It is
             # recorded now, in the order the runs saw it.
@@ -8245,7 +8261,8 @@ class LogicManager:
                 if (current := self._current_timer_node(graph_id, node)) is not None:
                     self._start_timer(graph_id, current, logic_depth)
             else:
-                pending_delays.append((node, was_triggered, triggered))
+                timer = self._timers[graph_id][node.id]  # recorded high just above
+                pending_delays.append((node, was_triggered, triggered, timer, timer.level_changes))
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
         _mark_side_effect()  # from the writes on, the run has acted (value sequences follow them)
@@ -8256,7 +8273,7 @@ class LogicManager:
         except BaseException:
             # The delays below will not start: take their level back (unless
             # a later run recorded another), so the edge is seen again.
-            for node, was_triggered, triggered in pending_delays:
+            for node, was_triggered, triggered, _timer, _changes in pending_delays:
                 timer = self._timers.get(graph_id, {}).get(node.id)
                 if timer is not None and timer.kind == node.type and timer.prev_trigger == triggered:
                     self._set_timer_level(graph_id, node, was_triggered)
@@ -8272,9 +8289,11 @@ class LogicManager:
                 self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
         # Configured as the sheet now stands: a save may have landed during the
         # writes above.
-        for node, _was_triggered, _triggered in pending_delays:
+        for node, _was_triggered, _triggered, timer, changes in pending_delays:
             if self._timer_epochs.get(graph_id) is not timer_epoch:
                 continue
+            if self._timers.get(graph_id, {}).get(node.id) is not timer or timer.level_changes != changes:
+                continue  # a newer run that finished first recorded another level (e.g. the fall that followed)
             if (current := self._current_timer_node(graph_id, node)) is not None:
                 self._start_timer(graph_id, current, logic_depth)
 
