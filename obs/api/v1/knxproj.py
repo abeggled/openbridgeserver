@@ -39,6 +39,7 @@ from obs.api.v1.services.knx_traceability import (
     KnxDeviceDatapointsContextOut,
     KnxTraceDatapointOut,
     build_device_datapoints_context,
+    pa_order_by_sql,
 )
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
@@ -1235,7 +1236,7 @@ async def list_knx_devices(
                 imported_at
             FROM knx_devices
             {where_sql}
-            ORDER BY individual_address
+            ORDER BY {pa_order_by_sql("individual_address")}
             LIMIT ? OFFSET ?""",
         (*params, size, page * size),
     )
@@ -1431,7 +1432,7 @@ async def list_knx_devices_for_group_address(
     total = count_row["n"] if count_row else 0
 
     rows = await db.fetchall(
-        """SELECT DISTINCT
+        f"""SELECT DISTINCT
                d.individual_address AS pa,
                d.name,
                d.product_name AS manufacturer,
@@ -1442,7 +1443,7 @@ async def list_knx_devices_for_group_address(
            JOIN knx_comm_objects co ON co.device_id = d.id
            JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE l.ga_address = ?
-           ORDER BY d.individual_address
+           ORDER BY {pa_order_by_sql("d.individual_address")}
            LIMIT ? OFFSET ?""",
         (ga, size, page * size),
     )

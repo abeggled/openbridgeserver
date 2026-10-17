@@ -11,6 +11,21 @@ from pydantic import BaseModel, Field
 from obs.db.database import Database
 
 
+def pa_order_by_sql(column: str) -> str:
+    """ORDER BY terms that sort a KNX individual address (``area.line.device``) numerically per part.
+
+    The column is stored as TEXT, so a plain ``ORDER BY`` would put ``1.0.10`` before ``1.0.2``.
+    The raw column is appended as a final tie-breaker for malformed values.
+    """
+    rest = f"substr({column}, instr({column}, '.') + 1)"
+    return (
+        f"CAST(substr({column}, 1, instr({column}, '.') - 1) AS INTEGER), "
+        f"CAST(substr({rest}, 1, instr({rest}, '.') - 1) AS INTEGER), "
+        f"CAST(substr({rest}, instr({rest}, '.') + 1) AS INTEGER), "
+        f"{column}"
+    )
+
+
 class KnxTraceCommObjectOut(BaseModel):
     id: str
     number: str
@@ -196,7 +211,7 @@ async def _devices_by_group_address(group_addresses: list[str], db: Database) ->
              JOIN knx_comm_objects co ON co.device_id = d.id
              JOIN knx_co_ga_links l ON l.comm_object_id = co.id
             WHERE l.ga_address IN ({placeholders})
-            ORDER BY l.ga_address, d.individual_address, CAST(co.number AS INTEGER), co.id""",
+            ORDER BY l.ga_address, {pa_order_by_sql("d.individual_address")}, CAST(co.number AS INTEGER), co.id""",
         normalized,
     )
 
