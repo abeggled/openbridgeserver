@@ -1612,6 +1612,23 @@ class TestKnxReadWrite:
         assert isinstance(telegram.payload.value, DPTArray)
 
     @pytest.mark.asyncio
+    async def test_write_dpt3_dimming_puts_dpt_binary_with_value(self, mock_bus):
+        adapter, mock_xknx = self._make_adapter_with_xknx(mock_bus)
+        binding = make_binding({"group_address": "1/2/3", "dpt_id": "DPT3.007"})
+        await adapter.write(binding, 11)
+        telegram = mock_xknx.telegrams.put.call_args[0][0]
+        assert isinstance(telegram.payload.value, DPTBinary)
+        assert telegram.payload.value.value == 11
+
+    @pytest.mark.asyncio
+    async def test_write_dpt2_puts_dpt_binary(self, mock_bus):
+        adapter, mock_xknx = self._make_adapter_with_xknx(mock_bus)
+        binding = make_binding({"group_address": "1/2/3", "dpt_id": "DPT2.001"})
+        await adapter.write(binding, 1)
+        telegram = mock_xknx.telegrams.put.call_args[0][0]
+        assert isinstance(telegram.payload.value, DPTBinary)
+
+    @pytest.mark.asyncio
     async def test_action_token_is_claimed_by_first_published_confirmation(self, mock_bus):
         stalled_adapter, stalled_xknx = self._make_adapter_with_xknx(mock_bus)
         healthy_adapter, healthy_xknx = self._make_adapter_with_xknx(mock_bus)
@@ -3065,6 +3082,26 @@ class TestHandleReadRequest:
         from xknx.telegram.apci import GroupValueResponse
 
         assert isinstance(telegram.payload, GroupValueResponse)
+
+    @pytest.mark.asyncio
+    async def test_good_dpt3_value_responds_with_dpt_binary(self, mock_bus):
+        from unittest.mock import MagicMock
+
+        adapter, mock_xknx = self._make_adapter(mock_bus)
+        dpt = DPTRegistry.get("DPT3.007")
+        binding = make_binding({"group_address": "1/2/3", "dpt_id": "DPT3.007"})
+        adapter._ga_respond_map["1/2/3"] = [(binding, dpt)]
+
+        state = MagicMock()
+        state.quality = "good"
+        state.value = 11
+        adapter.set_value_getter(lambda _: state)
+
+        await adapter._handle_read_request("1/2/3")
+        mock_xknx.telegrams.put.assert_called_once()
+        telegram = mock_xknx.telegrams.put.call_args[0][0]
+        assert isinstance(telegram.payload.value, DPTBinary)
+        assert telegram.payload.value.value == 11
 
     @pytest.mark.asyncio
     async def test_local_read_response_does_not_reenter_as_inbound_value(self, mock_bus):

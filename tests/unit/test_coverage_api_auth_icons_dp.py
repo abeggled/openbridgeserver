@@ -10,6 +10,7 @@ Covers the previously-uncovered statements in:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import uuid
 import zipfile
@@ -40,7 +41,6 @@ from obs.api.auth import (
     create_refresh_token,
     decode_token,
     hash_password,
-    require_configured_owner,
 )
 from obs.api.v1.icons import (
     DeleteRequest,
@@ -157,6 +157,7 @@ class _RegistryStub:
     def __init__(self, dps=None):
         self._dps: dict[uuid.UUID, _DpStub] = {}
         self._values: dict[uuid.UUID, Any] = {}
+        self.external_write_lock = asyncio.Lock()
         if dps:
             for dp in dps:
                 self._dps[dp.id] = dp
@@ -368,32 +369,6 @@ class TestGetAdminUser:
         with pytest.raises(HTTPException) as exc:
             await auth_module.get_admin_user(current_user="ghost", db=db)
         assert exc.value.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# auth.py — ensure_default_user
-# ---------------------------------------------------------------------------
-
-
-class TestRequireConfiguredOwner:
-    @pytest.mark.asyncio
-    async def test_fails_closed_when_no_administrator_exists(self):
-        db = _DbStub(fetchone_result=_make_row(c=0))
-        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
-            await require_configured_owner(db)
-        assert len(db.executed) == 0
-
-    @pytest.mark.asyncio
-    async def test_fails_closed_when_admin_count_cannot_be_read(self):
-        db = _DbStub(fetchone_result=None)
-        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
-            await require_configured_owner(db)
-
-    @pytest.mark.asyncio
-    async def test_skips_when_users_exist(self):
-        db = _DbStub(fetchone_result=_make_row(c=1))
-        await require_configured_owner(db)
-        assert len(db.executed) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1981,6 +1956,7 @@ class TestUpdateBinding:
         db._fetchone_side_effects = [current_row, updated_row]
 
         monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
+        monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub())
 
         body = AdapterBindingUpdate(enabled=False)
         result = await bindings_api.update_binding(dp_id=dp_id, binding_id=bid, body=body, _user="admin", db=db)

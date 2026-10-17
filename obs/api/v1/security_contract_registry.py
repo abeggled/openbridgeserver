@@ -214,6 +214,10 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("POST", "/api/v1/auth/login"): _contract(
         PrincipalMode.AUTH_FLOW, AuthorizationMode.AUTH_FLOW, None, "session", "auth.session.login", AuditMode.SECURITY
     ),
+    # First-run setup (#1229): runs before any principal can exist, like login.
+    ("POST", "/api/v1/setup/owner"): _contract(
+        PrincipalMode.AUTH_FLOW, AuthorizationMode.AUTH_FLOW, None, "user", "auth.owner.first_created", AuditMode.SECURITY
+    ),
     ("POST", "/api/v1/auth/refresh"): _contract(
         PrincipalMode.AUTH_FLOW, AuthorizationMode.AUTH_FLOW, None, "session", "auth.session.refresh", AuditMode.SECURITY
     ),
@@ -362,6 +366,17 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         capability="adapter.link_binding",
         details=("resource_count", "payload_sha256", "error_count"),
+    ),
+    # Webhook token rotation (issue #1256): a config_mutation like any other
+    # binding operation.  No `capability` is declared, and the route refuses
+    # every non-user principal, so an API key can never rotate a device token.
+    # No detail fields: the token itself must never reach the audit log, and
+    # the resource id already names the binding.
+    ("POST", "/api/v1/adapters/instances/{instance_id}/webhook/bindings/{binding_id}/rotate-token"): _policy(
+        "binding",
+        "adapter.webhook.token_rotated",
+        result=True,
+        audit_effect=AuditEffect.SECURITY_EVENT,
     ),
     ("POST", "/api/v1/adapters/{adapter_type}/test"): _admin("adapter_type", "adapter.type.tested", result=True),
     ("PATCH", "/api/v1/adapters/{adapter_type}/config"): _admin("adapter_type", "adapter.type.config_updated"),
@@ -695,6 +710,9 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("DELETE", "/api/v1/hierarchy/nodes/{node_id}"): _admin("hierarchy_node", "hierarchy.node.deleted"),
     ("POST", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.created"),
     ("DELETE", "/api/v1/hierarchy/links"): _admin("hierarchy_link", "hierarchy.link.deleted"),
+    ("POST", "/api/v1/hierarchy/logic-graph-links"): _admin("hierarchy_link", "hierarchy.logic_graph_link.created"),
+    ("DELETE", "/api/v1/hierarchy/logic-graph-links"): _admin("hierarchy_link", "hierarchy.logic_graph_link.deleted"),
+    ("DELETE", "/api/v1/hierarchy/logic-graph-links/{link_id}"): _admin("hierarchy_link", "hierarchy.logic_graph_link.deleted_by_id"),
     ("POST", "/api/v1/hierarchy/import-from-ets"): _admin(
         "hierarchy",
         "hierarchy.ets_imported",

@@ -1518,6 +1518,39 @@ class TestImportKnxprojFile:
         create_hierarchy.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_unavailable_trades_hierarchy_uses_localized_mode_name(self):
+        upload = AsyncMock()
+        upload.filename = "project.knxproj"
+        upload.read = AsyncMock(return_value=b"data")
+        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
+        db = _make_db()
+        create_hierarchy = AsyncMock()
+
+        with (
+            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
+            patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
+            patch("obs.api.v1.knxproj.create_ets_hierarchy", create_hierarchy),
+        ):
+            result = await import_knxproj_file(
+                file=upload,
+                password=None,
+                adapter_name=None,
+                direction="SOURCE",
+                hierarchy_modes=["trades"],
+                hierarchy_auto_link=True,
+                _user="admin",
+                db=db,
+            )
+
+        assert result.hierarchies[0].status == "failed"
+        assert result.hierarchies[0].message == (
+            "Keine Gewerke-Daten aus dieser .knxproj importiert. Der Gewerke-Hierarchieimport wurde übersprungen."
+        )
+        assert "trades" not in result.hierarchies[0].message
+        create_hierarchy.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_invalid_hierarchy_mode_raises_400(self):
         upload = AsyncMock()
         upload.filename = "project.knxproj"

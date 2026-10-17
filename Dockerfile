@@ -1,13 +1,13 @@
 # ---------------------------------------------------------------------------
 # open bridge server — Multi-Stage Dockerfile (3 stages)
-# Stage 1 (node-builder):   npm ci + vite build → gui_dist/ + frontend_dist/
+# Stage 1 (node-builder):   npm ci + vite/vitepress build → gui_dist/ + frontend_dist/ + help_dist/
 # Stage 2 (py-builder):     pip install Python deps
 # Stage 3 (runtime):        python:3.14-slim, copies all artefacts
 #
 # Target: Linux x86_64 and ARM64 (Cortex-A72 / Raspberry Pi 4)
 # ---------------------------------------------------------------------------
 
-# ── Stage 1: build Vue Admin-GUI + Visu-Frontend ────────────────────────────
+# ── Stage 1: build Vue Admin-GUI + Visu-Frontend + Help site ────────────────
 FROM node:24-slim AS node-builder
 ARG VITE_INSTANCE_NAME=
 ARG VITE_INSTANCE_COLOR=amber
@@ -29,6 +29,14 @@ RUN npm ci --prefer-offline
 COPY frontend/ ./
 RUN npm run build
 # Output: /frontend_dist
+
+# Help site (help/ → ../help_dist)
+WORKDIR /help-src
+COPY help/package.json help/package-lock.json ./
+RUN npm ci --prefer-offline
+COPY help/ ./
+RUN npm run build
+# Output: /help_dist
 
 
 # ── Stage 2: Python dependency builder ─────────────────────────────────────
@@ -68,7 +76,8 @@ COPY --from=py-builder /install /usr/local
 WORKDIR /app
 COPY obs/ ./obs/
 COPY scripts/obs-admin /usr/local/bin/obs-admin
-RUN chmod +x /usr/local/bin/obs-admin
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/obs-admin /usr/local/bin/docker-entrypoint.sh
 # Stamp the version into the image without touching the working tree
 RUN echo "$OBS_VERSION" > ./obs/version
 
@@ -77,6 +86,9 @@ COPY --from=node-builder /gui_dist ./gui_dist/
 
 # Built Visu SPA (served by FastAPI from /app/frontend_dist under /visu/)
 COPY --from=node-builder /frontend_dist ./frontend_dist/
+
+# Built Help site (served by FastAPI from /app/help_dist under /help/)
+COPY --from=node-builder /help_dist ./help_dist/
 
 # Pre-create data directory — volume mount inherits this, preventing SQLite errors
 RUN mkdir -p /data
@@ -90,4 +102,9 @@ ENV OBS_DATABASE__PATH=/data/obs.db \
 
 EXPOSE 8080
 
+# The entrypoint generates the per-instance JWT secret on first start and then
+# execs whatever command it is given, so `docker compose run obs obs-admin ...`
+# keeps working unchanged. (`docker exec` bypasses the entrypoint entirely —
+# obs-admin needs no JWT secret, it only touches the SQLite file.)
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "obs"]

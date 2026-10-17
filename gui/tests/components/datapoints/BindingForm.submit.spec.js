@@ -206,6 +206,133 @@ describe('BindingForm — ZEITSCHALTUHR create submit', () => {
     expect(createBinding.mock.calls[0][1].direction).toBe('SOURCE')
     w.unmount()
   })
+
+  // ── Issue #1008: Schaltwert muss zum Objekttyp passen ──────────────────────
+
+  it('submits a numeric switching value on a FLOAT object', async () => {
+    const w = await mountForm({ dpDataType: 'FLOAT' })
+    await selectInstance(w, 'zt-1')
+    await w.find('[data-testid="zt-value-number"]').setValue('50')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toBe('50')
+    w.unmount()
+  })
+
+  it('blocks the submit when the switching value does not fit the object type', async () => {
+    const w = await mountForm({ dpDataType: 'BOOLEAN' })
+    await selectInstance(w, 'zt-1')
+    // The BOOLEAN select cannot produce an invalid value — simulate a config
+    // that was stored before the object type changed.
+    w.vm.cfg.value = '50'
+    await submit(w)
+    expect(createBinding).not.toHaveBeenCalled()
+    expect(w.text()).toContain('1/0')
+    w.unmount()
+  })
+
+  // Codex review on PR #1155: der bisherige Startwert "1" passt zu keinem
+  // DATE/TIME/DATETIME-Objekt — die API weist so einen Schaltpunkt jetzt ab.
+  it.each([
+    ['DATE', /^\d{4}-\d{2}-\d{2}$/],
+    ['TIME', /^00:00:00$/],
+    ['DATETIME', /^\d{4}-\d{2}-\d{2}T00:00:00$/],
+    ['FLOAT', /^1$/],
+  ])('seeds a new %s schedule point with a value that type accepts', async (dataType, shape) => {
+    const w = await mountForm({ dpDataType: dataType })
+    await selectInstance(w, 'zt-1')
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toMatch(shape)
+    w.unmount()
+  })
+
+  // Ein Altbestand mit ausdrücklich leerem `value` bekommt beim Laden denselben
+  // typgerechten Startwert — ein ganz fehlender Schlüssel behält ihn ohnehin,
+  // weil der reaktive Default bereits typgerecht gesetzt ist.
+  it('seeds a stored config whose value is null', async () => {
+    const w = await mountForm({
+      dpDataType: 'DATE',
+      initial: {
+        id: 'b1',
+        adapter_type: 'ZEITSCHALTUHR',
+        adapter_instance_id: 'zt-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { timer_type: 'daily', time_ref: 'absolute', hour: 8, minute: 0, value: null },
+      },
+    })
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    w.unmount()
+  })
+
+  // Codex review on PR #1155: `buildConfig()` ersetzt einen leeren Schaltwert
+  // durch den Default "1" — geprüft werden muss der Rohwert, sonst wird ein
+  // Wert gespeichert, den niemand eingegeben hat.
+  it('blocks the submit when a typed switching value was cleared', async () => {
+    const w = await mountForm({ dpDataType: 'FLOAT' })
+    await selectInstance(w, 'zt-1')
+    await w.find('[data-testid="zt-value-number"]').setValue('')
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(true)
+    await submit(w)
+    expect(createBinding).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  // Ein leerer Schaltwert bleibt für STRING/UNKNOWN erlaubt — dort greift der
+  // Default weiterhin, weil `validateTimerValue()` diese Typen nicht prüft.
+  it('still applies the default switching value on an untyped object', async () => {
+    const w = await mountForm({ dpDataType: 'UNKNOWN' })
+    await selectInstance(w, 'zt-1')
+    await w.find('[data-testid="zt-value-text"]').setValue('')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toBe('1')
+    w.unmount()
+  })
+
+  // `<input type="number">` gibt Vue mit `v-model` eine Number — ein INTEGER-Wert
+  // jenseits von 2^53 würde dabei gerundet, obwohl das Backend beliebig genau ist.
+  it('preserves an INTEGER switching value beyond the safe-integer range', async () => {
+    const w = await mountForm({ dpDataType: 'INTEGER' })
+    await selectInstance(w, 'zt-1')
+    await w.get('[data-testid="zt-value-number"]').setValue('9007199254740993')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.value).toBe('9007199254740993')
+    w.unmount()
+  })
+
+  // Ein gespeicherter TIME-Wert mit Offset-Sekunden ist für die API gültig —
+  // der Editor muss ihn erneut speichern können statt clientseitig zu blocken.
+  it('resaves a TIME switching value whose offset carries seconds', async () => {
+    const w = await mountForm({
+      dpDataType: 'TIME',
+      initial: {
+        id: 'b1',
+        adapter_type: 'ZEITSCHALTUHR',
+        adapter_instance_id: 'zt-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { timer_type: 'daily', time_ref: 'absolute', hour: 8, minute: 0, value: '08:00:00+02:00:30' },
+      },
+    })
+    expect(w.find('[data-testid="zt-value-error"]').exists()).toBe(false)
+    await submit(w)
+    expect(updateBinding).toHaveBeenCalledWith('dp-1', 'b1', expect.objectContaining({
+      config: expect.objectContaining({ value: '08:00:00+02:00:30' }),
+    }))
+    w.unmount()
+  })
+
+  it('does not validate the switching value for meta bindings', async () => {
+    const w = await mountForm({ dpDataType: 'BOOLEAN' })
+    await selectInstance(w, 'zt-1')
+    w.vm.cfg.timer_type = 'meta'
+    w.vm.cfg.value = '50'
+    await submit(w)
+    expect(createBinding).toHaveBeenCalled()
+    w.unmount()
+  })
 })
 
 // ─── ANWESENHEITSSIMULATION submit ────────────────────────────────────────────
@@ -314,6 +441,160 @@ describe('BindingForm — MESSAGE create submit', () => {
         cooldown_seconds: 30,
       }),
     }))
+    w.unmount()
+  })
+
+  it('saves Pushover options only when they are set and a Pushover target exists', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-pushover',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: {
+          providers: [{ provider: 'pushover', target: 'phone' }],
+          pushover: { priority: 2, retry: 60, expire: 600, image_url: ' http://192.168.1.50/snap.jpg ', url: '', format: 'text' },
+        },
+      },
+    })
+    expect(w.find('[data-testid="pushover-priority"]').element.value).toBe('2')
+    await submit(w)
+
+    const config = updateBinding.mock.calls.at(-1)[2].config
+    expect(config.priority).toBe(2)
+    expect(config.pushover).toEqual({ image_url: 'http://192.168.1.50/snap.jpg', retry: 60, expire: 600 })
+    w.unmount()
+  })
+
+  it('omits empty Pushover options and options without a Pushover target', async () => {
+    for (const providers of [[{ provider: 'pushover', target: 'phone' }], [{ provider: 'telegram', target: 'family' }]]) {
+      updateBinding.mockClear()
+      const w = await mountForm({
+        initial: {
+          id: 'binding-plain',
+          adapter_type: 'MESSAGE',
+          adapter_instance_id: 'msg-1',
+          direction: 'SOURCE',
+          enabled: true,
+          config: { providers, priority: '', pushover: providers[0].provider === 'pushover' ? null : { sound: 'siren' } },
+        },
+      })
+      await submit(w)
+
+      const config = updateBinding.mock.calls.at(-1)[2].config
+      expect(config).not.toHaveProperty('pushover')
+      expect(config).not.toHaveProperty('priority')
+      w.unmount()
+    }
+  })
+
+  it('ignores hidden Pushover options when the binding only archives', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-archive',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: {
+          archive_strategy: 'archive_only',
+          archive_id: 'alarms',
+          providers: [{ provider: 'pushover', target: 'phone' }],
+          pushover: { url_title: 'Open without URL' },
+        },
+      },
+    })
+    await submit(w)
+
+    const config = updateBinding.mock.calls.at(-1)[2].config
+    expect(config).not.toHaveProperty('pushover')
+    w.unmount()
+  })
+
+  it('drops leftover retry and expire below emergency priority', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-leftover',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 1, pushover: { retry: 10, expire: 600, sound: 'siren' } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding.mock.calls.at(-1)[2].config.pushover).toEqual({ sound: 'siren' })
+    w.unmount()
+  })
+
+  it('keeps the top-level priority when the nested one is blank', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-blank-nested',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 1, pushover: { priority: '' } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding.mock.calls.at(-1)[2].config.priority).toBe(1)
+    w.unmount()
+  })
+
+  it('lets a disabled binding be saved with unfinished Pushover options', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-disabled',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: false,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 2, pushover: { retry: 10 } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('drops the hidden priority without a Pushover target', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-telegram',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'telegram', target: 'family' }], priority: 2 },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding.mock.calls.at(-1)[2].config).not.toHaveProperty('priority')
+    w.unmount()
+  })
+
+  it('blocks saving invalid Pushover options', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'binding-invalid',
+        adapter_type: 'MESSAGE',
+        adapter_instance_id: 'msg-1',
+        direction: 'SOURCE',
+        enabled: true,
+        config: { providers: [{ provider: 'pushover', target: 'phone' }], priority: 2, pushover: { retry: 10 } },
+      },
+    })
+    await submit(w)
+
+    expect(updateBinding).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Pushover-Optionen sind ungültig')
     w.unmount()
   })
 

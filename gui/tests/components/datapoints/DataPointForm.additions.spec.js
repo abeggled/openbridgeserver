@@ -143,3 +143,44 @@ describe('DataPointForm — submit includes mqtt_alias null when empty', () => {
     expect(w.emitted('cancel')).toBeTruthy()
   })
 })
+
+// ─── external_write_enabled ────────────────────────────────────────────────────
+
+describe('DataPointForm — external write enabled', () => {
+  it('defaults to unchecked when initial is null', () => {
+    const w = mountForm(null)
+    expect(w.find('[data-testid="checkbox-external-write-enabled"]').element.checked).toBe(false)
+  })
+
+  it('loads external_write_enabled=true from initial', () => {
+    const w = mountForm({
+      name: 'X', data_type: 'FLOAT', tags: [], unit: null, mqtt_alias: null,
+      persist_value: true, record_history: true, external_write_enabled: true,
+    })
+    expect(w.find('[data-testid="checkbox-external-write-enabled"]').element.checked).toBe(true)
+  })
+
+  it('defaults to false when initial omits external_write_enabled', () => {
+    const w = mountForm({ name: 'X', data_type: 'FLOAT', tags: [], unit: null, mqtt_alias: null, persist_value: true, record_history: true })
+    expect(w.find('[data-testid="checkbox-external-write-enabled"]').element.checked).toBe(false)
+  })
+
+  it('submits external_write_enabled=true after toggling the checkbox', async () => {
+    const saveHandler = vi.fn().mockResolvedValue()
+    const w = mountForm(null, saveHandler)
+    await w.find('[data-testid="input-name"]').setValue('DP')
+    await w.find('[data-testid="checkbox-external-write-enabled"]').setValue(true)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    expect(saveHandler).toHaveBeenCalledWith(expect.objectContaining({ external_write_enabled: true }))
+  })
+
+  it('submits external_write_enabled=false by default', async () => {
+    const saveHandler = vi.fn().mockResolvedValue()
+    const w = mountForm(null, saveHandler)
+    await w.find('[data-testid="input-name"]').setValue('DP')
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    expect(saveHandler).toHaveBeenCalledWith(expect.objectContaining({ external_write_enabled: false }))
+  })
+})

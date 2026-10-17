@@ -21,4 +21,5 @@ NODE_TYPE = NodeTypeDef(
         "longitude": {"type": "number", "default": 8.54, "label": "Längengrad"},
     },
     color="#d97706",
+    help_id="logic-block-astro-sun",
 )

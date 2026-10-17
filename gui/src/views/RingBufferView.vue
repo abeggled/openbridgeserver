@@ -54,6 +54,7 @@
           {{ statusBadgeText }}
         </span>
         <TopbarStats ref="topbarStatsRef" @stats="onMonitorStats" />
+        <HelpButton help-id="ringbuffer-toolbar" />
       </div>
     </div>
 
@@ -143,6 +144,9 @@
     />
 
     <div class="card overflow-hidden flex-1 min-h-0 flex flex-col">
+      <div class="flex justify-end px-4 pt-3 shrink-0">
+        <HelpButton help-id="ringbuffer-table" />
+      </div>
       <div v-if="loading" class="flex justify-center py-12"><Spinner size="lg" /></div>
       <div v-else-if="listError" class="px-4 py-6 text-sm text-red-500" data-testid="ringbuffer-error">{{ listError }}</div>
       <div v-else-if="!entries.length" class="text-center text-slate-500 text-sm py-12" data-testid="ringbuffer-empty">{{ $t('ringbuffer.noEntries') }}</div>
@@ -174,8 +178,8 @@
                   {{ e.name ?? e.datapoint_id?.slice(0, 8) }}
                 </RouterLink>
               </td>
-              <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ e.new_value }}<span v-if="e.unit" class="text-slate-500 ml-1 text-xs">{{ e.unit }}</span></td>
-              <td class="font-mono text-sm text-slate-500">{{ e.old_value ?? '-' }}<span v-if="e.unit && e.old_value !== null && e.old_value !== undefined" class="text-slate-500 ml-1 text-xs">{{ e.unit }}</span></td>
+              <td class="font-mono text-sm text-blue-500 dark:text-blue-300">{{ fmtEventValue(e.new_value) }}<span v-if="e.unit" class="text-slate-500 ml-1 text-xs">{{ e.unit }}</span></td>
+              <td class="font-mono text-sm text-slate-500">{{ e.old_value === null || e.old_value === undefined ? '-' : fmtEventValue(e.old_value) }}<span v-if="e.unit && e.old_value !== null && e.old_value !== undefined" class="text-slate-500 ml-1 text-xs">{{ e.unit }}</span></td>
               <td><Badge :variant="e.quality === 'good' ? 'success' : 'warning'" size="xs" dot>{{ qualityLabel(e.quality) }}</Badge></td>
               <td class="text-xs text-slate-500">{{ e.source_adapter ?? '-' }}</td>
             </tr>
@@ -194,6 +198,8 @@ import { useI18n } from 'vue-i18n'
 import { ringbufferApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
 import { useSetColors } from '@/composables/useSetColors'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
 import { useLiveQueue } from '@/composables/useLiveQueue'
 import { timeFilterToPayload, entryInTimeWindow } from '@/composables/useTimeFilterPayload'
 import { matchedSetIds } from '@/composables/useClientSideMatch'
@@ -202,6 +208,7 @@ import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { useAuthStore } from '@/stores/auth'
 import { useWebSocketStore } from '@/stores/websocket'
 import Badge from '@/components/ui/Badge.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import TimeFilterPopover from '@/components/ui/TimeFilterPopover.vue'
 import TopbarFilterChips from '@/views/ringbuffer/TopbarFilterChips.vue'
@@ -218,6 +225,14 @@ const DEFAULT_QUERY_LIMIT = 500
 
 const { t } = useI18n()
 const { fmtDateTime } = useTz()
+// Monitor values are display text — numbers follow the configured regional format
+// (issue #1073). Only real numbers are reformatted; strings stay verbatim so a
+// string datapoint like "1.05" is not altered. CSV/TSV export keeps raw values.
+const { regionFormat } = useRegionalFormat()
+function fmtEventValue(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return value
+  return formatNumber(value, regionFormat.value)
+}
 const auth = useAuthStore()
 const wsStore = useWebSocketStore()
 const { completionRevision } = useLegacyMigration()

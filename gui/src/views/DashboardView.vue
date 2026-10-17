@@ -8,10 +8,10 @@
 
     <!-- Stat cards -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" />
-      <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" />
-      <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" />
-      <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" />
+      <StatCard :label="$t('dashboard.stats.datapoints')" :value="health.datapoints" icon="📋" color="blue" help-id="dashboard-stats-datapoints" />
+      <StatCard :label="$t('dashboard.stats.adaptersRunning')" :value="health.adapters_running" icon="🔌" color="green" help-id="dashboard-stats-adapters" />
+      <StatCard :label="$t('dashboard.stats.wsStatus')" :value="ws.connected ? $t('dashboard.stats.live') : $t('dashboard.stats.offline')" icon="⚡" :color="ws.connected ? 'green' : 'red'" help-id="dashboard-stats-wsstatus" />
+      <StatCard :label="$t('dashboard.stats.server')" :value="health.status === 'ok' ? $t('dashboard.stats.online') : $t('dashboard.stats.error')" icon="🖥️" :color="health.status === 'ok' ? 'green' : 'red'" help-id="dashboard-stats-server" />
     </div>
 
     <!-- Aktive Warnungen (issue #466) — nur sichtbar bei degraded/fehlerhaften Adaptern -->
@@ -30,7 +30,10 @@
           {{ $t('dashboard.activeWarnings') }}
           <span class="text-xs text-slate-500 font-normal">({{ adapterIssues.length }})</span>
         </h3>
-        <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.toAdapters') }}</RouterLink>
+        <div class="flex items-center gap-2">
+          <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.toAdapters') }}</RouterLink>
+          <HelpButton help-id="dashboard-warnings" />
+        </div>
       </div>
       <div class="card-body flex flex-col gap-2">
         <RouterLink
@@ -70,7 +73,10 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('dashboard.adapterStatus.title') }}</h3>
-          <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.adapterStatus.showAll') }}</RouterLink>
+          <div class="flex items-center gap-2">
+            <RouterLink to="/adapters" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.adapterStatus.showAll') }}</RouterLink>
+            <HelpButton help-id="dashboard-adapters" />
+          </div>
         </div>
         <div class="card-body flex flex-col gap-2">
           <div v-if="adaptersLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -89,7 +95,10 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('dashboard.liveValues.title') }}</h3>
-          <RouterLink to="/datapoints" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.liveValues.showAll') }}</RouterLink>
+          <div class="flex items-center gap-2">
+            <RouterLink to="/datapoints" class="text-xs text-blue-400 hover:underline">{{ $t('dashboard.liveValues.showAll') }}</RouterLink>
+            <HelpButton help-id="dashboard-values" />
+          </div>
         </div>
         <div class="card-body flex flex-col gap-0 -mx-5 -my-5 overflow-hidden rounded-b-xl">
           <div v-if="dpStore.loading" class="flex justify-center py-8"><Spinner /></div>
@@ -105,7 +114,7 @@
                 <div :class="['text-sm font-mono font-medium', liveClass(dp)]">
                   {{ displayValue(dp) }}
                 </div>
-                <Badge :variant="qualityVariant(dp.quality)" size="xs" dot>{{ dp.quality ?? '—' }}</Badge>
+                <Badge :variant="qualityVariant(dp.quality)" size="xs" dot>{{ qualityLabel(dp.quality) ?? '—' }}</Badge>
               </div>
             </div>
           </template>
@@ -120,10 +129,12 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { systemApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import { useAdapterStore } from '@/stores/adapters'
 import Badge   from '@/components/ui/Badge.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import StatCard from '@/components/ui/StatCard.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import RingBufferCard from '@/components/dashboard/RingBufferCard.vue'
 import { adapterDotClass as adapterDot, adapterBadgeVariant, adapterStatusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 import { useI18n } from 'vue-i18n'
@@ -133,6 +144,7 @@ const statusDetailText = (a) => adapterStatusDetailText(a, t, te)
 
 const dpStore  = useDatapointStore()
 const ws       = useWebSocketStore()
+const { fmtNumber } = useRegionalFormat()
 const adStore  = useAdapterStore()
 
 const health   = ref({ status: '…', datapoints: '…', adapters_running: '…' })
@@ -169,12 +181,14 @@ onMounted(async () => {
 onUnmounted(() => { unsubWs?.() })
 
 function displayValue(dp) {
+  // Display only — numbers use the configured regional format (issue #1073).
   const live = ws.liveValues[dp.id]
   const val  = live?.value ?? dp.value
   if (val === null || val === undefined) return '—'
   if (typeof val === 'boolean') return val ? 'true' : 'false'
-  if (dp.unit) return `${val} ${dp.unit}`
-  return String(val)
+  const text = typeof val === 'number' && Number.isFinite(val) ? fmtNumber(val) : String(val)
+  if (dp.unit) return `${text} ${dp.unit}`
+  return text
 }
 
 function liveClass(dp) {
@@ -186,5 +200,9 @@ function qualityVariant(q) {
   if (q === 'bad')       return 'danger'
   if (q === 'uncertain') return 'warning'
   return 'muted'
+}
+
+function qualityLabel(q) {
+  return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
 }
 </script>

@@ -11,8 +11,8 @@ NODE_TYPE = NodeTypeDef(
     category="notification",
     description="Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
     inputs=[
-        port("trigger", "Trigger"),
-        port("message", "Nachricht"),
+        port("trigger", "Trigger", "trigger"),
+        port("message", "Nachricht", "trigger"),
         port("url", "URL"),
         port("url_title", "URL-Titel"),
         port("image_url", "Bild-URL"),

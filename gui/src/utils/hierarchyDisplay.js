@@ -34,3 +34,15 @@ export function hierarchyDisplayIndent(path, displayDepth) {
 export function hierarchyDisplayLabel(options) {
   return hierarchyDisplayPath(options).join(' › ')
 }
+
+/**
+ * `HierarchyCombobox`/`Combobox` (multi mode) emit an array of composite
+ * `"<tree_id>:<node_id>"` strings, not the full item objects — split one
+ * back into its parts. Returns `null` for a malformed id (no `:`, or an
+ * empty tree_id) rather than throwing, so a caller can skip it defensively.
+ */
+export function parseHierarchyCompositeId(compositeId) {
+  const idx = String(compositeId).indexOf(':')
+  if (idx <= 0) return null
+  return { tree_id: compositeId.slice(0, idx), node_id: compositeId.slice(idx + 1) }
+}

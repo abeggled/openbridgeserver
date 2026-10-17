@@ -18,6 +18,7 @@
         <span :class="['w-1.5 h-1.5 rounded-full', wsConnected ? 'bg-teal-400 animate-pulse' : 'bg-slate-600']" />
         {{ wsConnected ? $t('sidebar.live') : $t('sidebar.offline') }}
       </span>
+      <HelpButton help-id="logs-level" />
     </div>
 
     <!-- Filters -->
@@ -37,6 +38,7 @@
         <option value="200">200</option>
         <option value="500">500</option>
       </select>
+      <HelpButton help-id="logs-table" />
     </div>
 
     <!-- Log table -->
@@ -74,8 +76,9 @@ import { useI18n } from 'vue-i18n'
 import { logsApi } from '@/api/client'
 import { useTz } from '@/composables/useTz'
 import { useWebSocketStore } from '@/stores/websocket'
-import Badge   from '@/components/ui/Badge.vue'
-import Spinner from '@/components/ui/Spinner.vue'
+import Badge      from '@/components/ui/Badge.vue'
+import HelpButton from '@/components/ui/HelpButton.vue'
+import Spinner    from '@/components/ui/Spinner.vue'
 
 const { t } = useI18n()
 const { fmtDateTime } = useTz()

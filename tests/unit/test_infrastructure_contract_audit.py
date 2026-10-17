@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from datetime import UTC, datetime
@@ -90,7 +91,7 @@ async def db() -> Database:
         await database.disconnect()
 
 
-def test_all_41_infrastructure_mutations_have_exactly_one_literal_audit_binding() -> None:
+def test_all_45_infrastructure_mutations_have_exactly_one_literal_audit_binding() -> None:
     live = collect_live_routes()
     infrastructure = {
         signature: route
@@ -100,12 +101,12 @@ def test_all_41_infrastructure_mutations_have_exactly_one_literal_audit_binding(
         and ROUTE_CLASSIFICATIONS[signature] == "config_mutation"
     }
 
-    assert len(infrastructure) == 41
+    assert len(infrastructure) == 45
     assert {module: sum(route.endpoint.__module__ == module for route in infrastructure.values()) for module in _INFRASTRUCTURE_MODULES} == {
-        "obs.api.v1.adapters": 12,
+        "obs.api.v1.adapters": 13,
         "obs.api.v1.bindings": 3,
         "obs.api.v1.datapoints": 4,
-        "obs.api.v1.hierarchy": 10,
+        "obs.api.v1.hierarchy": 13,
         "obs.api.v1.icons": 6,
         "obs.api.v1.knxkeyfile": 2,
         "obs.api.v1.knxproj": 4,
@@ -322,6 +323,7 @@ def test_datapoint_metadata_snapshot_excludes_runtime_value_and_secrets() -> Non
         "persist_value",
         "record_history",
         "control_class",
+        "external_write_enabled",
     }
     assert "value" not in snapshot
     assert "mqtt_topic" not in snapshot
@@ -339,6 +341,8 @@ async def test_datapoint_patch_persists_safe_before_after_and_changed_fields(db:
     )
 
     class RegistryStub:
+        external_write_lock = asyncio.Lock()
+
         def get(self, dp_id):
             return datapoint if dp_id == datapoint.id else None
 

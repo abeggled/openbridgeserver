@@ -306,6 +306,19 @@ def _is_blocked_ip(addr: ipaddress._BaseAddress, *, allow_loopback: bool) -> boo
     return not addr.is_global
 
 
+def is_non_public_address(ip: str) -> bool:
+    """Return whether *ip* is an internal, reserved or otherwise non-public address.
+
+    Unparsable input is not a known internal address and returns False, so a
+    caller that relaxes a rule only for internal targets keeps the strict rule.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return _is_blocked_ip(addr, allow_loopback=False)
+
+
 def _is_private_network_ip(addr: ipaddress._BaseAddress) -> bool:  # type: ignore[attr-defined]
     if isinstance(addr, ipaddress.IPv6Address) and addr in _NAT64_WELL_KNOWN_PREFIX:
         embedded = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)

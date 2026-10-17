@@ -22,6 +22,7 @@ class DataPoint(BaseModel):
     persist_value: bool = True
     record_history: bool = True
     control_class: ControlClassName = "room_local"
+    external_write_enabled: bool = False
     created_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
     updated_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
 
@@ -41,6 +42,7 @@ class DataPointCreate(BaseModel):
     persist_value: bool = True
     record_history: bool = True
     control_class: ControlClassName = "room_local"
+    external_write_enabled: bool = False
 
 
 class DataPointUpdate(BaseModel):
@@ -52,4 +54,5 @@ class DataPointUpdate(BaseModel):
     persist_value: bool | None = None
     record_history: bool | None = None
     control_class: ControlClassName | None = None
+    external_write_enabled: bool | None = None
     value: Any | None = None  # Allow setting the datapoint value via PATCH

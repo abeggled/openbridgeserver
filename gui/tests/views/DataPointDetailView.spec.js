@@ -62,6 +62,23 @@ describe('DataPointDetailView', () => {
     apiMocks.dpApi.writeValue.mockResolvedValue({})
   })
 
+  it('shows the live value in the regional format and its live timestamp (#1073)', async () => {
+    const { useWebSocketStore } = await import('@/stores/websocket')
+    useWebSocketStore().liveValues['dp-internal'] = {
+      value: 1234.5,
+      quality: 'good',
+      ts: '2026-06-12T08:30:00+00:00',
+    }
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1.234,5 °C')
+    expect(wrapper.text()).toContain('12.06.2026')
+
+    delete useWebSocketStore().liveValues['dp-internal']
+  })
+
   it('allows writing an internal datapoint without writable adapter bindings', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -270,5 +287,55 @@ describe('DataPointDetailView', () => {
 
     expect(wrapper.find('[data-testid="datapoint-knx-context"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('2/3/4')
+  })
+
+  describe('add binding after editing one (#1312)', () => {
+    const existing = { id: 'binding-1', enabled: true, direction: 'SOURCE', adapter_type: 'MQTT', config: {} }
+
+    function mountWithBindingFormProbe() {
+      return mount(DataPointDetailView, {
+        props: { id: 'dp-internal' },
+        global: {
+          stubs: {
+            RouterLink: { template: '<a><slot /></a>' },
+            DataPointHierarchyCard: { template: '<div />' },
+            DataPointForm: { template: '<div />' },
+            BindingForm: { name: 'BindingForm', props: ['initial'], emits: ['save', 'cancel'], template: '<div />' },
+            Modal: { template: '<div v-if="modelValue"><slot /></div>', props: ['modelValue'] },
+            ConfirmDialog: { template: '<div />' },
+          },
+        },
+      })
+    }
+
+    beforeEach(() => {
+      apiMocks.dpApi.listBindings.mockResolvedValue({ data: [existing] })
+    })
+
+    it.each(['cancel', 'save'])('opens an empty form after an edit was closed via %s', async (closeEvent) => {
+      const wrapper = mountWithBindingFormProbe()
+      await flushPromises()
+
+      await wrapper.find('[data-testid="btn-edit-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toEqual(existing)
+
+      wrapper.findComponent({ name: 'BindingForm' }).vm.$emit(closeEvent)
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'BindingForm' }).exists()).toBe(false)
+
+      await wrapper.find('[data-testid="btn-add-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toBeNull()
+    })
+
+    it('still opens the form prefilled when editing', async () => {
+      const wrapper = mountWithBindingFormProbe()
+      await flushPromises()
+
+      await wrapper.find('[data-testid="btn-add-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toBeNull()
+
+      await wrapper.find('[data-testid="btn-edit-binding"]').trigger('click')
+      expect(wrapper.findComponent({ name: 'BindingForm' }).props('initial')).toEqual(existing)
+    })
   })
 })

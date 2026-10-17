@@ -37,20 +37,21 @@ open bridge connects different building technology protocols into a unified syst
 ## Table of Contents
 
 1. [Quick start — Proxmox LXC](#quick-start--proxmox-lxc)
-2. [Configuration](#configuration)
-3. [How does open bridge work?](#how-does-open-bridge-work)
-4. [Data points](#data-points)
-5. [Bindings](#bindings)
-6. [Search](#search)
-7. [Adapters](#adapters)
-8. [History](#history)
-9. [Change log (RingBuffer)](#change-log-ringbuffer)
-10. [Backup & Restore](#backup--restore)
-11. [System status](#system-status)
-12. [Log viewer](#log-viewer)
-13. [Live connection (WebSocket)](#live-connection-websocket)
-14. [Logic editor](#logic-editor)
-15. [Adapter configuration](#adapter-configuration)
+2. [Quick start — Docker Compose](#quick-start--docker-compose)
+3. [Configuration](#configuration)
+4. [How does open bridge work?](#how-does-open-bridge-work)
+5. [Data points](#data-points)
+6. [Bindings](#bindings)
+7. [Search](#search)
+8. [Adapters](#adapters)
+9. [History](#history)
+10. [Change log (RingBuffer)](#change-log-ringbuffer)
+11. [Backup & Restore](#backup--restore)
+12. [System status](#system-status)
+13. [Log viewer](#log-viewer)
+14. [Live connection (WebSocket)](#live-connection-websocket)
+15. [Logic editor](#logic-editor)
+16. [Adapter configuration](#adapter-configuration)
     - [KNX adapter](#knx-adapter)
     - [Modbus TCP adapter](#modbus-tcp-adapter)
     - [Modbus RTU adapter](#modbus-rtu-adapter)
@@ -62,13 +63,13 @@ open bridge connects different building technology protocols into a unified syst
     - [SNMP adapter](#snmp-adapter)
     - [Presence simulation adapter](#presence-simulation-adapter)
     - [Scheduler adapter](#scheduler-adapter)
-16. [MQTT topics](#mqtt-topics)
-17. [Data types](#data-types)
-18. [Settings](#settings)
-19. [Helper scripts](#helper-scripts)
-20. [Visualization (Visu)](#visualization-visu)
+17. [MQTT topics](#mqtt-topics)
+18. [Data types](#data-types)
+19. [Settings](#settings)
+20. [Helper scripts](#helper-scripts)
+21. [Visualization (Visu)](#visualization-visu)
     - [Floor plan and system diagram widget](#floor-plan-and-system-diagram-widget)
-21. [Development](#development)
+22. [Development](#development)
     - [Local development with PyCharm](#local-development-with-pycharm)
     - [Local Git Hooks (Pre-Push Gate)](#local-git-hooks-pre-push-gate)
 
@@ -114,8 +115,13 @@ The LXC template contains a complete Ubuntu 26.04 system with **open bridge serv
 |---|---|
 | **open bridge server** web interface + API | `http://<container-ip>:8080` |
 
-OBS deliberately ships no default credentials. The first start initializes the database and
-then stops with a setup notice. Create exactly one owner locally before restarting the service:
+OBS ships without credentials, so the first start serves nothing but its setup page: open the
+address above in a browser and set the administrator's username and password. Every other page,
+the API and the Visu stay blocked until that account exists.
+
+Do this right after installing — until the account is created, anyone who can reach the server on
+the network can create it. An installation that must never be claimable that way can create the
+owner offline instead, before the container is first reachable:
 
 ```bash
 obs-admin auth first-owner <username> --password-stdin
@@ -133,6 +139,68 @@ OBS_SECURITY__JWT_SECRET=<at-least-32-random-characters>
 # Restart the service
 systemctl restart obs
 ```
+
+---
+
+## Quick start — Docker Compose
+
+The Compose stack runs **open bridge server** together with its own Mosquitto broker. It needs
+nothing but Docker on the host.
+
+**Step 1 — Fetch the stack**
+
+```bash
+git clone https://github.com/abeggled/openbridgeserver.git
+cd openbridgeserver
+cp .env.example .env      # optional — MQTT service password, host ports, instance name
+```
+
+**Step 2 — Start the stack**
+
+```bash
+docker compose up -d
+```
+
+**Step 3 — Set the administrator password**
+
+Open `http://<host-ip>:8080` in a browser. OBS ships without credentials, so a fresh installation
+serves nothing but its setup page: enter a username and password there and the interface is ready
+— no shell, no `docker exec`, no restart. Every other page, the API and the Visu stay blocked
+until that account exists.
+
+Do this right after starting the stack — until the account is created, anyone who can reach the
+server on the network can create it. An installation that must never be claimable that way can
+create the owner offline instead, before the container is first reachable:
+
+```bash
+docker compose up -d mosquitto
+```
+
+```bash
+printf '%s\n' '<password>' | docker compose run --rm --no-deps -T obs obs-admin auth first-owner <username> --password-stdin
+```
+
+```bash
+docker compose up -d
+```
+
+`--no-deps` keeps Compose from starting the dependencies a second time; Mosquitto has to run
+already because the `obs` service shares its PID namespace. Where the stack is managed outside a
+Compose file (Portainer, a plain `docker run`), the same command runs in the container itself:
+`docker exec -i <container> obs-admin auth first-owner <username> --password-stdin`.
+
+**Step 4 — Access**
+
+| Service | Address |
+|---|---|
+| **open bridge server** web interface + API | `http://<host-ip>:8080` |
+
+**Security configuration**: the container generates a random per-instance JWT secret on its first
+start and persists it in the data volume (`/data/secrets/jwt-secret`) — nothing to configure. Set
+`OBS_JWT_SECRET` in `.env` only to pin a secret yourself; changing it later invalidates every
+issued token. The Mosquitto service account (`OBS_MQTT_USERNAME` / `OBS_MQTT_PASSWORD`) is shared
+by both containers and only reachable on the Compose network, but the published port `1883` makes
+it worth changing from the default.
 
 ---
 
@@ -170,7 +238,7 @@ ringbuffer:
 
 security:
   jwt_secret: changeme        # Session key — must be changed!
-  jwt_expire_minutes: 1440    # Session duration (default: 24 hours)
+  jwt_expire_minutes: 1440    # Access token lifetime (default: 24 hours)
   # Optional override for the private/internal URL target allowlist.
   # Default: OBS_SECRET_FILE_DIR/url-target-allowlist.yaml when OBS_SECRET_FILE_DIR is set,
   # otherwise secrets/url-target-allowlist.yaml next to the configured database.
@@ -178,6 +246,12 @@ security:
 ```
 
 > **Note:** The `mqtt` section refers to the **internal** Mosquitto broker. External MQTT brokers are set up as separate adapter instances (see [MQTT adapter](#mqtt-adapter-external-broker)).
+
+> **Note:** `jwt_expire_minutes` limits the lifetime of a single **access token**, not how long you
+> stay signed in. `POST /api/v1/auth/login` also issues a refresh token that is valid for 30 days,
+> and both the Admin GUI and the Visu use it to renew the access token automatically. A browser that
+> is used at least once every 30 days therefore never has to sign in again; lowering
+> `jwt_expire_minutes` only shortens the window in which a stolen access token is usable.
 
 ### Offline administration with `obs-admin`
 
@@ -221,7 +295,7 @@ Write commands create a SQLite backup next to the database before changing data 
 
 ### URL target allowlist for internal services
 
-Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.
+Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments (internal HTTP cameras need an allowlist entry; public image sources must use HTTPS), the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.
 
 By default, the YAML file is written to `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` when `OBS_SECRET_FILE_DIR` is set. Otherwise OBS writes it to `secrets/url-target-allowlist.yaml` next to the configured database file. For private targets, use an IP address or CIDR entry, for example `192.168.1.23/32` for a single LAN camera or `10.38.113.0/24` for an internal subnet.
 
@@ -629,9 +703,11 @@ The logic editor enables visual creation of automation rules — without program
 
 The graph can also be started manually via the **▶ Run** button.
 
-**States** (hysteresis, memory, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
+**States** (hysteresis, memory, edge detection, statistics, operating hours, min/max tracker, consumption counter) are stored in the database and survive a restart.
 
 Direct feedback loops are validated in the editor and blocked when saving or connecting nodes. Use a **Memory** block as an explicit tick boundary for controlled feedback: it outputs the value stored from the previous graph run and stores the current input for the next run.
+
+Every block can be **renamed** — function blocks and comment blocks alike: double-click its title on the logic sheet to turn it into a text field — Enter or clicking away commits the name, Escape aborts. The same field is also available at the top of the block properties, so a block can be renamed during a debug session as well. The custom name replaces the block type's default title on the card and in the block properties, with the block type and the generated block id kept below as a secondary line. Clearing the name restores the default title. Connections and references keep addressing the block by its id, and a rename on its own does not reset stored block state (memory, counters, statistics). Renaming edits the logic sheet and is therefore only offered to users who may change it; without that permission the title stays read-only.
 
 Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual blocks) and use **Copy** / **Paste** (or Ctrl/Cmd+C / Ctrl/Cmd+V) to duplicate them with their configuration intact — including across a switch to a different logic sheet, so a block group can be copied from one sheet to another. Pasted blocks are placed with a slight offset and come in pre-selected, ready to be dragged to their new position.
 
@@ -653,9 +729,12 @@ Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual
 | **OR** | A, B | Out | True when **at least one** input is true. |
 | **NOT** | In | Out | Inverts the input. |
 | **XOR** | A, B | Out | True when **exactly one** input is true. |
+| **Binary statistics** | IN 1 … IN 30 | Count TRUE, Count FALSE, Majority TRUE, Total, TRUE %, Tie, Threshold reached | Counts TRUE/FALSE over 2–30 binary inputs (per-input negation applied before counting). Unwired inputs are ignored by default or counted as FALSE; `Threshold` enables a "k of n" output. Stateless. |
 | **Memory** | In, Reset | Out | Outputs the stored value from the previous graph run and stores the current input for the next run. Use this block to build controlled feedback loops. |
 | **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
+| **Edge detection** | In, Reset | Out, Trigger rising, Trigger falling | Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the configured rising value and sets the Rising trigger, a falling edge (true → false) the falling value and the Falling trigger. Without an edge nothing is sent on Out, so a downstream Write Object does not write on every run. Each direction is configured on its own — send a value, only pulse the trigger, or stay silent — and Reset drops the remembered level so the next value starts fresh. |
 | **Hysteresis** | Value | Out | Switches on when the value exceeds "threshold ON", and switches off only when it falls below "threshold OFF". Prevents rapid toggling. |
+| **Merge** | IN 1, IN 2, … (2-30) | Out | Bundles several independent value sources into one shared output: whichever source last delivered a new value is passed through (Edomi-style terminal/junction). Replaces wiring several sources into the same input of another block — that isn't supported and is blocked at connect/save time. |
 | **Decision** | Value | 2-n boolean outputs | Evaluates multiple independent conditions against one input. Every output has its own name and condition; several outputs can be true at the same time. |
 | **Mapping** | Value | Result | Evaluates ordered rules and returns the first matching result. Output type can be bool, int, float, or string; an optional default value handles unmatched inputs. |
 
@@ -685,6 +764,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | Block | Inputs | Outputs | Description |
 |---|---|---|---|
 | **Concatenate** | 2–20 inputs (configurable) | Result | Joins multiple texts into one. Optional separator (e.g. `,` or ` `). |
+| **Search/Replace** | Text | Result | Replaces matches in a text using an ordered list of rules — add, reorder and delete them in the block. Each rule searches for a plain text or a regular expression (RegEx, group references such as `\1` in the replacement), optionally ignoring case and optionally only replacing the first occurrence. Rules run top to bottom, each on the result of the previous one. |
 
 #### Timer
 
@@ -694,6 +774,7 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False". |
 | **Trigger** | — | Trigger | Fires the graph on a schedule (cron format). Configurable via templates, a visual editor (min/hour/day/month/weekday), or direct expression entry. |
 | **Operating hours** | Active, Reset | Hours | Counts operating hours while "Active" is true. Saved counter survives restarts. |
+| **Sensor Watchdog** | IN 1…N (1–10, configurable) | OUT 1…N, Fault text, Fault trigger | Monitors up to 10 inputs for missing new values. Each input has its own timeout and fault value; once an input has gone longer than its timeout without a new value, its output switches to the fault value and a one-shot Fault text/Fault trigger fires. Runs its own internal scheduler, so a timeout is detected autonomously even if nothing else happens elsewhere in the graph. |
 
 #### Script
 
@@ -733,6 +814,12 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | **API request** | Trigger, Body | Response, Status code, Success | Sends an HTTP request to an external address. Method selectable (GET/POST/PUT/PATCH/DELETE). Response format: JSON or text. SSL verification configurable. |
 | **JSON extractor** | Data (JSON text) | Value | Parses a JSON string and extracts a value using a dot-notation path, e.g. `sensors.temperature`. |
 | **XML extractor** | Data (XML text) | Value | Parses an XML string and extracts a value using an XPath expression, e.g. `./sensor/temperature`. |
+
+#### Energy Management
+
+| Block | Inputs | Outputs | Description |
+|---|---|---|---|
+| **Surplus control** | Grid power (or import/export, or feed-in only), Enable, Feed-in reserve, Plant OK, per consumer: Measured power / Maximum power / Reset | Per consumer: setpoint (0–100 %), on/off or trigger pulse plus status; diagnostics: Grid power, Surplus, Budget, Allocated, Remaining, Status, Warning | HEMS Lite: distributes the surplus measured at the grid connection point across any number of consumers by priority (list order, drag and drop). Consumers are continuous (0–100 %), on/off with hysteresis, or one-shot triggers, with minimum run/off times and switch-on/off delays. An invalid or stale meter value puts all outputs into the safe state (0 %, off, no trigger). Runs its own control interval (default 30 s). |
 
 ---
 
@@ -864,6 +951,11 @@ Shows calculated intermediate values directly on the blocks — live and automat
 2. Click the **🔍 Debug** button in the toolbar
 3. Each block shows a yellow band with its current output values
 4. The display updates automatically after each execution (value change, schedule, manual start)
+5. Click a block to open its configuration panel — while debug mode is active it offers a
+   **Debug values** tab (appended to the tab bar of Read/Write Object blocks, next to a
+   **Settings** tab for all other blocks), so the block can still be configured during a
+   debug session. The **Debug values** tab shows the complete inputs and outputs, execution
+   metadata and allows temporary input overrides for a single test run
 
 | Type | Display |
 |---|---|
@@ -1289,15 +1381,16 @@ A 1-Wire busmaster's device node isn't guaranteed to stay the same across reboot
 - A plain USB busmaster (e.g. DS9490) enumerates as `/dev/bus/usb/<bus>/<device>` — bus/device numbers can shift.
 - The ElabNET PBM enumerates as an FTDI serial device (`/dev/ttyUSB0`, `/dev/ttyUSB1`, …) — the trailing number depends on plug-in order.
 
-For the PBM, `/dev/serial/by-id/usb-FTDI_...` is usually already a stable path that udev creates automatically for any serial device exposing a serial number, without a custom rule (see the `ls /dev/serial/by-id/` output in step 1) — pointing `OBS_ONEWIRE__PBM_DEVICES` at that path directly is enough, and you can skip ahead to step 3. Plain USB busmasters don't get an equivalent automatic alias, so a custom udev rule is the reliable fix there. A custom rule for the PBM only pays off if you'd rather have a short, self-chosen name than the long `by-id` path.
+For the PBM, `/dev/serial/by-id/usb-FTDI_...` is usually already a stable path that udev creates automatically for any serial device exposing a serial number, without a custom rule (see the `ls /dev/serial/by-id/` output in step 1) — pointing `OBS_ONEWIRE__PBM_DEVICES` at that path directly is enough, and you can skip ahead to step 3. A plain USB busmaster needs **no** stable path at all: `owserver` (`server: usb = all`) doesn't take a device path — it scans `/dev/bus/usb` itself via libusb and finds every busmaster wherever it enumerates. Its udev rule therefore creates no symlink; it only lets root inside an unprivileged LXC open the device (step 3 explains why a symlink can't be used for the busmaster). A custom rule for the PBM only pays off if you'd rather have a short, self-chosen name than the long `by-id` path.
 
-Create the rule on the **Proxmox host** (not inside the container — Proxmox resolves the LXC passthrough mount against the host's device tree before the container starts, so the symlink must already exist there), e.g. `/etc/udev/rules.d/99-onewire.rules`:
+Create the rule on the **Proxmox host** (not inside the container — device nodes and their permissions come from the host's device tree, and Proxmox resolves a passthrough symlink there before the container starts), e.g. `/etc/udev/rules.d/99-onewire.rules`:
 
 ```
-# DS9490/DS1490F plain USB busmaster — idVendor/idProduct are fixed for this device family
-# (04fa:2490). No serial condition, since this device reports no serial number (see step 1) —
-# with more than one identical busmaster, this match alone won't tell them apart.
-SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", SYMLINK+="onewire-busmaster"
+# DS9490/DS1490F plain USB busmaster (04fa:2490) — no symlink: owserver (usb = all) scans
+# /dev/bus/usb itself (see step 3). GROUP/MODE let root inside an unprivileged LXC open the
+# device; 100000 is the host GID of the container's root group with Proxmox's default ID
+# mapping. The match covers every busmaster of this family, so several of them work as well.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04fa", ATTR{idProduct}=="2490", GROUP="100000", MODE="0660"
 
 # ElabNET PBM (FTDI) — ATTRS{} rather than ATTR{}, since idVendor/idProduct/serial sit
 # on the parent USB device, not on the tty device itself (see step 1). idProduct varies
@@ -1307,49 +1400,62 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", ATTRS{seria
 
 Only carry over the block(s) for hardware that's actually attached (see the `lsusb` output from step 1) — a rule for hardware that isn't present is harmless but obviously creates no symlink.
 
-Apply it without rebooting, then confirm the symlink appeared:
+Apply it without rebooting, then check the result (busmaster: the `/dev/bus/usb/<bus>/<device>` path from `lsusb`):
 
 ```bash
 udevadm control --reload-rules && udevadm trigger
-ls -l /dev/onewire-busmaster /dev/onewire-pbm
+ls -l /dev/bus/usb/001/004 /dev/onewire-pbm
 ```
 
 Example output for the devices from step 1 (both rules applied):
 
 ```
-$ ls -l /dev/onewire-busmaster /dev/onewire-pbm
-lrwxrwxrwx 1 root root 15 Jul 26 14:02 /dev/onewire-busmaster -> bus/usb/001/004
+$ ls -l /dev/bus/usb/001/004 /dev/onewire-pbm
+crw-rw---- 1 root 100000 189, 3 Jul 26 14:02 /dev/bus/usb/001/004
 lrwxrwxrwx 1 root root  7 Jul 26 14:02 /dev/onewire-pbm -> ttyUSB0
 ```
 
-If only one of the two rules applies to your hardware, `ls` reports `No such file or directory` for the other symlink — that's expected, not an error (see the note above). The symlink *target* (`ttyUSB0`, `bus/usb/001/004`, …) can also change across reboots or reconnects — the rule matches on fixed device attributes, not on the kernel-assigned name, so udev repoints the symlink to wherever the device actually lands each time. That's fine: only the symlink name itself (`/dev/onewire-pbm`) needs to stay stable, since that's what step 3 and 4 reference — never the raw device path.
+If only one of the two rules applies to your hardware, `ls` reports `No such file or directory` for the other path — that's expected, not an error (see the note above). The symlink *target* (`ttyUSB0`, `ttyUSB1`, …) can also change across reboots or reconnects — the rule matches on fixed device attributes, not on the kernel-assigned name, so udev repoints the symlink to wherever the device actually lands each time. That's fine: only the symlink name itself (`/dev/onewire-pbm`) needs to stay stable, since that's what step 3 and 4 reference — never the raw device path.
 
 #### 3. Pass the device(s) through to the container
 
-- **Proxmox LXC**: open the container → **Resources** → **Add** → **Device Passthrough**, set **Device Path** to the stable symlink from step 2 (e.g. `/dev/onewire-busmaster`), and confirm. Repeat for each device that applies (busmaster and/or PBM):
+- **Proxmox LXC, plain USB busmaster**: bind-mount the host's whole `/dev/bus/usb` into the container and allow the USB character devices (major 189). Add both lines on the host to `/etc/pve/lxc/<CTID>.conf`, in the top section — if the container has snapshots, the file contains `[snapshot]` sections further down, and lines appended at the very end land in the last snapshot instead of the active configuration:
 
-  ![Proxmox container Resources tab with two passed-through 1-Wire devices](docs/device-passthrough1.jpeg)
-  ![Proxmox Device Passthrough edit dialog](docs/device-passthrough2.jpeg)
+  ```
+  lxc.cgroup2.devices.allow: c 189:* rwm
+  lxc.mount.entry: /dev/bus/usb dev/bus/usb none bind,optional,create=dir
+  ```
 
-  Proxmox writes the matching mount entry and cgroup device permission for you — no manual `lxc.mount.entry`/`lxc.cgroup2.devices.allow` editing, and no risk of forgetting the cgroup line (the most common mistake with the manual approach). Restart the container (`pct reboot <CTID>`) for the passthrough to take effect.
+  Don't pass the busmaster through as a symlink via *Device Passthrough*: the node then only exists inside the container under the symlink name, while libusb looks for busmasters exclusively under `/dev/bus/usb/<bus>/<device>` — `owserver` fails with `LIBUSB_ERROR_NO_DEVICE` / `No valid 1-wire buses found` (https://github.com/abeggled/openbridgeserver/issues/1287). The bind mount also covers several busmasters and re-plugging without a container restart (a passed-through path is resolved only once, at container start). Restart the container (`pct reboot <CTID>`) once after adding the lines; both lines are required — the mount alone is not enough.
+
+  Note that with the cgroup rule and the bind mount the container sees **all** USB devices of the host, not just the busmaster. With the usual permissions under `/dev/bus/usb` (`0664 root:root`), root inside the unprivileged container can only read them; but if other host udev rules grant looser modes (e.g. `MODE="0666"`), the container can use those devices as well.
+
+- **Proxmox LXC, ElabNET PBM**: open the container → **Resources** → **Add** → **Device Passthrough**, set **Device Path** to the stable path from step 2 (e.g. `/dev/onewire-pbm` or the `/dev/serial/by-id/...` path), and confirm:
+
+  ![Proxmox container Resources tab with the PBM passed through](docs/device-passthrough1.jpeg)
+  ![Proxmox Device Passthrough edit dialog for the PBM](docs/device-passthrough2.jpeg)
+
+  Proxmox writes the matching mount entry and cgroup device permission for you — no manual `lxc.mount.entry`/`lxc.cgroup2.devices.allow` editing. Restart the container (`pct reboot <CTID>`) for the passthrough to take effect.
 
 - **Docker Compose** (`docker-compose.yml`):
   ```yaml
   devices:
-    - "/dev/onewire-busmaster:/dev/onewire-busmaster"
+    - "/dev/bus/usb:/dev/bus/usb"          # plain USB busmaster(s) — whole tree, not the symlink
     - "/dev/onewire-pbm:/dev/ttyUSB0"
   ```
 
+  As for the LXC, map `/dev/bus/usb` for a plain busmaster, not the symlink. Docker fixes the device list when the container is created, so recreate the sidecar after re-plugging a busmaster (`docker compose up -d --force-recreate owserver`).
+
 #### 4. Configure `/etc/owfs.conf`
 
-`/etc/owfs.conf` is `owserver`'s own config file — it tells `owserver` which bus(es) to listen on. With OBS's own `owserver` packaging (the Proxmox LXC systemd service and the Docker Compose sidecar) you never hand-edit this file: both regenerate it from scratch on every start from a small set of `OBS_ONEWIRE__*` environment variables, via the same shared script (`scripts/obs-onewire-configure.sh`) behind both deployment paths. "Configuring `/etc/owfs.conf`" therefore means setting a couple of environment variables in the right place, using the stable symlinked path(s) from step 2 (not the raw `/dev/bus/usb/...` or `/dev/ttyUSB0`).
+`/etc/owfs.conf` is `owserver`'s own config file — it tells `owserver` which bus(es) to listen on. With OBS's own `owserver` packaging (the Proxmox LXC systemd service and the Docker Compose sidecar) you never hand-edit this file: both regenerate it from scratch on every start from a small set of `OBS_ONEWIRE__*` environment variables, via the same shared script (`scripts/obs-onewire-configure.sh`) behind both deployment paths. "Configuring `/etc/owfs.conf`" therefore means setting a couple of environment variables in the right place, using the stable path from step 2 for a PBM (not the raw `/dev/ttyUSB0`) — a plain busmaster needs no path, just `OBS_ONEWIRE__USB_ALL=true`.
 
 **Proxmox LXC** — edit `/etc/obs.env` inside the container (uncomment/add):
 
 ```bash
 OBS_ONEWIRE__USB_ALL=true                    # if a plain busmaster is passed through
 OBS_ONEWIRE__PBM_DEVICES=/dev/onewire-pbm    # comma-separated for multiple PBMs
-# OBS_ONEWIRE__PORT=4304                     # optional, only if you changed the default
+# OBS_ONEWIRE__PORT has no effect in the LXC — the systemd socket (127.0.0.1:4304) sets the port
 ```
 
 Then restart the service — `ExecCondition=` is re-evaluated on every start attempt, so this both regenerates `/etc/owfs.conf` and (re)starts `owserver` now that it has something to serve:
@@ -1448,11 +1554,15 @@ Sends notifications when a linked data point changes and the binding condition i
 | `message` | Message template with placeholders |
 | `title` | Optional message title |
 | `providers` | List of provider and target name to send to |
+| `priority` | Optional Pushover priority (`-2` … `2`) |
+| `pushover` | Optional Pushover options for Pushover targets only: `image_url`, `url`, `url_title`, `sound`, `format` (`text`/`html`/`monospace`), `ttl`, `timestamp`, `retry`/`expire` (required for priority `2`). `image_url`, `url` and `url_title` support the placeholders below. |
 | `send_on_change` | Sends only when entering the fulfilled state; for `any`, only when the value changes |
 | `cooldown_seconds` | Minimum delay between two sent messages |
 | `enabled` | Enables/disables the binding |
 
-Message placeholders: `###DP###` = value, `###DPU###` = unit, `###DPN###` = data point name, `###DPI###` = data point ID, `###TS###` = timestamp.
+Message placeholders: `###DP###` = value, `###DPU###` = unit, `###DPN###` = data point name, `###DPI###` = data point ID, `###TS###` = ISO timestamp, `###DATE###` / `###TIME###` = date and time in the configured display formats.
+
+Numeric values in `###DP###` are rendered in the configured **regional format** (see [Settings](#settings)) — with the German default, `1.05` becomes `1,05`. Non-numeric values (strings, booleans, objects) keep their locale-neutral representation, and `###TS###` always stays a locale-neutral ISO timestamp.
 
 > **Note:** Signal is not offered by the MESSAGE adapter for now because it would require operating a separate Signal gateway service.
 
@@ -1611,7 +1721,27 @@ Generates time-controlled events without external hardware — for time-of-day o
 | `every_minute` | `true`/`false` | Trigger every minute |
 | `holiday_mode` | `ignore`, `skip`, `only`, `as_sunday` | Behavior on holidays |
 | `vacation_mode` | `ignore`, `skip`, `only`, `as_sunday` | Behavior during vacation periods |
-| `value` | Text | Value written when triggered (default: `"1"`) |
+| `value` | Text | Value written when triggered (default: `"1"`). Parsed against the target object's `data_type` — see below. |
+
+**Switching value and object type:**
+
+The switching value is stored as text and converted to the target object's `data_type` when the
+schedule point fires. Both frontends render a matching input control for the bound object and
+reject an incompatible value when the binding is saved (HTTP 422).
+
+| Object type | Accepted switching values | Result |
+|---|---|---|
+| `BOOLEAN` | `1`/`0`, `true`/`false`, `on`/`off`, `ein`/`aus`, `yes`/`no`, `ja`/`nein` | `True` / `False` |
+| `INTEGER` | Whole number (`50`, `-3`, `0`); boolean literals map to `1`/`0` | `int` |
+| `FLOAT` | Number (`21.5`, `0`, `50`); boolean literals map to `1.0`/`0.0` | `float` |
+| `STRING` | Any text, taken literally — including `on`, `1` or `ein` | `str` |
+| `DATE` | ISO 8601 date, e.g. `2026-12-24` | `date` |
+| `TIME` | ISO 8601 time, e.g. `08:00:00` | `time` |
+| `DATETIME` | ISO 8601 timestamp, e.g. `2026-12-24T08:00:00` | `datetime` |
+| `UNKNOWN` | Any text | Heuristic: boolean literal → `int` → `float` → `str` |
+
+A value that cannot be converted is not published; a warning is logged and a `type_mismatch`
+diagnostic is recorded on the data point.
 
 **Holiday modes:**
 
@@ -1678,7 +1808,14 @@ Settings are accessible via the web interface (⚙ in the sidebar).
 
 **General:**
 - **Timezone** — all timestamps in the interface are displayed in this timezone (history, RingBuffer, history search, astro block)
+- **Default date format / default time format** — token patterns (`dd.MM.yyyy`, `HH:mm:ss`, …) used wherever a date or time is shown
+- **Regional format** — decimal separator, thousands grouping and date/currency conventions for **all** numeric output in the Admin GUI, the Visu and server-rendered notification text. This is a **separate setting from the language**, because the two are independent: German in Switzerland formats `1'234.50` while German in Germany formats `1.234,50`. `Automatic` derives the format from the selected language (`de` → `de-DE`, `gsw` → `de-CH`, `en` → `en-US`, …); any explicit entry (`de-DE`, `de-AT`, `de-CH`, `en-US`, `en-GB`, `fr-FR`, `fr-CH`, `it-IT`, `it-CH`, `es-ES`) overrides it. Data point values, calculations, API payloads, exports and stored history stay locale-neutral numbers.
+- **Currency** — ISO currency (`EUR`, `CHF`, `USD`, `GBP`) used for monetary output. `Automatic` derives it from the regional format (`de-CH`/`fr-CH`/`it-CH` → `CHF`, `en-US` → `USD`, `en-GB` → `GBP`, otherwise `EUR`).
 - **Import KNX project file** — upload ETS project file (`.knxproj`) to use group addresses as search suggestions in the binding form
+
+The regional format is also served read-only and without authentication at `GET /api/v1/system/display-settings`, so the Visu applies it for anonymous and PIN-only viewers as well.
+
+Formatting conventions and translated names are deliberately separated: **separators, date/time patterns and currency come from these server settings and are identical for every viewer** — one installation has one numeric convention — while **weekday and month names follow each viewer's own UI language**. A Visu opened in an English browser therefore shows English month names with the configured German number and date format.
 
 **History:** Overview of all data points with history recording. Data points with disabled recording (`record_history: false`) are shown first. Toggle recording per data point.
 

@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   updateBinding: vi.fn(),
   deleteBinding: vi.fn(),
   createBinding: vi.fn(),
+  get: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({
@@ -28,6 +29,8 @@ vi.mock('vue-i18n', () => ({
 
 const listBindingsMock = vi.mocked(datapoints.listBindings)
 const deleteBindingMock = vi.mocked(datapoints.deleteBinding)
+const createBindingMock = vi.mocked(datapoints.createBinding)
+const getMock = vi.mocked(datapoints.get)
 
 let wrapper: VueWrapper | null = null
 
@@ -104,5 +107,40 @@ describe('ZeitschaltuhrAddRemoveModal binding filtering', () => {
 
     expect(deleteBindingMock).toHaveBeenCalledTimes(1)
     expect(deleteBindingMock).toHaveBeenCalledWith('dp-1', 'zsu-binding')
+  })
+})
+
+describe('ZeitschaltuhrAddRemoveModal — switching value of a new schedule point', () => {
+  // Codex review on PR #1155: an empty config gets the adapter's default "1" at
+  // fire time, which no temporal object can hold — the point used to be stored
+  // and then silently dropped at every firing, and the API now rejects it.
+  it.each([
+    ['DATE', /^\d{4}-\d{2}-\d{2}$/],
+    ['TIME', /^00:00:00$/],
+    ['DATETIME', /^\d{4}-\d{2}-\d{2}T00:00:00$/],
+    ['FLOAT', /^1$/],
+  ])('seeds a %s schedule point with a value that type accepts', async (dataType, shape) => {
+    listBindingsMock.mockResolvedValue([])
+    getMock.mockResolvedValue({ id: 'dp-1', data_type: dataType } as never)
+    createBindingMock.mockResolvedValue(binding('new-1', 'zsu-instance', 'ZEITSCHALTUHR', 'x') as never)
+
+    const w = await mountModal()
+    await w.get('[data-testid="zsu-add-btn"]').trigger('click')
+    await flushPromises()
+
+    const config = createBindingMock.mock.calls[0][1].config as Record<string, string>
+    expect(config.value).toMatch(shape as RegExp)
+  })
+
+  it('falls back to the untyped default when the object cannot be read', async () => {
+    listBindingsMock.mockResolvedValue([])
+    getMock.mockRejectedValue(new Error('boom'))
+    createBindingMock.mockResolvedValue(binding('new-1', 'zsu-instance', 'ZEITSCHALTUHR', 'x') as never)
+
+    const w = await mountModal()
+    await w.get('[data-testid="zsu-add-btn"]').trigger('click')
+    await flushPromises()
+
+    expect((createBindingMock.mock.calls[0][1].config as Record<string, string>).value).toBe('1')
   })
 })

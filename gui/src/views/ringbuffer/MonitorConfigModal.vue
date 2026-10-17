@@ -305,12 +305,16 @@ import { ringbufferApi } from '@/api/client'
 import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
 import { useSegmentProblems } from '@/composables/useSegmentProblems'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Modal from '@/components/ui/Modal.vue'
 import PrognosisBlock from '@/components/ringbuffer/PrognosisBlock.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const { t } = useI18n()
+// Numbers and sizes follow the configured regional format (issue #1073).
+const { regionFormat } = useRegionalFormat()
 const { retentionSignal: buildRetentionSignal } = useSegmentProblems()
 
 const props = defineProps({
@@ -428,11 +432,11 @@ const maxFileSizeForPrognosis = computed(() => totalMaxBytes.value)
 
 function formatSegmentAge(seconds) {
   const hours = seconds / SECONDS_PER_HOUR
-  return `${new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 }).format(hours)} ${t('ringbuffer.unitHours')}`
+  return `${formatNumber(hours, regionFormat.value, { maxDecimals: 2 })} ${t('ringbuffer.unitHours')}`
 }
 
 function formatBytesCompact(value) {
-  return formatBytesBinary(value).replace(/([,.])0 (?=[KMGT]iB$)/, ' ')
+  return formatBytesBinary(value, regionFormat.value).replace(/([,.])0 (?=[KMGT]iB$)/, ' ')
 }
 
 function sourceText(explicitEnabled, explicitValue, derivedValue, formatter) {
@@ -462,11 +466,12 @@ const segmentRowsSourceText = computed(() => sourceText(
   configForm.segmentMaxRowsEnabled,
   explicitSegmentRows.value,
   configForm.maxEntriesEnabled && totalMaxEntries.value !== null ? Math.floor(totalMaxEntries.value / 3) : null,
-  (value) => new Intl.NumberFormat('de-DE').format(value),
+  (value) => formatNumber(value, regionFormat.value, { decimals: 0 }),
 ))
 
 function formatBytes(rawBytes) {
-  return formatBytesBinary(rawBytes)
+  // Byte sizes follow the configured regional format (issue #1073).
+  return formatBytesBinary(rawBytes, regionFormat.value)
 }
 
 function formatRetention(rawSeconds) {

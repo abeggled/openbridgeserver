@@ -11,8 +11,8 @@ NODE_TYPE = NodeTypeDef(
     category="notification",
     description="Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
     inputs=[
-        port("trigger", "Trigger"),
-        port("message", "Nachricht"),
+        port("trigger", "Trigger", "trigger"),
+        port("message", "Nachricht", "trigger"),
         port("title", "Titel"),
     ],
     outputs=[port("stored", "Gespeichert", "trigger")],
@@ -20,6 +20,21 @@ NODE_TYPE = NodeTypeDef(
         "archive_id": {"type": "string", "default": "", "label": "Meldungsarchiv"},
         "title": {"type": "string", "default": "", "label": "Titel (Fallback)"},
         "message": {"type": "string", "default": "", "label": "Nachricht (Fallback)"},
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in title and fallback message as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
         "type": {
             "type": "string",
             "enum": ["automation", "notification", "system", "security", "adapter", "diagnostic"],
@@ -34,4 +49,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#2563eb",
+    help_id="logic-block-message-archive",
 )

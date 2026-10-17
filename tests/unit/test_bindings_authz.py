@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,6 +19,7 @@ NOW = "2026-06-10T00:00:00+00:00"
 class _RegistryStub:
     def __init__(self, dp_id: uuid.UUID):
         self._dp = SimpleNamespace(id=dp_id)
+        self.external_write_lock = asyncio.Lock()
 
     def get(self, dp_id: uuid.UUID):
         if dp_id == self._dp.id:
@@ -41,6 +43,27 @@ def _principal(subject: str = "alice", *, is_admin: bool = False) -> Principal:
 
 def test_admin_binding_delegation_keeps_legacy_adapter_access() -> None:
     bindings_api._ensure_adapter_delegates_binding(_principal("admin", is_admin=True), "UNKNOWN")
+
+
+def test_webhook_binding_delegation_is_for_users_not_api_keys(monkeypatch) -> None:
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.knx.adapter import KnxAdapter
+    from obs.adapters.webhook.adapter import WebhookAdapter
+
+    # WEBHOOK follows the regular model: it declares LINK_BINDING, and binding
+    # delegation reaches user principals only (issue #1303).
+    monkeypatch.setitem(adapter_registry._adapters, "WEBHOOK", WebhookAdapter)
+    monkeypatch.setitem(adapter_registry._adapters, "KNX", KnxAdapter)
+    bindings_api._ensure_adapter_delegates_binding(_principal("alice"), "WEBHOOK")
+
+    with pytest.raises(HTTPException) as api_key:
+        bindings_api._ensure_adapter_delegates_binding(Principal(subject="api_key:device", type="api_key", is_admin=False), "WEBHOOK")
+    assert api_key.value.status_code == 403
+
+    # Undeclared adapters keep their gate for users as well.
+    with pytest.raises(HTTPException) as other:
+        bindings_api._ensure_adapter_delegates_binding(_principal("alice"), "KNX")
+    assert other.value.status_code == 403
 
 
 async def _insert_tree_and_nodes(db: Database) -> None:
@@ -439,3 +462,112 @@ async def test_binding_mutation_direct_datapoint_grant_central_plant_requires_ce
         (str(dp_id),),
     )
     await _ensure_binding_mutation_scope(db, _principal("alice"), dp_id)
+
+
+class _ExternalWriteRegistryStub:
+    """Minimal registry double exposing only what `_clear_stale_external_write_enabled` needs."""
+
+    def __init__(self, dp) -> None:
+        self._dp = dp
+        self.update_calls: list[object] = []
+
+    def get(self, dp_id):
+        return self._dp if dp_id == self._dp.id else None
+
+    async def update(self, dp_id, body):
+        self.update_calls.append(body)
+        self._dp.external_write_enabled = body.external_write_enabled
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_clears_when_flag_true(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="KNX", enabled=True)
+
+    assert dp.external_write_enabled is False
+    assert len(registry.update_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_when_already_false(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=False)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="KNX", enabled=True)
+
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_for_message_binding(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="MESSAGE", enabled=True)
+
+    assert dp.external_write_enabled is True
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_when_disabled(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(dp.id, adapter_type="KNX", enabled=False)
+
+    assert dp.external_write_enabled is True
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_clear_stale_external_write_enabled_noop_for_unknown_datapoint(monkeypatch):
+    from obs.api.v1.bindings import _clear_stale_external_write_enabled
+
+    dp = SimpleNamespace(id=uuid.uuid4(), external_write_enabled=True)
+    registry = _ExternalWriteRegistryStub(dp)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: registry)
+
+    await _clear_stale_external_write_enabled(uuid.uuid4(), adapter_type="KNX", enabled=True)
+
+    assert registry.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_operator_user_can_create_a_webhook_binding(monkeypatch, db: Database):
+    from obs.adapters import registry as adapter_registry
+    from obs.adapters.webhook.adapter import WebhookAdapter
+
+    dp_id = uuid.uuid4()
+    instance_id = uuid.uuid4()
+    await _insert_tree_and_nodes(db)
+    await _insert_datapoint(db, dp_id, "allowed-room")
+    await _insert_grant(db, node_type="datapoint", node_id=str(dp_id), role="operator")
+    await _insert_instance(db, instance_id, "WEBHOOK")
+    await _insert_instance_grant(db, instance_id)
+    monkeypatch.setitem(adapter_registry._adapters, "WEBHOOK", WebhookAdapter)
+    monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+    monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
+
+    created = await bindings_api.create_binding(
+        dp_id=dp_id,
+        body=AdapterBindingCreate(adapter_instance_id=instance_id, direction="SOURCE", config={"slug": "bell"}),
+        _user=_principal("alice"),
+        db=db,
+    )
+
+    assert created.adapter_type == "WEBHOOK"

@@ -28,7 +28,10 @@
 
       <!-- Zeitzone -->
       <div class="card" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.title') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.title') }}</h3>
+          <HelpButton help-id="settings-general" />
+        </div>
         <div class="card-body flex flex-col gap-4">
           <div class="form-group">
             <label class="label">{{ $t('settings.general.timezone') }}</label>
@@ -74,6 +77,25 @@
             <label class="label">{{ $t('settings.general.timeFormat') }}</label>
             <input v-model="timeFormatSelected" class="input text-sm font-mono" type="text" />
           </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.general.regionFormat') }}</label>
+            <p class="text-xs text-slate-500 mb-2">{{ $t('settings.general.regionFormatHint') }}</p>
+            <select v-model="regionFormatSelected" class="input text-sm" data-testid="region-format-select">
+              <option v-for="opt in regionFormatOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="label">{{ $t('settings.general.currency') }}</label>
+            <select v-model="currencySelected" class="input text-sm" data-testid="currency-select">
+              <option v-for="opt in currencyOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+          <div class="rounded-lg bg-slate-100 dark:bg-slate-800/60 p-3 text-xs text-slate-600 dark:text-slate-300 flex flex-col gap-1"
+            data-testid="region-format-preview">
+            <span class="uppercase tracking-wide text-[10px] text-slate-400">{{ $t('settings.general.formatPreview') }}</span>
+            <span class="font-mono">{{ regionFormatPreview.number }}</span>
+            <span class="font-mono">{{ regionFormatPreview.currency }}</span>
+          </div>
           <div v-if="tzMsg" :class="['p-3 rounded-lg text-sm', tzMsg.ok ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30']">{{ tzMsg.text }}</div>
           <button @click="saveTz" class="btn-primary" :disabled="tzSaving">
             <Spinner v-if="tzSaving" size="sm" color="white" />
@@ -86,6 +108,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.general.appearance') }}</h3>
+          <HelpButton help-id="settings-appearance" />
         </div>
         <div class="card-body flex flex-col gap-3">
           <p class="text-sm text-slate-500">{{ $t('settings.general.appearanceHint') }}</p>
@@ -114,7 +137,10 @@
 
     <!-- ── Passwort ── -->
     <div v-if="activeTab === 'password'" class="card max-w-md" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
-      <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.password.title') }}</h3></div>
+      <div class="card-header">
+        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.password.title') }}</h3>
+        <HelpButton help-id="settings-password" />
+      </div>
       <div class="card-body">
         <form @submit.prevent="changePassword" class="flex flex-col gap-4">
           <div class="form-group">
@@ -142,6 +168,7 @@
     <div v-if="activeTab === 'users' && (auth.isAdmin || isDemo)" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
         <span class="flex-1 text-sm text-slate-400">{{ $t('settings.users.count', { n: users.length }) }}</span>
+        <HelpButton help-id="settings-users" />
         <button @click="openCreateUser" class="btn-primary btn-sm">{{ $t('settings.users.addButton') }}</button>
       </div>
       <div class="card">
@@ -235,6 +262,7 @@
     <div v-if="activeTab === 'apikeys'" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="flex items-center gap-3 mb-4">
         <span class="flex-1 text-sm text-slate-400">{{ $t('settings.apikeys.count', { n: apiKeys.length }) }}</span>
+        <HelpButton help-id="settings-apikeys" />
         <button @click="createApiKey" class="btn-primary btn-sm">{{ $t('settings.apikeys.addButton') }}</button>
       </div>
       <div class="card overflow-hidden mb-4">
@@ -267,7 +295,10 @@
     <!-- ── Sicherheit ── -->
     <div v-if="activeTab === 'security' && (auth.isAdmin || isDemo)" class="flex flex-col gap-4 max-w-3xl" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.title') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.title') }}</h3>
+          <HelpButton help-id="settings-security" />
+        </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.security.description') }}</p>
           <div class="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-700 dark:text-amber-300">{{ $t('settings.security.warning') }}</div>
@@ -278,7 +309,10 @@
       </div>
 
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.checkTitle') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.checkTitle') }}</h3>
+          <HelpButton help-id="settings-security-check" />
+        </div>
         <div class="card-body flex flex-col gap-3">
           <div class="grid gap-3 md:grid-cols-[1fr_auto]">
             <input v-model="urlTargetCheckInput" class="input text-sm font-mono" placeholder="http://10.38.113.23/api/v1/status" @keydown.enter.prevent="checkUrlTarget" data-testid="security-url-target-check-input" />
@@ -305,7 +339,10 @@
       <div class="card overflow-hidden">
         <div class="card-header flex items-center justify-between">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.security.allowlistTitle') }}</h3>
-          <button class="btn-secondary btn-sm" @click="loadUrlTargets">{{ $t('settings.security.reload') }}</button>
+          <div class="flex items-center gap-1">
+            <HelpButton help-id="settings-security-entries" />
+            <button class="btn-secondary btn-sm" @click="loadUrlTargets">{{ $t('settings.security.reload') }}</button>
+          </div>
         </div>
         <div class="card-body flex flex-col gap-4">
           <form class="grid gap-3 md:grid-cols-[1fr_1fr_auto]" @submit.prevent="addManualUrlTarget">
@@ -339,6 +376,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.debugSettingsTitle') }}</h3>
+          <HelpButton help-id="settings-support-debug" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.support.debugDescription') }}</p>
@@ -372,6 +410,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.packageTitle') }}</h3>
+          <HelpButton help-id="settings-support-package" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.support.description') }}</p>
@@ -397,6 +436,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.support.viewerTitle') }}</h3>
+          <HelpButton help-id="settings-support-viewer" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.support.viewerDescription') }}</p>
@@ -587,7 +627,10 @@
 
       <!-- Sicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.exportTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.exportTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-config" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.exportDesc') }}</p>
         <button @click="doExport" class="btn-secondary">{{ $t('settings.importexport.exportButton') }}</button>
       </div>
@@ -606,7 +649,10 @@
 
       <!-- Datenbanksicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.dbExportTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.dbExportTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-db" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.dbExportDesc') }}</p>
         <button @click="doExportDb" class="btn-secondary">{{ $t('settings.importexport.dbExportButton') }}</button>
       </div>
@@ -634,7 +680,10 @@
 
       <!-- Meldungsarchiv-Datenbanksicherung erstellen (download) -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.messageArchiveDbExportTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.messageArchiveDbExportTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-messagearchive" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.messageArchiveDbExportDesc') }}</p>
         <button @click="doExportMessageArchiveDb" class="btn-secondary">{{ $t('settings.importexport.messageArchiveDbExportButton') }}</button>
       </div>
@@ -660,7 +709,10 @@
 
       <!-- Autobackup -->
       <div class="card p-5 flex flex-col gap-3">
-        <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupTitle') }}</h3>
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.autobackupTitle') }}</h3>
+          <HelpButton help-id="settings-importexport-autobackup" />
+        </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.autobackupDesc') }}</p>
         <div class="flex flex-col gap-3">
           <label class="flex items-center gap-2 cursor-pointer select-none">
@@ -726,9 +778,12 @@
 
       <!-- KNX Projekt Import -->
       <div id="knx-project-import" class="card p-5 flex flex-col gap-3">
-        <div class="flex items-center gap-2">
-          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
-          <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.importexport.knxTitle') }}</h3>
+            <span class="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">.knxproj</span>
+          </div>
+          <HelpButton help-id="settings-importexport-knx" />
         </div>
         <p class="text-sm text-slate-400">{{ $t('settings.importexport.knxDesc') }}</p>
         <div class="flex flex-col gap-2">
@@ -835,6 +890,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.history.dbTitle') }}</h3>
+          <HelpButton help-id="settings-history-db" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-500">{{ $t('settings.history.dbDesc') }}</p>
@@ -961,7 +1017,10 @@
       <div class="card" data-testid="history-filter-card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.history.filterTitle') }}</h3>
-          <span class="text-xs text-slate-500">{{ $t('settings.history.filterCount', { excluded: histFilterExcludedCount, total: histAllDps.length }) }}</span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-500">{{ $t('settings.history.filterCount', { excluded: histFilterExcludedCount, total: histAllDps.length }) }}</span>
+            <HelpButton help-id="settings-history-filter" />
+          </div>
         </div>
         <div class="card-body flex flex-col gap-3">
           <p class="text-sm text-slate-500">{{ $t('settings.history.filterDesc') }}</p>
@@ -1025,6 +1084,9 @@
 
     <!-- ── Hierarchie ── -->
     <div v-if="activeTab === 'hierarchy'" class="flex flex-col gap-4" data-testid="hierarchy-tab">
+      <div class="flex justify-end">
+        <HelpButton help-id="settings-hierarchy" />
+      </div>
       <div class="card">
         <div class="card-body" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
           <HierarchyManager />
@@ -1039,6 +1101,7 @@
       <div class="flex flex-wrap items-center gap-3">
         <span class="text-sm text-slate-400" data-testid="icons-count">{{ $t('settings.icons.count', { n: iconsFiltered.length }) }}</span>
         <div class="flex-1" />
+        <HelpButton help-id="settings-icons" />
         <button v-if="iconsSelected.size > 0" @click="doIconsExport" class="btn-secondary btn-sm" data-testid="btn-icons-export">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/></svg>
           {{ $t('settings.icons.export', { n: iconsSelected.size }) }}
@@ -1089,7 +1152,10 @@
 
       <!-- Upload area -->
       <div class="card">
-        <div class="card-header"><h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.importTitle') }}</h3></div>
+        <div class="card-header">
+          <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.importTitle') }}</h3>
+          <HelpButton help-id="settings-icons-import" />
+        </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">{{ $t('settings.icons.importDesc') }}</p>
 
@@ -1129,6 +1195,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.knxufTitle') }}</h3>
+          <HelpButton help-id="settings-icons-knxuf" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">{{ $t('settings.icons.knxufDesc') }}</p>
@@ -1146,6 +1213,7 @@
       <div class="card">
         <div class="card-header">
           <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.icons.faTitle') }}</h3>
+          <HelpButton help-id="settings-icons-fontawesome" />
         </div>
         <div class="card-body flex flex-col gap-4">
           <p class="text-sm text-slate-400">{{ $t('settings.icons.faDesc') }}</p>
@@ -1214,9 +1282,12 @@
             <h3 class="font-semibold text-sm text-slate-800 dark:text-slate-100">{{ $t('settings.links.title') }}</h3>
             <p class="text-xs text-slate-500 mt-0.5">{{ $t('settings.links.desc') }}</p>
           </div>
-          <button @click="openNavLinkForm()" class="btn-primary btn-sm" data-testid="btn-add-nav-link">
-            {{ $t('settings.links.addButton') }}
-          </button>
+          <div class="flex items-center gap-1">
+            <HelpButton help-id="settings-links" />
+            <button @click="openNavLinkForm()" class="btn-primary btn-sm" data-testid="btn-add-nav-link">
+              {{ $t('settings.links.addButton') }}
+            </button>
+          </div>
         </div>
         <div class="card-body flex flex-col gap-2">
 
@@ -1294,11 +1365,14 @@
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
-        <div class="px-5 py-3 border-b border-red-500/30 flex items-center gap-2">
-          <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-          </svg>
-          <h3 class="font-semibold text-sm text-red-400">{{ $t('settings.dangerzone.title') }}</h3>
+        <div class="px-5 py-3 border-b border-red-500/30 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+            <h3 class="font-semibold text-sm text-red-400">{{ $t('settings.dangerzone.title') }}</h3>
+          </div>
+          <HelpButton help-id="settings-dangerzone" />
         </div>
         <div class="divide-y divide-red-500/20">
 
@@ -1308,7 +1382,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.bindings.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.bindings.desc') }}</p>
             </div>
-            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('bindings')" data-testid="dz-bindings" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- DataPoints -->
@@ -1317,7 +1391,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.datapoints.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.datapoints.desc') }}</p>
             </div>
-            <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('datapoints')" data-testid="dz-datapoints" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Logic -->
@@ -1326,7 +1400,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.logic.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.logic.desc') }}</p>
             </div>
-            <button @click="showConfirm('logic')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('logic')" data-testid="dz-logic" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Adapters -->
@@ -1335,7 +1409,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.adapters.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.adapters.desc') }}</p>
             </div>
-            <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('adapters')" data-testid="dz-adapters" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- KNX Group Addresses -->
@@ -1344,7 +1418,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.knxga.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.knxga.desc', { n: knxGaCount }) }}</p>
             </div>
-            <button @click="showConfirm('knxga')" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('knxga')" data-testid="dz-knxga" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Factory Reset -->
@@ -1353,7 +1427,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.factory.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.factory.desc') }}</p>
             </div>
-            <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
+            <button @click="showConfirm('factory')" data-testid="dz-factory" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
           </div>
 
           <!-- Feedback -->
@@ -1521,6 +1595,9 @@ import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
+import HelpButton     from '@/components/ui/HelpButton.vue'
+import { formatCurrency, formatNumber } from '@/utils/numberFormat'
+import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/composables/useRegionalFormat'
 
 const { t, te } = useI18n()
 const auth     = useAuthStore()
@@ -1557,6 +1634,10 @@ const tzSearch         = ref('')
 const tzSelected       = ref(settings.timezone)
 const dateFormatSelected = ref(settings.dateFormat)
 const timeFormatSelected = ref(settings.timeFormat)
+// Numbers on this page follow the *saved* regional format, not the pending selection.
+const { regionFormat: activeRegionFormat } = useRegionalFormat()
+const regionFormatSelected = ref(settings.regionFormat)
+const currencySelected = ref(settings.currency)
 const tzSaving         = ref(false)
 const tzMsg            = ref(null)
 const tzDropdownOpen   = ref(false)
@@ -1601,6 +1682,8 @@ onMounted(async () => {
   tzSelected.value = settings.timezone
   dateFormatSelected.value = settings.dateFormat
   timeFormatSelected.value = settings.timeFormat
+  regionFormatSelected.value = settings.regionFormat
+  currencySelected.value = settings.currency
   document.addEventListener('mousedown', onOutsideClick)
   if (auth.isAdmin) {
     loadHistorySettings()
@@ -1640,10 +1723,64 @@ onUnmounted(() => {
   stopSupportDebugTick()
 })
 
+// Regional format is its own setting, independent of the UI language (issue #1073).
+// Option labels mix runtime locale data with translated text, so they are built in
+// local variables and translated via t() — never as hardcoded literals.
+const REGION_FORMAT_FALLBACK = ['auto', 'de-DE', 'de-AT', 'de-CH', 'en-US', 'en-GB', 'fr-FR', 'fr-CH', 'it-IT', 'it-CH', 'es-ES']
+const CURRENCY_FALLBACK = ['auto', 'EUR', 'CHF', 'USD', 'GBP']
+const SAMPLE_AMOUNT = 1234.5
+
+function regionDisplayName(code) {
+  try {
+    return new Intl.DisplayNames([settings.language], { type: 'language' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+const regionFormatOptions = computed(() => {
+  const codes = settings.supportedRegionFormats.length ? settings.supportedRegionFormats : REGION_FORMAT_FALLBACK
+  return codes.map((code) => {
+    const resolved = resolveRegionFormat(code, settings.language)
+    const sample = formatNumber(SAMPLE_AMOUNT, resolved, { decimals: 2 })
+    const optionLabel = code === 'auto'
+      ? t('settings.general.regionFormatAuto', { format: resolved, sample })
+      : `${regionDisplayName(code)} · ${code} · ${sample}`
+    return { value: code, label: optionLabel }
+  })
+})
+
+const currencyOptions = computed(() => {
+  const codes = settings.supportedCurrencies.length ? settings.supportedCurrencies : CURRENCY_FALLBACK
+  const resolvedRegion = resolveRegionFormat(regionFormatSelected.value, settings.language)
+  return codes.map((code) => {
+    const resolved = resolveCurrency(code, resolvedRegion)
+    const optionLabel = code === 'auto'
+      ? t('settings.general.currencyAuto', { currency: resolved })
+      : `${code} · ${formatCurrency(SAMPLE_AMOUNT, resolvedRegion, code)}`
+    return { value: code, label: optionLabel }
+  })
+})
+
+const regionFormatPreview = computed(() => {
+  const resolvedRegion = resolveRegionFormat(regionFormatSelected.value, settings.language)
+  return {
+    number: formatNumber(SAMPLE_AMOUNT, resolvedRegion, { decimals: 3 }),
+    currency: formatCurrency(SAMPLE_AMOUNT, resolvedRegion, resolveCurrency(currencySelected.value, resolvedRegion)),
+  }
+})
+
 async function saveTz() {
   tzSaving.value = true; tzMsg.value = null
   try {
-    await settings.save(tzSelected.value, dateFormatSelected.value, timeFormatSelected.value)
+    await settings.save(
+      tzSelected.value,
+      dateFormatSelected.value,
+      timeFormatSelected.value,
+      settings.language,
+      regionFormatSelected.value,
+      currencySelected.value,
+    )
     tzMsg.value = { ok: true, text: t('settings.general.tzSaved', { tz: tzSelected.value }) }
   } catch (e) {
     tzMsg.value = { ok: false, text: e.response?.data?.detail ?? t('common.saveError') }
@@ -1940,7 +2077,8 @@ function supportFormat(value) {
 
 function supportFormatNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return value.toLocaleString()
+  // `toLocaleString()` semantics: at most three fraction digits, no padding.
+  return formatNumber(value, activeRegionFormat.value, { maxDecimals: 3 })
 }
 
 function supportFormatBytes(value) {
@@ -1954,7 +2092,7 @@ function supportFormatCpu(resources) {
   if (typeof cpuCount !== 'number' && typeof load !== 'number') return '—'
   const parts = []
   if (typeof cpuCount === 'number') parts.push(`${cpuCount} ${t('settings.support.viewerCpuUnit')}`)
-  if (typeof load === 'number') parts.push(`${t('settings.support.viewerLoad')} ${load.toFixed(2)}`)
+  if (typeof load === 'number') parts.push(`${t('settings.support.viewerLoad')} ${formatNumber(load, activeRegionFormat.value, { decimals: 2 })}`)
   return parts.join(' / ')
 }
 
@@ -1993,7 +2131,7 @@ function supportFormatTopMemory(resources) {
 
 function supportFormatPercent(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  return `${value.toFixed(1)}%`
+  return `${formatNumber(value, activeRegionFormat.value, { decimals: 1 })}%`
 }
 
 function supportDuration(seconds) {
@@ -2600,8 +2738,9 @@ function formatAutobackupName(name) {
 
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  const region = activeRegionFormat.value
+  if (bytes < 1024 * 1024) return `${formatNumber(bytes / 1024, region, { decimals: 1 })} KB`
+  return `${formatNumber(bytes / 1024 / 1024, region, { decimals: 1 })} MB`
 }
 
 // ── KNX Projekt Import ──────────────────────────────────────────────────────
@@ -2773,7 +2912,7 @@ const DZ_CONFIG = {
     },
     after: () => { knxGaCount.value = 0 },
   },
-  all: {
+  factory: {
     action: async () => {
       const { data } = await configApi.reset()
       const iconInfo = (data.icons_deleted ?? 0) > 0 ? t('settings.dangerzone.factory.resultIcons', { n: data.icons_deleted }) : ''

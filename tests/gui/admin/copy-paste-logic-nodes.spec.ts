@@ -6,7 +6,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { apiPost, apiDelete, apiGet } from '../helpers'
+import { apiPost, apiDelete, apiGet, openLogicGraph } from '../helpers'
 
 interface FlowNode { id: string; type: string; position: { x: number; y: number }; data: Record<string, unknown> }
 interface FlowEdge { id: string; source: string; target: string; sourceHandle: string | null; targetHandle: string | null }
@@ -29,7 +29,7 @@ async function deleteGraphViaApi(id: string): Promise<void> {
 async function gotoLogicWithGraph(page: any, graphId: string) {
   await page.goto('/logic')
   await page.waitForLoadState('networkidle')
-  await page.selectOption('[data-testid="select-graph"]', graphId)
+  await openLogicGraph(page, graphId)
   await expect(page.locator('[data-testid="btn-copy-nodes"]')).toBeVisible({ timeout: 5_000 })
 }
 
@@ -81,7 +81,7 @@ test('Logic: markierte Blöcke kopieren und auf einer anderen Seite einfügen', 
     await expect(page.locator('.bg-green-500\\/10')).toBeVisible({ timeout: 8_000 })
 
     // Zur Zielseite wechseln
-    await page.selectOption('[data-testid="select-graph"]', targetId)
+    await openLogicGraph(page, targetId)
     await expect(page.locator('.vue-flow__node')).toHaveCount(0, { timeout: 5_000 })
 
     await page.click('[data-testid="btn-paste-nodes"]')

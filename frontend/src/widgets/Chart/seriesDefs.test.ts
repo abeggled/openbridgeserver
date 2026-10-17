@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSeriesDefs } from './seriesDefs'
+import { buildSeriesDefs, COLORS } from './seriesDefs'
 
 // Testdaten als Variablen statt direkter `label: '...'`-Objektliterale, damit
 // der i18n-Guard (tools/check_i18n_guard.py, ASSIGN_RE) diese Fixture-Werte
@@ -87,5 +87,36 @@ describe('buildSeriesDefs', () => {
 
   it('returns an empty list when neither a primary datapoint nor series are configured', () => {
     expect(buildSeriesDefs({}, null, '')).toEqual([])
+  })
+})
+
+// WCAG-Kontrast zwischen zwei Hex-Farben (#rrggbb)
+function relativeLuminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5]
+    .map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(v => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+function contrast(a: string, b: string): number {
+  const [x, y] = [relativeLuminance(a), relativeLuminance(b)]
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+
+describe('COLORS', () => {
+  // Hintergründe des Widgets im Light-Theme (bg-gray-100) und Dark-Theme (bg-gray-800)
+  const backgrounds = ['#f3f4f6', '#1f2937']
+
+  it('keeps the colours added in #1361 visible on both theme backgrounds', () => {
+    const added = COLORS.slice(8)
+    expect(added).toHaveLength(4)
+    for (const color of added) {
+      for (const bg of backgrounds) {
+        expect(contrast(color, bg), `${color} on ${bg}`).toBeGreaterThanOrEqual(3)
+      }
+    }
+  })
+
+  it('has no duplicate colours', () => {
+    expect(new Set(COLORS).size).toBe(COLORS.length)
   })
 })

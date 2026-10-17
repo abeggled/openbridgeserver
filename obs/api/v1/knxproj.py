@@ -995,7 +995,7 @@ async def import_knxproj_file(
                 else {}
             ),
             **(
-                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der trades-Hierarchieimport wurde übersprungen.")}
+                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der Gewerke-Hierarchieimport wurde übersprungen.")}
                 if trades_count == 0
                 else {}
             ),
@@ -1295,7 +1295,7 @@ async def get_knx_device(
            FROM knx_comm_objects co
            LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE co.device_id = ?
-           ORDER BY co.number, co.id, l.ga_address""",
+           ORDER BY CAST(co.number AS INTEGER), co.id, l.ga_address""",
         (device_row["id"],),
     )
 

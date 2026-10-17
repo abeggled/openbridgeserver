@@ -102,6 +102,46 @@ class TestJsonExtractor:
         out = _run(nodes)
         assert out["j1"]["value"] is None
 
+    def test_preview_is_none_without_data(self):
+        """An execution without a payload (e.g. untriggered upstream API
+        client) must report no preview at all — not the JSON text "null" —
+        so the GUI can keep the previously received payload (issue #1104)."""
+        nodes = [_jnode("j1", "key")]
+        out = _run(nodes)
+        assert out["j1"]["_preview"] is None
+
+    def test_received_json_null_is_a_real_preview(self):
+        """A payload that *is* the JSON document `null` is data, not an
+        absent input: the preview carries the text "null" so the GUI drops
+        the previously received paths instead of keeping them."""
+        nodes = [_jnode("j1", "key")]
+        out = _run(nodes, input_overrides={"j1": {"data": "null"}})
+        assert out["j1"]["value"] is None
+        assert out["j1"]["_preview"] == "null"
+        assert "_preview_pruned" not in out["j1"]
+
+    def test_native_none_on_the_port_counts_as_no_payload(self):
+        """A *present* port carrying native None is exactly what an
+        untriggered upstream block delivers (api_client's placeholder
+        ``response: None`` arrives through the edge as a present value) —
+        the very situation issue #1104 is about. It must therefore report no
+        preview, so the GUI keeps the last received payload; only the JSON
+        text ``"null"`` counts as a received document."""
+        nodes = [_jnode("j1", "key")]
+        out = _run(nodes, input_overrides={"j1": {"data": None}})
+        assert out["j1"]["value"] is None
+        assert out["j1"]["_preview"] is None
+
+    def test_untriggered_api_client_upstream_yields_no_preview(self):
+        """End-to-end through the edge: api_client not triggered → its
+        placeholder response is None → the extractor reports no preview."""
+        nodes = [node("a1", "api_client", {"url": "http://example.invalid"}), _jnode("j1", "key")]
+        edges = [edge("a1", "j1", "response", "data")]
+        out = _run(nodes, edges)
+        assert out["a1"]["response"] is None
+        assert out["j1"]["_preview"] is None
+        assert out["j1"]["value"] is None
+
     def test_preview_populated(self):
         payload = json.dumps({"a": 1})
         nodes = [_jnode("j1", "a")]
@@ -109,12 +149,49 @@ class TestJsonExtractor:
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["_preview"] == payload
 
-    def test_preview_capped_at_20kb(self):
-        big = json.dumps({"data": "x" * 30_000})
-        nodes = [_jnode("j1", "data")]
-        overrides = {"j1": {"data": big}}
-        out = _run(nodes, input_overrides=overrides)
-        assert len(out["j1"]["_preview"]) <= 20_001  # 20 KB + truncation marker
+    def test_preview_keeps_large_documents_intact(self):
+        """A 100 KB weather feed must reach the path picker in full — the
+        former 20 KB text cut produced invalid JSON and hid every path
+        (issue #1104)."""
+        doc = {"hours": [{"TTT_C": i, "cur_color": {"background_color": "#abcdef"}} for i in range(2000)]}
+        big = json.dumps(doc)
+        assert 20_000 < len(big) < 256_000
+        nodes = [_jnode("j1", "hours[1999].TTT_C")]
+        out = _run(nodes, input_overrides={"j1": {"data": big}})
+        assert out["j1"]["value"] == 1999
+        assert json.loads(out["j1"]["_preview"]) == doc
+        assert "_preview_pruned" not in out["j1"]
+
+    def test_preview_prunes_oversized_documents_to_valid_json(self):
+        """Above the size limit arrays and long strings are shortened
+        structurally, so the snapshot stays parseable and still lists the
+        keys; extraction itself works on the full document."""
+        doc = {"items": [{"n": i, "text": "y" * 300} for i in range(20_000)], "meta": {"id": "x" * 300}}
+        big = json.dumps(doc)
+        assert len(big) > 256_000
+        nodes = [_jnode("j1", "items[19999].n")]
+        out = _run(nodes, input_overrides={"j1": {"data": big}})
+        assert out["j1"]["value"] == 19_999
+        assert out["j1"]["_preview_pruned"] is True
+        preview = json.loads(out["j1"]["_preview"])
+        assert len(preview["items"]) == 5
+        assert preview["items"][0]["n"] == 0
+        assert preview["items"][0]["text"] == "y" * 200 + "…"
+        assert preview["meta"]["id"] == "x" * 200 + "…"
+
+    def test_preview_falls_back_to_text_cut_when_pruning_is_not_enough(self):
+        """Dict keys are never dropped — a document with more keys than fit
+        the limit is cut as text (last resort, marked with an ellipsis)."""
+        doc = {f"key_{i:06d}": i for i in range(60_000)}
+        big = json.dumps(doc)
+        assert len(big) > 256_000
+        nodes = [_jnode("j1", "key_000007")]
+        out = _run(nodes, input_overrides={"j1": {"data": big}})
+        assert out["j1"]["value"] == 7
+        preview = out["j1"]["_preview"]
+        assert len(preview) == 256_001
+        assert preview.endswith("…")
+        assert out["j1"]["_preview_pruned"] is True
 
     def test_string_value_extraction(self):
         payload = json.dumps({"status": "online"})
@@ -130,6 +207,104 @@ class TestJsonExtractor:
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["value"] is True
 
+    def test_double_encoded_json_is_unwrapped(self):
+        """A JSON document serialised twice (a JSON string literal whose
+        content is itself JSON) must still be addressable by path, and the
+        preview must show the decoded document (issue #1104)."""
+        inner = {"days": [{"SUNSET": "19:33", "TX_C": 18}]}
+        payload = json.dumps(json.dumps(inner))
+        nodes = [_jnode("j1", "days[0].TX_C")]
+        out = _run(nodes, input_overrides={"j1": {"data": payload}})
+        assert out["j1"]["value"] == 18
+        assert out["j1"]["_preview"] == json.dumps(inner)
+
+    def test_double_encoded_scalar_stays_string(self):
+        """Only nested objects/arrays are unwrapped — a plain string that
+        happens to parse as a JSON scalar keeps its string identity."""
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps("42")}})
+        assert out["j1"]["_preview"] == json.dumps("42")
+
+    def test_string_with_invalid_inner_json_stays_string(self):
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps("{not json")}})
+        assert out["j1"]["_preview"] == json.dumps("{not json")
+
+    def test_too_deeply_nested_inner_json_does_not_fail_the_node(self):
+        """Absurd nesting raises RecursionError somewhere along the way —
+        in the second decode on some Python versions, in the snapshot's
+        json.dumps on others. Either way the block must keep producing its
+        normal outputs instead of an ``__error__``."""
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        nodes = [_jnode("j1", "a")]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps(deep)}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["value"] is None
+        assert isinstance(out["j1"]["_preview"], str) and out["j1"]["_preview"]
+
+    def test_too_deeply_nested_raw_json_does_not_fail_the_node(self):
+        deep = "[" * 10_000 + "0" + "]" * 10_000
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": deep}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["value"] is None
+        assert isinstance(out["j1"]["_preview"], str) and out["j1"]["_preview"]
+
+    def test_inner_decode_recursion_error_keeps_the_string(self, monkeypatch):
+        """Pin the branch independent of the interpreter: when the inner
+        decode raises RecursionError, the outer string is kept as data."""
+        import json as _json
+
+        real_loads = _json.loads
+        calls = {"n": 0}
+
+        def flaky_loads(text, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RecursionError("maximum recursion depth exceeded")
+            return real_loads(text, *args, **kwargs)
+
+        monkeypatch.setattr(_json, "loads", flaky_loads)
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": _json.dumps("[1, 2]")}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["_preview"] == _json.dumps("[1, 2]")
+
+    def test_raw_decode_recursion_error_keeps_the_string(self, monkeypatch):
+        import json as _json
+
+        def boom(text, *args, **kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(_json, "loads", boom)
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": "[1]"}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["_preview"] == _json.dumps("[1]")
+
+    def test_unrepresentable_payload_does_not_fail_the_node(self):
+        """json.dumps fails (default=str raises) and so does the repr
+        fallback — the snapshot degrades to a marker, never to __error__."""
+
+        class Boom:
+            def __str__(self) -> str:
+                raise RecursionError("maximum recursion depth exceeded while getting the repr of an object")
+
+        out = _run([_jnode("j1", "")], input_overrides={"j1": {"data": Boom()}})
+        assert "__error__" not in out["j1"]
+        assert out["j1"]["_preview"] == "<unrepresentable>"
+
+    def test_unserialisable_fallback_preview_is_bounded(self):
+        """A non-JSON-serialisable payload falls back to its repr, but that
+        repr is capped like every other snapshot and flagged as pruned."""
+        circular: list = ["x" * 300_000]
+        circular.append(circular)
+        nodes = [_jnode("j1", "")]
+        out = _run(nodes, input_overrides={"j1": {"data": circular}})
+        assert len(out["j1"]["_preview"]) == 256_001
+        assert out["j1"]["_preview"].endswith("…")
+        assert out["j1"]["_preview_pruned"] is True
+
     def test_preview_falls_back_to_str_when_not_json_serializable(self):
         """A non-serializable data object (e.g. containing a circular
         reference) must not blow up the preview snapshot — it falls back to
@@ -140,6 +315,17 @@ class TestJsonExtractor:
         overrides = {"j1": {"data": circular}}
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["_preview"] == str(circular)
+
+    def test_preview_prunes_tuples_like_lists(self):
+        nodes = [_jnode("j1", "")]
+        payload = {"t": tuple(range(10)), "s": ("z" * 300, 1)}
+        big_padding = {"pad": ["p" * 100] * 6000}
+        data = {**payload, **big_padding}
+        out = _run(nodes, input_overrides={"j1": {"data": data}})
+        preview = json.loads(out["j1"]["_preview"])
+        assert preview["t"] == [0, 1, 2, 3, 4]
+        assert preview["s"] == ["z" * 200 + "…", 1]
+        assert len(preview["pad"]) == 5
 
 
 class TestJsonExtractorMultiPath:
@@ -182,6 +368,29 @@ class TestJsonExtractorMultiPath:
         overrides = {"j1": {"data": payload}}
         out = _run(nodes, input_overrides=overrides)
         assert out["j1"]["_preview"] == payload
+
+    def test_preview_is_none_without_data(self):
+        paths = [{"label": "X", "path": "x"}]
+        nodes = [self._mnode("j1", paths)]
+        out = _run(nodes)
+        assert out["j1"]["_preview"] is None
+        assert out["j1"]["out_1"] is None
+
+    def test_received_json_null_is_a_real_preview(self):
+        paths = [{"label": "X", "path": "x"}]
+        nodes = [self._mnode("j1", paths)]
+        out = _run(nodes, input_overrides={"j1": {"data": "null"}})
+        assert out["j1"]["_preview"] == "null"
+        assert out["j1"]["out_1"] is None
+
+    def test_pruned_marker_in_multi_mode(self):
+        doc = {"items": [{"n": i, "text": "y" * 300} for i in range(15_000)]}
+        paths = [{"label": "N", "path": "items[14999].n"}]
+        nodes = [self._mnode("j1", paths)]
+        out = _run(nodes, input_overrides={"j1": {"data": json.dumps(doc)}})
+        assert out["j1"]["out_1"] == 14_999
+        assert out["j1"]["_preview_pruned"] is True
+        assert len(json.loads(out["j1"]["_preview"])["items"]) == 5
 
     def test_no_value_key_in_multi_mode(self):
         payload = json.dumps({"a": 1})
@@ -284,6 +493,67 @@ class TestXmlExtractor:
         overrides = {"x1": {"data": xml}}
         out = _run(nodes, input_overrides=overrides)
         assert out["x1"]["value"] == "hello"
+
+
+class TestXmlExtractorPreviewPresence:
+    """Absent input vs. received (possibly empty) document (issue #1104)."""
+
+    def test_no_input_yields_no_preview(self):
+        out = _run([_xnode("x1", ".//a")])
+        assert out["x1"]["_preview"] is None
+        assert out["x1"]["value"] is None
+
+    def test_present_none_counts_as_no_input(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": None}})
+        assert out["x1"]["_preview"] is None
+
+    def test_empty_string_is_a_received_document(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": ""}})
+        assert out["x1"]["_preview"] == ""
+        assert out["x1"]["value"] is None
+
+    def test_whitespace_string_is_a_received_document(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": "  \n"}})
+        assert out["x1"]["_preview"] == "  \n"
+        assert out["x1"]["value"] is None
+
+    def test_non_string_input_previews_its_text(self):
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": 42}})
+        assert out["x1"]["_preview"] == "42"
+        assert out["x1"]["value"] is None
+
+    def test_long_non_string_input_is_capped(self):
+        out = _run([_xnode("x1", "")], input_overrides={"x1": {"data": ["y" * 30_000]}})
+        assert len(out["x1"]["_preview"]) == 20_000
+
+    def test_unrepresentable_non_string_input_does_not_fail_the_node(self):
+        """A value whose str() blows up (absurd nesting → RecursionError) must
+        not turn the extractor's outputs into __error__."""
+
+        class Boom:
+            def __str__(self) -> str:
+                raise RecursionError("maximum recursion depth exceeded while getting the repr of an object")
+
+        out = _run([_xnode("x1", ".//a")], input_overrides={"x1": {"data": Boom()}})
+        assert "__error__" not in out["x1"]
+        assert out["x1"]["value"] is None
+        assert out["x1"]["_preview"] == "<unrepresentable>"
+
+    def test_deeply_nested_python_script_result_does_not_fail_the_node(self):
+        """End-to-end through the edge from a Python Script block."""
+        script = "result = 0\nfor i in range(10000): result = [result]"
+        nodes = [node("p1", "python_script", {"script": script}), _xnode("x1", ".//a")]
+        out = _run(nodes, [edge("p1", "x1", "result", "data")])
+        assert "__error__" not in out["x1"]
+        assert out["x1"]["value"] is None
+        assert isinstance(out["x1"]["_preview"], str)
+
+    def test_multi_path_empty_string_is_a_received_document(self):
+        paths = [{"label": "A", "path": ".//a"}]
+        nodes = [node("x1", "xml_extractor", {"xml_paths": json.dumps(paths)})]
+        out = _run(nodes, input_overrides={"x1": {"data": ""}})
+        assert out["x1"]["_preview"] == ""
+        assert out["x1"]["out_1"] is None
 
 
 class TestXmlExtractorMultiPath:

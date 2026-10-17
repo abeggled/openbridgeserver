@@ -22,4 +22,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#475569",
+    help_id="logic-block-const-value",
 )

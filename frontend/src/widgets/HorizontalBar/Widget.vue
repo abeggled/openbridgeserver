@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useDatapointsStore } from '@/stores/datapoints'
+import { useFormatStore } from '@/stores/format'
 import type { DataPointValue } from '@/types'
 
 interface BarConfig {
@@ -23,6 +24,7 @@ const props = defineProps<{
 }>()
 
 const dpStore = useDatapointsStore()
+const format = useFormatStore()
 
 const widgetLabel = computed(() => (props.config.label as string | undefined) ?? '')
 const bars        = computed<BarConfig[]>(() => (props.config.bars as BarConfig[] | undefined) ?? [])
@@ -58,7 +60,8 @@ function getDisplayValue(bar: BarConfig): string {
   if (!dp) return '…'
   const v = typeof dp.v === 'number' ? dp.v : parseFloat(String(dp.v))
   if (isNaN(v)) return String(dp.v ?? '—')
-  const formatted = v.toFixed(bar.decimals ?? 1)
+  // Anzeige folgt dem konfigurierten Regionalformat (Issue #1073).
+  const formatted = format.fmtNumber(v, { decimals: bar.decimals ?? 1 })
   const unit = bar.postfix || dp.u || ''
   return [bar.prefix, formatted, unit].filter(Boolean).join(' ')
 }

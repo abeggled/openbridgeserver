@@ -45,7 +45,7 @@
           <span
             @click="toggleTree(tree.id)"
             class="font-semibold text-sm text-slate-800 dark:text-slate-100 flex-1 cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors select-none">
-            {{ tree.name }}
+            {{ tree.name }}<span v-if="treeNodes[tree.id]?.length" class="font-normal text-slate-400" :data-testid="`child-count-${tree.id}`"> ({{ treeNodes[tree.id].length }})</span>
           </span>
           <span v-if="tree.description" class="text-xs text-slate-400 hidden sm:block">{{ formatTreeDescription(tree.description) }}</span>
           <button @click="toggleTree(tree.id)" class="btn-secondary btn-xs" :data-testid="`btn-expand-${tree.id}`">
@@ -91,7 +91,7 @@
     </div>
 
     <!-- ── Modal: Create/Edit Tree ── -->
-    <div v-if="treeModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="treeModal.open = false">
+    <div v-if="treeModal.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="treeModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">
           {{ treeModal.isEdit ? $t('hierarchy.rename') : $t('hierarchy.newHierarchy') }}
@@ -123,7 +123,7 @@
     </div>
 
     <!-- ── Modal: Create/Edit Node ── -->
-    <div v-if="nodeModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="nodeModal.open = false">
+    <div v-if="nodeModal.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="nodeModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">
           {{ nodeModal.isEdit ? $t('hierarchy.editNode') : $t('hierarchy.addNode') }}
@@ -148,7 +148,7 @@
     </div>
 
     <!-- ── Modal: ETS Import ── -->
-    <div v-if="etsModal.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="etsModal.open = false">
+    <div v-if="etsModal.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="etsModal.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">{{ $t('hierarchy.importTitle') }}</h3>
         <p class="text-sm text-slate-500">
@@ -211,7 +211,7 @@
     </div>
 
     <!-- ── Modal: Confirm Delete ── -->
-    <div v-if="deleteConfirm.open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="deleteConfirm.open = false">
+    <div v-if="deleteConfirm.open" class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center bg-black/50" :style="{ right: help.reservedRight }" @click.self="deleteConfirm.open = false">
       <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100">{{ deleteConfirm.heading }}</h3>
         <p class="text-sm text-slate-500">{{ deleteConfirm.body }}</p>
@@ -235,8 +235,10 @@ import { hierarchyApi } from '@/api/client.js'
 import HierarchyNodeTree from '@/components/HierarchyNodeTree.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { buildDepthOptions } from '@/utils/hierarchyDepthOptions.js'
+import { useHelpStore } from '@/stores/help'
 
 const { t } = useI18n()
+const help = useHelpStore()
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -289,6 +291,9 @@ async function loadTrees() {
   try {
     const { data } = await hierarchyApi.listTrees()
     trees.value = data
+    // Preload every tree's nodes (not just expanded ones) so the child-count
+    // badge next to a tree's name is available before it's ever expanded.
+    await Promise.all(data.map((tree) => loadTreeNodes(tree.id)))
   } catch {
     showMsg(t('hierarchy.errorLoading'), false)
   } finally {
@@ -485,5 +490,7 @@ function showMsg(text, ok) {
   setTimeout(() => { msg.value = null }, 4000)
 }
 
-onMounted(loadTrees)
+onMounted(() => {
+  loadTrees()
+})
 </script>

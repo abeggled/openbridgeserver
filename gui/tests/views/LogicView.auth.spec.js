@@ -78,6 +78,7 @@ function makeGraph(id = 'graph-1', overrides = {}) {
 async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDetails = {} }) {
   vi.doMock('vue-router', () => ({
     useRoute: () => ({ query: routeQuery }),
+    useRouter: () => ({ push: vi.fn() }),
   }))
   const defaultGraph = graphs[0] ?? makeGraph()
   const logicApi = {
@@ -109,7 +110,10 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
     exportGraph: vi.fn().mockResolvedValue({ data: { export_type: 'logic_graph', name: 'Main Graph' } }),
     importGraph: vi.fn().mockResolvedValue({ data: makeGraph('graph-imported', { name: 'Imported Graph' }) }),
   })
-  vi.doMock('@/api/client', () => ({ logicApi }))
+  const hierarchyApi = {
+    createLogicGraphLink: vi.fn().mockResolvedValue({ data: { id: 'link-1' } }),
+  }
+  vi.doMock('@/api/client', () => ({ logicApi, hierarchyApi }))
   vi.doMock('@/api/logicAuthz', () => ({ logicRunAuthzApi }))
 
   const pinia = createPinia()
@@ -137,7 +141,7 @@ async function mountLogicView({ isAdmin, graphs = [], routeQuery = {}, graphDeta
     attachTo: document.body,
   })
   await flushPromises()
-  return { wrapper, logicApi, logicRunAuthzApi }
+  return { wrapper, logicApi, logicRunAuthzApi, hierarchyApi }
 }
 
 describe('LogicView auth gates', () => {
@@ -184,10 +188,11 @@ describe('LogicView auth gates', () => {
     wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
     expect(wrapper.vm.selectedNode).toBe(null)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     await wrapper.vm.runGraph()
     await wrapper.vm.doToggleEnabled()
-    await wrapper.vm.doDuplicateGraph()
+    wrapper.vm.openDuplicate()
+    await wrapper.vm.doDuplicate()
     wrapper.vm.openRenameGraph()
     await wrapper.vm.doRenameGraph()
     wrapper.vm.confirmDeleteGraph()
@@ -218,7 +223,7 @@ describe('LogicView auth gates', () => {
   })
 
   it('lets admins create a graph', async () => {
-    const { wrapper, logicApi } = await mountLogicView({ isAdmin: true })
+    const { wrapper, logicApi, hierarchyApi } = await mountLogicView({ isAdmin: true })
 
     await wrapper.find('.btn-primary').trigger('click')
     wrapper.vm.newGraphName = 'Automation'
@@ -232,9 +237,53 @@ describe('LogicView auth gates', () => {
       flow_data: { nodes: [], edges: [] },
     })
     expect(wrapper.vm.activeGraphId).toBe('graph-new')
+    // No hierarchy node picked — stays unassigned, exactly like before #1217.
+    expect(hierarchyApi.createLogicGraphLink).not.toHaveBeenCalled()
   })
 
-  it('preflights a delegated graph run and executes only after confirmation', async () => {
+  it('links a newly created graph into every hierarchy node picked in the dialog (#1217)', async () => {
+    const { wrapper, hierarchyApi } = await mountLogicView({ isAdmin: true })
+
+    await wrapper.find('.btn-primary').trigger('click')
+    wrapper.vm.newGraphName = 'Automation'
+    // HierarchyCombobox (multi mode) emits composite "tree_id:node_id"
+    // strings — this is what doCreateGraph must parse back apart before
+    // calling the link endpoint (it is not the full item object).
+    wrapper.vm.newGraphHierarchyNodes = ['tree-a:node-a', 'tree-b:node-b']
+    await wrapper.vm.doCreateGraph()
+
+    expect(hierarchyApi.createLogicGraphLink).toHaveBeenCalledTimes(2)
+    expect(hierarchyApi.createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-a', graph_id: 'graph-new' })
+    expect(hierarchyApi.createLogicGraphLink).toHaveBeenCalledWith({ node_id: 'node-b', graph_id: 'graph-new' })
+    expect(wrapper.vm.activeGraphId).toBe('graph-new')
+  })
+
+  it('ignores a malformed hierarchy composite id instead of sending a broken link request', async () => {
+    const { wrapper, hierarchyApi } = await mountLogicView({ isAdmin: true })
+
+    await wrapper.find('.btn-primary').trigger('click')
+    wrapper.vm.newGraphName = 'Automation'
+    wrapper.vm.newGraphHierarchyNodes = ['not-a-composite-id']
+    await wrapper.vm.doCreateGraph()
+
+    expect(hierarchyApi.createLogicGraphLink).not.toHaveBeenCalled()
+    expect(wrapper.vm.activeGraphId).toBe('graph-new')
+  })
+
+  it('still activates the new graph even if linking it into a hierarchy node fails', async () => {
+    const { wrapper, hierarchyApi } = await mountLogicView({ isAdmin: true })
+    hierarchyApi.createLogicGraphLink.mockRejectedValueOnce(new Error('boom'))
+
+    await wrapper.find('.btn-primary').trigger('click')
+    wrapper.vm.newGraphName = 'Automation'
+    wrapper.vm.newGraphHierarchyNodes = ['tree-a:node-a']
+    await wrapper.vm.doCreateGraph()
+
+    expect(wrapper.vm.activeGraphId).toBe('graph-new')
+    expect(wrapper.vm.showNewGraph).toBe(false)
+  })
+
+  it('runs a graph immediately when the preflight is fully allowed, without showing the popup', async () => {
     const graph = makeGraph('graph-1')
     const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
       isAdmin: false,
@@ -245,12 +294,50 @@ describe('LogicView auth gates', () => {
 
     await wrapper.get('[data-testid="btn-run"]').trigger('click')
     await flushPromises()
-    expect(logicRunAuthzApi.preflight).toHaveBeenCalledWith('graph-1')
-    expect(logicApi.runGraph).not.toHaveBeenCalled()
 
-    await wrapper.get('[data-testid="preflight-confirm"]').trigger('click')
-    await flushPromises()
+    expect(logicRunAuthzApi.preflight).toHaveBeenCalledWith('graph-1')
     expect(logicApi.runGraph).toHaveBeenCalledWith('graph-1')
+    expect(wrapper.find('[data-testid="run-preflight"]').exists()).toBe(false)
+  })
+
+  it('shows the popup and reports an error when the preflight request itself fails', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    logicRunAuthzApi.preflight.mockRejectedValueOnce({ response: { data: { detail: 'preflight down' } } })
+
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+    expect(wrapper.vm.runPreflightError).toBe('preflight down')
+    expect(wrapper.find('[data-testid="run-preflight"]').exists()).toBe(true)
+  })
+
+  it('runs the graph once a preflight already open in the dialog is confirmed', async () => {
+    // Reachable defensively (component API / future partial-allow call
+    // sites) rather than through today's UI — the dialog now only opens on
+    // a denial, which also disables its confirm button — but confirmGraphRun
+    // must still do the right thing if invoked with an approved snapshot.
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: false,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.preflightGraphId = 'graph-1'
+    wrapper.vm.runPreflightItems = [{ id: 'x', label: 'x', allowed: true }]
+
+    await wrapper.vm.confirmGraphRun()
+
+    expect(logicApi.runGraph).toHaveBeenCalledWith('graph-1')
+    expect(wrapper.vm.showRunPreflight).toBe(false)
+    expect(wrapper.vm.preflightGraphId).toBe('')
   })
 
   it('keeps a denied preflight from executing the graph', async () => {
@@ -283,6 +370,16 @@ describe('LogicView auth gates', () => {
       graphs: [graphOne, graphTwo],
       routeQuery: { graph: 'graph-1' },
       graphDetails: { 'graph-1': graphOne, 'graph-2': graphTwo },
+    })
+    // Force the denied path so the popup stays open pending confirmation —
+    // a fully-allowed preflight now runs immediately (see the fast-path
+    // test above) and never leaves anything pending to discard.
+    logicRunAuthzApi.preflight.mockResolvedValueOnce({
+      data: {
+        graph_id: 'graph-1',
+        allowed: false,
+        checks: [{ target_type: 'logic_capability', target_id: 'sms', node_ids: ['n2'], allowed: false, reason: 'missing_allow' }],
+      },
     })
 
     await wrapper.get('[data-testid="btn-run"]').trigger('click')
@@ -362,7 +459,7 @@ describe('LogicView auth gates', () => {
     await flushPromises()
     expect(wrapper.vm.nodes[0].data.value).toBe(7)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     expect(logicApi.saveGraph).toHaveBeenCalledWith('graph-1', expect.objectContaining({ name: 'Main Graph' }))
 
     await wrapper.vm.runGraph()
@@ -373,10 +470,9 @@ describe('LogicView auth gates', () => {
     await wrapper.vm.runGraph()
     expect(wrapper.vm.lastRunOutputs.n1.value).toBe(42)
     expect(wrapper.vm.lastRunDebugOutputs.n1.value).toBe(42)
-    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg')
-    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg_title')
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('= 42')
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     const savedPayload = logicApi.saveGraph.mock.calls.at(-1)[1]
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg')
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg_title')
@@ -384,8 +480,10 @@ describe('LogicView auth gates', () => {
     await wrapper.vm.doToggleEnabled()
     expect(logicApi.patchGraph).toHaveBeenCalledWith('graph-1', { enabled: false })
 
-    await wrapper.vm.doDuplicateGraph()
-    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1')
+    wrapper.vm.openDuplicate()
+    expect(wrapper.vm.duplicateName).toBe('Main Graph (Kopie)')
+    await wrapper.vm.doDuplicate()
+    expect(logicApi.duplicateGraph).toHaveBeenCalledWith('graph-1', 'Main Graph (Kopie)')
     expect(wrapper.vm.activeGraphId).toBe('graph-copy')
     expect(wrapper.vm.lastRunOutputs).toEqual({})
 
@@ -451,6 +549,101 @@ describe('LogicView auth gates', () => {
   })
 })
 
+// ── Grid visibility, independent of snapping (#1075) ───────────────────────
+
+describe('LogicView grid visibility', () => {
+  async function mountWithStorage(storage = {}, { isAdmin = true } = {}) {
+    const graph = makeGraph('graph-1')
+    localStorage.getItem.mockImplementation(key => storage[key] ?? null)
+    return mountLogicView({
+      isAdmin,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+  }
+
+  it('shows the raster by default', async () => {
+    const { wrapper } = await mountWithStorage()
+
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="btn-grid-visible"]').attributes('aria-pressed')).toBe('true')
+  })
+
+  it('keeps the raster hidden when the browser preference says so', async () => {
+    const { wrapper } = await mountWithStorage({ 'obs-logic-grid-visible': '0' })
+
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="btn-grid-visible"]').attributes('aria-pressed')).toBe('false')
+  })
+
+  it('toggles the raster and persists the preference per browser', async () => {
+    const { wrapper } = await mountWithStorage()
+
+    await wrapper.find('[data-testid="btn-grid-visible"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(false)
+    expect(localStorage.setItem).toHaveBeenCalledWith('obs-logic-grid-visible', '0')
+
+    await wrapper.find('[data-testid="btn-grid-visible"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(true)
+    expect(localStorage.setItem).toHaveBeenCalledWith('obs-logic-grid-visible', '1')
+  })
+
+  it('hides the raster without touching graph data or node coordinates', async () => {
+    const { wrapper, logicApi } = await mountWithStorage()
+    const before = JSON.parse(JSON.stringify(wrapper.vm.nodes))
+
+    await wrapper.find('[data-testid="btn-grid-visible"]').trigger('click')
+
+    expect(JSON.parse(JSON.stringify(wrapper.vm.nodes))).toEqual(before)
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+  })
+
+  it('leaves snapping untouched when the raster is hidden', async () => {
+    const { wrapper } = await mountWithStorage({ 'obs-logic-snap-to-grid': '1' })
+
+    await wrapper.find('[data-testid="btn-grid-visible"]').trigger('click')
+
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'VueFlow' }).props('snapToGrid')).toBe(true)
+  })
+
+  it('keeps the raster visible when snapping is switched off', async () => {
+    const { wrapper } = await mountWithStorage({ 'obs-logic-snap-to-grid': '1' })
+
+    await wrapper.find('[data-testid="btn-snap-to-grid"]').trigger('click')
+
+    expect(wrapper.findComponent({ name: 'VueFlow' }).props('snapToGrid')).toBe(false)
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="input-snap-grid-size"]').exists()).toBe(true)
+  })
+
+  it('hides the grid size input once neither snapping nor the raster needs it', async () => {
+    const { wrapper } = await mountWithStorage({ 'obs-logic-grid-visible': '0' })
+
+    expect(wrapper.find('[data-testid="input-snap-grid-size"]').exists()).toBe(false)
+  })
+
+  it('offers the raster toggle without edit permissions but keeps snapping admin-only', async () => {
+    const { wrapper } = await mountWithStorage({}, { isAdmin: false })
+
+    expect(wrapper.find('[data-testid="btn-grid-visible"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="btn-snap-to-grid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="input-snap-grid-size"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="btn-grid-visible"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'Background' }).exists()).toBe(false)
+    expect(localStorage.setItem).toHaveBeenCalledWith('obs-logic-grid-visible', '0')
+  })
+
+  it('offers no raster toggle before a logic sheet is opened', async () => {
+    localStorage.getItem.mockImplementation(() => null)
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+
+    expect(wrapper.find('[data-testid="btn-grid-visible"]').exists()).toBe(false)
+  })
+})
+
 describe('LogicView WebSocket', () => {
   let savedWebSocket
   beforeEach(() => { savedWebSocket = global.WebSocket })
@@ -511,8 +704,242 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.lastRunOutputs.n1.value).toEqual({ nested: true })
     expect(wrapper.vm.lastRunDebugOutputs.n1.value).toEqual({ nested: true })
     expect(wrapper.vm.lastRunInputs.n1.value.incoming).toBe(12)
-    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg')
-    expect(wrapper.vm.nodes[0].data).not.toHaveProperty('_dbg_title')
+    expect(wrapper.vm.nodes[0].data._dbg).toContain('[object Object]')
+  })
+
+  it('keeps the extractor preview across runs without payload and names its outputs in the debug band (issue #1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const payload = JSON.stringify({ Status: { Power: 1 } })
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'On/Off', path: 'Status.Power' }, { label: '', path: '' }]) } },
+          { id: 'g1', type: 'and', position: { x: 0, y: 0 }, data: {} },
+        ],
+        edges: [],
+      },
+    })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+
+    // Triggered run: payload arrives, the band shows the configured names.
+    wsInstance.onmessage({ data: JSON.stringify({
+      action: 'logic_run',
+      graph_id: 'graph-1',
+      outputs: { j1: { out_1: 1, out_2: null, _preview: payload }, g1: { out: true } },
+    }) })
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Wert 2=—')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('On/Off=1   Wert 2=—')
+    // Blocks without configurable output names keep the technical port id.
+    expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+
+    // The translated fallback name follows a locale switch immediately.
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Value 2=—')
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=1   Wert 2=—')
+
+    // Once the bands are cleared, a locale switch must not resurrect them.
+    wrapper.vm.clearDebugValues()
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+
+    // Untriggered re-execution (e.g. after the auto-save that follows "+"):
+    // no payload this time — the last received one is kept for the picker.
+    wsInstance.onmessage({ data: JSON.stringify({
+      action: 'logic_run',
+      graph_id: 'graph-1',
+      outputs: { j1: { out_1: null, out_2: null, _preview: null }, g1: { _internal: 1 } },
+    }) })
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(null)
+    expect(wrapper.vm.lastRunDebugOutputs.j1._preview).toBe(null)
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('On/Off=—   Wert 2=—')
+    // Only internal (_-prefixed) keys → nothing to show in the band.
+    expect(wrapper.vm.nodes[1].data._dbg).toBeUndefined()
+
+    // A manual run outside debug mode keeps it as well.
+    wrapper.vm.toggleDebug()
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { j1: { out_1: 2, out_2: null } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe(payload)
+    expect(wrapper.vm.lastRunOutputs.j1.out_1).toBe(2)
+
+    // A *received* JSON null is real data and replaces the retained payload.
+    logicApi.runGraph.mockResolvedValueOnce({ data: { outputs: { j1: { out_1: null, out_2: null, _preview: 'null' } } } })
+    await wrapper.vm.runGraph()
+    expect(wrapper.vm.lastRunOutputs.j1._preview).toBe('null')
+  })
+
+  it('updates a named debug band when its configured label is edited (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'Old', path: 'a' }]) } }], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('Old=7')
+
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'New', path: 'a' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('New=7')
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBe('New=7')
+
+    // Without any run yet, an edit must not invent a band.
+    wrapper.vm.clearDebugValues()
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'Newer', path: 'a' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('drops a cached debug band when extractor rows are added or removed (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const rows = [{ label: 'A', path: 'a' }, { label: 'B', path: 'b' }]
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [
+      { id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify(rows) } },
+      { id: 'g1', type: 'and', position: { x: 0, y: 0 }, data: {} },
+    ], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 11, out_2: 22 }, g1: { out: true } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('A=11   B=22')
+
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toEqual({ out_1: 11, out_2: 22 })
+
+    // Deleting the first row shifts out_2 → out_1: the cached values no
+    // longer match the rows, so the band disappears until the next run —
+    // and so do the Debug values tab's per-port values for this block.
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B', path: 'b' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    expect(wrapper.vm.nodes[0].data._dbg_title).toBeUndefined()
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toBeUndefined()
+    // Other blocks keep their bands and inspector values.
+    expect(wrapper.vm.nodes[1].data._dbg).toBe('out=✓')
+    expect(wrapper.vm.lastRunDebugOutputs.g1).toEqual({ out: true })
+    // The retained preview (path picker) is untouched by the row change.
+    expect(wrapper.vm.lastRunOutputs.j1).toBeDefined()
+
+    // A later rename of the surviving row must not resurrect the stale values…
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    // …and neither must a locale switch.
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+
+    // The next execution brings band and inspector values back for the new layout.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 22 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('B2=22')
+    expect(wrapper.vm.lastRunDebugOutputs.j1).toEqual({ out_1: 22 })
+
+    // A structural change without any run yet (no cached bands) is a no-op.
+    wrapper.vm.toggleDebug()
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }, { label: 'C', path: 'c' }, { label: 'D', path: 'd' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 1, out_2: 2, out_3: 3 } } }) })
+
+    // Adding a row drops it again.
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    wrapper.vm.onNodeDataUpdate({ json_paths: JSON.stringify([{ label: 'B2', path: 'b' }, { label: 'C', path: 'c' }]) })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+  })
+
+  it('clears a retained XML preview after an empty payload (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', { flow_data: { nodes: [{ id: 'x1', type: 'xml_extractor', position: { x: 0, y: 0 }, data: { xml_paths: '[]' } }], edges: [] } })
+    const { wrapper } = await mountLogicView({ isAdmin: true, graphs: [graph], routeQuery: { graph: 'graph-1' }, graphDetails: { 'graph-1': graph } })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { _preview: '<root><a>1</a></root>' } } }) })
+    // Untriggered run: nothing arrived → keep the document.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { value: null, _preview: null } } }) })
+    expect(wrapper.vm.lastRunOutputs.x1._preview).toBe('<root><a>1</a></root>')
+    // A received empty document replaces it.
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { x1: { value: null, _preview: '' } } }) })
+    expect(wrapper.vm.lastRunOutputs.x1._preview).toBe('')
+  })
+
+  it('does not resurrect the previous graph\'s debug bands on a locale change (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    // Imported copies keep their node ids, so both graphs share "j1".
+    const flow = { flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: '', path: 'a' }]) } }], edges: [] } }
+    const a = makeGraph('graph-1', flow)
+    const b = makeGraph('graph-2', flow)
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [a, b],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': a, 'graph-2': b },
+    })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7 } } }) })
+    expect(wrapper.vm.nodes[0].data._dbg).toBe('Wert 1=7')
+
+    wrapper.vm.activeGraphId = 'graph-2'
+    await wrapper.vm.loadGraph()
+    await flushPromises()
+    wrapper.vm.$i18n.locale = 'en'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
+    wrapper.vm.$i18n.locale = 'de'
+    await wrapper.vm.$nextTick()
+  })
+
+  it('keeps over-long configured output names out of the band and within the tooltip cap (#1104)', async () => {
+    let wsInstance = null
+    global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
+    overrideStorage({ access_token: 'tok' })
+
+    const graph = makeGraph('graph-1', {
+      flow_data: { nodes: [{ id: 'j1', type: 'json_extractor', position: { x: 0, y: 0 }, data: { json_paths: JSON.stringify([{ label: 'X'.repeat(2000), path: 'a' }, { label: 'Y'.repeat(2000), path: 'b' }]) } }], edges: [] },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wsInstance.onmessage({ data: JSON.stringify({ action: 'logic_run', graph_id: 'graph-1', outputs: { j1: { out_1: 7, out_2: 8 } } }) })
+
+    expect(wrapper.vm.nodes[0].data._dbg).toBe(`${'X'.repeat(24)}…=7   ${'Y'.repeat(24)}…=8`)
+    const title = wrapper.vm.nodes[0].data._dbg_title
+    expect(title.length).toBeLessThanOrEqual(1001)
+    expect(title.endsWith('…')).toBe(true)
   })
 
   it('ignores logic_run message for a different graph_id', async () => {
@@ -629,6 +1056,26 @@ describe('LogicView WebSocket', () => {
 })
 
 describe('LogicView inspector inputs', () => {
+  it('translates variable errors of notification/archive blocks', async () => {
+    const { default: i18n } = await import('@/i18n')
+    i18n.global.locale.value = 'de'
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    const text = wrapper.vm.fmtDebugVal({ __error__: 'Variable variable OBS1 object Lamp has no value' })
+    expect(text).not.toContain('has no value')
+    expect(text).toContain('Lamp')
+    wrapper.unmount()
+  })
+
+  it('translates semicolon names', async () => {
+    const { default: i18n } = await import('@/i18n')
+    i18n.global.locale.value = 'de'
+    const { wrapper } = await mountLogicView({ isAdmin: true })
+    const text = wrapper.vm.fmtDebugVal({ __error__: 'Variable variable OBS1 object Room; Lamp has no value' }, { full: true })
+    expect(text).not.toContain('has no value')
+    expect(text).toContain('Room; Lamp')
+    wrapper.unmount()
+  })
+
   it('formats compact and full debug values across output types', async () => {
     const { wrapper } = await mountLogicView({ isAdmin: true })
     const longError = 'x'.repeat(60)
@@ -654,17 +1101,41 @@ describe('LogicView inspector inputs', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    wrapper.vm.debugNode = { id: 'gate', type: 'and', data: { input_count: 3 } }
+    wrapper.vm.selectedNode = { id: 'gate', type: 'and', data: { input_count: 3 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in1', 'in2', 'in3'])
 
-    wrapper.vm.debugNode = { id: 'average', type: 'avg_multi', data: { input_count: 4 } }
+    wrapper.vm.selectedNode = { id: 'stats', type: 'binary_stats', data: { input_count: 2.5 } }
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in1', 'in2', 'in3'])
+
+    wrapper.vm.selectedNode = { id: 'average', type: 'avg_multi', data: { input_count: 4 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
 
-    wrapper.vm.debugNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
+    // An unwired HEMS block offers the same inputs as its card, so the meter can be injected.
+    wrapper.vm.selectedNode = {
+      id: 'hems',
+      type: 'hems_surplus',
+      data: { grid_mode: 'split', max_age_s: 60, consumers: [{ id: 'load', mode: 'percent', power_source: 'input' }] },
+    }
+    wrapper.vm.edges = []
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual([
+      'grid_import', 'grid_import_changed', 'grid_export', 'grid_export_changed',
+      'enable', 'target', 'plant_ok', 'c_load_enable', 'c_load_power', 'c_load_max_power',
+    ])
+
+    wrapper.vm.selectedNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
     wrapper.vm.edges = [{ id: 'custom', source: 'n1', target: 'concat', sourceHandle: 'value', targetHandle: 'in_4' }]
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
 
-    wrapper.vm.debugNode = { id: 'source', type: 'datapoint_read', data: {} }
+    // Without a configured count the block falls back to its two inputs, and an
+    // edge without an explicit handle targets the default 'in' port.
+    wrapper.vm.selectedNode = { id: 'concat', type: 'string_concat', data: {} }
+    wrapper.vm.edges = [{ id: 'default-handle', source: 'n1', target: 'concat', sourceHandle: 'out' }]
+    wrapper.vm.lastRunDebugOutputs = { n1: { out: 'from default handle' } }
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in'])
+    expect(wrapper.vm.debugInputs.find(input => input.id === 'in').incoming).toBe('from default handle')
+    wrapper.vm.lastRunDebugOutputs = {}
+
+    wrapper.vm.selectedNode = { id: 'source', type: 'datapoint_read', data: {} }
     wrapper.vm.edges = []
     wrapper.vm.lastRunInputs = {
       source: { value: { incoming: 23, effective: 99, overridden: true } },
@@ -680,11 +1151,11 @@ describe('LogicView inspector inputs', () => {
       }),
     ])
 
-    wrapper.vm.debugNode = { id: 'script', type: 'python_script', data: {} }
+    wrapper.vm.selectedNode = { id: 'script', type: 'python_script', data: {} }
     wrapper.vm.lastRunInputs = {}
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['a', 'b', 'c'])
 
-    wrapper.vm.debugNode = { id: 'gate', type: 'and', data: { input_count: 2 } }
+    wrapper.vm.selectedNode = { id: 'gate', type: 'and', data: { input_count: 2 } }
     wrapper.vm.edges = [{ id: 'stale', source: 'source', target: 'gate', sourceHandle: 'out', targetHandle: 'in1' }]
     wrapper.vm.lastRunOutputs = { source: { out: 'ordinary-run' } }
     wrapper.vm.lastRunDebugOutputs = {}
@@ -692,7 +1163,7 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.lastRunDebugOutputs = { source: { out: 'debug-run' } }
     expect(wrapper.vm.debugInputs.find(input => input.id === 'in1').incoming).toBe('debug-run')
 
-    wrapper.vm.debugNode = null
+    wrapper.vm.selectedNode = null
     expect(wrapper.vm.debugInputs).toEqual([])
   })
 
@@ -713,8 +1184,7 @@ describe('LogicView inspector inputs', () => {
 
     wrapper.vm.toggleDebug()
     wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
-    expect(wrapper.vm.debugNode.id).toBe('n1')
-    expect(wrapper.vm.selectedNode).toBe(null)
+    expect(wrapper.vm.selectedNode.id).toBe('n1')
 
     wrapper.vm.setDebugOverride('value', '{"nested":true}')
     wrapper.vm.setDebugOverride('label', 'plain text')
@@ -731,7 +1201,6 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.setDebugOverride('label', '   ')
     wrapper.vm.clearAllDebugOverrides()
     wrapper.vm.toggleDebug()
-    expect(wrapper.vm.debugNode).toBe(null)
     expect(wrapper.vm.lastRunMetadata).toBe(null)
     expect(wrapper.vm.lastRunDebugOutputs).toEqual({})
     expect(wrapper.vm.lastRunOutputs.n1.value).toBe(7)
@@ -739,7 +1208,49 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.toggleDebug()
     wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
     await wrapper.vm.$nextTick()
-    expect(wrapper.findComponent({ name: 'DebugInspector' }).props('outputs')).toEqual({})
+    const panel = wrapper.findComponent({ name: 'NodeConfigPanel' })
+    expect(panel.props('debugMode')).toBe(true)
+    expect(panel.props('debugOutputs')).toEqual({})
+  })
+
+  it('ignores override edits without edit permission', async () => {
+    const { wrapper } = await mountLogicView({ isAdmin: false })
+
+    wrapper.vm.setDebugOverride('value', '42')
+
+    expect(wrapper.vm.debugOverrides).toEqual({})
+  })
+
+  it('keeps the selected block editable while debug mode is on (issue #1128)', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wrapper.vm.toggleDebug()
+    wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
+    await wrapper.vm.$nextTick()
+
+    // One panel serves both tabs: it stays open on the same block and carries
+    // that block's debug data alongside its settings.
+    const panel = wrapper.findComponent({ name: 'NodeConfigPanel' })
+    expect(panel.exists()).toBe(true)
+    expect(panel.props('node').id).toBe('n1')
+    expect(panel.props('debugMode')).toBe(true)
+    wrapper.vm.lastRunInputs = { n1: { value: { incoming: 5, effective: 5, overridden: false } } }
+    await wrapper.vm.$nextTick()
+    expect(panel.props('debugInputs').map(input => input.id)).toEqual(['value'])
+
+    wrapper.vm.onNodeDataUpdate({ label: 'renamed in debug mode' })
+    vi.advanceTimersByTime(500)
+    await flushPromises()
+
+    expect(wrapper.vm.nodes[0].data.label).toBe('renamed in debug mode')
+    expect(logicApi.saveGraph).toHaveBeenCalled()
+    expect(wrapper.vm.debugMode).toBe(true)
   })
 
   it('ignores debug state from a run completed after debug mode is disabled', async () => {
@@ -847,7 +1358,7 @@ describe('LogicView graph cycle validation', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -887,8 +1398,181 @@ describe('LogicView graph cycle validation', () => {
   })
 })
 
+describe('LogicView duplicate target handle validation (#1116)', () => {
+  it('blocks connecting a second edge onto an already-connected input handle', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'const_value', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'const_value', position: { x: 0, y: 160 }, data: {} },
+          { id: 'c', type: 'datapoint_write', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-c', source: 'a', target: 'c', sourceHandle: 'value', targetHandle: 'value' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wrapper.vm.onConnect({ source: 'b', target: 'c', sourceHandle: 'value', targetHandle: 'value' })
+
+    expect(wrapper.vm.edges).toHaveLength(1)
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+  })
+
+  it('allows two edges that target different handles of the same node', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'const_value', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'const_value', position: { x: 0, y: 160 }, data: {} },
+          { id: 'c', type: 'compare', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-c', source: 'a', target: 'c', sourceHandle: 'value', targetHandle: 'in1' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    wrapper.vm.onConnect({ source: 'b', target: 'c', sourceHandle: 'value', targetHandle: 'in2' })
+
+    expect(wrapper.vm.edges).toHaveLength(2)
+    expect(wrapper.vm.validationWarnings).toEqual([])
+  })
+
+  it('detects a duplicate on the default "in" handle when edges omit targetHandle', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'const_value', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'const_value', position: { x: 0, y: 160 }, data: {} },
+          { id: 'c', type: 'not', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-c', source: 'a', target: 'c', sourceHandle: 'value' },
+          { id: 'b-c', source: 'b', target: 'c', sourceHandle: 'value' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    expect(wrapper.vm.validationWarnings).toEqual([
+      { node_id: 'c', code: 'duplicate_target_handle', message: expect.stringContaining('c.in') },
+    ])
+  })
+
+  it('blocks saving a graph with two edges on the same input handle and marks the target node', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'const_value', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'const_value', position: { x: 0, y: 160 }, data: {} },
+          { id: 'c', type: 'datapoint_write', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-c', source: 'a', target: 'c', sourceHandle: 'value', targetHandle: 'value' },
+          { id: 'b-c', source: 'b', target: 'c', sourceHandle: 'value', targetHandle: 'value' },
+        ],
+      },
+    })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    await wrapper.vm.saveGraph({ manual: true })
+
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    expect(wrapper.vm.statusMsg.ok).toBe(false)
+    expect(wrapper.vm.validationWarnings).toEqual([
+      { node_id: 'c', code: 'duplicate_target_handle', message: expect.stringContaining('c.value') },
+    ])
+    expect(wrapper.vm.lastRunOutputs.c.__diagnostic__).toBe('duplicate_target_handle')
+    expect(wrapper.vm.nodes.find(n => n.id === 'c').data._dbg).toBeTruthy()
+  })
+
+  it('reports the duplicate-handle warning on the live status bar for an already-saved graph', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'const_value', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'const_value', position: { x: 0, y: 160 }, data: {} },
+          { id: 'c', type: 'datapoint_write', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-c', source: 'a', target: 'c', sourceHandle: 'value', targetHandle: 'value' },
+          { id: 'b-c', source: 'b', target: 'c', sourceHandle: 'value', targetHandle: 'value' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    expect(wrapper.vm.validationWarnings).toHaveLength(1)
+    expect(wrapper.find('[data-testid="status-msg"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Mehrfachverbindung')
+  })
+
+  it('scopes the reported count to duplicate-handle warnings when a cycle warning is also present', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'a', type: 'not', position: { x: 0, y: 0 }, data: {} },
+          { id: 'b', type: 'not', position: { x: 160, y: 0 }, data: {} },
+          { id: 'c', type: 'const_value', position: { x: 0, y: 160 }, data: {} },
+          { id: 'd', type: 'const_value', position: { x: 0, y: 320 }, data: {} },
+          { id: 'e', type: 'datapoint_write', position: { x: 320, y: 160 }, data: {} },
+        ],
+        edges: [
+          { id: 'a-b', source: 'a', target: 'b', sourceHandle: 'out', targetHandle: 'in1' },
+          { id: 'b-a', source: 'b', target: 'a', sourceHandle: 'out', targetHandle: 'in1' },
+          { id: 'c-e', source: 'c', target: 'e', sourceHandle: 'value', targetHandle: 'value' },
+          { id: 'd-e', source: 'd', target: 'e', sourceHandle: 'value', targetHandle: 'value' },
+        ],
+      },
+    })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    await wrapper.vm.saveGraph({ manual: true })
+
+    expect(logicApi.saveGraph).not.toHaveBeenCalled()
+    // Two cycle warnings (a, b) plus one duplicate-handle warning (e) — the
+    // duplicate-handle message must report "1", not the combined total "3".
+    expect(wrapper.vm.validationWarnings).toHaveLength(3)
+    expect(wrapper.vm.statusMsg.text).toContain('1 Eingang')
+    expect(wrapper.vm.statusMsg.text).not.toContain('3 Eingang')
+  })
+})
+
 describe('LogicView operation error handling', () => {
-  it('shows error status when doDuplicateGraph fails', async () => {
+  it('shows error status when doDuplicate fails', async () => {
     const graph = makeGraph('graph-1')
     const { wrapper, logicApi } = await mountLogicView({
       isAdmin: true,
@@ -898,7 +1582,8 @@ describe('LogicView operation error handling', () => {
     })
     logicApi.duplicateGraph.mockRejectedValue({ response: { data: { detail: 'Duplicate failed' } } })
 
-    await wrapper.vm.doDuplicateGraph()
+    wrapper.vm.openDuplicate()
+    await wrapper.vm.doDuplicate()
 
     expect(wrapper.vm.statusMsg.ok).toBe(false)
   })
@@ -945,7 +1630,7 @@ describe('LogicView operation error handling', () => {
     })
     logicApi.saveGraph.mockRejectedValue({ response: { data: { detail: 'Save failed' } } })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(wrapper.vm.statusMsg.ok).toBe(false)
   })
