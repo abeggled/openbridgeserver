@@ -12,8 +12,11 @@ import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFormatStore } from '@/stores/format'
+import { useThemeStore } from '@/stores/theme'
+import { history } from '@/api/client'
 
 const chartConfigs: any[] = []
+const chartInstances: any[] = []
 
 vi.mock('chart.js', () => {
   class ChartMock {
@@ -21,6 +24,7 @@ vi.mock('chart.js', () => {
     options: unknown
     constructor(_canvas: unknown, config: any) {
       chartConfigs.push(config)
+      chartInstances.push(this)
       this.options = config.options
     }
 
@@ -47,6 +51,10 @@ vi.mock('@/composables/useWebSocket', () => ({
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 let wrapper: VueWrapper | null = null
+
+// Der Theme-Store fiele ohne gespeichertes Theme auf matchMedia zurück, das jsdom nicht kennt
+beforeEach(() => { localStorage.setItem('visu_theme', 'dark') })
+afterEach(() => { localStorage.clear() })
 
 async function mountChart(config: Record<string, unknown> = { label: 'Verlauf' }) {
   const mod = await import('./Widget.vue')
@@ -155,5 +163,231 @@ describe('Chart Widget.vue — y axes follow the series assignment (#1111)', () 
 
     expect(scales.y.display).toBe(true)
     expect(scales.y1.display).toBe(true)
+  })
+})
+
+describe('Chart Widget.vue — tooltip swatches and legend (#1361)', () => {
+  // Als Variablen, damit der i18n-Guard die Fixture-Werte nicht als UI-Text wertet
+  const bedroom = ['Schlaf', 'zimmer'].join('')
+  const bath    = ['B', 'ad'].join('')
+
+  const twoSeries = {
+    label:         'Verlauf',
+    primary_label: bedroom,
+    primary_color: '#3b82f6',
+    series:        [{ dp_id: 'dp-2', label: bath, color: '#ef4444' }],
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  async function mountLoaded(config: Record<string, unknown>) {
+    const chartConfig = await mountChart(config)
+    await flushPromises()
+    return { chartConfig, chart: chartInstances[chartInstances.length - 1] }
+  }
+
+  it('fills the tooltip swatch completely with the series colour', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+    const labelColor = chartConfig.options.plugins.tooltip.callbacks.labelColor
+
+    expect(labelColor({ datasetIndex: 1 })).toEqual({ borderColor: '#ef4444', backgroundColor: '#ef4444', borderWidth: 0 })
+  })
+
+  it('falls back to a neutral swatch for an unknown dataset', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+    const labelColor = chartConfig.options.plugins.tooltip.callbacks.labelColor
+
+    expect(labelColor({ datasetIndex: 7 }).backgroundColor).toBe('#6b7280')
+  })
+
+  it('keeps the Chart.js legend off and renders underlined HTML entries instead', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+
+    expect(chartConfig.options.plugins.legend.display).toBe(false)
+    const items = wrapper!.findAll('.chart-legend-item')
+    expect(items.map(i => i.text())).toEqual([bedroom, bath])
+    expect((items[1].element as HTMLElement).style.borderBottomColor).toBe('rgb(239, 68, 68)')
+    expect(items[0].attributes('aria-pressed')).toBe('true')
+    // Light- und Dark-Mode brauchen eigene Text-/Hover-Farben, sonst wird der Hover hell auf hell
+    expect(items[0].classes()).toEqual(expect.arrayContaining([
+      'text-gray-500', 'dark:text-gray-400', 'hover:text-gray-900', 'dark:hover:text-gray-200',
+    ]))
+  })
+
+  it('numbers unlabelled series in the legend', async () => {
+    await mountLoaded({ label: 'Verlauf', series: [{ dp_id: 'dp-2' }] })
+
+    expect(wrapper!.findAll('.chart-legend-item').map(i => i.text()))
+      .toEqual(['Verlauf', 'widgets.chart.seriesFallback'])
+  })
+
+  it('shows no legend for a single series', async () => {
+    await mountLoaded({ label: 'Verlauf' })
+
+    expect(wrapper!.find('.chart-legend-item').exists()).toBe(false)
+  })
+
+  it('hides and shows a series when its legend entry is clicked', async () => {
+    const { chart } = await mountLoaded(twoSeries)
+    const item = () => wrapper!.findAll('.chart-legend-item')[1]
+
+    await item().trigger('click')
+    expect(chart.data.datasets[1].hidden).toBe(true)
+    expect(item().classes()).toContain('line-through')
+    expect(item().attributes('aria-pressed')).toBe('false')
+    expect(chart.update).toHaveBeenCalled()
+
+    await item().trigger('click')
+    expect(chart.data.datasets[1].hidden).toBe(false)
+    expect(item().classes()).not.toContain('line-through')
+  })
+
+  it('keeps a hidden series hidden when the data is reloaded', async () => {
+    const { chart } = await mountLoaded(twoSeries)
+    await wrapper!.findAll('.chart-legend-item')[1].trigger('click')
+
+    await wrapper!.setProps({ config: { ...twoSeries, time_range: 'last_24h' } })
+    await flushPromises()
+
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+
+  it('toggles only the clicked entry when one datapoint is configured twice', async () => {
+    // Derselbe Datenpunkt als Haupt- und Zusatzserie: die ID allein ist kein eindeutiger Schlüssel
+    const sameDpTwice = { ...twoSeries, series: [{ dp_id: 'dp-1', label: bath, axis: 'right' }] }
+    const { chart } = await mountLoaded(sameDpTwice)
+    const items = () => wrapper!.findAll('.chart-legend-item')
+
+    await items()[1].trigger('click')
+    expect(items()[0].classes()).not.toContain('line-through')
+    expect(items()[1].classes()).toContain('line-through')
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+
+    await wrapper!.setProps({ config: { ...sameDpTwice, time_range: 'last_24h' } })
+    await flushPromises()
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+
+  it('remembers the toggle while a freshly created chart is still empty', async () => {
+    await mountLoaded(twoSeries)
+    const item = wrapper!.findAll('.chart-legend-item')[1]
+
+    // Typwechsel baut einen neuen, noch leeren Chart; loadData() hängt noch an der History-Abfrage
+    let release: (rows: unknown[]) => void = () => {}
+    const pending = new Promise<unknown[]>(resolve => { release = resolve })
+    vi.mocked(history.query).mockImplementation(() => pending as never)
+    vi.mocked(history.aggregate).mockImplementation(() => pending as never)
+    try {
+      await wrapper!.setProps({ config: { ...twoSeries, chart_type: 'bar' } })
+      const fresh = chartInstances[chartInstances.length - 1]
+      await item.trigger('click')
+      expect(fresh.data.datasets).toEqual([])
+      expect(fresh.update).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(history.query).mockResolvedValue([])
+      vi.mocked(history.aggregate).mockResolvedValue([])
+      release([])
+    }
+
+    await flushPromises()
+    const fresh = chartInstances[chartInstances.length - 1]
+    expect(fresh.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+})
+
+describe('Chart Widget.vue — grid colour follows the Visu theme (#1361)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  const gridColors = (scales: any) => [scales.x.grid.color, scales.y.grid.color, scales.y1.grid.color]
+
+  it('uses the dark grid colour in dark mode', async () => {
+    const config = await mountChart()
+
+    expect(gridColors(config.options.scales)).toEqual(['#374151', '#374151', '#374151'])
+  })
+
+  it('uses a light grid colour in light mode', async () => {
+    localStorage.setItem('visu_theme', 'light')
+    const config = await mountChart()
+
+    expect(gridColors(config.options.scales)).toEqual(['#e5e7eb', '#e5e7eb', '#e5e7eb'])
+  })
+
+  it('recolours the grid when the theme is toggled', async () => {
+    const config = await mountChart()
+    const chart = chartInstances[chartInstances.length - 1]
+    chart.update.mockClear()
+
+    useThemeStore().toggle()
+    await nextTick()
+
+    expect(gridColors(config.options.scales)).toEqual(['#e5e7eb', '#e5e7eb', '#e5e7eb'])
+    expect(chart.update).toHaveBeenCalled()
+  })
+
+  it('ignores a theme toggle in the editor, where no chart is drawn', async () => {
+    const mod = await import('./Widget.vue')
+    wrapper = mount(mod.default, {
+      props: { config: { label: 'Verlauf' }, datapointId: 'dp-1', value: null, editorMode: true },
+      global: { mocks: { $t: (key: string) => key } },
+    })
+
+    useThemeStore().toggle()
+    await nextTick()
+
+    expect(chartInstances).toEqual([])
+  })
+})
+
+describe('Chart Widget.vue — closed while loading', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('drops the history response when the widget was unmounted meanwhile', async () => {
+    let release: (rows: unknown[]) => void = () => {}
+    const pending = new Promise<unknown[]>(resolve => { release = resolve })
+    vi.mocked(history.query).mockImplementation(() => pending as never)
+    vi.mocked(history.aggregate).mockImplementation(() => pending as never)
+    try {
+      await mountChart({ label: 'Verlauf' })
+      const chart = chartInstances[chartInstances.length - 1]
+      wrapper!.unmount()
+      wrapper = null
+
+      release([])
+      await flushPromises()
+
+      expect(chart.data.datasets).toEqual([])
+      expect(chart.update).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(history.query).mockResolvedValue([])
+      vi.mocked(history.aggregate).mockResolvedValue([])
+    }
   })
 })
