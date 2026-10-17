@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from obs.api.auth import Principal
 from obs.api.v1 import knxproj as knxproj_api
-from obs.api.v1.services.knx_traceability import build_datapoint_knx_context
+from obs.api.v1.services.knx_traceability import build_datapoint_knx_context, ga_order_by_sql
 from obs.db.database import Database
 
 
@@ -494,6 +494,240 @@ async def test_datapoint_knx_context_comm_objects_are_sorted_numerically():
         by_ga = {ga.address: ga for ga in result.group_addresses}
         device = next(d for d in by_ga["1/2/3"].devices if d.pa == "1.1.1")
         assert [co.number for co in device.comm_objects] == ["1", "2", "10"]
+    finally:
+        await db.disconnect()
+
+
+# Inserted in random order; a TEXT sort would yield 1.0.1, 1.0.10, 1.0.100, 1.0.11, 1.0.2, 1.10.1, 1.2.1, 2.0.1.
+_PA_SORT_INSERT_ORDER = ["1.0.10", "2.0.1", "1.0.2", "1.10.1", "1.0.100", "1.0.1", "1.2.1", "1.0.11"]
+_PA_SORT_EXPECTED = ["1.0.1", "1.0.2", "1.0.10", "1.0.11", "1.0.100", "1.2.1", "1.10.1", "2.0.1"]
+
+
+async def _prepare_pa_sort_db() -> Database:
+    """Devices whose PAs only sort correctly when every address part is compared numerically (#1368).
+    Every device has one comm object linked to GA 1/2/3."""
+    db = Database(":memory:")
+    await db.connect()
+    await db.commit()
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        """INSERT INTO knx_group_addresses
+           (address, name, description, dpt, imported_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        ("1/2/3", "GA 1", "", "1.001", now),
+    )
+    await db.executemany(
+        """INSERT INTO knx_devices
+           (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [(f"dev-{pa}", pa, f"Device {pa}", "", "MDT", "BE-GT", "APP", now) for pa in _PA_SORT_INSERT_ORDER],
+    )
+    await db.executemany(
+        """INSERT INTO knx_comm_objects
+           (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [(f"co-{pa}", f"dev-{pa}", "1", "Switch", "", "", "1.001", now) for pa in _PA_SORT_INSERT_ORDER],
+    )
+    await db.executemany(
+        "INSERT INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
+        [(f"co-{pa}", "1/2/3") for pa in _PA_SORT_INSERT_ORDER],
+    )
+    await db.commit()
+    return db
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_sorts_pa_numerically_per_part():
+    """Regression for #1368: individual_address is TEXT, so `ORDER BY individual_address`
+    put 1.0.10 directly after 1.0.1."""
+    db = await _prepare_pa_sort_db()
+    try:
+        result = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+        assert [item.pa for item in result.items] == _PA_SORT_EXPECTED
+
+        # Pagination must follow the numeric order too, since it happens in SQL.
+        page_1 = await knxproj_api.list_knx_devices(
+            q="",
+            manufacturer="",
+            order_number="",
+            hierarchy_node_id="",
+            page=1,
+            size=3,
+            _user="admin",
+            db=db,
+        )
+        assert [item.pa for item in page_1.items] == _PA_SORT_EXPECTED[3:6]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_list_knx_devices_for_group_address_sorts_pa_numerically_per_part():
+    """Regression for #1368, same ordering for the devices of one group address."""
+    db = await _prepare_pa_sort_db()
+    try:
+        result = await knxproj_api.list_knx_devices_for_group_address(
+            ga="1/2/3",
+            page=0,
+            size=50,
+            _user="admin",
+            db=db,
+        )
+        assert [item.pa for item in result.items] == _PA_SORT_EXPECTED
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_datapoint_knx_context_sorts_devices_by_pa_numerically_per_part():
+    """Regression for #1368, same ordering for the devices in the traceability panel."""
+    db = await _prepare_pa_sort_db()
+    dp_id = "00000000-0000-0000-0000-000000001368"
+    await _insert_datapoint_binding(
+        db,
+        dp_id=dp_id,
+        name="Switch",
+        config='{"group_address": "1/2/3"}',
+    )
+    try:
+        result = await build_datapoint_knx_context(dp_id=uuid.UUID(dp_id), db=db)
+        by_ga = {ga.address: ga for ga in result.group_addresses}
+        assert [device.pa for device in by_ga["1/2/3"].devices] == _PA_SORT_EXPECTED
+    finally:
+        await db.disconnect()
+
+
+# Inserted in random order; a TEXT sort would yield 1/10/1, 1/2/1, 1/2/10, 1/2/100, 1/2/11, 1/2/2, 2/0/1.
+_GA_SORT_INSERT_ORDER = ["1/2/10", "2/0/1", "1/2/2", "1/10/1", "1/2/100", "1/2/1", "1/2/11"]
+_GA_SORT_EXPECTED = ["1/2/1", "1/2/2", "1/2/10", "1/2/11", "1/2/100", "1/10/1", "2/0/1"]
+
+
+async def _prepare_ga_sort_db() -> Database:
+    """Group addresses that only sort correctly when every address part is compared numerically (#1368).
+    Device 1.1.1 has one comm object linked to all of them."""
+    db = Database(":memory:")
+    await db.connect()
+    await db.commit()
+
+    now = datetime.now(UTC).isoformat()
+    await db.executemany(
+        """INSERT INTO knx_group_addresses
+           (address, name, description, dpt, imported_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        [(ga, f"Licht {ga}", "", "1.001", now) for ga in _GA_SORT_INSERT_ORDER],
+    )
+    await db.execute(
+        """INSERT INTO knx_devices
+           (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("dev-1", "1.1.1", "Actuator", "", "MDT", "AKS", "APP", now),
+    )
+    await db.execute(
+        """INSERT INTO knx_comm_objects
+           (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("co-1", "dev-1", "1", "Switch", "", "", "1.001", now),
+    )
+    await db.executemany(
+        "INSERT INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
+        [("co-1", ga) for ga in _GA_SORT_INSERT_ORDER],
+    )
+    await db.commit()
+    return db
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("q", ["", "Licht"])
+async def test_list_group_addresses_sorts_numerically_per_part(q: str):
+    """Regression for #1368: knx_group_addresses.address is TEXT, so `ORDER BY address`
+    put 1/2/10 directly after 1/2/1. Covers the unfiltered and the search query."""
+    db = await _prepare_ga_sort_db()
+    try:
+        result = await knxproj_api.list_group_addresses(q=q, page=0, size=50, _user="admin", db=db)
+        assert [item.address for item in result.items] == _GA_SORT_EXPECTED
+
+        # Pagination must follow the numeric order too, since it happens in SQL.
+        page_1 = await knxproj_api.list_group_addresses(q=q, page=1, size=3, _user="admin", db=db)
+        assert [item.address for item in page_1.items] == _GA_SORT_EXPECTED[3:6]
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("q", ["", "Licht"])
+async def test_non_admin_list_group_addresses_sorts_numerically_per_part(q: str):
+    """Regression for #1368, same ordering for the in-memory pagination of non-admin users."""
+    db = await _prepare_ga_sort_db()
+    await _insert_authz_tree(db)
+    await _insert_knx_instance(db)
+    for index, ga in enumerate(_GA_SORT_INSERT_ORDER):
+        await _insert_scoped_datapoint(
+            db,
+            dp_id=f"00000000-0000-0000-0000-00000000{index:04d}",
+            name=f"Licht {ga}",
+            node_id="allowed-room",
+            ga=ga,
+        )
+    await _grant_room(db)
+    principal = Principal(subject="alice", type="user", is_admin=False)
+    try:
+        result = await knxproj_api.list_group_addresses(q=q, page=0, size=50, _user=principal, db=db)
+        assert [item.address for item in result.items] == _GA_SORT_EXPECTED
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_knx_device_sorts_comm_object_group_addresses_numerically_per_part():
+    """Regression for #1368, same ordering for the group addresses linked to one comm object."""
+    db = await _prepare_ga_sort_db()
+    try:
+        result = await knxproj_api.get_knx_device(pa="1.1.1", _user="admin", db=db)
+        assert result.comm_objects[0].ga_addresses == _GA_SORT_EXPECTED
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_knx_device_datapoints_sorts_comm_object_group_addresses_numerically_per_part():
+    """Regression for #1368, same ordering in the device's datapoint-traceability panel."""
+    db = await _prepare_ga_sort_db()
+    try:
+        result = await knxproj_api.get_knx_device_datapoints(pa="1.1.1", _user="admin", db=db)
+        assert [ga.address for ga in result.comm_objects[0].group_addresses] == _GA_SORT_EXPECTED
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ga_order_by_sql_keeps_two_level_and_free_level_addresses_in_order():
+    """Two-level (main/sub) and free-level group addresses have fewer parts; they must still sort numerically."""
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        two_level = ["1/10", "2/1", "1/2", "1/100", "1/1"]
+        rows = await db.fetchall(
+            f"SELECT column1 AS a FROM (VALUES {', '.join('(?)' for _ in two_level)}) ORDER BY {ga_order_by_sql('column1')}",
+            two_level,
+        )
+        assert [row["a"] for row in rows] == ["1/1", "1/2", "1/10", "1/100", "2/1"]
+
+        free_level = ["10", "2", "100", "1"]
+        rows = await db.fetchall(
+            f"SELECT column1 AS a FROM (VALUES {', '.join('(?)' for _ in free_level)}) ORDER BY {ga_order_by_sql('column1')}",
+            free_level,
+        )
+        assert [row["a"] for row in rows] == ["1", "2", "10", "100"]
     finally:
         await db.disconnect()
 
