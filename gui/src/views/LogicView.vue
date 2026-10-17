@@ -589,6 +589,11 @@ function currentFlowData() {
   }
 }
 
+// Blocks whose output does not depend on their inputs within one run — mirrors
+// TICK_BOUNDARY_NODE_TYPES in obs/logic/graph_analysis.py: a feedback loop
+// through one of them is no cycle.
+const TICK_BOUNDARY_NODE_TYPES = new Set(['memory', 'timer_delay', 'timer_pulse'])
+
 function analyzeFlowWarnings(flowNodes, flowEdges) {
   const nodeMap = new Map(flowNodes.map(n => [n.id, n]))
   const inDegree = new Map(flowNodes.map(n => [n.id, 0]))
@@ -596,7 +601,7 @@ function analyzeFlowWarnings(flowNodes, flowEdges) {
 
   for (const edge of flowEdges) {
     if (!adj.has(edge.source) || !inDegree.has(edge.target)) continue
-    if (nodeMap.get(edge.target)?.type === 'memory') continue
+    if (TICK_BOUNDARY_NODE_TYPES.has(nodeMap.get(edge.target)?.type)) continue
     adj.get(edge.source).push(edge.target)
     inDegree.set(edge.target, inDegree.get(edge.target) + 1)
   }

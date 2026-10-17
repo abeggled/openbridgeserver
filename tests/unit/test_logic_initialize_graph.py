@@ -730,8 +730,9 @@ async def test_a_changed_pulse_into_the_value_input_still_taints_the_detector():
 
 @pytest.mark.asyncio
 async def test_write_downstream_of_timer_is_suppressed():
-    """timer_delay/timer_pulse are async manager-driven nodes; the executor
-    returns {} for them, so downstream coercions must not be written."""
+    """timer_delay/timer_pulse are async manager-driven nodes; their output in
+    the initialization pass is no event, so downstream coercions must not be
+    written."""
     src_id, dst_id = str(uuid.uuid4()), str(uuid.uuid4())
     flow = _flow(
         [

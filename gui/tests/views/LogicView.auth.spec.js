@@ -1338,6 +1338,32 @@ describe('LogicView graph cycle validation', () => {
     expect(wrapper.vm.validationWarnings).toEqual([])
   })
 
+  it.each(['timer_delay', 'timer_pulse'])('allows feedback connections through %s nodes', async (timerType) => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'timer', type: timerType, position: { x: 0, y: 0 }, data: {} },
+          { id: 'or', type: 'or', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'or-timer', source: 'or', target: 'timer', sourceHandle: 'out', targetHandle: 'trigger' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    const handle = timerType === 'timer_delay' ? 'trigger' : 'out'
+    wrapper.vm.onConnect({ source: 'timer', target: 'or', sourceHandle: handle, targetHandle: 'in2' })
+
+    expect(wrapper.vm.edges).toHaveLength(2)
+    expect(wrapper.vm.validationWarnings).toEqual([])
+  })
+
   it('blocks saving graphs with direct cycles and marks the nodes', async () => {
     const graph = makeGraph('graph-1', {
       flow_data: {

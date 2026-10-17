@@ -32,11 +32,58 @@ Outputs the current date and time in the configured application timezone (**Date
 
 ## Delay {#logic-block-timer-delay}
 
-Delays a trigger signal by a configured number of seconds before it appears at the output.
+Delays a trigger signal by a configured number of seconds before it appears at the output. When
+the delay has elapsed the sheet runs again and the output triggers the downstream blocks once —
+like the **Trigger** block at its scheduled time.
+
+The output is a pulse: it sends only in that run and nothing in any other run of the sheet — not
+even through downstream logic such as **NOT**. A connected Write Object therefore writes only when
+the delay fires.
+
+- **Retrigger:** A new trigger while a delay is pending starts the delay over. The output therefore
+  triggers once, one delay after the last trigger.
+- **Triggering:** The block starts on a rising edge at its input, on every single pulse (for example
+  from a **Change Filter** or the **Trigger** block) and on every true telegram a directly connected
+  **Read Object** receives again — even when the input does not fall back to false in between. With
+  a condition in between (such as a comparison), only its rising edge counts.
+- **Save and restart:** A pending delay is kept. It still fires at the planned time after the sheet
+  is saved or the server restarts; if that time has already passed, at once.
+- **Cancellation:** Disabling or deleting the sheet discards a pending delay. If the input is still
+  active after the sheet is enabled again, the delay starts over on the sheet's next run.
+- **Feedback:** The output may lead back to the block's own input — also through other blocks —
+  without a **Memory** in between. That gives, for example, a signal that repeats every N seconds.
+- **Chains:** When the delay has elapsed a new logic cascade begins, as with the **Trigger** block.
+  A loop through data points — also back into the same sheet, such as a blinker or a periodic
+  signal — therefore keeps running. With a delay under one second the run belongs to the cascade of
+  the value that triggered it instead, and such a loop is stopped after at most ten steps like any
+  other.
 
 ## Pulse {#logic-block-timer-pulse}
 
-Outputs a pulse on a trigger signal, held for a configured duration (seconds).
+Outputs a pulse on a trigger signal, held for a configured duration (seconds): the output becomes
+true at once and false again when the duration has elapsed. The sheet runs again on both changes so
+the downstream blocks receive the new state. Connect the output directly to the **Value** of a
+Write Object without a trigger of its own: the data point then follows the pulse. With **Output only on
+change** it writes only on a change, not on every run of the sheet. A Write Object
+that fires through its own trigger in the same run that starts the pulse still writes the state
+from before the pulse.
+
+- **Retrigger:** A new trigger during the pulse extends it — the output stays true until the
+  duration has elapsed from the last trigger (retriggerable, e.g. for staircase lighting).
+- **Slow blocks:** The duration counts from the run that writes the start of the pulse. If a slow
+  block in that run (e.g. **API Client**) holds up its writes, the data point still stays true for
+  the full duration.
+- **Chains:** The end of the pulse begins a new logic cascade, like an elapsed **Delay** (not with a
+  duration under one second).
+- **Triggering:** as for **Delay** — a rising edge, a single pulse or a repeated true telegram at the
+  input. A motion detector that sends "1" cyclically while someone is present therefore keeps the
+  pulse on.
+- **Save and restart:** A running pulse is kept in the block's state. It still ends at the planned
+  time after the sheet is saved or the server restarts; if that time has already passed, at once.
+- **Disable:** Nothing runs in a disabled sheet. If the pulse has run out meanwhile, the output
+  falls to false when the sheet is enabled again.
+- **Delete:** Deleting the sheet or the Pulse block ends the pulse too; a data point it wrote keeps
+  its last value.
 
 ## Operating Hours {#logic-block-operating-hours}
 
