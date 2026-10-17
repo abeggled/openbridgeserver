@@ -96,9 +96,9 @@ class _TimerState:
     errors: int = 0
     # The deadline a failed delay run was re-armed with: a save keeps that pause.
     retry_at: float | None = None
-    # What feeds the trigger when the level was recorded (see
+    # What fed the trigger when the level was recorded (see
     # _timer_trigger_signature): a level seen on another input is no baseline.
-    trigger_sig: str | None = None
+    trigger_sig: tuple[str, str] | None = None
     # Set when the deadline moves, so a task sleeping on it re-reads it.
     wake: asyncio.Event = field(default_factory=asyncio.Event, compare=False, repr=False)
 
@@ -2248,8 +2248,13 @@ class LogicManager:
         )
 
     @staticmethod
-    def _timer_trigger_signature(flow: FlowData, node_id: str) -> str:
-        """What feeds a timer block's trigger: its edge and everything upstream of it."""
+    def _timer_trigger_signature(flow: FlowData, node_id: str) -> tuple[str, str]:
+        """What feeds a timer block's trigger: its edge and everything upstream of it.
+
+        Two hashes: the whole input, block settings included, and its wiring
+        alone — the connections, the blocks' types and the data points their
+        Read Objects read. A settings change keeps the wiring.
+        """
         # The last edge into a handle is the effective one (GraphExecutor._build_edge_map).
         effective: dict[tuple[str, str], Any] = {}
         for edge in flow.edges:
@@ -2258,23 +2263,30 @@ class LogicManager:
         for (target, _handle), edge in effective.items():
             incoming.setdefault(target, []).append(edge)
         nodes_by_id = {node.id: node for node in flow.nodes}
-        parts: list[str] = []
+        wiring: list[str] = []
+        settings: list[str] = []
         seen: set[str] = set()
         frontier = [edge for edge in (effective.get((node_id, "trigger")),) if edge is not None]
         while frontier:
             edge = frontier.pop()
-            parts.append(json.dumps(["edge", edge.source, edge.sourceHandle, edge.target, edge.targetHandle]))
+            wiring.append(json.dumps(["edge", edge.source, edge.sourceHandle, edge.target, edge.targetHandle]))
             if edge.source in seen or edge.source == node_id:
                 continue
             seen.add(edge.source)
             source = nodes_by_id.get(edge.source)
+            if source is None:
+                wiring.append(json.dumps(["node", edge.source]))
+                continue
+            datapoint = source.data.get("datapoint_id") if source.type == "datapoint_read" else None
+            wiring.append(json.dumps(["node", edge.source, source.type, datapoint], default=str))
             # Without its label: a rename is a layout-only save (update_cached_graph), no new input.
-            data = {key: value for key, value in source.data.items() if key != "label"} if source else None
-            parts.append(json.dumps(["node", edge.source, source.type, data] if source else ["node", edge.source], sort_keys=True, default=str))
+            data = {key: value for key, value in source.data.items() if key != "label"}
+            settings.append(json.dumps(["data", edge.source, data], sort_keys=True, default=str))
             frontier.extend(incoming.get(edge.source, ()))
-        return hashlib.sha256("\n".join(sorted(parts)).encode()).hexdigest()
+        wiring_hash = hashlib.sha256("\n".join(sorted(wiring)).encode()).hexdigest()
+        return hashlib.sha256("\n".join([wiring_hash, *sorted(settings)]).encode()).hexdigest(), wiring_hash
 
-    def _set_timer_level(self, graph_id: str, node: Any, level: bool, trigger_sig: str | None = None) -> None:
+    def _set_timer_level(self, graph_id: str, node: Any, level: bool, trigger_sig: tuple[str, str] | None = None) -> None:
         """Record a block's trigger level (seen on the input *trigger_sig* describes).
 
         A low level of an idle block needs no state, so a sheet whose timers
@@ -2413,18 +2425,18 @@ class LogicManager:
             if restored_high:
                 # The input may have fallen while the server was down: a level
                 # still taken as high would swallow its next rise.
-                lows = self._triggers_low_now(graph_id, flow, {node.id for node in restored_high})
+                levels = self._trigger_levels_now(graph_id, flow, {node.id for node in restored_high})
                 for node in restored_high:
-                    if node.id in lows:
+                    if levels.get(node.id) is False:
                         self._set_timer_level(graph_id, node, False)
 
-    def _triggers_low_now(self, graph_id: str, flow: FlowData, node_ids: set[str]) -> set[str]:
-        """The timer blocks among *node_ids* whose trigger is definitely low as the registry now stands.
+    def _trigger_levels_now(self, graph_id: str, flow: FlowData, node_ids: set[str]) -> dict[str, bool]:
+        """The trigger level of the timer blocks among *node_ids* as the registry now stands.
 
-        A side-effect-free pass like initialize_graph's: a trigger behind a Read
+        A side-effect-free pass like initialize_graph's. A trigger behind a Read
         Object without a value, a block excluded from initialization (actions,
         timers, memory, ...), an edge detector or a "changed" pulse has no
-        level here, so its restored one stays.
+        level here and is left out.
         """
         seeds: dict[str, dict[str, Any]] = {}
         unknown: set[str] = set()
@@ -2451,7 +2463,7 @@ class LogicManager:
             if edge.target in node_ids and (edge.targetHandle or "in") == "trigger" and edge.source not in unknown and edge.sourceHandle != "changed"
         }
         if not sources:
-            return set()
+            return {}
         probe = flow.model_copy(deep=True)
         for node in probe.nodes:
             if node.type in _INIT_EXCLUDED_NODE_TYPES:
@@ -2467,15 +2479,15 @@ class LogicManager:
                 datapoint_lookup=self._datapoint_value_lookup,
             ).execute(seeds, commit_memory=False)
         except Exception:
-            logger.warning("Graph %s: could not evaluate restored timer triggers", graph_id[:8], exc_info=True)
-            return set()
-        lows: set[str] = set()
+            logger.warning("Graph %s: could not evaluate timer triggers", graph_id[:8], exc_info=True)
+            return {}
+        levels: dict[str, bool] = {}
         for node_id, (source_id, handle) in sources.items():
             source_out = outputs.get(source_id, {})
             value = GraphExecutor._get_output_value(source_out, handle)
-            if "__error__" not in source_out and value is not None and not GraphExecutor._to_bool(value):
-                lows.add(node_id)
-        return lows
+            if "__error__" not in source_out and value is not None:
+                levels[node_id] = GraphExecutor._to_bool(value)
+        return levels
 
     def _timer_states_to_persist(self, graph_id: str, node_ids: set[str] | None) -> dict[str, dict[str, Any]]:
         """Timer state of a sheet as node state; *node_ids* limits it to persisted nodes."""
@@ -2498,6 +2510,17 @@ class LogicManager:
             nodes_by_id = {node.id: node for node in entry[2].nodes} if entry is not None else {}
             types = {node_id: node.type for node_id, node in nodes_by_id.items()}
             enabled = entry is not None and entry[1]
+            trigger_sigs = {
+                node_id: self._timer_trigger_signature(entry[2], node_id)  # type: ignore[index]
+                for node_id, state in nodes.items()
+                if types.get(node_id) == state.kind
+            }
+            # A save changed what feeds a trigger still taken as high: its level
+            # as the sheet now stands is the baseline.
+            changed_high = {
+                node_id for node_id, sig in trigger_sigs.items() if nodes[node_id].trigger_sig not in (None, sig) and nodes[node_id].prev_trigger
+            }
+            levels = self._trigger_levels_now(graph_id, entry[2], changed_high) if changed_high else {}  # type: ignore[index]
             for node_id, state in list(nodes.items()):
                 key = (graph_id, node_id)
                 if types.get(node_id) != state.kind:
@@ -2505,15 +2528,17 @@ class LogicManager:
                     self._timer_dirty.add(graph_id)
                     self._cancel_timer_task(key)
                     continue
-                trigger_sig = self._timer_trigger_signature(entry[2], node_id)  # type: ignore[index]
-                if state.trigger_sig != trigger_sig:
-                    if state.trigger_sig is not None and state.prev_trigger:
-                        # A save rewired the trigger: the old input's level is no
-                        # baseline for the new one, whose first rise must count.
+                trigger_sig = trigger_sigs[node_id]
+                if node_id in changed_high:
+                    level = levels.get(node_id)
+                    # Low now, or rewired to an input without a level here: the
+                    # next rise must count. Still high: no new edge (a changed
+                    # threshold behind a held input must not fire again).
+                    if level is False or (level is None and state.trigger_sig[1] != trigger_sig[1]):  # type: ignore[index]
                         state.prev_trigger = False
                         state.level_changes += 1
                         self._timer_dirty.add(graph_id)
-                    state.trigger_sig = trigger_sig
+                state.trigger_sig = trigger_sig
                 if not enabled:
                     if state.kind == "timer_delay":
                         self._cancel_timer_task(key)

@@ -3718,7 +3718,7 @@ def test_a_level_recorded_on_another_input_is_no_baseline() -> None:
         manager = _manager()
         flow = _compare_flow(uuid.uuid4())
         manager._graphs["graph"] = ("Graph", True, flow)
-        manager._timers["graph"] = {"delay": _TimerState("timer_delay", prev_trigger=True, trigger_sig="another input")}
+        manager._timers["graph"] = {"delay": _TimerState("timer_delay", prev_trigger=True, trigger_sig=("another input", "another wiring"))}
 
         await manager._execute_graph("graph", "Graph", flow, {"read": {"value": 1, "changed": True}})
 
@@ -3933,7 +3933,7 @@ def test_a_restored_level_stays_when_its_input_cannot_be_evaluated(caplog: pytes
         _restore(manager, _restored_flow(), 0, {"delay": {"timer_prev_trigger": True}})
 
     assert manager._timers["graph"]["delay"].prev_trigger is True
-    assert any("restored timer triggers" in record.message for record in caplog.records)
+    assert any("could not evaluate timer triggers" in record.message for record in caplog.records)
 
 
 def test_a_restored_level_behind_a_failed_block_stays() -> None:
@@ -3976,3 +3976,91 @@ def test_renaming_a_block_upstream_of_a_held_delay_is_no_new_rise() -> None:
         manager._cancel_timer_tasks()
 
     asyncio.run(exercise())
+
+
+def _threshold_flow(source: uuid.UUID, target: uuid.UUID, operand: float) -> FlowData:
+    """Read Object → compare (> operand) → Delay (50 ms) → Write Object trigger (value: constant 7)."""
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(source)}),
+                node("cmp", "compare", {"operator": ">", "operand": operand}),
+                node("delay", "timer_delay", {"delay_s": 0.05}),
+                node("value", "const_value", {"value": "7", "data_type": "number"}),
+                node("write", "datapoint_write", {"datapoint_id": str(target)}),
+            ],
+            "edges": [
+                edge("read", "cmp", "value", "in1"),
+                edge("cmp", "delay", "out", "trigger"),
+                edge("delay", "write", "trigger", "trigger"),
+                edge("value", "write", "value", "value"),
+            ],
+        },
+    )
+
+
+async def _save(manager: LogicManager, flow: FlowData) -> None:
+    async def load_graphs() -> None:
+        manager._graphs = {"graph": ("Graph", True, flow)}
+
+    manager._load_graphs = load_graphs  # type: ignore[method-assign]
+    await manager.reinitialize_graph("graph")
+
+
+def test_changing_a_threshold_while_the_input_stays_high_fires_no_delay_again() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        values: dict[uuid.UUID, object] = {}
+        manager._registry.get_value.side_effect = lambda dp: SimpleNamespace(value=values.get(dp), ts=None)
+        source, target = uuid.uuid4(), uuid.uuid4()
+        manager._graphs["graph"] = ("Graph", True, _threshold_flow(source, target, 0))
+        values[source] = 5
+        await manager._on_value_event(_value_event(source, 5))  # rises: 5 > 0
+        await asyncio.sleep(0.15)
+        assert [value for dp, value, _depth in _published(manager) if dp == str(target)] == [7.0]
+
+        await _save(manager, _threshold_flow(source, target, 1))  # 5 > 1: still high
+        await manager._on_value_event(_value_event(source, 5))
+        await asyncio.sleep(0.15)
+
+        assert [value for dp, value, _depth in _published(manager) if dp == str(target)] == [7.0]
+        assert manager._timers["graph"]["delay"].prev_trigger is True
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(("rewired", "reset"), [(True, True), (False, False)])
+def test_a_changed_input_without_a_level_resets_the_edge_state_only_when_rewired(rewired: bool, reset: bool) -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        values: dict[uuid.UUID, object] = {}
+        manager._registry.get_value.side_effect = lambda dp: SimpleNamespace(value=values.get(dp), ts=None)
+        source, target = uuid.uuid4(), uuid.uuid4()
+        manager._graphs["graph"] = ("Graph", True, _threshold_flow(source, target, 0))
+        values[source] = 5
+        await manager._on_value_event(_value_event(source, 5))
+        manager._cancel_timer_tasks()
+        # The saved input has no value now: its level cannot be evaluated.
+        saved = _threshold_flow(uuid.uuid4(), target, 0) if rewired else _threshold_flow(source, target, 1)
+        if not rewired:
+            values[source] = None
+
+        await _save(manager, saved)
+
+        assert manager._timers["graph"]["delay"].prev_trigger is not reset
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def test_the_trigger_wiring_ignores_block_settings() -> None:
+    source = uuid.uuid4()
+    inputs, wiring = LogicManager._timer_trigger_signature(_compare_flow(source), "delay")
+    edited = _compare_flow(source)
+    edited.nodes[1].data["operand"] = 5
+    edited_inputs, edited_wiring = LogicManager._timer_trigger_signature(edited, "delay")
+
+    assert edited_wiring == wiring
+    assert edited_inputs != inputs
+    assert LogicManager._timer_trigger_signature(_compare_flow(uuid.uuid4()), "delay")[1] != wiring  # another data point
