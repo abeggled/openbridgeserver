@@ -2078,3 +2078,345 @@ class TestModbusTcpSharedBus:
         from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
 
         assert ModbusTcpAdapterConfig().shared_bus is False
+
+
+# ---------------------------------------------------------------------------
+# Wedged gateway recovery (#1136): swallowed cancellation, bounded drain,
+# socket keepalive
+# ---------------------------------------------------------------------------
+
+
+async def _read_that_swallows_cancel(*_args, **_kwargs):
+    """Mimics pymodbus 3.15: a cancel while awaiting the response is re-raised as
+    ModbusIOException("Request cancelled outside library.")."""
+    from pymodbus.exceptions import ModbusIOException
+
+    try:
+        await asyncio.sleep(100)
+    except asyncio.CancelledError as exc:
+        raise ModbusIOException("Request cancelled outside library.") from exc
+
+
+class TestPollLoopHonoursSwallowedCancel:
+    async def test_poll_loop_returns_when_cancel_is_converted_to_modbus_io_exception(self):
+        adapter, bus = _make_tcp()
+        adapter._client = _make_client()
+        adapter._client.read_holding_registers = AsyncMock(side_effect=_read_that_swallows_cancel)
+        binding = make_binding(_HOLDING_CFG, direction="SOURCE")
+
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=1.0)
+
+        assert task.done()
+        bad = [c.args[0] for c in bus.publish.call_args_list if getattr(c.args[0], "quality", None) == "bad"]
+        assert bad == []
+
+    async def test_poll_error_without_cancel_publishes_bad_and_keeps_polling(self):
+        adapter, bus = _make_tcp()
+        adapter._client = _make_client()
+        adapter._client.read_holding_registers = AsyncMock(side_effect=RuntimeError("boom"))
+        binding = make_binding(_HOLDING_CFG, direction="SOURCE")
+
+        task = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
+        await asyncio.sleep(0.12)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        bad = [c.args[0] for c in bus.publish.call_args_list if getattr(c.args[0], "quality", None) == "bad"]
+        assert len(bad) >= 2
+
+
+class TestDrainPollTasks:
+    @pytest.fixture
+    def short_drain(self, monkeypatch):
+        monkeypatch.setattr("obs.adapters.modbus_tcp.adapter._DRAIN_TIMEOUT_S", 0.05)
+        monkeypatch.setattr("obs.adapters.modbus_tcp.adapter._FORCE_CLOSE_GRACE_S", 0.05)
+
+    async def test_prompt_cancel_does_not_force_close(self, short_drain):
+        adapter, _ = _make_tcp()
+        client = _make_client()
+        adapter._client = client
+        task = asyncio.create_task(asyncio.sleep(100))
+        adapter._poll_tasks.append(task)
+        await asyncio.sleep(0)
+
+        await adapter._drain_poll_tasks()
+
+        assert task.cancelled()
+        client.close.assert_not_called()
+        assert adapter._poll_tasks == []
+
+    async def test_stuck_task_is_freed_by_force_closing_the_client(self, short_drain, caplog):
+        adapter, _ = _make_tcp()
+        released = asyncio.Event()
+        client = _make_client()
+        client.close = MagicMock(side_effect=released.set)
+        adapter._client = client
+
+        async def read_freed_only_by_close():
+            while not released.is_set():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await released.wait()
+
+        task = asyncio.create_task(read_freed_only_by_close())
+        adapter._poll_tasks.append(task)
+        await asyncio.sleep(0)
+
+        with caplog.at_level("WARNING", logger="obs.adapters.modbus_tcp.adapter"):
+            await adapter._drain_poll_tasks()
+
+        client.close.assert_called_once()
+        assert task.done()
+        assert "force-closing client" in caplog.text
+        assert "still running after force-close" not in caplog.text
+        assert adapter._poll_tasks == []
+
+    async def test_task_still_running_after_force_close_is_logged(self, short_drain, caplog):
+        adapter, _ = _make_tcp()
+        client = _make_client()
+        client.close = MagicMock(side_effect=OSError("close failed"))
+        adapter._client = client
+        released = asyncio.Event()
+
+        async def never_freed():
+            while not released.is_set():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await released.wait()
+
+        task = asyncio.create_task(never_freed())
+        adapter._poll_tasks.append(task)
+        await asyncio.sleep(0)
+
+        with caplog.at_level("DEBUG", logger="obs.adapters.modbus_tcp.adapter"):
+            await adapter._drain_poll_tasks()
+
+        assert "force-close during drain failed" in caplog.text
+        assert "still running after force-close" in caplog.text
+        assert adapter._poll_tasks == []
+        released.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    async def test_stuck_task_without_client_skips_force_close(self, short_drain, caplog):
+        adapter, _ = _make_tcp()
+        adapter._client = None
+        released = asyncio.Event()
+
+        async def never_freed():
+            while not released.is_set():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await released.wait()
+
+        task = asyncio.create_task(never_freed())
+        adapter._poll_tasks.append(task)
+        await asyncio.sleep(0)
+
+        with caplog.at_level("DEBUG", logger="obs.adapters.modbus_tcp.adapter"):
+            await adapter._drain_poll_tasks()
+
+        assert "force-close during drain failed" not in caplog.text
+        assert "still running after force-close" in caplog.text
+        released.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    async def test_caller_cancel_cancels_poll_tasks_again_and_propagates(self):
+        adapter, _ = _make_tcp()
+        adapter._client = _make_client()
+
+        async def swallows_first_cancel():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.sleep(100)
+            await asyncio.sleep(100)
+
+        poll = asyncio.create_task(swallows_first_cancel())
+        adapter._poll_tasks.append(poll)
+        await asyncio.sleep(0)
+
+        drain = asyncio.create_task(adapter._drain_poll_tasks())
+        await asyncio.sleep(0.02)
+        drain.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await drain
+        await asyncio.sleep(0)
+
+        assert poll.cancelled()
+        assert adapter._poll_tasks == []
+
+    async def test_poll_task_exception_is_retrieved_not_raised(self):
+        adapter, _ = _make_tcp()
+        adapter._client = _make_client()
+
+        async def fails_on_cancel():
+            try:
+                await asyncio.sleep(100)
+            except asyncio.CancelledError:
+                raise RuntimeError("teardown failed") from None
+
+        task = asyncio.create_task(fails_on_cancel())
+        adapter._poll_tasks.append(task)
+        await asyncio.sleep(0)
+
+        await adapter._drain_poll_tasks()
+
+        assert isinstance(task.exception(), RuntimeError)
+        assert adapter._poll_tasks == []
+
+
+def _client_with_socket(sock):
+    client = _make_client()
+    client.ctx.transport.get_extra_info = MagicMock(return_value=sock)
+    return client
+
+
+class TestSocketKeepalive:
+    @pytest.fixture
+    def tcp_opts(self, monkeypatch):
+        """Deterministic platform: TCP_KEEPIDLE present, TCP_USER_TIMEOUT absent."""
+        import socket
+
+        monkeypatch.setattr(socket, "TCP_KEEPIDLE", 4, raising=False)
+        monkeypatch.delattr(socket, "TCP_USER_TIMEOUT", raising=False)
+
+    async def test_applies_supported_options_and_skips_missing_ones(self, tcp_opts):
+        import socket
+
+        adapter, _ = _make_tcp()
+        sock = MagicMock()
+        adapter._client = _client_with_socket(sock)
+
+        adapter._apply_socket_keepalive()
+
+        calls = sock.setsockopt.call_args_list
+        assert calls[0].args == (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        assert ((socket.IPPROTO_TCP, 4, 10)) in [c.args for c in calls]
+        assert all(c.args[2] != 15000 for c in calls)  # TCP_USER_TIMEOUT skipped
+
+    async def test_same_socket_is_configured_once(self, tcp_opts):
+        adapter, _ = _make_tcp()
+        sock = MagicMock()
+        adapter._client = _client_with_socket(sock)
+
+        adapter._apply_socket_keepalive()
+        count = sock.setsockopt.call_count
+        adapter._apply_socket_keepalive()
+
+        assert sock.setsockopt.call_count == count
+
+    async def test_new_socket_after_reconnect_is_configured(self, tcp_opts):
+        adapter, _ = _make_tcp()
+        first, second = MagicMock(), MagicMock()
+        adapter._client = _client_with_socket(first)
+        adapter._apply_socket_keepalive()
+
+        adapter._client.ctx.transport.get_extra_info.return_value = second
+        adapter._apply_socket_keepalive()
+
+        second.setsockopt.assert_called()
+
+    async def test_no_client_is_a_no_op(self):
+        adapter, _ = _make_tcp()
+        adapter._client = None
+
+        adapter._apply_socket_keepalive()
+
+        assert adapter._keepalive_sock is None
+
+    async def test_transport_lookup_failure_is_a_no_op(self):
+        adapter, _ = _make_tcp()
+        client = _make_client()
+        client.ctx.transport.get_extra_info = MagicMock(side_effect=RuntimeError("closed"))
+        adapter._client = client
+
+        adapter._apply_socket_keepalive()
+
+        assert adapter._keepalive_sock is None
+
+    async def test_setsockopt_failure_never_raises(self, caplog):
+        adapter, _ = _make_tcp()
+        sock = MagicMock()
+        sock.setsockopt.side_effect = OSError("not supported")
+        adapter._client = _client_with_socket(sock)
+
+        with caplog.at_level("DEBUG", logger="obs.adapters.modbus_tcp.adapter"):
+            adapter._apply_socket_keepalive()
+
+        assert "keepalive setsockopt failed" in caplog.text
+
+    async def test_client_ready_configures_the_current_socket(self):
+        adapter, _ = _make_tcp()
+        sock = MagicMock()
+        adapter._client = _client_with_socket(sock)
+
+        assert adapter._client_ready() is True
+        sock.setsockopt.assert_called()
+
+    async def test_client_not_ready_skips_keepalive(self):
+        adapter, _ = _make_tcp()
+        sock = MagicMock()
+        adapter._client = _client_with_socket(sock)
+        adapter._stopping = True
+
+        assert adapter._client_ready() is False
+        sock.setsockopt.assert_not_called()
+
+
+class TestRealPymodbusWedgedGateway:
+    """Real pymodbus client against a local gateway that accepts but never answers."""
+
+    @contextlib.asynccontextmanager
+    async def _gateway(self, *, drop_first_after: float | None = None):
+        """Started inside the test so it runs on the test's own event loop."""
+        writers: list = []  # hold the writers, otherwise GC closes the gateway side
+
+        async def handler(_reader, writer):
+            writers.append(writer)
+            if drop_first_after is not None and len(writers) == 1:
+                await asyncio.sleep(drop_first_after)
+                writer.close()
+
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        try:
+            yield server.sockets[0].getsockname()[1], writers
+        finally:
+            server.close()
+            for w in writers:
+                w.close()
+
+    async def _connected_adapter(self, port):
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": port, "timeout": 30})
+        adapter._publish_status = AsyncMock()
+        await adapter.connect()
+        assert adapter._client.connected
+        return adapter
+
+    async def test_disconnect_with_poll_awaiting_response_returns_promptly(self):
+        async with self._gateway() as (port, writers):
+            adapter = await self._connected_adapter(port)
+            binding = make_binding({**_HOLDING_CFG, "poll_interval": 1.0}, direction="SOURCE")
+            poll = asyncio.create_task(adapter._poll_loop(binding, apply_jitter=False))
+            adapter._poll_tasks.append(poll)
+            await asyncio.sleep(0.2)  # the read is now waiting for a response
+            assert len(writers) == 1
+
+            await asyncio.wait_for(adapter.disconnect(), timeout=2.0)
+
+            assert poll.done()
+
+    async def test_socket_from_pymodbus_auto_reconnect_gets_keepalive(self):
+        import socket
+
+        async with self._gateway(drop_first_after=0.3) as (port, writers):
+            adapter = await self._connected_adapter(port)
+            for _ in range(40):  # gateway drops the first connection, pymodbus reconnects itself
+                await asyncio.sleep(0.05)
+                if len(writers) >= 2 and adapter._client.connected:
+                    break
+            assert len(writers) >= 2
+
+            assert adapter._client_ready()
+
+            sock = adapter._client.ctx.transport.get_extra_info("socket")
+            assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) != 0
+            adapter._client.close()
