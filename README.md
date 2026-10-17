@@ -770,11 +770,13 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 
 | Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Delay** | Trigger | Trigger | Delays a signal by N seconds. |
-| **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False". |
+| **Delay** | Trigger | Trigger | Delays a trigger by N seconds: when the delay has elapsed the sheet runs again and the output fires once. The output is a pulse, so a connected **Write Object** writes only then. Starts on a rising edge, on every single pulse (e.g. from a Change Filter or the Trigger block) and on every repeated true telegram of a directly connected Read Object; a new trigger while it is pending starts it over. The delay counts from the run that saw the trigger, so a slow block elsewhere on the sheet (e.g. API Client) does not lengthen it. A pending delay survives a save and a restart (and fires at once if its time has passed); disabling or deleting the sheet discards it. Its output may lead back to its own input without a Memory; a delay of at least one second begins a new logic cascade when it fires, so a blinker or keep-alive through data points keeps running. |
+| **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False"; the sheet runs again on both changes. Connect Out directly to the Value of a **Write Object**. Triggers like Delay; a new trigger during the pulse extends it (retriggerable, e.g. staircase lighting). The duration counts from the run that writes the start of the pulse: that run publishes it together with its other writes, after any slow block in it (e.g. API Client), and the data point still stays true for the full duration. A running pulse survives a save and a restart; deleting the sheet or the block ends it. |
 | **Trigger** | — | Trigger | Fires the graph on a schedule (cron format). Configurable via templates, a visual editor (min/hour/day/month/weekday), or direct expression entry. |
 | **Operating hours** | Active, Reset | Hours | Counts operating hours while "Active" is true. Saved counter survives restarts. |
 | **Sensor Watchdog** | IN 1…N (1–10, configurable) | OUT 1…N, Fault text, Fault trigger | Monitors up to 10 inputs for missing new values. Each input has its own timeout and fault value; once an input has gone longer than its timeout without a new value, its output switches to the fault value and a one-shot Fault text/Fault trigger fires. Runs its own internal scheduler, so a timeout is detected autonomously even if nothing else happens elsewhere in the graph. |
+
+Delay and Pulse remember the level of their trigger, also across a save and a restart: a trigger that is still true is no new rising edge. Rewiring the trigger, or changing a block that feeds it, resets that level — renaming a block does not. After a restart, a level whose input has fallen while the server was down is taken back, so the next rise counts. Overlapping runs of a sheet never let an older run overwrite the level a newer one has seen.
 
 #### Script
 
