@@ -473,7 +473,14 @@
       "editorPlaceholder": "History chart",
       "seriesFallback": "Series {n}",
       "primaryLabel": "Label (optional)",
-      "labelPlaceholder": "e.g. Temperature history"
+      "labelPlaceholder": "e.g. Temperature history",
+      "chartTitle": "Chart title",
+      "chartType": "Chart type",
+      "chartTypeLine": "〰 Line",
+      "chartTypeBar": "▐ Bar",
+      "color": "Color",
+      "primaryLabelHint": "Without its own label, the primary series uses the chart title.",
+      "toggleSeries": "Show/hide series"
     },
     "energiefluss": {
       "title": "Energy flow",
