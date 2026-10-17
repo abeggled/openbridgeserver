@@ -44,6 +44,20 @@ from obs.core.event_bus import DataValueEvent
 
 logger = logging.getLogger(__name__)
 
+# Bounded poll-task drain (see ModbusTcpAdapter._drain_poll_tasks): how long to wait
+# for cancelled pollers before force-closing the client, and how long after that.
+_DRAIN_TIMEOUT_S = 5.0
+_FORCE_CLOSE_GRACE_S = 3.0
+
+# Kernel dead-peer detection on the gateway socket (see _apply_socket_keepalive).
+# Options missing on the platform (e.g. TCP_USER_TIMEOUT outside Linux) are skipped.
+_TCP_KEEPALIVE_OPTS = (
+    ("TCP_KEEPIDLE", 10),
+    ("TCP_KEEPINTVL", 5),
+    ("TCP_KEEPCNT", 3),
+    ("TCP_USER_TIMEOUT", 15000),
+)
+
 
 # ---------------------------------------------------------------------------
 # Adapter Config
@@ -54,6 +68,12 @@ logger = logging.getLogger(__name__)
 # Modbus endpoint (several devices behind one RS485/Modbus-TCP gateway) share a
 # lock so their requests never overlap on the single serial bus.
 _SHARED_BUS_SEMS: dict[tuple[str, int], asyncio.Semaphore] = {}
+
+
+def _cancel_requested() -> bool:
+    """True when the running task has a pending cancel() that something swallowed."""
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
 
 
 def _shared_bus_sem(host: str, port: int) -> asyncio.Semaphore:
@@ -133,6 +153,9 @@ class ModbusTcpAdapter(AdapterBase):
         # True after the first _on_bindings_reloaded() call; jitter is only applied
         # on initial start, not on subsequent binding changes (delete/recreate).
         self._initial_load_done: bool = False
+        # Socket that _apply_socket_keepalive() last configured; a new one (own
+        # reconnect or pymodbus' automatic one) gets the options again.
+        self._keepalive_sock: Any = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -196,30 +219,49 @@ class ModbusTcpAdapter(AdapterBase):
         cancel the un-cancellable gather and hang itself), and if the tasks do not
         finish, force-close the client to break the stuck read. Force-close happens
         only in that stuck case, so normal teardown (tasks cancel promptly) is unchanged.
+
+        ``asyncio.wait`` on the tasks themselves never raises their outcome, so a
+        cancelled poll task cannot leak its ``CancelledError`` into the caller. If the
+        caller itself is cancelled, the poll tasks are cancelled again before the
+        cancellation propagates, so no poller outlives its lifecycle call.
         """
-        if not self._poll_tasks:
+        tasks = list(self._poll_tasks)
+        if not tasks:
             return
-        for t in self._poll_tasks:
+        for t in tasks:
             t.cancel()
-        gt = asyncio.ensure_future(asyncio.gather(*self._poll_tasks, return_exceptions=True))
-        done, _ = await asyncio.wait({gt}, timeout=5.0)
-        if gt not in done:
-            logger.warning(
-                "Modbus TCP: poll tasks did not cancel within 5s — force-closing client "
-                "to break a stuck read (%s:%s)",
-                self._adp_cfg.host, self._adp_cfg.port,
-            )
-            try:
-                if self._client:
-                    self._client.close()
-            except Exception:
-                logger.debug("Modbus TCP: force-close during drain failed", exc_info=True)
-            await asyncio.wait({gt}, timeout=3.0)
-            if not gt.done():
-                gt.cancel()
-                with contextlib.suppress(Exception):
-                    await gt
-        self._poll_tasks.clear()
+        try:
+            _, pending = await asyncio.wait(tasks, timeout=_DRAIN_TIMEOUT_S)
+            if pending:
+                logger.warning(
+                    "Modbus TCP: %d poll task(s) did not cancel within %.0fs — force-closing client to break a stuck read (%s:%s)",
+                    len(pending),
+                    _DRAIN_TIMEOUT_S,
+                    self._adp_cfg.host,
+                    self._adp_cfg.port,
+                )
+                try:
+                    if self._client:
+                        self._client.close()
+                except Exception:
+                    logger.debug("Modbus TCP: force-close during drain failed", exc_info=True)
+                _, pending = await asyncio.wait(pending, timeout=_FORCE_CLOSE_GRACE_S)
+                if pending:
+                    logger.error(
+                        "Modbus TCP: %d poll task(s) still running after force-close (%s:%s)",
+                        len(pending),
+                        self._adp_cfg.host,
+                        self._adp_cfg.port,
+                    )
+        except asyncio.CancelledError:
+            for t in tasks:
+                t.cancel()
+            raise
+        finally:
+            for t in tasks:
+                if t.done() and not t.cancelled():
+                    t.exception()  # mark retrieved, as gather(return_exceptions=True) did
+            self._poll_tasks.clear()
 
     async def disconnect(self) -> None:
         async with self._reload_lock:
@@ -407,6 +449,11 @@ class ModbusTcpAdapter(AdapterBase):
             except asyncio.CancelledError:
                 return
             except Exception:
+                # pymodbus turns a CancelledError raised while awaiting a response into
+                # ModbusIOException("Request cancelled outside library"). The task is
+                # still marked as cancelling, so honour the cancel instead of polling on.
+                if _cancel_requested():
+                    return
                 logger.exception("Modbus TCP poll error (binding %s)", binding.id)
                 await self._bus.publish(
                     DataValueEvent(
@@ -455,47 +502,35 @@ class ModbusTcpAdapter(AdapterBase):
         comes). SO_KEEPALIVE + TCP_USER_TIMEOUT make the kernel drop such a socket
         within ~15 s, turning the silent hang into a normal socket error that the
         existing reconnect handling recovers from. Best-effort: never raises.
+
+        Idempotent per socket: pymodbus reconnects on its own after the peer closes
+        the connection, so this also runs before every Modbus call and configures a
+        socket the first time it shows up there.
         """
-        cl = self._client
-        if cl is None:
-            return
-        sock = None
-        for attr in ("transport", "ctx"):
-            obj = getattr(cl, attr, None)
-            tr = obj if attr == "transport" else getattr(obj, "transport", None)
-            if tr is not None:
-                try:
-                    sock = tr.get_extra_info("socket")
-                except Exception:
-                    sock = None
-                if sock is not None:
-                    break
+        # pymodbus 3.x keeps the asyncio transport on the client's TransactionManager.
+        transport = getattr(getattr(self._client, "ctx", None), "transport", None)
+        try:
+            sock = transport.get_extra_info("socket") if transport is not None else None
+        except Exception:
+            logger.debug("Modbus TCP: socket lookup for keepalive failed", exc_info=True)
+            sock = None
         if sock is None:
-            logger.debug(
-                "Modbus TCP: no socket to set keepalive on (%s:%s)",
-                self._adp_cfg.host, self._adp_cfg.port,
-            )
+            logger.debug("Modbus TCP: no socket to set keepalive on (%s:%s)", self._adp_cfg.host, self._adp_cfg.port)
             return
+        if sock is self._keepalive_sock:
+            return
+        self._keepalive_sock = sock
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             applied = ["SO_KEEPALIVE"]
-            for name, val in (
-                ("TCP_KEEPIDLE", 10), ("TCP_KEEPINTVL", 5),
-                ("TCP_KEEPCNT", 3), ("TCP_USER_TIMEOUT", 15000),
-            ):
+            for name, val in _TCP_KEEPALIVE_OPTS:
                 opt = getattr(socket, name, None)
                 if opt is not None:
                     sock.setsockopt(socket.IPPROTO_TCP, opt, val)
-                    applied.append("%s=%s" % (name, val))
-            logger.info(
-                "Modbus TCP keepalive set on %s:%s (%s)",
-                self._adp_cfg.host, self._adp_cfg.port, ",".join(applied),
-            )
+                    applied.append(f"{name}={val}")
+            logger.info("Modbus TCP keepalive set on %s:%s (%s)", self._adp_cfg.host, self._adp_cfg.port, ",".join(applied))
         except Exception:
-            logger.debug(
-                "Modbus TCP: keepalive setsockopt failed (%s:%s)",
-                self._adp_cfg.host, self._adp_cfg.port, exc_info=True,
-            )
+            logger.debug("Modbus TCP: keepalive setsockopt failed (%s:%s)", self._adp_cfg.host, self._adp_cfg.port, exc_info=True)
 
     def _new_client(self) -> Any:
         if self._client_factory is None:
@@ -552,7 +587,12 @@ class ModbusTcpAdapter(AdapterBase):
             yield self._client if self._client_ready() else None
 
     def _client_ready(self) -> bool:
-        return bool(not self._stopping and self._client and self._client.connected)
+        if self._stopping or not self._client or not self._client.connected:
+            return False
+        # Covers sockets pymodbus opened by its own auto-reconnect, which bypass
+        # every connect() call site; a no-op once the current socket is configured.
+        self._apply_socket_keepalive()
+        return True
 
     def _reconnect_backoff_delay(self, current_poll_interval: float) -> float:
         intervals = [current_poll_interval]
