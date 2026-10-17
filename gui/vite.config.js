@@ -15,7 +15,7 @@ export default defineConfig({
     alias: { '@': resolve(import.meta.dirname, 'src') }
   },
 
-  // Dev server: proxy /api to backend, /visu to the Visu frontend dev server (port 5174)
+  // Dev server: proxy /api, /hook and /help to backend, /visu to the Visu frontend dev server (port 5174)
   server: {
     port: 5173,
     proxy: {
@@ -26,6 +26,20 @@ export default defineConfig({
       },
       '/visu': {
         target: 'http://localhost:5174',
+        changeOrigin: true,
+      },
+      '/help': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      // WEBHOOK adapter trigger endpoint (#1256). The binding form builds the
+      // call URL from window.location.origin, which in dev is this dev server
+      // — without this the copied URL would hit Vite's SPA fallback and the
+      // backend would never see the call. Covers the default path prefix; an
+      // instance configured with a different one must be called on :8080
+      // directly while developing.
+      '/hook': {
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
     }

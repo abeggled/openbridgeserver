@@ -36,6 +36,22 @@
     "submitting": "Signing in …",
     "logoAlt": "open bridge server"
   },
+  "setup": {
+    "title": "Initial setup",
+    "intro": "This installation has no administrator account yet. Create it now — the interface becomes available right after.",
+    "username": "Username",
+    "password": "Password",
+    "passwordRepeat": "Repeat password",
+    "passwordHint": "At least {n} characters.",
+    "submit": "Create account",
+    "submitting": "Creating account …",
+    "securityNote": "Do this right after installing: until the account exists, anyone who can reach the server on the network can create it.",
+    "errorUsernameRequired": "Please enter a username.",
+    "errorPasswordTooShort": "The password must be at least {n} characters long.",
+    "errorPasswordMismatch": "The two passwords do not match.",
+    "errorAlreadyDone": "Setup has already been completed. Reload the page and sign in.",
+    "errorFailed": "The account could not be created. Please try again."
+  },
   "dashboard": {
     "title": "Overview",
     "subtitle": "System overview – Live status",
@@ -126,7 +142,24 @@
       "persistValueHint": "immediately available after restart",
       "recordHistory": "History active",
       "recordHistoryHint": "store values in history DB",
-      "saveError": "Error saving"
+      "externalWriteEnabled": "Allow external write",
+      "externalWriteEnabledHint": "any MQTT client that can reach the broker can then set this value",
+      "saveError": "Error saving",
+      "unitCategories": {
+        "temperature": "Temperature",
+        "humidityAirQuality": "Humidity & air quality",
+        "pressure": "Pressure",
+        "electricity": "Electricity",
+        "light": "Light",
+        "speedAcceleration": "Speed & acceleration",
+        "angle": "Angle",
+        "volumeFlow": "Volume & flow",
+        "lengthArea": "Length & area",
+        "mass": "Mass",
+        "time": "Time",
+        "radiation": "Radiation",
+        "other": "Other"
+      }
     },
     "delete": {
       "confirm": "Really delete data point?",
@@ -151,7 +184,7 @@
     "duplicate": {
       "action": "Duplicate",
       "title": "Duplicate data point",
-      "hint": "All properties and adapter bindings are copied. Current values and history are not copied.",
+      "hint": "All properties and adapter bindings are copied, except central-plant classification and external write access — both always start off on the copy. Current values and history are not copied.",
       "defaultName": "Copy of {name}",
       "saving": "Duplicating …",
       "error": "The data point could not be duplicated."
@@ -385,7 +418,10 @@
         "selectOnewireInstanceFirst": "Please select a 1-Wire instance first",
         "noSensorsFound": "No sensors found",
         "onewireScanFailed": "1-Wire sensor scan failed",
-        "onewireAliasSaveFailed": "Could not save alias"
+        "onewireAliasSaveFailed": "Could not save alias",
+        "webhookEntryNotFound": "No call URL found for this binding",
+        "webhookLoadFailed": "Could not load the call URL",
+        "webhookRotateFailed": "Could not issue a new token"
       },
       "knxSection": "KNX binding",
       "dptLabel": "DPT *",
@@ -596,7 +632,22 @@
       "ztSelectHoliday": "— select holiday —",
       "ztOutputDivider": "Output",
       "ztOutputValueLabel": "Output value",
-      "ztOutputValueHint": "e.g. 1 / 0 / true / false / 21.5 / any text",
+      "ztOutputValueHint_boolean": "Switches the value to On (true) or Off (false).",
+      "ztOutputValueHint_integer": "Whole number, e.g. 50 or 0.",
+      "ztOutputValueHint_float": "Decimal number, e.g. 21.5 or 0.",
+      "ztOutputValueHint_date": "Date in YYYY-MM-DD format, e.g. 2026-12-24.",
+      "ztOutputValueHint_time": "Time in HH:MM:SS format, e.g. 08:00:00.",
+      "ztOutputValueHint_datetime": "Date and time (ISO 8601), e.g. 2026-12-24T08:00:00.",
+      "ztOutputValueHint_text": "Taken literally — including 1, 0, on or ein.",
+      "ztOutputValueOn": "On (true)",
+      "ztOutputValueOff": "Off (false)",
+      "ztOutputValueErrorRequired": "Please enter an output value.",
+      "ztOutputValueErrorBoolean": "Not a valid yes/no value — allowed are 1/0, true/false, on/off, ein/aus.",
+      "ztOutputValueErrorInteger": "Not a valid whole number.",
+      "ztOutputValueErrorFloat": "Not a valid number.",
+      "ztOutputValueErrorDate": "Not a valid date (expected YYYY-MM-DD).",
+      "ztOutputValueErrorTime": "Not a valid time (expected HH:MM or HH:MM:SS).",
+      "ztOutputValueErrorDatetime": "Not a valid timestamp (expected YYYY-MM-DDTHH:MM:SS).",
       "anwSection": "Presence simulation — binding options",
       "anwOffsetOverrideLabel": "Override offset",
       "anwDefaultAdapter": "Default (adapter)",
@@ -703,7 +754,40 @@
       "ztChristmasEve": "Christmas Eve",
       "ztAdventOffset": "1st Advent {sign}{n} days",
       "notSet": "—",
-      "ztHolidayOffset": "{name} {sign}{n} days"
+      "ztHolidayOffset": "{name} {sign}{n} days",
+      "webhookSection": "Webhook binding",
+      "webhookIntro": "An incoming HTTP call sets this datapoint. Made for devices that can only call a URL — a door station when the bell is pressed, for example.",
+      "webhookSlugLabel": "Slug (path segment)",
+      "webhookSlugPlaceholder": "front-door-bell",
+      "webhookSlugHint": "Lower-case letters, digits, hyphen and underscore. Part of the call URL and unique per webhook instance.",
+      "webhookMethodsLabel": "Allowed HTTP methods",
+      "webhookMethodsHint": "Devices that can only call a URL use GET.",
+      "webhookValueSourceLabel": "Value source",
+      "webhookValueSourceFixed": "Fixed value",
+      "webhookValueSourceRequest": "Value from the request",
+      "webhookFixedValueLabel": "Fixed value",
+      "webhookFixedValueHint": "Converted to the datapoint's data type — \"true\" for a push button or a doorbell.",
+      "webhookValueParamLabel": "Parameter / field name",
+      "webhookValueParamHint": "For GET the query parameter \"?{name}=…\", for POST the field of the same name in the JSON body.",
+      "webhookDebounceLabel": "Debounce (ms)",
+      "webhookDebounceHint": "Further calls within this window are acknowledged with 204 but do not set the value again. 0 = off.",
+      "webhookCallUrlSection": "Call URL",
+      "webhookCallUrlLabel": "URL with the token as a query parameter",
+      "webhookCallUrlHint": "Configure this URL in the device. The token authorizes this one datapoint and nothing else.",
+      "webhookCallUrlPathLabel": "URL with the token in the path",
+      "webhookCallUrlPathHint": "Alternative for devices whose configuration field does not accept query parameters.",
+      "webhookCallCount": "Calls",
+      "webhookPublishCount": "Values set",
+      "webhookLastCalled": "Last call",
+      "webhookNeverCalled": "never",
+      "webhookRotateToken": "Issue a new token",
+      "webhookRotateTokenHint": "Revokes the previous URL immediately — other integrations are untouched.",
+      "webhookAutoresetLabel": "Enable auto-reset",
+      "webhookAutoresetHint": "Sets the datapoint back to the reset value after the configured time — which turns the webhook into a trigger (bell: true, then false again shortly after). Another accepted call restarts the timer; a call inside the debounce window does not.",
+      "webhookAutoresetValueLabel": "Reset value",
+      "webhookAutoresetValueHint": "Converted to the datapoint's data type and run through the same transformation as the triggered value.",
+      "webhookAutoresetDelayLabel": "Reset delay (ms)",
+      "webhookAutoresetDelayHint": "How long the triggered value stands. 0 = reset immediately."
     },
     "knx": {
       "scan": {
@@ -1126,6 +1210,50 @@
           "title": "Request timeout (s)",
           "description": "Seconds per owserver call before it is treated as an error"
         }
+      },
+      "WEBHOOK": {
+        "path_prefix": {
+          "title": "Path prefix"
+        },
+        "trust_forwarded_for": {
+          "title": "Trust X-Forwarded-For"
+        },
+        "rate_limit_per_minute": {
+          "title": "Rate limit (calls/minute per IP)"
+        },
+        "slug": {
+          "title": "Slug (path segment)"
+        },
+        "token": {
+          "title": "Token"
+        },
+        "methods": {
+          "title": "HTTP methods"
+        },
+        "value_source": {
+          "title": "Value source"
+        },
+        "fixed_value": {
+          "title": "Fixed value"
+        },
+        "value_param": {
+          "title": "Parameter / field name"
+        },
+        "debounce_ms": {
+          "title": "Debounce (ms)"
+        },
+        "allowed_networks": {
+          "title": "Allowed networks (CIDR)"
+        },
+        "autoreset": {
+          "title": "Auto-reset"
+        },
+        "autoreset_value": {
+          "title": "Reset value"
+        },
+        "autoreset_delay_ms": {
+          "title": "Reset delay (ms)"
+        }
       }
     },
     "statusDetail": {
@@ -1163,7 +1291,11 @@
       "invalidBindingsSkipped": "{count} invalid binding(s) skipped ({examples})",
       "messageProviderFailures": "MESSAGE provider failures: {count} target(s)",
       "messageArchiveWriteFailed": "MESSAGE archive write failed",
-      "messageSent": "MESSAGE sent"
+      "messageSent": "MESSAGE sent",
+      "webhookListening": "Reachable at {prefix}/<slug>",
+      "webhookPrefixConflict": "Path prefix {prefix} overlaps the prefix of another instance",
+      "webhookDuplicateSlug": "Duplicate slug(s) ignored: {slugs}",
+      "webhookInvalidConfig": "Invalid instance configuration"
     },
     "testResult": {
       "typeNotRegistered": "Adapter type '{type}' not registered",
@@ -1171,6 +1303,69 @@
       "configValidationError": "Configuration validation error: {error}",
       "connectOk": "Connection to {type} successful",
       "connectFailed": "Connection attempt failed"
+    },
+    "allowlist": {
+      "bindingLabel": "Allowed networks (CIDR)",
+      "placeholder": "10.38.0.0/16",
+      "addEntry": "Add entry",
+      "removeEntry": "Remove entry",
+      "emptyMeansAny": "No entries — every caller may trigger this binding.",
+      "invalidEntries": "{n} entry/entries are not a valid IP address or CIDR",
+      "hint": "One IP address or network per row, e.g. 10.38.0.0/16 or 192.168.1.5. An empty list does not restrict anything.",
+      "rejectedCalls": "{n} call(s) rejected",
+      "instanceRejectedCalls": "Rejected instance-wide: {n} call(s) (total across all bindings, including ones that could not be matched)",
+      "lastRejection": "Last: {reason} — caller {host}",
+      "originBlocked": "This URL points at {host}. This binding's allowlist does not allow that caller — a call from here is rejected with 404.",
+      "reason": {
+        "rate_limited": "rate limit exceeded",
+        "unknown_slug": "unknown slug",
+        "invalid_binding": "invalid binding configuration",
+        "invalid_token": "wrong token",
+        "method_not_allowed": "HTTP method not allowed",
+        "address_blocked": "caller address not in the allowlist"
+      }
+    },
+    "pushoverOptions": {
+      "section": "Pushover options",
+      "intro": "Applies to the selected Pushover targets only; other providers send unchanged. Empty fields are not sent to Pushover.",
+      "imageUrl": "Image URL",
+      "imageUrlHint": "OBS downloads the image (JPEG, PNG, GIF or WebP, max. 5 MB) and attaches it. External sources over HTTPS only; internal cameras (HTTP too) must be released in the URL Target Allowlist.",
+      "url": "URL",
+      "urlTitle": "URL title",
+      "placeholderHint": "Image URL, URL and URL title support ###DP### · ###DPU### · ###DPN### · ###DPI### · ###DATE### · ###TIME### · ###TS###",
+      "priority": "Priority",
+      "priorityDefault": "Default",
+      "priorities": {
+        "pm2": "-2 · lowest",
+        "pm1": "-1 · low",
+        "p0": "0 · normal",
+        "p1": "1 · high",
+        "p2": "2 · emergency (requires acknowledgement)"
+      },
+      "format": "Formatting",
+      "formats": {
+        "text": "Plain text",
+        "html": "HTML",
+        "monospace": "Monospace"
+      },
+      "retry": "Retry (seconds)",
+      "expire": "Expire (seconds)",
+      "sound": "Sound",
+      "soundDefault": "Target default",
+      "ttl": "TTL (seconds)",
+      "timestamp": "Timestamp (Unix seconds)",
+      "errors": {
+        "invalid": "The Pushover options are invalid. Please correct the highlighted fields.",
+        "integer": "Please enter a whole number.",
+        "positive": "The value must be greater than 0.",
+        "retryMin": "Retry must be at least 30 seconds.",
+        "retryRequired": "Emergency priority requires retry.",
+        "expireRequired": "Emergency priority requires expire.",
+        "expireRange": "Expire must be between 1 and 10800 seconds.",
+        "urlTitleWithoutUrl": "A URL title requires a URL.",
+        "soundInvalid": "Sound names consist of letters, digits, _ and - only.",
+        "tooLong": "At most {max} characters."
+      }
     }
   },
   "history": {
@@ -1300,7 +1495,8 @@
       "export": "Export",
       "failed": "Export failed",
       "title": "Export",
-      "fileExtHint": "File extension: {ext}."
+      "fileExtHint": "File extension: {ext}.",
+      "escapeCharPlaceholder": "(empty)"
     },
     "topbar": {
       "activeTitle": "Active — click to deactivate (for me only)",
@@ -1593,18 +1789,28 @@
     "openSheet": "Open logic sheet",
     "renameGraph": "Rename graph",
     "duplicateGraph": "Duplicate graph",
+    "duplicateNameSuffix": " (Copy)",
     "exportJson": "Export graph as JSON",
     "importJson": "Import graph from JSON",
     "searchNodes": "Search nodes — e.g. room, heating …",
     "searchNodesPalette": "Search nodes …",
     "negateOutput": "Negate output",
     "debugMode": "Debug mode: shows values after execution",
-    "snapToGrid": "Grid",
+    "snapToGrid": "Snap",
     "snapToGridTitle": "Snap function blocks to the grid",
+    "gridVisible": "Grid",
+    "gridShowTitle": "Show the canvas grid",
+    "gridHideTitle": "Hide the canvas grid",
     "gridSize": "Grid size",
     "deleteBlock": "Delete block",
     "deleteNode": "Delete branch",
     "init": "Init",
+    "blockName": {
+      "label": "Block name",
+      "editTitle": "{name} — double-click to rename",
+      "panelHint": "Custom name for this block. Leave empty for the block type's default title.",
+      "typeAndId": "{type} · {id}"
+    },
     "nodeTypes": {
       "divide": "Divide",
       "const_value": "Constant",
@@ -1613,10 +1819,14 @@
       "or": "OR",
       "not": "NOT",
       "xor": "XOR",
+      "binary_stats": "Binary statistics",
       "gate": "Gate",
       "memory": "Memory",
+      "change_filter": "Change filter",
+      "edge_detect": "Edge detection",
       "compare": "Comparison",
       "hysteresis": "Hysteresis",
+      "merge": "Merge",
       "decision": "Decision",
       "value_mapping": "Mapping",
       "datapoint_read": "Read Object",
@@ -1628,6 +1838,7 @@
       "statistics": "Statistics",
       "avg_multi": "Average",
       "string_concat": "Concatenate",
+      "string_replace": "Search/Replace",
       "heating_circuit": "Summer/Winter (DIN)",
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Energy counter",
@@ -1637,6 +1848,7 @@
       "timer_cron": "Trigger",
       "datetime": "Date/Time",
       "operating_hours": "Op. Hours",
+      "sensor_watchdog": "Sensor Watchdog",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
       "astro_sun": "Astro Sun",
@@ -1651,7 +1863,8 @@
       "substring_extractor": "Substring / RegEx",
       "ical": "iCalendar",
       "api_client": "API Client",
-      "mcp_tool": "MCP Tool"
+      "mcp_tool": "MCP Tool",
+      "hems_surplus": "Surplus control"
     },
     "selectGraph": "— Select logic sheet —",
     "newGraphBtn": "+ New",
@@ -1668,7 +1881,6 @@
     "errorToggle": "Error changing status",
     "debugBtn": "Debug",
     "debugInspector": {
-      "title": "Debug inspector",
       "inputs": "Inputs",
       "outputs": "Outputs",
       "incoming": "Incoming value",
@@ -1680,7 +1892,6 @@
       "copyAll": "Copy payload",
       "copy": "Copy",
       "copied": "Copied!",
-      "close": "Close",
       "noValues": "No inputs",
       "noExecution": "Run the sheet to inspect outputs.",
       "timestamp": "Executed",
@@ -1721,10 +1932,14 @@
     },
     "runResultWithWarnings": "Graph executed — {count} nodes checked, {warnings} warnings",
     "nodeError": "⚠ Error",
-    "graphValidationCycle": "Cycle detected: {count} node(s) need a Memory node as tick boundary.",
-    "graphValidationConnectBlocked": "Connection not created: cycle detected ({count} node(s)). Use a Memory node for feedback.",
-    "graphValidationSaveBlocked": "Save blocked: cycle detected ({count} node(s)). Use a Memory node for feedback.",
-    "graphValidationNodeError": "Cycle detected; direct feedback needs a Memory node.",
+    "graphValidationCycle": "Cycle detected: {count} node(s) need a Memory, Delay or Pulse node as tick boundary.",
+    "graphValidationConnectBlocked": "Connection not created: cycle detected ({count} node(s)). Use a Memory, Delay or Pulse node for feedback.",
+    "graphValidationSaveBlocked": "Save blocked: cycle detected ({count} node(s)). Use a Memory, Delay or Pulse node for feedback.",
+    "graphValidationNodeError": "Cycle detected; direct feedback needs a Memory, Delay or Pulse node.",
+    "graphValidationDuplicateHandle": "Duplicate connection detected: {count} input(s) have more than one connection. Use a Merge node to combine several sources.",
+    "graphValidationConnectBlockedDuplicateHandle": "Connection not created: this input already has a connection. Use a Merge node to combine several sources.",
+    "graphValidationSaveBlockedDuplicateHandle": "Save blocked: {count} input(s) have more than one connection. Use a Merge node to combine several sources.",
+    "graphValidationNodeErrorDuplicateHandle": "Duplicate connection detected; only one connection per input is allowed. Use a Merge node.",
     "duplicated": "Graph duplicated as “{name}”",
     "errorDuplicate": "Error duplicating graph",
     "copiedNodes": "{count} block(s) copied",
@@ -1737,6 +1952,8 @@
     "imported": "Graph “{name}” imported",
     "errorImport": "Invalid or corrupt export file",
     "newGraphPlaceholder": "e.g. Living Room Lights",
+    "hierarchyNodes": "Hierarchy nodes",
+    "hierarchyNodesHint": "Optional — assign to one or more Logic hierarchy nodes right away. Left empty, the sheet stays unassigned as before.",
     "notSelected": "— not selected —",
     "filterBadge": "Filter / transformation active",
     "negatePort": "Negate {id}",
@@ -1754,13 +1971,16 @@
         "notification": "Notification",
         "integration": "Integration",
         "script": "Scripts",
-        "ai": "AI"
+        "ai": "AI",
+        "hems": "Energy Management"
       }
     },
     "ports": {
       "value": "Value",
       "trigger": "Trigger",
       "changed": "Changed",
+      "rising": "Trigger rising",
+      "falling": "Trigger falling",
       "object": "Object",
       "result": "Result",
       "enable": "Enable",
@@ -1768,7 +1988,10 @@
       "output": "Output",
       "out": "Out",
       "in_n": "IN {n}",
+      "in_n_changed": "IN {n} Changed",
+      "out_n": "OUT {n}",
       "data": "Data",
+      "text": "Text",
       "body": "Body",
       "done": "Done",
       "running": "Running",
@@ -1796,6 +2019,10 @@
       "inputs": "{n} Inputs",
       "parts": "{n} Parts",
       "rules": "{n} Rules",
+      "replaceModes": {
+        "plain": "Plain",
+        "regex": "RegEx"
+      },
       "sequence": "{n} steps · {mode}",
       "hold": "→ hold",
       "filters": "{n} Filters",
@@ -1806,7 +2033,8 @@
         "zwischen": "between",
         "ausschneiden": "cut out",
         "regex": "regex"
-      }
+      },
+      "consumers": "{n} consumers"
     },
     "missingNode": {
       "title": "Unknown Block",
@@ -1821,6 +2049,10 @@
         "text": "Text",
         "textPlaceholder": "Note text…",
         "empty": "Empty comment — edit in the panel"
+      },
+      "panelTabs": {
+        "settings": "Settings",
+        "debug": "Debug values"
       },
       "tabs": {
         "connection": "Connection",
@@ -1978,7 +2210,7 @@
         "variablesSection": "Variables",
         "addVariable": "Add variable",
         "removeVariable": "Remove",
-        "variablesHint": "Variables reference existing objects and can be used as ###OBS1###, ###OBS2###, etc. in URL, headers, auth fields and body.",
+        "variablesHint": "Variables reference existing objects and can be used as ###OBS1###, ###OBS2###, etc. in URL, headers, auth fields and body. The date/time variables (e.g. ###HH###, ###yyyy###, ###DATE###, ###TS###) are available as well; variables are not allowed in the URL scheme, host or port.",
         "noVariables": "No variables configured."
       },
       "stringConcat": {
@@ -1988,6 +2220,37 @@
         "staticSection": "Static text per input",
         "staticHint": "Connected inputs override static text. Empty fields produce an empty substring.",
         "inputPlaceholder": "Input {n} …"
+      },
+      "stringReplace": {
+        "rules": "Rules",
+        "moveUp": "Move rule up",
+        "moveDown": "Move rule down",
+        "orderHint": "Rules are applied one after another from top to bottom — each rule works on the result of the previous one.",
+        "modes": {
+          "plain": "Search text (plain)",
+          "regex": "Regular expression (RegEx)"
+        },
+        "searchLabel": "Search for",
+        "searchPlaceholder": "e.g. old",
+        "patternLabel": "RegEx pattern",
+        "patternPlaceholder": "e.g. (\\d+)",
+        "replaceLabel": "Replace with",
+        "replacePlaceholder": "empty = remove match",
+        "groupHint": "Group references such as \\1 or \\g<name> are supported.",
+        "replaceAll": "Replace all occurrences"
+      },
+      "sensorWatchdog": {
+        "inputs": "Monitored Inputs",
+        "add": "+ Input",
+        "remove": "Remove input",
+        "removeShort": "−",
+        "labelPlaceholder": "Display name",
+        "timeoutLabel": "Timeout (seconds)",
+        "faultValueLabel": "Fault Value",
+        "faultValuePlaceholder": "Replacement value",
+        "repeatLabel": "Repeat (seconds)",
+        "repeatPlaceholder": "0 = no repeat",
+        "repeatHint": "Fires the fault trigger again at this interval while the input keeps being stale. 0 = only once on the initial fault."
       },
       "rules": {
         "add": "+ Rule",
@@ -2047,7 +2310,9 @@
         "valueN": "Value {n}",
         "outputsCount": "Outputs ({n})",
         "labelPlaceholder": "Label",
-        "pathExample": "e.g. data.temperature"
+        "pathExample": "e.g. data.temperature",
+        "previewPruned": "Preview pruned: the document exceeds the preview size, arrays and long strings were shortened. Per-output live values may differ from the actual result.",
+        "pathListTruncated": "Path list limited to {n} entries — type further paths directly."
       },
       "substr": {
         "modeLabel": "Mode",
@@ -2113,7 +2378,10 @@
       },
       "invalidJson": "Invalid JSON: {msg}",
       "common": {
-        "optional": "(optional)"
+        "optional": "(optional)",
+        "boolTrue": "True",
+        "boolFalse": "False",
+        "unsetEnum": "Not set"
       },
       "const_value": {
         "value": "Value",
@@ -2128,6 +2396,15 @@
       "xor": {
         "input_count": "Input count"
       },
+      "binary_stats": {
+        "input_count": "Number of inputs",
+        "unwired_inputs": "Unwired inputs",
+        "unwired_inputsOptions": {
+          "ignore": "Ignore",
+          "count_false": "Count as FALSE"
+        },
+        "threshold_count": "Threshold (0 = off)"
+      },
       "gate": {
         "closed_behavior": "Behavior (closed)",
         "default_value": "Default value (when closed)",
@@ -2137,6 +2414,36 @@
       "memory": {
         "initial_value": "Initial value",
         "data_type": "Data type",
+        "persist_state": "Restore state on restart"
+      },
+      "merge": {
+        "input_count": "Input count",
+        "persist_state": "Restore state on restart"
+      },
+      "change_filter": {
+        "persist_state": "Restore state on restart"
+      },
+      "edge_detect": {
+        "on_rising": "Rising edge",
+        "on_risingOptions": {
+          "value": "Trigger + value",
+          "trigger": "Trigger only",
+          "off": "Off"
+        },
+        "value_rising": "Value on rising edge",
+        "on_falling": "Falling edge",
+        "on_fallingOptions": {
+          "value": "Trigger + value",
+          "trigger": "Trigger only",
+          "off": "Off"
+        },
+        "value_falling": "Value on falling edge",
+        "data_type": "Data type",
+        "data_typeOptions": {
+          "bool": "Boolean",
+          "number": "Number",
+          "string": "Text"
+        },
         "persist_state": "Restore state on restart"
       },
       "hysteresis": {
@@ -2265,8 +2572,8 @@
         "title": "Title",
         "fallback": "Message (fallback)",
         "placeholders": "The logic block has no datapoint context; MESSAGE placeholders are sent unchanged.",
-        "priority": "Priority",
-        "legacy": "Legacy block. Please use the Notification block for new notifications."
+        "legacy": "Legacy block. Please use the Notification block for new notifications.",
+        "pushoverInputsHint": "Connected URL, URL title and image URL inputs override the static values. Static values support variables such as ###OBS1###."
       },
       "messageArchive": {
         "archive": "Message archive",
@@ -2320,13 +2627,13 @@
         "response_type": "Response Content-Type",
         "verify_ssl": "Verify SSL certificate",
         "headers": "Headers (JSON object, optional)",
-        "headers_secret_file": "Headers from secret file (optional)",
+        "headers_value_file": "Headers from file (optional)",
         "timeout_s": "Timeout (s)",
         "auth_type": "Authentication",
         "auth_username": "Username (Basic/Digest)",
         "auth_password": "Password (Basic/Digest)",
         "auth_token": "Bearer token",
-        "auth_token_file": "Bearer token from secret file"
+        "auth_value_file": "Bearer token from file"
       },
       "math_formula": {
         "formula": "Formula",
@@ -2338,7 +2645,110 @@
         "out_min": "Output min",
         "out_max": "Output max"
       },
-      "resizeHandle": "Drag to resize panel"
+      "resizeHandle": "Drag to resize panel",
+      "triggerMode": {
+        "label": "Trigger mode",
+        "event": "On every event",
+        "edge": "Rising edge only",
+        "eventHint": "Every incoming true on the trigger input fires – even if the value was already true before.",
+        "edgeHint": "Fires only on a change from false to true. A repeated true without a preceding false is ignored."
+      },
+      "hemsSurplus": {
+        "gridSection": "Grid connection point & control",
+        "gridMode": "Measurement mode",
+        "gridModeOptions": {
+          "bidirectional": "Bidirectional via one input",
+          "split": "Separate inputs (import/export)",
+          "feed_in_only": "Feed-in power only"
+        },
+        "gridModeHints": {
+          "bidirectional": "One input: positive value = grid import, negative value = export.",
+          "split": "Two positive inputs. Internally grid power = import − export. Both values must be valid.",
+          "feed_in_only": "One input carrying the feed-in power (0 or greater)."
+        },
+        "feedInOnlyWarning": "Limitation: at 0 W the block cannot tell a balanced meter from grid import. It therefore holds the power first and, after the off-delay has passed, reduces it step by step.",
+        "global": {
+          "interval_s": "Control interval (seconds, 5–3600)",
+          "target_w": "Feed-in reserve at the grid connection point (W)",
+          "on_delay_s": "Switch-on delay (seconds)",
+          "off_delay_s": "Switch-off delay (seconds)",
+          "max_age_s": "Maximum age of meter values (seconds)",
+          "max_age_sHint": "0 = no age check. Otherwise the Read Object's changed output must be wired to the block; when no new telegram arrives for longer, the value counts as stale.",
+          "invalid_behavior": "Behaviour on invalid input values",
+          "invalid_behaviorOptions": {
+            "off": "Safe: 0 %, off, no trigger",
+            "hold": "Hold last outputs"
+          },
+          "only_on_change": "Output only on change",
+          "only_on_changeHint": "Avoids unnecessary writes"
+        },
+        "consumers": "Consumers",
+        "add": "+ Consumer",
+        "remove": "Remove consumer",
+        "removeShort": "−",
+        "noConsumers": "No consumer configured yet.",
+        "priorityHint": "The order is the priority: top = highest priority. Sort by drag and drop; new consumers are appended at the bottom.",
+        "dragHint": "Drag to reorder",
+        "namePlaceholder": "Name",
+        "fields": {
+          "active": "Active (include in control)",
+          "mode": "Control type",
+          "modeOptions": {
+            "percent": "Percent (0–100 %)",
+            "onoff": "On/Off",
+            "trigger": "Trigger"
+          },
+          "power_source": "Power source",
+          "power_sourceOptions": {
+            "fixed": "Fixed value",
+            "input": "Input"
+          },
+          "power_w": "Maximum power (W)",
+          "power_w_onoff": "Rated power (W)",
+          "min_power_w": "Minimum power (W)",
+          "min_setpoint": "Minimum setpoint (%)",
+          "max_setpoint": "Maximum setpoint (%)",
+          "step": "Step size (%)",
+          "below_min": "Below the minimum power",
+          "below_minOptions": {
+            "off": "Set to 0 %",
+            "hold_min": "Hold at minimum (until the switch-off delay expires)"
+          },
+          "on_threshold_w": "Switch-on threshold (W)",
+          "on_threshold_wPlaceholder": "empty = rated power",
+          "off_threshold_w": "Switch-off threshold (W)",
+          "off_threshold_wPlaceholder": "empty = rated power",
+          "min_runtime_s": "Minimum run time (seconds)",
+          "min_off_s": "Minimum off time (seconds)",
+          "on_delay_s": "Switch-on delay (seconds)",
+          "on_delay_s_trigger": "Minimum surplus must persist for (seconds)",
+          "on_delay_sPlaceholder": "empty = global value",
+          "off_delay_s": "Switch-off delay (seconds)",
+          "off_delay_sPlaceholder": "empty = global value",
+          "min_surplus_w": "Required minimum surplus (W)",
+          "pulse_s": "Pulse duration (seconds)",
+          "lockout_s": "Lockout after firing (seconds)",
+          "rearm": "Re-arm",
+          "rearmOptions": {
+            "after_lockout": "After the lockout has expired",
+            "after_drop": "Only after the threshold was undershot in between",
+            "reset_input": "Via the reset input"
+          },
+          "reserve_w": "Power reserved while firing (W)",
+          "enable_default": "Released (default)",
+          "enable_defaultHint": "Applies while this consumer's “Release” input is not connected, and with the fault handling “Use the default”.",
+          "enable_fault": "Release missing, invalid or stale",
+          "enable_faultOptions": {
+            "lock": "Lock the consumer (safe, recommended with a connected input)",
+            "default": "Use the default"
+          }
+        },
+        "releaseState": {
+          "released": "Released",
+          "blocked": "Blocked"
+        },
+        "releaseStateHint": "Release state in the last run (debug mode only, updated live)"
+      }
     },
     "portLabels": {
       "heizmode": "Heating mode",
@@ -2386,7 +2796,38 @@
       "icalTomorrow": "Tomorrow",
       "icalToday": "Today",
       "reachable": "Reachable",
-      "latencyMs": "Latency (ms)"
+      "latencyMs": "Latency (ms)",
+      "faultText": "Fault Text",
+      "faultTrigger": "Fault Trigger",
+      "countTrue": "Count TRUE",
+      "countFalse": "Count FALSE",
+      "majorityTrue": "Majority TRUE",
+      "total": "Total",
+      "percentTrue": "TRUE %",
+      "tie": "Tie",
+      "thresholdReached": "Threshold reached",
+      "url": "URL",
+      "hems": {
+        "grid": "Grid power (+import/−export)",
+        "grid_import": "Grid import",
+        "grid_export": "Grid export",
+        "feed_in": "Feed-in power",
+        "enable": "Enable",
+        "target": "Feed-in reserve (dyn.)",
+        "plant_ok": "Plant OK",
+        "consumer": "Consumer {n}",
+        "measuredPower": "Measured power",
+        "maxPower": "Maximum power",
+        "reset": "Reset",
+        "status": "Status",
+        "grid_power": "Grid power",
+        "surplus": "Surplus",
+        "budget": "Power budget",
+        "allocated": "Allocated power",
+        "remaining": "Remaining budget",
+        "warning": "Warning",
+        "release": "Release"
+      }
     },
     "nodeDescriptions": {
       "datetime": "Outputs the current date and time in the configured timezone and format.",
@@ -2396,10 +2837,14 @@
       "or": "Output is true when AT LEAST ONE input is true. Inputs (2–30) and output can be individually negated.",
       "not": "Inverts the input",
       "xor": "Output is true when EXACTLY ONE input is true. Inputs (2–30) and output can be individually negated.",
+      "binary_stats": "Counts TRUE/FALSE across 2–30 binary inputs (each input can be negated): counts, majority, tie, percentage and threshold (k of n). Unwired inputs can be ignored or counted as FALSE.",
       "gate": "Signal gate: passes the input when enable=true, blocks otherwise. Behavior when closed: hold the last value (retain) or output a default value.",
       "memory": "Outputs the stored value from the previous logic run and stores the current input value for the next run. Explicit tick boundary for controlled feedback.",
+      "change_filter": "Outputs the input value and sets the changed trigger only when it differs from the last received value. Repeated identical values are suppressed.",
+      "edge_detect": "Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the rising value and sets the rising trigger, a falling edge (true → false) outputs the falling value and sets the falling trigger. Without an edge nothing is sent on the output.",
       "compare": "Compares two values (>, <, =, >=, <=, !=)",
       "hysteresis": "Switches ON when threshold is exceeded, OFF only when it falls below",
+      "merge": "Bundles several independent value sources into one shared output: whichever source last delivered a new value is passed through (Edomi-style terminal/junction).",
       "decision": "Checks one input value against multiple independent conditions. Each output returns TRUE or FALSE independently; multiple outputs can be TRUE at the same time.",
       "value_mapping": "Checks an ordered rule list and returns the value from the first matching rule. An optional default value is returned when no rule matches.",
       "datapoint_read": "Outputs the current value of a DataPoint. Triggers on value change.",
@@ -2411,6 +2856,7 @@
       "statistics": "Continuously calculates Min/Max/Average over all received values. Reset input resets the statistics.",
       "avg_multi": "Calculates the average of 2–20 inputs (current) and moving averages over time windows: 1 min, 1 h, 1 day, 7/14/30/180/365 days. Each new value is stored with a timestamp. Time window values are retained after restart (configurable).",
       "string_concat": "Concatenates 2–20 texts into one result. Each input can be dynamically connected or statically preset. A connected input takes precedence over the static text.",
+      "string_replace": "Replaces matches in a text. Several rules are applied one after another, in the given order, to the intermediate result. Per rule: plain search text or regular expression (RegEx, group references such as \\1 in the replace field), case sensitivity, and all or only the first occurrence.",
       "heating_circuit": "Summer/winter switching according to DIN (Mannheim method). Input: outdoor temperature. Measurement times (first crossing): T1 = value from 07:00, T2 = from 14:00, T3 = from 21:00. Works even if the sensor does not hit the measurement hours exactly. Each slot is recorded only once per day. Daily average: T_avg = (T1 + T2 + 2×T3) / 4. Monthly average: moving average of the last 31 daily averages. Heating mode ON when T_avg < threshold, OFF when T_avg ≥ threshold + hysteresis. Missing slots are filled from history on startup. State is retained across restarts.",
       "min_max_tracker": "Tracks minimum and maximum over time periods (daily, weekly, monthly, yearly, absolute). Period values are automatically reset at day/week/month/year boundaries.",
       "consumption_counter": "Calculates consumption values (daily, weekly, monthly, yearly) from a continuously incrementing counter value. Also stores the previous period's consumption for comparisons.",
@@ -2419,19 +2865,68 @@
       "value_sequence": "Writes configured values and pauses in sequence without blocking logic execution.",
       "timer_cron": "Fires automatically on a cron schedule (minute hour day month weekday).",
       "operating_hours": "Counts operating hours while 'Active' is true. Reset clears the counter.",
+      "sensor_watchdog": "Monitors up to 10 inputs for missing new values. Once an input has gone longer than its configured timeout without a new value, its output switches to the configured fault value and a fault text plus trigger are emitted. Runs autonomously via an internal scheduler.",
       "python_script": "Executes a Python script. Available: inputs dict → return value",
       "astro_sun": "Calculates sunrise and sunset based on latitude/longitude. Requires: pip install astral",
       "notify_message": "Sends a notification through the configured targets of a Message/notification adapter.",
       "notify_pushover": "Sends a push notification via the Pushover API (api.pushover.net). Triggered automatically when a message arrives at the input.",
       "notify_sms": "Sends an SMS via the seven.io gateway (gateway.seven.io). Triggered automatically when a message arrives at the input.",
       "message_archive": "Writes a message to a message archive. Triggered automatically when a message arrives at the input or when the trigger is true.",
-      "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true.",
-      "host_check": "Pings a host and outputs the reachability status (true/false) and latency in milliseconds. Runs on the rising edge of the trigger input. Recommended: connect to a Timer/Cron node for periodic polling.",
+      "wake_on_lan": "Sends a Wake-on-LAN magic packet to a device via UDP broadcast. Triggered when the trigger input is true – depending on the trigger mode on every incoming true event or on the rising edge only.",
+      "host_check": "Pings a host and outputs the reachability status (true/false) and latency in milliseconds. Triggered when the trigger input is true – depending on the trigger mode on every incoming true event or on the rising edge only. Recommended: connect to a Timer/Cron node for periodic polling.",
       "json_extractor": "Parses a JSON string and extracts one or more values by key paths (dot notation, e.g. sensors.temperature). Multiple outputs configurable via + in the config panel.",
       "xml_extractor": "Parses an XML string and extracts one or more values by XPath expressions (ElementTree syntax, e.g. .//temperature). Multiple outputs configurable via + in the config panel.",
       "substring_extractor": "Extracts text from a string using substring operations or regular expressions. Modes: left_of / right_of (first or last occurrence), between (two markers), cut (position + length), regex (Python re syntax, capture groups selectable).",
       "ical": "Loads an iCal/ICS file from a URL and evaluates events. The RAW output delivers the raw calendar text. Each filter provides 4 outputs: Array (all events), Next date, Tomorrow (bool), Today (bool). Filters can be applied to Summary, Location and/or Description.",
-      "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution."
+      "api_client": "Sends HTTP requests (GET/POST/PUT…) to external APIs. The trigger input controls execution.",
+      "hems_surplus": "HEMS Lite: distributes the surplus measured at the grid connection point across several consumers by priority — continuously (0–100 %), on/off, or as a one-shot trigger. The list order is the priority; when the budget shrinks, consumers are reduced from the bottom up. With an invalid or stale meter value all outputs go to the safe state (0 %, off, no trigger). Every consumer has its own “Release” input; a locked consumer is skipped in the distribution and keeps its position."
+    },
+    "graphPicker": {
+      "title": "Open Logic",
+      "breadcrumbRoot": "All Hierarchies",
+      "noTrees": "No hierarchies exist yet.",
+      "unassigned": "Unassigned logic sheets",
+      "empty": "This folder is empty.",
+      "organize": "Edit logic hierarchy",
+      "loading": "Loading …",
+      "errorLoading": "Could not load.",
+      "assign": "Assign hierarchy",
+      "assignHint": "Assign this logic sheet to one or more hierarchy positions — existing assignments are kept.",
+      "assignConfirm": "Assign",
+      "assignError": "Could not assign the hierarchy position.",
+      "currentGraph": "currently open",
+      "removeHere": "Remove from hierarchy",
+      "removeHereTitle": "Removes the logic sheet only from this hierarchy position. If this was its last position, the logic sheet reappears at the top under \"Unassigned\".",
+      "deleteHereTitle": "This logic sheet has no hierarchy assignment — deleting it here removes it irreversibly.",
+      "deleteTitle": "Deletes this logic graph irreversibly, including all of its hierarchy assignments.",
+      "deleteConfirm": "The logic graph \"{name}\" will be deleted irreversibly.",
+      "showAll": "List of all logic sheets",
+      "noGraphs": "No logic sheets exist yet.",
+      "links": "Links",
+      "linksModalTitle": "Hierarchy links: {name}",
+      "linksEmpty": "This logic sheet is not currently assigned to any hierarchy position."
+    },
+    "variables": {
+      "insert": "Insert variable…",
+      "groupStandard": "Standard values",
+      "groupDateTime": "Date/time",
+      "groupObjects": "Object variables",
+      "resolvedPath": "Resolved path",
+      "unresolved": "Unresolvable variable(s): {names}",
+      "extractorHint": "Variables can be used as ###OBS1###, ###OBS2###, etc. in the paths – together with the date/time variables (e.g. ###HH###, ###yyyy###).",
+      "textHint": "Variables can be used as ###OBS1###, ###OBS2###, etc. in the title, fallback text or static texts – together with the date/time variables (e.g. ###HH###, ###DATE###). Values connected through inputs are not evaluated.",
+      "replaceHint": "Variables can be used as ###OBS1###, ###OBS2###, etc. in the replacement text – together with the date/time variables. In regex rules substituted values stay literal (group references such as \\1 only work in your own text).",
+      "urlHint": "Variables (e.g. ###yyyy###, ###OBS1###) are only allowed in the URL path and query, not in scheme, host or port.",
+      "issues": {
+        "unknownVariable": "Unknown variable {name}",
+        "pathNotFound": "Path '{path}' not found",
+        "invalidXPath": "Invalid XPath '{path}': {error}",
+        "notConfigured": "Variable {name} is not configured",
+        "notAvailable": "Variable {name}: object {object} is not available",
+        "invalidObject": "Variable {name} references an invalid object",
+        "noValue": "Variable {name}: object {object} has no value",
+        "emptyValue": "The variable value is empty"
+      }
     }
   },
   "authzPreflight": {
@@ -2479,7 +2974,13 @@
       "themeLightDesc": "Light appearance",
       "themeDark": "Dark",
       "themeDarkDesc": "Dark appearance",
-      "tzSaved": "Timezone set to «{tz}»"
+      "tzSaved": "Timezone set to «{tz}»",
+      "regionFormat": "Regional format",
+      "regionFormatHint": "Controls number, currency and date formats. Independent of the language — German in Switzerland formats differently from German in Germany.",
+      "regionFormatAuto": "Automatic (from language: {format} · {sample})",
+      "currency": "Currency",
+      "currencyAuto": "Automatic (from regional format: {currency})",
+      "formatPreview": "Preview"
     },
     "security": {
       "title": "URL target allowlist",
@@ -3154,10 +3655,12 @@
       "december": "December"
     },
     "chooseFile": "Choose file",
-    "noFileSelected": "No file selected"
+    "noFileSelected": "No file selected",
+    "copy": "Copy",
+    "copied": "Copied"
   },
   "hierarchy": {
-    "title": "Device structure",
+    "title": "Hierarchies",
     "deleteNode": "Delete branch",
     "newHierarchy": "New hierarchy",
     "importFromEts": "Import from ETS",
@@ -3227,7 +3730,11 @@
       "trades": "Trades",
       "mid": "Middle groups",
       "flat": "Flat (GA only)"
-    }
+    },
+    "addChildNode": "Add child node",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "renameNode": "Rename"
   },
   "topbar": {
     "logout": "Sign out"
@@ -3299,5 +3806,12 @@
       "acknowledged": "Acknowledged",
       "closed": "Closed"
     }
+  },
+  "help": {
+    "title": "Help",
+    "openLabel": "Open help for this section",
+    "unavailable": "No help is available for this section yet.",
+    "systemUnavailable": "Help content is currently unavailable on this server.",
+    "openInNewTab": "Open in new tab"
   }
 }

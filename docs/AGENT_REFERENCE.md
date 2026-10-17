@@ -49,8 +49,12 @@ in the shared project venv, then let worktrees resolve that environment through 
 
 ### GUI Node dependencies for agents and worktrees
 
-Do not run `npm install` or `npm ci` in issue or PR worktrees. GUI dependencies are shared from the
-main worktree through a local `gui/node_modules` symlink:
+Which command applies depends on whether this checkout is a **linked worktree** beside a main
+worktree, or a **standalone checkout** (CI job, review sandbox, fresh clone). Check with
+`git worktree list`:
+
+**Linked worktree (more than one entry).** Do not run `npm install` or `npm ci` here. GUI
+dependencies are shared from the main worktree through a local `gui/node_modules` symlink:
 
 ```bash
 tools/link-worktree-node-modules
@@ -59,6 +63,22 @@ tools/link-worktree-node-modules
 The pre-push hook runs this linker automatically before GUI Vitest gates if `gui/node_modules` is
 missing. If the main worktree dependencies are missing or stale, update them in the main worktree,
 not in the issue/PR worktree.
+
+**Standalone checkout (a single entry).** There is no main worktree to share from, so the linker
+cannot help and exits 1 by design. Install directly:
+
+```bash
+cd gui && npm ci
+```
+
+This is the supported path for CI jobs, automated review sandboxes and fresh clones. The rule above
+exists to keep several local worktrees on one shared `node_modules`, not to forbid installing
+dependencies where none exist.
+
+> Why this distinction is spelled out: an automated reviewer followed the linked-worktree rule in a
+> standalone sandbox, hit `vitest: not found` (exit 127), saw the linker exit 1, and reported the
+> whole GUI surface as unreviewed partial coverage rather than installing. The commands were right,
+> the precondition was not stated.
 
 ### config.yaml — required local overrides
 
@@ -110,7 +130,28 @@ Default login: `admin` / `admin`
 
 - `gui/` — Admin GUI (Vue 3 + Vite), dev server on port 5173, built to `gui_dist/` (served by FastAPI at `/`)
 - `frontend/` — Visu SPA (Vue 3 + TypeScript), built to `frontend_dist/` (served by FastAPI at `/visu`)
-- Both proxy `/api` to `localhost:8080` during dev via `vite.config`
+- Both proxy `/api` to `localhost:8080` during dev via `vite.config`; the Admin GUI additionally
+  proxies `/help` and `/hook` (the WEBHOOK adapter's trigger endpoint, #1256 — the binding form
+  builds its call URL from the browser origin, so without that proxy a URL copied in dev would hit
+  Vite's SPA fallback instead of the backend)
+
+#### Logic editor node cards
+
+Every node component under `gui/src/components/logic/nodes/` must render its card on the shared
+opaque surface (issue #1074) so the configurable canvas raster (issue #1072) cannot show through
+the block body:
+
+- add the global `logic-node-surface` class (defined unlayered at the end of `gui/src/style.css`)
+  to the card element, and
+- pass the block's category colour as the inline `--node-tint` custom property, built with
+  `nodeTint()` from `gui/src/utils/logicNodeSurface.js` so all blocks share one tint alpha.
+
+The card element's own scoped styles must **not** declare `background`/`background-color` — scoped
+selectors (`.gn-card[data-v-…]`) outrank the shared class and would mask the opaque surface again.
+Card text, borders and handles use the `--node-*` / `--handle-*` theme tokens; hardcoded dark
+colours become unreadable on the light-mode surface. The spec
+`gui/tests/components/logic/nodes/nodeCardSurface.spec.js` asserts this for every node component —
+extend its `CARDS` table when adding one.
 
 ### Internationalisation (i18n)
 
@@ -156,6 +197,7 @@ Admin GUI (`gui/src/locales/`):
 | `settings.*` | Settings view |
 | `common.*` | Shared across views (save, cancel, delete, error, warning, …) |
 | `hierarchy.*` | Hierarchy manager |
+| `help.*` | Integrated help drawer (#896) — `HelpButton.vue`/`HelpDrawer.vue` |
 
 Visu SPA (`frontend/src/locales/`):
 
@@ -269,6 +311,55 @@ The Playwright suite lives in `tests/gui/` and requires a running full stack (ba
 
 **Weblate** components are named `gui-admin` (Admin GUI) and `frontend-visu` (Visu SPA) under the `openbridgeserver` project on [hosted.weblate.org](https://hosted.weblate.org/projects/openbridgeserver/). Source language is `de`; file format is `JSON (simple)`. CLI tool: `pip install wlc`; credentials in `~/.config/weblate` or via `WLC_URL` / `WLC_KEY` env vars.
 
+#### Help site translations (Weblate) — #896
+
+The `help/` VitePress site (issue #896 — no dedicated architecture doc yet, this section is the reference) is content, not UI strings, so it doesn't fit the `de.json`/`en.json` pattern above. Weblate supports it via a different mechanism — see `.weblate` for the exact "Component discovery" add-on configuration (not wired up yet as of this writing; `.weblate` documents the plan for whoever sets up the Weblate-side component).
+
+**Unlike `gui-admin`/`frontend-visu` above, English (not German) is the Weblate source language for the help site.** Every help page is authored in both German and English by hand from the start (not translated from one into the other), so translators working on additional languages need a source they can read without German — English. German is still a completely normal Weblate *target* language for the help site (same as for `gui-admin`/`frontend-visu`), it just starts out already complete since it's hand-authored alongside English. This is why `help/*.md` content lives under `help/de/...` and `help/en/...` symmetrically — both prefixed, no unprefixed "root" locale — unlike `gui/src/locales/de.json` having no directory-prefix equivalent to worry about. The backend redirects the bare `/help/` to `/help/de/` (see `obs/main.py`) since VitePress does not pick a default locale for you once there's no root locale.
+
+**The one rule that matters for anyone editing `help/*.md` by hand or reviewing a Weblate-sourced translation:**
+
+Every `help_id` lives *inside* the heading it belongs to, as an explicit anchor:
+
+```md
+## Zeitzone, Datums- und Zeitformat {#settings-general}
+```
+
+If Weblate (or a human translator) changes or drops the `{#settings-general}` part while translating the heading text, that locale's `help_id` stops resolving — the Admin-GUI's `HelpButton` for that section would show "no help available" for that language. `help/scripts/generate-help-index.mjs` itself only *warns* (non-blocking) about this, but the help-contract gate below turns the same finding into a CI failure, so a dropped anchor cannot reach main unnoticed. When reviewing a Weblate-translated heading, always verify the `{#...}` suffix survived unchanged.
+
+#### Help contract gate — #1183
+
+`tools/check_help_contract.py` (workflow `.github/workflows/help-contract.yml`) is the completeness gate for documentation, next to `check_authz_contract.py` for routes and `check_i18n_guard.py` for strings. It enumerates the UI surfaces that must be documented from the registries that already define them, derives the `help_id` each is expected to carry, and fails CI when that id has no help page — so a new view, widget type, or skin cannot go green without either help content or an explicit, justified exemption.
+
+| Surface | Enumerated from | Expected `help_id` |
+|---|---|---|
+| Admin route | `gui/src/router/index.js` (`routes[]`, named routes only) | `route.meta.helpId` |
+| Visu widget type | `frontend/src/widgets/*/index.ts` (`WidgetRegistry.register`) | `widget-<kebab-case type>` |
+| Logic function block | `obs.logic.registry.BUILTIN_NODE_TYPES` (excluding `hidden_from_palette`) | `NodeTypeDef.help_id` |
+| Skin | `<obs-visu-skins>/packages/skins/*/manifest.json` | `skin-<kebab-case name>` |
+
+Routes and Logic blocks declare their id explicitly because it is live wiring, not gate-only metadata: `TopBar.vue` renders the page-level help button from `route.meta.helpId`, and `NodePalette.vue` renders a block's button from `nt.help_id`, served by the backend as part of the node type definition (`obs/logic/models.py::NodeTypeDef.help_id`). These ids are not computable from the type name — `scale` is documented as `logic-block-math-map`, `gate` as `logic-block-gate` — so the gate reads the declared value and checks that. A palette-visible block that declares none renders no button, so no user meets a dead link, but it ships undocumented: the gate reports it, and it needs either a help section or an allowlist entry with a reason. **Adding a Logic function block without a help section fails CI.** Widgets and skins, which have no such declaration, still follow the naming convention in the table.
+
+`hidden_from_palette` blocks are excluded by rule rather than by allowlist: the palette is the only place a block can be picked from, so one it never offers is not a surface anyone can land on (today, the two legacy notification blocks).
+
+On top of coverage the gate enforces two things the generator does not: every `help_id` literally referenced from `gui/src` or `frontend/src` must exist in the index (no broken help links — the dynamic `:help-id="expr"` form is out of reach and is skipped), and a `help_id` present in one locale but not another fails instead of warning.
+
+**Everything the gate reads, it reads from a real parse.** `tools/scan-help-declarations.mjs` parses the frontends with `@babel/parser` (JavaScript and TypeScript) and `@vue/compiler-sfc` (single-file components), and `tools/rendered-help-ids.mjs` builds the help site and reports the heading ids VitePress actually emitted, which the gate compares against the generated `help-index.json`. Neither reimplements a language: an earlier version scanned both with regexes, and review after review found the next construct it misread — quoted property keys, a comment after a closing quote, a regex holding a quote, `${…}` expressions, spreads, shorthand properties, a CSS custom property shaped like a JS one; on the Markdown side fenced code, HTML comments, raw HTML blocks, escaped braces, frontmatter, indented headings. A parser has no special cases for those, and a build has no opinion about them at all.
+
+Where a declaration cannot be resolved to a literal — a route `name`, a `children` array, or a widget registration's `type` given by a constant — the gate **fails closed** with the file and line rather than skipping it. A skipped declaration is the one outcome a coverage gate must never produce: the surface ships and the run reports success.
+
+The help build writes to a temporary directory, never to `help_dist/` — three integration tests in `tests/integration/test_visu_static_files.py` assert that directory is absent, so a stray build breaks them. (That is also why `cd help && npm run build`, used for local preview, should be followed by `rm -rf help_dist`.)
+
+Skins live in the separate `obs-visu-skins` repository. Without `--skins-dir` (or `OBS_VISU_SKINS_DIR`) pointing at a checkout, the gate reports that surface as *not checked* rather than passing it silently; CI does not check skins today.
+
+Deliberately undocumented surfaces belong in `tools/help-contract-allowlist.txt` as `<route|widget|logic-block|skin>:<name>  # reason`, mirroring `tools/i18n-allowlist.txt`. The reason is mandatory, and the list is validated back against reality: an entry for a surface that no longer exists — or for one that meanwhile *is* documented — fails too, so it cannot rot into a blanket exemption. The Visu widget types are currently listed there as tracked debt; each entry disappears as its `{#widget-<type>}` section is written.
+
+Run it before pushing anything that adds a route, a widget type, a Logic function block, or help content:
+
+```bash
+python tools/check_help_contract.py
+```
+
 ## Architecture
 
 ### Startup Sequence (`obs/main.py`)
@@ -314,6 +405,25 @@ Adapters self-register at import time via `@register` (from `obs/adapters/regist
 3. Implement `connect`, `disconnect`, `read`, `write`
 4. Decorate the class with `@register`
 5. Add the import to the adapter block in `obs/main.py`
+
+### Logic Function Blocks
+
+Built-in Logic function blocks live in one module per block under `obs/logic/nodes/<category>/`,
+each exporting a single `NODE_TYPE`. The category package name always equals the node's `category`
+field, and each category `__init__.py` exports its own `NODE_TYPES` tuple. `obs/logic/registry.py`
+combines those tuples into the public catalogue (`BUILTIN_NODE_TYPES`, `NODE_TYPE_REGISTRY`,
+`get_node_type`, `list_node_types`); `obs/logic/node_types.py` is a deprecated compatibility facade
+that only re-exports them.
+
+Node behaviour stays in the two documented shared handlers — `GraphExecutor._eval_node`
+(`obs/logic/executor.py`, per-tick evaluation) and `LogicManager` (`obs/logic/manager.py`,
+scheduling and side-effect orchestration). Node-specific branches elsewhere are not allowed.
+
+**Adding a new block** touches its own module, one category `__init__.py`, `obs/logic/capabilities.py`,
+the dispatcher and its focused tests under `tests/unit/logic/nodes/<category>/`. The complete
+contract, dependency rules and step-by-step procedure are in
+[`docs/architecture/logic-nodes.md`](architecture/logic-nodes.md); the guardrails are enforced by
+`tests/unit/logic/test_node_architecture.py` and `tests/unit/logic/test_node_registry.py`.
 
 ### Configuration
 
@@ -428,7 +538,7 @@ RCs never receive the `latest` tag.
 - Three release assets are produced:
   - `openbridgeserver-lxc_<version>_amd64.tar.zst` — full Proxmox CT template (x86-64)
   - `openbridgeserver-lxc_<version>_arm64.tar.zst` — full Proxmox CT template (ARM64)
-  - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
+  - `openbridgeserver-app-bundle_<version>.tar.gz` — arch-agnostic app archive (`obs/`, `gui_dist/`, `frontend_dist/`, `help_dist/`, `requirements.txt`, `obs-update`) used for in-place updates; built once from the amd64 job
 - App installs to `/opt/obs/`, Python venv at `/opt/obs/venv/`, data volume at `/data/`
 - Installed version tracked in `/opt/obs/version` (written by `obs-update` after each install)
 - `obs-update` script at `/usr/local/bin/obs-update` presents an interactive version picker (all RCs + up to two stable releases, sorted semantically). It self-updates on every install by copying the `obs-update` from the extracted bundle.
@@ -458,6 +568,7 @@ actually starts once an admin has configured a 1-Wire bus master.
 | Path | Purpose |
 |---|---|
 | `/etc/systemd/system/owserver.service.d/override.conf` | Drop-in that gates the packaged unit — does not replace its `ExecStart=`, so package upgrades keep working |
+| `/etc/systemd/system/owserver.socket.d/override.conf` | Binds the packaged, always-enabled `owserver.socket` to `127.0.0.1:4304` instead of all interfaces — owserver has no authentication (#1288). With socket activation owserver ignores the port from `/etc/owfs.conf`, so `OBS_ONEWIRE__PORT` has no effect in the LXC; change the socket instead |
 | `scripts/obs-onewire-should-run.sh` | `ExecCondition=` — exits 0 only if `OBS_ONEWIRE__USB_ALL=true` or `OBS_ONEWIRE__PBM_DEVICES` is set in `/etc/obs.env` |
 | `scripts/obs-onewire-configure.sh` | `ExecStartPre=` — (re)generates `/etc/owfs.conf` from those same env vars on every start attempt |
 | `/etc/obs.env` | Same file as the MQTT credentials; `OBS_ONEWIRE__*` lines ship commented out |

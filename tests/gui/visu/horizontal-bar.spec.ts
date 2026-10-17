@@ -112,11 +112,13 @@ test('HorizontalBar: Datenpunkt-Wert erscheint als formatierter Text', async ({ 
 
     const valueEl = page.locator(`[data-widget-id="${widgetId}"] [data-testid="widget-value"]`)
 
+    // Decimal separator follows the configured regional format — the OBS
+    // default language `de` resolves to de-DE (issue #1073).
     await pushValue(dp.id, 23.5)
-    await expect(valueEl).toHaveText('23.5 °C', { timeout: 5_000 })
+    await expect(valueEl).toHaveText('23,5 °C', { timeout: 5_000 })
 
     await pushValue(dp.id, 0)
-    await expect(valueEl).toHaveText('0.0 °C', { timeout: 5_000 })
+    await expect(valueEl).toHaveText('0,0 °C', { timeout: 5_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)
@@ -180,8 +182,8 @@ test('HorizontalBar: mehrere Balken zeigen unabhängige Werte', async ({ page })
     await pushValue(dp2.id, 25)
 
     const values = page.locator(`[data-widget-id="${widgetId}"] [data-testid="widget-value"]`)
-    await expect(values.nth(0)).toHaveText('75.0', { timeout: 5_000 })
-    await expect(values.nth(1)).toHaveText('25.0', { timeout: 5_000 })
+    await expect(values.nth(0)).toHaveText('75,0', { timeout: 5_000 })
+    await expect(values.nth(1)).toHaveText('25,0', { timeout: 5_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp1.id}`)

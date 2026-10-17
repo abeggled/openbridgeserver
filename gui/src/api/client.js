@@ -22,6 +22,13 @@ api.interceptors.response.use(
   res => res,
   async err => {
     const original = err.config
+    // The installation has no owner (any more): the backend answers nothing but
+    // its setup page, so there is no point retrying or redirecting to /login.
+    // A full page load rebuilds the cached setup state on the way.
+    if (err.response?.status === 503 && err.response?.data?.setup_required) {
+      if (window.location.pathname !== '/setup') window.location.href = '/setup'
+      return Promise.reject(err)
+    }
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
       const refreshToken = localStorage.getItem('refresh_token')
@@ -134,6 +141,8 @@ export const adapterApi = {
   anwesenheitDatapoints:  (id)          => api.get(`/adapters/instances/${id}/anwesenheit/datapoints`),
   anwesenheitSyncBindings:(id, dpIds)  => api.post(`/adapters/instances/${id}/anwesenheit/sync-bindings`, { datapoint_ids: dpIds }),
   anwesenheitHealth:      (id)          => api.get(`/adapters/instances/${id}/anwesenheit/health`),
+  webhookBindings:    (id)              => api.get(`/adapters/instances/${id}/webhook/bindings`),
+  webhookRotateToken: (id, bindingId)   => api.post(`/adapters/instances/${id}/webhook/bindings/${bindingId}/rotate-token`),
   snmpWalk: (id, host, oid = '1.3.6.1.2.1', port = 161, maxResults = 50, timeout = 10, startOid = null) => {
     const params = { host, oid, port, max_results: maxResults, timeout }
     if (startOid) params.start_oid = startOid
@@ -181,6 +190,20 @@ export const hierarchyApi = {
   createLink:   (data)          => api.post('/hierarchy/links', data),
   deleteLink:   (nodeId, dpId)  => api.delete('/hierarchy/links', { params: { node_id: nodeId, datapoint_id: dpId } }),
 
+  // Logic-graph links (#1217) — purely organizational, no authz inheritance
+  getNodeLogicGraphs:   (nodeId)     => api.get(`/hierarchy/nodes/${nodeId}/logic-graphs`),
+  getLogicGraphNodes:   (graphId)    => api.get(`/hierarchy/logic-graphs/${graphId}/nodes`),
+  createLogicGraphLink: (data)       => api.post('/hierarchy/logic-graph-links', data),
+  deleteLogicGraphLink: (nodeId, graphId) => api.delete('/hierarchy/logic-graph-links', { params: { node_id: nodeId, graph_id: graphId } }),
+  // By link_id rather than node_id+graph_id — used by the "open graph" picker
+  // (GraphPickerModal), which already has link_id per row from browse() and
+  // would otherwise have to resolve the node_id of whichever level it is
+  // currently showing (a tree's own root included).
+  deleteLogicGraphLinkById: (linkId) => api.delete(`/hierarchy/logic-graph-links/${linkId}`),
+
+  // Drill-down navigation for the Logic editor's "open" popup (#1217)
+  browse: (params = {}) => api.get('/hierarchy/browse', { params }),
+
   // Node search (for DP detail view)
   searchNodes:   (q = '', limit = 30) => api.get('/hierarchy/nodes/search', { params: { q, limit } }),
 
@@ -199,6 +222,7 @@ export const systemApi = {
 export const settingsApi = {
   get:    ()     => api.get('/system/settings'),
   update: (data) => api.put('/system/settings', data),
+  displaySettings: () => api.get('/system/display-settings'),
 }
 
 // ── History Settings ───────────────────────────────────────────────────────
@@ -342,7 +366,34 @@ export const logicApi = {
   patchGraph:       (id, data)   => api.patch(`/logic/graphs/${id}`, data),
   deleteGraph:      (id)         => api.delete(`/logic/graphs/${id}`),
   runGraph:         (id, data = {}) => api.post(`/logic/graphs/${id}/run`, data),
-  duplicateGraph:   (id)         => api.post(`/logic/graphs/${id}/duplicate`),
+  duplicateGraph:   (id, name)   => api.post(`/logic/graphs/${id}/duplicate`, name ? { name } : {}),
   exportGraph:      (id)         => api.get(`/logic/graphs/${id}/export`),
   datapointUsages:  (dpId)       => api.get(`/logic/datapoint/${dpId}/usages`),
+}
+
+// ── Help site (#896) ─────────────────────────────────────────────────────
+// Served by FastAPI at /help, outside /api/v1 — no JWT needed (static, public
+// content) — so this bypasses the scoped `api` instance and its auth
+// interceptors, same as the raw axios.post(...) used for token refresh above.
+export const helpApi = {
+  index: () => axios.get('/help/help-index.json'),
+}
+
+// ── First-run setup (#1229) ──────────────────────────────────────────────
+// Plain axios, not the `api` instance: these run before any token exists, and
+// the 401 interceptor's redirect to /login would fight the setup guard.
+//
+// Bare axios has no timeout, unlike the `api` instance above. The router guard
+// awaits the status call before it resolves *any* route, so a request that is
+// accepted but never answered — a stalled proxy, a half-open connection —
+// would leave the app on a blank page for good. A short bound sends the user
+// on to the normal login flow instead; the claim itself gets the same 15s the
+// authenticated instance uses.
+const SETUP_STATUS_TIMEOUT_MS = 8000
+const SETUP_CLAIM_TIMEOUT_MS = 15000
+
+export const setupApi = {
+  status:      ()                   => axios.get('/api/v1/setup/status', { timeout: SETUP_STATUS_TIMEOUT_MS }),
+  createOwner: (username, password) =>
+                                       axios.post('/api/v1/setup/owner', { username, password }, { timeout: SETUP_CLAIM_TIMEOUT_MS }),
 }

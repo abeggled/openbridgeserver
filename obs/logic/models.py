@@ -65,6 +65,13 @@ class LogicGraphRun(BaseModel):
     debug: bool = False
 
 
+class LogicGraphDuplicate(BaseModel):
+    """Optional override for the duplicate's name — falls back to the ``"Kopie von {name}"``
+    default when omitted or blank."""
+
+    name: str | None = None
+
+
 class LogicGraphOut(BaseModel):
     id: str
     name: str
@@ -107,6 +114,9 @@ class NodeTypeDef(BaseModel):
     required_capability: str | None = None
     hidden_from_palette: bool = False
     legacy: bool = False
+    # Heading anchor id in help/{en,de}/logic/blocks-<category>.md, resolvable at
+    # runtime via GET /help/help-index.json -> .helpIds[help_id].{en,de}.
+    help_id: str | None = None
 
 
 class LogicRunPreflightCheck(BaseModel):

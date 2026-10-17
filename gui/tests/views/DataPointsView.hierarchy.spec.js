@@ -532,6 +532,21 @@ describe('DataPointsView hierarchy rendering', () => {
     expect(badge.attributes('title')).toContain('str')
   })
 
+  it('renders live values in the regional format, with and without a unit (#1073)', async () => {
+    const { wrapper } = await mountDataPointsView({
+      items: [
+        { id: 'dp-with-unit', name: 'Leistung', data_type: 'FLOAT', tags: [], value: 1234.5, unit: 'W', quality: 'good' },
+        { id: 'dp-no-unit', name: 'Zahl', data_type: 'FLOAT', tags: [], value: 1234.5, quality: 'good' },
+        { id: 'dp-string', name: 'Text', data_type: 'STRING', tags: [], value: 'online', quality: 'good' },
+      ],
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('1.234,5 W')
+    expect(text).toContain('1.234,5')
+    expect(text).toContain('online')
+  })
+
   it('uses fallback text for incomplete type mismatch diagnostics', async () => {
     const { wrapper } = await mountDataPointsView({
       items: [

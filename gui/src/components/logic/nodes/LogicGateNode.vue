@@ -7,7 +7,7 @@
       class="logic-handle" />
 
     <BaseNode :label="data.label || type.toUpperCase()" :color="color">
-      <div class="text-center text-slate-400 text-xs py-1">{{ description }}</div>
+      <div class="text-center text-xs py-1" :style="{ color: 'var(--node-summary-color)' }">{{ description }}</div>
     </BaseNode>
 
     <!-- Output handles -->
@@ -35,5 +35,5 @@ const props = defineProps({
 </script>
 <style scoped>
 .logic-node-wrap { position: relative; }
-.logic-handle { width: 10px; height: 10px; background: #94a3b8; border: 2px solid #1e293b; }
+.logic-handle { width: 10px; height: 10px; background: var(--handle-in-bg); border: 2px solid var(--handle-border); }
 </style>

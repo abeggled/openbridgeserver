@@ -271,6 +271,56 @@ describe('DataPointDetailView — logic usages', () => {
     expect(wrapper.html()).toContain('badge')
   })
 
+  // The binding form needs the DataPoint's own type and unit to render a matching
+  // switching-value input for a Zeitschaltuhr binding (issue #1008). Both are read
+  // through `dp?.…`, which is still null while the DataPoint is loading.
+  it.each([
+    [{ data_type: 'FLOAT', unit: '%' }, 'FLOAT', '%'],
+    [{ data_type: 'BOOLEAN', unit: null }, 'BOOLEAN', ''],
+  ])('passes the data type and unit down to the binding form', async (dpOverrides, expectedType, expectedUnit) => {
+    apiMocks.dpApi.get.mockResolvedValue({ data: makeDP(dpOverrides) })
+    const wrapper = mountView(makeDP(dpOverrides), {
+      BindingForm: {
+        template: '<div data-testid="binding-form-stub" />',
+        props: ['dpId', 'initial', 'dpPersistValue', 'dpDataType', 'dpUnit'],
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="btn-add-binding"]').trigger('click')
+    await flushPromises()
+
+    const form = wrapper.findComponent('[data-testid="binding-form-stub"]')
+    expect(form.exists()).toBe(true)
+    expect(form.props('dpDataType')).toBe(expectedType)
+    expect(form.props('dpUnit')).toBe(expectedUnit)
+  })
+
+  it('falls back to safe defaults when the payload carries none of those fields', async () => {
+    // The three `?? …` guards on that binding are the only thing standing between a
+    // lean/partial DataPoint payload and a BindingForm mounted with `undefined` props.
+    const lean = makeDP()
+    delete lean.persist_value
+    delete lean.data_type
+    delete lean.unit
+    apiMocks.dpApi.get.mockResolvedValue({ data: lean })
+    const wrapper = mountView(lean, {
+      BindingForm: {
+        template: '<div data-testid="binding-form-stub" />',
+        props: ['dpId', 'initial', 'dpPersistValue', 'dpDataType', 'dpUnit'],
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="btn-add-binding"]').trigger('click')
+    await flushPromises()
+
+    const form = wrapper.findComponent('[data-testid="binding-form-stub"]')
+    expect(form.props('dpPersistValue')).toBe(false)
+    expect(form.props('dpDataType')).toBe('UNKNOWN')
+    expect(form.props('dpUnit')).toBe('')
+  })
+
   it('shows no-logic-bindings message when usages list is empty', async () => {
     apiMocks.dpApi.get.mockResolvedValue({ data: makeDP() })
     apiMocks.logicApi.datapointUsages.mockResolvedValue({ data: [] })

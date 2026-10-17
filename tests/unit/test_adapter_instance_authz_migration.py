@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from obs.db.database import Database, _migration_v44
+from obs.db.database import MIGRATIONS, Database, _migration_v44
 
 NOW = "2026-07-13T00:00:00+00:00"
 
@@ -64,12 +64,12 @@ async def _insert_binding(
 
 
 @pytest.mark.asyncio
-async def test_clean_install_reaches_v50_and_v44_is_default_deny_and_idempotent() -> None:
+async def test_clean_install_reaches_latest_schema_and_v44_is_default_deny_and_idempotent() -> None:
     db = Database(":memory:")
     await db.connect()
     try:
         version = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 50
+        assert version["version"] == MIGRATIONS[-1][0]
 
         await _migration_v44(db.conn)
         await _migration_v44(db.conn)

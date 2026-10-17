@@ -562,3 +562,29 @@ async def test_run_graph_allows_admin_side_effect_nodes(monkeypatch, db: Databas
     assert result["debug"]["used_overrides"] is False
     assert result["debug"]["inputs"] == {}
     manager.execute_graph.assert_awaited_once_with("graph-admin-side-effect")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_type", sorted(logic_api._VARIABLE_BLOCK_TYPES))
+async def test_run_graph_requires_activation_scope_for_shared_variable_datapoints(monkeypatch, db: Database, node_type: str):
+    _, blocked_dp = await _seed_scope(db, allowed_role="resident")
+    node = {
+        "id": "var-node",
+        "type": node_type,
+        "position": {"x": 0, "y": 0},
+        "data": {"variables": [{"slot": 1, "datapoint_id": str(blocked_dp), "datapoint_name": "Secret"}]},
+    }
+    await _insert_graph_flow(db, "graph-var", "Variable graph", _flow_with_nodes([node]))
+    await _insert_grant(db, "graph-var", role="resident", node_type="logic_graph")
+    manager = AsyncMock()
+    monkeypatch.setattr("obs.logic.manager.get_logic_manager", lambda: manager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await logic_api.run_graph(
+            graph_id="graph-var",
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 403
+    manager.execute_graph.assert_not_awaited()

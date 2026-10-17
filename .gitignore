@@ -61,6 +61,10 @@ node_modules/
 # Frontend build artefacts (built by vite / docker)
 gui_dist/
 frontend_dist/
+help_dist/
+help/.vitepress/cache/
+help/public/help-index.json
+help/.build.lock
 
 # Playwright local artefacts (auth tokens, test runs, HTML reports)
 tests/gui/.auth/

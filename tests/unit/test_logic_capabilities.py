@@ -15,7 +15,7 @@ from obs.api.v1 import logic as logic_api
 from obs.db.database import Database
 from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_CREATE_CAPABILITY, LOGIC_NODE_CAPABILITIES, PURE_LOGIC_NODE_TYPES
 from obs.logic.models import LogicGraphCreate, LogicGraphImport, LogicGraphUpdate, NodeTypeDef
-from obs.logic.node_types import NODE_TYPE_REGISTRY, _classify_node_type
+from obs.logic.registry import NODE_TYPE_REGISTRY, _classify_node_type
 from obs.models.authz import AuthzPrincipalGrant
 
 

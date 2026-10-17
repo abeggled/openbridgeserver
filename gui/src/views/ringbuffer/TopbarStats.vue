@@ -49,8 +49,12 @@ import { useFloating, autoUpdate, offset, flip, shift } from '@floating-ui/vue'
 import { ringbufferApi } from '@/api/client'
 import { useWebSocketStore } from '@/stores/websocket'
 import { formatDurationDeutsch } from '@/composables/useTimeFilterParser'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
 
 const { t } = useI18n()
+// Counts and sizes follow the configured regional format (issue #1073).
+const { regionFormat } = useRegionalFormat()
 const stats = ref(null)
 const helpIcon = ref(null)
 const tooltip = ref(null)
@@ -75,11 +79,7 @@ const storage = computed(() => (enabled.value ? (stats.value?.storage ?? '—') 
 
 function fmt(n) {
   if (!Number.isFinite(n)) return '—'
-  try {
-    return new Intl.NumberFormat('de-DE').format(n)
-  } catch {
-    return String(n)
-  }
+  return formatNumber(n, regionFormat.value, { decimals: 0 })
 }
 
 const formattedTotal = computed(() => fmt(total.value))
@@ -103,11 +103,8 @@ function fmtBytes(n) {
     v /= 1024
     i += 1
   }
-  const formatter = new Intl.NumberFormat('de-DE', {
-    minimumFractionDigits: v >= 100 || i === 0 ? 0 : 1,
-    maximumFractionDigits: v >= 100 || i === 0 ? 0 : 1,
-  })
-  return `${formatter.format(v)} ${units[i]}`
+  const digits = v >= 100 || i === 0 ? 0 : 1
+  return `${formatNumber(v, regionFormat.value, { decimals: digits })} ${units[i]}`
 }
 
 const formattedDiskSize = computed(() => fmtBytes(fileSizeBytes.value))

@@ -6,7 +6,8 @@
     >
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        class="fixed top-0 left-0 bottom-0 z-50 flex items-center justify-center p-4"
+        :style="{ right: help.reservedRight }"
         @mousedown.self="onBackdropClick"
       >
         <!-- Backdrop -->
@@ -31,11 +32,14 @@
             <!-- Header -->
             <div v-if="title" class="card-header shrink-0">
               <h3 class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ title }}</h3>
-              <button :disabled="!dismissible" @click="dismiss" class="btn-icon">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-              </button>
+              <div class="flex items-center gap-2">
+                <slot name="header-actions" />
+                <button :disabled="!dismissible" @click="dismiss" class="btn-icon">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <!-- Body -->
@@ -56,6 +60,9 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useHelpStore } from '@/stores/help'
+
+const help = useHelpStore()
 const props = defineProps({
   modelValue: Boolean,
   title:      String,
@@ -71,7 +78,15 @@ const props = defineProps({
   softBackdrop: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue'])
-const maxWidths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '2xl': 'max-w-2xl' }
+const maxWidths = {
+  sm: 'max-w-sm',
+  md: 'max-w-md',
+  lg: 'max-w-lg',
+  xl: 'max-w-xl',
+  '2xl': 'max-w-2xl',
+  '3xl': 'max-w-3xl',
+  '6xl': 'max-w-6xl',
+}
 const maxWidthClass = computed(() => maxWidths[props.maxWidth] ?? maxWidths.lg)
 
 function onBackdropClick() {
@@ -114,8 +129,14 @@ watch(() => props.modelValue, () => {
 .modal-resizable {
   resize: both;
   overflow: hidden;
-  min-width: min(42rem, calc(100vw - 2rem));
+  /* % resolves against this flex item's container (the outer `fixed` wrapper,
+     already narrowed by its own `right: reservedRight` and `p-4` padding),
+     not the raw viewport — a fixed `calc(100vw - ...)` here ignored that
+     narrowing and could force the dialog wider than the space actually left
+     beside an open help drawer, pushing it underneath (Codex review on PR
+     #1180). */
+  min-width: min(42rem, 100%);
   min-height: min(28rem, calc(100vh - 2rem));
-  max-width: calc(100vw - 2rem);
+  max-width: 100%;
 }
 </style>

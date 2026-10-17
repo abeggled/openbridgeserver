@@ -8,13 +8,22 @@
       :style="hStyle(i, def.inputs.length)"
     />
 
-    <!-- Card — height controlled so handles align with rows -->
-    <div class="gn-card"
-         :style="{ borderTopColor: def.color, background: def.color + '12', minHeight: cardH + 'px' }">
+    <!-- Card — height controlled so handles align with rows.
+         The category tint rides on top of the opaque theme surface via
+         `--node-tint` (see `.logic-node-surface` in style.css) so the canvas
+         raster cannot show through the block body. -->
+    <div class="gn-card logic-node-surface"
+         :style="{ borderTopColor: def.color, '--node-tint': cardTint, minHeight: cardH + 'px', width: cardWidthPx + 'px' }">
 
       <div class="gn-header" :style="{ background: def.color + '28' }">
-        <span class="gn-title" :title="def.label">{{ def.label }}</span>
-        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
+        <NodeTitleEditor
+          :value="customLabel"
+          :fallback="def.label"
+          :editable="auth.isAdmin && canvasEditable"
+          :title-class="['gn-title', customLabel && 'gn-title--custom']"
+          @rename="renameNode"
+        />
+        <button v-if="canvasEditable" class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
@@ -29,7 +38,7 @@
           >
             <!-- Input label — clickable negation toggle for gate nodes -->
             <button
-              v-if="isGateNode && def.inputs[r]"
+              v-if="(isGateNode || isBinaryStatsNode) && def.inputs[r]"
               class="gn-port-negate nodrag"
               :class="{ 'gn-port-negate--active': !!data[`negate_${def.inputs[r].id}`] }"
               :title="$t('logic.negatePort', { id: def.inputs[r].id })"
@@ -64,11 +73,21 @@
 </template>
 
 <script setup>
+import { coercedValueText } from '@/utils/logicTypedValue'
 import { ref, computed } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
+import { nodeTint } from '@/utils/logicNodeSurface'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsInputPorts } from '@/utils/logicHemsOutputs'
+import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
+import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 
 const props = defineProps({
@@ -99,8 +118,12 @@ const NODE_DEFS = computed(() => ({
   or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})}],                                                      outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  binary_stats: { label: t('logic.nodeTypes.binary_stats'), color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}], outputs: [{id:'count_true',label:t('logic.portLabels.countTrue')},{id:'count_false',label:t('logic.portLabels.countFalse')},{id:'majority_true',label:t('logic.portLabels.majorityTrue')},{id:'total',label:t('logic.portLabels.total')},{id:'percent_true',label:t('logic.portLabels.percentTrue')},{id:'tie',label:t('logic.portLabels.tie')},{id:'threshold_reached',label:t('logic.portLabels.thresholdReached')}] },
+  merge:        { label: 'Klemme',      color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
+  change_filter:{ label: t('logic.nodeTypes.change_filter'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')}],                                        outputs: [{id:'out',label:t('logic.ports.output')},{id:'changed',label:t('logic.ports.changed')}] },
+  edge_detect:  { label: t('logic.nodeTypes.edge_detect'), color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}], outputs: [{id:'out',label:t('logic.ports.output')},{id:'rising',label:t('logic.ports.rising')},{id:'falling',label:t('logic.ports.falling')}] },
   compare:      { label: 'Vergleich',   color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.portLabels.resultShort')}] },
   hysteresis:   { label: 'Hysterese',   color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   decision:     { label: 'Entscheidung', color: '#1d4ed8', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'out_1',label:t('logic.nodeConfig.decision.defaultOutput', { n: 1 })},{id:'out_2',label:t('logic.nodeConfig.decision.defaultOutput', { n: 2 })}] },
@@ -125,8 +148,27 @@ const NODE_DEFS = computed(() => ({
   consumption_counter:{ label: 'Verbrauch',      color: '#7c3aed', inputs: [{id:'value',label:t('logic.portLabels.counter')}],                                          outputs: [{id:'daily',label:t('logic.portLabels.daily')},{id:'weekly',label:t('logic.portLabels.weekly')},{id:'monthly',label:t('logic.portLabels.monthly')},{id:'yearly',label:t('logic.portLabels.yearly')},{id:'prev_daily',label:t('logic.portLabels.prevDaily')},{id:'prev_weekly',label:t('logic.portLabels.prevWeekly')},{id:'prev_monthly',label:t('logic.portLabels.prevMonthly')},{id:'prev_yearly',label:t('logic.portLabels.prevYearly')}] },
   // Timer (extended)
   operating_hours:    { label: 'Betriebsstd.',   color: '#b45309', inputs: [{id:'active',label:t('logic.ports.active')},{id:'reset',label:t('logic.ports.reset')}],     outputs: [{id:'hours',      label:t('logic.ports.hours')}]       },
+  // sensor_watchdog: fully dynamic in_N/out_N (see the `def` computed below) —
+  // this base entry is only the pre-config-load fallback.
+  sensor_watchdog:    { label: t('logic.nodeTypes.sensor_watchdog'), color: '#b45309',
+    inputs: [
+      {id:'in_1',        label:t('logic.ports.in_n',{n:1})},
+      {id:'in_1_changed',label:t('logic.ports.in_n_changed',{n:1})},
+    ],
+    outputs: [
+      {id:'out_1',        label:t('logic.ports.out_n',{n:1})},
+      {id:'fault_text',   label:t('logic.portLabels.faultText')},
+      {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
+    ]
+  },
+  // HEMS — hems_surplus: ports are generated from the grid mode and the consumer
+  // list (see the `def` computed below); this entry is the pre-config-load fallback.
+  hems_surplus:       { label: t('logic.nodeTypes.hems_surplus'), color: '#0d9488',
+    inputs: [{id:'grid',label:t('logic.portLabels.hems.grid')}],
+    outputs: [{id:'status',label:t('logic.portLabels.hems.status')}]
+  },
   // Notification
-  notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
+  notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:t('logic.portLabels.url')},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   message_archive:    { label: t('logic.nodeTypes.message_archive'), color: '#2563eb', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'title',label:t('logic.portLabels.title')}], outputs: [{id:'stored', label:t('logic.ports.stored')}] },
@@ -149,6 +191,7 @@ const NODE_DEFS = computed(() => ({
   },
   // String
   string_concat:      { label: 'String Verketten', color: '#0891b2', inputs: [{id:'in_1',label:'1'},{id:'in_2',label:'2'}], outputs: [{id:'result',label:t('logic.ports.result')}] },
+  string_replace:     { label: 'String Suchen/Ersetzen', color: '#0891b2', inputs: [{id:'text',label:t('logic.ports.text')}], outputs: [{id:'result',label:t('logic.ports.result')}] },
   // Integration
   api_client:         { label: 'API Client',     color: '#0e7490', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'body',label:t('logic.ports.body')}],     outputs: [{id:'response',   label:t('logic.ports.response')},{id:'status',label:t('logic.ports.status')},{id:'success',label:t('logic.ports.success')}] },
   json_extractor:     { label: 'JSON Extraktor',     color: '#0369a1', inputs: [{id:'data',label:t('logic.ports.data')}], outputs: [{id:'value',label:t('logic.ports.value')}] },
@@ -161,17 +204,27 @@ const NODE_DEFS = computed(() => ({
 const isGateNode = computed(() =>
   props.type === 'and' || props.type === 'or' || props.type === 'xor'
 )
+// merge shares and/or/xor's dynamic in1..inN port generation, but its inputs
+// are plain values (not booleans) — kept separate from isGateNode so the
+// per-port negation toggles (boolean-only) never render for it.
+const isMergeNode = computed(() => props.type === 'merge')
+// binary_stats takes the gates' dynamic in1..inN inputs and per-input negation,
+// but has its own output ports and no output negation.
+const isBinaryStatsNode = computed(() => props.type === 'binary_stats')
 
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
   const base = NODE_DEFS.value[props.type] ?? { label: props.type, color: '#475569', inputs: [], outputs: [] }
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
-  if (isGateNode.value) {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+  if (isGateNode.value || isMergeNode.value || isBinaryStatsNode.value) {
+    const count = isBinaryStatsNode.value
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
       label: t('logic.ports.in_n', { n: i + 1 }),
     }))
+    if (isBinaryStatsNode.value) return { ...base, label, inputs }
     return { ...base, label, inputs, outputs: [{ id: 'out', label: t('logic.ports.out') }] }
   }
   if (props.type === 'string_concat') {
@@ -189,6 +242,39 @@ const def = computed(() => {
       label: t('logic.ports.in_n', { n: i + 1 }),
     }))
     return { ...base, label, inputs }
+  }
+  if (props.type === 'sensor_watchdog') {
+    const rows = parseRowList(props.data?.inputs)
+    const count = Math.max(1, Math.min(10, rows.length || 1))
+    const inputs = []
+    const outputs = []
+    for (let i = 0; i < count; i++) {
+      const rowLabel = rows[i]?.label
+      inputs.push({ id: `in_${i + 1}`, label: rowLabel || t('logic.ports.in_n', { n: i + 1 }) })
+      inputs.push({ id: `in_${i + 1}_changed`, label: rowLabel ? `${rowLabel}: ${t('logic.ports.changed')}` : t('logic.ports.in_n_changed', { n: i + 1 }) })
+      outputs.push({ id: `out_${i + 1}`, label: rowLabel || t('logic.ports.out_n', { n: i + 1 }) })
+    }
+    outputs.push(
+      { id: 'fault_text',    label: t('logic.portLabels.faultText') },
+      { id: 'fault_trigger', label: t('logic.portLabels.faultTrigger') },
+    )
+    return { ...base, label, inputs, outputs }
+  }
+  if (props.type === 'hems_surplus') {
+    const d = props.data
+    const inputs = hemsInputPorts(d, t)
+    const outputs = []
+    hemsConsumers(d.consumers).forEach((c, i) => {
+      const name = hemsConsumerName(c, i, t)
+      outputs.push(
+        { id: `c_${c.id}`, label: name },
+        { id: `c_${c.id}_status`, label: `${name}: ${t('logic.portLabels.hems.status')}` },
+      )
+    })
+    for (const k of HEMS_DIAGNOSTICS) {
+      outputs.push({ id: k, label: t(`logic.portLabels.hems.${k}`) })
+    }
+    return { ...base, label, inputs, outputs }
   }
   if (props.type === 'ical') {
     const filterCount = Math.max(0, Math.min(20, Number(props.data?.filter_count) || 0))
@@ -224,6 +310,22 @@ const def = computed(() => {
     }))
     return { ...base, label, outputs }
   }
+  if (props.type === 'edge_detect') {
+    // Only render the handles this configuration can actually drive, so the
+    // block states what it emits. "out" is shared by both directions, so it
+    // survives as long as *either* direction still sends a value.
+    const rising  = props.data?.on_rising  ?? 'value'
+    const falling = props.data?.on_falling ?? 'value'
+    // Mirror the executor: only 'off' and 'trigger' withhold the value; every
+    // other setting — including an imported or future one — sends. Testing for
+    // the literal 'value' would hide a handle the runtime actually drives.
+    const sends = action => action !== 'off' && action !== 'trigger'
+    const outputs = []
+    if (sends(rising) || sends(falling)) outputs.push({ id: 'out', label: t('logic.ports.output') })
+    if (rising  !== 'off') outputs.push({ id: 'rising',  label: t('logic.ports.rising') })
+    if (falling !== 'off') outputs.push({ id: 'falling', label: t('logic.ports.falling') })
+    return { ...base, label, outputs }
+  }
   if (props.type === 'json_extractor') {
     let pathList = []
     try { pathList = JSON.parse(props.data?.json_paths || '[]') } catch (_) { pathList = [] }
@@ -251,8 +353,21 @@ const def = computed(() => {
   return { ...base, label }
 })
 
-// ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
+// Category tint painted over the opaque card surface (issue #1074)
+const cardTint = computed(() => nodeTint(def.value.color))
+
+// ── User-defined block name (issue #1157) ──────────────────────────────────
+// Kept in `data.label`, separate from the generated node id, so edges and
+// references keep addressing the block by id.
+const customLabel = computed(() => String(props.data?.label ?? '').trim())
+function renameNode(label) { updateNodeData(props.id, { label }) }
+// Only admins can save a sheet, so offering the inline field to a read-only
+// viewer would silently discard whatever they typed.
+const auth = useAuthStore()
+
+// ── Inline negation toggle (AND / OR / XOR / binary_stats) ─────
 function toggleNegate(portId) {
+  if (!canvasEditable.value) return
   const key = `negate_${portId}`
   updateNodeData(props.id, { [key]: !props.data[key] })
 }
@@ -272,6 +387,37 @@ const summary = computed(() => {
     const rules = parseRowList(d.rules)
     const type = d.output_type || 'string'
     return `${type} · ${t('logic.summary.rules', { n: rules.length || 2 })}`
+  }
+  if (props.type === 'edge_detect') {
+    // "↑ <rising>  ↓ <falling>", one part per edge direction.
+    // A boolean edge value is stored as the literal "true"/"false"; show it in
+    // the viewer's language instead of raw English on the block card.
+    // The executor reads every one of these as d.get(key, <default>), so only
+    // an ABSENT key takes the default — an explicit JSON null is a configured
+    // value it coerces (and _to_bool(None) is False). `??` cannot express that.
+    const configured = (key, fallback) => (key in d ? d[key] : fallback)
+    // The shared rule decides everything; only the boolean labels are local,
+    // because the card shows them in the viewer's language while the panel
+    // uses the stored 'true'/'false' as option values.
+    const edgeValue = (text, dataType) => {
+      const coerced = coercedValueText(text, dataType)
+      if (dataType !== 'bool') return coerced
+      return coerced === 'false'
+        ? t('logic.nodeConfig.common.boolFalse')
+        : t('logic.nodeConfig.common.boolTrue')
+    }
+    // A direction set to trigger-only shows an em dash instead of a value;
+    // one set to off is left out of the summary entirely.
+    const edgePart = (arrow, action, valueKey, fallback) => {
+      if (action === 'off') return null
+      const value = edgeValue(configured(valueKey, fallback), configured('data_type', 'bool'))
+      return `${arrow} ${action === 'trigger' ? '\u2014' : value}`
+    }
+    const parts = [
+      edgePart('\u2191', configured('on_rising',  'value'), 'value_rising',  'true'),
+      edgePart('\u2193', configured('on_falling', 'value'), 'value_falling', 'false'),
+    ].filter(Boolean)
+    return parts.join('  ')
   }
   if (props.type === 'math_formula') return d.formula || 'a + b'
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`
@@ -297,6 +443,20 @@ const summary = computed(() => {
   if (props.type === 'avg_multi') {
     const count = Math.max(2, Math.min(20, Number(d.input_count) || 2))
     return t('logic.summary.inputs', { n: count })
+  }
+  if (props.type === 'sensor_watchdog') {
+    const rows = parseRowList(d.inputs)
+    return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
+  }
+  if (props.type === 'hems_surplus') {
+    return t('logic.summary.consumers', { n: hemsConsumers(d.consumers).length })
+  }
+  if (props.type === 'string_replace') {
+    const rules = parseRowList(d.rules)
+    const modes = new Set(rules.map(rule => (String(rule.mode ?? '').trim().toLowerCase() === 'regex' ? 'regex' : 'plain')))
+    const mode = modes.size === 1 ? t(`logic.summary.replaceModes.${[...modes][0]}`) : null
+    const label = t('logic.summary.rules', { n: rules.length })
+    return mode ? `${label} · ${mode}` : label
   }
   if (props.type === 'string_concat') {
     const count = Math.max(2, Math.min(20, Number(d.count) || 2))
@@ -338,8 +498,10 @@ const summary = computed(() => {
     const behavior = d.closed_behavior === 'default_value' ? `→ ${d.default_value ?? 0}` : t('logic.summary.hold')
     return d.negate_enable ? `${t('logic.summary.negateEnable')}  ${behavior}` : behavior
   }
-  if (props.type === 'and' || props.type === 'or' || props.type === 'xor') {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge' || props.type === 'binary_stats') {
+    const count = props.type === 'binary_stats'
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     return count > 2 ? t('logic.summary.inputs', { n: count }) : null
   }
   return null
@@ -355,6 +517,45 @@ const rowCount  = computed(() => Math.max(def.value.inputs.length, def.value.out
 const summaryPx = computed(() => summary.value ? SUMMARY_H : 0)
 const debugPx   = computed(() => props.data._dbg ? DEBUG_H : 0)
 const cardH     = computed(() => HEADER_H + summaryPx.value + rowCount.value * PORT_H + debugPx.value + 8)
+
+// ── Dynamic card width ──────────────────────────────────────────────────────
+// The card used to be a fixed 130px for every block, which clips longer
+// port labels (e.g. sensor_watchdog's "<label>: Geändert" input) instead of
+// wrapping or eliding them — unreadable, not just cosmetically tight. Size
+// the card to the widest row (left label + right label, since a row shows
+// both side by side) and to the title, same canvas.measureText technique as
+// the graph-name select width fix (LogicView.vue, issue #1171).
+const CARD_MIN_W = 130
+const CARD_MAX_W = 320
+const ROW_PAD    = 20  // .gn-ports-rows left+right padding (10px each)
+// canvas.measureText underestimates real DOM text layout for this font stack
+// (fallback font resolution differs between the 2D context and CSS) — pad
+// generously rather than chase an exact match, a few px of slack is cheap.
+const ROW_GAP    = 30  // breathing room between left/right labels + slack
+const TITLE_FONT = '700 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+const PORT_FONT  = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+let _measureCtx // lazily created, reused across every node instance's computations
+function measureTextPx(text, font) {
+  if (_measureCtx === undefined) {
+    _measureCtx = document.createElement('canvas').getContext('2d')
+  }
+  if (!_measureCtx) return 0
+  _measureCtx.font = font
+  return _measureCtx.measureText(text || '').width
+}
+const cardWidthPx = computed(() => {
+  const titleText = (customLabel.value || def.value.label || '').toString()
+  // .gn-title is uppercase for generated titles — measure what actually renders.
+  let widest = measureTextPx(customLabel.value ? titleText : titleText.toUpperCase(), TITLE_FONT) + 34 // header padding + delete button
+  const inputs  = def.value.inputs || []
+  const outputs = def.value.outputs || []
+  for (let r = 0; r < rowCount.value; r++) {
+    const leftPx  = inputs[r]  ? measureTextPx(inputs[r].label, PORT_FONT)  : 0
+    const rightPx = outputs[r] ? measureTextPx(outputs[r].label, PORT_FONT) : 0
+    widest = Math.max(widest, leftPx + rightPx + ROW_GAP + ROW_PAD)
+  }
+  return Math.min(CARD_MAX_W, Math.max(CARD_MIN_W, Math.ceil(widest)))
+})
 
 // port row indices (0..rowCount-1)
 const portRows  = computed(() => Array.from({ length: rowCount.value }, (_, i) => i))
@@ -388,13 +589,14 @@ function remove() { removeNodes([props.id]) }
 .gn-root  { position: relative; }
 
 .gn-card  {
-  width: 130px;
+  width: 130px; /* fallback until cardWidthPx's inline style applies */
   border: 1px solid var(--node-card-border);
   border-top: 3px solid #475569;
   border-radius: 8px;
   box-shadow: 0 4px 14px rgba(0,0,0,.3);
-  background: var(--node-card-bg);
   overflow: visible;
+  /* background: intentionally not set here — `.logic-node-surface` provides
+     the opaque theme surface plus the inline `--node-tint` overlay. */
 }
 
 .gn-header {
@@ -415,6 +617,9 @@ function remove() { removeNodes([props.id]) }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A user-chosen name keeps its own casing — the uppercase treatment is for
+   the generated type titles. */
+.gn-title--custom { text-transform: none; letter-spacing: .02em; }
 .gn-del   { flex-shrink:0; font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; }
 .gn-del:hover { color:#f87171; }
 
@@ -439,9 +644,13 @@ function remove() { removeNodes([props.id]) }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
-.gn-port-left  { font-size: 9px; color: var(--node-port-label); }
-.gn-port-right { font-size: 9px; color: var(--node-port-label); }
+/* cardWidthPx sizes the card to fit both labels of the widest row, but an
+   extreme custom port/row label can still exceed the CARD_MAX_W cap —
+   truncate gracefully instead of wrapping or overflowing the card. */
+.gn-port-left  { font-size: 9px; color: var(--node-port-label); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gn-port-right { font-size: 9px; color: var(--node-port-label); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 
 /* Inline negation toggle */
 .gn-port-negate {
@@ -455,7 +664,9 @@ function remove() { removeNodes([props.id]) }
   line-height: 1;
   transition: background .12s, color .12s;
 }
-.gn-port-negate:hover          { background: rgba(255,255,255,.10); color: #7dd3fc; }
+/* Neutral grey rather than white/10 %: the card body is an opaque light or dark
+   theme surface (#1074), and a white wash is invisible on the light one. */
+.gn-port-negate:hover          { background: rgba(148,163,184,.28); color: var(--node-accent-hover); }
 .gn-port-negate--active        { color: #f87171; font-weight: 700; }
 .gn-port-negate--right         { margin-left: auto; }
 

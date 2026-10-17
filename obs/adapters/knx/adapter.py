@@ -876,8 +876,9 @@ class KnxAdapter(AdapterBase):
                 from xknx.telegram.address import GroupAddress
 
                 raw = dpt.encoder(state.value)
-                # DPTBinary only for 1-bit boolean DPTs; all others need DPTArray
-                if dpt.data_type == "BOOLEAN":
+                # DPTBinary for 1-bit boolean DPTs and the 2-bit / 4-bit DPT 2.x / 3.x
+                # types (xknx payload_type); all others need DPTArray
+                if dpt.data_type == "BOOLEAN" or dpt.dpt_id.startswith(("DPT2.", "DPT3.")):
                     payload_value = DPTBinary(raw[0])
                 else:
                     payload_value = DPTArray(list(raw))
@@ -1307,9 +1308,10 @@ class KnxAdapter(AdapterBase):
             dpt = DPTRegistry.get(bc.dpt_id)
             raw = dpt.encoder(value)
 
-            # DPTBinary only for 1-bit boolean DPTs; all others (incl. 1-byte
-            # DPT 5.x with values 0-255) need DPTArray to avoid ConversionError
-            if dpt.data_type == "BOOLEAN":
+            # DPTBinary for 1-bit boolean DPTs and the 2-bit / 4-bit DPT 2.x / 3.x
+            # types (xknx payload_type); all others (incl. 1-byte DPT 5.x with
+            # values 0-255) need DPTArray to avoid ConversionError
+            if dpt.data_type == "BOOLEAN" or dpt.dpt_id.startswith(("DPT2.", "DPT3.")):
                 payload_value = DPTBinary(raw[0])
             else:
                 payload_value = DPTArray(list(raw))
@@ -1390,7 +1392,7 @@ def _build_sniffer(xknx_instance: Any, ga_source_map: dict, adapter: KnxAdapter)
             # _iter_remote_values() returns the correct GAs when
             # Device.__init__ calls xknx.devices.async_add(self).
             self._remote_values = remote_values
-            super().__init__(xknx_instance, "obs_sniffer")
+            super().__init__(xknx_instance, name="obs_sniffer")
 
         def _iter_remote_values(self):  # type: ignore[override]
             return iter(self._remote_values)

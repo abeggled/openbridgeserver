@@ -10,6 +10,7 @@
           {{ t('knxDevices.snapshotHint') }}
         </p>
       </div>
+      <HelpButton help-id="knxdevices-list" />
       <RouterLink
         v-if="canImport"
         class="btn-primary"
@@ -45,9 +46,12 @@
         data-testid="knx-devices-hierarchy-filter"
         :placeholder="t('knxDevices.hierarchyFilterPlaceholder')"
       />
-      <button class="btn-primary justify-center" data-testid="knx-devices-apply">
-        {{ t('common.search') }}
-      </button>
+      <div class="flex items-center gap-2">
+        <button class="btn-primary justify-center flex-1" data-testid="knx-devices-apply">
+          {{ t('common.search') }}
+        </button>
+        <HelpButton help-id="knxdevices-filters" />
+      </div>
     </form>
 
     <div
@@ -60,6 +64,9 @@
 
     <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_24rem] gap-4 items-start">
       <section class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <div class="flex justify-end px-4 pt-3">
+          <HelpButton help-id="knxdevices-table" />
+        </div>
         <div v-if="loading" class="px-4 py-8 text-center text-sm text-slate-500" data-testid="knx-devices-loading">
           {{ t('common.loading') }}
         </div>
@@ -159,6 +166,9 @@
       </section>
 
       <aside class="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 min-h-64">
+        <div class="flex justify-end mb-2">
+          <HelpButton help-id="knxdevices-detail" />
+        </div>
         <div v-if="detailLoading" class="text-sm text-slate-500" data-testid="knx-device-detail-loading">
           {{ t('common.loading') }}
         </div>
@@ -285,6 +295,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { knxprojApi } from '@/api/client'
+import HelpButton from '@/components/ui/HelpButton.vue'
 import HierarchyCombobox from '@/components/ui/HierarchyCombobox.vue'
 import PathLabel from '@/components/ui/PathLabel.vue'
 import QuickFilterInput from '@/components/ui/QuickFilterInput.vue'

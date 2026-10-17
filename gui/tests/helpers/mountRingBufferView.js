@@ -87,6 +87,7 @@ export async function mountRingBufferView({
     ringbufferApi,
     searchApi,
     hierarchyApi,
+    helpApi: { index: vi.fn().mockResolvedValue({ data: { helpIds: {} } }) },
   }))
 
   vi.doMock('@/stores/websocket', () => ({

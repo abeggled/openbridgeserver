@@ -18,12 +18,15 @@
     <div class="grid lg:grid-cols-3 gap-4">
       <!-- Current value card -->
       <div class="card p-5 flex flex-col gap-3">
-        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.currentValue') }}</div>
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.currentValue') }}</div>
+          <HelpButton help-id="datapoints-detail" />
+        </div>
         <div class="text-4xl font-bold font-mono text-blue-600 dark:text-blue-300">
           {{ displayVal }}
         </div>
         <div class="text-xs text-slate-500">
-          {{ liveState?.ts ? new Date(liveState.ts).toLocaleString('de-CH') : dp.updated_at }}
+          {{ liveState?.ts ? fmtDateTime(liveState.ts) : fmtDateTime(dp.updated_at) }}
         </div>
         <div class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_topic }}</div>
         <div v-if="dp.mqtt_alias" class="font-mono text-xs text-slate-600 break-all">{{ dp.mqtt_alias }}</div>
@@ -72,7 +75,10 @@
 
       <!-- Properties -->
       <div class="card p-5 col-span-2">
-        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">{{ $t('datapoints.detail.properties') }}</div>
+        <div class="flex items-center justify-between mb-4">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.properties') }}</div>
+          <HelpButton help-id="datapoints-detail-properties" />
+        </div>
         <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <dt class="text-slate-500">{{ $t('datapoints.table.name') }}</dt>       <dd class="text-slate-700 dark:text-slate-200">{{ dp.name }}</dd>
           <dt class="text-slate-500">{{ $t('datapoints.detail.datatype') }}</dt>   <dd><Badge variant="info" size="xs">{{ dp.data_type }}</Badge></dd>
@@ -90,8 +96,8 @@
           <dd>
             <Badge :variant="dp.record_history ? 'success' : 'muted'" size="xs" data-testid="badge-record-history">{{ dp.record_history ? $t('common.active') : $t('common.disabled') }}</Badge>
           </dd>
-          <dt class="text-slate-500">{{ $t('datapoints.detail.createdAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.created_at).toLocaleString('de-CH') }}</dd>
-          <dt class="text-slate-500">{{ $t('datapoints.detail.updatedAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ new Date(dp.updated_at).toLocaleString('de-CH') }}</dd>
+          <dt class="text-slate-500">{{ $t('datapoints.detail.createdAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ fmtDateTime(dp.created_at) }}</dd>
+          <dt class="text-slate-500">{{ $t('datapoints.detail.updatedAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ fmtDateTime(dp.updated_at) }}</dd>
         </dl>
         <div class="flex gap-3 mt-5">
           <button @click="showEdit = true" class="btn-secondary btn-sm">{{ $t('common.edit') }}</button>
@@ -107,10 +113,13 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.adapterBindings') }}</h3>
-        <button @click="showBindingForm = true" class="btn-primary btn-sm" data-testid="btn-add-binding">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          {{ $t('datapoints.detail.addBinding') }}
-        </button>
+        <div class="flex items-center gap-2">
+          <HelpButton help-id="datapoints-detail-bindings" />
+          <button @click="openNewBinding" class="btn-primary btn-sm" data-testid="btn-add-binding">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            {{ $t('datapoints.detail.addBinding') }}
+          </button>
+        </div>
       </div>
       <div class="card-body">
         <div v-if="bindingsLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -162,7 +171,7 @@
               <div v-else class="text-xs text-slate-500 font-mono mt-1 truncate">{{ JSON.stringify(b.config) }}</div>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')">
+              <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')" data-testid="btn-edit-binding">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
               </button>
               <button @click="confirmDeleteBinding(b)" class="btn-icon text-red-400" :title="$t('common.delete')">
@@ -178,6 +187,7 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.logicBindings') }}</h3>
+        <HelpButton help-id="datapoints-detail-logic" />
       </div>
       <div class="card-body">
         <div v-if="logicUsagesLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -208,12 +218,15 @@
 
     <!-- Edit Objekt Modal -->
     <Modal v-model="showEdit" :title="$t('datapoints.form.editTitle')">
+      <template #header-actions>
+        <HelpButton help-id="datapoints-form" />
+      </template>
       <DataPointForm :initial="dp" :datatypes="dpStore.datatypes" :save-handler="onEditSave" @cancel="showEdit = false" />
     </Modal>
 
     <!-- Binding form Modal -->
     <Modal v-model="showBindingForm" :title="editBinding ? $t('datapoints.detail.bindingModalEdit') : $t('datapoints.detail.bindingModalNew')" max-width="xl">
-      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" :dp-data-type="dp?.data_type ?? 'UNKNOWN'" @save="onBindingSave" @cancel="showBindingForm = false" />
+      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" :dp-data-type="dp?.data_type ?? 'UNKNOWN'" :dp-unit="dp?.unit ?? ''" @save="onBindingSave" @cancel="showBindingForm = false" />
     </Modal>
 
     <!-- Delete binding confirm -->
@@ -231,9 +244,12 @@ import { useI18n } from 'vue-i18n'
 import { dpApi, logicApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useTz } from '@/composables/useTz'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
+import HelpButton     from '@/components/ui/HelpButton.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import DataPointForm          from '@/components/datapoints/DataPointForm.vue'
 import BindingForm            from '@/components/datapoints/BindingForm.vue'
@@ -241,6 +257,9 @@ import DataPointHierarchyCard from '@/components/datapoints/DataPointHierarchyCa
 
 const props   = defineProps({ id: { type: String, required: true } })
 const { t } = useI18n()
+// Timestamps follow the configured timezone and date/time format (issue #1073).
+const { fmtDateTime } = useTz()
+const { fmtNumber } = useRegionalFormat()
 const dpStore = useDatapointStore()
 const ws      = useWebSocketStore()
 
@@ -265,9 +284,12 @@ let unsubWs = null
 const liveState  = computed(() => ws.liveValues[props.id])
 const currentRawValue = computed(() => liveState.value?.value ?? dp.value?.value)
 const displayVal = computed(() => {
+  // Display only — numbers use the configured regional format (issue #1073),
+  // while the edit field below keeps the raw, locale-neutral value.
   const v = currentRawValue.value
   if (v === null || v === undefined) return '—'
-  return dp.value?.unit ? `${v} ${dp.value.unit}` : String(v)
+  const text = typeof v === 'number' && Number.isFinite(v) ? fmtNumber(v) : String(v)
+  return dp.value?.unit ? `${text} ${dp.value.unit}` : text
 })
 const activeBindings = computed(() => bindings.value.filter(b => b.enabled))
 const activeWritableBindings = computed(() => activeBindings.value.filter(b => b.adapter_type !== 'MESSAGE'))
@@ -337,6 +359,8 @@ async function onEditSave(payload) {
   showEdit.value = false   // only reached if no error thrown
 }
 
+// Clear any binding left over from a previous edit, else the form would update it instead of creating one (#1312).
+function openNewBinding() { editBinding.value = null; showBindingForm.value = true }
 function openEditBinding(b) { editBinding.value = b; showBindingForm.value = true }
 async function onBindingSave() { showBindingForm.value = false; await Promise.all([loadBindings(), loadKnxContext()]) }
 

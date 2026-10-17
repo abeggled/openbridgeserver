@@ -15,6 +15,13 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    // The HelpDrawer (#896) renders a real <iframe src="/help/...">; without
+    // this, happy-dom attempts an actual network fetch for the iframe content
+    // on every test that mounts it, logging ECONNREFUSED noise (harmless —
+    // assertions only check the src attribute — but pollutes test output).
+    environmentOptions: {
+      happyDOM: { settings: { disableIframePageLoading: true } },
+    },
     globals: true,
     include: ['tests/**/*.spec.js'],
     setupFiles: ['tests/setup.js'],

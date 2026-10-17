@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 from obs.logic.executor import GraphExecutor
 from obs.logic.manager import LogicManager
 from obs.logic.models import FlowData
-from obs.logic.node_types import get_node_type
+from obs.logic.registry import get_node_type
 from tests.unit.conftest import edge, node
 
 
@@ -527,6 +527,119 @@ def test_datapoint_change_pulses_retrigger_a_sequence() -> None:
     asyncio.run(exercise())
 
 
+def test_change_filter_pulses_retrigger_a_sequence() -> None:
+    """Regression: a change_filter's changed=True pulse must retrigger a
+    running sequence on consecutive real changes, exactly like a
+    datapoint_read.changed pulse — otherwise the second change is silently
+    absorbed by the sequence's rising-edge dedup."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("cf", "change_filter"),
+                    node("sequence", "value_sequence", {"restart_policy": "queue", "steps": [{"datapoint_id": str(target), "value": 1}]}),
+                ],
+                "edges": [edge("cf", "sequence", "changed", "trigger")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+
+        await manager._execute_graph("graph", "Graph", flow, {"cf": {"in": 1}})
+        await manager._sequence_tasks[("graph", "sequence")]
+        await manager._execute_graph("graph", "Graph", flow, {"cf": {"in": 2}})
+        await manager._sequence_tasks[("graph", "sequence")]
+
+        assert manager._event_bus.publish.await_count == 2
+
+    asyncio.run(exercise())
+
+
+def test_change_filter_wired_to_condition_does_not_retrigger_sequence() -> None:
+    """Regression: a change_filter's changed pulse must only retrigger a
+    sequence when wired into the trigger handle. Wired into condition
+    instead, it must not restart an already-running, separately sustained
+    trigger — the backward pulse-walk must start from the sequence's
+    trigger edge only, not from every incoming edge."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("const", "const_value", {"value": "1", "data_type": "number"}),
+                    node("cf", "change_filter"),
+                    node("sequence", "value_sequence", {"restart_policy": "queue", "steps": [{"datapoint_id": str(target), "value": 1}]}),
+                ],
+                "edges": [
+                    edge("const", "sequence", "value", "trigger"),
+                    edge("cf", "sequence", "changed", "condition"),
+                ],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+
+        await manager._execute_graph("graph", "Graph", flow, {"cf": {"in": 1}})
+        first_task = manager._sequence_tasks.get(("graph", "sequence"))
+        if first_task is not None:
+            await first_task
+        first_count = manager._event_bus.publish.await_count
+
+        await manager._execute_graph("graph", "Graph", flow, {"cf": {"in": 2}})
+        retrigger_task = manager._sequence_tasks.get(("graph", "sequence"))
+        if retrigger_task is not None and not retrigger_task.done():
+            await retrigger_task
+
+        assert manager._event_bus.publish.await_count == first_count
+
+    asyncio.run(exercise())
+
+
+def test_change_filter_pulse_through_memory_reset_does_not_retrigger_sustained_sequence() -> None:
+    """Regression: the value_sequence's own reverse pulse-trace (used to
+    decide whether an upstream change_filter pulse should bypass the
+    sustained-trigger dedup) did not stop at Memory nodes, unlike the
+    forward cron_reachable traversal. With change_filter.changed ->
+    memory.reset and a retained memory.out -> value_sequence.trigger that
+    stays truthy across the tick, a change_filter pulse merely resetting
+    memory (which only takes effect on the *next* tick, via the executor's
+    deferred commit_memory_inputs) must not be treated as if it drove
+    memory.out itself — the sequence must stay deduped as "sustained", not
+    restart on every filter pulse."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("cf", "change_filter"),
+                    node("mem", "memory", {"initial_value": "0", "data_type": "number"}),
+                    node("sequence", "value_sequence", {"restart_policy": "queue", "steps": [{"datapoint_id": str(target), "value": 1}]}),
+                ],
+                "edges": [
+                    edge("cf", "mem", "changed", "reset"),
+                    edge("mem", "sequence", "out", "trigger"),
+                ],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        manager._hysteresis["graph"] = {"mem": {"value": 1}, "cf": {"value": 1}}
+        manager._node_state["graph"] = {"sequence": {"sequence_prev_trigger": True}}
+
+        await manager._execute_graph("graph", "Graph", flow, {"cf": {"in": 2}})
+        task = manager._sequence_tasks.get(("graph", "sequence"))
+        if task is not None:
+            await task
+
+        assert manager._event_bus.publish.await_count == 0
+
+    asyncio.run(exercise())
+
+
 def test_cancelling_a_restart_also_cancels_its_original_sequence() -> None:
     async def exercise() -> None:
         manager = _manager()
@@ -628,5 +741,68 @@ def test_datapoint_rename_updates_sequence_step_labels() -> None:
         await manager._on_datapoint_renamed(SimpleNamespace(dp_id=dp_id, old_name="Old", new_name="New"))
         assert flow.nodes[0].data["steps"][0]["datapoint_name"] == "New"
         manager._db.execute_and_commit.assert_awaited_once()
+
+    asyncio.run(exercise())
+
+
+def test_layout_only_rename_keeps_a_running_sequence_alive() -> None:
+    """Issue #1157: renaming a block is a layout-only save, which reaches the
+    manager through `update_cached_graph()` instead of a re-initialisation. The
+    per-node config cached when the sequence started must follow, otherwise the
+    next `reload()` sees `node.data != _sequence_configs[...]` and cancels a
+    sequence that is still supposed to be running.
+    """
+
+    async def exercise() -> None:
+        manager = _manager()
+        before = FlowData.model_validate(
+            {"nodes": [{"id": "seq", "type": "value_sequence", "position": {"x": 0, "y": 0}, "data": {"steps": []}}], "edges": []}
+        )
+        renamed = FlowData.model_validate(
+            {
+                "nodes": [{"id": "seq", "type": "value_sequence", "position": {"x": 0, "y": 0}, "data": {"steps": [], "label": "Morgenszene"}}],
+                "edges": [],
+            }
+        )
+        manager._db.fetchall = AsyncMock(
+            return_value=[{"id": "g1", "name": "G", "enabled": 1, "flow_data": renamed.model_dump_json(), "node_state": "{}"}]
+        )
+        manager._graphs["g1"] = ("G", True, before)
+        task = asyncio.create_task(asyncio.sleep(3600))
+        manager._sequence_tasks[("g1", "seq")] = task
+        manager._sequence_configs[("g1", "seq")] = dict(before.nodes[0].data)
+        manager._sequence_graph_signatures["g1"] = before.model_dump_json()
+
+        manager.update_cached_graph("g1", "G", True, renamed)
+        assert manager._sequence_configs[("g1", "seq")]["label"] == "Morgenszene"
+
+        await manager.reload()
+        await asyncio.sleep(0)
+        assert task.cancelled() is False
+        assert ("g1", "seq") in manager._sequence_tasks
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_update_cached_graph_leaves_untracked_sequence_nodes_alone() -> None:
+    """Only nodes whose sequence is actually running carry a cached config;
+    a layout-only save must not invent entries for the others."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [{"id": "seq", "type": "value_sequence", "position": {"x": 0, "y": 0}, "data": {"steps": [], "label": "Morgenszene"}}],
+                "edges": [],
+            }
+        )
+        manager._graphs["g1"] = ("G", True, flow)
+
+        manager.update_cached_graph("g1", "G", True, flow)
+
+        assert manager._sequence_configs == {}
 
     asyncio.run(exercise())

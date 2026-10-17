@@ -24,17 +24,39 @@ if [ "$#" -ne 0 ]; then
 fi
 
 MAIN_WORKTREE=""
+WORKTREE_COUNT=0
 while IFS= read -r line; do
   case "$line" in
     worktree\ *)
-      MAIN_WORKTREE="${line#worktree }"
-      break
+      WORKTREE_COUNT=$((WORKTREE_COUNT + 1))
+      [ -z "$MAIN_WORKTREE" ] && MAIN_WORKTREE="${line#worktree }"
       ;;
   esac
 done < <(git -C "$REPO_ROOT" worktree list --porcelain)
 
 if [ -z "$MAIN_WORKTREE" ]; then
   echo "link-worktree-node-modules: could not determine main worktree" >&2
+  exit 1
+fi
+
+# A STANDALONE CHECKOUT HAS NOTHING TO LINK FROM.
+#
+# This linker shares ONE `gui/node_modules` across SEVERAL local worktrees. In a
+# single checkout - a CI job, an automated review sandbox, a fresh clone - there
+# is no second worktree to borrow from, so no amount of rerunning helps: the
+# dependencies have to be installed here. Saying so plainly matters, because the
+# previous message read "update them in the main worktree, then rerun this
+# command", which in a standalone checkout points back at the very directory that
+# is missing them. An automated reviewer followed that loop, gave up, and reported
+# a whole GUI surface as unreviewed.
+if [ "$WORKTREE_COUNT" -le 1 ] && [ ! -d "$MAIN_WORKTREE/gui/node_modules" ]; then
+  cat >&2 <<EOF
+link-worktree-node-modules: this is a standalone checkout, not a linked worktree -
+there is no main worktree to share GUI dependencies from.
+
+Install them here instead (this script is not needed in that case):
+  cd "$MAIN_WORKTREE/gui" && npm ci
+EOF
   exit 1
 fi
 

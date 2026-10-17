@@ -10,6 +10,8 @@ import {
 } from 'chart.js'
 import { history } from '@/api/client'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useFormatStore } from '@/stores/format'
+import { useThemeStore } from '@/stores/theme'
 import type { DataPointValue } from '@/types'
 import type { WriteContext } from '@/api/client'
 import { aggregateBucketEndTimestamp, sortedUniqueTimestamps, weightedAverage, weightedValuesByTimestamp } from './aggregation'
@@ -65,8 +67,34 @@ let wsOff:        (() => void) | null = null
 let reloadTimer:  ReturnType<typeof setTimeout> | null = null
 const seriesUnits = ref<string[]>([])
 
+// Eigene HTML-Legende statt der Chart.js-Legende: Serien werden durch eine
+// farbige Unterstreichung statt eines Kästchens gekennzeichnet (#1361).
+interface LegendItem { key: string; label: string; color: string }
+const legendItems = ref<LegendItem[]>([])
+// Über einen Serien-Schlüssel statt des Dataset-Objekts gemerkt, damit
+// ausgeblendete Serien das periodische Neuladen (neue Dataset-Objekte)
+// überstehen. Die Datenpunkt-ID allein reicht nicht: derselbe Datenpunkt kann
+// als Haupt- und Zusatzserie (z. B. mit anderer Achse) konfiguriert sein.
+const hiddenSeries = ref<Set<string>>(new Set())
+function seriesKey(id: string, index: number): string {
+  return `${index}:${id}`
+}
+
+// Achsen-, Tooltip- und Wertformatierung folgen dem konfigurierten
+// Regionalformat (Issue #1073); die Rohdaten bleiben locale-neutral.
+const format = useFormatStore()
+
+// Gitterlinien folgen dem Visu-Theme und heben sich in beiden Modi leicht vom
+// Kartenhintergrund ab (dunkel #232d3b, hell #f3f4f6) — vorher lag das Dark-Grau
+// unter dem Hintergrund und wirkte im Light-Mode fast schwarz (#1361).
+// Achsenbeschriftungen (gray-500) sind in beiden Modi lesbar.
+const theme = useThemeStore()
+function gridColor(): string {
+  return theme.isDark ? '#374151' : '#e5e7eb'
+}
+
 function fmtMs(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
+  return format.fmtDateTime(ms, {
     month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
@@ -103,6 +131,9 @@ function initChart() {
       responsive:          true,
       maintainAspectRatio: false,
       animation:           false,
+      // Chart.js formats axis ticks with Intl.NumberFormat under this locale;
+      // without it, it would silently follow the browser language (issue #1073).
+      locale:              format.regionFormat,
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -113,12 +144,18 @@ function initChart() {
               if (chartType.value === 'bar') return items[0]?.label ?? ''
               return items[0]?.parsed.x != null ? fmtMs(items[0].parsed.x) : ''
             },
+            // Kästchen vollflächig in der Serienfarbe — Chart.js nähme sonst den
+            // fast transparenten Flächen-Hintergrund der Linie (#1361)
+            labelColor: (ctx) => {
+              const color = legendItems.value[ctx.datasetIndex]?.color ?? '#6b7280'
+              return { borderColor: color, backgroundColor: color, borderWidth: 0 }
+            },
             label: (ctx) => {
               const v    = ctx.parsed.y
               if (v == null) return ''
               const u    = seriesUnits.value[ctx.datasetIndex] ?? ''
               const name = ctx.dataset.label || ''
-              const val  = u ? `${v.toFixed(2)} ${u}` : String(v)
+              const val  = u ? `${format.fmtNumber(v, { decimals: 2 })} ${u}` : format.fmtNumber(v)
               return name ? `${name}: ${val}` : val
             },
           },
@@ -129,7 +166,7 @@ function initChart() {
           ? {
               type:  'category',
               ticks: { color: '#6b7280', maxTicksLimit: 8, maxRotation: 0 },
-              grid:  { color: '#1f2937' },
+              grid:  { color: gridColor() },
             }
           : {
               type:  'linear',
@@ -139,13 +176,13 @@ function initChart() {
                 maxRotation:   0,
                 callback: (ms) => ms == null ? '' : fmtMs(Number(ms)),
               },
-              grid: { color: '#1f2937' },
+              grid: { color: gridColor() },
             },
         y: {
           type:     'linear',
           position: 'left',
           ticks:    { color: '#6b7280' },
-          grid:     { color: '#1f2937' },
+          grid:     { color: gridColor() },
           title:    { display: false, text: '', color: '#6b7280', font: { size: 11 } },
         },
         y1: {
@@ -153,7 +190,7 @@ function initChart() {
           position: 'right',
           display:  false,
           ticks:    { color: '#6b7280' },
-          grid:     { drawOnChartArea: false, color: '#1f2937' },
+          grid:     { drawOnChartArea: false, color: gridColor() },
           title:    { display: false, text: '', color: '#6b7280', font: { size: 11 } },
         },
       },
@@ -191,11 +228,19 @@ async function loadData() {
     units = results.map(r => r[0]?.u ?? '')
   }
 
+  // Während der Abfrage geschlossen (z. B. Seitenwechsel): onUnmounted hat den Chart bereits entfernt
+  if (!chart) return
+
   seriesUnits.value = units
 
   const hasMultiple = defs.length > 1
+  const hasLeft     = defs.some(s => s.axis === 'y')
   const hasRight    = defs.some(s => s.axis === 'y1')
   const isBar       = chartType.value === 'bar'
+  const labels      = defs.map((s, i) => s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''))
+  const hidden      = hiddenSeries.value
+
+  legendItems.value = defs.map((s, i) => ({ key: seriesKey(s.id, i), label: labels[i], color: s.color }))
 
   const leftUnit  = defs.reduce<string>((u, s, i) => u || (s.axis === 'y'  ? (seriesUnits.value[i] ?? '') : ''), '')
   const rightUnit = defs.reduce<string>((u, s, i) => u || (s.axis === 'y1' ? (seriesUnits.value[i] ?? '') : ''), '')
@@ -206,7 +251,8 @@ async function loadData() {
       chart.data.labels = bucketTimestamps.map(fmtMs)
       chart.data.datasets = defs.map((s, i) => ({
         yAxisID:         s.axis,
-        label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+        label:           labels[i],
+        hidden:          hidden.has(seriesKey(s.id, i)),
         data:            weightedValuesByTimestamp(results[i], bucketTimestamps),
         backgroundColor: s.color + 'cc',
         borderWidth:     0,
@@ -232,7 +278,8 @@ async function loadData() {
         })
         return {
           yAxisID:         s.axis,
-          label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+          label:           labels[i],
+          hidden:          hidden.has(seriesKey(s.id, i)),
           data,
           backgroundColor: s.color + 'cc',
           borderWidth:     0,
@@ -244,7 +291,8 @@ async function loadData() {
     chart.data.labels   = undefined
     chart.data.datasets = defs.map((s, i) => ({
       yAxisID:         s.axis,
-      label:           s.label || (hasMultiple ? t('widgets.chart.seriesFallback', { n: i + 1 }) : ''),
+      label:           labels[i],
+      hidden:          hidden.has(seriesKey(s.id, i)),
       data:            results[i].map(d => ({
         x: requestPlan.mode === 'aggregate'
           ? aggregateBucketEndTimestamp(d.ts, requestPlan.interval, fromDate.getTime(), toDate.getTime())
@@ -264,10 +312,12 @@ async function loadData() {
     if (xAxis) { xAxis.min = fromDate.getTime(); xAxis.max = toDate.getTime() }
   }
 
-  // Linke Y-Achse
+  // Linke Y-Achse — wie die rechte nur anzeigen, wenn eine Reihe darauf liegt;
+  // sonst zeichnet Chart.js eine leere Standardskala 0–1 (#1111)
   const yLeft = chart.options.scales?.y as Record<string, unknown> | undefined
   if (yLeft) {
-    yLeft.title = { display: !!leftUnit, text: leftUnit, color: '#6b7280', font: { size: 11 } }
+    yLeft.display = hasLeft
+    yLeft.title   = { display: !!leftUnit, text: leftUnit, color: '#6b7280', font: { size: 11 } }
   }
 
   // Rechte Y-Achse — nur anzeigen wenn mindestens eine Reihe zugewiesen
@@ -277,15 +327,20 @@ async function loadData() {
     yRight.title   = { display: !!rightUnit && hasRight, text: rightUnit, color: '#6b7280', font: { size: 11 } }
   }
 
-  // Legende
-  if (chart.options.plugins) {
-    (chart.options.plugins as Record<string, unknown>).legend = {
-      display: hasMultiple,
-      labels:  { color: '#9ca3af', boxWidth: 12, font: { size: 11 } },
-    }
-  }
-
   chart.update()
+}
+
+function toggleSeries(key: string, index: number) {
+  const next = new Set(hiddenSeries.value)
+  if (!next.delete(key)) next.add(key)
+  hiddenSeries.value = next
+
+  // Nach einem Wechsel des Diagrammtyps ist der neue Chart bis zum Ende von
+  // loadData() noch leer — dann greift der Zustand erst beim Befüllen.
+  const dataset = chart?.data.datasets[index]
+  if (!dataset) return
+  dataset.hidden = next.has(key)
+  chart!.update()
 }
 
 onMounted(() => {
@@ -316,6 +371,22 @@ watch(() => props.config, async (newCfg, oldCfg) => {
   await loadData()
 }, { deep: true })
 watch(selectedTimeRange, loadData)
+// The public display settings load asynchronously from App.vue's onMounted, which
+// Vue runs *after* this child mounted and already built its chart — so the axis
+// locale has to be refreshed once the real regional format arrives (issue #1073).
+watch(() => format.regionFormat, (regionFormat) => {
+  if (!chart) return
+  chart.options.locale = regionFormat
+  chart.update()
+})
+
+watch(() => theme.isDark, () => {
+  if (!chart) return
+  for (const scale of Object.values(chart.options.scales ?? {})) {
+    (scale as { grid: { color: string } }).grid.color = gridColor()
+  }
+  chart.update()
+})
 
 onUnmounted(() => {
   wsOff?.()
@@ -338,6 +409,22 @@ onUnmounted(() => {
         <option v-for="p in TIME_RANGE_PRESETS" :key="p.value" :value="p.value">{{ $t(p.label) }}</option>
       </select>
     </div>
+    <div
+      v-if="!editorMode && legendItems.length > 1"
+      class="flex flex-wrap justify-center gap-x-3 gap-y-0.5 mb-1 text-[11px] leading-4"
+    >
+      <button
+        v-for="(item, i) in legendItems"
+        :key="item.key"
+        type="button"
+        class="chart-legend-item text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+        :class="{ 'opacity-50 line-through': hiddenSeries.has(item.key) }"
+        :style="{ borderBottomColor: item.color }"
+        :aria-pressed="!hiddenSeries.has(item.key)"
+        :title="$t('widgets.chart.toggleSeries')"
+        @click="toggleSeries(item.key, i)"
+      >{{ item.label }}</button>
+    </div>
     <div class="flex-1 min-h-0">
       <canvas v-if="!editorMode" ref="canvas" />
       <div v-else class="flex items-center justify-center h-full text-gray-600 text-sm">
@@ -346,3 +433,10 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.chart-legend-item {
+  border-bottom-width: 2px;
+  border-bottom-style: solid;
+}
+</style>
