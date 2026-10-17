@@ -624,7 +624,7 @@ describe('GenericNode — hems_surplus', () => {
     await flushPromises()
     expect(ids(w, 'target')).toEqual([
       'grid', 'enable', 'target', 'plant_ok',
-      'c_boiler_power', 'c_car_power', 'c_car_max_power', 'c_wash_reset',
+      'c_boiler_enable', 'c_boiler_power', 'c_car_enable', 'c_car_power', 'c_car_max_power', 'c_wash_enable', 'c_wash_reset',
     ])
     expect(ids(w, 'source')).toEqual(['c_boiler', 'c_boiler_status', 'c_car', 'c_car_status', 'c_wash', 'c_wash_status', ...DIAGNOSTICS])
     expect(w.find('.gn-summary').text()).toBe('3 Verbraucher')

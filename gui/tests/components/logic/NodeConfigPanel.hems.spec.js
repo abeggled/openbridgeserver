@@ -83,4 +83,25 @@ describe('NodeConfigPanel hems_surplus debug tab', () => {
     expect(text).not.toContain('c_wuzo62')
     w.unmount()
   })
+
+  it('hands the last-run outputs to the consumer list for the release state', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const { useAuthStore } = await import('@/stores/auth')
+    useAuthStore().user = { id: 'u1', username: 'admin', is_admin: true }
+    const mod = await import('@/components/logic/NodeConfigPanel.vue')
+    const w = mount(mod.default, {
+      props: {
+        node: { id: 'n1', type: 'hems_surplus', data: { consumers: [{ id: 'wuzo62', name: 'Boiler', mode: 'percent' }] } },
+        nodeTypes: [{ type: 'hems_surplus', label: 'hems_surplus', description: '' }],
+        nodeOutputs: {},
+        debugOutputs: { c_wuzo62_status: 'blocked' },
+      },
+      global: { plugins: [pinia] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(w.find('[data-testid="hems-consumer-release-state-0"]').text()).toBe('Gesperrt')
+    w.unmount()
+  })
 })
