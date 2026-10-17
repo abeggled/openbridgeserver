@@ -1392,7 +1392,7 @@ def _build_sniffer(xknx_instance: Any, ga_source_map: dict, adapter: KnxAdapter)
             # _iter_remote_values() returns the correct GAs when
             # Device.__init__ calls xknx.devices.async_add(self).
             self._remote_values = remote_values
-            super().__init__(xknx_instance, "obs_sniffer")
+            super().__init__(xknx_instance, name="obs_sniffer")
 
         def _iter_remote_values(self):  # type: ignore[override]
             return iter(self._remote_values)
