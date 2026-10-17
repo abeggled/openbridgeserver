@@ -2335,8 +2335,12 @@ class LogicManager:
         run = self._run_timer_delay if kind == "timer_delay" else self._run_timer_pulse
         self._timer_tasks[(graph_id, node_id)] = asyncio.create_task(run(graph_id, node_id), name=f"{kind}-{graph_id[:8]}-{node_id[:8]}")
 
-    def _start_timer(self, graph_id: str, node: Any, logic_depth: int) -> bool:
-        """(Re)start a triggered delay or pulse; False when the cascade limit refuses it."""
+    def _start_timer(self, graph_id: str, node: Any, logic_depth: int, triggered_at: float | None = None) -> bool:
+        """(Re)start a triggered delay or pulse; False when the cascade limit refuses it.
+
+        A delay runs from *triggered_at* (the monotonic start of the run that
+        saw the trigger) when given: a slow action of that run is no part of it.
+        """
         # The runs it causes count one more step — a pulse's start at once, a
         # short timer's firing or end too (_timer_run_depth) — and no sheet runs
         # at the limit (see _on_value_event).
@@ -2352,7 +2356,7 @@ class LogicManager:
         if node.type == "timer_delay":
             # Starts over: a waiting task sleeps on to the new deadline, and one
             # busy firing fires again for it afterwards.
-            state.deadline = monotonic() + self._timer_duration(node)
+            state.deadline = (monotonic() if triggered_at is None else triggered_at) + self._timer_duration(node)
         else:
             if state.deadline is None:
                 state.need_on = True
@@ -2379,6 +2383,7 @@ class LogicManager:
             hyst = self._hysteresis.get(graph_id)
             if not hyst:
                 continue
+            restored_high: list[Any] = []
             for node in flow.nodes:
                 saved = hyst.pop(node.id, None) if node.type in TIMER_NODE_TYPES else None
                 if isinstance(saved, dict) and node.data.get("persist_state") is False:
@@ -2394,6 +2399,8 @@ class LogicManager:
                     continue
                 state = self._timer_state(graph_id, node.id, node.type)
                 state.prev_trigger = saved.get("timer_prev_trigger") is True
+                if state.prev_trigger:
+                    restored_high.append(node)
                 if "timer_deadline" in saved:
                     # At most one configured duration ahead: a wall clock that
                     # jumped (a host without RTC before NTP) must not hold it for years.
@@ -2403,6 +2410,72 @@ class LogicManager:
                     except (TypeError, ValueError, OverflowError):
                         state.deadline = now_mono
                     state.need_on = saved.get("pulse_need_on") is True
+            if restored_high:
+                # The input may have fallen while the server was down: a level
+                # still taken as high would swallow its next rise.
+                lows = self._triggers_low_now(graph_id, flow, {node.id for node in restored_high})
+                for node in restored_high:
+                    if node.id in lows:
+                        self._set_timer_level(graph_id, node, False)
+
+    def _triggers_low_now(self, graph_id: str, flow: FlowData, node_ids: set[str]) -> set[str]:
+        """The timer blocks among *node_ids* whose trigger is definitely low as the registry now stands.
+
+        A side-effect-free pass like initialize_graph's: a trigger behind a Read
+        Object without a value, a block excluded from initialization (actions,
+        timers, memory, ...), an edge detector or a "changed" pulse has no
+        level here, so its restored one stays.
+        """
+        seeds: dict[str, dict[str, Any]] = {}
+        unknown: set[str] = set()
+        for node in flow.nodes:
+            if node.type in _INIT_EXCLUDED_NODE_TYPES or node.type == "edge_detect":
+                unknown.add(node.id)
+            if node.type != "datapoint_read":
+                continue
+            value_state = None
+            try:
+                value_state = self._registry.get_value(uuid.UUID(node.data.get("datapoint_id") or ""))
+            except (ValueError, TypeError, AttributeError):
+                pass
+            if value_state is not None and value_state.value is not None:
+                seeds[node.id] = {"value": value_state.value, "changed": False}
+            else:
+                unknown.add(node.id)
+        effective = list({(edge.target, edge.targetHandle or "in"): edge for edge in flow.edges}.values())
+        unknown.update(edge.target for edge in effective if edge.sourceHandle == "changed" and edge.target not in node_ids)
+        unknown = _downstream_closure(unknown, effective)
+        sources = {
+            edge.target: (edge.source, edge.sourceHandle or "out")
+            for edge in effective
+            if edge.target in node_ids and (edge.targetHandle or "in") == "trigger" and edge.source not in unknown and edge.sourceHandle != "changed"
+        }
+        if not sources:
+            return set()
+        probe = flow.model_copy(deep=True)
+        for node in probe.nodes:
+            if node.type in _INIT_EXCLUDED_NODE_TYPES:
+                node.type = "missing_node"
+        boundary_ids = {node.id for node in flow.nodes if node.type in TICK_BOUNDARY_NODE_TYPES}
+        probe.edges = [edge for edge in probe.edges if edge.target not in boundary_ids]
+        try:
+            outputs = GraphExecutor(
+                probe,
+                _safe_deepcopy_state(self._hysteresis.get(graph_id, {})),
+                self._app_config,
+                retained_boundary_handles={node.id: {"out"} for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES},
+                datapoint_lookup=self._datapoint_value_lookup,
+            ).execute(seeds, commit_memory=False)
+        except Exception:
+            logger.warning("Graph %s: could not evaluate restored timer triggers", graph_id[:8], exc_info=True)
+            return set()
+        lows: set[str] = set()
+        for node_id, (source_id, handle) in sources.items():
+            source_out = outputs.get(source_id, {})
+            value = GraphExecutor._get_output_value(source_out, handle)
+            if "__error__" not in source_out and value is not None and not GraphExecutor._to_bool(value):
+                lows.add(node_id)
+        return lows
 
     def _timer_states_to_persist(self, graph_id: str, node_ids: set[str] | None) -> dict[str, dict[str, Any]]:
         """Timer state of a sheet as node state; *node_ids* limits it to persisted nodes."""
@@ -4046,6 +4119,7 @@ class LogicManager:
         active_pulses = self._active_pulses(graph_id)
         timer_epoch = self._timer_epochs.setdefault(graph_id, object())
         timer_run_seq = next(self._timer_run_seqs)
+        run_started_at = monotonic()
         ical_generation = self._ical_cache_generations.setdefault(graph_id, object())
         ical_result_cache = self._ical_result_caches.setdefault(graph_id, {})
         # Event-driven executions still evaluate the full graph so unrelated
@@ -8365,7 +8439,7 @@ class LogicManager:
             if self._timers.get(graph_id, {}).get(node.id) is not timer or timer.level_changes != changes:
                 continue  # a newer run that finished first recorded another level (e.g. the fall that followed)
             if (current := self._current_timer_node(graph_id, node)) is not None:
-                self._start_timer(graph_id, current, logic_depth)
+                self._start_timer(graph_id, current, logic_depth, triggered_at=run_started_at)
 
         for node in flow.nodes:
             if node.type == "gate":

@@ -3820,3 +3820,130 @@ def test_an_opted_out_timer_row_is_cleared_before_persistence_is_re_enabled() ->
         assert "delay" not in saved
 
     asyncio.run(exercise())
+
+
+def test_a_delay_runs_from_its_trigger_not_from_the_end_of_a_slow_run() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source = uuid.uuid4()
+        flow = _slow_action_flow(source, "timer_delay", "const")
+        flow.nodes[1].data["delay_s"] = 0.1
+        manager._graphs["graph"] = ("Graph", True, flow)
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_ping(*_args: object) -> tuple[bool, float]:
+            entered.set()
+            await release.wait()
+            return True, 1.0
+
+        with patch("obs.logic.manager._ping_host", side_effect=slow_ping):
+            run = asyncio.create_task(manager._on_value_event(_value_event(source, True)))
+            await entered.wait()
+            await asyncio.sleep(0.15)
+            release.set()
+            await run
+
+        deadline = manager._timers["graph"]["timer"].deadline
+        assert deadline is None or deadline <= monotonic()  # due (or fired) already
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def _restored_flow() -> FlowData:
+    """Three Delays behind Read Object → compare (> 0): one directly, one behind
+    a "changed" pulse, one behind a Read Object without a value."""
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(uuid.uuid4())}),
+                node("unset", "datapoint_read", {"datapoint_id": str(uuid.uuid4())}),
+                node("cmp", "compare", {"operator": ">", "operand": 0}),
+                node("delay", "timer_delay", {"delay_s": 60}),
+                node("pulsed", "timer_delay", {"delay_s": 60}),
+                node("unknown", "timer_delay", {"delay_s": 60}),
+            ],
+            "edges": [
+                edge("read", "cmp", "value", "in1"),
+                edge("cmp", "delay", "out", "trigger"),
+                edge("read", "pulsed", "changed", "trigger"),
+                edge("unset", "unknown", "value", "trigger"),
+            ],
+        },
+    )
+
+
+def _restore(manager: LogicManager, flow: FlowData, value: object, saved: dict[str, dict]) -> None:
+    read_dp = uuid.UUID(flow.nodes[0].data["datapoint_id"])
+    manager._registry.get_value.side_effect = lambda dp: SimpleNamespace(value=value if dp == read_dp else None, ts=None)
+    manager._graphs = {"graph": ("Graph", True, flow)}
+    manager._hysteresis = {"graph": saved}
+    manager._adopt_persisted_timer_state()
+
+
+def test_a_restored_high_level_whose_input_fell_meanwhile_is_taken_back() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        flow = _restored_flow()
+        high = {"timer_prev_trigger": True}
+        _restore(manager, flow, 0, {"delay": dict(high), "pulsed": dict(high), "unknown": dict(high)})
+
+        assert set(manager._timers["graph"]) == {"pulsed", "unknown"}  # no level here: kept
+        assert "graph" in manager._timer_dirty
+        await manager._execute_graph("graph", "Graph", flow, {"read": {"value": 1, "changed": False}})
+        assert manager._timers["graph"]["delay"].deadline is not None  # its rise counts
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def test_a_restored_high_level_whose_input_is_still_high_stays() -> None:
+    manager = _manager()
+    _restore(manager, _restored_flow(), 5, {"delay": {"timer_prev_trigger": True}})
+
+    assert manager._timers["graph"]["delay"].prev_trigger is True
+
+
+def test_a_restored_pending_delay_whose_input_fell_keeps_its_deadline() -> None:
+    manager = _manager()
+    deadline = datetime.now(UTC).timestamp() + 30
+    _restore(manager, _restored_flow(), 0, {"delay": {"timer_prev_trigger": True, "timer_deadline": deadline, "pulse_need_on": False}})
+
+    state = manager._timers["graph"]["delay"]
+    assert state.prev_trigger is False and state.deadline is not None
+
+
+def test_a_restored_level_without_a_known_input_stays() -> None:
+    manager = _manager()
+    _restore(manager, _restored_flow(), None, {"delay": {"timer_prev_trigger": True}})
+
+    assert manager._timers["graph"]["delay"].prev_trigger is True
+
+
+def test_a_restored_level_stays_when_its_input_cannot_be_evaluated(caplog: pytest.LogCaptureFixture) -> None:
+    manager = _manager()
+    with patch.object(GraphExecutor, "execute", side_effect=RuntimeError("boom")), caplog.at_level(logging.WARNING, logger="obs.logic.manager"):
+        _restore(manager, _restored_flow(), 0, {"delay": {"timer_prev_trigger": True}})
+
+    assert manager._timers["graph"]["delay"].prev_trigger is True
+    assert any("restored timer triggers" in record.message for record in caplog.records)
+
+
+def test_a_restored_level_behind_a_failed_block_stays() -> None:
+    manager = _manager()
+    with patch.object(GraphExecutor, "execute", return_value={"cmp": {"out": False, "__error__": "boom"}}):
+        _restore(manager, _restored_flow(), 0, {"delay": {"timer_prev_trigger": True}})
+
+    assert manager._timers["graph"]["delay"].prev_trigger is True
+
+
+def test_a_restored_level_of_a_read_object_with_an_invalid_id_stays() -> None:
+    manager = _manager()
+    flow = _restored_flow()
+    flow.nodes[0].data["datapoint_id"] = "not-a-uuid"
+    manager._registry.get_value.side_effect = ValueError
+    manager._graphs = {"graph": ("Graph", True, flow)}
+    manager._hysteresis = {"graph": {"delay": {"timer_prev_trigger": True}}}
+    manager._adopt_persisted_timer_state()
+
+    assert manager._timers["graph"]["delay"].prev_trigger is True
