@@ -12,6 +12,7 @@ import asyncio
 import base64
 import copy
 import email.utils
+import hashlib
 import html
 import http.cookies
 import ipaddress
@@ -95,6 +96,9 @@ class _TimerState:
     errors: int = 0
     # The deadline a failed delay run was re-armed with: a save keeps that pause.
     retry_at: float | None = None
+    # What feeds the trigger when the level was recorded (see
+    # _timer_trigger_signature): a level seen on another input is no baseline.
+    trigger_sig: str | None = None
     # Set when the deadline moves, so a task sleeping on it re-reads it.
     wake: asyncio.Event = field(default_factory=asyncio.Event, compare=False, repr=False)
 
@@ -1807,6 +1811,11 @@ class LogicManager:
         self._timers: dict[str, dict[str, _TimerState]] = {}
         # Sheets whose timer state changed since it was last persisted.
         self._timer_dirty: set[str] = set()
+        # Per sheet and timer block, the sequence number of the run that last
+        # recorded its trigger level: an older run finishing later does not
+        # overwrite it (runs overlap while one waits on an action).
+        self._timer_run_seqs = itertools.count(1)
+        self._timer_level_seqs: dict[str, dict[str, int]] = {}
         # Replaced when a sheet's timers are forgotten (reset) and dropped when
         # the sheet is deleted, so a run still in flight does not bring them back.
         self._timer_epochs: dict[str, object] = {}
@@ -1913,7 +1922,9 @@ class LogicManager:
             self._prune_graph_executor_lock(graph_id)
         for graph_id in set(self._hysteresis) - live_graph_ids:
             self._hysteresis.pop(graph_id, None)
-        for graph_id in (set(self._timers) | set(self._timer_epochs) | self._timers_adopted | self._timer_dirty) - live_graph_ids:
+        for graph_id in (
+            set(self._timers) | set(self._timer_epochs) | set(self._timer_level_seqs) | self._timers_adopted | self._timer_dirty
+        ) - live_graph_ids:
             self._forget_timers(graph_id)  # e.g. a bulk delete or restore
             self._timer_epochs.pop(graph_id, None)
         for key in [key for key in self._ical_fetch_locks if key[0] not in live_graph_ids]:
@@ -2236,8 +2247,35 @@ class LogicManager:
             node_id for node_id, timer in self._timers.get(graph_id, {}).items() if timer.kind == "timer_pulse" and timer.deadline is not None
         )
 
-    def _set_timer_level(self, graph_id: str, node: Any, level: bool) -> None:
-        """Record a block's trigger level.
+    @staticmethod
+    def _timer_trigger_signature(flow: FlowData, node_id: str) -> str:
+        """What feeds a timer block's trigger: its edge and everything upstream of it."""
+        # The last edge into a handle is the effective one (GraphExecutor._build_edge_map).
+        effective: dict[tuple[str, str], Any] = {}
+        for edge in flow.edges:
+            effective[(edge.target, edge.targetHandle or "in")] = edge
+        incoming: dict[str, list[Any]] = {}
+        for (target, _handle), edge in effective.items():
+            incoming.setdefault(target, []).append(edge)
+        nodes_by_id = {node.id: node for node in flow.nodes}
+        parts: list[str] = []
+        seen: set[str] = set()
+        frontier = [edge for edge in (effective.get((node_id, "trigger")),) if edge is not None]
+        while frontier:
+            edge = frontier.pop()
+            parts.append(json.dumps(["edge", edge.source, edge.sourceHandle, edge.target, edge.targetHandle]))
+            if edge.source in seen or edge.source == node_id:
+                continue
+            seen.add(edge.source)
+            source = nodes_by_id.get(edge.source)
+            parts.append(
+                json.dumps(["node", edge.source, source.type, source.data] if source else ["node", edge.source], sort_keys=True, default=str)
+            )
+            frontier.extend(incoming.get(edge.source, ()))
+        return hashlib.sha256("\n".join(sorted(parts)).encode()).hexdigest()
+
+    def _set_timer_level(self, graph_id: str, node: Any, level: bool, trigger_sig: str | None = None) -> None:
+        """Record a block's trigger level (seen on the input *trigger_sig* describes).
 
         A low level of an idle block needs no state, so a sheet whose timers
         are all idle and low has nothing to keep.
@@ -2248,6 +2286,8 @@ class LogicManager:
             if not level:
                 return
             timer = self._timer_state(graph_id, node.id, node.type)
+        if trigger_sig is not None:
+            timer.trigger_sig = trigger_sig
         # A rise needs no write of its own: it starts the timer, which persists
         # it. A fall is persisted, or a restart would take the input as still
         # high and miss its next rise.
@@ -2284,6 +2324,7 @@ class LogicManager:
         """Cancel and drop every timer of a sheet (deleted or reset)."""
         self._cancel_timer_tasks(graph_id)
         self._timers.pop(graph_id, None)
+        self._timer_level_seqs.pop(graph_id, None)
         self._timers_adopted.discard(graph_id)
         self._timer_dirty.discard(graph_id)
         self._timer_epochs[graph_id] = object()
@@ -2340,6 +2381,10 @@ class LogicManager:
                 continue
             for node in flow.nodes:
                 saved = hyst.pop(node.id, None) if node.type in TIMER_NODE_TYPES else None
+                if isinstance(saved, dict) and node.data.get("persist_state") is False:
+                    # A row left from before the opt-out: rewritten without it,
+                    # or re-enabling persistence later would revive it.
+                    self._timer_dirty.add(graph_id)
                 if (
                     not adopting
                     or not isinstance(saved, dict)
@@ -2387,6 +2432,15 @@ class LogicManager:
                     self._timer_dirty.add(graph_id)
                     self._cancel_timer_task(key)
                     continue
+                trigger_sig = self._timer_trigger_signature(entry[2], node_id)  # type: ignore[index]
+                if state.trigger_sig != trigger_sig:
+                    if state.trigger_sig is not None and state.prev_trigger:
+                        # A save rewired the trigger: the old input's level is no
+                        # baseline for the new one, whose first rise must count.
+                        state.prev_trigger = False
+                        state.level_changes += 1
+                        self._timer_dirty.add(graph_id)
+                    state.trigger_sig = trigger_sig
                 if not enabled:
                     if state.kind == "timer_delay":
                         self._cancel_timer_task(key)
@@ -2436,6 +2490,11 @@ class LogicManager:
         if logic_depth >= _MAX_LOGIC_CASCADE_DEPTH:
             # E.g. a save shortened a pending delay below _TIMER_NEW_CASCADE_S.
             logger.warning("Logic cascade depth limit reached: timer run graph=%s node=%s skipped", graph_id[:8], node_id[:8])
+            # No run persists what its timer changed (e.g. a delay cleared as
+            # done): a restart must not fire it again at depth zero.
+            self._timer_dirty.add(graph_id)
+            if graph_id in self._graphs:
+                await self._persist_node_state(graph_id)
             return "ran"
         await self._wait_for_timer_run(key)
         entry = self._graphs.get(graph_id)
@@ -3986,6 +4045,7 @@ class LogicManager:
         # One level per pulse for every pass of this run.
         active_pulses = self._active_pulses(graph_id)
         timer_epoch = self._timer_epochs.setdefault(graph_id, object())
+        timer_run_seq = next(self._timer_run_seqs)
         ical_generation = self._ical_cache_generations.setdefault(graph_id, object())
         ical_result_cache = self._ical_result_caches.setdefault(graph_id, {})
         # Event-driven executions still evaluate the full graph so unrelated
@@ -8220,6 +8280,13 @@ class LogicManager:
                 continue
             if self._current_timer_node(graph_id, node) is None:
                 continue  # a save removed the block meanwhile: a level kept for it would greet its re-adding
+            level_seqs = self._timer_level_seqs.setdefault(graph_id, {})
+            if level_seqs.get(node.id, 0) > timer_run_seq:
+                continue  # a newer run that finished first recorded the newer level
+            trigger_sig = self._timer_trigger_signature(flow, node.id)
+            current_entry = self._graphs.get(graph_id)
+            if current_entry is not None and current_entry[2] is not flow and self._timer_trigger_signature(current_entry[2], node.id) != trigger_sig:
+                continue  # a save rewired the trigger meanwhile: this run saw the old input
             # The level is kept beyond _node_state (and persisted): a trigger
             # still high after a save or restart is no new rising edge. It is
             # recorded now, in the order the runs saw it.
@@ -8236,9 +8303,11 @@ class LogicManager:
             if "__error__" in outputs[node.id] or trigger_level is None:
                 continue  # no level this run: a failed producer or nothing arrived is no falling edge
             timer = self._timers.get(graph_id, {}).get(node.id)
-            was_triggered = timer.prev_trigger if timer is not None and timer.kind == node.type else False
+            same_input = timer is not None and timer.kind == node.type and timer.trigger_sig in (None, trigger_sig)
+            was_triggered = timer.prev_trigger if same_input else False  # type: ignore[union-attr]
             triggered = GraphExecutor._to_bool(trigger_level)
-            self._set_timer_level(graph_id, node, triggered)
+            level_seqs[node.id] = timer_run_seq
+            self._set_timer_level(graph_id, node, triggered, trigger_sig)
             # A TRUE telegram a Read Object wired straight to the trigger received
             # in this run counts again, e.g. a motion detector repeating "1"
             # while someone is there — not every reading behind a condition.
@@ -8275,7 +8344,8 @@ class LogicManager:
             # a later run recorded another), so the edge is seen again.
             for node, was_triggered, triggered, _timer, _changes in pending_delays:
                 timer = self._timers.get(graph_id, {}).get(node.id)
-                if timer is not None and timer.kind == node.type and timer.prev_trigger == triggered:
+                recorded_by_this_run = self._timer_level_seqs.get(graph_id, {}).get(node.id) == timer_run_seq
+                if timer is not None and timer.kind == node.type and timer.prev_trigger == triggered and recorded_by_this_run:
                     self._set_timer_level(graph_id, node, was_triggered)
             raise
 

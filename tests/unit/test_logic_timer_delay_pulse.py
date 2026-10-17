@@ -1408,12 +1408,14 @@ def test_a_run_failing_in_its_writes_takes_the_delay_level_back() -> None:
                     node("level", "const_value", {"value": "true", "data_type": "bool"}),
                     node("delay", "timer_delay", {"delay_s": 60}),
                     node("other", "timer_delay", {"delay_s": 60}),
+                    node("newer", "timer_delay", {"delay_s": 60}),
                     node("value", "const_value", {"value": "7", "data_type": "number"}),
                     node("write", "datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
                 ],
                 "edges": [
                     edge("level", "delay", "value", "trigger"),
                     edge("level", "other", "value", "trigger"),
+                    edge("level", "newer", "value", "trigger"),
                     edge("value", "write", "value", "value"),
                 ],
             },
@@ -1422,6 +1424,7 @@ def test_a_run_failing_in_its_writes_takes_the_delay_level_back() -> None:
 
         async def publish(_event: object) -> None:
             manager._timers["graph"]["other"].prev_trigger = False  # a later run saw it low
+            manager._timer_level_seqs["graph"]["newer"] += 1  # a later run saw it high too
             raise asyncio.CancelledError
 
         manager._event_bus.publish = AsyncMock(side_effect=publish)
@@ -1429,8 +1432,9 @@ def test_a_run_failing_in_its_writes_takes_the_delay_level_back() -> None:
             await manager._execute_graph("graph", "Graph", flow, {})
 
         assert manager._timer_tasks == {}
-        assert set(manager._timers["graph"]) == {"other"}  # "delay" back to low: no state needed
+        assert set(manager._timers["graph"]) == {"other", "newer"}  # "delay" back to low: no state needed
         assert manager._timers["graph"]["other"].prev_trigger is False
+        assert manager._timers["graph"]["newer"].prev_trigger is True  # the later run's level stays
 
     asyncio.run(exercise())
 
@@ -3557,5 +3561,262 @@ def test_a_run_records_no_level_for_a_delay_a_save_removed_meanwhile() -> None:
         await manager._execute_graph("graph", "Graph", flow, {})
         assert ("graph", "delay") in manager._timer_tasks
         manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def _value_event(source: uuid.UUID, value: object, depth: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(datapoint_id=source, value=value, logic_depth=depth, initialization=False, suppress_action_triggers=False)
+
+
+def _slow_action_flow(source: uuid.UUID, kind: str, action_trigger: str) -> FlowData:
+    """Read Object → timer, beside a host check whose trigger comes from *action_trigger*."""
+    config = {"delay_s": 60} if kind == "timer_delay" else {"duration_s": 60}
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(source)}),
+                node("timer", kind, config),
+                node("const", "const_value", {"value": "true", "data_type": "bool"}),
+                node("ping", "host_check", {"host": "example.com"}),
+            ],
+            "edges": [edge("read", "timer", "value", "trigger"), edge(action_trigger, "ping", "value", "trigger")],
+        },
+    )
+
+
+async def _overlapping_runs(manager: LogicManager, source: uuid.UUID, older: bool, newer: bool) -> None:
+    """The older event's run waits on its host check while the newer one completes."""
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def slow_ping(*_args: object) -> tuple[bool, float]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return True, 1.0
+
+    with patch("obs.logic.manager._ping_host", side_effect=slow_ping):
+        old = asyncio.create_task(manager._on_value_event(_value_event(source, older)))
+        await entered.wait()
+        await manager._on_value_event(_value_event(source, newer))
+        release.set()
+        await old
+
+
+def test_a_slower_true_run_starts_no_pulse_after_a_newer_run_saw_the_fall() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source = uuid.uuid4()
+        manager._graphs["graph"] = ("Graph", True, _slow_action_flow(source, "timer_pulse", "read"))
+
+        await _overlapping_runs(manager, source, older=True, newer=False)
+
+        assert manager._timers.get("graph", {}).get("timer") is None
+        assert manager._timer_tasks == {}
+
+    asyncio.run(exercise())
+
+
+def test_a_slower_false_run_keeps_the_newer_runs_high_level() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source = uuid.uuid4()
+        manager._graphs["graph"] = ("Graph", True, _slow_action_flow(source, "timer_delay", "const"))
+
+        await _overlapping_runs(manager, source, older=False, newer=True)
+
+        state = manager._timers["graph"]["timer"]
+        assert state.prev_trigger is True and state.deadline is not None
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def _compare_flow(source: uuid.UUID) -> FlowData:
+    """Read Object → compare (> 0) → Delay trigger."""
+    return FlowData.model_validate(
+        {
+            "nodes": [
+                node("read", "datapoint_read", {"datapoint_id": str(source)}),
+                node("cmp", "compare", {"operator": ">", "operand": 0}),
+                node("delay", "timer_delay", {"delay_s": 60}),
+            ],
+            "edges": [edge("read", "cmp", "value", "in1"), edge("cmp", "delay", "out", "trigger")],
+        },
+    )
+
+
+@pytest.mark.parametrize("old_level", [True, False])
+def test_rewiring_a_timers_trigger_resets_its_edge_state(old_level: bool) -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        values: dict[uuid.UUID, object] = {}
+        manager._registry.get_value.side_effect = lambda dp: SimpleNamespace(value=values.get(dp), ts=None)
+        old_source, new_source = uuid.uuid4(), uuid.uuid4()
+        manager._graphs["graph"] = ("Graph", True, _compare_flow(old_source))
+        values[old_source] = 1
+        await manager._on_value_event(_value_event(old_source, 1))
+        state = manager._timers["graph"]["delay"]
+        before = state.deadline
+        if not old_level:
+            values[old_source] = 0
+            await manager._on_value_event(_value_event(old_source, 0))
+            assert state.prev_trigger is False
+        values[new_source] = 0
+        rewired = _compare_flow(new_source)
+
+        async def load_graphs() -> None:
+            manager._graphs = {"graph": ("Graph", True, rewired)}
+
+        manager._load_graphs = load_graphs  # type: ignore[method-assign]
+        await manager.reinitialize_graph("graph")
+        assert state.prev_trigger is False
+        await asyncio.sleep(0.02)
+        values[new_source] = 1
+        await manager._on_value_event(_value_event(new_source, 1))
+
+        assert manager._timers["graph"]["delay"].deadline > before + 0.01  # the first rise restarts it
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def test_a_run_on_the_old_wiring_records_no_level_after_a_save_rewired_the_trigger() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        old_flow, new_flow = _compare_flow(uuid.uuid4()), _compare_flow(uuid.uuid4())
+        manager._graphs["graph"] = ("Graph", True, new_flow)
+
+        await manager._execute_graph("graph", "Graph", old_flow, {"read": {"value": 1, "changed": True}})
+
+        assert manager._timers == {}
+        assert manager._timer_tasks == {}
+
+    asyncio.run(exercise())
+
+
+def test_a_run_on_a_replaced_sheet_with_the_same_wiring_still_records_its_level() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source = uuid.uuid4()
+        old_flow, new_flow = _compare_flow(source), _compare_flow(source)
+        manager._graphs["graph"] = ("Graph", True, new_flow)
+
+        await manager._execute_graph("graph", "Graph", old_flow, {"read": {"value": 1, "changed": True}})
+
+        assert manager._timers["graph"]["delay"].prev_trigger is True
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def test_a_level_recorded_on_another_input_is_no_baseline() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        flow = _compare_flow(uuid.uuid4())
+        manager._graphs["graph"] = ("Graph", True, flow)
+        manager._timers["graph"] = {"delay": _TimerState("timer_delay", prev_trigger=True, trigger_sig="another input")}
+
+        await manager._execute_graph("graph", "Graph", flow, {"read": {"value": 1, "changed": True}})
+
+        state = manager._timers["graph"]["delay"]
+        assert state.deadline is not None  # a rise, not a level still high
+        assert state.trigger_sig == LogicManager._timer_trigger_signature(flow, "delay")
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())
+
+
+def test_the_trigger_signature_follows_what_feeds_the_trigger() -> None:
+    def signature(edges: list[dict], read_dp: str = "a") -> str:
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("read", "datapoint_read", {"datapoint_id": read_dp}),
+                    node("other", "datapoint_read", {"datapoint_id": "b"}),
+                    node("delay", "timer_delay", {"delay_s": 60}),
+                ],
+                "edges": edges,
+            },
+        )
+        return LogicManager._timer_trigger_signature(flow, "delay")
+
+    direct = [edge("read", "delay", "value", "trigger")]
+    assert signature([]) == signature([edge("read", "delay", "value", "reset")])  # nothing on the trigger
+    assert signature(direct) == signature(direct + [edge("other", "delay", "value", "reset")])
+    assert signature(direct) != signature(direct, read_dp="c")
+    assert signature(direct) != signature([edge("other", "delay", "value", "trigger")])
+    # A feedback loop through the block itself, and an edge from a block that is gone.
+    assert signature([edge("delay", "read", "trigger", "in"), *direct])
+    assert signature([edge("missing", "delay", "value", "trigger")]) != signature([])
+
+
+def _stop_after_load(manager: LogicManager, flow: FlowData) -> None:
+    async def load_graphs() -> None:
+        manager._graphs = {"graph": ("Graph", True, flow)}
+
+    manager._load_graphs = load_graphs  # type: ignore[method-assign]
+
+
+def test_a_cascade_limited_timer_run_persists_its_completion() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source = uuid.uuid4()
+        flow = FlowData.model_validate(
+            {
+                "nodes": [
+                    node("read", "datapoint_read", {"datapoint_id": str(source)}),
+                    node("delay", "timer_delay", {"delay_s": 60}),
+                ],
+                "edges": [edge("read", "delay", "value", "trigger")],
+            },
+        )
+        manager._graphs["graph"] = ("Graph", True, flow)
+        await manager._on_value_event(_value_event(source, True, depth=9))
+        flow.nodes[1].data["delay_s"] = 0.01  # a save shortens it below a new cascade
+        _stop_after_load(manager, flow)
+        await manager.reload()
+        await manager._timer_tasks[("graph", "delay")]
+
+        saved = json.loads(manager._db.execute_and_commit.await_args.args[1][0])["state"]["delay"]
+        assert manager._timers["graph"]["delay"].deadline is None
+        assert "timer_deadline" not in saved
+        assert "graph" not in manager._timer_dirty
+
+    asyncio.run(exercise())
+
+
+def test_a_cascade_limited_timer_run_of_an_unloaded_sheet_keeps_its_mark() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+
+        assert await manager._run_timer_graph("graph", "delay", "timer_delay", {}, 10) == "ran"
+
+        assert "graph" in manager._timer_dirty
+        manager._db.execute_and_commit.assert_not_awaited()
+
+    asyncio.run(exercise())
+
+
+def test_an_opted_out_timer_row_is_cleared_before_persistence_is_re_enabled() -> None:
+    def flow(persist: bool) -> FlowData:
+        return FlowData.model_validate({"nodes": [node("delay", "timer_delay", {"delay_s": 60, "persist_state": persist})], "edges": []})
+
+    async def exercise() -> None:
+        stale = {"timer_prev_trigger": True, "timer_deadline": datetime.now(UTC).timestamp() + 3600, "pulse_need_on": False}
+        manager = _manager()
+        manager._graphs = {"graph": ("Graph", True, flow(False))}
+        manager._hysteresis = {"graph": {"delay": dict(stale)}}
+
+        manager._adopt_persisted_timer_state()
+        assert manager._timers == {}
+        assert "graph" in manager._timer_dirty
+        await manager._persist_dirty_timers()
+
+        saved = json.loads(manager._db.execute_and_commit.await_args.args[1][0])["state"]
+        assert "delay" not in saved
 
     asyncio.run(exercise())
