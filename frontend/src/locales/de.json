@@ -473,7 +473,14 @@
       "editorPlaceholder": "Verlaufs-Chart",
       "seriesFallback": "Serie {n}",
       "primaryLabel": "Bezeichnung (optional)",
-      "labelPlaceholder": "z.B. Temperaturverlauf"
+      "labelPlaceholder": "z.B. Temperaturverlauf",
+      "chartTitle": "Diagrammtitel",
+      "chartType": "Diagrammtyp",
+      "chartTypeLine": "〰 Linie",
+      "chartTypeBar": "▐ Balken",
+      "color": "Farbe",
+      "primaryLabelHint": "Ohne eigene Bezeichnung übernimmt die primäre Reihe den Diagrammtitel.",
+      "toggleSeries": "Reihe ein-/ausblenden"
     },
     "energiefluss": {
       "title": "Energiefluss",
