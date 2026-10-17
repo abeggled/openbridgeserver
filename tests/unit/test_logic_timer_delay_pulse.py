@@ -3748,6 +3748,13 @@ def test_the_trigger_signature_follows_what_feeds_the_trigger() -> None:
     assert signature([]) == signature([edge("read", "delay", "value", "reset")])  # nothing on the trigger
     assert signature(direct) == signature(direct + [edge("other", "delay", "value", "reset")])
     assert signature(direct) != signature(direct, read_dp="c")
+    labelled = FlowData.model_validate(
+        {
+            "nodes": [node("read", "datapoint_read", {"datapoint_id": "a", "label": "Renamed"}), node("delay", "timer_delay", {"delay_s": 60})],
+            "edges": direct,
+        },
+    )
+    assert LogicManager._timer_trigger_signature(labelled, "delay") == signature(direct)  # a rename is cosmetic
     assert signature(direct) != signature([edge("other", "delay", "value", "trigger")])
     # A feedback loop through the block itself, and an edge from a block that is gone.
     assert signature([edge("delay", "read", "trigger", "in"), *direct])
@@ -3947,3 +3954,25 @@ def test_a_restored_level_of_a_read_object_with_an_invalid_id_stays() -> None:
     manager._adopt_persisted_timer_state()
 
     assert manager._timers["graph"]["delay"].prev_trigger is True
+
+
+def test_renaming_a_block_upstream_of_a_held_delay_is_no_new_rise() -> None:
+    async def exercise() -> None:
+        manager = _manager()
+        source, other = uuid.uuid4(), uuid.uuid4()
+        flow = _compare_flow(source)
+        flow.nodes.append(FlowData.model_validate({"nodes": [node("other", "datapoint_read", {"datapoint_id": str(other)})], "edges": []}).nodes[0])
+        manager._graphs["graph"] = ("Graph", True, flow)
+        manager._registry.get_value.side_effect = lambda dp: SimpleNamespace(value=1 if dp == source else 0, ts=None)
+        await manager._on_value_event(_value_event(source, 1))
+        before = manager._timers["graph"]["delay"].deadline
+        renamed = flow.model_copy(deep=True)
+        renamed.nodes[1].data["label"] = "Cosmetic name"
+        manager.update_cached_graph("graph", "Graph", True, renamed)
+        await asyncio.sleep(0.02)
+        await manager._on_value_event(_value_event(other, 0))
+
+        assert manager._timers["graph"]["delay"].deadline == before
+        manager._cancel_timer_tasks()
+
+    asyncio.run(exercise())

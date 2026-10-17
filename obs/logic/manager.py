@@ -2268,9 +2268,9 @@ class LogicManager:
                 continue
             seen.add(edge.source)
             source = nodes_by_id.get(edge.source)
-            parts.append(
-                json.dumps(["node", edge.source, source.type, source.data] if source else ["node", edge.source], sort_keys=True, default=str)
-            )
+            # Without its label: a rename is a layout-only save (update_cached_graph), no new input.
+            data = {key: value for key, value in source.data.items() if key != "label"} if source else None
+            parts.append(json.dumps(["node", edge.source, source.type, data] if source else ["node", edge.source], sort_keys=True, default=str))
             frontier.extend(incoming.get(edge.source, ()))
         return hashlib.sha256("\n".join(sorted(parts)).encode()).hexdigest()
 
