@@ -79,6 +79,28 @@ describe('DataPointDetailView', () => {
     delete useWebSocketStore().liveValues['dp-internal']
   })
 
+  it('shows a system DataPoint as read-only without write form or edit button (#1370)', async () => {
+    const { data } = await apiMocks.dpApi.get()
+    apiMocks.dpApi.get.mockResolvedValue({ data: { ...data, data_type: 'BOOLEAN', system: true } })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dp-system-badge"]').text()).toBe('System')
+    expect(wrapper.find('[data-testid="dp-system-readonly"]').exists()).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === 'true')).toBe(false)
+    expect(wrapper.find('[data-testid="btn-edit-dp"]').exists()).toBe(false)
+  })
+
+  it('offers the edit button and no system badge for ordinary DataPoints', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dp-system-badge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dp-system-readonly"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="btn-edit-dp"]').exists()).toBe(true)
+  })
+
   it('allows writing an internal datapoint without writable adapter bindings', async () => {
     const wrapper = mountView()
     await flushPromises()

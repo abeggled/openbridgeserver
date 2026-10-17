@@ -10,6 +10,7 @@ import pytest
 
 from obs.api.v1 import config as config_api
 from obs.core.registry import DataPointRegistry
+from obs.core.system_datapoints import SYSTEM_DATAPOINTS
 from obs.db.database import Database
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
 
@@ -42,7 +43,8 @@ async def test_registry_persists_and_reloads_datapoint_control_class(db: Databas
     assert updated.control_class == "room_local"
 
     reloaded = _registry(db)
-    assert await reloaded.load_from_db() == 1
+    # The five backend-managed system DataPoints (#1370) are always there too.
+    assert await reloaded.load_from_db() == 1 + len(SYSTEM_DATAPOINTS)
     assert reloaded.get(datapoint.id).control_class == "room_local"
 
 

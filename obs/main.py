@@ -16,14 +16,17 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from obs import __version__
+from obs.core.system_datapoints import SystemDataPointError
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +167,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     db_maintenance_scheduler = init_db_maintenance_scheduler(db=db)
 
+    # 12. Update-Prüfung (#1370) — publiziert Kanal + installierte Version sofort,
+    #     die erste Online-Prüfung folgt mit zufälligem Versatz.
+    from obs.update.service import init_update_service
+
+    update_service = await init_update_service(db, bus, settings.update_check)
+
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",
         registry.count(),
@@ -187,6 +196,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield  # ← application running
 
     # Shutdown (reverse order)
+    await update_service.stop()
     await db_maintenance_scheduler.stop()
     await autobackup_scheduler.stop()
     await logic_mgr.stop()
@@ -288,6 +298,10 @@ async def _stop_optional_ringbuffer() -> None:
         await active_rb.stop()
 
 
+async def _system_datapoint_error_handler(_request: Any, _exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": "System DataPoint is read-only"})
+
+
 def create_app() -> FastAPI:
     from pathlib import Path
 
@@ -311,6 +325,8 @@ def create_app() -> FastAPI:
     # Rate limiter state (used by @limiter.limit decorators in auth.py)
     app.state.limiter = auth_limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # Read-only system DataPoints (#1370): whichever route reaches the registry guard.
+    app.add_exception_handler(SystemDataPointError, _system_datapoint_error_handler)
 
     from fastapi import Request
     from fastapi.responses import JSONResponse, RedirectResponse

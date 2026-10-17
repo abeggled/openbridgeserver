@@ -19,7 +19,7 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -29,6 +29,7 @@ from obs.api.audit import AuditLogWriter, AuditOutcome, audit_payload_sha256, bu
 from obs.api.auth import get_admin_user
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
 from obs.api.v1.bindings import (
+    _ensure_system_datapoint_binding_allowed,
     _ensure_webhook_slug_free,
     _ensure_webhook_target_allowed,
     _json_config,
@@ -38,6 +39,7 @@ from obs.api.v1.bindings import (
 from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
+from obs.core.system_datapoints import SYSTEM_DATAPOINT_IDS, is_system_datapoint
 from obs.datetime_format import DATETIME_SETTING_KEYS, validate_datetime_setting
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_CREATE_CAPABILITY
@@ -50,6 +52,20 @@ from obs.regional_format import REGIONAL_SETTING_KEYS, validate_regional_setting
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["config"])
+
+# Resets keep the backend-managed system DataPoints (#1370); grants on them go like all others.
+_SYSTEM_DP_PARAMS = tuple(sorted(str(dp_id) for dp_id in SYSTEM_DATAPOINT_IDS))
+_NOT_SYSTEM_DP_SQL = f"NOT IN ({', '.join('?' * len(_SYSTEM_DP_PARAMS))})"
+# app_settings keys of the update check, see obs/update/service.py.
+_UPDATE_SETTING_PREFIX = "update."
+
+
+def _forget_user_datapoints(reg: Any) -> None:
+    """Drop the bulk-deleted DataPoints from the registry; the system ones stay live."""
+    for dp_id in [dp_id for dp_id in reg._points if not is_system_datapoint(dp_id)]:
+        del reg._points[dp_id]
+        reg._values.pop(dp_id, None)
+
 
 _EXPORT_VERSION = "5"
 
@@ -492,8 +508,11 @@ async def export_config(
         for r in nav_link_rows
     ]
 
-    # App-Settings (alle außer FA-Key — der wird separat übergeben für Rückwärtskompatibilität)
-    setting_rows = await db.fetchall("SELECT key, value FROM app_settings WHERE key != 'icons.fontawesome_api_key' ORDER BY key")
+    # App-Settings (alle außer FA-Key — der wird separat übergeben für Rückwärtskompatibilität —
+    # und außer dem Update-Kanal und -Status (#1370), die zur jeweiligen Installation gehören)
+    setting_rows = await db.fetchall(
+        f"SELECT key, value FROM app_settings WHERE key != 'icons.fontawesome_api_key' AND key NOT LIKE '{_UPDATE_SETTING_PREFIX}%' ORDER BY key"
+    )
     app_settings = [ExportedAppSetting(key=r["key"], value=r["value"]) for r in setting_rows]
 
     # Hierarchy
@@ -723,6 +742,17 @@ async def import_db(
             reg._values.clear()
             await reg.load_from_db()
 
+        # Update-Kanal und -Status (#1370) gehören zur Installation, nicht zum Backup:
+        # zurückschreiben und die Systemdatenpunkte neu befüllen
+        try:
+            from obs.update.service import get_optional_update_service
+
+            update_service = get_optional_update_service()
+            if update_service is not None:
+                await update_service.keep_after_restore()
+        except Exception:
+            logger.exception("Update status reload after DB restore failed")
+
         # Logic Engine neu starten
         try:
             from obs.logic.manager import get_logic_manager
@@ -800,6 +830,9 @@ async def import_config(
     for dp_data in body.datapoints:
         try:
             dp_id = uuid.UUID(dp_data.id)
+            if is_system_datapoint(dp_id):
+                # Backend-managed (#1370): every installation already has it.
+                continue
             requested_external_write[dp_id] = bool(dp_data.external_write_enabled)
             existing = reg.get(dp_id)
             if existing:
@@ -905,7 +938,7 @@ async def import_config(
         try:
             b_id = b_data.id
             existing_binding = await db.fetchone(
-                "SELECT id, adapter_type, adapter_instance_id, config FROM adapter_bindings WHERE id=?",
+                "SELECT id, datapoint_id, adapter_type, adapter_instance_id, config FROM adapter_bindings WHERE id=?",
                 (b_id,),
             )
             effective_adapter_type = existing_binding["adapter_type"] if existing_binding is not None else b_data.adapter_type
@@ -930,6 +963,9 @@ async def import_config(
                 enabled=b_data.enabled,
                 instance_config=instance_config,
             )
+            # An existing binding keeps its DataPoint (the UPDATE below never moves it).
+            effective_dp_id = existing_binding["datapoint_id"] if existing_binding is not None else b_data.datapoint_id
+            _ensure_system_datapoint_binding_allowed(effective_dp_id, effective_adapter_type, b_data.direction)
             stored_config = b_data.config
             if effective_adapter_type == "WEBHOOK":
                 # Store the config the way the create route would: slug trimmed and
@@ -1239,6 +1275,10 @@ async def import_config(
     # otherwise reach the frontends, where Intl rejects it (issue #1073).
     imported_datetime_settings: dict[str, str] = {}
     for s in body.app_settings:
+        if s.key.startswith(_UPDATE_SETTING_PREFIX):
+            # Installation-specific (#1370): the channel follows the installed
+            # version, the status is a cache. Neither is taken from a backup.
+            continue
         try:
             if s.key in DATETIME_SETTING_KEYS:
                 validate_datetime_setting(s.key, s.value)
@@ -1493,7 +1533,7 @@ async def factory_reset(
     try:
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
         result.bindings_deleted = row["n"] if row else 0
-        row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
+        row = await db.fetchone(f"SELECT COUNT(*) as n FROM datapoints WHERE id {_NOT_SYSTEM_DP_SQL}", _SYSTEM_DP_PARAMS)
         result.datapoints_deleted = row["n"] if row else 0
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_instances")
         result.adapter_instances_deleted = row["n"] if row else 0
@@ -1502,10 +1542,8 @@ async def factory_reset(
             await db.execute("DELETE FROM authz_node_roles WHERE node_type='datapoint'")
             await db.execute("DELETE FROM authz_node_roles WHERE node_type='adapter_instance'")
             await db.execute("DELETE FROM adapter_instances")
-            await db.execute("DELETE FROM datapoints")
-        reg = get_registry()
-        reg._points.clear()
-        reg._values.clear()
+            await db.execute(f"DELETE FROM datapoints WHERE id {_NOT_SYSTEM_DP_SQL}", _SYSTEM_DP_PARAMS)
+        _forget_user_datapoints(get_registry())
     except Exception as exc:
         logger.exception("DataPoints and adapters reset failed")
         result.errors.append(f"DataPoints and adapters reset failed: {exc}")
@@ -1555,9 +1593,10 @@ async def factory_reset(
         logger.exception("Hierarchy reset failed")
         result.errors.append(f"Hierarchy reset failed: {exc}")
 
-    # App-Settings zurücksetzen (Autobackup-Einstellungen behalten, Standard-Timezone wiederherstellen)
+    # App-Settings zurücksetzen (Autobackup-Einstellungen sowie Update-Kanal und -Status (#1370)
+    # behalten — beide gehören zur Installation, nicht zur Konfiguration —, Standard-Timezone wiederherstellen)
     try:
-        await db.execute_and_commit("DELETE FROM app_settings WHERE key NOT LIKE 'autobackup.%'")
+        await db.execute_and_commit(f"DELETE FROM app_settings WHERE key NOT LIKE 'autobackup.%' AND key NOT LIKE '{_UPDATE_SETTING_PREFIX}%'")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('timezone', 'Europe/Zurich')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('date_format', 'dd.MM.yyyy')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('time_format', 'HH:mm:ss')")
@@ -1652,15 +1691,13 @@ async def clear_datapoints(
         await adapter_registry.stop_all()
         row = await db.fetchone("SELECT COUNT(*) as n FROM adapter_bindings")
         result.bindings_deleted = row["n"] if row else 0
-        row = await db.fetchone("SELECT COUNT(*) as n FROM datapoints")
+        row = await db.fetchone(f"SELECT COUNT(*) as n FROM datapoints WHERE id {_NOT_SYSTEM_DP_SQL}", _SYSTEM_DP_PARAMS)
         result.deleted = row["n"] if row else 0
         async with db.transaction():
             await db.execute("DELETE FROM adapter_bindings")
             await db.execute("DELETE FROM authz_node_roles WHERE node_type='datapoint'")
-            await db.execute("DELETE FROM datapoints")
-        reg = get_registry()
-        reg._points.clear()
-        reg._values.clear()
+            await db.execute(f"DELETE FROM datapoints WHERE id {_NOT_SYSTEM_DP_SQL}", _SYSTEM_DP_PARAMS)
+        _forget_user_datapoints(get_registry())
         await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
         logger.exception("DataPoints clear failed")

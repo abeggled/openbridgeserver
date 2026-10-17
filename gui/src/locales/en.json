@@ -235,7 +235,9 @@
       "bindingDisabled": "Disabled",
       "graphDisabled": "Disabled"
     },
-    "allAdapters": "All adapters"
+    "allAdapters": "All adapters",
+    "system": "System",
+    "systemReadOnly": "System DataPoint: managed by OBS and read-only."
   },
   "adapters": {
     "title": "Adapter Instances",
@@ -2948,7 +2950,8 @@
       "icons": "Icons",
       "history": "History DB",
       "security": "Security",
-      "support": "Support"
+      "support": "Support",
+      "updates": "Updates"
     },
     "general": {
       "title": "General settings",
@@ -3809,5 +3812,57 @@
     "unavailable": "No help is available for this section yet.",
     "systemUnavailable": "Help content is currently unavailable on this server.",
     "openInNewTab": "Open in new tab"
+  },
+  "updates": {
+    "title": "Updates",
+    "channel": "Update channel",
+    "channels": {
+      "stable": "Stable",
+      "pre-release": "Pre-release",
+      "nightly": "Nightly"
+    },
+    "channelHints": {
+      "stable": "Reports regular releases only.",
+      "pre-release": "Reports regular releases and release candidates, but no nightlies.",
+      "nightly": "Reports daily nightly builds only – not meant for production use."
+    },
+    "checkNow": "Check now",
+    "actionFailed": "The action failed. Please try again later.",
+    "status": {
+      "installed": "Installed version",
+      "latest": "Latest version",
+      "availability": "Update",
+      "available": "Update available",
+      "upToDate": "Up to date",
+      "unknown": "Unknown",
+      "lastSuccess": "Last successful check",
+      "lastCheck": "Last check attempt",
+      "nextCheck": "Next automatic check",
+      "never": "never",
+      "stale": "The last check failed – the result shown may be out of date.",
+      "disabled": "The online check is disabled in the configuration (update_check.enabled = false)."
+    },
+    "errors": {
+      "network": "The update server could not be reached.",
+      "rate_limited": "GitHub rejected the request because of too many requests.",
+      "http_status": "The update server answered with an error.",
+      "invalid_response": "The update server sent an invalid response.",
+      "internal": "The check failed with an internal error."
+    },
+    "notice": {
+      "title": "New version {version} available",
+      "details": "Channel: {channel} · installed: {installed} · latest: {latest} · checked: {checked}",
+      "releaseNotes": "Release notes",
+      "openSettings": "Details"
+    },
+    "releaseNotes": {
+      "title": "Release notes",
+      "range": "Changes after {installed} up to and including {latest}",
+      "empty": "No release notes available.",
+      "loadError": "The release notes could not be loaded.",
+      "openOnGithub": "Open on GitHub"
+    },
+    "statusLoadError": "The update status could not be loaded.",
+    "retry": "Try again"
   }
 }

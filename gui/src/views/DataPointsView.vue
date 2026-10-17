@@ -290,6 +290,7 @@
               <td>
                 <RouterLink :to="`/datapoints/${dp.id}`" class="font-medium hover:text-blue-400 transition-colors block leading-snug">
                   {{ dp.name }}
+                  <Badge v-if="dp.system" variant="muted" size="xs" :title="$t('datapoints.systemReadOnly')" :data-testid="`dp-system-${dp.id}`">{{ $t('datapoints.system') }}</Badge>
                 </RouterLink>
                 <div v-if="dp.hierarchy_nodes?.length" class="flex flex-wrap gap-1 mt-1">
                   <span
@@ -369,13 +370,14 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.5 6.5l4-4a4.95 4.95 0 017 7l-4 4m-10 4l-4 4a4.95 4.95 0 01-7-7l4-4m5.5 3.5l5-5"/>
                     </svg>
                   </RouterLink>
-                  <button v-if="auth.isAdmin" @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
+                  <!-- System DataPoints (#1370) are backend-managed: no edit, copy or delete -->
+                  <button v-if="auth.isAdmin && !dp.system" @click="openEdit(dp)" class="btn-icon" :title="$t('common.edit')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
                   </button>
                   <button
-                    v-if="auth.isAdmin"
+                    v-if="auth.isAdmin && !dp.system"
                     @click="openDuplicate(dp)"
                     class="btn-icon"
                     :title="$t('datapoints.duplicate.action')"
@@ -385,7 +387,7 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 8h11v11H8zM5 16H4a1 1 0 01-1-1V4a1 1 0 011-1h11a1 1 0 011 1v1"/>
                     </svg>
                   </button>
-                  <button v-if="auth.isAdmin" @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
+                  <button v-if="auth.isAdmin && !dp.system" @click="confirmDelete(dp)" class="btn-icon text-red-400" :title="$t('common.delete')">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                     </svg>

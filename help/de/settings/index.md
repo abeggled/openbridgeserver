@@ -17,6 +17,7 @@ Administratoren.
 | [API Keys](./apikeys) | Schlüssel für den programmatischen Zugriff auf die API |
 | [Sicherheit](./security) | Sicherheitsprüfung und sicherheitsrelevante Ereignisse |
 | [Support](./support) | Diagnosepaket, Debug-Modus und Fernwartungs-Zugang |
+| [Updates](./updates) | Update-Kanal, Update-Prüfung, Release Notes und Systemdatenpunkte |
 | [Links](./links) | Eigene Verknüpfungen in der Seitenleiste |
 | [Hierarchie](./hierarchy) | Baumstrukturen (z. B. Gebäude, Etage, Raum) zur Gruppierung von Objekten und Logiken |
 | [Datenmanagement](./importexport) | Import und Export von Konfiguration, Datenbank und KNX-Projekt |

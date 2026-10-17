@@ -23,6 +23,11 @@
       {{ $t('common.demoMode') }}
     </div>
 
+    <!-- ── Updates (#1370) ── -->
+    <div v-if="activeTab === 'updates'" class="flex flex-col gap-4 max-w-xl" data-testid="updates-tab">
+      <UpdateSettingsPanel />
+    </div>
+
     <!-- ── Allgemein ── -->
     <div v-if="activeTab === 'general'" class="flex flex-col gap-4 max-w-md">
 
@@ -1596,6 +1601,8 @@ import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 import HelpButton     from '@/components/ui/HelpButton.vue'
+import UpdateSettingsPanel from '@/components/updates/UpdateSettingsPanel.vue'
+import { useUpdatesStore } from '@/stores/updates'
 import { formatCurrency, formatNumber } from '@/utils/numberFormat'
 import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/composables/useRegionalFormat'
 
@@ -1796,6 +1803,7 @@ const tabs = computed(() => [
   { id: 'apikeys',      label: t('settings.tabs.apikeys') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'security', label: t('settings.tabs.security') }] : []),
   ...(auth.isAdmin || isDemo.value ? [{ id: 'support', label: t('settings.tabs.support') }] : []),
+  { id: 'updates',      label: t('settings.tabs.updates') },
   { id: 'links',        label: t('settings.tabs.links') },
   { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'importexport', label: t('settings.tabs.importexport') }] : []),
@@ -1807,6 +1815,15 @@ const tabs = computed(() => [
 watch(
   () => tabs.value.map((tab) => tab.id).join('|'),
   () => activateTabFromRoute(),
+)
+
+// The global update notice links here; while this view is already open the
+// URL alone cannot switch tabs (tab clicks do not touch it), so the notice
+// also signals through the store (#1370).
+const updatesStore = useUpdatesStore()
+watch(
+  () => updatesStore.updatesTabRequests,
+  () => { activeTab.value = 'updates' },
 )
 
 // ── URL Target Allowlist ──────────────────────────────────────────────────

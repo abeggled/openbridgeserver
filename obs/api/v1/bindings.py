@@ -31,6 +31,7 @@ from obs.api.authz_service import (
 )
 from obs.api.v1.redaction import REDACTED
 from obs.core.registry import get_registry
+from obs.core.system_datapoints import is_system_datapoint
 from obs.db.database import Database, get_db
 from obs.models.binding import (
     AdapterBindingCreate,
@@ -232,6 +233,19 @@ async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     from obs.adapters import registry as adapter_registry
 
     await adapter_registry.reload_instance_bindings(instance_id, db)
+
+
+def _ensure_system_datapoint_binding_allowed(dp_id: uuid.UUID | str, adapter_type: str, direction: str) -> None:
+    """A read-only system DataPoint (#1370) may feed bindings, never be fed by one.
+
+    DEST bindings pass its value on to a device, and MESSAGE bindings only watch
+    it; any other SOURCE/BOTH binding would write adapter values into it.
+    """
+    if is_system_datapoint(dp_id) and adapter_type != "MESSAGE" and direction != "DEST":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "System DataPoints are read-only: only DEST bindings are allowed",
+        )
 
 
 def _validate_adapter_binding(
@@ -492,6 +506,7 @@ async def create_binding(
         enabled=body.enabled,
         instance_config=_json_config(instance_row["config"]) if adapter_type == "MESSAGE" else None,
     )
+    _ensure_system_datapoint_binding_allowed(dp_id, adapter_type, body.direction)
     _validate_timer_output_value(adapter_type, body.config, dp_id)
 
     effective_config = body.config
@@ -611,6 +626,7 @@ async def update_binding(
         enabled=bool(enabled),
         instance_config=instance_config,
     )
+    _ensure_system_datapoint_binding_allowed(dp_id, row["adapter_type"], direction)
     if "config" in updates:
         _validate_timer_output_value(row["adapter_type"], config, dp_id)
 

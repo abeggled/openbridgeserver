@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from obs.core.system_datapoints import SYSTEM_DATAPOINT_IDS, SYSTEM_SOURCE_ADAPTER
+
 Severity = Literal["ok", "warning", "error"]
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,26 @@ Handler = Callable[[AnyEvent], Coroutine[Any, Any, None]]
 # ---------------------------------------------------------------------------
 
 
+# (DataPoint, source) pairs already warned about: a DEST binding that echoes or
+# receives values for a system DataPoint would otherwise repeat the warning on
+# every update.
+_warned_system_writes: set[tuple[uuid.UUID, str]] = set()
+
+
+def _log_rejected_system_write(event: DataValueEvent) -> None:
+    key = (event.datapoint_id, event.source_adapter)
+    # An adapter's outbound confirmation of an allowed DEST binding is expected.
+    if event.suppress_write_propagation or key in _warned_system_writes:
+        logger.debug("Write to read-only system DataPoint %s from '%s' rejected", event.datapoint_id, event.source_adapter)
+        return
+    _warned_system_writes.add(key)
+    logger.warning(
+        "Write to read-only system DataPoint %s from '%s' rejected (further ones from this source are logged at DEBUG)",
+        event.datapoint_id,
+        event.source_adapter,
+    )
+
+
 class EventBus:
     """Async publish/subscribe bus for internal use only.
 
@@ -120,6 +142,11 @@ class EventBus:
 
     async def publish(self, event: AnyEvent) -> None:
         """Publish *event* to all registered handlers (concurrent, fire-and-forget errors)."""
+        if isinstance(event, DataValueEvent) and event.datapoint_id in SYSTEM_DATAPOINT_IDS and event.source_adapter != SYSTEM_SOURCE_ADAPTER:
+            # Read-only system DataPoints (#1370): one choke point for every
+            # write path — API, MQTT set, adapter bindings and Logic alike.
+            _log_rejected_system_write(event)
+            return
         handlers = self._handlers.get(type(event), [])
         if not handlers:
             return

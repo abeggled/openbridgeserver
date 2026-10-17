@@ -671,13 +671,14 @@ async def test_import_config_updates_existing_binding(monkeypatch):
 
     bind_id = str(uuid.uuid4())
     # fetchone returns existing row
-    db = _DbStub(fetchone_result=_row({"id": bind_id, "adapter_type": "mqtt", "adapter_instance_id": None}))
+    dp_id = str(uuid.uuid4())
+    db = _DbStub(fetchone_result=_row({"id": bind_id, "datapoint_id": dp_id, "adapter_type": "mqtt", "adapter_instance_id": None}))
 
     body = _make_config_export(
         bindings=[
             config_api.ExportedBinding(
                 id=bind_id,
-                datapoint_id=str(uuid.uuid4()),
+                datapoint_id=dp_id,
                 adapter_type="mqtt",
                 direction="SOURCE",
                 config={"topic": "test"},

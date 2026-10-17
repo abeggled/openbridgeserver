@@ -28,6 +28,8 @@ import time
 import uuid
 from typing import Any
 
+from obs.core.system_datapoints import SYSTEM_SOURCE_ADAPTER, is_system_datapoint
+
 _MAX_CACHED_VALUE_CHARS = 8192
 _CACHE_TAG_STR_DIGEST = "__str_digest__"
 _CACHE_TAG_REPR_DIGEST = "__repr_digest__"
@@ -165,6 +167,10 @@ class WriteRouter:
         if dp is None:
             logger.warning("Write request for unknown DataPoint %s — ignored", dp_id)
             return
+        if is_system_datapoint(dp_id):
+            # Not even forwarded to a DEST binding: the value would not come from OBS (#1370).
+            logger.warning("Write request for read-only system DataPoint %s — ignored", dp_id)
+            return
 
         rows = await self._db.fetchall(
             """SELECT direction, enabled, adapter_type FROM adapter_bindings
@@ -231,7 +237,9 @@ class WriteRouter:
         )
 
         if event.quality != "good" or event.value is None:
-            logger.warning(
+            # A system DataPoint without a result yet (#1370) is expected, not a fault.
+            logger.log(
+                logging.DEBUG if getattr(event, "source_adapter", None) == SYSTEM_SOURCE_ADAPTER else logging.WARNING,
                 "WriteRouter: skip DataValueEvent propagation for dp=%s due to quality=%s value=%r",
                 event.datapoint_id,
                 event.quality,

@@ -12,6 +12,9 @@ beforeEach(() => {
       emits: ['toggle'],
     },
   }))
+  vi.doMock('@/components/updates/UpdateNotice.vue', () => ({
+    default: { name: 'UpdateNotice', template: '<div class="update-notice-stub" />' },
+  }))
   vi.doMock('@/components/layout/TopBar.vue', () => ({
     default: {
       name: 'TopBar',
@@ -24,6 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.doUnmock('@/components/layout/Sidebar.vue')
   vi.doUnmock('@/components/layout/TopBar.vue')
+  vi.doUnmock('@/components/updates/UpdateNotice.vue')
 })
 
 async function mountAppLayout(slot = '<p class="main">Content</p>') {
@@ -47,6 +51,11 @@ describe('AppLayout', () => {
   it('renders the TopBar stub', async () => {
     const w = await mountAppLayout()
     expect(w.find('.topbar-stub').exists()).toBe(true)
+  })
+
+  it('renders the global update notice on every page (#1370)', async () => {
+    const w = await mountAppLayout()
+    expect(w.find('.update-notice-stub').exists()).toBe(true)
   })
 
   it('renders slot content in the main area', async () => {

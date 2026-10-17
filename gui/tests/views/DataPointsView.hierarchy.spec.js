@@ -126,6 +126,28 @@ describe('DataPointsView hierarchy rendering', () => {
     expect(dpApi.duplicate).not.toHaveBeenCalled()
   })
 
+  it('offers admins no edit, duplicate or delete for system DataPoints (#1370)', async () => {
+    const { wrapper } = await mountDataPointsView({
+      items: [
+        {
+          id: 'dp-system',
+          name: 'OBS Update Available',
+          data_type: 'BOOLEAN',
+          tags: ['system'],
+          value: null,
+          quality: 'uncertain',
+          hierarchy_nodes: [],
+          system: true,
+        },
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="dp-system-dp-system"]').text()).toBe('System')
+    expect(wrapper.find('[title="Bearbeiten"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="btn-duplicate-dp-system"]').exists()).toBe(false)
+    expect(wrapper.find('[title="Löschen"]').exists()).toBe(false)
+  })
+
   it('lets admins create, update and delete datapoints', async () => {
     const item = {
       id: 'dp-admin',

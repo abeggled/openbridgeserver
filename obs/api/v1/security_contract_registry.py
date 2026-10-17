@@ -398,6 +398,10 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ("PATCH", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.updated"),
     ("DELETE", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.deleted"),
     ("PUT", "/api/v1/system/log-level"): _admin("log_level", "system.log_level.updated", result=True),
+    # Update check (#1370): a manual check is an outbound request to GitHub,
+    # the channel decides which releases count as updates.
+    ("POST", "/api/v1/system/update-status/check"): _admin("update_status", "system.update.checked", result=True),
+    ("PUT", "/api/v1/system/update-channel"): _admin("update_channel", "system.update.channel_updated", result=True, details=("after", "before")),
     ("POST", "/api/v1/support/debug-log"): _admin("debug_log", "support.debug_log.enabled", result=True),
     ("DELETE", "/api/v1/support/debug-log"): _admin("debug_log", "support.debug_log.disabled", result=True),
     ("POST", "/api/v1/ringbuffer/filtersets"): _policy(

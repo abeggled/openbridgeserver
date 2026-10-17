@@ -42,6 +42,7 @@ from obs.api.v1.services.knx_traceability import (
     ga_order_by_sql,
     pa_order_by_sql,
 )
+from obs.core.system_datapoints import is_system_datapoint
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
 from obs.knxproj.parser import (
@@ -191,7 +192,10 @@ async def _bulk_import_datapoints(
         try:
             cfg = json.loads(row["config"])
             ga = cfg.get("group_address")
-            if ga:
+            # A read-only system DataPoint (#1370) may carry a DEST binding to a GA.
+            # The import must neither rename it nor turn that binding into one
+            # that writes into it, so such a GA counts as not yet imported.
+            if ga and not is_system_datapoint(row["datapoint_id"]):
                 existing_map[ga] = {
                     "binding_id": row["id"],
                     "dp_id": row["datapoint_id"],
