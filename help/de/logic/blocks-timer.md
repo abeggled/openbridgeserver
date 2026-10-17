@@ -50,9 +50,20 @@ Logikblatts nichts — auch nicht über nachgelagerte Logik wie **NOT**. Ein ang
   Wahr-Telegramm eines direkt angeschlossenen **Objekt lesen** — auch wenn der Eingang dazwischen
   nicht auf falsch zurückfällt. Liegt eine Bedingung dazwischen (etwa ein Vergleich), zählt nur
   deren steigende Flanke.
+- **Langsame Blöcke:** Die Verzögerung zählt ab dem Lauf, der den Trigger gesehen hat. Ein
+  langsamer Block an anderer Stelle des Logikblatts (z. B. **API Client**) verlängert sie nicht.
 - **Speichern und Neustart:** Eine laufende Verzögerung bleibt erhalten. Sie löst auch nach dem
   Speichern des Logikblatts oder einem Neustart des Servers zum geplanten Zeitpunkt aus; ist dieser
   bereits vorbei, sofort.
+- **Pegel des Eingangs:** Der Block merkt sich, ob sein Eingang zuletzt wahr war — auch über
+  Speichern und Neustart hinweg. Ein Eingang, der wahr bleibt, ist deshalb keine neue steigende
+  Flanke. Ändert das Speichern, was den Eingang speist (eine Verbindung, ein Block davor oder
+  dessen Einstellungen), wird der Eingang neu ausgewertet: Ist er jetzt falsch, zählt sein nächster
+  Anstieg; ist er weiterhin wahr, löst der Block nicht erneut aus — ein geänderter Schwellwert bei
+  einem weiterhin erfüllten Vergleich startet die Verzögerung also nicht neu. Hat ein neu
+  verbundener Eingang noch keinen Wert, beginnt der Block wie neu. Das Umbenennen eines Blocks
+  ändert nichts. Nach einem Neustart wird ebenso geprüft, ob der Eingang inzwischen falsch geworden
+  ist.
 - **Abbruch:** Deaktivieren oder Löschen des Logikblatts verwirft eine laufende Verzögerung. Liegt
   der Eingang nach dem erneuten Aktivieren noch an, startet sie beim nächsten Durchlauf des
   Logikblatts neu.
@@ -80,12 +91,15 @@ im selben Lauf aus, der auch den Impuls startet, schreibt es noch den Zustand vo
   Treppenhauslicht).
 - **Langsame Blöcke:** Die Dauer zählt ab dem Lauf, der den Beginn des Impulses schreibt. Hält ein
   langsamer Block in diesem Lauf (z. B. **API Client**) dessen Schreibvorgänge auf, bleibt der
-  Datenpunkt trotzdem die volle Dauer wahr.
+  Datenpunkt trotzdem die volle Dauer wahr. Der Beginn selbst wird zusammen mit den übrigen
+  Schreibvorgängen dieses Laufs geschrieben, also erst nach dem langsamen Block.
 - **Ketten:** Das Ende des Impulses beginnt — wie der Ablauf einer **Verzögerung** — eine neue
   Logik-Kaskade (bei einer Dauer unter einer Sekunde nicht).
 - **Auslösung:** wie bei **Verzögerung** — steigende Flanke, einzelner Impuls oder erneutes
   Wahr-Telegramm am Eingang. Ein Bewegungsmelder, der während der Anwesenheit zyklisch „1“ sendet,
   hält den Impuls also an.
+- **Pegel des Eingangs:** wie bei **Verzögerung** — ein Eingang, der wahr bleibt, verlängert den
+  Impuls nach dem Speichern oder einem Neustart nicht.
 - **Speichern und Neustart:** Ein laufender Impuls bleibt im Zustand des Blocks erhalten. Er endet
   auch nach dem Speichern des Logikblatts oder einem Neustart des Servers zum geplanten Zeitpunkt;
   ist dieser bereits vorbei, sofort.
