@@ -9,7 +9,13 @@ from typing import Any
 from obs.logic.models import FlowData, LogicNode
 from obs.logic.registry import get_node_type
 
-TICK_BOUNDARY_NODE_TYPES = {"memory"}
+# Nodes whose output does not depend on their inputs within a run: memory
+# outputs last tick's value; a delay or pulse outputs what its timer (owned by
+# the LogicManager) decided. Edges into them do not order the run, so a
+# feedback loop through one is no cycle.
+# The blocks whose timing the LogicManager owns (issue #1166).
+TIMER_NODE_TYPES = frozenset({"timer_delay", "timer_pulse"})
+TICK_BOUNDARY_NODE_TYPES = {"memory", *TIMER_NODE_TYPES}
 
 # Import-time placeholder for an unresolved node type (obs/api/v1/logic.py) — an
 # already-known, intentional marker, not itself an "unknown" type to re-flag.
@@ -130,7 +136,10 @@ def topology_warnings(flow: FlowData) -> list[dict[str, str]]:
                 {
                     "node_id": node.id,
                     "code": "graph_cycle",
-                    "message": f"Graph cycle detected; node cannot be executed without a memory node. Cycle nodes: {', '.join(ordered_cyclic[:5])}",
+                    "message": (
+                        "Graph cycle detected; node cannot be executed without a memory, delay or pulse node. "
+                        f"Cycle nodes: {', '.join(ordered_cyclic[:5])}"
+                    ),
                 },
             )
         elif node.id in analysis.blocked_node_ids:

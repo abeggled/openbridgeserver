@@ -59,8 +59,9 @@ Signal gate: lets the input through as long as "Enable" is true, blocks it other
 ## Memory {#logic-block-memory}
 
 Outputs the value stored during the previous logic run and stores the current input value for the
-next run. This block is the **explicit tick boundary** for controlled feedback loops — without
-it, a graph with feedback would loop infinitely within a single run. The **reset** input resets
+next run. This block is an **explicit tick boundary** for controlled feedback loops (as are
+**Delay** and **Pulse**) — without such a boundary, a graph with feedback would loop infinitely
+within a single run. The **reset** input resets
 the stored value to the configured initial value. "Restore state after restart" determines whether
 the stored value survives a server restart.
 

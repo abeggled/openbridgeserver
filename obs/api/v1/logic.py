@@ -644,8 +644,9 @@ async def get_node_types(_user: str = Depends(get_current_user)) -> list[NodeTyp
       block itself (e.g. `change_filter` only sets `changed` when the input actually changed).
       This is different from the key being present with value `null`/`None`, which means a value
       arrived but was empty/unset.
-    - `memory` is the **only** node allowed to close a feedback loop within one graph (it outputs
-      the previous tick's stored value) — any other cycle is rejected, see `POST /graphs/validate`.
+    - `memory`, `timer_delay` and `timer_pulse` are the only nodes allowed to close a feedback loop
+      within one graph (memory outputs the previous tick's stored value, a timer what its timer
+      decided) — any other cycle is rejected, see `POST /graphs/validate`.
 
     **Resolving `help_id` to full prose documentation** (English and German, one paragraph per
     block with the exact intended behaviour): `GET /help/help-index.json`, then
@@ -681,8 +682,8 @@ async def validate_graph(
     """Check `flow_data` for problems before saving it — advisory, does not persist anything.
 
     Two independent checks, both returned as one flat `warnings` list (`{node_id, code, message}`):
-    - **Graph-cycle topology**: a cycle not broken by a `memory` node (see `GET /node-types`'s
-      "Memory is the only node allowed to close a feedback loop"). Codes: `graph_cycle`,
+    - **Graph-cycle topology**: a cycle not broken by a `memory`, `timer_delay` or `timer_pulse`
+      node (see `GET /node-types` on closing a feedback loop). Codes: `graph_cycle`,
       `graph_cycle_blocked`.
     - **Config-schema conformance**: each node's `data` checked against its type's `config_schema`
       from `GET /node-types` — unknown node types, values that don't match a declared `type` or
