@@ -11,19 +11,31 @@ from pydantic import BaseModel, Field
 from obs.db.database import Database
 
 
-def pa_order_by_sql(column: str) -> str:
-    """ORDER BY terms that sort a KNX individual address (``area.line.device``) numerically per part.
+def _knx_address_order_by_sql(column: str, separator: str) -> str:
+    """ORDER BY terms that sort a KNX address stored as TEXT numerically per part.
 
-    The column is stored as TEXT, so a plain ``ORDER BY`` would put ``1.0.10`` before ``1.0.2``.
+    A plain ``ORDER BY`` would put ``1.0.10`` before ``1.0.2``. Up to three parts are compared as
+    integers; addresses with fewer parts sort by their last part (``1/234`` as 1, 0, 234 and a
+    free-level ``234`` as 0, 0, 234), which keeps every addressing style of one project in order.
     The raw column is appended as a final tie-breaker for malformed values.
     """
-    rest = f"substr({column}, instr({column}, '.') + 1)"
+    rest = f"substr({column}, instr({column}, '{separator}') + 1)"
     return (
-        f"CAST(substr({column}, 1, instr({column}, '.') - 1) AS INTEGER), "
-        f"CAST(substr({rest}, 1, instr({rest}, '.') - 1) AS INTEGER), "
-        f"CAST(substr({rest}, instr({rest}, '.') + 1) AS INTEGER), "
+        f"CAST(substr({column}, 1, instr({column}, '{separator}') - 1) AS INTEGER), "
+        f"CAST(substr({rest}, 1, instr({rest}, '{separator}') - 1) AS INTEGER), "
+        f"CAST(substr({rest}, instr({rest}, '{separator}') + 1) AS INTEGER), "
         f"{column}"
     )
+
+
+def pa_order_by_sql(column: str) -> str:
+    """ORDER BY terms for a KNX individual address (``area.line.device``)."""
+    return _knx_address_order_by_sql(column, ".")
+
+
+def ga_order_by_sql(column: str) -> str:
+    """ORDER BY terms for a KNX group address (``main/middle/sub``, ``main/sub`` or free-level)."""
+    return _knx_address_order_by_sql(column, "/")
 
 
 class KnxTraceCommObjectOut(BaseModel):
@@ -375,7 +387,7 @@ async def build_device_datapoints_context(pa: str, db: Database) -> KnxDeviceDat
         return KnxDeviceDatapointsContextOut(pa=pa)
 
     co_rows = await db.fetchall(
-        """SELECT
+        f"""SELECT
                co.id,
                co.number,
                co.name,
@@ -384,7 +396,7 @@ async def build_device_datapoints_context(pa: str, db: Database) -> KnxDeviceDat
            FROM knx_comm_objects co
            LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE co.device_id = ?
-           ORDER BY CAST(co.number AS INTEGER), co.id, l.ga_address""",
+           ORDER BY CAST(co.number AS INTEGER), co.id, {ga_order_by_sql("l.ga_address")}""",
         (device_row["id"],),
     )
 
