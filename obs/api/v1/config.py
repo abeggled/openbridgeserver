@@ -28,7 +28,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from obs.api.audit import AuditLogWriter, AuditOutcome, audit_payload_sha256, build_audit_context
 from obs.api.auth import get_admin_user
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
-from obs.api.v1.bindings import _json_config, _validate_adapter_binding
+from obs.api.v1.bindings import (
+    _ensure_webhook_slug_free,
+    _ensure_webhook_target_allowed,
+    _json_config,
+    _validate_adapter_binding,
+    _webhook_config_with_token,
+)
 from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
@@ -39,6 +45,7 @@ from obs.logic.models import FlowData
 from obs.logic.validation import validate_timer_durations
 from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
+from obs.regional_format import REGIONAL_SETTING_KEYS, validate_regional_setting
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +67,7 @@ class ExportedDataPoint(BaseModel):
     tags: list[str]
     mqtt_alias: str | None
     control_class: Literal["room_local", "central_plant"] = "room_local"
+    external_write_enabled: bool = False
 
 
 class ExportedBinding(BaseModel):
@@ -245,6 +253,10 @@ class ExportedHierarchyNode(BaseModel):
     description: str
     node_order: int
     icon: str | None
+    is_tree_root: bool = False
+    """The tree's hidden root node (#1217 follow-up) — round-tripped through
+    export/import so a restore doesn't turn it back into a visible folder.
+    Defaults to False for older exports that predate this field."""
 
 
 class ExportedHierarchyDpLink(BaseModel):
@@ -354,6 +366,7 @@ async def export_config(
             tags=dp.tags,
             mqtt_alias=dp.mqtt_alias,
             control_class=getattr(dp, "control_class", "room_local"),
+            external_write_enabled=getattr(dp, "external_write_enabled", False),
         )
         for dp in all_dps
     ]
@@ -497,6 +510,7 @@ async def export_config(
             description=r["description"],
             node_order=r["node_order"],
             icon=r["icon"],
+            is_tree_root=bool(r["is_tree_root"]),
         )
         for r in h_node_rows
     ]
@@ -774,9 +788,19 @@ async def import_config(
     now = datetime.now(UTC).isoformat()
 
     # --- DataPoints ---
+    # external_write_enabled is deliberately imported as False here, regardless
+    # of what the document requests: this loop runs before bindings are
+    # imported below, so checking binding topology at this point would miss
+    # bindings the same document is about to create — a datapoint could then
+    # end up with both an enabled binding and the opt-in flag, silently
+    # violating the invariant the PATCH route enforces (Codex review). Actually
+    # enabling a requested opt-in is deferred to the post-bindings pass further
+    # down, once the full, final topology is known.
+    requested_external_write: dict[uuid.UUID, bool] = {}
     for dp_data in body.datapoints:
         try:
             dp_id = uuid.UUID(dp_data.id)
+            requested_external_write[dp_id] = bool(dp_data.external_write_enabled)
             existing = reg.get(dp_id)
             if existing:
                 from obs.models.datapoint import DataPointUpdate
@@ -790,6 +814,7 @@ async def import_config(
                         tags=dp_data.tags,
                         mqtt_alias=dp_data.mqtt_alias,
                         control_class=dp_data.control_class,
+                        external_write_enabled=False,
                     ),
                 )
                 result.datapoints_updated += 1
@@ -802,11 +827,12 @@ async def import_config(
                     tags=dp_data.tags,
                     mqtt_alias=dp_data.mqtt_alias,
                     control_class=dp_data.control_class,
+                    external_write_enabled=False,
                 )
                 await db.execute_and_commit(
                     """INSERT OR IGNORE INTO datapoints
-                       (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, control_class, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                       (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, control_class, external_write_enabled, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         str(dp.id),
                         dp.name,
@@ -816,6 +842,7 @@ async def import_config(
                         dp.mqtt_topic,
                         dp.mqtt_alias,
                         dp.control_class,
+                        int(dp.external_write_enabled),
                         now,
                         now,
                     ),
@@ -878,7 +905,7 @@ async def import_config(
         try:
             b_id = b_data.id
             existing_binding = await db.fetchone(
-                "SELECT id, adapter_type, adapter_instance_id FROM adapter_bindings WHERE id=?",
+                "SELECT id, adapter_type, adapter_instance_id, config FROM adapter_bindings WHERE id=?",
                 (b_id,),
             )
             effective_adapter_type = existing_binding["adapter_type"] if existing_binding is not None else b_data.adapter_type
@@ -903,6 +930,24 @@ async def import_config(
                 enabled=b_data.enabled,
                 instance_config=instance_config,
             )
+            stored_config = b_data.config
+            if effective_adapter_type == "WEBHOOK":
+                # Store the config the way the create route would: slug trimmed and
+                # lower-case (so a later create of `bell` cannot collide with an
+                # imported `Bell`) and a token that is never empty. A document
+                # that carries one — a backup — keeps it; one that omits it gets
+                # the stored token of that binding or a fresh one, instead of an
+                # endpoint that can never authenticate.
+                stored_token = b_data.config.get("token") or (_json_config(existing_binding["config"]).get("token") if existing_binding else None)
+                stored_config = _webhook_config_with_token(b_data.config, stored_token=stored_token or None)
+                # Rows are written one by one, so a later duplicate sees the
+                # earlier one. Without this both would be stored and the adapter
+                # would silently drop one of the two URLs on the restart below.
+                await _ensure_webhook_slug_free(db, effective_instance_id, stored_config["slug"], exclude_binding_id=b_id)
+                # The create/update routes refuse a live webhook on a central_plant
+                # DataPoint; an import must not be a way around that.
+                if b_data.enabled:
+                    _ensure_webhook_target_allowed(uuid.UUID(b_data.datapoint_id))
             if existing_binding:
                 await db.execute_and_commit(
                     """UPDATE adapter_bindings
@@ -913,7 +958,7 @@ async def import_config(
                        WHERE id=?""",
                     (
                         b_data.direction,
-                        json.dumps(b_data.config),
+                        json.dumps(stored_config),
                         int(b_data.enabled),
                         formula,
                         b_data.send_throttle_ms,
@@ -940,7 +985,7 @@ async def import_config(
                         b_data.adapter_type,
                         b_data.adapter_instance_id,
                         b_data.direction,
-                        json.dumps(b_data.config),
+                        json.dumps(stored_config),
                         int(b_data.enabled),
                         formula,
                         b_data.send_throttle_ms,
@@ -955,6 +1000,27 @@ async def import_config(
         except Exception as exc:
             logger.exception(f"Binding {b_data.id} failed")
             result.errors.append(f"Binding {b_data.id}: {exc}")
+
+    # --- External write opt-in (post-bindings) ---
+    # Deferred from the DataPoints pass above so the binding topology this
+    # checks against already includes any bindings the same import document
+    # just created — matches the invariant the PATCH route enforces (a
+    # datapoint may only opt in while genuinely bindingless).
+    if any(requested_external_write.values()):
+        from obs.api.v1.datapoints import _has_write_semantic_binding
+        from obs.models.datapoint import DataPointUpdate
+
+        for dp_id, requested in requested_external_write.items():
+            if not requested:
+                continue
+            try:
+                if await _has_write_semantic_binding(db, dp_id):
+                    result.errors.append(f"DataPoint {dp_id}: external_write_enabled ignored — datapoint has an adapter binding")
+                    continue
+                await reg.update(dp_id, DataPointUpdate(external_write_enabled=True))
+            except Exception as exc:
+                logger.exception(f"DataPoint {dp_id} external_write_enabled opt-in failed")
+                result.errors.append(f"DataPoint {dp_id}: external_write_enabled opt-in failed: {exc}")
 
     # --- KNX Group Addresses ---
     for ga in body.knx_group_addresses:
@@ -1168,17 +1234,22 @@ async def import_config(
             result.errors.append(f"NavLink {nl.id}: {exc}")
 
     # --- App Settings ---
+    # Display settings are validated on the way in exactly as PUT /system/settings
+    # does: an unchecked region_format or currency from a hand-edited backup would
+    # otherwise reach the frontends, where Intl rejects it (issue #1073).
     imported_datetime_settings: dict[str, str] = {}
     for s in body.app_settings:
         try:
             if s.key in DATETIME_SETTING_KEYS:
                 validate_datetime_setting(s.key, s.value)
+            elif s.key in REGIONAL_SETTING_KEYS:
+                validate_regional_setting(s.key, s.value)
             await db.execute_and_commit(
                 "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)",
                 (s.key, s.value),
             )
             result.app_settings_upserted += 1
-            if s.key in DATETIME_SETTING_KEYS:
+            if s.key in DATETIME_SETTING_KEYS or s.key in REGIONAL_SETTING_KEYS:
                 imported_datetime_settings[s.key] = s.value
         except Exception as exc:
             logger.exception(f"AppSetting {s.key} failed")
@@ -1244,13 +1315,13 @@ async def import_config(
                     try:
                         await db.execute_and_commit(
                             """INSERT INTO hierarchy_nodes
-                               (id, tree_id, parent_id, name, description, node_order, icon, created_at, updated_at)
-                               VALUES (?,?,?,?,?,?,?,?,?)
+                               (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)
                                ON CONFLICT(id) DO UPDATE
                                SET tree_id=excluded.tree_id, parent_id=excluded.parent_id, name=excluded.name,
                                    description=excluded.description, node_order=excluded.node_order,
-                                   icon=excluded.icon, updated_at=excluded.updated_at""",
-                            (hn.id, hn.tree_id, hn.parent_id, hn.name, hn.description, hn.node_order, hn.icon, now, now),
+                                   icon=excluded.icon, is_tree_root=excluded.is_tree_root, updated_at=excluded.updated_at""",
+                            (hn.id, hn.tree_id, hn.parent_id, hn.name, hn.description, hn.node_order, hn.icon, int(hn.is_tree_root), now, now),
                         )
                         inserted_h_ids.add(hn.id)
                         result.hierarchy_upserted += 1
@@ -1261,6 +1332,27 @@ async def import_config(
                 else:
                     next_remaining_h.append(hn)
             remaining_h = next_remaining_h
+
+    # A backup taken before #1217's tree-root-node feature (or a synthetic
+    # partial import missing hierarchy_nodes) may restore hierarchy_trees rows
+    # with no is_tree_root=1 node — backfill any still missing one, same as
+    # _migration_v54_hierarchy_tree_root_nodes. Runs after the node import
+    # loop above so a root node actually included in the import is correctly
+    # recognized here and never duplicated.
+    for ht in body.hierarchy_trees:
+        existing_root = await db.fetchone("SELECT id FROM hierarchy_nodes WHERE tree_id=? AND is_tree_root=1", (ht.id,))
+        if existing_root:
+            continue
+        try:
+            await db.execute_and_commit(
+                """INSERT INTO hierarchy_nodes
+                       (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+                   VALUES (?,?,NULL,?,'',-1,NULL,1,?,?)""",
+                (str(uuid.uuid4()), ht.id, ht.name, now, now),
+            )
+        except Exception as exc:
+            logger.exception(f"HierarchyTree {ht.id} root node backfill failed")
+            result.errors.append(f"HierarchyTree {ht.id} root node: {exc}")
 
     # --- Hierarchy DataPoint Links ---
     for link in body.hierarchy_dp_links:
@@ -1470,9 +1562,20 @@ async def factory_reset(
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('date_format', 'dd.MM.yyyy')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('time_format', 'HH:mm:ss')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'de')")
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('region_format', 'auto')")
+        await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('currency', 'auto')")
         from obs.logic.manager import get_logic_manager
 
-        get_logic_manager().update_app_config({"timezone": "Europe/Zurich", "date_format": "dd.MM.yyyy", "time_format": "HH:mm:ss", "language": "de"})
+        get_logic_manager().update_app_config(
+            {
+                "timezone": "Europe/Zurich",
+                "date_format": "dd.MM.yyyy",
+                "time_format": "HH:mm:ss",
+                "language": "de",
+                "region_format": "auto",
+                "currency": "auto",
+            }
+        )
     except Exception as exc:
         logger.exception("App settings reset failed")
         result.errors.append(f"App settings reset failed: {exc}")

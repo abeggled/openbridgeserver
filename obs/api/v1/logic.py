@@ -21,6 +21,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -30,14 +31,16 @@ from obs.api.auth import Principal, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
+from obs.api.v1.content_disposition import attachment_header
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
-from obs.logic.graph_analysis import topology_warnings
-from obs.logic.manager import _normalise_api_client_variables
+from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
+from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
     LogicGraphCreate,
+    LogicGraphDuplicate,
     LogicGraphImport,
     LogicGraphOut,
     LogicGraphRun,
@@ -48,7 +51,7 @@ from obs.logic.models import (
     LogicUsageOut,
     NodeTypeDef,
 )
-from obs.logic.node_types import get_node_type, list_node_types
+from obs.logic.registry import get_node_type, list_node_types
 from obs.logic.validation import validate_timer_durations
 
 logger = logging.getLogger(__name__)
@@ -65,11 +68,24 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
 
 
 def _without_positions(raw: dict) -> dict:
-    """Strip node positions and purely visual comment nodes for layout-only
-    save detection — neither affects execution semantics.
+    """Strip node positions, user-defined block names and purely visual comment
+    nodes for layout-only save detection — none of them affects execution
+    semantics.
+
+    ``data.label`` is the block name a user typed on the sheet (issue #1157).
+    Treating a rename as an execution change would re-initialize the graph and
+    reset persisted block state (memory, counters, statistics) over a purely
+    cosmetic edit. The renamed flow still reaches the runtime: the layout-only
+    path hands it to ``LogicManager.update_cached_graph``, so the one place
+    that does read the name — the ``node_label`` of an archived message — sees
+    the new one on the next tick.
     """
     raw = dict(raw)
-    raw["nodes"] = [{k: v for k, v in node.items() if k != "position"} for node in raw.get("nodes", []) if node.get("type") != "comment"]
+    raw["nodes"] = [
+        {k: v for k, v in node.items() if k != "position"} | {"data": {k: v for k, v in (node.get("data") or {}).items() if k != "label"}}
+        for node in raw.get("nodes", [])
+        if node.get("type") != "comment"
+    ]
     return raw
 
 
@@ -80,17 +96,56 @@ def _normalized_without_positions(raw: dict) -> dict:
     freshly parsed request body carries explicitly as null — comparing raw
     dicts would misclassify a move-only save as an execution change.
     """
-    return _without_positions(json.loads(FlowData.model_validate(raw).model_dump_json()))
+    flow_data = FlowData.model_validate(raw)
+    _migrate_legacy_api_client_field_names(flow_data)
+    return _without_positions(json.loads(flow_data.model_dump_json()))
+
+
+def _normalize_missing_node_placeholders(flow_data: FlowData) -> None:
+    """Canonicalize ``missing_node`` placeholders before they reach a client.
+
+    ``data.label`` now means "user-defined block name" (issue #1157), so the two
+    older uses of that key on a placeholder have to be resolved here — the
+    properties panel offers ``label`` as an editable name for every block type
+    and cannot know a placeholder ever meant something else by it:
+
+    * Imports before #1157 wrote a generated German type marker
+      (``[Fehlend: <type>]``). That is not a name the user typed, so it is
+      dropped.
+    * A placeholder carrying its missing type in ``label`` alone has that type
+      promoted to ``original_type``, where renaming the block cannot overwrite
+      it. The built-in importer has always written both keys, but a hand-edited
+      or third-party export can still reach this route.
+
+    Doing it at the read boundary keeps the block card, the properties panel and
+    re-imported old exports consistent, and the canonical shape is written back
+    the next time the sheet is saved.
+    """
+    for node in flow_data.nodes:
+        if node.type != "missing_node":
+            continue
+        original_type = node.data.get("original_type")
+        label = node.data.get("label")
+        if not original_type:
+            if isinstance(label, str) and label.strip():
+                node.data["original_type"] = label.strip()
+                node.data.pop("label", None)
+            continue
+        if label == f"[Fehlend: {original_type}]":
+            node.data.pop("label", None)
 
 
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
+    flow_data = FlowData.model_validate(raw)
+    _migrate_legacy_api_client_field_names(flow_data)
+    _normalize_missing_node_placeholders(flow_data)
     return LogicGraphOut(
         id=row["id"],
         name=row["name"],
         description=row["description"] or "",
         enabled=bool(row["enabled"]),
-        flow_data=FlowData.model_validate(raw),
+        flow_data=flow_data,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         control_class=_row_control_class(row),
@@ -267,10 +322,16 @@ def _flow_from_row(row: dict) -> FlowData:
     return FlowData.model_validate(raw)
 
 
+# Blocks whose ###OBSn### variables read DataPoints (#1301); all need the same authorization as a Read Object.
+_VARIABLE_BLOCK_TYPES = frozenset(
+    {"api_client", "json_extractor", "xml_extractor", "string_concat", "string_replace", "notify_message", "message_archive", "ical"}
+)
+
+
 def _node_datapoint_ids(node: LogicNode) -> list[object]:
     if node.type in {"datapoint_read", "datapoint_write"}:
         return [node.data.get("datapoint_id")]
-    if node.type == "api_client":
+    if node.type in _VARIABLE_BLOCK_TYPES:
         return [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
     if node.type == "value_sequence":
         steps = node.data.get("steps") or []
@@ -565,6 +626,51 @@ def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
 
 @router.get("/node-types", response_model=list[NodeTypeDef])
 async def get_node_types(_user: str = Depends(get_current_user)) -> list[NodeTypeDef]:
+    """List every built-in Logic function block, for building a `flow_data` graph.
+
+    Each `NodeTypeDef` is the complete, authoritative contract for one block — this is the
+    single source of truth also used by the Logic editor, so nothing here goes stale.
+
+    **Ports and `flow_data` wiring.** A `LogicGraph`'s `flow_data` is `{nodes: [...], edges:
+    [...]}`. Each node has `id`, `type` (one of the `type` values in this catalogue), `position`
+    (`{x, y}`, cosmetic only), and `data` (the node's `config_schema` values, plus a `label`
+    string). Each edge has `id`, `source`/`target` (node ids) and `sourceHandle`/`targetHandle`
+    (port ids from that node type's `outputs`/`inputs`). A port's `type` is `"value"` (carries a
+    value every tick it has one) or `"trigger"` (carries a one-shot pulse, no persistent value).
+
+    **Execution semantics not visible elsewhere in this API:**
+    - A node's per-tick result is a dict keyed by output port id. A key **absent** from that dict
+      means "nothing produced this tick" — a trigger that did not fire, or a value withheld by the
+      block itself (e.g. `change_filter` only sets `changed` when the input actually changed).
+      This is different from the key being present with value `null`/`None`, which means a value
+      arrived but was empty/unset.
+    - `memory`, `timer_delay` and `timer_pulse` are the only nodes allowed to close a feedback loop
+      within one graph (memory outputs the previous tick's stored value, a timer what its timer
+      decided) — any other cycle is rejected, see `POST /graphs/validate`.
+
+    **Resolving `help_id` to full prose documentation** (English and German, one paragraph per
+    block with the exact intended behaviour): `GET /help/help-index.json`, then
+    `.helpIds[<help_id>].en` (or `.de`) is a ready-to-fetch URL under `/help/...`. Not every type
+    has a `help_id` yet (`null` if undocumented).
+
+    **Minimal `flow_data` example** — a `compare` block driving a `datapoint_write`:
+    ```json
+    {
+      "nodes": [
+        {"id": "n1", "type": "datapoint_read", "position": {"x": 0, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}},
+        {"id": "n2", "type": "compare", "position": {"x": 200, "y": 0},
+         "data": {"operator": ">", "operand": 20}},
+        {"id": "n3", "type": "datapoint_write", "position": {"x": 400, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}}
+      ],
+      "edges": [
+        {"id": "e1", "source": "n1", "target": "n2", "sourceHandle": "value", "targetHandle": "in1"},
+        {"id": "e2", "source": "n2", "target": "n3", "sourceHandle": "out", "targetHandle": "value"}
+      ]
+    }
+    ```
+    """
     return list_node_types()
 
 
@@ -573,7 +679,28 @@ async def validate_graph(
     body: FlowData,
     _user: str = Depends(get_current_user),
 ) -> dict:
-    return {"status": "ok", "warnings": topology_warnings(body)}
+    """Check `flow_data` for problems before saving it — advisory, does not persist anything.
+
+    Two independent checks, both returned as one flat `warnings` list (`{node_id, code, message}`):
+    - **Graph-cycle topology**: a cycle not broken by a `memory`, `timer_delay` or `timer_pulse`
+      node (see `GET /node-types` on closing a feedback loop). Codes: `graph_cycle`,
+      `graph_cycle_blocked`.
+    - **Config-schema conformance**: each node's `data` checked against its type's `config_schema`
+      from `GET /node-types` — unknown node types, values that don't match a declared `type` or
+      `enum`, and (for `type: array` fields such as `decision.conditions`) malformed JSON or a
+      missing required item field. Codes: `unknown_node_type`, `config_schema_type_mismatch`,
+      `config_schema_enum_invalid`, `config_schema_malformed_json`,
+      `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
+      whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
+      (it falls back to the schema default).
+
+    `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
+    `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
+    with cycles or invalid config the same way regardless of whether this was called first, except
+    for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
+    endpoints reject outright (422) at save time — independently of this endpoint.
+    """
+    return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
 
 @router.get("/graphs", response_model=list[LogicGraphOut])
@@ -595,6 +722,7 @@ async def create_graph(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Create a Logic graph. See `GET /node-types` for the `flow_data` authoring contract."""
     _validate_timer_durations(body.flow_data)
     principal = _principal_from_mutation_dependency(_user)
     delegated = await _require_logic_graph_creation(
@@ -650,6 +778,7 @@ async def update_graph_full(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Replace a Logic graph's `flow_data` (full save). See `GET /node-types` for the authoring contract."""
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
@@ -863,15 +992,19 @@ async def import_graph(
     processed_nodes: list[LogicNode] = []
     for node in body.flow_data.nodes:
         if node.type not in known_types and node.type != "missing_node":
+            placeholder_data: dict[str, Any] = {"original_type": node.type}
+            # Keep the user-defined block name (issue #1157) so a renamed block
+            # stays identifiable after its type disappeared; the frontend
+            # renders the missing type from `original_type` and localizes the
+            # placeholder heading itself.
+            if custom_label := str(node.data.get("label") or "").strip():
+                placeholder_data["label"] = custom_label
             processed_nodes.append(
                 LogicNode(
                     id=node.id,
                     type="missing_node",
                     position=node.position,
-                    data={
-                        "original_type": node.type,
-                        "label": f"[Fehlend: {node.type}]",
-                    },
+                    data=placeholder_data,
                 ),
             )
         else:
@@ -1022,6 +1155,7 @@ async def run_graph(
 async def duplicate_graph(
     graph_id: str,
     request: Request = None,
+    body: LogicGraphDuplicate | None = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
@@ -1058,7 +1192,7 @@ async def duplicate_graph(
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
     _validate_timer_durations(new_flow)
 
-    new_name = f"Kopie von {row['name']}"
+    new_name = body.name.strip() if body and body.name and body.name.strip() else f"Kopie von {row['name']}"
     result = await _persist_created_graph(
         db,
         principal,
@@ -1115,7 +1249,7 @@ async def get_datapoint_logic_usages(
                 if node.data.get("datapoint_id") != dp_id:
                     continue
                 direction = "DEST"
-            elif node.type == "api_client":
+            elif node.type in _VARIABLE_BLOCK_TYPES:
                 variables = _normalise_api_client_variables(node.data.get("variables"))
                 if not any(variable["datapoint_id"] == dp_id for variable in variables.values()):
                     continue
@@ -1170,5 +1304,5 @@ async def export_graph(
     safe_name = row["name"].replace(" ", "_").replace("/", "_")
     return JSONResponse(
         content=export_data,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.json"'},
+        headers={"Content-Disposition": attachment_header(f"{safe_name}.json")},
     )

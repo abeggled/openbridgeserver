@@ -119,9 +119,18 @@ watch(allDpIds, (newIds, oldIds) => {
   if (removed.length) dpStore.unsubscribe(removed)
 }, { immediate: false })
 
+// Ein Lauf kann auf den Breadcrumb warten, während die Erneuerung den Baum
+// bereits neu geholt hat. Der Knoten taucht dann mitten im Lauf auf, dessen
+// Ergebnis ihn noch nicht kennt — ohne Vormerkung gäbe es danach keine
+// Änderung mehr, die einen zweiten Versuch auslösen könnte.
+let loadRunning = false
+let nodeAppearedWhileLoading = false
+
 async function load() {
   loading.value = true
   error.value = ''
+  loadRunning = true
+  nodeAppearedWhileLoading = false
   try {
     if (!visuStore.treeLoaded) await visuStore.loadTree()
     await visuStore.loadBreadcrumb(props.id)
@@ -161,21 +170,70 @@ async function load() {
     error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
+    loadRunning = false
+  }
+  if (nodeAppearedWhileLoading) {
+    nodeAppearedWhileLoading = false
+    await load()
   }
 }
 
 // Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
 function onSessionExpired() { load() }
 
+// Anmeldung endgültig weg. Die Viewer-Route trägt kein `requiresAuth`, der
+// globale Handler im Router leitet hier also nicht um — eine Seite mit
+// access='user' bliebe sonst ohne Sitzung stehen und würde stillschweigend
+// keine Werte mehr nachführen. load() schickt sie zur Login-Route.
+function onUnauthorized() {
+  if (getJwt()) return
+  // Fehlt der Knoten im Baum, stammt dieser aus der anonym gefilterten Sicht —
+  // dann lässt sich gerade nicht belegen, dass die Seite öffentlich ist, und
+  // der Viewer bliebe sonst auf seiner Fehlerseite stehen.
+  const known = visuStore.getNode(props.id)
+  if (known && resolveAccessNode(props.id).access !== 'user') return
+  // Direkt umleiten statt über load(): das wartet zuerst auf den Breadcrumb,
+  // den das Backend für einen verborgenen privaten Knoten ohne Anmeldung mit
+  // 404 beantwortet — der Zugriffs-Check dahinter würde nie erreicht.
+  router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+}
+
 onMounted(() => {
   load()
   window.addEventListener('visu:session-expired', onSessionExpired)
+  window.addEventListener('visu:unauthorized', onUnauthorized)
 })
 onUnmounted(() => {
   window.removeEventListener('visu:session-expired', onSessionExpired)
+  window.removeEventListener('visu:unauthorized', onUnauthorized)
   clearWriteContext()
 })
 watch(() => props.id, load)
+
+// Der Baum kann sich unter der offenen Seite ändern — die Token-Erneuerung holt
+// ihn neu, und die autorisierte Sicht kann Knoten hinzufügen wie entfernen.
+watch([() => props.id, node], ([id, found], [previousId, previous]) => {
+  // Ein Seitenwechsel lädt bereits über den `props.id`-Watcher; sein
+  // Knotenwechsel ist keine Änderung am Baum.
+  if (id !== previousId) return
+
+  // Kaltstart mit abgelaufenem Access-Token: das Backend liefert dafür keine
+  // 401, sondern eine anonym gefilterte Sicht, in der ein privater Knoten
+  // fehlt — die Seite landet im Fehlerzustand oder als leere Übersicht. Sobald
+  // die Erneuerung den Baum neu geholt hat und der Knoten auftaucht, den
+  // Ladevorgang wiederholen; er lief bisher gegen einen unbekannten Knoten.
+  if (found && !previous) {
+    if (loadRunning) nodeAppearedWhileLoading = true
+    else load()
+    return
+  }
+
+  // Umgekehrter Fall: die Erneuerung hat den Baum neu geholt und der Knoten
+  // fehlt jetzt darin — die Berechtigung für diese Seite wurde entzogen. Ohne
+  // Umleitung bliebe der Viewer als leere LOCATION-Hülle auf /:id stehen,
+  // deren neu verbundener WebSocket abgewiesen wird.
+  if (previous && !found) router.push({ name: 'tree' })
+})
 
 // Grid-Geometrie — feste Pixel-Werte → 1:1 identisch mit Editor (WYSIWYG)
 const COLS   = computed(() => visuStore.pageConfig?.grid_cols       ?? 12)

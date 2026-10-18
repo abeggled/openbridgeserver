@@ -98,14 +98,16 @@ test('Gauge Bogen: aktueller Wert wird im SVG-Text angezeigt', async ({ page }) 
 
     const valueEl = page.locator(`[data-widget-id="${widgetId}"] [data-testid="widget-value"]`)
 
+    // Decimal separator follows the configured regional format — the OBS
+    // default language `de` resolves to de-DE (issue #1073).
     await pushFloat(dp.id, 42.5)
-    await expect(valueEl).toHaveText('42.5', { timeout: 3_000 })
+    await expect(valueEl).toHaveText('42,5', { timeout: 3_000 })
 
     await pushFloat(dp.id, 0)
-    await expect(valueEl).toHaveText('0.0', { timeout: 3_000 })
+    await expect(valueEl).toHaveText('0,0', { timeout: 3_000 })
 
     await pushFloat(dp.id, 100)
-    await expect(valueEl).toHaveText('100.0', { timeout: 3_000 })
+    await expect(valueEl).toHaveText('100,0', { timeout: 3_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
     await apiDelete(`/api/v1/datapoints/${dp.id}`)

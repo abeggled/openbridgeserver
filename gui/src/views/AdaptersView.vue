@@ -12,9 +12,12 @@
         <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ $t('adapters.title') }}</h2>
         <p class="text-sm text-slate-500 mt-0.5">{{ $t('adapters.subtitle') }}</p>
       </div>
-      <button v-if="!isDemo" @click="openCreate" class="btn-primary btn-sm" data-testid="btn-new-instance">
-        {{ $t('adapters.newInstance') }}
-      </button>
+      <div class="flex items-center gap-2">
+        <HelpButton help-id="adapters-list" />
+        <button v-if="!isDemo" @click="openCreate" class="btn-primary btn-sm" data-testid="btn-new-instance">
+          {{ $t('adapters.newInstance') }}
+        </button>
+      </div>
     </div>
 
     <div v-if="store.loading" class="flex justify-center py-20"><Spinner size="lg" /></div>
@@ -25,11 +28,14 @@
       <div v-if="creating" class="card border border-blue-500/40">
         <div class="card-header">
           <h3 class="font-semibold text-slate-800 dark:text-slate-100">{{ $t('adapters.createTitle') }}</h3>
-          <button @click="cancelCreate" class="btn-icon">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
+          <div class="flex items-center gap-2">
+            <HelpButton help-id="adapters-create" />
+            <button @click="cancelCreate" class="btn-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="p-5 flex flex-col gap-4">
           <div class="grid grid-cols-2 gap-4">
@@ -144,6 +150,9 @@
 
         <!-- Expanded Config Panel -->
         <div v-if="expanded[a.id]" class="border-t border-slate-200 dark:border-slate-700/60 p-5 flex flex-col gap-4">
+          <div class="flex justify-end -mb-2">
+            <HelpButton help-id="adapters-instance-actions" />
+          </div>
           <div :class="{ 'pointer-events-none select-none opacity-50': isDemo }">
             <div class="form-group">
               <label class="label">{{ $t('adapters.nameLabel') }}</label>
@@ -216,7 +225,7 @@
           </div>
 
           <div v-if="!isDemo" class="flex gap-3 flex-wrap">
-            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION' && a.adapter_type !== 'SNMP' && a.adapter_type !== 'MESSAGE'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
+            <button v-if="!NO_CONNECTION_TEST_TYPES.includes(a.adapter_type)" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
               :title="$t('adapters.testConnectionTitle')">
               <Spinner v-if="busy[a.id] === 'test'" size="xs" color="slate" />
               {{ $t('adapters.testConnection') }}
@@ -403,6 +412,7 @@ import { adapterApi } from '@/api/client'
 import { useAdapterStore } from '@/stores/adapters'
 import { useAuthStore } from '@/stores/auth'
 import Badge         from '@/components/ui/Badge.vue'
+import HelpButton    from '@/components/ui/HelpButton.vue'
 import Spinner       from '@/components/ui/Spinner.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import SchemaForm    from '@/components/adapters/SchemaForm.vue'
@@ -443,6 +453,10 @@ function feedbackText(fb) {
   }
   return fb.detail ?? ''
 }
+// Adapter types without an outbound connection to test: they either run
+// entirely inside OBS or are driven by incoming traffic (WEBHOOK, #1256).
+const NO_CONNECTION_TEST_TYPES = ['ANWESENHEITSSIMULATION', 'SNMP', 'MESSAGE', 'WEBHOOK']
+
 const store          = useAdapterStore()
 const auth           = useAuthStore()
 const isDemo         = computed(() => auth.username === 'demo')

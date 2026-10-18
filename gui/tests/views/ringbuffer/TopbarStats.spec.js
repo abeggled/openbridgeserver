@@ -56,6 +56,27 @@ describe('TopbarStats', () => {
     vi.useRealTimers()
   })
 
+  it('formats a small disk size with one decimal in the regional format (#1073)', async () => {
+    const { wrapper } = await mountStats(makeApi({ file_size_bytes: 1536 }))
+    expect(wrapper.text()).toContain('1,5 KB')
+  })
+
+  it('drops the decimal once the disk size reaches three digits (#1073)', async () => {
+    const { wrapper } = await mountStats(makeApi({ file_size_bytes: 200 * 1024 }))
+    expect(wrapper.text()).toContain('200 KB')
+  })
+
+  it('shows raw bytes without a decimal below one kibibyte (#1073)', async () => {
+    const { wrapper } = await mountStats(makeApi({ file_size_bytes: 512 }))
+    expect(wrapper.text()).toContain('512 B')
+  })
+
+  it('formats entry counts in the regional format (#1073)', async () => {
+    const { wrapper } = await mountStats(makeApi({ total: 12345, max_entries: 50000 }))
+    expect(wrapper.text()).toContain('12.345')
+    expect(wrapper.text()).toContain('50.000')
+  })
+
   it('calls ringbufferApi.stats() once on mount', async () => {
     const api = makeApi()
     await mountStats(api)

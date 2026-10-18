@@ -73,7 +73,7 @@ describe('NodeConfigPanel datapoint_read — connection tab', () => {
     const w = await mountPanel('datapoint_read', { datapoint_name: '' })
     await flushPromises()
 
-    const searchInput = w.find('input[type="text"]')
+    const searchInput = w.get('[data-testid="dp-search"]')
     await searchInput.setValue('Temp')
     await searchInput.trigger('input')
     await flushPromises()
@@ -98,7 +98,7 @@ describe('NodeConfigPanel datapoint_read — connection tab', () => {
     const w = await mountPanel('datapoint_read', { datapoint_name: 'Existierender DP' })
     await flushPromises()
 
-    const input = w.find('input[type="text"]')
+    const input = w.get('[data-testid="dp-search"]')
     expect(input.element.value).toBe('Existierender DP')
     w.unmount()
   })

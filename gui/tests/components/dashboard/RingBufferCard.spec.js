@@ -322,6 +322,13 @@ describe('RingBufferCard — legacy state', () => {
     expect(wrapper.find('[data-testid="rb-card-open-segments"]').exists()).toBe(false)
   })
 
+  it('falls back to zero when the legacy stats carry no file size (#1073)', async () => {
+    const wrapper = await mountCard({ enabled: true, store: null, total: 1234 })
+    expect(wrapper.find('[data-testid="rb-card-legacy-size"]').text()).toContain('0 B')
+    // Counts still use the regional format.
+    expect(wrapper.find('[data-testid="rb-card-legacy-total"]').text()).toContain('1.234')
+  })
+
   it('opens the config modal from the legacy state', async () => {
     const wrapper = await mountCard({ enabled: true, store: null, total: 10, file_size_bytes: 0 })
     await wrapper.find('[data-testid="rb-card-configure"]').trigger('click')

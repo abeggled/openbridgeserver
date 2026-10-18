@@ -53,8 +53,12 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
 
 const { t } = useI18n()
+// Numbers and sizes follow the configured regional format (issue #1073).
+const { regionFormat } = useRegionalFormat()
 
 const props = defineProps({
   // stats.prognosis: { bytes_per_hour, rows_per_hour, avg_segment_seconds,
@@ -90,15 +94,11 @@ function posNumber(value) {
 }
 
 function fmtNum(value, digits = 0) {
-  try {
-    return new Intl.NumberFormat('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value)
-  } catch {
-    return String(value)
-  }
+  return formatNumber(value, regionFormat.value, { decimals: digits })
 }
 
 function formatBytesCompact(value) {
-  return formatBytesBinary(value).replace(/([,.])0 (?=[KMGT]iB$)/, ' ')
+  return formatBytesBinary(value, regionFormat.value).replace(/([,.])0 (?=[KMGT]iB$)/, ' ')
 }
 
 /** Formatiert Sekunden menschlich als „~X h" bzw. „~X Tage" (h<48 → Stunden). */
@@ -194,7 +194,7 @@ const historyLine = computed(() => {
   }
   const dur = humanDuration(props.prognosis?.estimated_retention_seconds)
   if (dur === null) return ''
-  return t('ringbuffer.prognosis.history', { budget: formatBytesBinary(budget), duration: dur })
+  return t('ringbuffer.prognosis.history', { budget: formatBytesBinary(budget, regionFormat.value), duration: dur })
 })
 
 // Bei bewusst unbegrenzter Gesamt-Retention die Konsequenz quantifizieren.
@@ -226,12 +226,12 @@ const budgetLine = computed(() => {
   if (retentionWins) {
     return t('ringbuffer.prognosis.budgetRetention', {
       retention: humanDuration(retentionSeconds),
-      budget: formatBytesBinary(recommended),
+      budget: formatBytesBinary(recommended, regionFormat.value),
     })
   }
   return t('ringbuffer.prognosis.budget', {
     age: fmtNum(age, age < 10 ? 1 : 0),
-    budget: formatBytesBinary(recommended),
+    budget: formatBytesBinary(recommended, regionFormat.value),
     segments: MIN_SEGMENTS,
   })
 })

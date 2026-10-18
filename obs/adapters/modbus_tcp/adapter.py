@@ -571,9 +571,7 @@ class ModbusTcpAdapter(AdapterBase):
         holds bus-wide even right after a zero-delay sibling released the shared
         semaphore."""
         if self._shared_bus_key is not None:
-            return _SHARED_BUS_DELAYS.get(
-                self._shared_bus_key, self._adp_cfg.inter_read_delay_ms
-            )
+            return _SHARED_BUS_DELAYS.get(self._shared_bus_key, self._adp_cfg.inter_read_delay_ms)
         return self._adp_cfg.inter_read_delay_ms
 
     def _client_ready(self) -> bool:

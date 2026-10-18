@@ -6,11 +6,17 @@
       <Handle type="target" id="trigger" :position="Position.Left" :style="{ top: port2Top }" />
     </template>
 
-    <div class="gn-card" ref="cardRef">
+    <div class="gn-card logic-node-surface" ref="cardRef" :style="{ '--node-tint': cardTint }">
       <div class="gn-header">
-        <span class="gn-label">{{ isWrite ? $t('logic.nodeTypes.datapoint_write') : $t('logic.nodeTypes.datapoint_read') }}</span>
+        <NodeTitleEditor
+          :value="customLabel"
+          :fallback="defaultLabel"
+          :editable="auth.isAdmin && canvasEditable"
+          :title-class="['gn-label', customLabel && 'gn-label--custom']"
+          @rename="renameNode"
+        />
         <span v-if="hasFilter" class="gn-filter-badge" :title="$t('logic.filterBadge')">⊘</span>
-        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
+        <button v-if="canvasEditable" v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
       </div>
       <div class="gn-body">
         <div class="gn-sublabel">{{ $t('logic.ports.object') }}</div>
@@ -42,6 +48,13 @@
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
+import { useI18n } from 'vue-i18n'
+import { nodeTint } from '@/utils/logicNodeSurface'
+import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
+import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
+
+const { t } = useI18n()
 
 const props = defineProps({
   id:   { type: String, required: true },
@@ -49,10 +62,28 @@ const props = defineProps({
   data: { type: Object, default: () => ({}) },
 })
 
+// Category colour of the datapoint blocks — also used for the top border and
+// the header accent below. Tinted over the opaque card surface (issue #1074).
+const DATAPOINT_COLOR = '#0f766e'
+const cardTint = nodeTint(DATAPOINT_COLOR)
+
 const isWrite   = computed(() => props.type === 'datapoint_write')
 const hovered   = ref(false)
-const { removeNodes } = useVueFlow()
+const { removeNodes, updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 function remove() { removeNodes([props.id]) }
+
+// ── User-defined block name (issue #1157) ─────────────────────────────────
+// Several "Read Object" blocks on one sheet are otherwise indistinguishable.
+// The name lives in `data.label`, separate from the generated node id.
+const defaultLabel = computed(() => t(isWrite.value ? 'logic.nodeTypes.datapoint_write' : 'logic.nodeTypes.datapoint_read'))
+const customLabel  = computed(() => String(props.data?.label ?? '').trim())
+function renameNode(label) { updateNodeData(props.id, { label }) }
+// Only admins can save a sheet, so offering the inline field to a read-only
+// viewer would silently discard whatever they typed.
+const auth = useAuthStore()
 
 // ── Handle positioning: align with port labels ────────────────────────────
 // Use offsetTop (relative to offsetParent) instead of getBoundingClientRect()
@@ -111,7 +142,7 @@ const hasFilter = computed(() => {
 
 .gn-card {
   width: 160px;
-  background: var(--node-card-bg);
+  /* background: provided by `.logic-node-surface` (opaque surface + tint). */
   border: 1px solid var(--node-card-border);
   border-top: 3px solid #0f766e;
   border-radius: 8px;
@@ -125,7 +156,10 @@ const hasFilter = computed(() => {
   background: rgba(15,118,110,.15);
   border-radius: 5px 5px 0 0;
 }
-.gn-label        { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--node-title-color); }
+.gn-label        { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--node-title-color); }
+/* A user-chosen name keeps its own casing — the uppercase treatment is for
+   the generated type titles. */
+.gn-label--custom { text-transform:none; letter-spacing:.02em; }
 .gn-filter-badge { font-size:9px; color:#fbbf24; opacity:.85; flex-shrink:0; }
 .gn-delete       { font-size:11px; color:var(--node-del-color); background:none; border:none; cursor:pointer; padding:0 2px; line-height:1; transition:color .15s; margin-left:auto; flex-shrink:0; }
 .gn-delete:hover { color:#f87171; }

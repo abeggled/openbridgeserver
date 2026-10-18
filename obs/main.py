@@ -13,6 +13,7 @@ Startup-Sequenz:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -26,11 +27,14 @@ from obs import __version__
 
 logger = logging.getLogger(__name__)
 
+# Mirrors uvicorn's own exit code for a failed application startup.
+_STARTUP_FAILED_EXIT_CODE = 3
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.adapters import registry as adapter_registry
-    from obs.api.auth import require_configured_owner
+    from obs.api.setup import announce_setup_mode
     from obs.api.v1.websocket import init_ws_manager
     from obs.config import get_settings
     from obs.core.event_bus import DataValueEvent, init_event_bus
@@ -51,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.log_buffer import LogBufferHandler
 
     LogBufferHandler.install(asyncio.get_event_loop(), level=log_level)
+    # Runs after uvicorn configured its loggers, whichever way the server was started.
+    from obs.adapters.webhook.access_log import install_webhook_access_log_filter
+
+    install_webhook_access_log_filter()
     logger.info(f"open bridge server v{__version__} starting …")
 
     # 1. Database
@@ -69,7 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Failed to apply persistent log level")
         logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
-    await require_configured_owner(db)
+    await announce_setup_mode(db, settings.server.port)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
     # SIGHUP is sent after MQTT connects (see below) so Mosquitto reloads cleanly.
@@ -135,6 +143,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
     import obs.adapters.snmp.adapter
+    import obs.adapters.webhook.adapter
     import obs.adapters.zeitschaltuhr.adapter  # noqa: F401
 
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
@@ -303,6 +312,30 @@ def create_app() -> FastAPI:
     app.state.limiter = auth_limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+    from fastapi import Request
+    from fastapi.responses import JSONResponse, RedirectResponse
+
+    # ── WEBHOOK adapter trigger endpoint (issue #1256) ────────────────────
+    # Registered *before* the CORS middleware and _setup_gate: Starlette runs the
+    # last-added middleware first, so this puts the webhook gate innermost.
+    #   * CORS wraps it, which means a browser caller on an allowed origin gets
+    #     the allow-origin header on the trigger response and not only on the
+    #     preflight (a response returned from here never reaches inner layers).
+    #   * The setup gate stays the outermost middleware: an installation that
+    #     has not been claimed yet must not expose any entry point, not even one
+    #     guarded by a per-binding token.
+    #
+    # A middleware rather than a route because each WEBHOOK instance picks its
+    # own path prefix at runtime; see obs/api/webhook.py for the full reasoning.
+    @app.middleware("http")
+    async def _webhook_gate(request: Request, call_next):
+        from obs.api.webhook import handle_webhook_request
+
+        response = await handle_webhook_request(request)
+        if response is not None:
+            return response
+        return await call_next(request)
+
     # CORS — configure allowed origins via config.yaml or OBS_CORS__ORIGINS env var
     app.add_middleware(
         CORSMiddleware,
@@ -315,8 +348,23 @@ def create_app() -> FastAPI:
 
     app.include_router(router, prefix="/api/v1")
 
-    from fastapi import Request
-    from fastapi.responses import JSONResponse
+    @app.middleware("http")
+    async def _setup_gate(request: Request, call_next):
+        """Reduce the whole HTTP surface to the setup page while no owner exists.
+
+        OPTIONS passes through so the CORS layer can still answer preflights;
+        the request it belongs to is blocked all the same.
+        """
+        from obs.api.setup import path_is_allowed_during_setup, setup_required
+
+        if not setup_required() or request.method == "OPTIONS" or path_is_allowed_during_setup(request.url.path):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "open bridge server is not set up yet — create the first owner at /setup.", "setup_required": True},
+                status_code=503,
+            )
+        return RedirectResponse("/setup", status_code=303)
 
     def _spa_index_response(index: Path) -> FileResponse:
         return FileResponse(
@@ -387,6 +435,77 @@ def create_app() -> FastAPI:
                 return _spa_index_response(index)
             return JSONResponse({"detail": "Visu nicht gebaut"}, status_code=404)
 
+    # ── Serve Help site (help_dist → /help) ────────────────────────────────
+    # VitePress renders a static multi-page site (a real .html file per route),
+    # unlike the Vue Admin-GUI/Visu SPAs — html=True lets StaticFiles resolve
+    # directory requests to their index.html without the SPA fallback trick above.
+    #
+    # Mounted unconditionally (unlike gui_dist/frontend_dist above) via a small
+    # wrapper that re-checks help_dist/'s existence on every request instead of
+    # once at startup: help/ is a separate VitePress project (`cd help && npm
+    # run build`), not built by any Python-side step, and there's no reliable
+    # way to guarantee that build finishes before the backend starts in every
+    # dev workflow (issue #1179 — a PyCharm "before launch" step for this
+    # turned out not to be awaited reliably). A plain `StaticFiles(...)` would
+    # either raise at construction (check_dir=True, the default) or raise on
+    # its own first-request check_config() if the directory doesn't exist yet
+    # — this wrapper defers that to a per-request is_dir() check instead, so
+    # /help starts working the moment the directory appears on disk, before or
+    # after the backend started, with no restart required.
+    _help_dist = Path(__file__).parent.parent / "help_dist"
+
+    class _LazyHelpStatic:
+        def __init__(self, directory: Path) -> None:
+            self._directory = directory
+            self._static: StaticFiles | None = None
+
+        async def __call__(self, scope, receive, send) -> None:
+            if not self._directory.is_dir():
+                response = JSONResponse({"detail": "Not found"}, status_code=404)
+                await response(scope, receive, send)
+                return
+            if self._static is None:
+                self._static = StaticFiles(directory=self._directory, html=True, check_dir=False)
+            await self._static(scope, receive, send)
+
+    @app.api_route("/help", methods=["GET", "HEAD"], include_in_schema=False)
+    async def help_bare_path():
+        # A bare "/help" (no trailing slash) is a distinct request from
+        # "/help/..." — Starlette's Mount below redirects it to "/help/"
+        # before ever reaching _LazyHelpStatic, which would mask a missing
+        # help_dist/ behind a 307 instead of the same JSON 404 every other
+        # /help/... path gets. Registered before the mount so this exact
+        # route wins over Mount's own redirect for this one path. Must accept
+        # HEAD explicitly — unlike a plain Mount, an @app.get()-only route
+        # does not also answer HEAD, so an availability probe using HEAD
+        # would otherwise get a bare 405 instead of following the redirect
+        # (Codex review on PR #1180).
+        if not _help_dist.is_dir():
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return RedirectResponse(url="/help/")
+
+    @app.api_route("/help/", methods=["GET", "HEAD"], include_in_schema=False)
+    async def help_root_path():
+        # The help site has no unprefixed "root" locale (every locale,
+        # including German, lives under its own /help/<lang>/ prefix — see
+        # help/.vitepress/config.mts) — VitePress does not build an index.html
+        # at help_dist/index.html, and does not redirect the bare site root to
+        # a default locale on its own. Redirect to German explicitly, mirroring
+        # help_bare_path()'s guard: this exact route wins over the mount below
+        # for "/help/" specifically, same reasoning as the bare "/help" route.
+        if not _help_dist.is_dir():
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return RedirectResponse(url="/help/de/")
+
+    app.mount("/help", _LazyHelpStatic(_help_dist), name="help")
+    if not _help_dist.is_dir():
+        logger.warning(
+            "help_dist/ not found at %s yet — /help returns 404 until it is built "
+            "(cd help && npm run build) or the packaged app bundle is used; no restart "
+            "needed once it appears.",
+            _help_dist,
+        )
+
     # ── 404-Handler für alles andere ──────────────────────────────────────
     @app.exception_handler(404)
     async def spa_404_handler(request: Request, exc):
@@ -397,6 +516,19 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "Not found"}, status_code=404)
         if request.url.path.startswith("/visu/"):
             # Bereits durch visu_spa abgedeckt — sollte nicht hier landen
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if request.url.path == "/help" or request.url.path.startswith("/help/"):
+            # _LazyHelpStatic already 404s directly (JSON) when help_dist/
+            # doesn't exist at all — this handler is only reached once the
+            # directory exists but StaticFiles itself can't resolve the
+            # request (no matching page and no local 404.html). That's not
+            # only the "no dist" case it was assumed to be: a help_dist/
+            # mid-build (e.g. index.html already written, 404.html not yet)
+            # hits it too, and without this guard it fell through to the
+            # Admin-GUI SPA shell as a misleading 200 instead of the JSON 404
+            # the help store's loadIndex() needs to know to retry (Codex
+            # review on PR #1180 — this guard was previously removed here as
+            # "dead code", which the partial-build case disproves).
             return JSONResponse({"detail": "Not found"}, status_code=404)
         if _gui_dist.is_dir():
             index = _gui_dist / "index.html"
@@ -435,4 +567,45 @@ async def main() -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        await server.serve()
+    except SystemExit as exc:
+        # Uvicorn meldet einen fehlgeschlagenen Application-Startup per
+        # sys.exit(3) *innerhalb* von serve() (uvicorn.server.Server.startup).
+        await _abort_failed_startup(exc.code if isinstance(exc.code, int) else _STARTUP_FAILED_EXIT_CODE)
+        return  # _abort_failed_startup() kehrt im Betrieb nicht zurueck.
+    if not server.started:
+        # Kein Listener, aber auch kein SystemExit — z. B. Signal waehrend des
+        # Startups. Derselbe Hänger, dieselbe Behandlung.
+        await _abort_failed_startup()
+
+
+async def _abort_failed_startup(exit_code: int = _STARTUP_FAILED_EXIT_CODE) -> None:
+    """Terminate the process when the lifespan failed instead of hanging forever.
+
+    Uvicorn returns from ``serve()`` after a failed startup, but the interpreter
+    then waits for the *non-daemon* worker threads that aiosqlite starts per
+    connection (``Thread(target=_connection_worker_thread)``).  The database is
+    opened before the fail-closed owner check, so a fresh install would keep a
+    live-but-unserving process: ``docker ps`` shows "Up … (unhealthy)" forever,
+    no restart policy fires and systemd still considers obs.service running.
+
+    Close what startup managed to open, then leave hard — a startup that failed
+    has no other resources worth unwinding, and ``os._exit`` cannot be blocked
+    by a thread that never joins.
+    """
+    try:
+        from obs.message_archive import close_message_archive_store
+
+        await close_message_archive_store()
+    except Exception:
+        logger.exception("Could not close the message archive during startup abort")
+    try:
+        from obs.db.database import get_db
+
+        await get_db().disconnect()
+    except Exception:
+        logger.exception("Could not close the database during startup abort")
+    logger.error("open bridge server startup failed — exiting (see the traceback above).")
+    logging.shutdown()
+    os._exit(exit_code)

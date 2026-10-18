@@ -6,7 +6,14 @@ export interface SeriesDef {
   axis: 'y' | 'y1'
 }
 
-export const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
+// Die letzten vier erweitern die ursprünglichen acht, damit sich Farben erst ab
+// der 13. Serie wiederholen (#1361). Sie sind auf mittlere Helligkeit gesetzt,
+// damit sie auf dem hellen wie dem dunklen Widget-Hintergrund mindestens 3:1
+// Kontrast halten (Limette, Senf, Grau, Braun).
+export const COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316',
+  '#578d0b', '#9a7c04', '#787f8e', '#b06a32',
+]
 
 interface ExtraSeriesConfig {
   dp_id?: string

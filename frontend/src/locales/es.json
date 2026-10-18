@@ -8,5 +8,12 @@
   },
   "common": {
     "save": "Ahorrar"
+  },
+  "datetimeNames": {
+    "weekdays": "lunes|martes|miércoles|jueves|viernes|sábado|domingo",
+    "weekdaysShort": "lun|mar|mié|jue|vie|sáb|dom",
+    "weekdaysTwo": "lu|ma|mi|ju|vi|sá|do",
+    "months": "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre",
+    "monthsShort": "ene|feb|mar|abr|may|jun|jul|ago|sept|oct|nov|dic"
   }
 }

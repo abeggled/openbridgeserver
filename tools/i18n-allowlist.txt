@@ -43,6 +43,7 @@ Tagsüber
 Temp °C
 Zähler
 String Verketten
+String Suchen/Ersetzen
 API Client
 Substring / RegEx
 Wake on LAN

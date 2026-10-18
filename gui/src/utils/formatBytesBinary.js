@@ -9,13 +9,14 @@
 const BINARY_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
 
 /**
- * Formatiert eine Byte-Zahl binär (1024er-Schritte) mit deutschem Zahlformat.
+ * Formatiert eine Byte-Zahl binär (1024er-Schritte) im übergebenen Regionalformat.
  * Nicht-endliche oder nicht-positive Eingaben ergeben ``0 B``.
  *
  * @param {number|string} rawBytes
+ * @param {string} [locale] BCP-47-Regionalformat (Issue #1073); Default `de-DE`
  * @returns {string} z. B. "3,0 MiB" oder "512 B"
  */
-export function formatBytesBinary(rawBytes) {
+export function formatBytesBinary(rawBytes, locale = 'de-DE') {
   const bytes = Number(rawBytes)
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   let i = 0
@@ -27,7 +28,7 @@ export function formatBytesBinary(rawBytes) {
   const fractionDigits = v >= 100 || i === 0 ? 0 : 1
   let formatted
   try {
-    formatted = new Intl.NumberFormat('de-DE', {
+    formatted = new Intl.NumberFormat(locale, {
       minimumFractionDigits: fractionDigits,
       maximumFractionDigits: fractionDigits,
     }).format(v)

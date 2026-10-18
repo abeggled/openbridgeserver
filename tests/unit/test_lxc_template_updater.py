@@ -1,6 +1,8 @@
 import io
 import json
+import os
 import re
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -289,3 +291,130 @@ def test_channel_info_script_yields_empty_lines_when_lxc_not_yet_published():
     lines = _run_channel_info_script(obs_update, manifest)
 
     assert lines == ["", "", ""]
+
+
+def _run_version_list_script(releases: list[dict], *, show_nightlies: bool) -> list[str]:
+    """Run the VERSION_LIST Python snippet as bash would hand it to python3."""
+    m = re.search(
+        r'VERSION_LIST=\$\(echo "\$ALL_RELEASES" \| SHOW_NIGHTLIES="\$SHOW_NIGHTLIES" python3 -c "\n(.*?)\n"\)', _obs_update_text(), re.DOTALL
+    )
+    assert m, "Could not find VERSION_LIST python block"
+    # Inside bash double quotes `\$` reaches python3 as a plain `$`.
+    script = m.group(1).replace("\\$", "$")
+
+    old_stdin, old_stdout = sys.stdin, sys.stdout
+    old_env = os.environ.get("SHOW_NIGHTLIES")
+    os.environ["SHOW_NIGHTLIES"] = "true" if show_nightlies else "false"
+    sys.stdin = io.StringIO(json.dumps(releases))
+    buf = io.StringIO()
+    sys.stdout = buf
+    try:
+        exec(script, {})  # noqa: S102
+    finally:
+        sys.stdin, sys.stdout = old_stdin, old_stdout
+        if old_env is None:
+            del os.environ["SHOW_NIGHTLIES"]
+        else:
+            os.environ["SHOW_NIGHTLIES"] = old_env
+    return buf.getvalue().splitlines()
+
+
+def _release(tag: str, published_at: str | None, *, prerelease: bool = False) -> dict:
+    return {"tag_name": tag, "draft": False, "prerelease": prerelease, "published_at": published_at}
+
+
+def test_version_list_orders_release_above_same_month_nightlies():
+    """#1323: 2026.10.0 published after nightly-20261008 must be listed first,
+    not below every nightly of October (patch 0 vs day of month 8)."""
+    releases = [
+        _release("nightly-20261008", "2026-10-08T09:10:57Z", prerelease=True),
+        _release("2026.10.0", "2026-10-08T19:40:34Z"),
+        _release("nightly-20261007", "2026-10-07T08:53:09Z", prerelease=True),
+        _release("nightly-20261001", "2026-10-01T09:06:15Z", prerelease=True),
+        _release("nightly-20260930", "2026-09-30T08:43:49Z", prerelease=True),
+        _release("2026.9.1", "2026-09-08T20:22:13Z"),
+        _release("2026.9.0", "2026-09-07T19:57:15Z"),
+    ]
+
+    lines = _run_version_list_script(releases, show_nightlies=True)
+
+    assert lines == [
+        "stable 2026.10.0",
+        "nightly nightly-20261008",
+        "nightly nightly-20261007",
+        "nightly nightly-20261001",
+        "nightly nightly-20260930",
+        "stable 2026.9.1",
+    ]
+
+
+def test_version_list_without_nightlies_keeps_two_stables_newest_first():
+    releases = [
+        _release("nightly-20261008", "2026-10-08T09:10:57Z", prerelease=True),
+        _release("2026.9.1", "2026-09-08T20:22:13Z"),
+        _release("2026.10.0", "2026-10-08T19:40:34Z"),
+        _release("2026.10.1-RC1", "2026-10-09T10:00:00Z", prerelease=True),
+        _release("2026.9.0", "2026-09-07T19:57:15Z"),
+    ]
+
+    lines = _run_version_list_script(releases, show_nightlies=False)
+
+    assert lines == ["rc 2026.10.1-RC1", "stable 2026.10.0", "stable 2026.9.1"]
+
+
+def test_version_list_puts_release_without_published_at_last():
+    releases = [
+        _release("2026.9.1", None),
+        _release("2026.10.0", "2026-10-08T19:40:34Z"),
+    ]
+
+    lines = _run_version_list_script(releases, show_nightlies=False)
+
+    assert lines == ["stable 2026.10.0", "stable 2026.9.1"]
+
+
+def test_updater_follows_redirects_of_transferred_repos():
+    """A transferred repo answers the API with 301 + JSON body; -f alone lets it through (#1322)."""
+    obs_update = _obs_update_text()
+
+    assert 'ALL_RELEASES=$(curl -sfL "https://api.github.com/repos/${REPO}/releases")' in obs_update
+    assert 'MANIFEST=$(curl -sfL "https://raw.githubusercontent.com/' in obs_update
+    assert not re.search(r"curl -sf ", obs_update)
+
+
+def _run_version_recovery(tmp_path: Path, version: str | None, stamp: str | None) -> tuple[str, str | None]:
+    """Run the startup block of obs-update (up to the migration recovery) against a fake install dir."""
+    obs_update = _obs_update_text()
+    m = re.search(r"^CURRENT=\$\(cat .*?^fi\n", obs_update, re.DOTALL | re.MULTILINE)
+    assert m, "Could not find CURRENT / migration recovery block"
+    install_dir = tmp_path / "opt-obs"
+    (install_dir / "obs").mkdir(parents=True)
+    if version is not None:
+        (install_dir / "version").write_text(version + "\n")
+    if stamp is not None:
+        (install_dir / "obs" / "version").write_text(stamp + "\n")
+    script = f'set -euo pipefail\nINSTALL_DIR="{install_dir}"\n{m.group(0)}printf "%s" "$CURRENT"\n'
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    version_file = install_dir / "version"
+    return result.stdout, version_file.read_text().strip() if version_file.exists() else None
+
+
+def test_version_recovery_restores_real_version_after_migration_patch(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.99.0", "2026.10.0")
+
+    assert current == "2026.10.0"
+    assert written == "2026.10.0"
+
+
+def test_version_recovery_leaves_regular_version_untouched(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.11.0", "2026.10.0")
+
+    assert current == "2026.11.0"
+    assert written == "2026.11.0"
+
+
+def test_version_recovery_keeps_patch_tag_without_version_stamp(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.99.0", None)
+
+    assert current == "2026.99.0"
+    assert written == "2026.99.0"

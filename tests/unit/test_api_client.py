@@ -19,20 +19,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from obs.api.v1.logic import _row_to_out
 from obs.config import SecuritySettings, Settings, override_settings
 from obs.core.registry import ValueState
 from obs.logic.manager import (
+    _API_CLIENT_MAX_RESPONSE_BYTES,
     LogicManager,
+    _api_client_response_output,
     _api_client_value_to_string,
     _build_api_client_fetch_targets,
+    _load_external_value_file,
     _make_api_client_variable_resolver,
+    _migrate_legacy_api_client_field_names,
     _normalise_api_client_variables,
-    _read_secret_file,
     _replace_api_client_placeholders,
     _replace_api_client_url_placeholders,
+    _send_api_client_request,
 )
-from obs.logic.models import FlowData
+from obs.logic.models import FlowData, LogicNode, NodePosition
 from obs.security.url_targets import add_allowed_url_target, evaluate_url_target
+from tests.unit._api_client_fakes import serve_via_request
 from tests.unit.conftest import edge, make_executor, node
 
 # ===========================================================================
@@ -63,7 +69,7 @@ def _mock_response(status_code: int, json_data: object | None = None, text: str 
     """Build a fake httpx.Response."""
     resp = MagicMock()
     resp.status_code = status_code
-    resp.text = text or (str(json_data) if json_data is not None else "")
+    resp.text = text or (json.dumps(json_data) if json_data is not None else "")
     if json_data is not None:
         resp.json.return_value = json_data
     else:
@@ -106,62 +112,155 @@ class TestApiClientSsrfHostGuard:
         assert decision.blocked_ips == ["127.0.0.1"]
 
 
-class TestApiClientSecretFileGuard:
-    """Unit tests for bounded API client secret-file reads."""
+class TestApiClientExternalValueFileGuard:
+    """Unit tests for bounded API client external-value-file reads."""
 
-    def test_reads_file_from_configured_secret_root(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+    def test_reads_file_from_configured_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "values"
         root.mkdir()
-        secret_file = root / "api-token"
-        secret_file.write_text(" secret-token \n", encoding="utf-8")
+        value_file = root / "api-value"
+        value_file.write_text(" configured-value \n", encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_file)) == "secret-token"
+        assert _load_external_value_file(str(value_file)) == "configured-value"
 
-    def test_rejects_file_outside_secret_root(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+    def test_rejects_file_outside_configured_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "values"
         root.mkdir()
-        outside_file = tmp_path / "outside-token"
+        outside_file = tmp_path / "outside-value"
         outside_file.write_text("outside", encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(outside_file)) == ""
+        assert _load_external_value_file(str(outside_file)) == ""
 
     def test_rejects_non_regular_file(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(root)) == ""
+        assert _load_external_value_file(str(root)) == ""
 
     def test_rejects_fifo_without_blocking(self, tmp_path, monkeypatch):
         if not hasattr(os, "mkfifo"):
             return
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
-        secret_pipe = root / "api-token-pipe"
-        os.mkfifo(secret_pipe)
+        fifo_entry = root / "api-value-pipe"
+        os.mkfifo(fifo_entry)
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_pipe)) == ""
+        assert _load_external_value_file(str(fifo_entry)) == ""
 
     def test_rejects_oversized_file(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
-        secret_file = root / "large-token"
-        secret_file.write_text("x" * 8193, encoding="utf-8")
+        value_file = root / "large-value"
+        value_file.write_text("x" * 8193, encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_file)) == ""
+        assert _load_external_value_file(str(value_file)) == ""
 
     def test_rejects_invalid_utf8(self, tmp_path, monkeypatch):
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
-        secret_file = root / "binary-token"
-        secret_file.write_bytes(b"\xff")
+        value_file = root / "binary-value"
+        value_file.write_bytes(b"\xff")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
-        assert _read_secret_file(str(secret_file)) == ""
+        assert _load_external_value_file(str(value_file)) == ""
+
+    def test_rejects_file_that_grows_between_fstat_and_read(self, tmp_path, monkeypatch):
+        # fstat() reports a small, allowed size, but the underlying read()
+        # call itself returns more bytes than the size limit (e.g. because
+        # the file grew between the two syscalls) — this must still be
+        # rejected by the post-read size double-check, not just trusted
+        # because the earlier fstat-based check already passed.
+        root = tmp_path / "values"
+        root.mkdir()
+        value_file = root / "growing-value"
+        value_file.write_text("small", encoding="utf-8")
+        monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
+
+        with patch("os.read", return_value=b"x" * 8193):
+            assert _load_external_value_file(str(value_file)) == ""
+
+
+class TestMigrateLegacyApiClientFieldNames:
+    """Unit tests for the _load_graphs() upgrade path (issue #1087 CodeQL cleanup)."""
+
+    @staticmethod
+    def _node(node_type: str, data: dict) -> LogicNode:
+        return LogicNode(id="n1", type=node_type, position=NodePosition(x=0, y=0), data=data)
+
+    def test_renames_legacy_keys_on_api_client_node(self):
+        flow = FlowData(nodes=[self._node("api_client", {"headers_secret_file": "/run/secrets/hdr", "auth_token_file": "/run/secrets/tok"})])
+
+        _migrate_legacy_api_client_field_names(flow)
+
+        assert flow.nodes[0].data == {"headers_value_file": "/run/secrets/hdr", "auth_value_file": "/run/secrets/tok"}
+
+    def test_does_not_overwrite_an_already_migrated_new_key(self):
+        flow = FlowData(
+            nodes=[self._node("api_client", {"headers_secret_file": "/run/secrets/legacy", "headers_value_file": "/run/secrets/current"})]
+        )
+
+        _migrate_legacy_api_client_field_names(flow)
+
+        assert flow.nodes[0].data == {"headers_value_file": "/run/secrets/current"}
+
+    def test_ignores_non_api_client_nodes(self):
+        flow = FlowData(nodes=[self._node("and", {"headers_secret_file": "/run/secrets/hdr"})])
+
+        _migrate_legacy_api_client_field_names(flow)
+
+        assert flow.nodes[0].data == {"headers_secret_file": "/run/secrets/hdr"}
+
+    def test_graph_api_output_exposes_legacy_file_fields_under_current_names(self):
+        raw_flow = self._flow_with_legacy_fields().model_dump_json()
+
+        result = _row_to_out(
+            {
+                "id": "g1",
+                "name": "Graph",
+                "description": "",
+                "enabled": 1,
+                "flow_data": raw_flow,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+
+        assert result.flow_data.nodes[0].data == {
+            "headers_value_file": "/run/secrets/hdr",
+            "auth_value_file": "/run/secrets/tok",
+        }
+
+    def test_update_cached_graph_migrates_legacy_fields_on_layout_only_save(self):
+        # A layout-only save (e.g. dragging a node) resubmits the flow_data
+        # exactly as GET returned it — which reads the raw, unmigrated DB
+        # row, not this manager's already-migrated in-memory cache. Without
+        # migrating again here, update_cached_graph() would overwrite the
+        # migrated cache with the legacy field names and silently drop the
+        # configured headers/bearer-token file until the next full reload.
+        manager = _make_manager()
+        graph_id = "g1"
+        manager._graphs[graph_id] = ("Graph", True, self._flow_with_legacy_fields())
+
+        legacy_flow = self._flow_with_legacy_fields()
+        manager.update_cached_graph(graph_id, "Graph", True, legacy_flow)
+
+        _, _, cached_flow = manager._graphs[graph_id]
+        assert cached_flow.nodes[0].data == {"headers_value_file": "/run/secrets/hdr", "auth_value_file": "/run/secrets/tok"}
+
+    @staticmethod
+    def _flow_with_legacy_fields() -> FlowData:
+        return FlowData(
+            nodes=[
+                TestMigrateLegacyApiClientFieldNames._node(
+                    "api_client", {"headers_secret_file": "/run/secrets/hdr", "auth_token_file": "/run/secrets/tok"}
+                )
+            ]
+        )
 
 
 class TestApiClientFetchTarget:
@@ -319,6 +418,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {"ok": True}))
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph()
@@ -335,6 +435,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(404, text="Not Found"))
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph()
@@ -350,6 +451,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=Exception("Connection refused"))
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph()
@@ -366,6 +468,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph()
@@ -382,6 +485,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(extra_data={"url": ""})
@@ -404,6 +508,7 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph("GET")
@@ -426,6 +531,7 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(
@@ -455,6 +561,7 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph("POST", {"content_type": "text/plain"})
@@ -471,6 +578,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {}))
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(extra_data={"verify_ssl": "false"})
@@ -481,7 +589,7 @@ class TestApiClientManagerHttp:
         assert kwargs["verify"] is False
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    def test_invalid_inline_and_secret_headers_are_ignored(self, mock_client_cls, tmp_path, monkeypatch):
+    def test_invalid_inline_and_value_file_headers_are_ignored(self, mock_client_cls, tmp_path, monkeypatch):
         captured: dict = {}
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -492,7 +600,8 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {})
 
         mock_client.request = _capture
-        root = tmp_path / "secrets"
+        serve_via_request(mock_client)
+        root = tmp_path / "values"
         root.mkdir()
         headers_file = root / "headers.json"
         headers_file.write_text("not json", encoding="utf-8")
@@ -502,7 +611,7 @@ class TestApiClientManagerHttp:
         _, flow = self._build_graph(
             extra_data={
                 "headers": "not json",
-                "headers_secret_file": str(headers_file),
+                "headers_value_file": str(headers_file),
             },
         )
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
@@ -521,6 +630,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph()
@@ -547,6 +657,7 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {"ok": True})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(
@@ -586,6 +697,7 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {"ok": True})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(extra_data={"url": "https://example.com/api"})
@@ -619,6 +731,7 @@ class TestApiClientManagerHttp:
             raise httpx.ConnectError("all addresses refused", request=request)
 
         mock_client.request = _fail
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(extra_data={"url": "https://example.com/api"})
@@ -653,6 +766,7 @@ class TestApiClientManagerHttp:
             raise httpx.ConnectError("post address refused", request=request)
 
         mock_client.request = _fail
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph("POST", {"url": "https://example.com/api"})
@@ -672,27 +786,28 @@ class TestApiClientManagerHttp:
         assert outputs["ac"]["success"] is False
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    def test_text_response_is_truncated_to_1mb(self, mock_client_cls):
-        """Large text responses must be truncated before storing node output."""
+    def test_oversized_text_response_fails_the_node(self, mock_client_cls):
+        """A text response over the 1 MB limit is not stored; the node reports the overrun (#530)."""
         big = "x" * 1_500_000
         resp = _mock_response(200, text=big)
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=resp)
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(extra_data={"response_type": "text/plain"})
         with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
             outputs = self._run(manager, flow)
 
-        assert outputs["ac"]["success"] is True
-        assert isinstance(outputs["ac"]["response"], str)
-        assert len(outputs["ac"]["response"]) == 1_000_000
+        assert outputs["ac"]["success"] is False
+        assert outputs["ac"]["status"] == 200
+        assert outputs["ac"]["response"] == "Response exceeds the size limit of 1000000 bytes"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
-    def test_secret_files_supply_headers_and_bearer_token(self, mock_client_cls, tmp_path, monkeypatch):
-        """Secret-file fields are honored when paths stay inside the configured secret root."""
+    def test_value_files_supply_headers_and_bearer_token(self, mock_client_cls, tmp_path, monkeypatch):
+        """External-value-file fields are honored when paths stay inside the configured root."""
         captured_headers: list[dict] = []
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -703,12 +818,13 @@ class TestApiClientManagerHttp:
             return _mock_response(200, {})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
-        root = tmp_path / "secrets"
+        root = tmp_path / "values"
         root.mkdir()
         headers_file = root / "api-headers.json"
         token_file = root / "api-token"
-        headers_file.write_text('{"X-Secret": "from-file"}', encoding="utf-8")
+        headers_file.write_text('{"X-Custom": "from-file"}', encoding="utf-8")
         token_file.write_text("file-token-###OBS1###", encoding="utf-8")
         monkeypatch.setenv("OBS_SECRET_FILE_DIR", str(root))
 
@@ -723,8 +839,8 @@ class TestApiClientManagerHttp:
                 "headers": '{"X-Base": "inline"}',
                 "auth_type": "bearer",
                 "auth_token": "",
-                "auth_token_file": str(token_file),
-                "headers_secret_file": str(headers_file),
+                "auth_value_file": str(token_file),
+                "headers_value_file": str(headers_file),
                 "variables": [{"datapoint_id": str(dp_id), "datapoint_name": "Token Suffix"}],
             },
         )
@@ -734,7 +850,7 @@ class TestApiClientManagerHttp:
         assert outputs["ac"]["success"] is True
         assert len(captured_headers) == 1
         assert captured_headers[0]["X-Base"] == "inline"
-        assert captured_headers[0]["X-Secret"] == "from-file"
+        assert captured_headers[0]["X-Custom"] == "from-file"
         assert captured_headers[0]["Authorization"] == "Bearer file-token-from-variable"
 
     @patch("obs.logic.manager.httpx.AsyncClient")
@@ -745,6 +861,7 @@ class TestApiClientManagerHttp:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {"ok": True}))
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         _, flow = self._build_graph(extra_data={"url": "http://localhost:8080/api/v1/system/health"})
@@ -789,6 +906,7 @@ class TestApiClientAuthentication:
             def __init__(self, auth=None, verify=True):
                 captured_auth.append(auth)
                 self._resp = _mock_response(200, {"ok": True})
+                serve_via_request(self)
 
             async def __aenter__(self):
                 return self
@@ -863,6 +981,7 @@ class TestApiClientAuthentication:
         class _FakeClient:
             def __init__(self, auth=None, verify=True):
                 self._resp = _mock_response(200, {"ok": True})
+                serve_via_request(self)
 
             async def __aenter__(self):
                 return self
@@ -915,6 +1034,7 @@ class TestApiClientAuthentication:
             return _mock_response(200, {})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         data = {
@@ -947,6 +1067,7 @@ class TestApiClientAuthentication:
             return _mock_response(200, {})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         data = {
@@ -972,6 +1093,7 @@ class TestApiClientAuthentication:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {}))
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         data = {"url": "http://93.184.216.34/", "method": "GET", "auth_type": "none"}
@@ -1085,6 +1207,7 @@ class TestApiClientVariables:
             return _mock_response(200, {"ok": True})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         dp1 = uuid.uuid4()
         dp2 = uuid.uuid4()
@@ -1151,6 +1274,7 @@ class TestApiClientVariables:
             return _mock_response(200, {"ok": True})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         dp2 = uuid.uuid4()
         manager = _make_manager()
@@ -1187,6 +1311,7 @@ class TestApiClientVariables:
             return _mock_response(200, {"ok": True})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1231,6 +1356,7 @@ class TestApiClientVariables:
             return _mock_response(200, {"ok": True})
 
         mock_client.request = _capture
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1274,6 +1400,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1381,6 +1508,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         data = {"url": "http://example.com/###OBS1###", "method": "GET", "variables": []}
@@ -1403,6 +1531,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1435,6 +1564,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1468,6 +1598,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         manager = _make_manager()
         data = {
@@ -1500,6 +1631,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock()
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1540,6 +1672,7 @@ class TestApiClientVariables:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {"ok": True}))
+        serve_via_request(mock_client)
 
         dp_id = uuid.uuid4()
         manager = _make_manager()
@@ -1589,6 +1722,7 @@ class TestApiClientDownstreamPropagation:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {"data": 42}))
+        serve_via_request(mock_client)
 
         # Graph: cv_trig → ac.trigger,  ac.success → gate.in1, cv_true → gate.in2
         nodes = [
@@ -1625,6 +1759,7 @@ class TestApiClientDownstreamPropagation:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(404))
+        serve_via_request(mock_client)
 
         nodes = [
             node("cv_trig", "const_value", {"value": "true", "data_type": "bool"}),
@@ -1656,6 +1791,7 @@ class TestApiClientDownstreamPropagation:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(404))
+        serve_via_request(mock_client)
 
         nodes = [
             node("cv_trig", "const_value", {"value": "true", "data_type": "bool"}),
@@ -1710,6 +1846,7 @@ class TestApiClientDownstreamPropagation:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
+        serve_via_request(mock_client)
 
         source_dp_id = uuid.uuid4()
         target_dp_id = uuid.uuid4()
@@ -1755,6 +1892,7 @@ class TestApiClientDownstreamPropagation:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
+        serve_via_request(mock_client)
 
         nodes = [
             node("stats", "statistics", {}),
@@ -1793,6 +1931,7 @@ class TestApiClientDownstreamPropagation:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {"ok": True}))
+        serve_via_request(mock_client)
 
         target_dp_id = uuid.uuid4()
         nodes = [
@@ -1838,6 +1977,7 @@ class TestApiClientWsBroadcast:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_mock_response(200, {"result": 1}))
+        serve_via_request(mock_client)
 
         ws_payloads: list[dict] = []
 
@@ -1959,6 +2099,7 @@ class TestApiClientResponseType:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             mock_client.request = AsyncMock(return_value=mock_resp)
+            serve_via_request(mock_client)
             with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
                 return asyncio.run(manager._execute_graph(graph_id, "t", flow, {"ac": {"trigger": True}}))
 
@@ -2064,3 +2205,109 @@ class TestNotifyPushoverImageUrlSecurity:
         assert get_call.kwargs["headers"] == {"Host": "example.com"}
         assert get_call.kwargs["extensions"] == {"sni_hostname": "example.com"}
         assert get_call.kwargs["follow_redirects"] is False
+
+
+# ---------------------------------------------------------------------------
+# Response size limit before materializing/parsing the body (#530)
+# ---------------------------------------------------------------------------
+
+
+def _streaming_client(chunks: list[bytes], *, headers: dict[str, str] | None = None, status: int = 200):
+    """A real httpx client whose response streams *chunks*; records how many were pulled."""
+    pulled: list[int] = []
+
+    class _Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in chunks:
+                pulled.append(len(chunk))
+                yield chunk
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, headers=headers or {}, stream=_Stream())
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(_handler)), pulled
+
+
+class TestApiClientResponseSizeLimit:
+    async def test_body_within_limit_is_returned(self):
+        client, _ = _streaming_client([b'{"a": ', b"1}"])
+        async with client:
+            resp, body = await _send_api_client_request(client, "GET", "http://example.test/")
+        assert resp.status_code == 200
+        assert body == b'{"a": 1}'
+
+    async def test_streamed_body_over_limit_stops_reading(self):
+        chunk = b"x" * 400_000
+        client, pulled = _streaming_client([chunk] * 10)
+        async with client:
+            _, body = await _send_api_client_request(client, "GET", "http://example.test/")
+        assert body is None
+        # Abandoned right after the chunk that crossed the limit, not after all ten.
+        assert len(pulled) == 3
+
+    async def test_declared_content_length_over_limit_reads_nothing(self):
+        client, pulled = _streaming_client([b"x"], headers={"Content-Length": str(_API_CLIENT_MAX_RESPONSE_BYTES + 1)})
+        async with client:
+            resp, body = await _send_api_client_request(client, "GET", "http://example.test/")
+        assert body is None
+        assert resp.status_code == 200
+        assert pulled == []
+
+    @pytest.mark.parametrize("status", [204, 304])
+    async def test_declared_length_of_a_bodyless_status_is_ignored(self, status):
+        # RFC 9110 §8.6: a 304 may carry the Content-Length of the 200 it stands for,
+        # though it has no body — that must not count as an oversized response.
+        client, _ = _streaming_client([], headers={"Content-Length": str(_API_CLIENT_MAX_RESPONSE_BYTES + 1)}, status=status)
+        async with client:
+            resp, body = await _send_api_client_request(client, "GET", "http://example.test/")
+        assert resp.status_code == status
+        assert body == b""
+
+    async def test_unparsable_content_length_falls_back_to_the_streamed_limit(self):
+        client, _ = _streaming_client([b"ok"], headers={"Content-Length": "bogus"})
+        async with client:
+            _, body = await _send_api_client_request(client, "GET", "http://example.test/")
+        assert body == b"ok"
+
+    def test_oversized_body_fails_the_node_with_the_status(self):
+        resp = httpx.Response(200)
+        assert _api_client_response_output(resp, None, "json") == {
+            "response": "Response exceeds the size limit of 1000000 bytes",
+            "status": 200,
+            "success": False,
+        }
+
+    @pytest.mark.parametrize("resp_type", ["json", "application/json"])
+    def test_json_body_is_parsed(self, resp_type):
+        out = _api_client_response_output(httpx.Response(201), b'{"ok": true}', resp_type)
+        assert out == {"response": {"ok": True}, "status": 201, "success": True}
+
+    def test_invalid_json_falls_back_to_text(self):
+        out = _api_client_response_output(httpx.Response(200), b"not json", "json")
+        assert out["response"] == "not json"
+
+    def test_text_body_uses_the_response_charset(self):
+        resp = httpx.Response(404, headers={"Content-Type": "text/plain; charset=latin-1"})
+        out = _api_client_response_output(resp, "Grüße".encode("latin-1"), "text/plain")
+        assert out == {"response": "Grüße", "status": 404, "success": False}
+
+    @patch("obs.logic.manager.httpx.AsyncClient")
+    def test_oversized_json_response_fails_the_node(self, mock_client_cls):
+        """JSON gets the same limit as text and is never parsed past it."""
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.request = AsyncMock(return_value=_mock_response(200, text='{"v": "' + "x" * 1_000_000 + '"}'))
+        serve_via_request(mock_client)
+
+        manager = _make_manager()
+        nodes = [node("ac", "api_client", {"url": "http://93.184.216.34/", "method": "GET", "response_type": "json"})]
+        flow = _flow(nodes)
+        manager._graphs["test-graph"] = ("test", True, flow)
+        manager._node_state["test-graph"] = {}
+        with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
+            outputs = asyncio.run(manager._execute_graph("test-graph", "test", flow, {"ac": {"trigger": True}}))
+
+        assert outputs["ac"]["response"] == "Response exceeds the size limit of 1000000 bytes"
+        assert outputs["ac"]["status"] == 200
+        assert outputs["ac"]["success"] is False

@@ -316,6 +316,88 @@ async def test_import_creates_new_datapoints(client, auth_headers):
 
 
 # ---------------------------------------------------------------------------
+# POST /config/import  — external_write_enabled validated against topology
+# ---------------------------------------------------------------------------
+
+
+async def test_import_ignores_external_write_enabled_when_document_also_binds_the_datapoint(client, auth_headers):
+    """A document requesting the opt-in for a datapoint it also binds in the
+    same import must not end up with both — the binding is imported first
+    internally, but the opt-in check must still see it (Codex review)."""
+    dp_id = str(uuid.uuid4())
+    inst_id = str(uuid.uuid4())
+    binding_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [
+            {
+                "id": dp_id,
+                "name": f"Imported-{uuid.uuid4().hex[:6]}",
+                "data_type": "BOOLEAN",
+                "unit": None,
+                "tags": [],
+                "mqtt_alias": None,
+                "external_write_enabled": True,
+            }
+        ],
+        "bindings": [
+            {
+                "id": binding_id,
+                "datapoint_id": dp_id,
+                "adapter_type": _ADAPTER_TYPE,
+                "adapter_instance_id": inst_id,
+                "direction": "SOURCE",
+                "config": {},
+                "enabled": True,
+            }
+        ],
+        "adapter_instances": [
+            {"id": inst_id, "adapter_type": _ADAPTER_TYPE, "name": f"BoundInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False}
+        ],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["datapoints_created"] == 1
+    assert result["bindings_created"] == 1
+    assert any("external_write_enabled" in e for e in result["errors"])
+
+    get_resp = await client.get(f"/api/v1/datapoints/{dp_id}", headers=auth_headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["external_write_enabled"] is False
+
+
+async def test_import_applies_external_write_enabled_for_a_genuinely_bindingless_datapoint(client, auth_headers):
+    new_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [
+            {
+                "id": new_id,
+                "name": f"Imported-{uuid.uuid4().hex[:6]}",
+                "data_type": "BOOLEAN",
+                "unit": None,
+                "tags": [],
+                "mqtt_alias": None,
+                "external_write_enabled": True,
+            }
+        ],
+        "bindings": [],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["datapoints_created"] == 1
+    assert result["errors"] == []
+
+    get_resp = await client.get(f"/api/v1/datapoints/{new_id}", headers=auth_headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["external_write_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
 # POST /config/import  — adapter instances upsert
 # ---------------------------------------------------------------------------
 
@@ -421,6 +503,57 @@ async def test_import_skips_invalid_datetime_settings(client, auth_headers):
     assert response.json()["app_settings_upserted"] == 0
     assert len(response.json()["errors"]) == 3
     assert (await client.get("/api/v1/system/settings", headers=auth_headers)).json() == original
+
+
+async def test_import_skips_invalid_regional_settings(client, auth_headers):
+    """An unvalidated currency would reach the frontends, where Intl rejects it (#1073)."""
+    original = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [],
+        "bindings": [],
+        "app_settings": [
+            {"key": "region_format", "value": "nl-NL"},
+            {"key": "currency", "value": "x"},
+        ],
+    }
+
+    response = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["app_settings_upserted"] == 0
+    assert len(response.json()["errors"]) == 2
+    assert (await client.get("/api/v1/system/settings", headers=auth_headers)).json() == original
+
+
+async def test_import_applies_valid_regional_settings(client, auth_headers):
+    from obs.logic.manager import get_logic_manager
+
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2024-01-01T00:00:00",
+        "datapoints": [],
+        "bindings": [],
+        "app_settings": [
+            {"key": "region_format", "value": "de-CH"},
+            {"key": "currency", "value": "CHF"},
+        ],
+    }
+
+    response = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["app_settings_upserted"] == 2
+    settings = (await client.get("/api/v1/system/settings", headers=auth_headers)).json()
+    assert settings["region_format"] == "de-CH"
+    assert settings["currency"] == "CHF"
+    assert get_logic_manager()._app_config["region_format"] == "de-CH"
+    await client.put(
+        "/api/v1/system/settings",
+        json={"region_format": "auto", "currency": "auto"},
+        headers=auth_headers,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1137,42 @@ async def test_import_hierarchy(client, auth_headers):
     assert body["hierarchy_upserted"] >= 3  # tree + node + link
     row = await get_db().fetchone("SELECT source FROM hierarchy_trees WHERE id = ?", (tree_id,))
     assert row["source"] == "ets_import:groups"
+
+    # #1217 follow-up: an import whose hierarchy_nodes doesn't include a
+    # root node (e.g. a backup predating that feature) must still end up
+    # with exactly one is_tree_root=1 node for the tree, backfilled — a
+    # missing one broke list_trees()'s root_node_id (regression covered here).
+    roots = await get_db().fetchall("SELECT id FROM hierarchy_nodes WHERE tree_id=? AND is_tree_root=1", (tree_id,))
+    assert len(roots) == 1
+
+    list_resp = await client.get("/api/v1/hierarchy/trees", headers=auth_headers)
+    assert list_resp.status_code == 200
+    imported = next(t for t in list_resp.json() if t["id"] == tree_id)
+    assert imported["root_node_id"] == roots[0]["id"]
+
+
+async def test_import_hierarchy_root_node_round_trips_and_is_not_duplicated(client, auth_headers):
+    """Exporting a tree (with its is_tree_root node) and re-importing it must
+    not create a second root node — the explicit one in hierarchy_nodes is
+    recognized and the backfill pass is a no-op."""
+    tree_resp = await client.post("/api/v1/hierarchy/trees", json={"name": "RoundTripTree"}, headers=auth_headers)
+    assert tree_resp.status_code == 201
+    tree = tree_resp.json()
+
+    export_resp = await client.get("/api/v1/config/export", headers=auth_headers)
+    assert export_resp.status_code == 200
+    export_body = export_resp.json()
+    exported_tree_nodes = [n for n in export_body["hierarchy_nodes"] if n["tree_id"] == tree["id"]]
+    assert len(exported_tree_nodes) == 1
+    assert exported_tree_nodes[0]["is_tree_root"] is True
+    assert exported_tree_nodes[0]["id"] == tree["root_node_id"]
+
+    reimport_resp = await client.post("/api/v1/config/import", json=export_body, headers=auth_headers)
+    assert reimport_resp.status_code == 200
+
+    roots = await get_db().fetchall("SELECT id FROM hierarchy_nodes WHERE tree_id=? AND is_tree_root=1", (tree["id"],))
+    assert len(roots) == 1
+    assert roots[0]["id"] == tree["root_node_id"]  # same node, not a duplicate
 
 
 # ---------------------------------------------------------------------------

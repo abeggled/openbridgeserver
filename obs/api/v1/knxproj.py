@@ -39,6 +39,8 @@ from obs.api.v1.services.knx_traceability import (
     KnxDeviceDatapointsContextOut,
     KnxTraceDatapointOut,
     build_device_datapoints_context,
+    ga_order_by_sql,
+    pa_order_by_sql,
 )
 from obs.db.database import Database, get_db
 from obs.knxproj.csv_parser import parse_ga_csv
@@ -995,7 +997,7 @@ async def import_knxproj_file(
                 else {}
             ),
             **(
-                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der trades-Hierarchieimport wurde übersprungen.")}
+                {"trades": ("Keine Gewerke-Daten aus dieser .knxproj importiert. Der Gewerke-Hierarchieimport wurde übersprungen.")}
                 if trades_count == 0
                 else {}
             ),
@@ -1235,7 +1237,7 @@ async def list_knx_devices(
                 imported_at
             FROM knx_devices
             {where_sql}
-            ORDER BY individual_address
+            ORDER BY {pa_order_by_sql("individual_address")}
             LIMIT ? OFFSET ?""",
         (*params, size, page * size),
     )
@@ -1286,7 +1288,7 @@ async def get_knx_device(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"KNX Gerät {pa} nicht gefunden")
 
     co_rows = await db.fetchall(
-        """SELECT
+        f"""SELECT
                co.id,
                co.number,
                co.name,
@@ -1295,7 +1297,7 @@ async def get_knx_device(
            FROM knx_comm_objects co
            LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE co.device_id = ?
-           ORDER BY co.number, co.id, l.ga_address""",
+           ORDER BY CAST(co.number AS INTEGER), co.id, {ga_order_by_sql("l.ga_address")}""",
         (device_row["id"],),
     )
 
@@ -1431,7 +1433,7 @@ async def list_knx_devices_for_group_address(
     total = count_row["n"] if count_row else 0
 
     rows = await db.fetchall(
-        """SELECT DISTINCT
+        f"""SELECT DISTINCT
                d.individual_address AS pa,
                d.name,
                d.product_name AS manufacturer,
@@ -1442,7 +1444,7 @@ async def list_knx_devices_for_group_address(
            JOIN knx_comm_objects co ON co.device_id = d.id
            JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE l.ga_address = ?
-           ORDER BY d.individual_address
+           ORDER BY {pa_order_by_sql("d.individual_address")}
            LIMIT ? OFFSET ?""",
         (ga, size, page * size),
     )
@@ -1470,17 +1472,17 @@ async def list_group_addresses(
         if q:
             like = f"%{q}%"
             candidate_rows = await db.fetchall(
-                """SELECT address, name, description, dpt, imported_at
+                f"""SELECT address, name, description, dpt, imported_at
                    FROM knx_group_addresses
                    WHERE address LIKE ? OR name LIKE ? OR description LIKE ?
-                   ORDER BY address""",
+                   ORDER BY {ga_order_by_sql("address")}""",
                 (like, like, like),
             )
         else:
             candidate_rows = await db.fetchall(
-                """SELECT address, name, description, dpt, imported_at
+                f"""SELECT address, name, description, dpt, imported_at
                    FROM knx_group_addresses
-                   ORDER BY address""",
+                   ORDER BY {ga_order_by_sql("address")}""",
             )
         allowed_addresses = await _authorized_knx_group_addresses(
             db,
@@ -1497,10 +1499,10 @@ async def list_group_addresses(
     if q:
         like = f"%{q}%"
         rows = await db.fetchall(
-            """SELECT address, name, description, dpt, imported_at
+            f"""SELECT address, name, description, dpt, imported_at
                FROM knx_group_addresses
                WHERE address LIKE ? OR name LIKE ? OR description LIKE ?
-               ORDER BY address
+               ORDER BY {ga_order_by_sql("address")}
                LIMIT ? OFFSET ?""",
             (like, like, like, size, page * size),
         )
@@ -1511,9 +1513,9 @@ async def list_group_addresses(
         )
     else:
         rows = await db.fetchall(
-            """SELECT address, name, description, dpt, imported_at
+            f"""SELECT address, name, description, dpt, imported_at
                FROM knx_group_addresses
-               ORDER BY address
+               ORDER BY {ga_order_by_sql("address")}
                LIMIT ? OFFSET ?""",
             (size, page * size),
         )

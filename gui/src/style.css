@@ -38,6 +38,8 @@
   --handle-border:    #e2e8f0;
   --node-del-color:   #94a3b8;
   --node-dp-active:   #0f766e;
+  --node-script-color: #be185d;
+  --node-accent-hover: #0284c7;
 }
 .dark {
   --surface-950: #090b11;
@@ -60,6 +62,8 @@
   --handle-border:    #0f172a;
   --node-del-color:   #64748b;
   --node-dp-active:   #5eead4;
+  --node-script-color: #f9a8d4;
+  --node-accent-hover: #7dd3fc;
 }
 
 @layer base {
@@ -147,3 +151,23 @@
   100% { filter: brightness(1.0); }
 }
 .table tr.ringbuffer-row-matched { animation: ringbuffer-row-flash 600ms ease-out; }
+
+/* Logic editor node cards (#1074) — every function block renders its
+   type/category tint ON TOP of the opaque theme surface instead of using the
+   tint alone as its background. With a transparent card the configurable
+   canvas raster (#1072) shows straight through the block body, which made
+   generic blocks look washed out next to the already-opaque datapoint blocks.
+     - `background-color` is the opaque light/dark surface, so nothing behind
+       the card can bleed through;
+     - `background-image` paints the category tint the component passes in via
+       the inline `--node-tint` custom property (a flat two-stop gradient is
+       the only way to layer a colour over a background-color in one element);
+     - components that do not set `--node-tint` simply get the plain surface.
+   These rules live OUTSIDE @layer components so they beat Tailwind utility
+   classes; the node components' own scoped styles must therefore NOT declare
+   a `background`/`background-color` on the same element, or their higher
+   specificity (`.gn-card[data-v-…]`) would mask the surface again. */
+.logic-node-surface {
+  background-color: var(--node-card-bg);
+  background-image: linear-gradient(var(--node-tint, transparent), var(--node-tint, transparent));
+}

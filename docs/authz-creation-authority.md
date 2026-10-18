@@ -22,3 +22,14 @@ MQTT explicitly declares adapter delegation capabilities. KNX and every
 adapter without an explicit declaration remain non-delegable. A declaration
 does not create an API route by itself; it only authorizes a matching existing
 adapter-owned operation after the instance-scope check succeeds.
+
+Creating, changing and deleting a binding through
+`/api/v1/datapoints/{dp_id}/bindings` is such an operation: after the
+DataPoint and instance `operator` checks it is allowed exactly for an admin, or
+for a user principal when the adapter type declares `LINK_BINDING` (today
+MQTT, ioBroker, Anwesenheitssimulation and WEBHOOK). An API key is refused
+whatever its grants. The decision depends on the principal type and the
+declaration only; `tools/check_authz_contract.py` rejects an adapter-type
+comparison that lets an authorization helper return early, and
+`tests/unit/test_binding_delegation_matrix.py` checks every registered adapter
+type against this rule.

@@ -13,6 +13,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -26,8 +27,8 @@ from obs.models.types import DataTypeRegistry
 logger = logging.getLogger(__name__)
 
 _INSERT_DATAPOINT_SQL = """INSERT INTO datapoints
-   (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, created_at, updated_at)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+   (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, external_write_enabled, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +81,12 @@ class DataPointRegistry:
         self._bus: EventBus = event_bus
         self._points: dict[uuid.UUID, DataPoint] = {}
         self._values: dict[uuid.UUID, ValueState] = {}
+        # Serializes external_write_enabled enable-transitions (datapoints.py)
+        # against binding creation/update's own opt-in cleanup (bindings.py):
+        # without it, an enable-PATCH's "no write-semantic binding" check and
+        # a concurrent create_binding() race, and neither side's check
+        # observes the other's not-yet-committed change (Codex review).
+        self._external_write_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Startup
@@ -135,6 +142,10 @@ class DataPointRegistry:
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------
+
+    @property
+    def external_write_lock(self) -> asyncio.Lock:
+        return self._external_write_lock
 
     def get(self, dp_id: uuid.UUID) -> DataPoint | None:
         return self._points.get(dp_id)
@@ -200,6 +211,7 @@ class DataPointRegistry:
             int(dp.persist_value),
             int(dp.record_history),
             dp.control_class,
+            int(dp.external_write_enabled),
             dp.created_at.isoformat(),
             dp.updated_at.isoformat(),
         )
@@ -227,34 +239,56 @@ class DataPointRegistry:
             if clearable_field in payload.model_fields_set:
                 updates[clearable_field] = getattr(payload, clearable_field)
         now = datetime.now(UTC)
-
         old_name = dp.name
-        for key, val in updates.items():
-            setattr(dp, key, val)
-        dp.updated_at = now
 
-        await self._db.execute_and_commit(
-            """UPDATE datapoints
-               SET name=?, data_type=?, unit=?, tags=?, mqtt_alias=?, persist_value=?, record_history=?, control_class=?, updated_at=?
-               WHERE id=?""",
-            (
-                dp.name,
-                dp.data_type,
-                dp.unit,
-                json.dumps(dp.tags),
-                dp.mqtt_alias,
-                int(dp.persist_value),
-                int(dp.record_history),
-                dp.control_class,
-                now.isoformat(),
-                str(dp_id),
-            ),
-        )
-        # If persistence was just disabled, remove any stored last value
-        if not dp.persist_value:
-            await self._db.execute_and_commit("DELETE FROM datapoint_last_values WHERE datapoint_id=?", (str(dp_id),))
+        def _column_value(key: str, val: Any) -> Any:
+            if key == "tags":
+                return json.dumps(val)
+            if key in ("persist_value", "record_history", "external_write_enabled"):
+                return int(val)
+            return val
 
-        self._points[dp_id] = dp
+        # Only the columns actually being changed — a full-row UPDATE built
+        # from a snapshot of the whole object would silently lose a second,
+        # concurrently-committed PATCH to an unrelated field: both requests
+        # would snapshot the same pre-update row, so whichever commits last
+        # overwrites the first request's already-persisted change with its
+        # own now-stale value for that column (Codex review).
+        set_clause = ", ".join([*(f"{key}=?" for key in updates), "updated_at=?"])
+        params = [*(_column_value(key, val) for key, val in updates.items()), now.isoformat(), str(dp_id)]
+
+        async def _persist_and_apply() -> None:
+            await self._db.execute_and_commit(f"UPDATE datapoints SET {set_clause} WHERE id=?", params)
+            # Only mutate the live, shared registry object — the same
+            # instance WriteRouter reads directly, with no DB re-check —
+            # after the write commits, so a failed write never leaves e.g.
+            # external_write_enabled live in memory without it actually
+            # having persisted (Codex review).
+            for key, val in updates.items():
+                setattr(dp, key, val)
+            dp.updated_at = now
+            # If persistence was just disabled, remove any stored last value
+            if not dp.persist_value:
+                await self._db.execute_and_commit("DELETE FROM datapoint_last_values WHERE datapoint_id=?", (str(dp_id),))
+            self._points[dp_id] = dp
+
+        # Run the whole persist-then-apply sequence as a real Task, shielded
+        # from the caller's own cancellation: without this, a request
+        # cancelled (e.g. client disconnect, server timeout) right after the
+        # UPDATE physically commits but before these lines run would leave
+        # the live registry object stale relative to what's now actually in
+        # the database — e.g. WriteRouter still accepting external MQTT
+        # writes after a disabling PATCH whose DB write in fact succeeded
+        # (Codex review). Mirrors the asyncio.shield() pattern already used
+        # for this exact class of problem in
+        # obs/api/v1/datapoints.py::duplicate_datapoint().
+        task = asyncio.create_task(_persist_and_apply())
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+
         logger.debug("DataPoint updated: %s (%s)", dp.name, dp_id)
 
         if dp.name != old_name:
@@ -366,6 +400,7 @@ def _row_to_datapoint(row: Any) -> DataPoint:
         persist_value=bool(row["persist_value"]) if row["persist_value"] is not None else True,
         record_history=bool(row["record_history"]) if row["record_history"] is not None else True,
         control_class=row["control_class"] if "control_class" in row.keys() else "room_local",  # noqa: SIM118 -- sqlite Row membership checks values
+        external_write_enabled=bool(row["external_write_enabled"]) if "external_write_enabled" in row.keys() else False,  # noqa: SIM118
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )

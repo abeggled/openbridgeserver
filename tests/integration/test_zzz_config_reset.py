@@ -234,6 +234,8 @@ async def test_factory_reset_success(client, auth_headers):
         "date_format": "dd.MM.yyyy",
         "time_format": "HH:mm:ss",
         "language": "de",
+        "region_format": "auto",
+        "currency": "auto",
     }
 
 

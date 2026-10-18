@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -20,6 +21,8 @@ class _RegistryStub:
     def __init__(self, dps=None):
         self._dps = {dp.id: dp for dp in dps or []}
         self._values: dict[uuid.UUID, ValueState] = {}
+        self.last_update_payload = None
+        self.external_write_lock = asyncio.Lock()
 
     def all(self):
         return list(self._dps.values())
@@ -31,6 +34,7 @@ class _RegistryStub:
         return self._values.get(dp_id)
 
     async def update(self, dp_id, body):
+        self.last_update_payload = body
         datapoint = self._dps[dp_id]
         for field in body.model_fields_set:
             value = getattr(body, field)
@@ -112,6 +116,23 @@ async def _link_datapoint(db: Database, dp_id: uuid.UUID, node_id: str) -> None:
         VALUES (?, ?, ?, ?)
         """,
         (str(uuid.uuid4()), node_id, str(dp_id), NOW),
+    )
+
+
+async def _insert_binding(
+    db: Database,
+    dp_id: uuid.UUID,
+    *,
+    adapter_type: str = "MQTT",
+    direction: str = "SOURCE",
+    enabled: bool = True,
+) -> None:
+    await db.execute_and_commit(
+        """
+        INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, direction, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (str(uuid.uuid4()), str(dp_id), adapter_type, direction, int(enabled), NOW, NOW),
     )
 
 
@@ -304,6 +325,271 @@ async def test_user_write_grant_can_update_datapoint_metadata_without_api_key_ca
     )
 
     assert result.name == "Updated by user"
+
+
+@pytest.mark.asyncio
+async def test_non_admin_write_grant_cannot_enable_external_write_enabled(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000043", "Delegated write target")
+    await _insert_datapoint(db, datapoint)
+    await _insert_grant(db, str(datapoint.id), node_type="datapoint", role="resident")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.update_datapoint(
+            dp_id=datapoint.id,
+            body=dp_api.DataPointUpdate(external_write_enabled=True),
+            request=None,
+            _user=Principal(subject="alice", type="user", is_admin=False),
+            db=db,
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_admin_write_grant_can_edit_other_fields_when_flag_already_true(monkeypatch, db: Database):
+    # The GUI form always resends the full form state on save, including an
+    # already-true external_write_enabled — only an actual false-to-true
+    # transition should require admin, not merely including `true` in the body.
+    datapoint = _dp("00000000-0000-0000-0000-000000000047", "Already enabled")
+    datapoint.external_write_enabled = True
+    await _insert_datapoint(db, datapoint)
+    await _insert_grant(db, str(datapoint.id), node_type="datapoint", role="resident")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    result = await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(name="Renamed", external_write_enabled=True),
+        request=None,
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result.name == "Renamed"
+    assert result.external_write_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_non_admin_resubmitted_true_never_reaches_the_registry_write(monkeypatch, db: Database):
+    # TOCTOU (Codex review): the gate above only sees a snapshot of
+    # current_dp at check time. If a non-admin's already-gate-passed PATCH
+    # (submitted while the flag already read true) is delayed and a
+    # concurrent admin PATCH disables the flag in between, the delayed
+    # request must not be able to persist a stale `true` and silently
+    # revert the disable. Verified structurally here: a non-admin's `true`
+    # must never even reach the registry's update payload, regardless of
+    # current_dp's state at check time — which is what makes the race
+    # impossible in the first place, independent of any timing.
+    datapoint = _dp("00000000-0000-0000-0000-000000000052", "Already enabled")
+    datapoint.external_write_enabled = True
+    await _insert_datapoint(db, datapoint)
+    await _insert_grant(db, str(datapoint.id), node_type="datapoint", role="resident")
+    registry = _RegistryStub([datapoint])
+    monkeypatch.setattr(dp_api, "get_registry", lambda: registry)
+
+    await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(name="Renamed", external_write_enabled=True),
+        request=None,
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert registry.last_update_payload.external_write_enabled is None
+
+
+@pytest.mark.asyncio
+async def test_non_admin_write_grant_can_disable_external_write_enabled(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000044", "Delegated write target")
+    await _insert_datapoint(db, datapoint)
+    await _insert_grant(db, str(datapoint.id), node_type="datapoint", role="resident")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    result = await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(external_write_enabled=False),
+        request=None,
+        _user=Principal(subject="alice", type="user", is_admin=False),
+        db=db,
+    )
+
+    assert result.external_write_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_admin_can_enable_external_write_enabled(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000045", "Admin write target")
+    await _insert_datapoint(db, datapoint)
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    result = await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(external_write_enabled=True),
+        request=None,
+        _user=Principal(subject="admin", type="user", is_admin=True),
+        db=db,
+    )
+
+    assert result.external_write_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_enable_external_write_enabled_on_a_source_bound_datapoint(monkeypatch, db: Database):
+    # A SOURCE-only binding means the value is meant to be a passive read-out
+    # of a real device — WriteRouter's non-writable-binding guard rejects the
+    # MQTT set regardless of this flag, so accepting the PATCH would silently
+    # make the toggle a no-op (Codex review).
+    datapoint = _dp("00000000-0000-0000-0000-000000000048", "Source-bound target")
+    await _insert_datapoint(db, datapoint)
+    await _insert_binding(db, datapoint.id, direction="SOURCE")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.update_datapoint(
+            dp_id=datapoint.id,
+            body=dp_api.DataPointUpdate(external_write_enabled=True),
+            request=None,
+            _user=Principal(subject="admin", type="user", is_admin=True),
+            db=db,
+        )
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_enable_external_write_enabled_on_a_dest_bound_datapoint(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000049", "Dest-bound target")
+    await _insert_datapoint(db, datapoint)
+    await _insert_binding(db, datapoint.id, direction="DEST")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.update_datapoint(
+            dp_id=datapoint.id,
+            body=dp_api.DataPointUpdate(external_write_enabled=True),
+            request=None,
+            _user=Principal(subject="admin", type="user", is_admin=True),
+            db=db,
+        )
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_admin_can_enable_external_write_enabled_when_only_a_disabled_binding_exists(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000050", "Disabled-binding target")
+    await _insert_datapoint(db, datapoint)
+    await _insert_binding(db, datapoint.id, direction="SOURCE", enabled=False)
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    result = await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(external_write_enabled=True),
+        request=None,
+        _user=Principal(subject="admin", type="user", is_admin=True),
+        db=db,
+    )
+
+    assert result.external_write_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_admin_can_enable_external_write_enabled_when_only_a_message_binding_exists(monkeypatch, db: Database):
+    # MESSAGE-type bindings are pass-through observers, not real bindings —
+    # WriteRouter itself excludes them from has_write_semantic_bindings.
+    datapoint = _dp("00000000-0000-0000-0000-000000000051", "Message-bound target")
+    await _insert_datapoint(db, datapoint)
+    await _insert_binding(db, datapoint.id, adapter_type="MESSAGE", direction="SOURCE")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    result = await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(external_write_enabled=True),
+        request=None,
+        _user=Principal(subject="admin", type="user", is_admin=True),
+        db=db,
+    )
+
+    assert result.external_write_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_api_key_metadata_capability_cannot_enable_external_write_enabled(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000046", "API key write target")
+    await _insert_datapoint(db, datapoint)
+    key_id = "00000000-0000-0000-0000-000000000990"
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'hash-990', 'admin', ?)",
+        (key_id, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, 'datapoint.metadata.write')",
+        (key_id,),
+    )
+    await db.execute_and_commit(
+        """
+        INSERT INTO authz_node_roles (principal_type, principal_id, node_type, node_id, role, effect)
+        VALUES ('api_key', ?, 'datapoint', ?, 'resident', 'allow')
+        """,
+        (key_id, str(datapoint.id)),
+    )
+    principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.update_datapoint(
+            dp_id=datapoint.id,
+            body=dp_api.DataPointUpdate(external_write_enabled=True),
+            request=None,
+            _user=principal,
+            db=db,
+        )
+    assert exc_info.value.status_code == 403
+
+    # The denial must go through the same capability-use audit trail as any
+    # other rejected use of this API key's granted capability, not bypass it.
+    audit = await db.fetchall("SELECT details_json FROM audit_log_entries WHERE action='api_key.capability.use' ORDER BY id")
+    assert audit
+    assert '"result":"denied"' in audit[-1]["details_json"]
+
+
+@pytest.mark.asyncio
+async def test_api_key_without_target_grant_gets_same_denial_regardless_of_binding_topology(monkeypatch, db: Database):
+    # An API key with the metadata capability but no WRITE grant for this
+    # specific target must be denied identically whether the target has a
+    # binding or not — the binding-topology 422 check must never run before
+    # target authorization, or its distinct status code (422 vs 403) leaks
+    # whether the target has a binding to a caller unauthorized to know that
+    # at all (Codex review).
+    bound_dp = _dp("00000000-0000-0000-0000-000000000047", "Bound, no grant")
+    bare_dp = _dp("00000000-0000-0000-0000-000000000048", "Bindingless, no grant")
+    await _insert_datapoint(db, bound_dp)
+    await _insert_datapoint(db, bare_dp)
+    await _insert_binding(db, bound_dp.id, direction="SOURCE")
+
+    key_id = "00000000-0000-0000-0000-000000000991"
+    await db.execute_and_commit(
+        "INSERT INTO api_keys (id, name, key_hash, owner, created_at) VALUES (?, 'key', 'hash-991', 'admin', ?)",
+        (key_id, NOW),
+    )
+    await db.execute_and_commit(
+        "INSERT INTO api_key_capabilities (key_id, capability) VALUES (?, 'datapoint.metadata.write')",
+        (key_id,),
+    )
+    # deliberately no authz_node_roles grant for either datapoint
+    principal = Principal(subject=f"api_key:{key_id}", type="api_key", is_admin=False, owner="admin")
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([bound_dp, bare_dp]))
+
+    statuses = []
+    for dp in (bound_dp, bare_dp):
+        with pytest.raises(HTTPException) as exc_info:
+            await dp_api.update_datapoint(
+                dp_id=dp.id,
+                body=dp_api.DataPointUpdate(external_write_enabled=True),
+                request=None,
+                _user=principal,
+                db=db,
+            )
+        statuses.append(exc_info.value.status_code)
+
+    assert statuses == [403, 403]
 
 
 @pytest.mark.asyncio
@@ -1007,3 +1293,48 @@ async def test_central_plant_write_blocked_via_page_scope(monkeypatch, db: Datab
 
     assert exc_info.value.status_code == 403
     event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_with_value_rejects_a_value_incompatible_with_the_datapoints_type(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000070", "PatchValueCoerce")
+    await _insert_datapoint(db, datapoint)
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dp_api.update_datapoint(
+            dp_id=datapoint.id,
+            body=dp_api.DataPointUpdate(value="not-a-number"),
+            request=None,
+            _user=Principal(subject="admin", type="user", is_admin=True),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 422
+    event_bus.publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_with_explicit_none_value_publishes_uncertain_quality(monkeypatch, db: Database):
+    datapoint = _dp("00000000-0000-0000-0000-000000000071", "PatchValueNone")
+    await _insert_datapoint(db, datapoint)
+    monkeypatch.setattr(dp_api, "get_registry", lambda: _RegistryStub([datapoint]))
+    event_bus = MagicMock()
+    event_bus.publish = AsyncMock()
+    monkeypatch.setattr(dp_api, "get_event_bus", lambda: event_bus)
+
+    await dp_api.update_datapoint(
+        dp_id=datapoint.id,
+        body=dp_api.DataPointUpdate(value=None),
+        request=None,
+        _user=Principal(subject="admin", type="user", is_admin=True),
+        db=db,
+    )
+
+    event_bus.publish.assert_awaited_once()
+    published_event = event_bus.publish.call_args[0][0]
+    assert published_event.quality == "uncertain"
+    assert published_event.value is None

@@ -3,7 +3,7 @@ from __future__ import annotations
 import aiosqlite
 import pytest
 
-from obs.db.database import Database, _migration_v45
+from obs.db.database import MIGRATIONS, Database, _migration_v45
 
 AUTHZ_TABLE = """
 CREATE TABLE authz_node_roles (
@@ -100,12 +100,12 @@ async def test_v45_leaves_grant_types_with_missing_historical_tables_untouched()
 
 
 @pytest.mark.asyncio
-async def test_clean_install_reaches_v50_and_reconciliation_is_idempotent() -> None:
+async def test_clean_install_reaches_latest_schema_and_reconciliation_is_idempotent() -> None:
     db = Database(":memory:")
     await db.connect()
     try:
         row = await db.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert row["version"] == 50
+        assert row["version"] == MIGRATIONS[-1][0]
 
         await _migration_v45(db.conn)
         await _migration_v45(db.conn)
@@ -140,7 +140,7 @@ async def test_populated_v44_database_upgrades_to_v50_and_applies_v45(tmp_path) 
     await upgraded.connect()
     try:
         version = await upgraded.fetchone("SELECT MAX(version) AS version FROM schema_version")
-        assert version["version"] == 50
+        assert version["version"] == MIGRATIONS[-1][0]
         rows = await upgraded.fetchall(
             "SELECT principal_id, node_id FROM authz_node_roles ORDER BY principal_id",
         )

@@ -24,7 +24,7 @@
           @click="node.children?.length && toggleExpand(node.id)"
           :class="['text-sm text-slate-700 dark:text-slate-200 flex-1 truncate select-none',
             node.children?.length ? 'cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors' : '']">
-          {{ node.name }}
+          {{ node.name }}<span v-if="node.children?.length" class="font-normal text-slate-400" :data-testid="`child-count-${node.id}`"> ({{ node.children.length }})</span>
         </span>
         <span v-if="node.description" class="text-xs text-slate-400 hidden lg:block truncate max-w-24">{{ node.description }}</span>
 
@@ -34,7 +34,7 @@
             @click="emit('reorder', { node, siblings: nodes, index, direction: 'up' })"
             :disabled="index === 0"
             class="p-0.5 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 disabled:cursor-not-allowed"
-            title="Nach oben">
+            :title="$t('hierarchy.moveUp')">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
             </svg>
@@ -43,7 +43,7 @@
             @click="emit('reorder', { node, siblings: nodes, index, direction: 'down' })"
             :disabled="index === nodes.length - 1"
             class="p-0.5 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-20 disabled:cursor-not-allowed"
-            title="Nach unten">
+            :title="$t('hierarchy.moveDown')">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
             </svg>
@@ -52,17 +52,17 @@
 
         <!-- ── weitere Aktionen (hover) ── -->
         <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button @click="emit('add-child', node)" class="btn-secondary btn-xs" :data-testid="`btn-add-child-${node.id}`" title="Unterknoten hinzufügen">
+          <button @click="emit('add-child', node)" class="btn-secondary btn-xs" :data-testid="`btn-add-child-${node.id}`" :title="$t('hierarchy.addChildNode')">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
             </svg>
           </button>
-          <button @click="emit('edit', node)" class="btn-secondary btn-xs" :data-testid="`btn-edit-node-${node.id}`" title="Umbenennen">
+          <button @click="emit('edit', node)" class="btn-secondary btn-xs" :data-testid="`btn-edit-node-${node.id}`" :title="$t('hierarchy.renameNode')">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.293-6.293a1 1 0 011.414 0l1.586 1.586a1 1 0 010 1.414L12 16H9v-3z"/>
             </svg>
           </button>
-          <button @click="emit('delete', node)" class="btn-danger btn-xs" :data-testid="`btn-delete-node-${node.id}`" title="Löschen">
+          <button @click="emit('delete', node)" class="btn-danger btn-xs" :data-testid="`btn-delete-node-${node.id}`" :title="$t('common.delete')">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7h6m-7 0a1 1 0 011-1h4a1 1 0 011 1m-7 0h8"/>
             </svg>
@@ -89,7 +89,7 @@
 <script setup>
 import { reactive } from 'vue'
 
-const props = defineProps({
+defineProps({
   nodes:        { type: Array,  default: () => [] },
   treeId:       { type: String, required: true },
   depth:        { type: Number, default: 0 },

@@ -95,7 +95,9 @@ describe('NodeConfigPanel timer durations', () => {
     })
     await flushPromises()
 
-    const input = wrapper.find('input[type="text"]')
+    // Skip the header block-name field (issue #1157) so this covers the
+    // generic schema renderer, not the panel heading.
+    const input = wrapper.find('input[type="text"]:not([data-testid="node-label-input"])')
     await input.setValue('after')
     await input.trigger('change')
     expect(wrapper.emitted('update').at(-1)[0].label).toBe('after')

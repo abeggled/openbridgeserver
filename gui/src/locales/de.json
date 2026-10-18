@@ -36,6 +36,22 @@
     "submitting": "Anmelden …",
     "logoAlt": "open bridge server"
   },
+  "setup": {
+    "title": "Ersteinrichtung",
+    "intro": "Diese Installation hat noch kein Administratorkonto. Lege es jetzt an — danach ist die Oberfläche wie gewohnt erreichbar.",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "passwordRepeat": "Passwort wiederholen",
+    "passwordHint": "Mindestens {n} Zeichen.",
+    "submit": "Konto anlegen",
+    "submitting": "Konto wird angelegt …",
+    "securityNote": "Führe diesen Schritt direkt nach der Installation aus: bis das Konto existiert, kann jeder, der den Server im Netzwerk erreicht, es anlegen.",
+    "errorUsernameRequired": "Bitte einen Benutzernamen eingeben.",
+    "errorPasswordTooShort": "Das Passwort muss mindestens {n} Zeichen lang sein.",
+    "errorPasswordMismatch": "Die beiden Passwörter stimmen nicht überein.",
+    "errorAlreadyDone": "Die Einrichtung wurde bereits abgeschlossen. Lade die Seite neu und melde dich an.",
+    "errorFailed": "Das Konto konnte nicht angelegt werden. Bitte erneut versuchen."
+  },
   "dashboard": {
     "title": "Übersicht",
     "subtitle": "Systemübersicht – Live-Status",
@@ -126,7 +142,24 @@
       "persistValueHint": "nach Neustart sofort verfügbar",
       "recordHistory": "Historisierung aktiv",
       "recordHistoryHint": "Werte in der Historie-DB speichern",
-      "saveError": "Fehler beim Speichern"
+      "externalWriteEnabled": "Externes Schreiben erlauben",
+      "externalWriteEnabledHint": "jeder MQTT-Client mit Broker-Zugriff kann diesen Wert dann setzen",
+      "saveError": "Fehler beim Speichern",
+      "unitCategories": {
+        "temperature": "Temperatur",
+        "humidityAirQuality": "Feuchte & Luftqualität",
+        "pressure": "Druck",
+        "electricity": "Elektrizität",
+        "light": "Licht",
+        "speedAcceleration": "Geschwindigkeit & Beschleunigung",
+        "angle": "Winkel",
+        "volumeFlow": "Volumen & Durchfluss",
+        "lengthArea": "Länge & Fläche",
+        "mass": "Masse",
+        "time": "Zeit",
+        "radiation": "Strahlung",
+        "other": "Sonstiges"
+      }
     },
     "delete": {
       "confirm": "Objekt wirklich löschen?",
@@ -151,7 +184,7 @@
     "duplicate": {
       "action": "Duplizieren",
       "title": "Objekt duplizieren",
-      "hint": "Alle Eigenschaften und Adapter-Verknüpfungen werden kopiert. Aktuelle Werte und Historie werden nicht übernommen.",
+      "hint": "Alle Eigenschaften und Adapter-Verknüpfungen werden kopiert, mit Ausnahme der Zentraltechnik-Einstufung und der externen Schreibfreigabe — beide sind bei der Kopie immer deaktiviert. Aktuelle Werte und Historie werden nicht übernommen.",
       "defaultName": "Kopie von {name}",
       "saving": "Wird dupliziert …",
       "error": "Das Objekt konnte nicht dupliziert werden."
@@ -385,7 +418,10 @@
         "selectOnewireInstanceFirst": "Bitte zuerst eine 1-Wire-Instanz wählen",
         "noSensorsFound": "Keine Sensoren gefunden",
         "onewireScanFailed": "1-Wire-Sensor-Scan fehlgeschlagen",
-        "onewireAliasSaveFailed": "Alias konnte nicht gespeichert werden"
+        "onewireAliasSaveFailed": "Alias konnte nicht gespeichert werden",
+        "webhookEntryNotFound": "Aufruf-URL für diese Verknüpfung nicht gefunden",
+        "webhookLoadFailed": "Aufruf-URL konnte nicht geladen werden",
+        "webhookRotateFailed": "Token konnte nicht neu erzeugt werden"
       },
       "knxSection": "KNX-Verknüpfung",
       "dptLabel": "DPT *",
@@ -596,7 +632,22 @@
       "ztSelectHoliday": "— Feiertag wählen —",
       "ztOutputDivider": "Ausgabe",
       "ztOutputValueLabel": "Schalt-Wert",
-      "ztOutputValueHint": "z.B. 1 / 0 / true / false / 21.5 / Beliebiger Text",
+      "ztOutputValueHint_boolean": "Schaltet den Wert auf Ein (true) bzw. Aus (false).",
+      "ztOutputValueHint_integer": "Ganzzahl, z.B. 50 oder 0.",
+      "ztOutputValueHint_float": "Dezimalzahl, z.B. 21.5 oder 0.",
+      "ztOutputValueHint_date": "Datum im Format JJJJ-MM-TT, z.B. 2026-12-24.",
+      "ztOutputValueHint_time": "Uhrzeit im Format HH:MM:SS, z.B. 08:00:00.",
+      "ztOutputValueHint_datetime": "Datum und Uhrzeit (ISO 8601), z.B. 2026-12-24T08:00:00.",
+      "ztOutputValueHint_text": "Wird unverändert übernommen — auch 1, 0, on oder ein.",
+      "ztOutputValueOn": "Ein (true)",
+      "ztOutputValueOff": "Aus (false)",
+      "ztOutputValueErrorRequired": "Bitte einen Schaltwert angeben.",
+      "ztOutputValueErrorBoolean": "Kein gültiger Ja/Nein-Wert — erlaubt sind 1/0, true/false, on/off, ein/aus.",
+      "ztOutputValueErrorInteger": "Kein gültiger Ganzzahl-Wert.",
+      "ztOutputValueErrorFloat": "Kein gültiger Zahlenwert.",
+      "ztOutputValueErrorDate": "Kein gültiges Datum (erwartet JJJJ-MM-TT).",
+      "ztOutputValueErrorTime": "Keine gültige Uhrzeit (erwartet HH:MM oder HH:MM:SS).",
+      "ztOutputValueErrorDatetime": "Kein gültiger Zeitstempel (erwartet JJJJ-MM-TTTHH:MM:SS).",
       "anwSection": "Anwesenheitssimulation — Binding-Optionen",
       "anwOffsetOverrideLabel": "Versatz überschreiben",
       "anwDefaultAdapter": "Standard (Adapter)",
@@ -703,7 +754,40 @@
       "ztChristmasEve": "Heiligabend",
       "ztAdventOffset": "1. Advent {sign}{n} Tage",
       "notSet": "—",
-      "ztHolidayOffset": "{name} {sign}{n} Tage"
+      "ztHolidayOffset": "{name} {sign}{n} Tage",
+      "webhookSection": "Webhook-Verknüpfung",
+      "webhookIntro": "Ein eingehender HTTP-Aufruf setzt diesen Datenpunkt. Geeignet für Geräte, die nur eine URL aufrufen können — z. B. eine Türsprechstelle beim Klingeln.",
+      "webhookSlugLabel": "Slug (Pfadsegment)",
+      "webhookSlugPlaceholder": "haustuer-klingel",
+      "webhookSlugHint": "Kleinbuchstaben, Ziffern, Bindestrich und Unterstrich. Teil der Aufruf-URL und je Webhook-Instanz eindeutig.",
+      "webhookMethodsLabel": "Erlaubte HTTP-Methoden",
+      "webhookMethodsHint": "Geräte, die nur eine URL aufrufen können, benutzen GET.",
+      "webhookValueSourceLabel": "Wertquelle",
+      "webhookValueSourceFixed": "Fester Wert",
+      "webhookValueSourceRequest": "Wert aus der Anfrage",
+      "webhookFixedValueLabel": "Fester Wert",
+      "webhookFixedValueHint": "Wird in den Datentyp des Datenpunkts umgewandelt — für einen Taster oder eine Klingel „true“.",
+      "webhookValueParamLabel": "Parameter-/Feldname",
+      "webhookValueParamHint": "Bei GET der Query-Parameter „?{name}=…“, bei POST das gleichnamige Feld im JSON-Body.",
+      "webhookDebounceLabel": "Entprellung (ms)",
+      "webhookDebounceHint": "Weitere Aufrufe innerhalb dieser Zeit werden mit 204 bestätigt, setzen den Wert aber nicht erneut. 0 = aus.",
+      "webhookCallUrlSection": "Aufruf-URL",
+      "webhookCallUrlLabel": "URL mit Token als Query-Parameter",
+      "webhookCallUrlHint": "Diese URL im Gerät hinterlegen. Das Token berechtigt ausschließlich diesen einen Datenpunkt.",
+      "webhookCallUrlPathLabel": "URL mit Token im Pfad",
+      "webhookCallUrlPathHint": "Alternative für Geräte, deren Konfigurationsfeld keine Query-Parameter zulässt.",
+      "webhookCallCount": "Aufrufe",
+      "webhookPublishCount": "Gesetzte Werte",
+      "webhookLastCalled": "Letzter Aufruf",
+      "webhookNeverCalled": "nie",
+      "webhookRotateToken": "Token neu erzeugen",
+      "webhookRotateTokenHint": "Widerruft die bisherige URL sofort — andere Integrationen bleiben unberührt.",
+      "webhookAutoresetLabel": "Auto-Reset aktivieren",
+      "webhookAutoresetHint": "Setzt den Datenpunkt nach der eingestellten Zeit automatisch auf den Reset-Wert zurück — damit wird aus dem Webhook ein Trigger (Klingel: true, kurz darauf wieder false). Ein erneuter, angenommener Aufruf startet die Zeit neu; ein Aufruf innerhalb der Entprellung zählt nicht.",
+      "webhookAutoresetValueLabel": "Reset-Wert",
+      "webhookAutoresetValueHint": "Wird wie der ausgelöste Wert in den Datentyp umgewandelt und durchläuft dieselbe Transformation.",
+      "webhookAutoresetDelayLabel": "Reset-Verzögerung (ms)",
+      "webhookAutoresetDelayHint": "Wie lange der ausgelöste Wert stehen bleibt. 0 = sofort zurücksetzen."
     },
     "knx": {
       "scan": {
@@ -1130,6 +1214,50 @@
           "title": "Anfrage-Timeout (s)",
           "description": "Sekunden pro owserver-Aufruf, bevor er als Fehler gewertet wird"
         }
+      },
+      "WEBHOOK": {
+        "path_prefix": {
+          "title": "Pfad-Präfix"
+        },
+        "trust_forwarded_for": {
+          "title": "X-Forwarded-For vertrauen"
+        },
+        "rate_limit_per_minute": {
+          "title": "Ratenlimit (Aufrufe/Minute je IP)"
+        },
+        "slug": {
+          "title": "Slug (Pfadsegment)"
+        },
+        "token": {
+          "title": "Token"
+        },
+        "methods": {
+          "title": "HTTP-Methoden"
+        },
+        "value_source": {
+          "title": "Wertquelle"
+        },
+        "fixed_value": {
+          "title": "Fester Wert"
+        },
+        "value_param": {
+          "title": "Parameter-/Feldname"
+        },
+        "debounce_ms": {
+          "title": "Entprellung (ms)"
+        },
+        "allowed_networks": {
+          "title": "Erlaubte Netze (CIDR)"
+        },
+        "autoreset": {
+          "title": "Auto-Reset"
+        },
+        "autoreset_value": {
+          "title": "Reset-Wert"
+        },
+        "autoreset_delay_ms": {
+          "title": "Reset-Verzögerung (ms)"
+        }
       }
     },
     "statusDetail": {
@@ -1167,7 +1295,11 @@
       "invalidBindingsSkipped": "{count} ungültige Verknüpfung(en) übersprungen ({examples})",
       "messageProviderFailures": "MESSAGE-Provider-Fehler: {count} Ziel(e)",
       "messageArchiveWriteFailed": "Meldungsarchiv konnte nicht geschrieben werden",
-      "messageSent": "MESSAGE gesendet"
+      "messageSent": "MESSAGE gesendet",
+      "webhookListening": "Erreichbar unter {prefix}/<slug>",
+      "webhookPrefixConflict": "Pfad-Präfix {prefix} überschneidet sich mit dem Präfix einer anderen Instanz",
+      "webhookDuplicateSlug": "Doppelte Slugs ignoriert: {slugs}",
+      "webhookInvalidConfig": "Ungültige Instanz-Konfiguration"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
@@ -1175,6 +1307,69 @@
       "configValidationError": "Konfigurations-Validierungsfehler: {error}",
       "connectOk": "Verbindung zu {type} erfolgreich",
       "connectFailed": "Verbindungsversuch fehlgeschlagen"
+    },
+    "allowlist": {
+      "bindingLabel": "Erlaubte Netze (CIDR)",
+      "placeholder": "10.38.0.0/16",
+      "addEntry": "Eintrag hinzufügen",
+      "removeEntry": "Eintrag entfernen",
+      "emptyMeansAny": "Keine Einträge — alle Absender dürfen diese Verknüpfung auslösen.",
+      "invalidEntries": "{n} Eintrag/Einträge sind keine gültige IP oder CIDR-Notation",
+      "hint": "Je Zeile eine IP-Adresse oder ein Netz, z. B. 10.38.0.0/16 oder 192.168.1.5. Eine leere Liste schränkt nicht ein.",
+      "rejectedCalls": "{n} Aufruf(e) abgewiesen",
+      "instanceRejectedCalls": "Instanzweit abgewiesen: {n} Aufruf(e) (Summe über alle Verknüpfungen, auch nicht zuordenbare)",
+      "lastRejection": "Zuletzt: {reason} — Absender {host}",
+      "originBlocked": "Diese URL zeigt auf {host}. Die Allowlist dieser Verknüpfung erlaubt diesen Absender nicht — ein Aufruf von hier aus wird mit 404 abgewiesen.",
+      "reason": {
+        "rate_limited": "Ratenlimit überschritten",
+        "unknown_slug": "unbekannter Slug",
+        "invalid_binding": "ungültige Binding-Konfiguration",
+        "invalid_token": "falsches Token",
+        "method_not_allowed": "HTTP-Methode nicht erlaubt",
+        "address_blocked": "Absenderadresse nicht in der Allowlist"
+      }
+    },
+    "pushoverOptions": {
+      "section": "Pushover-Optionen",
+      "intro": "Gilt nur für die ausgewählten Pushover-Ziele; andere Provider senden unverändert. Leere Felder werden nicht an Pushover übertragen.",
+      "imageUrl": "Bild-URL",
+      "imageUrlHint": "OBS lädt das Bild (JPEG, PNG, GIF oder WebP, max. 5 MB) und hängt es an. Externe Quellen nur über HTTPS; interne Kameras (auch HTTP) müssen in der URL Target Allowlist freigegeben sein.",
+      "url": "URL",
+      "urlTitle": "URL-Titel",
+      "placeholderHint": "Bild-URL, URL und URL-Titel unterstützen ###DP### · ###DPU### · ###DPN### · ###DPI### · ###DATE### · ###TIME### · ###TS###",
+      "priority": "Priorität",
+      "priorityDefault": "Standard",
+      "priorities": {
+        "pm2": "-2 · sehr niedrig",
+        "pm1": "-1 · niedrig",
+        "p0": "0 · normal",
+        "p1": "1 · hoch",
+        "p2": "2 · Notfall (mit Bestätigung)"
+      },
+      "format": "Formatierung",
+      "formats": {
+        "text": "Nur Text",
+        "html": "HTML",
+        "monospace": "Monospace"
+      },
+      "retry": "Retry (Sekunden)",
+      "expire": "Expire (Sekunden)",
+      "sound": "Sound",
+      "soundDefault": "Standard des Ziels",
+      "ttl": "TTL (Sekunden)",
+      "timestamp": "Zeitstempel (Unix-Sekunden)",
+      "errors": {
+        "invalid": "Die Pushover-Optionen sind ungültig. Bitte die markierten Felder korrigieren.",
+        "integer": "Bitte eine ganze Zahl eingeben.",
+        "positive": "Der Wert muss grösser als 0 sein.",
+        "retryMin": "Retry muss mindestens 30 Sekunden betragen.",
+        "retryRequired": "Für die Notfall-Priorität ist Retry erforderlich.",
+        "expireRequired": "Für die Notfall-Priorität ist Expire erforderlich.",
+        "expireRange": "Expire muss zwischen 1 und 10800 Sekunden liegen.",
+        "urlTitleWithoutUrl": "Ein URL-Titel benötigt eine URL.",
+        "soundInvalid": "Sound-Namen bestehen nur aus Buchstaben, Ziffern, _ und -.",
+        "tooLong": "Höchstens {max} Zeichen."
+      }
     }
   },
   "history": {
@@ -1304,7 +1499,8 @@
       "export": "Exportieren",
       "failed": "Export fehlgeschlagen",
       "title": "Export",
-      "fileExtHint": "Dateiendung: {ext}."
+      "fileExtHint": "Dateiendung: {ext}.",
+      "escapeCharPlaceholder": "(leer)"
     },
     "topbar": {
       "activeTitle": "Aktiv — klicken zum Deaktivieren (nur für mich)",
@@ -1597,18 +1793,28 @@
     "openSheet": "Logic-Sheet öffnen",
     "renameGraph": "Graph umbenennen",
     "duplicateGraph": "Graph duplizieren",
+    "duplicateNameSuffix": " (Kopie)",
     "exportJson": "Graph als JSON exportieren",
     "importJson": "Graph aus JSON importieren",
     "searchNodes": "Knoten suchen — z.B. Raum, Heizung …",
     "searchNodesPalette": "Knoten suchen …",
     "negateOutput": "Ausgang negieren",
     "debugMode": "Debug-Modus: zeigt Werte nach Ausführen",
-    "snapToGrid": "Raster",
+    "snapToGrid": "Einrasten",
     "snapToGridTitle": "Funktionsblöcke am Raster einrasten",
+    "gridVisible": "Raster",
+    "gridShowTitle": "Raster einblenden",
+    "gridHideTitle": "Raster ausblenden",
     "gridSize": "Rastermaß",
     "deleteBlock": "Block löschen",
     "deleteNode": "Ast löschen",
     "init": "Init",
+    "blockName": {
+      "label": "Blockname",
+      "editTitle": "{name} — Doppelklick zum Umbenennen",
+      "panelHint": "Eigener Name für diesen Block. Leer lassen für den Standardtitel des Blocktyps.",
+      "typeAndId": "{type} · {id}"
+    },
     "nodeTypes": {
       "divide": "Dividieren",
       "const_value": "Festwert",
@@ -1617,10 +1823,14 @@
       "or": "OR",
       "not": "NOT",
       "xor": "XOR",
+      "binary_stats": "Binärstatistik",
       "gate": "TOR",
       "memory": "Speicher",
+      "change_filter": "Änderungsfilter",
+      "edge_detect": "Flankenerkennung",
       "compare": "Vergleich",
       "hysteresis": "Hysterese",
+      "merge": "Klemme",
       "decision": "Entscheidung",
       "value_mapping": "Zuordnung",
       "datapoint_read": "Objekt lesen",
@@ -1632,6 +1842,7 @@
       "statistics": "Statistik",
       "avg_multi": "Mittelwert",
       "string_concat": "String Verketten",
+      "string_replace": "String Suchen/Ersetzen",
       "heating_circuit": "Sommer/Winter (DIN)",
       "min_max_tracker": "Min/Max Tracker",
       "consumption_counter": "Verbrauchszähler",
@@ -1641,6 +1852,7 @@
       "timer_cron": "Trigger",
       "datetime": "Datum/Zeit",
       "operating_hours": "Betriebsstd.",
+      "sensor_watchdog": "Sensor Watchdog",
       "python_script": "Python Script",
       "ai_logic": "AI Logic",
       "astro_sun": "Astro Sonne",
@@ -1655,7 +1867,8 @@
       "substring_extractor": "Substring / RegEx",
       "ical": "iCalendar",
       "api_client": "API Client",
-      "mcp_tool": "MCP Tool"
+      "mcp_tool": "MCP Tool",
+      "hems_surplus": "Überschussregelung"
     },
     "selectGraph": "— Logikblatt wählen —",
     "newGraphBtn": "+ Neu",
@@ -1672,7 +1885,6 @@
     "errorToggle": "Fehler beim Ändern des Status",
     "debugBtn": "Debug",
     "debugInspector": {
-      "title": "Debug-Inspektor",
       "inputs": "Eingänge",
       "outputs": "Ausgänge",
       "incoming": "Eingehender Wert",
@@ -1684,7 +1896,6 @@
       "copyAll": "Nutzdaten kopieren",
       "copy": "Kopieren",
       "copied": "Kopiert!",
-      "close": "Schließen",
       "noValues": "Keine Eingänge",
       "noExecution": "Logikblatt ausführen, um Ausgänge zu prüfen.",
       "timestamp": "Ausgeführt",
@@ -1725,10 +1936,14 @@
     },
     "runResultWithWarnings": "Graph ausgeführt — {count} Nodes geprüft, {warnings} Warnungen",
     "nodeError": "⚠ Fehler",
-    "graphValidationCycle": "Zyklus erkannt: {count} Node(s) benötigen eine Speicher-Node als Tick-Grenze.",
-    "graphValidationConnectBlocked": "Verbindung nicht erstellt: Zyklus erkannt ({count} Node(s)). Nutze eine Speicher-Node für Rückkopplungen.",
-    "graphValidationSaveBlocked": "Speichern blockiert: Zyklus erkannt ({count} Node(s)). Nutze eine Speicher-Node für Rückkopplungen.",
-    "graphValidationNodeError": "Zyklus erkannt; direkte Rückkopplung benötigt eine Speicher-Node.",
+    "graphValidationCycle": "Zyklus erkannt: {count} Node(s) benötigen eine Speicher-, Verzögerungs- oder Impuls-Node als Tick-Grenze.",
+    "graphValidationConnectBlocked": "Verbindung nicht erstellt: Zyklus erkannt ({count} Node(s)). Nutze eine Speicher-, Verzögerungs- oder Impuls-Node für Rückkopplungen.",
+    "graphValidationSaveBlocked": "Speichern blockiert: Zyklus erkannt ({count} Node(s)). Nutze eine Speicher-, Verzögerungs- oder Impuls-Node für Rückkopplungen.",
+    "graphValidationNodeError": "Zyklus erkannt; direkte Rückkopplung benötigt eine Speicher-, Verzögerungs- oder Impuls-Node.",
+    "graphValidationDuplicateHandle": "Mehrfachverbindung erkannt: {count} Eingang/Eingänge haben mehr als eine Verbindung. Nutze eine Klemme-Node, um mehrere Quellen zusammenzuführen.",
+    "graphValidationConnectBlockedDuplicateHandle": "Verbindung nicht erstellt: Dieser Eingang hat bereits eine Verbindung. Nutze eine Klemme-Node, um mehrere Quellen zusammenzuführen.",
+    "graphValidationSaveBlockedDuplicateHandle": "Speichern blockiert: {count} Eingang/Eingänge haben mehr als eine Verbindung. Nutze eine Klemme-Node, um mehrere Quellen zusammenzuführen.",
+    "graphValidationNodeErrorDuplicateHandle": "Mehrfachverbindung erkannt; nur eine Verbindung pro Eingang möglich. Nutze eine Klemme-Node.",
     "duplicated": "Graph dupliziert als „{name}“",
     "errorDuplicate": "Fehler beim Duplizieren",
     "copiedNodes": "{count} Block(e) kopiert",
@@ -1741,6 +1956,8 @@
     "imported": "Graph „{name}“ importiert",
     "errorImport": "Ungültige oder fehlerhafte Export-Datei",
     "newGraphPlaceholder": "z.B. Licht Erdgeschoss",
+    "hierarchyNodes": "Hierarchie-Knoten",
+    "hierarchyNodesHint": "Optional — direkt bei der Erstellung einem oder mehreren Knoten der Logik-Hierarchie zuordnen. Ohne Auswahl bleibt die Logik wie bisher nicht zugeordnet.",
     "notSelected": "— nicht gewählt —",
     "filterBadge": "Filter / Transformation aktiv",
     "negatePort": "{id} negieren",
@@ -1758,13 +1975,16 @@
         "notification": "Benachrichtigung",
         "integration": "Integration",
         "script": "Skripte",
-        "ai": "AI"
+        "ai": "AI",
+        "hems": "Energiemanagement"
       }
     },
     "ports": {
       "value": "Wert",
       "trigger": "Trigger",
       "changed": "Geändert",
+      "rising": "Trigger-Steigend",
+      "falling": "Trigger-Fallend",
       "object": "Objekt",
       "result": "Ergebnis",
       "enable": "Freigabe",
@@ -1772,7 +1992,10 @@
       "output": "Ausgang",
       "out": "Out",
       "in_n": "IN {n}",
+      "in_n_changed": "IN {n} Geändert",
+      "out_n": "OUT {n}",
       "data": "Daten",
+      "text": "Text",
       "body": "Body",
       "done": "Fertig",
       "running": "Läuft",
@@ -1800,6 +2023,10 @@
       "inputs": "{n} Eingänge",
       "parts": "{n} Teile",
       "rules": "{n} Regeln",
+      "replaceModes": {
+        "plain": "Plain",
+        "regex": "RegEx"
+      },
       "sequence": "{n} Schritte · {mode}",
       "hold": "→ halten",
       "filters": "{n} Filter",
@@ -1810,7 +2037,8 @@
         "zwischen": "zwischen",
         "ausschneiden": "ausschneiden",
         "regex": "regex"
-      }
+      },
+      "consumers": "{n} Verbraucher"
     },
     "missingNode": {
       "title": "Unbekannter Block",
@@ -1825,6 +2053,10 @@
         "text": "Text",
         "textPlaceholder": "Notiztext…",
         "empty": "Leerer Kommentar — im Panel bearbeiten"
+      },
+      "panelTabs": {
+        "settings": "Einstellungen",
+        "debug": "Debug-Werte"
       },
       "tabs": {
         "connection": "Verbindung",
@@ -1982,7 +2214,7 @@
         "variablesSection": "Variablen",
         "addVariable": "Variable hinzufügen",
         "removeVariable": "Entfernen",
-        "variablesHint": "Variablen referenzieren bestehende Objekte und können als ###OBS1###, ###OBS2### usw. in URL, Headern, Auth-Feldern und Body verwendet werden.",
+        "variablesHint": "Variablen referenzieren bestehende Objekte und können als ###OBS1###, ###OBS2### usw. in URL, Headern, Auth-Feldern und Body verwendet werden. Zusätzlich stehen die Datums-/Zeitvariablen (z. B. ###HH###, ###yyyy###, ###DATE###, ###TS###) zur Verfügung; im Schema, Host und Port der URL sind keine Variablen erlaubt.",
         "noVariables": "Keine Variablen konfiguriert."
       },
       "stringConcat": {
@@ -1992,6 +2224,37 @@
         "staticSection": "Statischer Text pro Eingang",
         "staticHint": "Verbundene Eingänge überschreiben den statischen Text. Leere Felder ergeben einen leeren Teilstring.",
         "inputPlaceholder": "Eingang {n} …"
+      },
+      "stringReplace": {
+        "rules": "Regeln",
+        "moveUp": "Regel nach oben",
+        "moveDown": "Regel nach unten",
+        "orderHint": "Die Regeln werden von oben nach unten nacheinander angewendet — jede Regel arbeitet auf dem Ergebnis der vorherigen.",
+        "modes": {
+          "plain": "Suchtext (Plain)",
+          "regex": "Regulärer Ausdruck (RegEx)"
+        },
+        "searchLabel": "Suchen nach",
+        "searchPlaceholder": "z.B. alt",
+        "patternLabel": "RegEx-Muster",
+        "patternPlaceholder": "z.B. (\\d+)",
+        "replaceLabel": "Ersetzen durch",
+        "replacePlaceholder": "leer = Treffer entfernen",
+        "groupHint": "Gruppenverweise wie \\1 oder \\g<name> sind möglich.",
+        "replaceAll": "Alle Vorkommen ersetzen"
+      },
+      "sensorWatchdog": {
+        "inputs": "Überwachte Eingänge",
+        "add": "+ Eingang",
+        "remove": "Eingang entfernen",
+        "removeShort": "−",
+        "labelPlaceholder": "Anzeigename",
+        "timeoutLabel": "Timeout (Sekunden)",
+        "faultValueLabel": "Fault-Value",
+        "faultValuePlaceholder": "Ersatzwert",
+        "repeatLabel": "Wiederholung (Sekunden)",
+        "repeatPlaceholder": "0 = keine Wiederholung",
+        "repeatHint": "Löst den Fehlertrigger zusätzlich in diesem Intervall erneut aus, solange der Eingang weiter ausbleibt. 0 = nur einmalig beim Auslösen."
       },
       "rules": {
         "add": "+ Regel",
@@ -2051,7 +2314,9 @@
         "valueN": "Wert {n}",
         "outputsCount": "Ausgänge ({n})",
         "labelPlaceholder": "Bezeichnung",
-        "pathExample": "z.B. data.temperature"
+        "pathExample": "z.B. data.temperature",
+        "previewPruned": "Vorschau gekürzt: Das Dokument überschreitet die Vorschaugrösse, Arrays und lange Texte wurden verkürzt. Die Live-Werte je Ausgang können vom tatsächlichen Ergebnis abweichen.",
+        "pathListTruncated": "Pfadliste auf {n} Einträge gekürzt — weitere Pfade bitte direkt eingeben."
       },
       "substr": {
         "modeLabel": "Modus",
@@ -2117,7 +2382,10 @@
       },
       "invalidJson": "Ungültiges JSON: {msg}",
       "common": {
-        "optional": "(optional)"
+        "optional": "(optional)",
+        "boolTrue": "Wahr",
+        "boolFalse": "Falsch",
+        "unsetEnum": "Nicht gesetzt"
       },
       "const_value": {
         "value": "Wert",
@@ -2132,6 +2400,15 @@
       "xor": {
         "input_count": "Anzahl Eingänge"
       },
+      "binary_stats": {
+        "input_count": "Anzahl Eingänge",
+        "unwired_inputs": "Unverbundene Eingänge",
+        "unwired_inputsOptions": {
+          "ignore": "Ignorieren",
+          "count_false": "Als FALSE zählen"
+        },
+        "threshold_count": "Schwelle (0 = aus)"
+      },
       "gate": {
         "closed_behavior": "Verhalten (gesperrt)",
         "default_value": "Standardwert (bei gesperrt)",
@@ -2141,6 +2418,36 @@
       "memory": {
         "initial_value": "Initialwert",
         "data_type": "Datentyp",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "merge": {
+        "input_count": "Anzahl Eingänge",
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "change_filter": {
+        "persist_state": "Zustand nach Neustart wiederherstellen"
+      },
+      "edge_detect": {
+        "on_rising": "Steigende Flanke",
+        "on_risingOptions": {
+          "value": "Trigger + Wert",
+          "trigger": "Nur Trigger",
+          "off": "Aus"
+        },
+        "value_rising": "Wert bei steigender Flanke",
+        "on_falling": "Fallende Flanke",
+        "on_fallingOptions": {
+          "value": "Trigger + Wert",
+          "trigger": "Nur Trigger",
+          "off": "Aus"
+        },
+        "value_falling": "Wert bei fallender Flanke",
+        "data_type": "Datentyp",
+        "data_typeOptions": {
+          "bool": "Boolean",
+          "number": "Zahl",
+          "string": "Text"
+        },
         "persist_state": "Zustand nach Neustart wiederherstellen"
       },
       "hysteresis": {
@@ -2269,8 +2576,8 @@
         "title": "Titel",
         "fallback": "Nachricht (Fallback)",
         "placeholders": "Der Logikblock hat keinen Datenpunkt-Kontext; MESSAGE-Platzhalter werden unverändert gesendet.",
-        "priority": "Priorität",
-        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden."
+        "legacy": "Legacy-Block. Für neue Benachrichtigungen bitte den Block Benachrichtigung verwenden.",
+        "pushoverInputsHint": "Verbundene Eingänge URL, URL-Titel und Bild-URL überschreiben die statischen Werte. Statische Werte unterstützen Variablen wie ###OBS1###."
       },
       "messageArchive": {
         "archive": "Meldungsarchiv",
@@ -2324,13 +2631,13 @@
         "response_type": "Response Content-Typ",
         "verify_ssl": "SSL-Zertifikat prüfen",
         "headers": "Header (JSON-Objekt, optional)",
-        "headers_secret_file": "Header aus Secret-Datei (JSON-Objekt, optional)",
+        "headers_value_file": "Header aus Datei (JSON-Objekt, optional)",
         "timeout_s": "Timeout (s)",
         "auth_type": "Authentifizierung",
         "auth_username": "Benutzername (Basic/Digest)",
         "auth_password": "Passwort (Basic/Digest)",
         "auth_token": "Bearer Token",
-        "auth_token_file": "Bearer Token aus Secret-Datei"
+        "auth_value_file": "Bearer Token aus Datei"
       },
       "math_formula": {
         "formula": "Formel",
@@ -2342,7 +2649,110 @@
         "out_min": "Ausgang Min",
         "out_max": "Ausgang Max"
       },
-      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern"
+      "resizeHandle": "Ziehen, um die Panel-Breite zu ändern",
+      "triggerMode": {
+        "label": "Auslösemodus",
+        "event": "Bei jedem Event",
+        "edge": "Nur bei steigender Flanke",
+        "eventHint": "Jedes eingehende true am Trigger-Eingang löst aus – auch wenn der Wert vorher schon true war.",
+        "edgeHint": "Löst nur beim Wechsel von false auf true aus. Ein erneutes true ohne vorheriges false wird ignoriert."
+      },
+      "hemsSurplus": {
+        "gridSection": "Netzanschlusspunkt & Regelung",
+        "gridMode": "Messart",
+        "gridModeOptions": {
+          "bidirectional": "Bidirektional über einen Eingang",
+          "split": "Getrennte Eingänge (Bezug/Einspeisung)",
+          "feed_in_only": "Nur Einspeiseleistung"
+        },
+        "gridModeHints": {
+          "bidirectional": "Ein Eingang: positiver Wert = Netzbezug, negativer Wert = Einspeisung.",
+          "split": "Zwei positive Eingänge. Intern gilt Netzleistung = Netzbezug − Netzeinspeisung. Beide Werte müssen gültig sein.",
+          "feed_in_only": "Ein Eingang mit der Einspeiseleistung (0 oder größer)."
+        },
+        "feedInOnlyWarning": "Einschränkung: Bei 0 W kann der Block nicht unterscheiden, ob Gleichgewicht oder bereits Netzbezug vorliegt. Er hält die Leistung deshalb zunächst und reduziert nach Ablauf der Ausschaltverzögerung schrittweise.",
+        "global": {
+          "interval_s": "Regelintervall (Sekunden, 5–3600)",
+          "target_w": "Einspeisereserve am Netzanschlusspunkt (W)",
+          "on_delay_s": "Einschaltverzögerung (Sekunden)",
+          "off_delay_s": "Ausschaltverzögerung (Sekunden)",
+          "max_age_s": "Maximales Alter der Zählerwerte (Sekunden)",
+          "max_age_sHint": "0 = keine Alterungsprüfung. Sonst muss der Geändert-Ausgang des Read-Objekts am Block angeschlossen sein; bleibt ein neues Telegramm länger aus, gilt der Wert als veraltet.",
+          "invalid_behavior": "Verhalten bei ungültigen Eingangswerten",
+          "invalid_behaviorOptions": {
+            "off": "Sicher: 0 %, aus, kein Trigger",
+            "hold": "Letzte Ausgaben halten"
+          },
+          "only_on_change": "Nur bei Änderung ausgeben",
+          "only_on_changeHint": "Verhindert unnötige Schreibvorgänge"
+        },
+        "consumers": "Verbraucher",
+        "add": "+ Verbraucher",
+        "remove": "Verbraucher entfernen",
+        "removeShort": "−",
+        "noConsumers": "Noch kein Verbraucher angelegt.",
+        "priorityHint": "Die Reihenfolge ist die Priorität: oben = höchste Priorität. Per Drag-and-drop sortieren; neue Verbraucher werden unten angefügt.",
+        "dragHint": "Zum Umsortieren ziehen",
+        "namePlaceholder": "Name",
+        "fields": {
+          "active": "Aktiv (in der Regelung berücksichtigen)",
+          "mode": "Regelart",
+          "modeOptions": {
+            "percent": "Prozent (0–100 %)",
+            "onoff": "Ein/Aus",
+            "trigger": "Trigger"
+          },
+          "power_source": "Leistungsquelle",
+          "power_sourceOptions": {
+            "fixed": "Fester Wert",
+            "input": "Eingang"
+          },
+          "power_w": "Maximalleistung (W)",
+          "power_w_onoff": "Nennleistung (W)",
+          "min_power_w": "Mindestleistung (W)",
+          "min_setpoint": "Minimaler Sollwert (%)",
+          "max_setpoint": "Maximaler Sollwert (%)",
+          "step": "Schrittweite (%)",
+          "below_min": "Unterhalb der Mindestleistung",
+          "below_minOptions": {
+            "off": "Auf 0 % setzen",
+            "hold_min": "Auf Mindestwert halten (bis Ausschaltverzögerung abläuft)"
+          },
+          "on_threshold_w": "Einschaltschwelle (W)",
+          "on_threshold_wPlaceholder": "leer = Nennleistung",
+          "off_threshold_w": "Ausschaltschwelle (W)",
+          "off_threshold_wPlaceholder": "leer = Nennleistung",
+          "min_runtime_s": "Mindestlaufzeit (Sekunden)",
+          "min_off_s": "Mindestauszeit (Sekunden)",
+          "on_delay_s": "Einschaltverzögerung (Sekunden)",
+          "on_delay_s_trigger": "Mindestüberschuss muss bestehen für (Sekunden)",
+          "on_delay_sPlaceholder": "leer = globaler Wert",
+          "off_delay_s": "Ausschaltverzögerung (Sekunden)",
+          "off_delay_sPlaceholder": "leer = globaler Wert",
+          "min_surplus_w": "Benötigter Mindestüberschuss (W)",
+          "pulse_s": "Impulsdauer (Sekunden)",
+          "lockout_s": "Sperrzeit nach Auslösung (Sekunden)",
+          "rearm": "Erneute Freigabe",
+          "rearmOptions": {
+            "after_lockout": "Nach Ablauf der Sperrzeit",
+            "after_drop": "Erst nach zwischenzeitlichem Unterschreiten des Schwellwerts",
+            "reset_input": "Über den Reset-Eingang"
+          },
+          "reserve_w": "Reservierte Leistung bei Auslösung (W)",
+          "enable_default": "Freigegeben (Vorgabewert)",
+          "enable_defaultHint": "Gilt, solange der Eingang „Freigabe“ dieses Verbrauchers nicht verbunden ist, und bei der Fehlerbehandlung „Vorgabewert verwenden“.",
+          "enable_fault": "Freigabe fehlend, ungültig oder veraltet",
+          "enable_faultOptions": {
+            "lock": "Verbraucher sperren (sicher, empfohlen bei verbundenem Eingang)",
+            "default": "Vorgabewert verwenden"
+          }
+        },
+        "releaseState": {
+          "released": "Freigegeben",
+          "blocked": "Gesperrt"
+        },
+        "releaseStateHint": "Zustand der Freigabe im letzten Lauf (nur im Debug-Modus, live aktualisiert)"
+      }
     },
     "portLabels": {
       "heizmode": "Heizmodus",
@@ -2390,7 +2800,38 @@
       "icalTomorrow": "Morgen",
       "icalToday": "Heute",
       "reachable": "Erreichbar",
-      "latencyMs": "Latenz (ms)"
+      "latencyMs": "Latenz (ms)",
+      "faultText": "Fehlertext",
+      "faultTrigger": "Fehler-Trigger",
+      "countTrue": "Anzahl TRUE",
+      "countFalse": "Anzahl FALSE",
+      "majorityTrue": "Mehrheit TRUE",
+      "total": "Gesamt",
+      "percentTrue": "Anteil TRUE %",
+      "tie": "Gleichstand",
+      "thresholdReached": "Schwelle erreicht",
+      "url": "URL",
+      "hems": {
+        "grid": "Netzleistung (+Bezug/−Einspeisung)",
+        "grid_import": "Netzbezug",
+        "grid_export": "Netzeinspeisung",
+        "feed_in": "Einspeiseleistung",
+        "enable": "Freigabe",
+        "target": "Einspeisereserve (dyn.)",
+        "plant_ok": "Anlage OK",
+        "consumer": "Verbraucher {n}",
+        "measuredPower": "Gemessene Leistung",
+        "maxPower": "Maximalleistung",
+        "reset": "Reset",
+        "status": "Status",
+        "grid_power": "Netzleistung",
+        "surplus": "Überschuss",
+        "budget": "Leistungsbudget",
+        "allocated": "Verteilte Leistung",
+        "remaining": "Verbleibendes Budget",
+        "warning": "Warnung",
+        "release": "Freigabe"
+      }
     },
     "nodeDescriptions": {
       "datetime": "Gibt aktuelles Datum und Uhrzeit in der konfigurierten Zeitzone und im gewählten Format aus.",
@@ -2400,10 +2841,14 @@
       "or": "Ausgang ist true wenn MINDESTENS EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
       "not": "Invertiert den Eingang",
       "xor": "Ausgang ist true wenn GENAU EIN Eingang true ist. Eingänge (2–30) und Ausgang einzeln negierbar.",
+      "binary_stats": "Zählt TRUE/FALSE über 2–30 Binäreingänge (je Eingang negierbar): Anzahl, Mehrheit, Gleichstand, Prozentanteil und Schwelle (k von n). Unverbundene Eingänge werden wahlweise ignoriert oder als FALSE gezählt.",
       "gate": "Signal-Tor: lässt den Eingang durch wenn Freigabe=true, sperrt sonst. Verhalten bei gesperrtem Tor: letzten Wert halten (retain) oder Standardwert ausgeben.",
       "memory": "Gibt den gespeicherten Wert aus dem vorherigen Logiklauf aus und speichert den aktuellen Eingangswert für den nächsten Lauf. Explizite Tick-Grenze für kontrollierte Rückkopplungen.",
+      "change_filter": "Gibt den Eingangswert aus und setzt den Geändert-Trigger nur dann, wenn er sich vom zuletzt empfangenen Wert unterscheidet. Wiederholt gleiche Werte werden unterdrückt.",
+      "edge_detect": "Wertet den Eingang boolesch aus und reagiert auf den Wechsel: Bei steigender Flanke (falsch → wahr) wird der Wert für steigende Flanken ausgegeben und der Steigend-Trigger gesetzt, bei fallender Flanke (wahr → falsch) entsprechend der Wert für fallende Flanken und der Fallend-Trigger. Ohne Flanke wird nichts auf den Ausgang gesendet.",
       "compare": "Vergleicht zwei Werte (>, <, =, >=, <=, !=)",
       "hysteresis": "Schaltet bei Überschreitung ON, erst bei Unterschreitung OFF",
+      "merge": "Bündelt mehrere unabhängige Wertquellen auf einen gemeinsamen Ausgang: wer zuletzt einen neuen Wert liefert, wird durchgereicht (Edomi-Klemme).",
       "decision": "Prüft einen Eingangswert gegen mehrere unabhängige Bedingungen. Jeder Ausgang liefert unabhängig TRUE oder FALSE; mehrere Ausgänge können gleichzeitig TRUE sein.",
       "value_mapping": "Prüft eine geordnete Regelliste und gibt den Rückgabewert der ersten passenden Regel aus. Optional liefert ein Sonst-Wert ein Ergebnis, wenn keine Regel passt.",
       "datapoint_read": "Gibt den aktuellen Wert eines DataPoints aus. Triggert bei Wertänderung.",
@@ -2415,6 +2860,7 @@
       "statistics": "Berechnet Min/Max/Mittelwert laufend über alle empfangenen Werte. Reset-Eingang setzt zurück.",
       "avg_multi": "Berechnet den Mittelwert von 2–20 Eingängen (aktuell) und gleitende Mittelwerte über Zeitfenster: 1 min, 1 h, 1 Tag, 7/14/30/180/365 Tage. Jeder neue Wert wird mit Zeitstempel gespeichert. Die Zeitfensterwerte bleiben nach einem Neustart erhalten (konfigurierbar).",
       "string_concat": "Verkettet 2–20 Texte zu einem Ergebnis. Jeder Eingang kann dynamisch verbunden oder statisch vorbelegt sein. Ist ein Eingang verbunden, hat er Vorrang vor dem statischen Text.",
+      "string_replace": "Ersetzt Treffer in einem Text. Mehrere Regeln werden in der angegebenen Reihenfolge nacheinander auf das Zwischenergebnis angewendet. Je Regel wählbar: Suchtext (Plain) oder regulärer Ausdruck (RegEx, Gruppenverweise wie \\1 im Ersetzen-Feld), Gross-/Kleinschreibung und alle oder nur das erste Vorkommen.",
       "heating_circuit": "Sommer/Winter-Umschaltung nach DIN (Mannheimer Methode). Eingang: Aussentemperatur. Messzeitpunkte (Erste-Kreuzung): T1 = anliegender Wert ab 07:00, T2 = ab 14:00, T3 = ab 21:00. Funktioniert auch wenn der Sensor die Messstunden nicht exakt trifft. Jeder Slot wird pro Tag nur einmal erfasst. Tagesmittel: T_avg = (T1 + T2 + 2×T3) / 4. Monatsmittel: gleitender Mittelwert der letzten 31 Tagesmittel. Heizmodus EIN wenn T_avg < Grenztemperatur, AUS wenn T_avg ≥ Grenztemperatur + Hysterese. Fehlende Slots werden beim Start aus der Historie ergänzt. Zustand bleibt über Neustarts erhalten.",
       "min_max_tracker": "Verfolgt Minimum und Maximum über Zeitperioden (täglich, wöchentlich, monatlich, jährlich, absolut). Periodenwerte werden automatisch am Tages-/Wochen-/Monats-/Jahreswechsel zurückgesetzt.",
       "consumption_counter": "Berechnet Verbrauchswerte (täglich, wöchentlich, monatlich, jährlich) aus einem fortlaufenden Zählerwert. Speichert zusätzlich den Verbrauch der Vorperiode für Vergleiche.",
@@ -2423,19 +2869,68 @@
       "value_sequence": "Schreibt konfigurierte Werte und Pausen als Sequenz ohne die Logikausführung zu blockieren.",
       "timer_cron": "Löst automatisch nach einem Cron-Zeitplan aus (Minute Stunde Tag Monat Wochentag).",
       "operating_hours": "Zählt Betriebsstunden solange 'Aktiv' wahr ist. Reset setzt den Zähler zurück.",
+      "sensor_watchdog": "Überwacht bis zu 10 Eingänge auf das Ausbleiben neuer Werte. Bleibt ein Eingang länger als sein konfigurierter Timeout ohne neuen Wert, wird sein Ausgang durch den konfigurierten Fault-Value ersetzt und ein Fehlertext samt Trigger ausgegeben. Arbeitet autonom über einen internen Scheduler.",
       "python_script": "Führt ein Python-Skript aus. Verfügbar: inputs dict → return value",
       "astro_sun": "Berechnet Sonnenauf- und -untergang basierend auf Breitengrad/Längengrad. Benötigt: pip install astral",
       "notify_message": "Sendet eine Benachrichtigung über die konfigurierten Ziele eines Message-/Benachrichtigungsadapters.",
       "notify_pushover": "Sendet eine Push-Benachrichtigung via Pushover API (api.pushover.net). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "notify_sms": "Sendet eine SMS via seven.io Gateway (gateway.seven.io). Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt.",
       "message_archive": "Schreibt eine Meldung in ein Meldungsarchiv. Wird automatisch ausgelöst wenn eine Nachricht am Eingang ankommt oder der Trigger wahr ist.",
-      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist.",
-      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird bei steigender Flanke am Trigger-Eingang ausgeführt. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
+      "wake_on_lan": "Sendet ein Wake-on-LAN Magic-Paket an ein Gerät per UDP-Broadcast. Wird ausgelöst wenn der Trigger-Eingang true ist – je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke.",
+      "host_check": "Pingt einen Host und liefert den Erreichbarkeitsstatus (true/false) sowie die Latenz in Millisekunden. Wird ausgelöst wenn der Trigger-Eingang true ist – je nach Auslösemodus bei jedem eingehenden true-Event oder nur bei der steigenden Flanke. Empfehlung: mit einem Timer/Cron-Knoten verbinden.",
       "json_extractor": "Parst einen JSON-String und extrahiert einen oder mehrere Werte anhand von Schlüsselpfaden (Punkt-Notation, z.B. sensors.temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "xml_extractor": "Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
       "substring_extractor": "Extrahiert Text aus einem String per Substring-Operation oder regulärem Ausdruck. Modi: links_von / rechts_von (erstes oder letztes Vorkommen), zwischen (zwei Markierungen), ausschneiden (Position + Länge), regex (Python re-Syntax, Gruppen wählbar).",
       "ical": "Lädt ein iCal-/ICS-File von einer URL und wertet Termine aus. RAW-Ausgang liefert den rohen Kalendertext. Pro Filter gibt es 4 Ausgänge: Array (alle Termine), Nächstes Datum, Morgen (Bool), Heute (Bool). Filter können auf Summary, Location und/oder Description angewendet werden.",
-      "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung."
+      "api_client": "Sendet HTTP-Anfragen (GET/POST/PUT…) an externe APIs. Trigger-Eingang steuert die Ausführung.",
+      "hems_surplus": "HEMS Lite: verteilt den am Netzanschlusspunkt gemessenen Überschuss nach Priorität auf mehrere Verbraucher — stufenlos (0–100 %), Ein/Aus oder als einmaliger Trigger. Die Reihenfolge der Liste ist die Priorität; sinkt das Budget, wird von unten nach oben reduziert. Bei ungültigem oder veraltetem Zählerwert gehen alle Ausgänge in den sicheren Zustand (0 %, aus, kein Trigger). Jeder Verbraucher hat einen eigenen Eingang „Freigabe“; ein gesperrter Verbraucher wird bei der Verteilung übersprungen und behält seine Position."
+    },
+    "graphPicker": {
+      "title": "Logik öffnen",
+      "breadcrumbRoot": "Alle Hierarchien",
+      "noTrees": "Es sind noch keine Hierarchien vorhanden.",
+      "unassigned": "Nicht zugeordnete Logiken",
+      "empty": "Dieser Ordner ist leer.",
+      "organize": "Logik-Hierarchie bearbeiten",
+      "loading": "Wird geladen …",
+      "errorLoading": "Konnte nicht geladen werden.",
+      "assign": "Hierarchie zuweisen",
+      "assignHint": "Diese Logik einer oder mehreren Hierarchie-Positionen zuweisen — bestehende Zuordnungen bleiben erhalten.",
+      "assignConfirm": "Zuweisen",
+      "assignError": "Die Hierarchie-Zuweisung ist fehlgeschlagen.",
+      "currentGraph": "aktuell geöffnet",
+      "removeHere": "Aus Hierarchie entfernen",
+      "removeHereTitle": "Entfernt die Logik nur aus dieser Hierarchie-Position. Ist dies die letzte Position, erscheint die Logik danach oben bei „Nicht zugeordnet“.",
+      "deleteHereTitle": "Diese Logik ist keiner Hierarchie zugeordnet — hier löschen entfernt sie unwiderruflich.",
+      "deleteTitle": "Löscht diesen Logik-Graphen unwiderruflich, inklusive aller Hierarchie-Zuordnungen.",
+      "deleteConfirm": "Der Logik-Graph „{name}“ wird unwiderruflich gelöscht.",
+      "showAll": "Liste aller Logiken",
+      "noGraphs": "Es sind noch keine Logikblätter vorhanden.",
+      "links": "Verknüpfungen",
+      "linksModalTitle": "Hierarchie-Verknüpfungen: {name}",
+      "linksEmpty": "Diese Logik ist aktuell keiner Hierarchie-Position zugeordnet."
+    },
+    "variables": {
+      "insert": "Variable einfügen…",
+      "groupStandard": "Standardwerte",
+      "groupDateTime": "Datum/Zeit",
+      "groupObjects": "Objektvariablen",
+      "resolvedPath": "Aufgelöster Pfad",
+      "unresolved": "Nicht auflösbare Variable(n): {names}",
+      "extractorHint": "Variablen können als ###OBS1###, ###OBS2### usw. in den Pfaden verwendet werden – zusammen mit den Datums-/Zeitvariablen (z. B. ###HH###, ###yyyy###).",
+      "textHint": "Variablen können als ###OBS1###, ###OBS2### usw. in Titel, Fallback-Text bzw. statischen Texten verwendet werden – zusammen mit den Datums-/Zeitvariablen (z. B. ###HH###, ###DATE###). Über Eingänge verbundene Werte werden nicht ausgewertet.",
+      "replaceHint": "Variablen können als ###OBS1###, ###OBS2### usw. im Ersetzungstext verwendet werden – zusammen mit den Datums-/Zeitvariablen. Bei RegEx-Regeln bleiben eingesetzte Werte wörtlich (Gruppenverweise wie \\1 wirken nur im eigenen Text).",
+      "urlHint": "Variablen (z. B. ###yyyy###, ###OBS1###) sind nur im Pfad und in der Query der URL erlaubt, nicht in Schema, Host oder Port.",
+      "issues": {
+        "unknownVariable": "Unbekannte Variable {name}",
+        "pathNotFound": "Pfad '{path}' nicht gefunden",
+        "invalidXPath": "Ungültiger XPath '{path}': {error}",
+        "notConfigured": "Variable {name} ist nicht konfiguriert",
+        "notAvailable": "Variable {name}: Objekt {object} ist nicht verfügbar",
+        "invalidObject": "Variable {name} verweist auf ein ungültiges Objekt",
+        "noValue": "Variable {name}: Objekt {object} hat keinen Wert",
+        "emptyValue": "Der Variablenwert ist leer"
+      }
     }
   },
   "authzPreflight": {
@@ -2483,7 +2978,13 @@
       "themeLightDesc": "Helles Erscheinungsbild",
       "themeDark": "Dunkel",
       "themeDarkDesc": "Dunkles Erscheinungsbild",
-      "tzSaved": "Zeitzone auf «{tz}» gesetzt"
+      "tzSaved": "Zeitzone auf «{tz}» gesetzt",
+      "regionFormat": "Regionalformat",
+      "regionFormatHint": "Bestimmt Zahlen-, Währungs- und Datumsformate. Unabhängig von der Sprache — Deutsch in der Schweiz formatiert anders als Deutsch in Deutschland.",
+      "regionFormatAuto": "Automatisch (aus Sprache: {format} · {sample})",
+      "currency": "Währung",
+      "currencyAuto": "Automatisch (aus Regionalformat: {currency})",
+      "formatPreview": "Vorschau"
     },
     "security": {
       "title": "URL-Ziel-Allowlist",
@@ -3158,10 +3659,12 @@
       "december": "Dezember"
     },
     "chooseFile": "Datei wählen",
-    "noFileSelected": "Keine Datei ausgewählt"
+    "noFileSelected": "Keine Datei ausgewählt",
+    "copy": "Kopieren",
+    "copied": "Kopiert"
   },
   "hierarchy": {
-    "title": "Gerätestruktur",
+    "title": "Hierarchien",
     "deleteNode": "Ast löschen",
     "newHierarchy": "Neue Hierarchie",
     "importFromEts": "Aus ETS importieren",
@@ -3231,7 +3734,11 @@
       "trades": "Gewerke",
       "mid": "Mittelgruppen",
       "flat": "Flach (nur GA)"
-    }
+    },
+    "addChildNode": "Unterknoten hinzufügen",
+    "moveUp": "Nach oben",
+    "moveDown": "Nach unten",
+    "renameNode": "Umbenennen"
   },
   "topbar": {
     "logout": "Abmelden"
@@ -3303,5 +3810,12 @@
       "acknowledged": "Quittiert",
       "closed": "Geschlossen"
     }
+  },
+  "help": {
+    "title": "Hilfe",
+    "openLabel": "Hilfe zu diesem Bereich öffnen",
+    "unavailable": "Für diesen Bereich ist noch keine Hilfe verfügbar.",
+    "systemUnavailable": "Die Hilfe-Inhalte sind auf diesem Server aktuell nicht verfügbar.",
+    "openInNewTab": "In neuem Tab öffnen"
   }
 }

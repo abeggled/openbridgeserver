@@ -1,0 +1,71 @@
+name: Help Contract
+
+on:
+  push:
+    branches:
+      - main
+      - '[0-9][0-9][0-9][0-9].[0-9]*'  # release maintenance lines, e.g. 2026.6, 2026.7
+      - bug/*
+      - bugfix/*
+      - feat/*
+      - feature/*
+  pull_request:
+    branches:
+      - main
+      - '[0-9][0-9][0-9][0-9].[0-9]*'  # release maintenance lines, e.g. 2026.6, 2026.7
+
+permissions: {}
+
+jobs:
+  help-contract:
+    name: help-contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      # The gate parses the frontends with @babel/parser and @vue/compiler-sfc
+      # (declared by gui/) and compares the generated help index against a real
+      # VitePress build (help/). Both are real parses rather than
+      # reimplementations — see the module docstring of check_help_contract.py.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            gui/package-lock.json
+            help/package-lock.json
+
+      - name: Install GUI dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Install help site dependencies
+        working-directory: help
+        run: npm ci
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements_dev.txt
+
+      - name: Validate help coverage of documented UI surfaces
+        run: python tools/check_help_contract.py
+
+      - name: Run help contract tests
+        run: >-
+          pytest -q
+          tests/unit/test_check_help_contract.py
+
+      - name: Run help index generator tests
+        run: node --test help/scripts/generate-help-index.test.mjs
+
+      - name: Run declaration scanner tests
+        run: node --test tools/scan-help-declarations.test.mjs

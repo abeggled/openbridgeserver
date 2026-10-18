@@ -372,6 +372,8 @@ async def test_import_from_ets_groups_mode(client, auth_headers):
         ("delete", "/api/v1/hierarchy/nodes/does-not-exist", None, None),
         ("post", "/api/v1/hierarchy/links", {"node_id": "x", "datapoint_id": "y"}, None),
         ("delete", "/api/v1/hierarchy/links", None, {"node_id": "x", "datapoint_id": "y"}),
+        ("post", "/api/v1/hierarchy/logic-graph-links", {"node_id": "x", "graph_id": "y"}, None),
+        ("delete", "/api/v1/hierarchy/logic-graph-links", None, {"node_id": "x", "graph_id": "y"}),
         ("post", "/api/v1/hierarchy/import-from-ets", {"tree_name": "ETS", "mode": "groups"}, None),
     ],
 )

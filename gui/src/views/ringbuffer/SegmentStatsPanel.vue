@@ -151,6 +151,8 @@ import { useSegmentProblems } from '@/composables/useSegmentProblems'
 import { useLegacyMigration } from '@/composables/useLegacyMigration'
 import { useAuthStore } from '@/stores/auth'
 import { formatBytesBinary } from '@/utils/formatBytesBinary'
+import { useRegionalFormat } from '@/composables/useRegionalFormat'
+import { formatNumber } from '@/utils/numberFormat'
 import Badge from '@/components/ui/Badge.vue'
 
 const props = defineProps({
@@ -176,6 +178,7 @@ onMounted(() => {
 const { t } = useI18n()
 const { fmtDateTime } = useTz()
 const { problemSummary: buildProblemSummary, segmentProblemTitle } = useSegmentProblems()
+const { regionFormat } = useRegionalFormat()
 
 const common = computed(() => props.store?.common ?? {})
 const extra = computed(() => props.store?.backend_extra ?? {})
@@ -207,11 +210,8 @@ function statusLabel(status) {
 function fmtInt(n) {
   const value = Number(n)
   if (!Number.isFinite(value)) return '0'
-  try {
-    return new Intl.NumberFormat('de-DE').format(value)
-  } catch {
-    return String(value)
-  }
+  // Counts follow the configured regional format (issue #1073).
+  return formatNumber(value, regionFormat.value, { decimals: 0 })
 }
 
 function fmtSegmentRowCount(segment) {
@@ -221,7 +221,8 @@ function fmtSegmentRowCount(segment) {
 }
 
 function fmtBytes(rawBytes) {
-  return formatBytesBinary(rawBytes)
+  // Byte sizes follow the configured regional format (issue #1073).
+  return formatBytesBinary(rawBytes, regionFormat.value)
 }
 
 function fmtTs(iso) {

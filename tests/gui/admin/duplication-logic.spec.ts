@@ -5,7 +5,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { apiPost, apiDelete, apiGet } from '../helpers'
+import { apiPost, apiDelete, apiGet, openLogicGraph } from '../helpers'
 
 // ── API-Helpers ───────────────────────────────────────────────────────────
 
@@ -30,7 +30,10 @@ async function deleteGraphViaApi(id: string): Promise<void> {
 
 async function findCopyGraphId(originalName: string): Promise<string | null> {
   const graphs = await apiGet('/api/v1/logic/graphs') as Array<{ id: string; name: string }>
-  return graphs.find(g => g.name === `Kopie von ${originalName}`)?.id ?? null
+  // The "Duplizieren" button opens a name-prompt modal prefilled with the
+  // original name + " (Kopie)" (#1233 follow-up) — no longer an immediate
+  // "Kopie von …" duplicate.
+  return graphs.find(g => g.name === `${originalName} (Kopie)`)?.id ?? null
 }
 
 // ── Hilfsfunktion: zur Logic-View navigieren und Graph laden ──────────────
@@ -38,7 +41,7 @@ async function findCopyGraphId(originalName: string): Promise<string | null> {
 async function gotoLogicWithGraph(page: any, graphId: string) {
   await page.goto('/logic')
   await page.waitForLoadState('networkidle')
-  await page.selectOption('[data-testid="select-graph"]', graphId)
+  await openLogicGraph(page, graphId)
   // Warten bis loadGraph abgeschlossen (Button erscheint erst nach activeGraphId != '')
   await expect(page.locator('[data-testid="btn-duplicate"]')).toBeVisible({ timeout: 5_000 })
 }
@@ -69,6 +72,8 @@ test('Logic: Graph duplizieren erzeugt Kopie', async ({ page }) => {
   try {
     await gotoLogicWithGraph(page, gid)
     await page.click('[data-testid="btn-duplicate"]')
+    // Accept the prefilled "… (Kopie)" name and confirm.
+    await page.click('[data-testid="btn-duplicate-confirm"]')
 
     // Statusmeldung prüfen (erscheint im Status-Bar)
     await expect(page.locator('.bg-green-500\\/10')).toBeVisible({ timeout: 8_000 })

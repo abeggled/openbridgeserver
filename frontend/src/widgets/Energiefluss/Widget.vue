@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useDatapointsStore } from '@/stores/datapoints'
+import { useFormatStore } from '@/stores/format'
 import { useIcons } from '@/composables/useIcons'
 
 type FlowDirection = 'to_house' | 'from_house' | 'bidirectional'
@@ -28,6 +29,8 @@ const props = defineProps<{
 }>()
 
 const dpStore = useDatapointsStore()
+// Anzeige folgt dem konfigurierten Regionalformat (Issue #1073).
+const format = useFormatStore()
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -79,9 +82,9 @@ watch(houseIcon, loadSvgDataUrl, { immediate: true })
 function formatPower(watts: number, unit: string, decimals: number): string {
   const u = unit || 'W'
   if ((u === 'W' || u === 'Watt') && Math.abs(watts) >= 1000) {
-    return (watts / 1000).toFixed(Math.max(1, decimals)) + '\u202FkW'
+    return format.fmtNumber(watts / 1000, { decimals: Math.max(1, decimals) }) + '\u202FkW'
   }
-  return watts.toFixed(decimals) + '\u202F' + u
+  return format.fmtNumber(watts, { decimals }) + '\u202F' + u
 }
 
 /** isSource: true = Energie fliesst zum Haus (Punkt von Knoten → Mitte) */

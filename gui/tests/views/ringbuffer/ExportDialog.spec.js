@@ -136,6 +136,21 @@ describe('ExportDialog', () => {
     wrapper.unmount()
   })
 
+  it('derives the download filename from the delimiter when the server sends no filename', async () => {
+    exportMultiCsv.mockResolvedValueOnce({ data: new Blob(['a\tb\n']), headers: {} })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const wrapper = await mountDialog()
+    await flushPromises()
+
+    wrapper.vm.form.delimiter = '\t'
+    await wrapper.find('[data-testid="btn-export-go"]').trigger('click')
+    await flushPromises()
+
+    expect(clickSpy.mock.instances[0].download).toBe('ringbuffer_export.tsv')
+    clickSpy.mockRestore()
+    wrapper.unmount()
+  })
+
   it('shows an error message and stays open when the export fails', async () => {
     exportMultiCsv.mockRejectedValueOnce({ response: { data: { detail: 'too many rows' } } })
     const wrapper = await mountDialog()

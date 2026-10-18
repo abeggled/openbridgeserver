@@ -2206,9 +2206,7 @@ class TestSpaceOutBusCancellation:
     a poller mid-transaction must not stall on the inter-read turnaround sleep."""
 
     async def test_cancellation_skips_turnaround_sleep(self):
-        adapter, _ = _make_tcp(
-            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 5000}
-        )
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 5000})
         client = _make_client(connected=True)
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
@@ -2236,9 +2234,7 @@ class TestSpaceOutBusCancellation:
     async def test_ordinary_failure_still_delays(self):
         """The cancellation skip must not disable the delay for a normal
         transaction failure (pymodbus timeout / socket error)."""
-        adapter, _ = _make_tcp(
-            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 40}
-        )
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 40})
         client = _make_client(connected=True)
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
@@ -2299,9 +2295,7 @@ class TestSharedEndpointDelayPolicy:
         sleep_mock.assert_awaited_once_with(0.2)
 
     async def test_non_shared_instance_uses_own_delay(self):
-        adapter, _ = _make_tcp(
-            {"host": "127.0.0.1", "port": 502, "timeout": 1.0, "shared_bus": False, "inter_read_delay_ms": 30}
-        )
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "shared_bus": False, "inter_read_delay_ms": 30})
         await self._connect(adapter)
         assert adapter._shared_bus_key is None
         assert adapter._effective_delay() == 30

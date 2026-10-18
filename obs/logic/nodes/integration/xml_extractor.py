@@ -1,0 +1,36 @@
+"""Node definition for the ``xml_extractor`` function block (XML Extractor)."""
+
+from __future__ import annotations
+
+from obs.logic.models import NodeTypeDef
+from obs.logic.nodes.base import port
+
+NODE_TYPE = NodeTypeDef(
+    type="xml_extractor",
+    label="XML Extractor",
+    category="integration",
+    description="Parst einen XML-String und extrahiert einen oder mehrere Werte anhand von XPath-Ausdrücken (ElementTree-Syntax, z.B. .//temperature). Mehrere Ausgänge konfigurierbar über + im Konfigurations-Panel.",
+    inputs=[port("data", "Daten")],
+    outputs=[port("value", "Wert")],  # overridden dynamically when xml_paths is set
+    config_schema={
+        "xml_path": {"type": "string", "default": "", "label": "XPath-Ausdruck (Legacy)"},
+        "xml_paths": {"type": "string", "default": "", "label": "Ausgänge (JSON-Array)"},
+        "variables": {
+            "type": "array",
+            "default": [],
+            "label": "Variablen",
+            "description": "DataPoint-backed placeholders, usable in the paths as '###OBS<slot>###' (e.g. '###OBS1###').",
+            "items": {
+                "type": "object",
+                "required": ["slot", "datapoint_id"],
+                "properties": {
+                    "slot": {"type": "integer", "description": "Placeholder index, referenced as ###OBS<slot>###."},
+                    "datapoint_id": {"type": "string", "format": "datapoint"},
+                    "datapoint_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    color="#0369a1",
+    help_id="logic-block-xml-extractor",
+)

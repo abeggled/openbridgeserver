@@ -160,6 +160,7 @@ class _RegistryStub:
         self._dps = dps or []
         self._points = {}
         self._values = {}
+        self.external_write_lock = asyncio.Lock()
         for dp in self._dps:
             self._points[dp.id] = dp
 
