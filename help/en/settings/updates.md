@@ -65,4 +65,6 @@ installation, so Visu and Logic configurations stay portable.
 Channel and installed version are available right after start-up. **OBS Latest Version** and
 **OBS Update Available** keep the quality `uncertain` until the first successful check, so no
 false "no update" is reported. A system data point may be passed on to devices through DEST
-bindings (e.g. to a KNX group address), but cannot receive a SOURCE binding.
+bindings (e.g. to a KNX group address), but cannot receive a SOURCE binding. A new binding
+receives the current value right away. A KNX project or CSV import creates no additional data
+point for a group address a system data point sends to.

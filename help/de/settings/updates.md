@@ -70,4 +70,6 @@ Kanal und installierte Version stehen sofort nach dem Start bereit. **OBS Latest
 **OBS Update Available** haben bis zur ersten erfolgreichen Prüfung die Qualität `uncertain`,
 damit nicht fälschlich „kein Update“ gemeldet wird. Ein System-Datenpunkt darf über
 DEST-Verknüpfungen an Geräte weitergegeben werden (z. B. auf eine KNX-Gruppenadresse), aber
-keine SOURCE-Verknüpfung erhalten.
+keine SOURCE-Verknüpfung erhalten. Eine neue Verknüpfung erhält den aktuellen Wert sofort. Ein
+KNX-Projekt- oder CSV-Import legt für eine Gruppenadresse, an die ein System-Datenpunkt sendet,
+keinen zusätzlichen Datenpunkt an.
