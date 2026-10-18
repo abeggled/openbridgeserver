@@ -28,7 +28,7 @@
       <button class="btn-secondary btn-sm" data-testid="update-notice-notes" @click="notesOpen = true">
         {{ $t('updates.notice.releaseNotes') }}
       </button>
-      <RouterLink to="/settings?tab=updates" class="text-xs text-blue-400 hover:underline" data-testid="update-notice-settings" @click="store.requestUpdatesTab()">
+      <RouterLink to="/settings?tab=updates" class="text-xs text-blue-400 hover:underline" data-testid="update-notice-settings" @click="openUpdatesTab">
         {{ $t('updates.notice.openSettings') }}
       </RouterLink>
       <HelpButton help-id="settings-updates" />
@@ -64,6 +64,13 @@ onMounted(() => {
   store.fetchStatus()
   poll = window.setInterval(() => store.fetchStatus(), POLL_INTERVAL_MS)
 })
+
+// A modified click opens the link in a new tab or window, which Vue Router
+// leaves to the browser: this window must then stay on its current tab.
+function openUpdatesTab(event) {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  store.requestUpdatesTab()
+}
 
 onBeforeUnmount(() => {
   window.clearInterval(poll)

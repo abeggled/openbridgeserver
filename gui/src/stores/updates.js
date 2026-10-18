@@ -18,34 +18,43 @@ export const useUpdatesStore = defineStore('updates', () => {
   // already reads ?tab=updates (#1370).
   const updatesTabRequests = ref(0)
 
-  // Bumped when a check or channel change starts and again when it ends. A
-  // status read that overlapped one may carry the state from before it and
-  // must not overwrite the mutation's answer.
-  let mutations = 0
-  // A check and a channel change may overlap; the backend serializes them, so
-  // the order their answers arrive in says nothing about which state is newer.
-  // Only the latest mutation's answer is shown, and when an earlier one comes
-  // back after it the store reads the final state from the backend instead.
-  let latestMutation = 0
+  // Status answers can arrive in any order: the notice and the Settings panel
+  // read the status, a manual check and a channel change may overlap, and the
+  // backend serializes the mutations itself. Every request takes a ticket and
+  // an answer is shown only if no newer one has been shown yet. A read that
+  // overlapped a mutation may carry the state from before it and is dropped.
+  // Once overlapping mutations are all done, the store reads the final state
+  // back: their answers say nothing about which of them the backend ran last,
+  // and one of them may have failed after another one succeeded.
+  let tickets = 0
+  let shownTicket = 0
+  let mutationEpoch = 0  // bumped when a mutation starts and when it ends
   let pendingMutations = 0
+  let overlapped = false
   // Release notes come from two modals (notice, Settings) around channel
   // switches: only the newest request may set them.
   let notesRequests = 0
 
   const updateAvailable = computed(() => status.value?.update_available === true)
 
+  function show(ticket, data) {
+    if (ticket < shownTicket) return
+    shownTicket = ticket
+    status.value = data
+    statusError.value = false
+  }
+
   async function fetchStatus() {
-    const seen = mutations
+    const ticket = ++tickets
+    const epoch = mutationEpoch
+    const current = () => epoch === mutationEpoch && pendingMutations === 0
     try {
       const { data } = await updatesApi.status()
-      if (seen === mutations) {
-        status.value = data
-        statusError.value = false
-      }
+      if (current()) show(ticket, data)
     } catch {
       // Non-critical for the notice, which simply stays hidden; the Settings
       // panel shows the failure instead of loading forever.
-      if (seen === mutations) statusError.value = true
+      if (current() && ticket > shownTicket) statusError.value = true
     }
     return status.value
   }
@@ -70,20 +79,22 @@ export const useUpdatesStore = defineStore('updates', () => {
 
   async function mutate(flag, request) {
     flag.value = true
-    mutations += 1
+    mutationEpoch += 1
+    if (pendingMutations > 0) overlapped = true
     pendingMutations += 1
-    const mine = ++latestMutation
-    let superseded = false
+    const ticket = ++tickets
     try {
       const { data } = await request()
-      superseded = mine !== latestMutation
-      if (!superseded) status.value = data
+      show(ticket, data)
       return data
     } finally {
-      mutations += 1
+      mutationEpoch += 1
       pendingMutations -= 1
       flag.value = false
-      if (superseded && pendingMutations === 0) fetchStatus()
+      if (pendingMutations === 0 && overlapped) {
+        overlapped = false
+        fetchStatus()
+      }
     }
   }
 

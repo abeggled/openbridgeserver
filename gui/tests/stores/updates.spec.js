@@ -147,38 +147,86 @@ describe('useUpdatesStore', () => {
     expect(store.notesLoading).toBe(false)
   })
 
-  it('keeps the newer mutation when an earlier one answers last', async () => {
+  it('drops a stale mutation answer and reads the final state back', async () => {
     let finishCheck
-    let finishChannel
-    let finishLaterCheck
-    updatesApiMock.check
-      .mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve }))
-      .mockReturnValueOnce(new Promise(resolve => { finishLaterCheck = resolve }))
-    updatesApiMock.setChannel
-      .mockResolvedValueOnce({ data: { channel: 'nightly' } })
-      .mockReturnValueOnce(new Promise(resolve => { finishChannel = resolve }))
+    updatesApiMock.check.mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve }))
+    updatesApiMock.setChannel.mockResolvedValueOnce({ data: { channel: 'nightly' } })
     updatesApiMock.status.mockResolvedValue({ data: { channel: 'nightly', latest_version: 'nightly-20261018' } })
     const store = await useStore()
 
-    // Check started first, channel change answers first, check answers last:
-    // the stale check answer is dropped and the final state read back.
+    // Check started first, channel change answered first, check answers last.
     const check = store.checkNow()
     await store.setChannel('nightly')
+    expect(store.status).toEqual({ channel: 'nightly' })
+    expect(updatesApiMock.status).not.toHaveBeenCalled()
     finishCheck({ data: { channel: 'stable' } })
     await expect(check).resolves.toEqual({ channel: 'stable' })
     expect(store.checking).toBe(false)
     await vi.waitFor(() => expect(store.status).toEqual({ channel: 'nightly', latest_version: 'nightly-20261018' }))
     expect(updatesApiMock.status).toHaveBeenCalledTimes(1)
+  })
 
-    // The earlier one answering first is simply superseded: no extra read.
-    const channel = store.setChannel('stable')
-    const laterCheck = store.checkNow()
-    finishChannel({ data: { channel: 'stable' } })
+  it('reads the final state back when the newer mutation fails', async () => {
+    let finishCheck
+    let failChannel
+    updatesApiMock.check.mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve }))
+    updatesApiMock.setChannel.mockReturnValueOnce(new Promise((_, reject) => { failChannel = reject }))
+    updatesApiMock.status.mockResolvedValue({ data: { latest_version: '2026.11.0' } })
+    const store = await useStore()
+
+    const check = store.checkNow()
+    const channel = store.setChannel('nightly')
+    finishCheck({ data: { latest_version: '2026.11.0', channel: 'stable' } })
+    await check
+    expect(store.status).toEqual({ latest_version: '2026.11.0', channel: 'stable' })
+    failChannel(new Error('network'))
+    await expect(channel).rejects.toThrow('network')
+    await vi.waitFor(() => expect(store.status).toEqual({ latest_version: '2026.11.0' }))
+    expect(updatesApiMock.status).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the newest of overlapping status reads', async () => {
+    const pending = []
+    updatesApiMock.status.mockImplementation(() => new Promise((resolve, reject) => pending.push({ resolve, reject })))
+    const store = await useStore()
+
+    // An older read answering after a newer one is dropped, error or not.
+    const older = store.fetchStatus()
+    const olderFailing = store.fetchStatus()
+    const newer = store.fetchStatus()
+    pending[2].resolve({ data: { latest_version: '2026.11.0' } })
+    await newer
+    pending[0].resolve({ data: { latest_version: '2026.10.0' } })
+    pending[1].reject(new Error('down'))
+    await older
+    await olderFailing
+    expect(store.status).toEqual({ latest_version: '2026.11.0' })
+    expect(store.statusError).toBe(false)
+
+    // A newer read failing first still lets an older answer through.
+    const before = store.fetchStatus()
+    const failing = store.fetchStatus()
+    pending[4].reject(new Error('down'))
+    await failing
+    expect(store.statusError).toBe(true)
+    pending[3].resolve({ data: { latest_version: '2026.12.0' } })
+    await before
+    expect(store.status).toEqual({ latest_version: '2026.12.0' })
+    expect(store.statusError).toBe(false)
+  })
+
+  it('drops a read that answered while a mutation was still running', async () => {
+    let finishChannel
+    updatesApiMock.setChannel.mockReturnValueOnce(new Promise(resolve => { finishChannel = resolve }))
+    updatesApiMock.status.mockResolvedValueOnce({ data: { channel: 'stable' } })
+    const store = await useStore()
+
+    const channel = store.setChannel('nightly')
+    await store.fetchStatus()
+    expect(store.status).toBeNull()
+    finishChannel({ data: { channel: 'nightly' } })
     await channel
-    expect(store.status.channel).toBe('nightly')
-    finishLaterCheck({ data: { channel: 'stable', latest_version: '2026.10.0' } })
-    await laterCheck
-    expect(store.status).toEqual({ channel: 'stable', latest_version: '2026.10.0' })
+    expect(store.status).toEqual({ channel: 'nightly' })
     expect(updatesApiMock.status).toHaveBeenCalledTimes(1)
   })
 })

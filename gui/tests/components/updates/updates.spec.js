@@ -99,6 +99,11 @@ describe('UpdateNotice', () => {
     expect(details).not.toContain('—')
     expect(w.find('[data-testid="update-notice-stale"]').exists()).toBe(false)
     expect(w.find('.help-stub').attributes('data-help')).toBe('settings-updates')
+    // Ctrl/Cmd/Shift/Alt-click opens a new tab or window: this one stays put.
+    for (const modifier of ['ctrlKey', 'metaKey', 'shiftKey', 'altKey']) {
+      await w.find('[data-testid="update-notice-settings"]').trigger('click', { [modifier]: true })
+    }
+    expect(store.requestUpdatesTab).not.toHaveBeenCalled()
     await w.find('[data-testid="update-notice-settings"]').trigger('click')
     expect(store.requestUpdatesTab).toHaveBeenCalledTimes(1)
 
