@@ -332,4 +332,36 @@ describe('SettingsView — update notice opens the Updates tab while mounted (#1
     await flushPromises()
     expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
   })
+
+  it('follows Back and Forward across the history entry the notice added', async () => {
+    window.history.replaceState(null, '', '/settings')
+    const wrapper = await mountSettingsView()
+    const shows = (tab) => wrapper.findAll('button').find(button => button.text() === tab).classes().includes('border-blue-500')
+    const navigate = async (url) => {
+      window.history.replaceState(null, '', url)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      await flushPromises()
+    }
+    // Without a notice a parameterless entry keeps the tab the user picked.
+    await navigate('/settings')
+    expect(shows('Allgemein')).toBe(true)
+
+    // The view's own store instance: earlier tests in this file leave theirs mounted.
+    window.history.pushState(null, '', '/settings?tab=updates')
+    wrapper.vm.updatesStore.requestUpdatesTab()
+    await flushPromises()
+    wrapper.vm.updatesStore.requestUpdatesTab() // a second click still returns to General
+    await flushPromises()
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
+
+    await navigate('/settings')
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(false)
+    expect(shows('Allgemein')).toBe(true)
+
+    await navigate('/settings?tab=updates')
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
+
+    wrapper.unmount()
+    window.history.replaceState(null, '', '/')
+  })
 })

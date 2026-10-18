@@ -18,17 +18,25 @@ export const useUpdatesStore = defineStore('updates', () => {
   // already reads ?tab=updates (#1370).
   const updatesTabRequests = ref(0)
 
+  // Bumped when a check or channel change starts and again when it ends. A
+  // status read that overlapped one may carry the state from before it and
+  // must not overwrite the mutation's answer.
+  let mutations = 0
+
   const updateAvailable = computed(() => status.value?.update_available === true)
 
   async function fetchStatus() {
+    const seen = mutations
     try {
       const { data } = await updatesApi.status()
-      status.value = data
-      statusError.value = false
+      if (seen === mutations) {
+        status.value = data
+        statusError.value = false
+      }
     } catch {
       // Non-critical for the notice, which simply stays hidden; the Settings
       // panel shows the failure instead of loading forever.
-      statusError.value = true
+      if (seen === mutations) statusError.value = true
     }
     return status.value
   }
@@ -50,11 +58,13 @@ export const useUpdatesStore = defineStore('updates', () => {
 
   async function checkNow() {
     checking.value = true
+    mutations += 1
     try {
       const { data } = await updatesApi.check()
       status.value = data
       return data
     } finally {
+      mutations += 1
       checking.value = false
     }
   }
@@ -65,11 +75,13 @@ export const useUpdatesStore = defineStore('updates', () => {
 
   async function setChannel(channel) {
     saving.value = true
+    mutations += 1
     try {
       const { data } = await updatesApi.setChannel(channel)
       status.value = data
       return data
     } finally {
+      mutations += 1
       saving.value = false
     }
   }

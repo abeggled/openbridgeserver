@@ -1819,12 +1819,26 @@ watch(
 
 // The global update notice links here; while this view is already open the
 // URL alone cannot switch tabs (tab clicks do not touch it), so the notice
-// also signals through the store (#1370).
+// also signals through the store (#1370). Its link adds a history entry, so
+// Back/Forward must follow it: an entry with ?tab= shows that tab, the entry
+// without it the tab that was open before the notice switched.
 const updatesStore = useUpdatesStore()
+let tabBeforeNotice = null
 watch(
   () => updatesStore.updatesTabRequests,
-  () => { activeTab.value = 'updates' },
+  () => {
+    tabBeforeNotice ??= activeTab.value
+    activeTab.value = 'updates'
+  },
 )
+
+function onHistoryNavigation() {
+  const tab = new URLSearchParams(window.location.search).get('tab')
+  if (tabs.value.some((item) => item.id === tab)) activeTab.value = tab
+  else if (tabBeforeNotice !== null) activeTab.value = tabBeforeNotice
+}
+onMounted(() => window.addEventListener('popstate', onHistoryNavigation))
+onUnmounted(() => window.removeEventListener('popstate', onHistoryNavigation))
 
 // ── URL Target Allowlist ──────────────────────────────────────────────────
 const urlTargetsLoading = ref(false)

@@ -97,4 +97,28 @@ describe('useUpdatesStore', () => {
     await expect(store.setChannel('stable')).rejects.toThrow('403')
     expect(store.saving).toBe(false)
   })
+
+  it('ignores a status read that overlapped a channel change or check', async () => {
+    let resolveRead
+    let rejectRead
+    updatesApiMock.status
+      .mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve }))
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectRead = reject }))
+    updatesApiMock.setChannel.mockResolvedValue({ data: { channel: 'nightly' } })
+    updatesApiMock.check.mockResolvedValue({ data: { channel: 'nightly', latest_version: 'nightly-20261018' } })
+    const store = await useStore()
+
+    const staleRead = store.fetchStatus()
+    await store.setChannel('nightly')
+    resolveRead({ data: { channel: 'stable' } })
+    await expect(staleRead).resolves.toEqual({ channel: 'nightly' })
+    expect(store.status).toEqual({ channel: 'nightly' })
+
+    const failedRead = store.fetchStatus()
+    await store.checkNow()
+    rejectRead(new Error('down'))
+    await failedRead
+    expect(store.statusError).toBe(false)
+    expect(store.status.latest_version).toBe('nightly-20261018')
+  })
 })
