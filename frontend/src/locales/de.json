@@ -218,7 +218,8 @@
     },
     "device": "Gerät:",
     "deviceNone": "— kein Profil —",
-    "deviceUnknown": "Unbekannt ({slug})"
+    "deviceUnknown": "Unbekannt ({slug})",
+    "productName": "open bridge server"
   },
   "picker": {
     "notFound": "Objekt nicht gefunden",

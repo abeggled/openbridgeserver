@@ -52,7 +52,7 @@ function navigate(node: VisuNode) {
           <line x1="36" y1="16" x2="36" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
           <line x1="42" y1="22" x2="42" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
         </svg>
-        <span class="font-semibold text-gray-800 dark:text-gray-100">open bridge server</span>
+        <span class="font-semibold text-gray-800 dark:text-gray-100">{{ $t('tree.productName') }}</span>
         <span class="text-gray-300 dark:text-gray-600">|</span>
         <span class="text-gray-600 dark:text-gray-300">{{ $t('tree.visualization') }}</span>
       </div>

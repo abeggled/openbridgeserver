@@ -91,3 +91,9 @@ describe('VisuTree — device selector', () => {
     expect(select.findAll('option').map(o => o.text())).not.toContain('tree.deviceUnknown:{"slug":"handy"}')
   })
 })
+
+describe('VisuTree — header', () => {
+  it('renders the product name through i18n', () => {
+    expect(mountTree().text()).toContain('tree.productName')
+  })
+})
