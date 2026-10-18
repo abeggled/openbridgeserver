@@ -111,16 +111,21 @@ async def test_put_validates_profiles(client, auth_headers, reset_devices, devic
 
 
 async def test_config_import_rejects_invalid_profiles_but_keeps_valid_ones(client, auth_headers, reset_devices):
-    export = (await client.get("/api/v1/config/export", headers=auth_headers)).json()
-    export["app_settings"] = [s for s in export["app_settings"] if s["key"] != "visu.devices"]
-    export["app_settings"].append({"key": "visu.devices", "value": "not json"})
-    resp = await client.post("/api/v1/config/import", json=export, headers=auth_headers)
+    # A minimal import document: only the app setting under test, nothing else to upsert.
+    document = {
+        "obs_version": "test",
+        "exported_at": "2026-10-18T00:00:00+00:00",
+        "datapoints": [],
+        "bindings": [],
+        "app_settings": [{"key": "visu.devices", "value": "not json"}],
+    }
+    resp = await client.post("/api/v1/config/import", json=document, headers=auth_headers)
     assert resp.status_code == 200, resp.text
     assert any("visu.devices" in e for e in resp.json()["errors"])
     assert (await client.get(URL)).json() == []
 
     good = [{"slug": "imported", "name": "Imported", "start_node_id": None, "return_after_s": 30}]
-    export["app_settings"][-1] = {"key": "visu.devices", "value": json.dumps(good)}
-    resp = await client.post("/api/v1/config/import", json=export, headers=auth_headers)
+    document["app_settings"] = [{"key": "visu.devices", "value": json.dumps(good)}]
+    resp = await client.post("/api/v1/config/import", json=document, headers=auth_headers)
     assert resp.status_code == 200, resp.text
     assert (await client.get(URL)).json() == good
