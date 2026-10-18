@@ -518,10 +518,9 @@ class ModbusTcpAdapter(AdapterBase):
         if self._shared_bus_key is not None and _sbt > 0:
             try:
                 await asyncio.wait_for(self._io_sem.acquire(), timeout=_sbt)
-            except (asyncio.TimeoutError, TimeoutError):
+            except TimeoutError:
                 logger.warning(
-                    "Modbus shared bus %s: I/O semaphore acquire timed out after %.0fs "
-                    "(possible cross-instance wedge) — skipping this transaction",
+                    "Modbus shared bus %s: I/O semaphore acquire timed out after %.0fs (possible cross-instance wedge) — skipping this transaction",
                     self._shared_bus_key,
                     _sbt,
                 )

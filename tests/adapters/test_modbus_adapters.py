@@ -2310,10 +2310,7 @@ class TestSharedBusAcquireTimeout:
         assert ModbusTcpAdapterConfig().shared_bus_acquire_timeout_s == 30.0
 
     async def _connect_shared(self, host, timeout_s):
-        adapter, _ = _make_tcp(
-            {"host": host, "port": 502, "timeout": 1.0, "shared_bus": True,
-             "shared_bus_acquire_timeout_s": timeout_s}
-        )
+        adapter, _ = _make_tcp({"host": host, "port": 502, "timeout": 1.0, "shared_bus": True, "shared_bus_acquire_timeout_s": timeout_s})
         client = _make_client(connected=True)
         fake_mod = MagicMock()
         fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
