@@ -146,4 +146,39 @@ describe('useUpdatesStore', () => {
     expect(store.notesError).toBe(false)
     expect(store.notesLoading).toBe(false)
   })
+
+  it('keeps the newer mutation when an earlier one answers last', async () => {
+    let finishCheck
+    let finishChannel
+    let finishLaterCheck
+    updatesApiMock.check
+      .mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve }))
+      .mockReturnValueOnce(new Promise(resolve => { finishLaterCheck = resolve }))
+    updatesApiMock.setChannel
+      .mockResolvedValueOnce({ data: { channel: 'nightly' } })
+      .mockReturnValueOnce(new Promise(resolve => { finishChannel = resolve }))
+    updatesApiMock.status.mockResolvedValue({ data: { channel: 'nightly', latest_version: 'nightly-20261018' } })
+    const store = await useStore()
+
+    // Check started first, channel change answers first, check answers last:
+    // the stale check answer is dropped and the final state read back.
+    const check = store.checkNow()
+    await store.setChannel('nightly')
+    finishCheck({ data: { channel: 'stable' } })
+    await expect(check).resolves.toEqual({ channel: 'stable' })
+    expect(store.checking).toBe(false)
+    await vi.waitFor(() => expect(store.status).toEqual({ channel: 'nightly', latest_version: 'nightly-20261018' }))
+    expect(updatesApiMock.status).toHaveBeenCalledTimes(1)
+
+    // The earlier one answering first is simply superseded: no extra read.
+    const channel = store.setChannel('stable')
+    const laterCheck = store.checkNow()
+    finishChannel({ data: { channel: 'stable' } })
+    await channel
+    expect(store.status.channel).toBe('nightly')
+    finishLaterCheck({ data: { channel: 'stable', latest_version: '2026.10.0' } })
+    await laterCheck
+    expect(store.status).toEqual({ channel: 'stable', latest_version: '2026.10.0' })
+    expect(updatesApiMock.status).toHaveBeenCalledTimes(1)
+  })
 })

@@ -22,6 +22,12 @@ export const useUpdatesStore = defineStore('updates', () => {
   // status read that overlapped one may carry the state from before it and
   // must not overwrite the mutation's answer.
   let mutations = 0
+  // A check and a channel change may overlap; the backend serializes them, so
+  // the order their answers arrive in says nothing about which state is newer.
+  // Only the latest mutation's answer is shown, and when an earlier one comes
+  // back after it the store reads the final state from the backend instead.
+  let latestMutation = 0
+  let pendingMutations = 0
   // Release notes come from two modals (notice, Settings) around channel
   // switches: only the newest request may set them.
   let notesRequests = 0
@@ -62,34 +68,35 @@ export const useUpdatesStore = defineStore('updates', () => {
     return releaseNotes.value
   }
 
-  async function checkNow() {
-    checking.value = true
+  async function mutate(flag, request) {
+    flag.value = true
     mutations += 1
+    pendingMutations += 1
+    const mine = ++latestMutation
+    let superseded = false
     try {
-      const { data } = await updatesApi.check()
-      status.value = data
+      const { data } = await request()
+      superseded = mine !== latestMutation
+      if (!superseded) status.value = data
       return data
     } finally {
       mutations += 1
-      checking.value = false
+      pendingMutations -= 1
+      flag.value = false
+      if (superseded && pendingMutations === 0) fetchStatus()
     }
+  }
+
+  function checkNow() {
+    return mutate(checking, () => updatesApi.check())
   }
 
   function requestUpdatesTab() {
     updatesTabRequests.value += 1
   }
 
-  async function setChannel(channel) {
-    saving.value = true
-    mutations += 1
-    try {
-      const { data } = await updatesApi.setChannel(channel)
-      status.value = data
-      return data
-    } finally {
-      mutations += 1
-      saving.value = false
-    }
+  function setChannel(channel) {
+    return mutate(saving, () => updatesApi.setChannel(channel))
   }
 
   return {
