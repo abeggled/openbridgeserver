@@ -545,6 +545,34 @@ async def test_manual_check_is_not_swallowed_by_a_non_check_lock(env):
     assert state.latest_version == "2026.10.0"
 
 
+async def test_unchanged_values_are_not_published_again(env):
+    source = FakeSource(FetchResult(False, None, PAYLOAD), FetchResult(False, None, PAYLOAD))
+    service = _service(env, source)
+    await service.load()
+    await service.check()
+    seen = []
+
+    async def record(event):
+        seen.append(event.datapoint_id)
+
+    env.bus.subscribe(DataValueEvent, record)
+    env.clock.advance(3600)
+    await service.check()
+    # Only the time of the attempt changed.
+    assert seen == [LAST_CHECK.id]
+    await service.publish_datapoints(force=True)
+    assert len(seen) == 6
+
+
+async def test_a_clock_set_back_does_not_block_manual_checks(env):
+    source = FakeSource(FetchResult(False, None, PAYLOAD), FetchResult(False, None, PAYLOAD))
+    service = _service(env, source)
+    await service.load()
+    await service.check()
+    env.clock.advance(-3600)
+    assert (await service.check_now())[1] is True
+
+
 # ---------------------------------------------------------------------------
 # channel change
 # ---------------------------------------------------------------------------

@@ -742,17 +742,6 @@ async def import_db(
             reg._values.clear()
             await reg.load_from_db()
 
-        # Update-Kanal und -Status (#1370) gehören zur Installation, nicht zum Backup:
-        # zurückschreiben und die Systemdatenpunkte neu befüllen
-        try:
-            from obs.update.service import get_optional_update_service
-
-            update_service = get_optional_update_service()
-            if update_service is not None:
-                await update_service.keep_after_restore()
-        except Exception:
-            logger.exception("Update status reload after DB restore failed")
-
         # Logic Engine neu starten
         try:
             from obs.logic.manager import get_logic_manager
@@ -773,6 +762,18 @@ async def import_db(
             adapters_restarted = len(adapter_registry.get_all_instances())
         except Exception:
             logger.exception("Adapter restart after DB restore failed")
+
+        # Update-Kanal und -Status (#1370) gehören zur Installation, nicht zum Backup:
+        # zurückschreiben und die Systemdatenpunkte neu befüllen — erst nach dem
+        # Adapter-Neustart, damit DEST-Bindings die Werte auch erhalten
+        try:
+            from obs.update.service import get_optional_update_service
+
+            update_service = get_optional_update_service()
+            if update_service is not None:
+                await update_service.keep_after_restore()
+        except Exception:
+            logger.exception("Update status reload after DB restore failed")
 
         operation_succeeded = True
         writer = AuditLogWriter(db, audit_context)

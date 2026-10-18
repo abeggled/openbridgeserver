@@ -266,6 +266,10 @@ class UpdateCheckService:
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._check_running = False
+        # Last (value, quality) sent per system DataPoint: unchanged values are
+        # not sent again, so a MESSAGE binding or Logic graph on e.g. "OBS Update
+        # Available" does not fire on every twelve-hourly check.
+        self._published: dict[Any, tuple[Any, str]] = {}
         self._channel_derived = False
         self.next_check_at: datetime | None = None
 
@@ -317,7 +321,8 @@ class UpdateCheckService:
             raw_state = state_row["value"] if state_row and self._source is not None else None
             restored = _restore_state(raw_state, channel, self._installed_version)
             self._state = restored or UpdateState(channel=channel, installed_version=self._installed_version)
-            await self.publish_datapoints()
+            # The registry starts every DataPoint empty: send all values once.
+            await self.publish_datapoints(force=True)
 
     async def keep_after_restore(self) -> None:
         """Write this installation's channel and status back after a database restore.
@@ -330,7 +335,8 @@ class UpdateCheckService:
         async with self._lock:
             await _write_setting(self._db, CHANNEL_SETTING_KEY, self._state.channel)
             await self._write_derived_marker()
-            await self._persist_and_publish()
+            await _write_setting(self._db, STATE_SETTING_KEY, self._state.to_json())
+            await self.publish_datapoints(force=True)
 
     async def _write_derived_marker(self) -> None:
         if self._channel_derived:
@@ -397,7 +403,8 @@ class UpdateCheckService:
             async with self._lock:
                 return self._state, False
         last = self._state.last_check_at
-        if last is not None and (self._clock() - last).total_seconds() < MANUAL_CHECK_COOLDOWN_SECONDS:
+        # A last check "in the future" (clock set back since) must not block checks.
+        if last is not None and 0 <= (self._clock() - last).total_seconds() < MANUAL_CHECK_COOLDOWN_SECONDS:
             return self._state, False
         return await self.check(), True
 
@@ -477,27 +484,31 @@ class UpdateCheckService:
             logger.exception("Update check: could not persist status")
         await self.publish_datapoints()
 
-    async def publish_datapoints(self) -> None:
+    async def publish_datapoints(self, *, force: bool = False) -> None:
         state = self._state
         known = state.last_success_at is not None
-        await self._publish(UPDATE_CHANNEL, state.channel, "good")
-        await self._publish(CURRENT_VERSION, state.installed_version, "good")
-        await self._publish(LATEST_VERSION, state.latest_version, "good" if known and state.latest_version else "uncertain")
-        await self._publish(UPDATE_AVAILABLE, state.update_available, "good" if known and state.update_available is not None else "uncertain")
-        await self._publish(LAST_CHECK, state.last_check_at, "good" if state.last_check_at else "uncertain")
+        await self._publish(UPDATE_CHANNEL, state.channel, "good", force)
+        await self._publish(CURRENT_VERSION, state.installed_version, "good", force)
+        await self._publish(LATEST_VERSION, state.latest_version, "good" if known and state.latest_version else "uncertain", force)
+        await self._publish(UPDATE_AVAILABLE, state.update_available, "good" if known and state.update_available is not None else "uncertain", force)
+        await self._publish(LAST_CHECK, state.last_check_at, "good" if state.last_check_at else "uncertain", force)
 
-    async def _publish(self, definition: SystemDataPointDef, value: Any, quality: str) -> None:
+    async def _publish(self, definition: SystemDataPointDef, value: Any, quality: str, force: bool) -> None:
         from obs.core.event_bus import DataValueEvent
 
+        sent = (value if quality == "good" else None, quality)
+        if not force and self._published.get(definition.id) == sent:
+            return
         try:
             await self._bus.publish(
                 DataValueEvent(
                     datapoint_id=definition.id,
-                    value=value if quality == "good" else None,
+                    value=sent[0],
                     quality=quality,
                     source_adapter=SYSTEM_SOURCE_ADAPTER,
                 )
             )
+            self._published[definition.id] = sent
         except Exception:
             logger.exception("Update check: could not publish %s", definition.name)
 
