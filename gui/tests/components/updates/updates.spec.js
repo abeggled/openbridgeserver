@@ -34,6 +34,7 @@ function baseStatus(overrides = {}) {
 
 let store
 let isAdmin
+let isLoggedIn
 
 function makeStore(status) {
   store = reactive({
@@ -58,7 +59,8 @@ beforeEach(() => {
   vi.resetModules()
   isAdmin = true
   vi.doMock('@/stores/updates', () => ({ useUpdatesStore: () => store }))
-  vi.doMock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin }) }))
+  isLoggedIn = true
+  vi.doMock('@/stores/auth', () => ({ useAuthStore: () => ({ isAdmin, isLoggedIn }) }))
   vi.doMock('@/components/ui/Modal.vue', () => ({ default: MODAL_STUB }))
   vi.doMock('@/components/ui/HelpButton.vue', () => ({ default: { name: 'HelpButton', props: ['helpId'], template: '<span class="help-stub" :data-help="helpId" />' } }))
   setActivePinia(createPinia())
@@ -123,6 +125,16 @@ describe('UpdateNotice', () => {
     makeStore(status)
     const w = await mountComponent('@/components/updates/UpdateNotice.vue')
     expect(w.find('[data-testid="update-notice"]').exists()).toBe(false)
+  })
+
+  it('does not ask for the status without a login (no 401 redirect loop)', async () => {
+    vi.useFakeTimers()
+    isLoggedIn = false
+    makeStore(null)
+    const w = await mountComponent('@/components/updates/UpdateNotice.vue')
+    vi.advanceTimersByTime(15 * 60 * 1000)
+    expect(store.fetchStatus).not.toHaveBeenCalled()
+    w.unmount()
   })
 
   it('polls the cached status and stops on unmount', async () => {

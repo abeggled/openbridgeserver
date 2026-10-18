@@ -42,12 +42,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import HelpButton from '@/components/ui/HelpButton.vue'
 import ReleaseNotesModal from '@/components/updates/ReleaseNotesModal.vue'
 import { useTz } from '@/composables/useTz'
+import { useAuthStore } from '@/stores/auth'
 import { useUpdatesStore } from '@/stores/updates'
 
 // The backend re-checks every twelve hours; polling its cached status this
 // often is enough to show a new result without a page reload.
 const POLL_INTERVAL_MS = 15 * 60 * 1000
 
+const auth = useAuthStore()
 const store = useUpdatesStore()
 const { fmtDateTime } = useTz()
 const status = computed(() => store.status)
@@ -55,6 +57,10 @@ const notesOpen = ref(false)
 let poll = null
 
 onMounted(() => {
+  // App.vue renders this layout briefly before the route (and its public flag)
+  // is resolved: a request without a login would answer 401, whose interceptor
+  // redirects to /login — and back here, in a loop. Same guard as Sidebar.vue.
+  if (!auth.isLoggedIn) return
   store.fetchStatus()
   poll = window.setInterval(() => store.fetchStatus(), POLL_INTERVAL_MS)
 })
