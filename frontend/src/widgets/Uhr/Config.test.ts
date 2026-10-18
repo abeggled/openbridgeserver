@@ -46,3 +46,17 @@ describe('Uhr Config.vue — minute dots', () => {
     expect(lastEmitted(w)).toMatchObject({ minuteDots: true })
   })
 })
+
+describe('Uhr Config.vue — translated texts', () => {
+  it('renders placeholders and hints through i18n keys', () => {
+    const w = mountConfig({ mode: 'analog' })
+
+    expect(w.get('input[type="color"]').attributes('title')).toBe('widgets.uhr.accentColor')
+    expect(w.get('input[list="tz-vorschlaege"]').attributes('placeholder')).toBe('widgets.uhr.timezonePlaceholder')
+    expect(w.text()).toContain('widgets.uhr.timezoneFormat')
+    expect(w.text()).toContain('widgets.uhr.optional')
+    const textInputs = w.findAll('input[type="text"]')
+    const labelInput = textInputs[textInputs.length - 1]
+    expect(labelInput.attributes('placeholder')).toBe('widgets.uhr.labelPlaceholder')
+  })
+})
