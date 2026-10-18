@@ -18,6 +18,7 @@ const cfg = reactive({
   preserve_icon_color: (props.modelValue.preserve_icon_color as boolean) ?? false,
   label_size:          (props.modelValue.label_size          as string)  ?? 'sm',
   active_indicator:    (props.modelValue.active_indicator    as string)  ?? 'none',
+  icon_size:           (props.modelValue.icon_size           as number)  ?? 0,
 })
 
 // Sync bei Widget-Wechsel
@@ -30,6 +31,7 @@ watch(() => props.modelValue, (v) => {
   cfg.preserve_icon_color = (v.preserve_icon_color as boolean) ?? false
   cfg.label_size          = (v.label_size          as string)  ?? 'sm'
   cfg.active_indicator    = (v.active_indicator    as string)  ?? 'none'
+  cfg.icon_size           = (v.icon_size           as number)  ?? 0
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -123,6 +125,20 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
       <input type="checkbox" v-model="cfg.show_icon" class="rounded" />
       <span class="text-xs text-gray-500 dark:text-gray-400">{{ $t('widgets.link.showIcon') }}</span>
     </label>
+
+    <!-- Icon-Grösse -->
+    <div>
+      <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">{{ $t('widgets.link.iconSize') }}</label>
+      <input
+        v-model.number="cfg.icon_size"
+        type="number"
+        min="0"
+        step="1"
+        data-testid="link-icon-size"
+        class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-2 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
+      />
+      <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">{{ $t('widgets.link.iconSizeHint') }}</p>
+    </div>
 
     <!-- SVG-Farbe erhalten -->
     <label class="flex items-center gap-2 cursor-pointer select-none">

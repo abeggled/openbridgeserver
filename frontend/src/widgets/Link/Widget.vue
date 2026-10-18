@@ -28,6 +28,11 @@ const labelSize = computed(() => {
   const map: Record<string, string> = { xs: 'text-xs', sm: 'text-sm', md: 'text-base', lg: 'text-lg', xl: 'text-xl' }
   return map[s ?? ''] ?? 'text-sm'
 })
+// Icon size in px; 0, missing or invalid keeps the default size (text-4xl).
+const iconSize = computed(() => {
+  const n = Number(props.config.icon_size)
+  return Number.isFinite(n) && n > 0 ? n : 0
+})
 const showArrow = computed(() => props.config.show_arrow !== false)
 
 const activeIndicator = computed(() => (props.config.active_indicator as string | undefined) ?? 'none')
@@ -93,7 +98,13 @@ function navigate() {
     ]"
     @click="navigate"
   >
-    <span v-if="showIcon" class="text-4xl leading-none" data-testid="link-icon"><VisuIcon :icon="icon" :preserve-color="preserveIconColor" /></span>
+    <span
+      v-if="showIcon"
+      class="leading-none"
+      :class="iconSize ? 'block w-full text-center' : 'text-4xl'"
+      :style="iconSize ? { fontSize: `${iconSize}px` } : undefined"
+      data-testid="link-icon"
+    ><VisuIcon :icon="icon" :preserve-color="preserveIconColor" :fit-width="iconSize > 0" /></span>
     <span class="font-medium text-gray-800 dark:text-gray-200 text-center leading-tight" :class="labelSize">{{ label }}</span>
     <span v-if="showArrow && !editorMode && targetId" class="text-xs text-gray-400 dark:text-gray-500">→</span>
     <span v-else-if="!targetId" class="text-xs text-gray-400 dark:text-gray-600">{{ $t('widgets.link.noTarget') }}</span>
