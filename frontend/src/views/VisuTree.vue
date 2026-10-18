@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useThemeStore } from '@/stores/theme'
+import { useDeviceStore } from '@/stores/device'
 import type { VisuNode } from '@/types'
 import { storeToRefs } from 'pinia'
 import AuthButton from '@/components/AuthButton.vue'
@@ -13,6 +14,7 @@ const { t } = useI18n()
 const store = useVisuStore()
 const { rootNodes, isAdmin } = storeToRefs(store)
 const router = useRouter()
+const device = useDeviceStore()
 const loading = ref(true)
 const error = ref('')
 
@@ -55,6 +57,25 @@ function navigate(node: VisuNode) {
         <span class="text-gray-600 dark:text-gray-300">{{ $t('tree.visualization') }}</span>
       </div>
       <div class="flex items-center gap-3">
+        <!-- Geräteprofil (Startseite + Rücksprung), nur wenn Profile angelegt sind -->
+        <label
+          v-if="device.devices.length > 0"
+          class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400"
+        >
+          <span>{{ $t('tree.device') }}</span>
+          <select
+            class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-xs text-gray-700 dark:text-gray-200"
+            data-testid="device-select"
+            :value="device.slug ?? ''"
+            @change="device.select(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ $t('tree.deviceNone') }}</option>
+            <option v-if="device.slug && !device.profile" :value="device.slug">
+              {{ $t('tree.deviceUnknown', { slug: device.slug }) }}
+            </option>
+            <option v-for="d in device.devices" :key="d.slug" :value="d.slug">{{ d.name }}</option>
+          </select>
+        </label>
         <!-- Hell/Dunkel-Umschalter -->
         <button
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"

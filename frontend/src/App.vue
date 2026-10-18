@@ -5,6 +5,8 @@ import { useWebSocket } from '@/composables/useWebSocket'
 import { getJwt } from '@/api/client'
 import { useThemeStore } from '@/stores/theme'
 import { useFormatStore } from '@/stores/format'
+import { useDeviceStore } from '@/stores/device'
+import { useIdleReturn } from '@/composables/useIdleReturn'
 
 const ws = useWebSocket()
 // Theme-Store initialisieren (setzt dark-Klasse auf <html>)
@@ -17,8 +19,13 @@ const format = useFormatStore()
 const { locale } = useI18n()
 watch(locale, (code) => format.setUiLanguage(String(code)), { immediate: true })
 
+// Geräteprofil (Startseite + Rücksprung) — zentral im Admin-GUI gepflegt.
+const device = useDeviceStore()
+useIdleReturn()
+
 onMounted(() => {
   format.load()
+  device.load()
   // WebSocket nur starten wenn JWT vorhanden (Live-Werte für eingeloggte User)
   if (getJwt()) {
     ws.connect()

@@ -215,7 +215,10 @@
       "public": "Öffentlich",
       "publicDesc": "Ohne Anmeldung, interaktiv",
       "pinDesc": "PIN-Eingabe erforderlich"
-    }
+    },
+    "device": "Gerät:",
+    "deviceNone": "— kein Profil —",
+    "deviceUnknown": "Unbekannt ({slug})"
   },
   "picker": {
     "notFound": "Objekt nicht gefunden",

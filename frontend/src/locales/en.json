@@ -215,7 +215,10 @@
       "public": "Public",
       "publicDesc": "Without login, interactive",
       "pinDesc": "PIN required"
-    }
+    },
+    "device": "Device:",
+    "deviceNone": "— no profile —",
+    "deviceUnknown": "Unknown ({slug})"
   },
   "picker": {
     "notFound": "Object not found",
