@@ -309,3 +309,60 @@ async def test_manual_check_publishes_every_system_datapoint(client, auth_header
 
         await get_db().execute_and_commit("DELETE FROM app_settings WHERE key = ?", (STATE_SETTING_KEY,))
         await service.load()
+
+
+async def test_concurrent_manual_checks_queued_behind_channel_change(client, auth_headers, monkeypatch):
+    """Two "Check now" requests waiting behind a channel change ask GitHub once (PR #1371 review)."""
+    from datetime import UTC, datetime
+
+    from obs.db.database import get_db
+    from obs.update import service as svc
+
+    service = svc.get_update_service()
+
+    class Source:
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch(self, etag):
+            self.calls += 1
+            await asyncio.sleep(0)
+            return svc.FetchResult(False, None, [])
+
+    source = Source()
+    previous_channel = service.state.channel
+    monkeypatch.setattr(service, "_source", source)
+    monkeypatch.setattr(service, "_releases", [])
+    monkeypatch.setattr(service, "_releases_fetched_at", datetime(2026, 10, 18, tzinfo=UTC))
+    monkeypatch.setattr(service, "_etag", None)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = svc._write_setting
+    blocked_once = False
+
+    async def slow_write_setting(db, key, value):
+        nonlocal blocked_once
+        if key == svc.CHANNEL_SETTING_KEY and not blocked_once:
+            blocked_once = True
+            entered.set()
+            await release.wait()
+        await original(db, key, value)
+
+    monkeypatch.setattr(svc, "_write_setting", slow_write_setting)
+    new_channel = "nightly" if previous_channel != "nightly" else "stable"
+    try:
+        channel_change = asyncio.create_task(client.put("/api/v1/system/update-channel", json={"channel": new_channel}, headers=auth_headers))
+        await entered.wait()
+        checks = [asyncio.create_task(client.post("/api/v1/system/update-status/check", headers=auth_headers)) for _ in range(2)]
+        await asyncio.sleep(0)
+        release.set()
+
+        responses = await asyncio.gather(channel_change, *checks)
+        assert [response.status_code for response in responses] == [200, 200, 200]
+        assert source.calls == 1
+    finally:
+        monkeypatch.undo()
+        await client.put("/api/v1/system/update-channel", json={"channel": previous_channel}, headers=auth_headers)
+        await get_db().execute_and_commit("DELETE FROM app_settings WHERE key = ?", (svc.STATE_SETTING_KEY,))
+        await service.load()

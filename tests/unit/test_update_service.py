@@ -541,6 +541,19 @@ async def test_load_waits_for_a_running_check(env):
     assert service.state.last_check_at == finished.last_check_at
 
 
+async def test_manual_checks_queued_behind_the_lock_ask_github_once(env):
+    source = FakeSource(FetchResult(False, None, PAYLOAD), FetchResult(False, None, PAYLOAD))
+    service = _service(env, source)
+    await service.load()
+    async with service._lock:
+        # e.g. a channel change persisting while two admins click "Check now".
+        pending = [asyncio.create_task(service.check_now()) for _ in range(2)]
+        await asyncio.sleep(0)
+    results = await asyncio.gather(*pending)
+    assert [ran for _state, ran in results] == [True, False]
+    assert len(source.etags) == 1
+
+
 async def test_manual_check_is_not_swallowed_by_a_non_check_lock(env):
     source = FakeSource(FetchResult(False, None, PAYLOAD))
     service = _service(env, source)

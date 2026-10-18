@@ -378,34 +378,38 @@ class UpdateCheckService:
     async def check(self) -> UpdateState:
         """Run one check attempt. Never raises for network or data errors."""
         async with self._lock:
-            self._check_running = True
-            try:
-                await self._attempt()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Update check: unexpected failure")
-                self._record_failure(UpdateCheckError("internal"))
-            finally:
-                self._check_running = False
-            await self._persist_and_publish()
-            return self._state
+            return await self._check_locked()
+
+    async def _check_locked(self) -> UpdateState:
+        """The check itself; the caller holds ``self._lock``."""
+        self._check_running = True
+        try:
+            await self._attempt()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Update check: unexpected failure")
+            self._record_failure(UpdateCheckError("internal"))
+        finally:
+            self._check_running = False
+        await self._persist_and_publish()
+        return self._state
 
     async def check_now(self) -> tuple[UpdateState, bool]:
         """Manual check from the Admin GUI.
 
-        Joins a check that is already running instead of starting a second
-        one, and does not ask GitHub again within the cool-down after the
-        previous attempt. Returns the state and whether this call ran a check.
+        Does not ask GitHub again within the cool-down after the previous
+        attempt. The cool-down is evaluated only once the lock is held: callers
+        queued behind a running check or a channel change would otherwise all
+        pass it and each send a request; this way the first one checks and the
+        others take its result. Returns the state and whether this call ran a check.
         """
-        if self._check_running:
-            async with self._lock:
+        async with self._lock:
+            last = self._state.last_check_at
+            # A last check "in the future" (clock set back since) must not block checks.
+            if last is not None and 0 <= (self._clock() - last).total_seconds() < MANUAL_CHECK_COOLDOWN_SECONDS:
                 return self._state, False
-        last = self._state.last_check_at
-        # A last check "in the future" (clock set back since) must not block checks.
-        if last is not None and 0 <= (self._clock() - last).total_seconds() < MANUAL_CHECK_COOLDOWN_SECONDS:
-            return self._state, False
-        return await self.check(), True
+            return await self._check_locked(), True
 
     async def _attempt(self) -> None:
         now = self._clock()

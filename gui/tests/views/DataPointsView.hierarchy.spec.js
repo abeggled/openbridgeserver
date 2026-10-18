@@ -126,6 +126,19 @@ describe('DataPointsView hierarchy rendering', () => {
     expect(dpApi.duplicate).not.toHaveBeenCalled()
   })
 
+  it('opens the edit form and the delete confirmation from the row buttons', async () => {
+    const item = { id: 'dp-row', name: 'Row DP', data_type: 'FLOAT', tags: [], value: 1, quality: 'good', hierarchy_nodes: [] }
+    const { wrapper } = await mountDataPointsView({ items: [item] })
+
+    await wrapper.find('[title="Bearbeiten"]').trigger('click')
+    expect(wrapper.vm.showForm).toBe(true)
+    expect(wrapper.vm.editTarget.id).toBe('dp-row')
+
+    await wrapper.find('[title="Löschen"]').trigger('click')
+    expect(wrapper.vm.showConfirm).toBe(true)
+    expect(wrapper.vm.deleteTarget.id).toBe('dp-row')
+  })
+
   it('offers admins no edit, duplicate or delete for system DataPoints (#1370)', async () => {
     const { wrapper } = await mountDataPointsView({
       items: [
