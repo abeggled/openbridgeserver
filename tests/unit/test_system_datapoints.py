@@ -419,3 +419,15 @@ async def test_app_maps_the_registry_guard_to_403():
     response = await _system_datapoint_error_handler(None, SystemDataPointError(UPDATE_CHANNEL.id))
     assert response.status_code == 403
     assert _json.loads(response.body) == {"detail": "System DataPoint is read-only"}
+
+
+@pytest.mark.parametrize(
+    ("dp_id", "service_present", "expected"),
+    [(CURRENT_VERSION.id, True, [CURRENT_VERSION.id]), (CURRENT_VERSION.id, False, []), (uuid.uuid4(), True, [])],
+)
+async def test_new_binding_on_a_system_datapoint_gets_the_current_value(dp_id, service_present, expected):
+    calls = []
+    service = SimpleNamespace(republish=AsyncMock(side_effect=calls.append)) if service_present else None
+    with patch("obs.update.service.get_optional_update_service", return_value=service):
+        await bindings_api._resend_system_value(dp_id)
+    assert calls == expected

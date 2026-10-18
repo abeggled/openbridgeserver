@@ -34,6 +34,10 @@ DEFAULT_CHANNEL: Channel = "stable"
 _VERSIONED_RE = re.compile(r"^(\d{4})\.(\d{1,2})\.(\d{1,3})(?:-RC(\d{1,3}))?$", re.IGNORECASE)
 _NIGHTLY_RE = re.compile(r"^nightly-(\d{4})(\d{2})(\d{2})(-[0-9a-f]{7,40})?$")
 
+# RC number given to a stable tag that GitHub marks as a pre-release (RCs are
+# limited to three digits by the contract).
+_AFTER_ALL_RCS = 1000
+
 # Which version kinds each channel may offer as its newest version.
 _CHANNEL_KINDS: dict[Channel, frozenset[VersionKind]] = {
     "stable": frozenset({"stable"}),
@@ -147,7 +151,8 @@ def classify_releases(payload: Any) -> list[Release]:
         if version is None:
             continue
         if version.kind == "stable" and item.get("prerelease") is True:
-            version = Version(version.raw, "rc", version.key[:3] + (0, 0))
+            # Still the final build of that version: after all of its RCs.
+            version = Version(version.raw, "rc", version.key[:3] + (0, _AFTER_ALL_RCS))
         body = item.get("body")
         url = item.get("html_url")
         name = item.get("name")

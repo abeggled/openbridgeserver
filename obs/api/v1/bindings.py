@@ -43,6 +43,22 @@ router = APIRouter(tags=["bindings"])
 WEBHOOK_ADAPTER_TYPE = "WEBHOOK"
 
 
+async def _resend_system_value(dp_id: uuid.UUID) -> None:
+    """Feed a binding just attached to a system DataPoint (#1370) its current value.
+
+    The update service only re-sends values that change, and the version or the
+    channel never change at runtime — a new DEST binding would otherwise wait
+    for the next restart.
+    """
+    if not is_system_datapoint(dp_id):
+        return
+    from obs.update.service import get_optional_update_service
+
+    service = get_optional_update_service()
+    if service is not None:
+        await service.republish(dp_id)
+
+
 async def _clear_stale_external_write_enabled(dp_id: uuid.UUID, *, adapter_type: str, enabled: bool) -> None:
     """A newly enabled, non-MESSAGE binding takes precedence over the
     external_write_enabled opt-in at request time (see WriteRouter.handle()
@@ -564,6 +580,7 @@ async def create_binding(
         )
         await _clear_stale_external_write_enabled(dp_id, adapter_type=adapter_type, enabled=body.enabled)
     await _reload_adapter_instance(str(body.adapter_instance_id), db)
+    await _resend_system_value(dp_id)
 
     row = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (binding_id,))
     name_map = await _get_instance_name_map(db)
@@ -689,6 +706,7 @@ async def update_binding(
     instance_id = row["adapter_instance_id"]
     if instance_id:
         await _reload_adapter_instance(instance_id, db)
+    await _resend_system_value(dp_id)
 
     updated = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (str(binding_id),))
     name_map = await _get_instance_name_map(db)

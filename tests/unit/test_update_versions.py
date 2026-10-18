@@ -171,6 +171,11 @@ def test_classify_treats_a_stable_tag_marked_prerelease_as_rc():
     assert not channel_allows("stable", release.version.kind)
 
 
+def test_a_stable_tag_marked_prerelease_sorts_after_its_rcs():
+    releases = classify_releases([_gh("2026.11.0-RC2", prerelease=True), _gh("2026.11.0", prerelease=True)])
+    assert evaluate_channel("pre-release", "2026.10.0", releases).latest.tag == "2026.11.0"
+
+
 # ---------------------------------------------------------------------------
 # evaluate_channel — the acceptance criteria
 # ---------------------------------------------------------------------------

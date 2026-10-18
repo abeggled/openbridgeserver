@@ -121,7 +121,17 @@ jobs:
           chmod +x obs-update
 
       - name: Stamp version file
+        env:
+          GITHUB_REF_SAFE: ${{ github.ref }}
         run: |
+          if [[ "$GITHUB_REF_SAFE" != refs/tags/* ]]; then
+            # Untagged builds are the nightlies (nightly-lxc.yml dispatches this
+            # workflow on main). Stamp them like the nightly Docker image, so the
+            # update check (#1370) recognises a template-built install as a
+            # nightly instead of as the unreleased version from RELEASENOTES.md.
+            echo "nightly-$(date -u +%Y%m%d)-$(git rev-parse --short=7 HEAD)" > obs/version
+            exit 0
+          fi
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
           TAG="${{ steps.meta.outputs.version }}"
           if [[ "$TAG" =~ (-RC[0-9]*)$ ]]; then RC="${BASH_REMATCH[1]}"; else RC=""; fi

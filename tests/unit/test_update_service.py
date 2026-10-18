@@ -289,6 +289,16 @@ async def test_load_discards_a_result_for_another_version_or_channel(env, overri
     assert _dp(env, LATEST_VERSION) == (None, "uncertain")
 
 
+async def test_load_reads_naive_timestamps_as_utc(env):
+    await _store_state(env.db, last_check_at="2026-10-16T08:00:00")
+    service = _service(env, FakeSource())
+    await service.load()
+    assert service.state.last_check_at == datetime(2026, 10, 16, 8, tzinfo=UTC)
+    # Comparing with the aware clock must not raise; a day old: outside the cool-down.
+    _state, ran = await service.check_now()
+    assert ran is True
+
+
 async def test_load_tolerates_odd_field_types(env):
     await _store_state(
         env.db, latest_version=5, latest_url=None, update_available="yes", last_check_at="never", last_success_at=7, last_error=3, last_error_detail=4
@@ -562,6 +572,19 @@ async def test_unchanged_values_are_not_published_again(env):
     assert seen == [LAST_CHECK.id]
     await service.publish_datapoints(force=True)
     assert len(seen) == 6
+
+
+async def test_republish_resends_only_the_requested_datapoint(env):
+    service = _service(env, None)
+    await service.load()
+    seen = []
+
+    async def record(event):
+        seen.append(event.datapoint_id)
+
+    env.bus.subscribe(DataValueEvent, record)
+    await service.republish(CURRENT_VERSION.id)
+    assert seen == [CURRENT_VERSION.id]
 
 
 async def test_a_clock_set_back_does_not_block_manual_checks(env):

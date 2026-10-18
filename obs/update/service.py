@@ -188,9 +188,11 @@ def _parse_dt(raw: Any) -> datetime | None:
     if not isinstance(raw, str):
         return None
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    # A naive value (hand-edited state) would break arithmetic with aware times.
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _restore_state(raw: str | None, channel: Channel, installed_version: str) -> UpdateState | None:
@@ -482,6 +484,11 @@ class UpdateCheckService:
             await _write_setting(self._db, STATE_SETTING_KEY, self._state.to_json())
         except Exception:
             logger.exception("Update check: could not persist status")
+        await self.publish_datapoints()
+
+    async def republish(self, dp_id: Any) -> None:
+        """Send one system DataPoint's current value again, e.g. to a new binding."""
+        self._published.pop(dp_id, None)
         await self.publish_datapoints()
 
     async def publish_datapoints(self, *, force: bool = False) -> None:
