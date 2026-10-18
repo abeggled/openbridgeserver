@@ -1,7 +1,8 @@
 """Icons Library API
 
 GET    /icons/            — list all installed SVG icons
-POST   /icons/import      — upload SVG file(s) or ZIP containing SVGs
+POST   /icons/import      — upload SVG/PNG/JPEG file(s) or a ZIP containing them
+                            (PNG/JPEG are stored as an SVG wrapping the embedded image)
 POST   /icons/export      — export selected or all icons as ZIP (JSON body, kein URL-Limit)
 GET    /icons/{name}      — get raw SVG content of a single icon
 DELETE /icons/            — delete one or multiple icons by name
@@ -10,9 +11,11 @@ POST   /icons/fontawesome — import icons from FontAwesome
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import re
+import struct
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -34,6 +37,20 @@ router = APIRouter(tags=["icons"])
 _SVG_RE = re.compile(rb"<svg[\s>]", re.IGNORECASE)
 _SVG_MAX_DEPTH = 256
 _SVG_DOCTYPE_RE = re.compile(r"<!DOCTYPE", re.IGNORECASE)
+
+# Raster images embedded in an SVG <image> element. Matched against the href value after
+# control characters/whitespace were removed and it was lower-cased. Only base64 payloads of
+# these raster types are allowed — never image/svg+xml, which could carry script.
+_RASTER_DATA_URI_RE = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]*={0,2}")
+
+# PNG/JPEG uploads are wrapped into a minimal SVG (see _raster_to_svg).
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_RASTER_MAX_BYTES = 1024 * 1024  # per image; the icon list endpoint inlines every icon
+_RASTER_MAX_DIMENSION = 16384
+# JPEG start-of-frame markers carry the image size (C4 = DHT, C8 = JPG, CC = DAC are not SOF).
+_JPEG_SOF_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_ICON_FILE_SUFFIXES = (".svg", ".png", ".jpg", ".jpeg")
 
 
 def _secure_filename(filename: str) -> str:
@@ -165,7 +182,12 @@ def _sanitize_svg(content: bytes) -> bytes:
             attr_name = local_name(attr)
             value = elem.attrib.get(attr) or ""
             normalized_scheme = re.sub(r"[\x00-\x20]+", "", value).lower()
-            if attr_name.startswith("on") or attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
+            if attr_name.startswith("on"):
+                del elem.attrib[attr]
+            elif attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
+                # An embedded raster image (e.g. a PNG placed in Inkscape) cannot run script.
+                if tag_name == "image" and _RASTER_DATA_URI_RE.fullmatch(normalized_scheme):
+                    continue
                 del elem.attrib[attr]
 
         for child in list(elem):
@@ -176,6 +198,67 @@ def _sanitize_svg(content: bytes) -> bytes:
     if root.tag.startswith("{"):
         ET.register_namespace("", root.tag.split("}", 1)[0][1:])
     return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
+
+def _png_size(content: bytes) -> tuple[int, int] | None:
+    """Width/height from the IHDR chunk, which the PNG spec requires to come first."""
+    if len(content) < 24 or content[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", content[16:24])
+
+
+def _jpeg_size(content: bytes) -> tuple[int, int] | None:
+    """Width/height from the first start-of-frame segment of a JPEG."""
+    pos = 2  # skip SOI
+    while pos + 4 <= len(content):
+        if content[pos] != 0xFF:
+            return None
+        marker = content[pos + 1]
+        if marker == 0xFF:  # fill byte
+            pos += 1
+            continue
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7:  # markers without a length field
+            pos += 2
+            continue
+        if marker in _JPEG_SOF_MARKERS:
+            if pos + 9 > len(content):
+                return None
+            height, width = struct.unpack(">HH", content[pos + 5 : pos + 9])
+            return width, height
+        (segment_length,) = struct.unpack(">H", content[pos + 2 : pos + 4])
+        pos += 2 + segment_length
+    return None
+
+
+def _raster_to_svg(content: bytes, filename: str) -> bytes | None:
+    """Wrap a PNG/JPEG upload into a minimal SVG with the image embedded as data URI.
+
+    Returns None if the content is neither PNG nor JPEG, so the caller can fall back to the
+    SVG path. Raises 422 for an oversized or unreadable image.
+    """
+    if content.startswith(_PNG_MAGIC):
+        mime, size = "image/png", _png_size(content)
+    elif content.startswith(_JPEG_MAGIC):
+        mime, size = "image/jpeg", _jpeg_size(content)
+    else:
+        return None
+    if len(content) > _RASTER_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"'{filename}' ist zu gross (max. {_RASTER_MAX_BYTES // 1024} KB pro Bild)",
+        )
+    if size is None or not all(0 < dim <= _RASTER_MAX_DIMENSION for dim in size):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"'{filename}' ist kein gültiges PNG- oder JPEG-Bild",
+        )
+    width, height = size
+    data = base64.b64encode(content).decode("ascii")
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        f'<image width="{width}" height="{height}" href="data:{mime};base64,{data}"/></svg>'
+    )
+    return _sanitize_svg(svg.encode("ascii"))
 
 
 def _safe_name(filename: str) -> str | None:
@@ -271,9 +354,10 @@ async def import_icons(
     request: Request = None,
     _user: str = Depends(get_admin_user),
 ) -> ImportResult:
-    """Upload one or more SVG files or a ZIP archive containing SVGs.
-    Each file is validated to confirm it actually contains SVG markup,
-    regardless of its file extension.
+    """Upload one or more SVG, PNG or JPEG files or a ZIP archive containing them.
+    Each file is validated by its content (SVG markup or PNG/JPEG signature),
+    regardless of its file extension. PNG/JPEG images are stored as an SVG that
+    embeds the image, so every icon is still served as SVG.
     """
     if not files:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Keine Dateien empfangen")
@@ -296,20 +380,21 @@ async def import_icons(
             try:
                 with zipfile.ZipFile(io.BytesIO(content)) as zf:
                     for member in zf.namelist():
-                        # Skip directories and obviously non-SVG entries
+                        # Skip directories and obviously non-icon entries
                         if member.endswith("/"):
                             continue
                         member_lower = member.lower()
-                        if member_lower.endswith(".svg") or not Path(member).suffix:
+                        if member_lower.endswith(_ICON_FILE_SUFFIXES) or not Path(member).suffix:
                             member_bytes = zf.read(member)
-                            if not _is_svg(member_bytes):
+                            raster_svg = _raster_to_svg(member_bytes, member)
+                            if raster_svg is None and not _is_svg(member_bytes):
                                 skipped += 1
                                 continue
                             name = _safe_name(Path(member).name)
                             if not name:
                                 skipped += 1
                                 continue
-                            pending_writes[name] = _sanitize_svg(member_bytes)
+                            pending_writes[name] = raster_svg if raster_svg is not None else _sanitize_svg(member_bytes)
                             if name not in imported:
                                 imported.append(name)
                         else:
@@ -320,17 +405,18 @@ async def import_icons(
                     f"'{filename}' ist kein gültiges ZIP-Archiv",
                 )
         else:
-            # --- Single file: validate as SVG ---
-            if not _is_svg(content):
+            # --- Single file: PNG/JPEG (wrapped into SVG) or SVG ---
+            raster_svg = _raster_to_svg(content, filename)
+            if raster_svg is None and not _is_svg(content):
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    f"'{filename}' enthält kein gültiges SVG (kein <svg> Tag gefunden)",
+                    f"'{filename}' enthält weder gültiges SVG (kein <svg> Tag gefunden) noch ein PNG- oder JPEG-Bild",
                 )
             name = _safe_name(filename)
             if not name:
                 skipped += 1
                 continue
-            pending_writes[name] = _sanitize_svg(content)
+            pending_writes[name] = raster_svg if raster_svg is not None else _sanitize_svg(content)
             if name not in imported:
                 imported.append(name)
 

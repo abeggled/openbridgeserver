@@ -1179,7 +1179,7 @@
                 <p class="text-xs text-slate-400 mt-0.5">{{ $t('settings.icons.dropzoneClick') }}</p>
               </div>
             </div>
-            <input ref="iconsFileInput" type="file" accept=".svg,.zip" multiple class="sr-only"
+            <input ref="iconsFileInput" type="file" accept=".svg,.png,.jpg,.jpeg,.zip" multiple class="sr-only"
               data-testid="input-icons-file"
               @change="onIconsFileSelect" />
           </div>
@@ -3058,7 +3058,7 @@ async function _uploadFiles(fileList) {
     iconsMsg.value = { ok: true, text: data.message }
     await loadIcons()
   } catch (e) {
-    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? 'Upload fehlgeschlagen' }
+    iconsMsg.value = { ok: false, text: e.response?.data?.detail ?? t('settings.icons.uploadFailed') }
   } finally {
     iconsUploading.value = false
   }

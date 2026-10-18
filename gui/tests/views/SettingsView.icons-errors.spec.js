@@ -178,3 +178,41 @@ describe('SettingsView Icons tab — doDeleteFaKey error', () => {
     wrapper.unmount()
   })
 })
+
+// ─── icon upload ──────────────────────────────────────────────────────────────
+
+async function uploadIconFile(wrapper, file) {
+  const input = wrapper.find('[data-testid="input-icons-file"]')
+  Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+  await input.trigger('change')
+  await flushPromises()
+}
+
+describe('SettingsView Icons tab — upload', () => {
+  it('offers PNG and JPEG files next to SVG and ZIP in the file picker', async () => {
+    const wrapper = await mountSettingsView()
+    await openIconsTab(wrapper)
+    const accept = wrapper.find('[data-testid="input-icons-file"]').attributes('accept').split(',')
+    expect(accept).toEqual(expect.arrayContaining(['.svg', '.png', '.jpg', '.jpeg', '.zip']))
+    expect(wrapper.text()).toContain('SVG, PNG, JPEG oder ZIP hier ablegen')
+    wrapper.unmount()
+  })
+
+  it('shows the server detail when an upload is rejected', async () => {
+    iconsApi.import.mockRejectedValue({ response: { data: { detail: "'big.png' ist zu gross" } } })
+    const wrapper = await mountSettingsView()
+    await openIconsTab(wrapper)
+    await uploadIconFile(wrapper, new File(['x'], 'big.png', { type: 'image/png' }))
+    expect(wrapper.find('[data-testid="icons-msg"]').text()).toContain("'big.png' ist zu gross")
+    wrapper.unmount()
+  })
+
+  it('shows the translated fallback when an upload fails without detail', async () => {
+    iconsApi.import.mockRejectedValue(new Error('network'))
+    const wrapper = await mountSettingsView()
+    await openIconsTab(wrapper)
+    await uploadIconFile(wrapper, new File(['x'], 'car.png', { type: 'image/png' }))
+    expect(wrapper.find('[data-testid="icons-msg"]').text()).toBe('Upload fehlgeschlagen')
+    wrapper.unmount()
+  })
+})

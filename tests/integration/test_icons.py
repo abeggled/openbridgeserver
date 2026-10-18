@@ -6,9 +6,12 @@ Each test uses its own temporary icons directory to avoid cross-test pollution.
 
 from __future__ import annotations
 
+import base64
 import io
+import struct
 import uuid
 import zipfile
+import zlib
 from unittest.mock import patch
 
 import pytest
@@ -171,6 +174,62 @@ async def test_import_zip_skips_non_svg_members(client, auth_headers, icons_tmp)
     body = resp.json()
     assert body["imported"] == 1
     assert body["skipped"] >= 1
+
+
+def _minimal_png(width: int, height: int) -> bytes:
+    """A decodable 8-bit greyscale PNG of the given size."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + b"\x80" * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_png_is_listed_and_served_as_svg(client, auth_headers, icons_tmp):
+    png = _minimal_png(39, 20)
+    resp = await client.post(
+        "/api/v1/icons/import",
+        headers=auth_headers,
+        files=[("files", ("car.png", png, "image/png"))],
+    )
+    assert resp.status_code == 200
+    assert resp.json()["names"] == ["car"]
+
+    data_uri = "data:image/png;base64," + base64.b64encode(png).decode()
+    resp = await client.get("/api/v1/icons/car", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg+xml")
+    assert 'viewBox="0 0 39 20"' in resp.text
+    assert data_uri in resp.text
+
+    resp = await client.get("/api/v1/icons/", headers=auth_headers)
+    icon = next(i for i in resp.json()["icons"] if i["name"] == "car")
+    assert data_uri in icon["content"]
+
+
+@pytest.mark.asyncio
+async def test_get_icon_keeps_embedded_png_but_strips_svg_data_uri(client, auth_headers, icons_tmp):
+    png_uri = "data:image/png;base64," + base64.b64encode(_minimal_png(1, 1)).decode()
+    (icons_tmp / "mixed.svg").write_bytes(
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'
+            f'<image xlink:href="{png_uri}"/>'
+            '<image href="data:image/svg+xml;base64,PHN2Zy8+"/>'
+            f'<use href="{png_uri}"/></svg>'
+        ).encode()
+    )
+
+    resp = await client.get("/api/v1/icons/mixed", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.text.count(png_uri) == 1
+    assert "image/svg+xml;base64" not in resp.text
 
 
 @pytest.mark.asyncio

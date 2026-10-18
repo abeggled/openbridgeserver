@@ -18,6 +18,14 @@ const URL_FUNCTION_ATTRIBUTES = new Set([
   'cursor',
 ])
 
+// Raster images embedded as base64 data URI on an <image> element (a PNG/JPEG wrapped on
+// import, or a bitmap placed in Inkscape) cannot run script — unlike data:image/svg+xml.
+const RASTER_DATA_URI_RE = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]*={0,2}$/
+
+function isEmbeddedRasterImage(el: Element, normalizedValue: string): boolean {
+  return el.localName.toLowerCase() === 'image' && RASTER_DATA_URI_RE.test(normalizedValue)
+}
+
 function stripAsciiControlsAndWhitespace(raw: string): string {
   return raw.toLowerCase().replace(/[\u0000-\u0020\u007f-\u009f]+/g, '')
 }
@@ -66,6 +74,8 @@ function sanitizeSvg(raw: string): string {
         el.removeAttribute(attr.name)
         continue
       }
+
+      if (localName === 'href' && isEmbeddedRasterImage(el, normalizedValue)) continue
 
       if ((localName === 'href' || localName === 'src') && (
         normalizedValue.startsWith('//') ||
