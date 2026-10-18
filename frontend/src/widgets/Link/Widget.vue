@@ -29,6 +29,10 @@ const labelSize = computed(() => {
   return map[s ?? ''] ?? 'text-sm'
 })
 const showArrow = computed(() => props.config.show_arrow !== false)
+// Back to the previously visited page, whichever it was; target_node_id is the
+// fallback when there is no history (e.g. the page was opened directly).
+const historyBack = computed(() => props.config.history_back === true)
+const hasDestination = computed(() => historyBack.value || !!targetId.value)
 
 const activeIndicator = computed(() => (props.config.active_indicator as string | undefined) ?? 'none')
 
@@ -61,7 +65,12 @@ const isActive = computed(() => {
 })
 
 function navigate() {
-  if (props.editorMode || !targetId.value) return
+  if (props.editorMode) return
+  if (historyBack.value && window.history.state?.back) {
+    router.back()
+    return
+  }
+  if (!targetId.value) return
   const target = store.getNode(targetId.value)
   if (target?.type === 'LOCATION') {
     const targetAccess = resolveAccessNode(target)
@@ -95,8 +104,8 @@ function navigate() {
   >
     <span v-if="showIcon" class="text-4xl leading-none" data-testid="link-icon"><VisuIcon :icon="icon" :preserve-color="preserveIconColor" /></span>
     <span class="font-medium text-gray-800 dark:text-gray-200 text-center leading-tight" :class="labelSize">{{ label }}</span>
-    <span v-if="showArrow && !editorMode && targetId" class="text-xs text-gray-400 dark:text-gray-500">→</span>
-    <span v-else-if="!targetId" class="text-xs text-gray-400 dark:text-gray-600">{{ $t('widgets.link.noTarget') }}</span>
+    <span v-if="showArrow && !editorMode && hasDestination" class="text-xs text-gray-400 dark:text-gray-500">→</span>
+    <span v-else-if="!hasDestination" class="text-xs text-gray-400 dark:text-gray-600" data-testid="link-no-target">{{ $t('widgets.link.noTarget') }}</span>
 
     <!-- active_indicator: dot -->
     <span
