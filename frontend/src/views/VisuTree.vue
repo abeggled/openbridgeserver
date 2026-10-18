@@ -36,7 +36,7 @@ function navigate(node: VisuNode) {
 <template>
   <div class="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
     <!-- Header -->
-    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between bg-gray-50 dark:bg-gray-900">
+    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex flex-wrap items-center justify-between gap-3 bg-gray-50 dark:bg-gray-900">
       <div class="flex items-center gap-3">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="w-8 h-8 rounded-lg shrink-0">
           <rect width="64" height="64" rx="14" fill="#085041"/>
@@ -62,7 +62,7 @@ function navigate(node: VisuNode) {
           v-if="device.devices.length > 0"
           class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400"
         >
-          <span>{{ $t('tree.device') }}</span>
+          <span class="hidden sm:inline">{{ $t('tree.device') }}</span>
           <select
             class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-xs text-gray-700 dark:text-gray-200"
             data-testid="device-select"
