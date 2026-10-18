@@ -587,19 +587,6 @@ async def test_unchanged_values_are_not_published_again(env):
     assert len(seen) == 6
 
 
-async def test_republish_resends_only_the_requested_datapoint(env):
-    service = _service(env, None)
-    await service.load()
-    seen = []
-
-    async def record(event):
-        seen.append(event.datapoint_id)
-
-    env.bus.subscribe(DataValueEvent, record)
-    await service.republish(CURRENT_VERSION.id)
-    assert seen == [CURRENT_VERSION.id]
-
-
 async def test_a_clock_set_back_does_not_block_manual_checks(env):
     source = FakeSource(FetchResult(False, None, PAYLOAD), FetchResult(False, None, PAYLOAD))
     service = _service(env, source)

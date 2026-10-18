@@ -121,4 +121,29 @@ describe('useUpdatesStore', () => {
     expect(store.statusError).toBe(false)
     expect(store.status.latest_version).toBe('nightly-20261018')
   })
+
+  it('fetchReleaseNotes keeps only the newest response', async () => {
+    let resolveOld
+    let rejectOld
+    updatesApiMock.releaseNotes
+      .mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+      .mockResolvedValueOnce({ data: [{ version: 'nightly-20261018' }] })
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectOld = reject }))
+      .mockResolvedValueOnce({ data: [{ version: '2026.10.0' }] })
+    const store = await useStore()
+
+    const older = store.fetchReleaseNotes()
+    await store.fetchReleaseNotes()
+    resolveOld({ data: [{ version: '2026.9.0' }] })
+    await older
+    expect(store.releaseNotes).toEqual([{ version: 'nightly-20261018' }])
+
+    const failing = store.fetchReleaseNotes()
+    await store.fetchReleaseNotes()
+    rejectOld(new Error('down'))
+    await failing
+    expect(store.releaseNotes).toEqual([{ version: '2026.10.0' }])
+    expect(store.notesError).toBe(false)
+    expect(store.notesLoading).toBe(false)
+  })
 })

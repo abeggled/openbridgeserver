@@ -89,6 +89,46 @@ describe('BindingForm', () => {
   })
 })
 
+describe('BindingForm — read-only system DataPoint (#1370)', () => {
+  const instances = {
+    listInstances: vi.fn().mockResolvedValue({
+      data: [
+        { id: 'mqtt-inst-1', name: 'MQTT Test', adapter_type: 'MQTT' },
+        { id: 'message-inst-1', name: 'Notifications', adapter_type: 'MESSAGE', config: {} },
+        { id: 'timer-1', name: 'Timer', adapter_type: 'ZEITSCHALTUHR' },
+        { id: 'webhook-1', name: 'Hook', adapter_type: 'WEBHOOK' },
+        { id: 'presence-1', name: 'Presence', adapter_type: 'ANWESENHEITSSIMULATION' },
+      ],
+    }),
+  }
+
+  it('offers only sending bindings and defaults to DEST', async () => {
+    const { wrapper } = await mountBindingForm({ dpSystem: true }, instances)
+    const offered = wrapper.findAll('[data-testid="select-adapter-instance"] option').map(option => option.attributes('value'))
+    expect(offered).toEqual(['', 'mqtt-inst-1', 'message-inst-1'])
+
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('message-inst-1')
+    await flushPromises()
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('mqtt-inst-1')
+    await flushPromises()
+    const direction = wrapper.find('[data-testid="select-direction"]')
+    expect(direction.element.value).toBe('DEST')
+    expect(direction.findAll('option').map(option => option.attributes('value'))).toEqual(['DEST'])
+    expect(wrapper.find('[data-testid="system-dest-only-hint"]').exists()).toBe(true)
+  })
+
+  it('keeps every direction and instance for ordinary DataPoints', async () => {
+    const { wrapper } = await mountBindingForm({}, instances)
+    expect(wrapper.findAll('[data-testid="select-adapter-instance"] option')).toHaveLength(6)
+    await wrapper.find('[data-testid="select-adapter-instance"]').setValue('mqtt-inst-1')
+    await flushPromises()
+    const direction = wrapper.find('[data-testid="select-direction"]')
+    expect(direction.element.value).toBe('SOURCE')
+    expect(direction.findAll('option').map(option => option.attributes('value'))).toEqual(['SOURCE', 'DEST', 'BOTH'])
+    expect(wrapper.find('[data-testid="system-dest-only-hint"]').exists()).toBe(false)
+  })
+})
+
 describe('BindingForm — 1-Wire sensor scan/select/alias flow', () => {
   it('scans sensors and fills sensor_id/property when a property is selected', async () => {
     const onewireBrowseSensors = vi.fn().mockResolvedValue({

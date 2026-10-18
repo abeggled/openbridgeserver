@@ -936,6 +936,7 @@ async def import_config(
             result.errors.append(f"AdapterInstance {ai.id}: {exc}")
 
     # --- Bindings ---
+    fed_system_bindings: list[tuple[str, str]] = []
     for b_data in body.bindings:
         try:
             b_id = b_data.id
@@ -1035,6 +1036,8 @@ async def import_config(
                     ),
                 )
                 result.bindings_created += 1
+            if is_system_datapoint(effective_dp_id):
+                fed_system_bindings.append((effective_dp_id, b_id))
         except Exception as exc:
             logger.exception(f"Binding {b_data.id} failed")
             result.errors.append(f"Binding {b_data.id}: {exc}")
@@ -1147,8 +1150,8 @@ async def import_config(
         result.errors.append(f"Adapter restart failed: {exc}")
 
     # Imported (DEST) bindings on system DataPoints get their current value (#1370).
-    for system_dp_id in sorted({b.datapoint_id for b in body.bindings if is_system_datapoint(b.datapoint_id)}):
-        await _resend_system_value(uuid.UUID(system_dp_id))
+    for system_dp_id, system_binding_id in fed_system_bindings:
+        await _resend_system_value(uuid.UUID(system_dp_id), system_binding_id)
 
     # --- FontAwesome API Key ---
     if body.fa_api_key:

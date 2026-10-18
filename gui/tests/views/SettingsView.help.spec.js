@@ -361,6 +361,15 @@ describe('SettingsView — update notice opens the Updates tab while mounted (#1
     await navigate('/settings?tab=updates')
     expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
 
+    // General → Details → Links → Details → Back returns to Links.
+    await navigate('/settings')
+    await wrapper.findAll('button').find(button => button.text() === 'Links').trigger('click')
+    window.history.pushState(null, '', '/settings?tab=updates')
+    wrapper.vm.updatesStore.requestUpdatesTab()
+    await flushPromises()
+    await navigate('/settings')
+    expect(shows('Links')).toBe(true)
+
     wrapper.unmount()
     window.history.replaceState(null, '', '/')
   })

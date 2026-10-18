@@ -43,20 +43,23 @@ router = APIRouter(tags=["bindings"])
 WEBHOOK_ADAPTER_TYPE = "WEBHOOK"
 
 
-async def _resend_system_value(dp_id: uuid.UUID) -> None:
+async def _resend_system_value(dp_id: uuid.UUID, binding_id: uuid.UUID | str) -> None:
     """Feed a binding just attached to a system DataPoint (#1370) its current value.
 
     The update service only re-sends values that change, and the version or the
     channel never change at runtime — a new DEST binding would otherwise wait
-    for the next restart.
+    for the next restart. Only that binding is written: a new value event would
+    also re-fire every Logic graph, MESSAGE notification and other binding of
+    the DataPoint.
     """
     if not is_system_datapoint(dp_id):
         return
-    from obs.update.service import get_optional_update_service
+    state = get_registry().get_value(dp_id)
+    if state is None or state.quality != "good" or state.value is None:
+        return
+    from obs.core.write_router import get_write_router
 
-    service = get_optional_update_service()
-    if service is not None:
-        await service.republish(dp_id)
+    await get_write_router().write_binding(dp_id, uuid.UUID(str(binding_id)), state.value)
 
 
 async def _clear_stale_external_write_enabled(dp_id: uuid.UUID, *, adapter_type: str, enabled: bool) -> None:
@@ -580,7 +583,7 @@ async def create_binding(
         )
         await _clear_stale_external_write_enabled(dp_id, adapter_type=adapter_type, enabled=body.enabled)
     await _reload_adapter_instance(str(body.adapter_instance_id), db)
-    await _resend_system_value(dp_id)
+    await _resend_system_value(dp_id, binding_id)
 
     row = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (binding_id,))
     name_map = await _get_instance_name_map(db)
@@ -706,7 +709,7 @@ async def update_binding(
     instance_id = row["adapter_instance_id"]
     if instance_id:
         await _reload_adapter_instance(instance_id, db)
-    await _resend_system_value(dp_id)
+    await _resend_system_value(dp_id, binding_id)
 
     updated = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (str(binding_id),))
     name_map = await _get_instance_name_map(db)

@@ -184,6 +184,70 @@ async def test_config_import_cannot_touch_system_datapoints(client, auth_headers
     assert (dp["name"], dp["data_type"]) == ("OBS Update Channel", "STRING")
 
 
+async def test_new_system_bindings_get_the_value_without_a_value_event(client, auth_headers, monkeypatch):
+    """Only the new binding is fed: Logic, notifications and other bindings see no event."""
+    from obs.core.event_bus import DataValueEvent, get_event_bus
+    from obs.core.write_router import WriteRouter
+
+    fed = []
+    events = []
+
+    async def record_write(self, dp_id, binding_id, value):
+        fed.append((dp_id, str(binding_id), value))
+
+    async def record_event(event):
+        if event.datapoint_id == CURRENT_VERSION.id:
+            events.append(event)
+
+    monkeypatch.setattr(WriteRouter, "write_binding", record_write)
+    get_event_bus().subscribe(DataValueEvent, record_event)
+    version = (await _value(client, auth_headers, CURRENT_VERSION))["value"]
+    inst = await _create_instance(client, auth_headers)
+    url = f"/api/v1/datapoints/{CURRENT_VERSION.id}/bindings"
+    imported_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2026-10-17T00:00:00",
+        "datapoints": [],
+        "bindings": [
+            {
+                "id": imported_id,
+                "datapoint_id": str(CURRENT_VERSION.id),
+                "adapter_type": _ADAPTER_TYPE,
+                "adapter_instance_id": inst["id"],
+                "direction": "DEST",
+                "config": {},
+                "enabled": True,
+            },
+            # Refused (SOURCE on a system DataPoint): nothing to feed.
+            {
+                "id": str(uuid.uuid4()),
+                "datapoint_id": str(UPDATE_CHANNEL.id),
+                "adapter_type": _ADAPTER_TYPE,
+                "adapter_instance_id": inst["id"],
+                "direction": "SOURCE",
+                "config": {},
+                "enabled": True,
+            },
+        ],
+    }
+    created_id = None
+    try:
+        resp = await client.post(url, json={"adapter_instance_id": inst["id"], "direction": "DEST", "config": {}}, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        created_id = resp.json()["id"]
+        resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["bindings_created"] == 1
+        assert fed == [(CURRENT_VERSION.id, created_id, version), (CURRENT_VERSION.id, imported_id, version)]
+        assert events == []
+    finally:
+        get_event_bus().unsubscribe(DataValueEvent, record_event)
+        for binding_id in (created_id, imported_id):
+            if binding_id:
+                await client.delete(f"{url}/{binding_id}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # Update status API
 # ---------------------------------------------------------------------------

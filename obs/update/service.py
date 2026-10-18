@@ -488,11 +488,6 @@ class UpdateCheckService:
             logger.exception("Update check: could not persist status")
         await self.publish_datapoints()
 
-    async def republish(self, dp_id: Any) -> None:
-        """Send one system DataPoint's current value again, e.g. to a new binding."""
-        self._published.pop(dp_id, None)
-        await self.publish_datapoints()
-
     async def publish_datapoints(self, *, force: bool = False) -> None:
         state = self._state
         known = state.last_success_at is not None

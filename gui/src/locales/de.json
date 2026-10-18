@@ -386,6 +386,7 @@
       "directionWrite": "Schreiben (to adapter)",
       "directionReadWrite": "Lesen/Schreiben (von/auf Adapter)",
       "timerReadOnlyHint": "Die Zeitschaltuhr ist eine reine Quelle — nur Lesen möglich.",
+      "systemDestOnlyHint": "System-DataPoints sind schreibgeschützt: Ihr Wert kann nur gesendet werden.",
       "groupAddressLabel": "Gruppenadresse *",
       "groupAddressPlaceholder": "z.B. 1/2/3 oder Name suchen …",
       "selectDpt": "DPT wählen …",

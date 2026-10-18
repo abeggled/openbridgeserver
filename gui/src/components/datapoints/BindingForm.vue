@@ -39,12 +39,15 @@
             :disabled="selectedAdapterType === 'ZEITSCHALTUHR'"
             data-testid="select-direction"
           >
-            <option value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
+            <option v-if="!props.dpSystem" value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
             <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="DEST">{{ $t('adapters.bindingForm.directionWrite') }}</option>
-            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
+            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR' && !props.dpSystem" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
           </select>
           <p v-if="selectedAdapterType === 'ZEITSCHALTUHR'" class="hint">
             {{ $t('adapters.bindingForm.timerReadOnlyHint') }}
+          </p>
+          <p v-if="props.dpSystem" class="hint" data-testid="system-dest-only-hint">
+            {{ $t('adapters.bindingForm.systemDestOnlyHint') }}
           </p>
         </div>
       </div>
@@ -348,6 +351,7 @@ const props = defineProps({
   dpPersistValue: { type: Boolean, default: false },
   dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
   dpUnit:         { type: String,  default: '' },         // DataPoint.unit, shown next to typed value inputs
+  dpSystem:       { type: Boolean, default: false },      // read-only system DataPoint (#1370): DEST or MESSAGE only
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
@@ -369,10 +373,13 @@ const THROTTLE_FACTORS = { ms: 1, s: 1000, min: 60_000, h: 3_600_000 }
 // Adapter types that only ever observe values, so the direction select is
 // hidden and SOURCE is forced (see the watcher further down and submit()).
 const DIRECTION_LOCKED_TYPES = ['ANWESENHEITSSIMULATION', 'MESSAGE', 'WEBHOOK']
+// Of those plus the timer, only MESSAGE may watch a read-only system DataPoint;
+// the others would write into it, which the backend refuses (#1370).
+const SYSTEM_EXCLUDED_TYPES = ['ANWESENHEITSSIMULATION', 'WEBHOOK', 'ZEITSCHALTUHR']
 
 const form = reactive({
   adapter_instance_id:  '',
-  direction:            'SOURCE',
+  direction:            props.dpSystem ? 'DEST' : 'SOURCE',
   enabled:              true,
   value_formula:        '',
   formula_preset:       '',
@@ -633,6 +640,7 @@ const groupedDpts = computed(() => {
 const groupedInstances = computed(() => {
   const groups = {}
   for (const inst of allInstances.value) {
+    if (props.dpSystem && SYSTEM_EXCLUDED_TYPES.includes(inst.adapter_type)) continue
     if (!groups[inst.adapter_type]) groups[inst.adapter_type] = []
     groups[inst.adapter_type].push(inst)
   }
@@ -1046,6 +1054,7 @@ watch(() => cfg.source_data_type, sdt => {
 // Force direction to SOURCE for adapters that observe values instead of writing.
 watch(selectedAdapterType, type => {
   if (type === 'ZEITSCHALTUHR' || type === 'MESSAGE' || type === 'WEBHOOK') form.direction = 'SOURCE'
+  else if (props.dpSystem) form.direction = 'DEST'
   if (type === 'IOBROKER') {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false

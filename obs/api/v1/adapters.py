@@ -933,8 +933,8 @@ async def migrate_instance_bindings(
     await adapter_registry.reload_instance_bindings(source_id, db)
     await adapter_registry.reload_instance_bindings(target_id, db)
     # A system DataPoint's binding on the new instance gets the current value (#1370).
-    for dp_id in sorted(target_datapoint_ids):
-        await _resend_system_value(uuid.UUID(str(dp_id)))
+    for binding_row in bindings_to_migrate:
+        await _resend_system_value(uuid.UUID(str(binding_row["datapoint_id"])), binding_row["id"])
 
     result = BindingMigrationResult(
         source_instance_id=source_instance_id,

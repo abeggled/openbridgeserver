@@ -372,23 +372,30 @@ async def test_knx_import_leaves_a_system_datapoint_and_its_dest_binding_alone(d
         "INSERT INTO adapter_instances (id, adapter_type, name, config, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
         ("inst-knx", "KNX", "KNX-Test", "{}", 0, now, now),
     )
-    await db.execute_and_commit(
-        "INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
-        ("b-sys", str(LATEST_VERSION.id), "KNX", "inst-knx", "DEST", '{"group_address": "1/1/1"}', 1, now, now),
-    )
+    user_dp = await registry.create(DataPointCreate(name="Mine", data_type="FLOAT"))
+    for binding_id, dp_id, ga in (
+        ("b-sys", str(LATEST_VERSION.id), "1/1/1"),
+        ("b-sys-shared", str(CURRENT_VERSION.id), "1/1/3"),
+        ("b-user-shared", str(user_dp.id), "1/1/3"),
+        ("b-no-ga", str(user_dp.id), ""),
+    ):
+        await db.execute_and_commit(
+            "INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (binding_id, dp_id, "KNX", "inst-knx", "DEST", f'{{"group_address": "{ga}"}}', 1, now, now),
+        )
     records = [
         SimpleNamespace(address="1/1/1", name="Hijack", dpt="9.001"),
         SimpleNamespace(address="1/1/2", name="Fresh", dpt="9.001"),
+        SimpleNamespace(address="1/1/3", name="Shared", dpt="9.001"),
     ]
     created, updated = await knxproj_api._bulk_import_datapoints(records, "KNX-Test", "SOURCE", db, now)
-    # The GA bound to the system DataPoint counts as not yet imported: it gets a
-    # DataPoint of its own instead of taking over the system one.
-    assert (created, updated) == (2, 0)
-    imported = await db.fetchone(
-        "SELECT d.name FROM adapter_bindings b JOIN datapoints d ON d.id = b.datapoint_id WHERE b.id != 'b-sys' AND b.config LIKE '%1/1/1%'"
-    )
-    assert imported["name"] == "Hijack"
+    # The GA OBS sends its own value to is skipped: no second DataPoint that
+    # would read it back. A user DataPoint on a shared GA is updated as usual.
+    assert (created, updated) == (1, 1)
+    ga_1 = await db.fetchall("SELECT id FROM adapter_bindings WHERE config LIKE '%1/1/1%'")
+    assert [row["id"] for row in ga_1] == ["b-sys"]
+    assert (await db.fetchone("SELECT name FROM datapoints WHERE id=?", (str(user_dp.id),)))["name"] == "Shared"
     row = await db.fetchone("SELECT name, data_type FROM datapoints WHERE id=?", (str(LATEST_VERSION.id),))
     assert (row["name"], row["data_type"]) == ("OBS Latest Version", "STRING")
     binding = await db.fetchone("SELECT direction FROM adapter_bindings WHERE id='b-sys'")
@@ -421,13 +428,50 @@ async def test_app_maps_the_registry_guard_to_403():
     assert _json.loads(response.body) == {"detail": "System DataPoint is read-only"}
 
 
+def _value_state(value, quality):
+    state = ValueState()
+    state.value, state.quality = value, quality
+    return state
+
+
 @pytest.mark.parametrize(
-    ("dp_id", "service_present", "expected"),
-    [(CURRENT_VERSION.id, True, [CURRENT_VERSION.id]), (CURRENT_VERSION.id, False, []), (uuid.uuid4(), True, [])],
+    ("dp_id", "state", "written"),
+    [
+        (CURRENT_VERSION.id, _value_state("2026.10.0", "good"), True),
+        (CURRENT_VERSION.id, _value_state(None, "good"), False),
+        (LATEST_VERSION.id, _value_state(None, "uncertain"), False),
+        (LATEST_VERSION.id, None, False),
+        (uuid.uuid4(), _value_state("x", "good"), False),
+    ],
 )
-async def test_new_binding_on_a_system_datapoint_gets_the_current_value(dp_id, service_present, expected):
-    calls = []
-    service = SimpleNamespace(republish=AsyncMock(side_effect=calls.append)) if service_present else None
-    with patch("obs.update.service.get_optional_update_service", return_value=service):
-        await bindings_api._resend_system_value(dp_id)
-    assert calls == expected
+async def test_new_binding_on_a_system_datapoint_gets_the_current_value(dp_id, state, written):
+    router = SimpleNamespace(write_binding=AsyncMock())
+    binding_id = uuid.uuid4()
+    with (
+        patch.object(bindings_api, "get_registry", return_value=SimpleNamespace(get_value=lambda _id: state)),
+        patch("obs.core.write_router.get_write_router", return_value=router),
+    ):
+        await bindings_api._resend_system_value(dp_id, str(binding_id))
+    if written:
+        # Only the new binding is written; no value event re-fires other consumers.
+        router.write_binding.assert_awaited_once_with(dp_id, binding_id, "2026.10.0")
+    else:
+        router.write_binding.assert_not_awaited()
+
+
+async def test_write_binding_writes_only_the_named_binding(db, registry, monkeypatch):
+    from obs.adapters import registry as adapter_registry
+
+    now = "2026-10-17T00:00:00+00:00"
+    for binding_id in ("b-new", "b-old"):
+        await db.execute_and_commit(
+            "INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (str(uuid.uuid5(uuid.NAMESPACE_OID, binding_id)), str(LATEST_VERSION.id), "MQTT", None, "DEST", '{"topic": "t"}', 1, now, now),
+        )
+    written = []
+    instance = SimpleNamespace(write=AsyncMock(side_effect=lambda binding, value: written.append((binding.id, value))))
+    monkeypatch.setattr(adapter_registry, "get_instance", lambda _type: instance)
+    target = uuid.uuid5(uuid.NAMESPACE_OID, "b-new")
+    await WriteRouter(db, registry).write_binding(LATEST_VERSION.id, target, "2026.10.0")
+    assert written == [(target, "2026.10.0")]

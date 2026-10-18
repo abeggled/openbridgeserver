@@ -1827,7 +1827,8 @@ let tabBeforeNotice = null
 watch(
   () => updatesStore.updatesTabRequests,
   () => {
-    tabBeforeNotice ??= activeTab.value
+    // A repeated click while Updates is open keeps the tab to return to.
+    if (activeTab.value !== 'updates') tabBeforeNotice = activeTab.value
     activeTab.value = 'updates'
   },
 )

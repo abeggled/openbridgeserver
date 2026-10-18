@@ -284,6 +284,20 @@ class WriteRouter:
             suppress_confirmation_actions=True,
         )
 
+    async def write_binding(self, dp_id: uuid.UUID, binding_id: uuid.UUID, value: Any) -> None:
+        """Write *value* to one DEST/BOTH binding of *dp_id* only (#1370).
+
+        Feeds a newly attached binding the DataPoint's current value without a
+        value event, which would reach every other consumer of the DataPoint too.
+        """
+        await self._write_to_dest_bindings(
+            dp_id,
+            value,
+            skip_binding_id=None,
+            suppress_confirmation_actions=True,
+            only_binding_id=binding_id,
+        )
+
     # ------------------------------------------------------------------
     # Shared helper
     # ------------------------------------------------------------------
@@ -294,6 +308,7 @@ class WriteRouter:
         value: Any,
         skip_binding_id: uuid.UUID | None,
         suppress_confirmation_actions: bool = False,
+        only_binding_id: uuid.UUID | None = None,
     ) -> None:
         from obs.adapters import registry as adapter_registry
         from obs.adapters.base import ConfirmationActionToken, ConfirmationOrderTracker
@@ -301,8 +316,9 @@ class WriteRouter:
 
         rows = await self._db.fetchall(
             """SELECT * FROM adapter_bindings
-               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1 AND adapter_type <> 'MESSAGE'""",
-            (str(dp_id),),
+               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1 AND adapter_type <> 'MESSAGE'
+                 AND (? IS NULL OR id=?)""",
+            (str(dp_id), *([str(only_binding_id)] * 2 if only_binding_id else [None, None])),
         )
         if not rows:
             logger.debug("No writable bindings for DataPoint %s", dp_id)

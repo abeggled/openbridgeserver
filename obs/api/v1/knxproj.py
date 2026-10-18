@@ -188,14 +188,17 @@ async def _bulk_import_datapoints(
         (adapter_instance_id,),
     )
     existing_map: dict[str, dict[str, str]] = {}
+    # A read-only system DataPoint (#1370) may carry a DEST binding to a GA. The
+    # import must neither rename it nor turn that binding into one that writes
+    # into it, nor add a second DataPoint for the GA OBS itself sends to.
+    system_gas: set[str] = set()
     for row in existing_rows:
         try:
             cfg = json.loads(row["config"])
             ga = cfg.get("group_address")
-            # A read-only system DataPoint (#1370) may carry a DEST binding to a GA.
-            # The import must neither rename it nor turn that binding into one
-            # that writes into it, so such a GA counts as not yet imported.
-            if ga and not is_system_datapoint(row["datapoint_id"]):
+            if ga and is_system_datapoint(row["datapoint_id"]):
+                system_gas.add(ga)
+            elif ga:
                 existing_map[ga] = {
                     "binding_id": row["id"],
                     "dp_id": row["datapoint_id"],
@@ -234,6 +237,8 @@ async def _bulk_import_datapoints(
             existing = existing_map[record.address]
             dp_updates.append((record.name, data_type, unit, row_ts, existing["dp_id"]))
             binding_updates.append((config_json, direction, row_ts, existing["binding_id"]))
+        elif record.address in system_gas:
+            continue
         else:
             dp_id = str(uuid_mod.uuid4())
             mqtt_topic = f"dp/{dp_id}/value"

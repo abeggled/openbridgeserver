@@ -22,6 +22,9 @@ export const useUpdatesStore = defineStore('updates', () => {
   // status read that overlapped one may carry the state from before it and
   // must not overwrite the mutation's answer.
   let mutations = 0
+  // Release notes come from two modals (notice, Settings) around channel
+  // switches: only the newest request may set them.
+  let notesRequests = 0
 
   const updateAvailable = computed(() => status.value?.update_available === true)
 
@@ -42,16 +45,19 @@ export const useUpdatesStore = defineStore('updates', () => {
   }
 
   async function fetchReleaseNotes() {
+    const request = ++notesRequests
     notesLoading.value = true
     notesError.value = false
     try {
       const { data } = await updatesApi.releaseNotes()
-      releaseNotes.value = data
+      if (request === notesRequests) releaseNotes.value = data
     } catch {
-      notesError.value = true
-      releaseNotes.value = []
+      if (request === notesRequests) {
+        notesError.value = true
+        releaseNotes.value = []
+      }
     } finally {
-      notesLoading.value = false
+      if (request === notesRequests) notesLoading.value = false
     }
     return releaseNotes.value
   }

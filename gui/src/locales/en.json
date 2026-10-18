@@ -386,6 +386,7 @@
       "directionWrite": "Write (to adapter)",
       "directionReadWrite": "Read/Write (from/to adapter)",
       "timerReadOnlyHint": "The timer is a read-only source.",
+      "systemDestOnlyHint": "System DataPoints are read-only: their value can only be sent.",
       "groupAddressLabel": "Group address *",
       "groupAddressPlaceholder": "e.g. 1/2/3 or search name …",
       "selectDpt": "Select DPT …",
