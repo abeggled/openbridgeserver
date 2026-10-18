@@ -19,6 +19,7 @@ const showDate    = computed(() => (props.config.showDate    as boolean | undefi
 const color       = computed(() => (props.config.color       as string  | undefined) ?? '#3b82f6')
 const label       = computed(() => (props.config.label       as string  | undefined) ?? '')
 const timezone    = computed(() => (props.config.timezone    as string  | undefined) ?? '')
+const minuteDots  = computed(() => (props.config.minuteDots  as boolean | undefined) ?? false)
 
 // ── Live-Zeit ─────────────────────────────────────────────────────────────────
 // Wochentags-, Monats- und Zeitzonennamen sind Übersetzungen und folgen der
@@ -166,10 +167,15 @@ for (const [schlüssel, zeile, spalte, länge] of WORT_DEFINITIONEN) {
   }
 }
 
-function getAktiveWörter(stunden: number, minuten: number): Set<string> {
+/**
+ * Ohne Minutenpunkte runden die Wörter auf den nächsten 5-Minuten-Schritt.
+ * Mit Minutenpunkten wird abgerundet, damit die Punkte die restlichen 1–4
+ * Minuten ergänzen (17:47 → "dreiviertel sechs" + 2 Punkte).
+ */
+function getAktiveWörter(stunden: number, minuten: number, abrunden = false): Set<string> {
   const aktiv = new Set<string>(['ES', 'IST'])
 
-  let gerundeteMinuten = Math.round(minuten / 5) * 5
+  let gerundeteMinuten = (abrunden ? Math.floor(minuten / 5) : Math.round(minuten / 5)) * 5
 
   // 24h → 12h
   let h = stunden % 12
@@ -204,8 +210,19 @@ function getAktiveWörter(stunden: number, minuten: number): Set<string> {
 }
 
 const aktiveWörter = computed(() =>
-  getAktiveWörter(now.value.getHours(), now.value.getMinutes()),
+  getAktiveWörter(now.value.getHours(), now.value.getMinutes(), minuteDots.value),
 )
+
+// Minutenpunkte in den Ecken, im Uhrzeigersinn ab oben links:
+// 1 = oben links, 2 = + oben rechts, 3 = + unten rechts, 4 = + unten links.
+const MINUTEN_ECKEN = [
+  'top-0 left-0',
+  'top-0 right-0',
+  'bottom-0 right-0',
+  'bottom-0 left-0',
+] as const
+
+const restMinuten = computed(() => now.value.getMinutes() % 5)
 
 function istZelleAktiv(zeile: number, spalte: number): boolean {
   return ZELLEN_WÖRTER[zeile][spalte].some(k => aktiveWörter.value.has(k))
@@ -349,28 +366,48 @@ function istZelleAktiv(zeile: number, spalte: number): boolean {
         data-testid="uhr-wortuhr"
         class="w-full h-full flex flex-col items-center justify-center p-1"
       >
-        <!-- Buchstabenraster 11 × 10 -->
         <div
-          class="grid w-full"
-          style="
-            grid-template-columns: repeat(11, 1fr);
-            grid-template-rows: repeat(10, 1fr);
-            flex: 1;
-            min-height: 0;
-          "
+          class="relative w-full"
+          style="flex: 1; min-height: 0; display: flex;"
+          :style="minuteDots ? { padding: '4cqi' } : {}"
         >
-          <template v-for="(zeile, zi) in GRID" :key="zi">
-            <div
-              v-for="(buchstabe, si) in zeile"
-              :key="`${zi}-${si}`"
-              class="flex items-center justify-center font-bold uppercase transition-colors duration-300 leading-none"
-              style="font-size: clamp(0.35rem, 6cqi, 1rem);"
-              :style="istZelleAktiv(zi, si) ? { color } : {}"
-              :class="istZelleAktiv(zi, si)
-                ? ''
-                : 'text-gray-300 dark:text-gray-700'"
-            >{{ buchstabe }}</div>
+          <!-- Minutenpunkte (optional) -->
+          <template v-if="minuteDots">
+            <span
+              v-for="(ecke, i) in MINUTEN_ECKEN"
+              :key="ecke"
+              :data-testid="`uhr-wortuhr-dot-${i + 1}`"
+              :data-active="i < restMinuten"
+              class="absolute rounded-full transition-colors duration-300"
+              :class="[ecke, i < restMinuten ? '' : 'bg-gray-300 dark:bg-gray-700']"
+              style="width: clamp(3px, 2cqi, 10px); height: clamp(3px, 2cqi, 10px); margin: 1cqi;"
+              :style="i < restMinuten ? { backgroundColor: color } : {}"
+            />
           </template>
+
+          <!-- Buchstabenraster 11 × 10 -->
+          <div
+            class="grid w-full"
+            style="
+              grid-template-columns: repeat(11, 1fr);
+              grid-template-rows: repeat(10, 1fr);
+              flex: 1;
+              min-height: 0;
+            "
+          >
+            <template v-for="(zeile, zi) in GRID" :key="zi">
+              <div
+                v-for="(buchstabe, si) in zeile"
+                :key="`${zi}-${si}`"
+                class="flex items-center justify-center font-bold uppercase transition-colors duration-300 leading-none"
+                style="font-size: clamp(0.35rem, 6cqi, 1rem);"
+                :style="istZelleAktiv(zi, si) ? { color } : {}"
+                :class="istZelleAktiv(zi, si)
+                  ? ''
+                  : 'text-gray-300 dark:text-gray-700'"
+              >{{ buchstabe }}</div>
+            </template>
+          </div>
         </div>
 
         <span

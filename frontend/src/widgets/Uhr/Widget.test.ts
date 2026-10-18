@@ -133,3 +133,88 @@ describe('Uhr Widget.vue — date line (#1073)', () => {
     expect(mountClock({ showDate: false }).text()).not.toContain('2026')
   })
 })
+
+describe('Uhr Widget.vue — Wortuhr minute dots', () => {
+  const COLOR = 'rgb(255, 0, 0)'
+
+  function mountWordClock(hours: number, minutes: number, config: Record<string, unknown> = {}) {
+    // The word clock reads local time; build the instant in local time too.
+    vi.setSystemTime(new Date(2026, 7, 20, hours, minutes, 0))
+    return mountClock({ mode: 'wortuhr', showDate: false, color: COLOR, ...config })
+  }
+
+  /** Lit letters, row by row, joined with spaces between the rows that have any. */
+  function litLetters(w: VueWrapper): string {
+    const cells = w.findAll('[data-testid="uhr-wortuhr"] .grid > div')
+    expect(cells).toHaveLength(110)
+    const rows: string[] = []
+    for (let r = 0; r < 10; r++) {
+      const row = cells.slice(r * 11, r * 11 + 11)
+        .filter(c => (c.attributes('style') ?? '').includes(`color: ${COLOR}`))
+        .map(c => c.text())
+        .join('')
+      if (row) rows.push(row)
+    }
+    return rows.join(' ')
+  }
+
+  function activeDots(w: VueWrapper): boolean[] {
+    return [1, 2, 3, 4].map(n => w.get(`[data-testid="uhr-wortuhr-dot-${n}"]`).attributes('data-active') === 'true')
+  }
+
+  it('renders no dots and keeps rounding to the nearest five minutes by default', () => {
+    const w = mountWordClock(17, 48)
+
+    expect(w.find('[data-testid="uhr-wortuhr-dot-1"]').exists()).toBe(false)
+    // 17:48 rounds up to 17:50 → "es ist zehn vor sechs"
+    expect(litLetters(w)).toBe('ESIST ZEHN VOR SECHS')
+  })
+
+  it('rounds the words down and lights two dots at 17:47', () => {
+    const w = mountWordClock(17, 47, { minuteDots: true })
+
+    expect(litLetters(w)).toBe('ESIST DREIVIERTEL SECHS')
+    expect(activeDots(w)).toEqual([true, true, false, false])
+  })
+
+  it('lights three dots at 17:48 instead of rounding up to "zehn vor"', () => {
+    const w = mountWordClock(17, 48, { minuteDots: true })
+
+    expect(litLetters(w)).toBe('ESIST DREIVIERTEL SECHS')
+    expect(activeDots(w)).toEqual([true, true, true, false])
+  })
+
+  it('lights all four dots at 17:59 without jumping to the next full hour', () => {
+    const w = mountWordClock(17, 59, { minuteDots: true })
+
+    expect(litLetters(w)).toBe('ESISTFÜNF VOR SECHS')
+    expect(activeDots(w)).toEqual([true, true, true, true])
+  })
+
+  it('shows the full hour with no dot lit at 18:00', () => {
+    const w = mountWordClock(18, 0, { minuteDots: true })
+
+    expect(litLetters(w)).toBe('ESIST SECHSUHR')
+    expect(activeDots(w)).toEqual([false, false, false, false])
+  })
+
+  it('paints lit dots in the accent colour and unlit dots grey', () => {
+    const w = mountWordClock(17, 46, { minuteDots: true })
+
+    const lit = w.get('[data-testid="uhr-wortuhr-dot-1"]')
+    const unlit = w.get('[data-testid="uhr-wortuhr-dot-2"]')
+    expect(lit.attributes('style')).toContain(`background-color: ${COLOR}`)
+    expect(lit.classes()).not.toContain('bg-gray-300')
+    expect(unlit.attributes('style') ?? '').not.toContain('background-color')
+    expect(unlit.classes()).toContain('bg-gray-300')
+  })
+
+  it('places the dots clockwise from the top-left corner', () => {
+    const w = mountWordClock(17, 49, { minuteDots: true })
+
+    expect(w.get('[data-testid="uhr-wortuhr-dot-1"]').classes()).toEqual(expect.arrayContaining(['top-0', 'left-0']))
+    expect(w.get('[data-testid="uhr-wortuhr-dot-2"]').classes()).toEqual(expect.arrayContaining(['top-0', 'right-0']))
+    expect(w.get('[data-testid="uhr-wortuhr-dot-3"]').classes()).toEqual(expect.arrayContaining(['bottom-0', 'right-0']))
+    expect(w.get('[data-testid="uhr-wortuhr-dot-4"]').classes()).toEqual(expect.arrayContaining(['bottom-0', 'left-0']))
+  })
+})

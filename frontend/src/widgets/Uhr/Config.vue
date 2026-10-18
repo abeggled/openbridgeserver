@@ -11,6 +11,7 @@ interface UhrConfig {
   color:       string
   label:       string
   timezone:    string
+  minuteDots:  boolean
 }
 
 
@@ -56,6 +57,7 @@ const cfg = reactive<UhrConfig>({
   color:       (props.modelValue.color       as string   | undefined) ?? '#3b82f6',
   label:       (props.modelValue.label       as string   | undefined) ?? '',
   timezone:    (props.modelValue.timezone    as string   | undefined) ?? '',
+  minuteDots:  (props.modelValue.minuteDots  as boolean  | undefined) ?? false,
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -119,6 +121,20 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         />
         <span class="text-xs text-gray-300">{{ $t('widgets.uhr.showDate') }}</span>
       </label>
+    </div>
+
+    <!-- Minutenpunkte (nur Wortuhr) -->
+    <div v-if="cfg.mode === 'wortuhr'">
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          v-model="cfg.minuteDots"
+          type="checkbox"
+          data-testid="uhr-config-minute-dots"
+          class="w-4 h-4 rounded accent-blue-500"
+        />
+        <span class="text-xs text-gray-300">{{ $t('widgets.uhr.minuteDots') }}</span>
+      </label>
+      <p class="text-xs text-gray-600 mt-1">{{ $t('widgets.uhr.minuteDotsHint') }}</p>
     </div>
 
     <!-- Zeitzone (nur analog) -->

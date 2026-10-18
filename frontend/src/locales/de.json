@@ -851,7 +851,9 @@
       "timezoneHint": "(optional, leer = lokal)",
       "modeDigital": "Digital",
       "modeAnalog": "Analog",
-      "modeWortuhr": "Wortuhr"
+      "modeWortuhr": "Wortuhr",
+      "minuteDots": "Minutenpunkte in den Ecken",
+      "minuteDotsHint": "Zeigt die Minuten zwischen den 5-Minuten-Schritten als 1–4 Punkte in den Ecken (z. B. „dreiviertel sechs“ + 2 Punkte = 17:47). Die Wörter runden dann ab statt auf."
     },
     "valuedisplay": {
       "title": "Wertanzeige",
