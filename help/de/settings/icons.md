@@ -12,11 +12,18 @@ Zeigt alle installierten Icons als durchsuchbares Raster. Mehrfachauswahl per Kl
 ermöglicht Export (als Sammlung) oder Löschen der ausgewählten Icons; „Alle wählen"/„Alle
 abwählen" wirkt auf die aktuell gefilterte/durchsuchte Liste.
 
-## SVG Icons importieren {#settings-icons-import}
+## Icons importieren {#settings-icons-import}
 
-Icons per Drag & Drop oder Dateiauswahl hochladen — einzelne SVG-Dateien oder ein ZIP-Archiv
-mit mehreren SVGs. Jede Datei wird auf gültiges SVG-Format geprüft, unabhängig von der
-Dateiendung.
+Icons per Drag & Drop oder Dateiauswahl hochladen — einzelne SVG-, PNG- oder JPEG-Dateien oder
+ein ZIP-Archiv mit mehreren solchen Dateien. Jede Datei wird anhand ihres Inhalts geprüft,
+unabhängig von der Dateiendung; Name des Icons ist der Dateiname ohne Endung.
+
+PNG- und JPEG-Bilder (max. 1 MB pro Bild) werden als SVG gespeichert, in das das Bild
+eingebettet ist; Breite und Höhe des Bildes bleiben dabei als Seitenverhältnis erhalten. Auch
+SVGs, in die ein Bitmap eingebettet ist (z. B. ein in Inkscape eingefügtes Foto), behalten das
+Bild beim Import. Wie farbige SVGs erscheint ein solches Icon in der Visu nur dort in seinen
+Originalfarben, wo ein Widget die Option „SVG-Icon-Farbe erhalten" anbietet und sie aktiviert
+ist; sonst wird es als einfarbige Silhouette dargestellt.
 
 ## KNX UF Iconset importieren {#settings-icons-knxuf}
 

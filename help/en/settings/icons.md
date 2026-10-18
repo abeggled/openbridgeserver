@@ -12,11 +12,17 @@ Shows all installed icons as a searchable grid. Multi-select by clicking enables
 collection) or deletion of the selected icons; "Select all"/"Deselect all" act on the
 currently filtered/searched list.
 
-## Import SVG icons {#settings-icons-import}
+## Import icons {#settings-icons-import}
 
-Upload icons via drag & drop or file selection — individual SVG files or a ZIP archive
-containing multiple SVGs. Every file is validated as proper SVG regardless of its file
-extension.
+Upload icons via drag & drop or file selection — individual SVG, PNG or JPEG files or a ZIP
+archive containing several of them. Every file is checked by its content regardless of its
+file extension; the icon name is the file name without its extension.
+
+PNG and JPEG images (max. 1 MB per image) are stored as an SVG that embeds the image, keeping
+the image's width and height as its aspect ratio. SVGs that embed a bitmap (e.g. a photo
+placed in Inkscape) also keep that image on import. Like coloured SVGs, such an icon only
+appears in its original colours in the Visu where a widget offers the "Preserve SVG icon
+color" option and it is enabled; otherwise it is shown as a single-colour silhouette.
 
 ## Import KNX UF iconset {#settings-icons-knxuf}
 
