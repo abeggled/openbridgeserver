@@ -469,9 +469,14 @@ async def test_write_binding_writes_only_the_named_binding(db, registry, monkeyp
             " VALUES (?,?,?,?,?,?,?,?,?)",
             (str(uuid.uuid5(uuid.NAMESPACE_OID, binding_id)), str(LATEST_VERSION.id), "MQTT", None, "DEST", '{"topic": "t"}', 1, now, now),
         )
+    # Send-on-change and a throttle on both: a migrated or re-enabled binding
+    # still holds the value it was sent before.
+    await db.execute_and_commit("UPDATE adapter_bindings SET send_on_change=1, send_throttle_ms=3600000")
     written = []
     instance = SimpleNamespace(write=AsyncMock(side_effect=lambda binding, value: written.append((binding.id, value))))
     monkeypatch.setattr(adapter_registry, "get_instance", lambda _type: instance)
     target = uuid.uuid5(uuid.NAMESPACE_OID, "b-new")
-    await WriteRouter(db, registry).write_binding(LATEST_VERSION.id, target, "2026.10.0")
-    assert written == [(target, "2026.10.0")]
+    router = WriteRouter(db, registry)
+    await router.write_binding(LATEST_VERSION.id, target, "2026.10.0")
+    await router.write_binding(LATEST_VERSION.id, target, "2026.10.0")
+    assert written == [(target, "2026.10.0")] * 2

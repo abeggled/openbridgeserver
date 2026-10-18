@@ -289,7 +289,11 @@ class WriteRouter:
 
         Feeds a newly attached binding the DataPoint's current value without a
         value event, which would reach every other consumer of the DataPoint too.
+        The binding counts as new: a value cached from its previous target or
+        state must not let send-on-change or the throttle swallow the write.
         """
+        self._last_value.pop(binding_id, None)
+        self._last_sent.pop(binding_id, None)
         await self._write_to_dest_bindings(
             dp_id,
             value,
