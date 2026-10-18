@@ -33,6 +33,7 @@ from obs.api.v1.bindings import (
     _ensure_webhook_slug_free,
     _ensure_webhook_target_allowed,
     _json_config,
+    _resend_system_value,
     _validate_adapter_binding,
     _webhook_config_with_token,
 )
@@ -1144,6 +1145,10 @@ async def import_config(
     except Exception as exc:
         logger.exception("Adapter restart failed")
         result.errors.append(f"Adapter restart failed: {exc}")
+
+    # Imported (DEST) bindings on system DataPoints get their current value (#1370).
+    for system_dp_id in sorted({b.datapoint_id for b in body.bindings if is_system_datapoint(b.datapoint_id)}):
+        await _resend_system_value(uuid.UUID(system_dp_id))
 
     # --- FontAwesome API Key ---
     if body.fa_api_key:

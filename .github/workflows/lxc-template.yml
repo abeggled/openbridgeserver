@@ -124,9 +124,9 @@ jobs:
         env:
           GITHUB_REF_SAFE: ${{ github.ref }}
         run: |
-          if [[ "$GITHUB_REF_SAFE" != refs/tags/* ]]; then
-            # Untagged builds are the nightlies (nightly-lxc.yml dispatches this
-            # workflow on main). Stamp them like the nightly Docker image, so the
+          if [[ "$GITHUB_REF_SAFE" == refs/heads/main ]]; then
+            # Untagged builds of main are the nightlies (nightly-lxc.yml dispatches
+            # this workflow on main); other branches keep the RELEASENOTES stamp. Stamp them like the nightly Docker image, so the
             # update check (#1370) recognises a template-built install as a
             # nightly instead of as the unreleased version from RELEASENOTES.md.
             echo "nightly-$(date -u +%Y%m%d)-$(git rev-parse --short=7 HEAD)" > obs/version

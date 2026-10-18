@@ -898,7 +898,7 @@ async def set_update_channel(
     """Switch the update channel. Admin only."""
     service = _update_service()
     before = service.state.channel
-    await service.set_channel(body.channel)
+    state, checked = await service.set_channel(body.channel)
     writer = AuditLogWriter(db, build_audit_context(request, _admin))
     await writer.write_contract(
         "PUT",
@@ -906,4 +906,8 @@ async def set_update_channel(
         resource_id="global",
         details={"before": before, "after": body.channel},
     )
+    if checked:
+        # The switch asked GitHub: audited like a manual check.
+        outcome = AuditOutcome.FAILED if state.last_error else AuditOutcome.SUCCESS
+        await writer.write_contract("POST", "/api/v1/system/update-status/check", resource_id="global", outcome=outcome)
     return _update_status_out(service)

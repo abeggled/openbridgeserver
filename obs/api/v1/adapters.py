@@ -47,7 +47,7 @@ from obs.api.auth import Principal, get_admin_user, get_current_principal, get_c
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import adapter_delegates, authorize_adapter_instance, filter_authorized_datapoints
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
-from obs.api.v1.bindings import _ensure_binding_mutation_scope, _json_config, _validate_adapter_binding
+from obs.api.v1.bindings import _ensure_binding_mutation_scope, _json_config, _resend_system_value, _validate_adapter_binding
 from obs.api.v1.redaction import REDACTED
 from obs.db.database import Database, get_db
 
@@ -932,6 +932,9 @@ async def migrate_instance_bindings(
 
     await adapter_registry.reload_instance_bindings(source_id, db)
     await adapter_registry.reload_instance_bindings(target_id, db)
+    # A system DataPoint's binding on the new instance gets the current value (#1370).
+    for dp_id in sorted(target_datapoint_ids):
+        await _resend_system_value(uuid.UUID(str(dp_id)))
 
     result = BindingMigrationResult(
         source_instance_id=source_instance_id,

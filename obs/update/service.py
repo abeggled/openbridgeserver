@@ -56,10 +56,6 @@ MANUAL_CHECK_COOLDOWN_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 15.0
 RELEASES_PER_PAGE = 100
 
-# The migration patch release of the organisation move (#1322) writes this tag
-# into the install root's version file; it says nothing about the real version.
-_MIGRATION_PATCH_TAG = "2026.99.0"
-
 
 def resolve_installed_version(package_version: str | None = None, install_root: Path | None = None) -> str:
     """The version this installation runs.
@@ -77,7 +73,8 @@ def resolve_installed_version(package_version: str | None = None, install_root: 
         installed = (root / "version").read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         return package_version
-    if installed != _MIGRATION_PATCH_TAG and parse_version(installed) is not None:
+    # The migration patch tag (2026.99.0) is outside the contract too: month 99.
+    if parse_version(installed) is not None:
         return installed
     return package_version
 
@@ -449,7 +446,8 @@ class UpdateCheckService:
                 "Update check: %s is available in channel '%s' (installed: %s)", evaluation.latest.tag, self._state.channel, self._installed_version
             )
 
-    async def set_channel(self, channel: Channel) -> UpdateState:
+    async def set_channel(self, channel: Channel) -> tuple[UpdateState, bool]:
+        """Switch the channel; returns the state and whether GitHub was asked."""
         if channel not in CHANNELS:
             raise ValueError(f"unknown update channel {channel!r}")
         async with self._lock:
@@ -472,8 +470,8 @@ class UpdateCheckService:
             # No release list answers the new channel yet: ask GitHub right away
             # (within the manual cool-down), so the response already carries the
             # status of the chosen channel.
-            return (await self.check_now())[0]
-        return self._state
+            return await self.check_now()
+        return self._state, False
 
     # ------------------------------------------------------------------
     # Persistence and DataPoints

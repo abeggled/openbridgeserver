@@ -615,7 +615,7 @@ async def test_set_channel_reevaluates_the_cached_release_list(env):
     await service.check()
     fetched_at = service.state.last_success_at
     env.clock.advance(60)
-    state = await service.set_channel("pre-release")
+    state, _checked = await service.set_channel("pre-release")
     assert state.latest_version == "2026.11.0-RC1"
     assert state.last_success_at == fetched_at
     assert await _setting(env.db, CHANNEL_SETTING_KEY) == "pre-release"
@@ -629,7 +629,7 @@ async def test_set_channel_without_cache_checks_before_answering(env):
     source = FakeSource(FetchResult(False, None, PAYLOAD))
     service = _service(env, source)
     await service.load()
-    state = await service.set_channel("nightly")
+    state, _checked = await service.set_channel("nightly")
     assert state.latest_version == "nightly-20261017"
     assert _dp(env, LATEST_VERSION) == ("nightly-20261017", "good")
 
@@ -638,18 +638,18 @@ async def test_channel_changes_ask_github_only_until_a_check_succeeded(env):
     source = FakeSource(UpdateCheckError("network"), FetchResult(False, None, PAYLOAD))
     service = _service(env, source)
     await service.load()
-    failed = await service.set_channel("nightly")
-    assert failed.last_error == "network"
+    failed, checked = await service.set_channel("nightly")
+    assert (failed.last_error, checked) == ("network", True)
     # Within the manual cool-down a further change does not ask again …
-    skipped = await service.set_channel("stable")
-    assert (skipped.latest_version, len(source.etags)) == (None, 1)
+    skipped, checked = await service.set_channel("stable")
+    assert (skipped.latest_version, len(source.etags), checked) == (None, 1, False)
     # The failure stays visible instead of a blank "never checked" status.
     assert (skipped.last_error, skipped.last_check_at) == ("network", env.clock.now)
     # … after it, the next change does.
     env.clock.advance(svc.MANUAL_CHECK_COOLDOWN_SECONDS)
-    ok = await service.set_channel("pre-release")
+    ok, _checked = await service.set_channel("pre-release")
     assert ok.latest_version == "2026.11.0-RC1"
-    back = await service.set_channel("stable")
+    back, _checked = await service.set_channel("stable")
     assert back.latest_version == "2026.10.0"
     assert len(source.etags) == 2
 
@@ -658,7 +658,7 @@ async def test_resending_the_channel_does_not_check(env):
     source = FakeSource()
     service = _service(env, source)
     await service.load()
-    state = await service.set_channel("stable")
+    state, _checked = await service.set_channel("stable")
     assert (state.channel, source.etags) == ("stable", [])
 
 
@@ -670,7 +670,7 @@ async def test_channel_switch_keeps_a_failed_attempt_visible(env):
     fetched_at = service.state.last_success_at
     env.clock.advance(3600)
     await service.check()
-    state = await service.set_channel("pre-release")
+    state, _checked = await service.set_channel("pre-release")
     # Re-evaluated from the cached list, but that list predates the failed attempt.
     assert (state.latest_version, state.last_success_at) == ("2026.11.0-RC1", fetched_at)
     assert (state.last_error, state.last_error_detail) == ("network", "ConnectError")
@@ -693,7 +693,7 @@ async def test_keep_after_restore_writes_the_installation_state_back(env):
 async def test_set_channel_without_source_does_not_check(env):
     service = _service(env, None)
     await service.load()
-    state = await service.set_channel("nightly")
+    state, _checked = await service.set_channel("nightly")
     assert (state.channel, state.last_check_at) == ("nightly", None)
 
 
@@ -701,7 +701,7 @@ async def test_set_same_channel_keeps_the_result(env):
     service = _service(env, FakeSource(FetchResult(False, None, PAYLOAD)))
     await service.load()
     await service.check()
-    state = await service.set_channel("stable")
+    state, _checked = await service.set_channel("stable")
     assert state.latest_version == "2026.10.0"
 
 

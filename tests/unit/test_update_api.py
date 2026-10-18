@@ -21,7 +21,7 @@ def _service(*, enabled=True, **state_fields):
 
     async def set_channel(channel):
         state.channel = channel
-        return state
+        return state, channel == "nightly"
 
     return SimpleNamespace(
         enabled=enabled,
@@ -110,9 +110,21 @@ async def test_channel_change_is_audited(monkeypatch, audit):
     out = await system_api.set_update_channel(system_api.UpdateChannelIn(channel="nightly"), request=None, _admin="admin", db=object())
     service.set_channel.assert_awaited_once_with("nightly")
     assert out.channel == "nightly"
-    call = audit.write_contract.await_args
-    assert call.args == ("PUT", "/api/v1/system/update-channel")
-    assert call.kwargs["details"] == {"before": "stable", "after": "nightly"}
+    put_call, check_call = audit.write_contract.await_args_list
+    assert put_call.args == ("PUT", "/api/v1/system/update-channel")
+    assert put_call.kwargs["details"] == {"before": "stable", "after": "nightly"}
+    # The switch asked GitHub (no cached list): audited like a manual check.
+    assert check_call.args == ("POST", "/api/v1/system/update-status/check")
+
+
+@pytest.mark.parametrize(("channel", "last_error", "calls"), [("pre-release", None, 1), ("nightly", "network", 2)])
+async def test_channel_change_audits_a_check_only_when_it_ran(monkeypatch, audit, channel, last_error, calls):
+    service = _service(last_error=last_error)
+    _install(monkeypatch, service)
+    await system_api.set_update_channel(system_api.UpdateChannelIn(channel=channel), request=None, _admin="admin", db=object())
+    assert audit.write_contract.await_count == calls
+    if calls == 2:
+        assert audit.write_contract.await_args.kwargs["outcome"].value == "failed"
 
 
 async def test_manual_check_without_a_request_is_not_audited(monkeypatch, audit):
