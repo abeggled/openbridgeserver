@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VisuViewer from './VisuViewer.vue'
 
 const mocks = vi.hoisted(() => {
@@ -237,5 +237,26 @@ describe('VisuViewer session end', () => {
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
+  })
+})
+
+describe('VisuViewer embedded as alarm popup', () => {
+  afterEach(() => {
+    sessionStorage.clear()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('shows the header normally and hides it with ?embed=1', async () => {
+    mocks.getJwt.mockReturnValue('jwt-1')
+    const normal = mountViewer()
+    await flushPromises()
+    expect(normal.find('header').exists()).toBe(true)
+    normal.unmount()
+
+    window.history.replaceState(null, '', '/visu/page-1?embed=1')
+    const embedded = mountViewer()
+    await flushPromises()
+    expect(embedded.find('header').exists()).toBe(false)
+    embedded.unmount()
   })
 })
