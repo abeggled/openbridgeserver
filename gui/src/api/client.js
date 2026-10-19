@@ -233,6 +233,12 @@ export const visuDevicesApi = {
   pages:  ()        => api.get('/visu/tree'),
 }
 
+// ── Visu alarms ────────────────────────────────────────────────────────────
+export const visuAlarmsApi = {
+  list:   ()       => api.get('/system/visu-alarms'),
+  update: (alarms) => api.put('/system/visu-alarms', { alarms }),
+}
+
 // ── History Settings ───────────────────────────────────────────────────────
 export const historySettingsApi = {
   get:    ()     => api.get('/system/history/settings'),

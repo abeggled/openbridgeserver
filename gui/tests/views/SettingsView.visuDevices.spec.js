@@ -75,6 +75,7 @@ async function mountSettingsView(user = { id: 'u1', username: 'admin', is_admin:
       stubs: {
         HierarchyManager: true,
         VisuDevicesPanel: { template: '<div data-testid="visu-devices-panel-stub" />' },
+        VisuAlarmsPanel: { template: '<div data-testid="visu-alarms-panel-stub" />' },
         Modal: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
         ConfirmDialog: true,
         IconPicker: true,
@@ -119,5 +120,31 @@ describe('SettingsView — Visu devices tab', () => {
     await tabButton(wrapper).trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="visudevices-tab"]').classes()).toContain('pointer-events-none')
+  })
+})
+
+function alarmsTab(wrapper) {
+  return wrapper.findAll('button').find(button => button.text() === 'Visu-Alarme')
+}
+
+describe('SettingsView — Visu alarms tab', () => {
+  it('shows the tab to admins and renders the panel when it is opened', async () => {
+    const wrapper = await mountSettingsView()
+
+    await alarmsTab(wrapper).trigger('click')
+    await flushPromises()
+
+    const tab = wrapper.get('[data-testid="visualarms-tab"]')
+    expect(tab.find('[data-testid="visu-alarms-panel-stub"]').exists()).toBe(true)
+    expect(tab.classes()).not.toContain('pointer-events-none')
+  })
+
+  it('hides the tab from non-admin users and shows it read-only to the demo user', async () => {
+    expect(alarmsTab(await mountSettingsView({ id: 'u2', username: 'alice', is_admin: false }))).toBeUndefined()
+
+    const demo = await mountSettingsView({ id: 'u3', username: 'demo', is_admin: false })
+    await alarmsTab(demo).trigger('click')
+    await flushPromises()
+    expect(demo.get('[data-testid="visualarms-tab"]').classes()).toContain('pointer-events-none')
   })
 })
