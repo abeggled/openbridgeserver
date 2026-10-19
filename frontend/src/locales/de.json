@@ -853,7 +853,13 @@
       "timezoneHint": "(optional, leer = lokal)",
       "modeDigital": "Digital",
       "modeAnalog": "Analog",
-      "modeWortuhr": "Wortuhr"
+      "modeWortuhr": "Wortuhr",
+      "minuteDots": "Minutenpunkte in den Ecken",
+      "minuteDotsHint": "Zeigt die Minuten zwischen den 5-Minuten-Schritten als 1–4 Punkte in den Ecken (z. B. „dreiviertel sechs“ + 2 Punkte = 17:47). Die Wörter runden dann ab statt auf.",
+      "timezonePlaceholder": "z.B. Asia/Tokyo",
+      "timezoneFormat": "IANA-Format, z.B.",
+      "optional": "(optional)",
+      "labelPlaceholder": "z.B. Wohnzimmer"
     },
     "valuedisplay": {
       "title": "Wertanzeige",
