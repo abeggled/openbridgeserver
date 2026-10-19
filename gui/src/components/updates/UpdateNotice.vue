@@ -33,8 +33,10 @@
       </RouterLink>
       <HelpButton help-id="settings-updates" />
     </div>
-    <ReleaseNotesModal v-model="notesOpen" />
   </div>
+  <!-- Outside the notice: a poll, check or channel switch that clears
+       update_available must not close the notes the user is reading. -->
+  <ReleaseNotesModal v-model="notesOpen" />
 </template>
 
 <script setup>

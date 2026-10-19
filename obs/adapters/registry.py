@@ -14,6 +14,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from obs.core.event_bus import AdapterInstanceStartedEvent
+
 logger = logging.getLogger(__name__)
 
 _adapters: dict[str, type] = {}  # adapter_type → AdapterBase Klasse
@@ -232,6 +234,14 @@ async def restart_instance(instance_id: str, event_bus: Any, db: Any, value_gett
             (instance_id,),
         )
         bindings, issues = await reload_instance_from_rows(instance, binding_rows)
+        # Erst jetzt ist die Instanz per ID auffindbar und kennt ihre Bindings (#1370).
+        await event_bus.publish(
+            AdapterInstanceStartedEvent(
+                instance_id=uuid.UUID(instance_id),
+                adapter_type=row["adapter_type"],
+                connected=bool(getattr(instance, "connected", False)),
+            )
+        )
 
         logger.info(
             "Adapter neu gestartet: %s '%s' (%d Bindings, %d invalid skipped)",

@@ -401,7 +401,9 @@ class WriteRouter:
             instance = None
             if binding.adapter_instance_id:
                 instance = adapter_registry.get_instance_by_id(binding.adapter_instance_id)
-            if instance is None:
+            # A targeted write (#1370) is meant for exactly this instance: another
+            # one of the same type would put the value on a different line.
+            if instance is None and not (only_binding_id and binding.adapter_instance_id):
                 instance = adapter_registry.get_instance(binding.adapter_type)
 
             if instance is None:

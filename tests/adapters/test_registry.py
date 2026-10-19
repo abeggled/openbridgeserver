@@ -496,6 +496,38 @@ class TestRestartInstance:
         result.connect.assert_called_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("connected", [True, False])
+    async def test_announces_the_registered_instance(self, mock_bus, connected):
+        """#1370: handlers that write to the instance by ID wait for this event."""
+        from obs.core.event_bus import AdapterInstanceStartedEvent
+
+        class _Connecting(_MockAdapterClass):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+
+                async def _connect():
+                    self.connected = connected
+
+                self.connect = _connect
+
+        reg._adapters["TEST"] = _Connecting
+        iid = str(uuid.uuid4())
+        db = _make_db(fetchone_row=_make_instance_row(id=iid), binding_rows=[])
+        registered_at_publish = []
+
+        async def _publish(event):
+            registered_at_publish.append(iid in reg._instances)
+
+        mock_bus.publish.side_effect = _publish
+        result = await restart_instance(iid, mock_bus, db)
+
+        event = mock_bus.publish.await_args.args[0]
+        assert isinstance(event, AdapterInstanceStartedEvent)
+        assert (event.instance_id, event.adapter_type, event.connected) == (uuid.UUID(iid), "TEST", connected)
+        assert registered_at_publish == [True]
+        assert result is not None
+
+    @pytest.mark.asyncio
     async def test_calls_value_getter_on_new_instance(self, mock_bus):
         reg._adapters["TEST"] = _MockAdapterClass
         iid = str(uuid.uuid4())

@@ -519,6 +519,22 @@ class UpdateCheckService:
         self._instance_connected[instance_id] = connected
         if not connected or was_connected:
             return
+        from obs.adapters import registry as adapter_registry
+
+        # An instance (re)started from the Admin GUI reports its connection from
+        # inside connect(), before the registry holds it: a write now would find
+        # no instance by ID. handle_instance_started sends the values instead.
+        if adapter_registry.get_instance_by_id(instance_id) is None:
+            return
+        await self._resend_system_bindings(instance_id)
+
+    async def handle_instance_started(self, event: Any) -> None:
+        """Re-send the system values to an instance the registry just (re)started (#1370)."""
+        self._instance_connected[event.instance_id] = event.connected
+        if event.connected:
+            await self._resend_system_bindings(event.instance_id)
+
+    async def _resend_system_bindings(self, instance_id: Any) -> None:
         try:
             from obs.core.write_router import get_write_router
 

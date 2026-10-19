@@ -79,6 +79,20 @@ class AdapterStatusEvent:
 
 
 @dataclass
+class AdapterInstanceStartedEvent:
+    """Fired by the adapter registry once a (re)started instance is registered (#1370).
+
+    The instance publishes its first AdapterStatusEvent from inside connect(),
+    before the registry holds it, so a handler that wants to write to it by
+    instance ID has to wait for this event instead.
+    """
+
+    instance_id: uuid.UUID
+    adapter_type: str
+    connected: bool
+
+
+@dataclass
 class DataPointRenamedEvent:
     """Fired when a DataPoint's name is changed via the registry."""
 
@@ -88,7 +102,7 @@ class DataPointRenamedEvent:
 
 
 # All event types that the bus understands
-AnyEvent = DataValueEvent | AdapterStatusEvent | DataPointRenamedEvent
+AnyEvent = DataValueEvent | AdapterStatusEvent | AdapterInstanceStartedEvent | DataPointRenamedEvent
 
 Handler = Callable[[AnyEvent], Coroutine[Any, Any, None]]
 

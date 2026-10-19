@@ -810,7 +810,15 @@ def _status(*, connected, instance_id, severity="ok"):
 
 
 @pytest.fixture
-def resend_router():
+def registered():
+    """Instance IDs the adapter registry holds; a status of any other instance comes from inside connect()."""
+    ids: set = set()
+    with patch("obs.adapters.registry.get_instance_by_id", side_effect=lambda instance_id: object() if instance_id in ids else None):
+        yield ids
+
+
+@pytest.fixture
+def resend_router(registered):
     router = SimpleNamespace(resend_system_bindings=AsyncMock(return_value=1))
     with patch("obs.core.write_router.get_write_router", return_value=router):
         yield router
@@ -820,15 +828,17 @@ def _bare_service():
     return UpdateCheckService(AsyncMock(), AsyncMock(), source=None, installed_version="2026.10.0")
 
 
-async def test_connecting_instance_gets_the_system_values_resent(resend_router):
+async def test_connecting_instance_gets_the_system_values_resent(resend_router, registered):
     instance_id = uuid.uuid4()
+    registered.add(instance_id)
     service = _bare_service()
     await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
     resend_router.resend_system_bindings.assert_awaited_once_with(instance_id)
 
 
-async def test_a_repeated_connected_announcement_does_not_resend(resend_router):
+async def test_a_repeated_connected_announcement_does_not_resend(resend_router, registered):
     instance_id = uuid.uuid4()
+    registered.add(instance_id)
     service = _bare_service()
     await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
     # e.g. ioBroker reporting its socket stable again — the link never dropped.
@@ -836,8 +846,9 @@ async def test_a_repeated_connected_announcement_does_not_resend(resend_router):
     assert resend_router.resend_system_bindings.await_count == 1
 
 
-async def test_an_instance_that_reconnects_gets_the_values_again(resend_router):
+async def test_an_instance_that_reconnects_gets_the_values_again(resend_router, registered):
     instance_id = uuid.uuid4()
+    registered.add(instance_id)
     service = _bare_service()
     await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
     # A restart from the Admin GUI, or a link outage: the adapter publishes the
@@ -859,12 +870,47 @@ async def test_a_status_without_an_instance_is_ignored(resend_router):
     resend_router.resend_system_bindings.assert_not_awaited()
 
 
-async def test_a_failing_resend_is_logged_and_swallowed(caplog):
+async def test_a_failing_resend_is_logged_and_swallowed(caplog, registered):
     router = SimpleNamespace(resend_system_bindings=AsyncMock(side_effect=RuntimeError("no router")))
     service = _bare_service()
+    instance_id = uuid.uuid4()
+    registered.add(instance_id)
     with patch("obs.core.write_router.get_write_router", return_value=router):
-        await service.handle_adapter_status(_status(connected=True, instance_id=uuid.uuid4()))
+        await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
     assert "could not re-send system values" in caplog.text
+
+
+def _started(*, connected, instance_id):
+    from obs.core.event_bus import AdapterInstanceStartedEvent
+
+    return AdapterInstanceStartedEvent(instance_id=instance_id, adapter_type="KNX", connected=connected)
+
+
+async def test_a_restarted_instance_gets_the_values_once_it_is_registered(resend_router, registered):
+    """restart_instance(): connect() reports the connection before the registry holds the instance."""
+    instance_id = uuid.uuid4()
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    resend_router.resend_system_bindings.assert_not_awaited()
+
+    registered.add(instance_id)
+    await service.handle_instance_started(_started(connected=True, instance_id=instance_id))
+    resend_router.resend_system_bindings.assert_awaited_once_with(instance_id)
+    # A later "still connected" announcement is no new connection.
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert resend_router.resend_system_bindings.await_count == 1
+
+
+async def test_an_instance_started_offline_gets_the_values_when_it_connects(resend_router, registered):
+    instance_id = uuid.uuid4()
+    registered.add(instance_id)
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    # Restarted while its router is down: the start reports no connection.
+    await service.handle_instance_started(_started(connected=False, instance_id=instance_id))
+    assert resend_router.resend_system_bindings.await_count == 1
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert resend_router.resend_system_bindings.await_count == 2
 
 
 async def test_lifespan_subscribes_the_handler_to_adapter_status():
@@ -874,3 +920,47 @@ async def test_lifespan_subscribes_the_handler_to_adapter_status():
 
     source = inspect.getsource(main_module.lifespan)
     assert "bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)" in source
+    assert "bus.subscribe(AdapterInstanceStartedEvent, update_service.handle_instance_started)" in source
+
+
+async def test_restart_instance_resends_only_after_registering_the_instance(monkeypatch):
+    """The Admin GUI restart path end to end: a resend during connect() found no instance by ID."""
+    from obs.adapters import registry as adapter_registry
+    from obs.core.event_bus import AdapterInstanceStartedEvent, AdapterStatusEvent
+
+    instance_id = str(uuid.uuid4())
+    bus = EventBus()
+
+    class _ConnectingAdapter:
+        adapter_type = "KNX"
+
+        def __init__(self, event_bus, config, instance_id, name):
+            self._bus, self._id, self.connected = event_bus, instance_id, False
+
+        async def connect(self):
+            # Like KnxAdapter.connect(): the status goes out before connect() returns.
+            self.connected = True
+            await self._bus.publish(AdapterStatusEvent(adapter_type="KNX", connected=True, instance_id=self._id))
+
+        async def reload_bindings(self, bindings):
+            pass
+
+    monkeypatch.setitem(adapter_registry._adapters, "KNX", _ConnectingAdapter)
+    monkeypatch.setattr(adapter_registry, "_instances", {})
+    found_at_resend = []
+
+    async def _resend(resend_id):
+        found_at_resend.append(adapter_registry.get_instance_by_id(resend_id))
+
+    service = _bare_service()
+    bus.subscribe(AdapterStatusEvent, service.handle_adapter_status)
+    bus.subscribe(AdapterInstanceStartedEvent, service.handle_instance_started)
+    db = SimpleNamespace(
+        fetchone=AsyncMock(return_value={"id": instance_id, "adapter_type": "KNX", "name": "Line 2", "config": "{}"}),
+        fetchall=AsyncMock(return_value=[]),
+    )
+    with patch("obs.core.write_router.get_write_router", return_value=SimpleNamespace(resend_system_bindings=_resend)):
+        new = await adapter_registry.restart_instance(instance_id, bus, db)
+
+    assert new is not None
+    assert found_at_resend == [new]

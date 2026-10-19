@@ -257,6 +257,10 @@ async def test_value_write_is_refused_even_for_admins(api_registry, db):
         (UPDATE_AVAILABLE.id, "KNX", "SOURCE", False),
         (UPDATE_AVAILABLE.id, "MQTT", "BOTH", False),
         (uuid.uuid4(), "KNX", "SOURCE", True),
+        # Timer and presence simulation never pass a value on, even as DEST.
+        (UPDATE_AVAILABLE.id, "ZEITSCHALTUHR", "DEST", False),
+        (UPDATE_AVAILABLE.id, "ANWESENHEITSSIMULATION", "DEST", False),
+        (uuid.uuid4(), "ZEITSCHALTUHR", "DEST", True),
     ],
 )
 def test_system_datapoints_only_feed_bindings(dp_id, adapter_type, direction, allowed):
@@ -487,6 +491,26 @@ async def test_write_binding_writes_only_the_named_binding(db, registry, monkeyp
     await router.write_binding(LATEST_VERSION.id, target, "2026.10.0")
     await router.write_binding(LATEST_VERSION.id, target, "2026.10.0")
     assert written == [(target, "2026.10.0")] * 2
+
+
+async def test_write_binding_never_falls_back_to_another_instance_of_the_type(db, registry, monkeypatch, caplog):
+    """A second KNX instance is a different line: the value must not land there."""
+    from obs.adapters import registry as adapter_registry
+
+    instance_id, binding_id = uuid.uuid4(), uuid.uuid4()
+    now = "2026-10-17T00:00:00+00:00"
+    await db.execute_and_commit(
+        "INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        (str(binding_id), str(UPDATE_AVAILABLE.id), "KNX", str(instance_id), "DEST", '{"group_address": "1/2/3"}', 1, now, now),
+    )
+    other_line = SimpleNamespace(write=AsyncMock())
+    monkeypatch.setattr(adapter_registry, "get_instance_by_id", lambda _id: None)
+    monkeypatch.setattr(adapter_registry, "get_instance", lambda _type: other_line)
+    router = WriteRouter(db, registry)
+    await router.write_binding(UPDATE_AVAILABLE.id, binding_id, True)
+    other_line.write.assert_not_awaited()
+    assert "Adapter-Instanz nicht gefunden" in caplog.text
 
 
 # ---------------------------------------------------------------------------

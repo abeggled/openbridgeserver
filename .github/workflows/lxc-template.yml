@@ -7,6 +7,12 @@ on:
       - '!nightly-*'  # nightly-lxc.yml creates these; must not trigger a real release/build
 
   workflow_dispatch:
+    inputs:
+      nightly_date:
+        description: 'Set by nightly-lxc.yml only: the UTC date (YYYYMMDD) of the nightly release this build becomes'
+        required: false
+        type: string
+        default: ''
 
 env:
   TEMPLATE_NAME: openbridgeserver
@@ -122,14 +128,19 @@ jobs:
 
       - name: Stamp version file
         env:
-          GITHUB_REF_SAFE: ${{ github.ref }}
+          NIGHTLY_DATE: ${{ inputs.nightly_date }}
         run: |
-          if [[ "$GITHUB_REF_SAFE" == refs/heads/main ]]; then
-            # Untagged builds of main are the nightlies (nightly-lxc.yml dispatches
-            # this workflow on main); other branches keep the RELEASENOTES stamp. Stamp them like the nightly Docker image, so the
-            # update check (#1370) recognises a template-built install as a
-            # nightly instead of as the unreleased version from RELEASENOTES.md.
-            echo "nightly-$(date -u +%Y%m%d)-$(git rev-parse --short=7 HEAD)" > obs/version
+          if [[ -n "$NIGHTLY_DATE" ]]; then
+            # A nightly: nightly-lxc.yml passes the date of the release tag it
+            # publishes, so the stamp matches that tag even when the build runs
+            # past UTC midnight. Stamped like the nightly Docker image, the update
+            # check (#1370) recognises the install as that nightly. Any other
+            # manual run keeps the RELEASENOTES stamp below.
+            if ! [[ "$NIGHTLY_DATE" =~ ^[0-9]{8}$ ]]; then
+              echo "Invalid nightly_date: $NIGHTLY_DATE" >&2
+              exit 1
+            fi
+            echo "nightly-${NIGHTLY_DATE}-$(git rev-parse --short=7 HEAD)" > obs/version
             exit 0
           fi
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')

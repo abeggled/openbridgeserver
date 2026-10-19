@@ -116,6 +116,18 @@ describe('UpdateNotice', () => {
     expect(w.find('.modal-stub').exists()).toBe(false)
   })
 
+  it('keeps the open release notes when the update disappears', async () => {
+    makeStore(baseStatus())
+    const w = await mountComponent('@/components/updates/UpdateNotice.vue')
+    await w.find('[data-testid="update-notice-notes"]').trigger('click')
+    await flushPromises()
+    // A poll, a manual check or a channel switch clears update_available.
+    store.status = baseStatus({ update_available: false })
+    await flushPromises()
+    expect(w.find('[data-testid="update-notice"]').exists()).toBe(false)
+    expect(w.find('.modal-stub').exists()).toBe(true)
+  })
+
   it('marks a possibly outdated result', async () => {
     makeStore(baseStatus({ stale: true, last_error: 'network' }))
     const w = await mountComponent('@/components/updates/UpdateNotice.vue')

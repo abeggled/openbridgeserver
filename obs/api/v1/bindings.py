@@ -253,16 +253,28 @@ async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     await adapter_registry.reload_instance_bindings(instance_id, db)
 
 
+_SOURCE_ONLY_ADAPTER_TYPES = frozenset({"ZEITSCHALTUHR", "ANWESENHEITSSIMULATION"})
+
+
 def _ensure_system_datapoint_binding_allowed(dp_id: uuid.UUID | str, adapter_type: str, direction: str) -> None:
     """A read-only system DataPoint (#1370) may feed bindings, never be fed by one.
 
     DEST bindings pass its value on to a device, and MESSAGE bindings only watch
     it; any other SOURCE/BOTH binding would write adapter values into it.
     """
-    if is_system_datapoint(dp_id) and adapter_type != "MESSAGE" and direction != "DEST":
+    if not is_system_datapoint(dp_id):
+        return
+    if adapter_type != "MESSAGE" and direction != "DEST":
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "System DataPoints are read-only: only DEST bindings are allowed",
+        )
+    # The timer and the presence simulation only ever write into their DataPoint;
+    # a DEST binding of theirs would never pass the value on.
+    if adapter_type in _SOURCE_ONLY_ADAPTER_TYPES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"System DataPoints are read-only: {adapter_type} bindings cannot use them",
         )
 
 

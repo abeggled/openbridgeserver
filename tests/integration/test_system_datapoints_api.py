@@ -18,13 +18,13 @@ from obs.core.system_datapoints import CURRENT_VERSION, LAST_CHECK, LATEST_VERSI
 
 pytestmark = pytest.mark.integration
 
-_ADAPTER_TYPE = "ANWESENHEITSSIMULATION"
+_ADAPTER_TYPE = "SNMP"
 
 
-async def _create_instance(client, auth_headers) -> dict:
+async def _create_instance(client, auth_headers, adapter_type=_ADAPTER_TYPE) -> dict:
     resp = await client.post(
         "/api/v1/adapters/instances",
-        json={"adapter_type": _ADAPTER_TYPE, "name": f"SysDpInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False},
+        json={"adapter_type": adapter_type, "name": f"SysDpInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False},
         headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
@@ -116,6 +116,17 @@ async def test_bindings_may_read_but_never_write(client, auth_headers):
         assert resp.status_code == 422
     finally:
         assert (await client.delete(f"{url}/{binding_id}", headers=auth_headers)).status_code == 204
+
+
+@pytest.mark.parametrize("adapter_type", ["ZEITSCHALTUHR", "ANWESENHEITSSIMULATION"])
+async def test_timer_and_presence_simulation_cannot_bind_a_system_datapoint(client, auth_headers, adapter_type):
+    """Both only write into their DataPoint: a DEST binding of theirs would stay dead."""
+    inst = await _create_instance(client, auth_headers, adapter_type)
+    url = f"/api/v1/datapoints/{UPDATE_AVAILABLE.id}/bindings"
+    resp = await client.post(url, json={"adapter_instance_id": inst["id"], "direction": "DEST", "config": {}}, headers=auth_headers)
+    assert resp.status_code == 422, resp.text
+    assert adapter_type in resp.json()["detail"]
+    assert (await client.get(url, headers=auth_headers)).json() == []
 
 
 async def test_config_import_cannot_repoint_an_existing_system_binding(client, auth_headers):
