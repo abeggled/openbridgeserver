@@ -7,7 +7,15 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
   const error   = ref(null)
 
-  const isLoggedIn  = computed(() => !!localStorage.getItem('access_token'))
+  // localStorage is not reactive: without this the first value of isLoggedIn
+  // (false on the login page) stays cached after an in-app login, and e.g. the
+  // update notice mounted afterwards never polls. Login and logout bump it; the
+  // API client's token refresh keeps the login, its failure reloads the page.
+  const tokenRevision = ref(0)
+  const isLoggedIn  = computed(() => {
+    void tokenRevision.value  // dependency only
+    return !!localStorage.getItem('access_token')
+  })
   const isAdmin     = computed(() => user.value?.is_admin ?? false)
   const username    = computed(() => user.value?.username ?? '')
 
@@ -18,6 +26,7 @@ export const useAuthStore = defineStore('auth', () => {
       const { data } = await authApi.login(username, password)
       localStorage.setItem('access_token',  data.access_token)
       localStorage.setItem('refresh_token', data.refresh_token)
+      tokenRevision.value += 1
       await loadMe()
       return true
     } catch (e) {
@@ -40,6 +49,7 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
+    tokenRevision.value += 1
     user.value = null
   }
 
