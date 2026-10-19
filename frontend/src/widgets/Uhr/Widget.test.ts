@@ -145,7 +145,7 @@ describe('Uhr Widget.vue — Wortuhr minute dots', () => {
 
   /** Lit letters, row by row, joined with spaces between the rows that have any. */
   function litLetters(w: VueWrapper): string {
-    const cells = w.findAll('[data-testid="uhr-wortuhr"] .grid > div')
+    const cells = w.findAll('[data-testid="uhr-wortuhr-cell"]')
     expect(cells).toHaveLength(110)
     const rows: string[] = []
     for (let r = 0; r < 10; r++) {

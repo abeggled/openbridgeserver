@@ -399,6 +399,7 @@ function istZelleAktiv(zeile: number, spalte: number): boolean {
               <div
                 v-for="(buchstabe, si) in zeile"
                 :key="`${zi}-${si}`"
+                data-testid="uhr-wortuhr-cell"
                 class="flex items-center justify-center font-bold uppercase transition-colors duration-300 leading-none"
                 style="font-size: clamp(0.35rem, 6cqi, 1rem);"
                 :style="istZelleAktiv(zi, si) ? { color } : {}"
