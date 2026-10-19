@@ -169,8 +169,11 @@ def classify_releases(payload: Any) -> list[Release]:
 
 
 def _published_date(installed: Version, releases: list[Release]) -> date | None:
+    # By tag, not by key: a stable tag GitHub marks as a pre-release has an RC
+    # key. Case-insensitive like parse_version: "-rc1" installs from "-RC1".
+    tag = installed.raw.casefold()
     for release in releases:
-        if release.version.raw == installed.raw and release.published_at is not None:
+        if release.version.raw.casefold() == tag and release.published_at is not None:
             return release.published_at.astimezone(UTC).date()
     return None
 

@@ -51,7 +51,8 @@ separated per version.
 
 For the Visu and Logic, OBS automatically creates five data points that can be read like any
 other data point but cannot be renamed, duplicated, deleted or written (neither through the
-Admin GUI nor through the API, MQTT or adapters). Their IDs are the same on every
+Admin GUI nor through the API, MQTT, adapters or Logic — a logic sheet can read them but cannot
+use them as the target of a write block or a value sequence). Their IDs are the same on every
 installation, so Visu and Logic configurations stay portable.
 
 | Data point | Type | Content |

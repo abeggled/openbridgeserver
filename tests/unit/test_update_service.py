@@ -913,6 +913,20 @@ async def test_an_instance_started_offline_gets_the_values_when_it_connects(rese
     assert resend_router.resend_system_bindings.await_count == 2
 
 
+async def test_instances_running_at_subscription_are_not_new_connections(resend_router, registered):
+    """They got the start-up publish; their first status update is no reconnect."""
+    up, down = uuid.uuid4(), uuid.uuid4()
+    registered.update({up, down})
+    service = _bare_service()
+    service.track_instances([SimpleNamespace(_instance_id=up, connected=True), SimpleNamespace(_instance_id=down, connected=False)])
+    # e.g. a KNX tunnel warning: still connected.
+    await service.handle_adapter_status(_status(connected=True, instance_id=up, severity="warning"))
+    resend_router.resend_system_bindings.assert_not_awaited()
+    # The one that was down at start-up connects now: that is a new connection.
+    await service.handle_adapter_status(_status(connected=True, instance_id=down))
+    resend_router.resend_system_bindings.assert_awaited_once_with(down)
+
+
 async def test_lifespan_subscribes_the_handler_to_adapter_status():
     import inspect
 
@@ -921,6 +935,7 @@ async def test_lifespan_subscribes_the_handler_to_adapter_status():
     source = inspect.getsource(main_module.lifespan)
     assert "bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)" in source
     assert "bus.subscribe(AdapterInstanceStartedEvent, update_service.handle_instance_started)" in source
+    assert "update_service.track_instances(adapter_registry.get_all_instances().values())" in source
 
 
 async def test_restart_instance_resends_only_after_registering_the_instance(monkeypatch):

@@ -176,6 +176,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # values never change on their own, so a connection re-sends them (#1370).
     bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)
     bus.subscribe(AdapterInstanceStartedEvent, update_service.handle_instance_started)
+    update_service.track_instances(adapter_registry.get_all_instances().values())
 
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",

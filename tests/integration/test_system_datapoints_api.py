@@ -21,10 +21,10 @@ pytestmark = pytest.mark.integration
 _ADAPTER_TYPE = "SNMP"
 
 
-async def _create_instance(client, auth_headers, adapter_type=_ADAPTER_TYPE) -> dict:
+async def _create_instance(client, auth_headers, adapter_type=_ADAPTER_TYPE, *, enabled=False) -> dict:
     resp = await client.post(
         "/api/v1/adapters/instances",
-        json={"adapter_type": adapter_type, "name": f"SysDpInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": False},
+        json={"adapter_type": adapter_type, "name": f"SysDpInst-{uuid.uuid4().hex[:6]}", "config": {}, "enabled": enabled},
         headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
@@ -196,24 +196,31 @@ async def test_config_import_cannot_touch_system_datapoints(client, auth_headers
 
 
 async def test_new_system_bindings_get_the_value_without_a_value_event(client, auth_headers, monkeypatch):
-    """Only the new binding is fed: Logic, notifications and other bindings see no event."""
+    """Only the bindings are fed: Logic, notifications and other bindings see no event.
+
+    The SNMP instance connects without a network. Creating a binding feeds it,
+    and the config import restarts every adapter (stop_all + start_all), after
+    which each system binding of the instance gets the value again — the one
+    the import brought along and the one it did not mention.
+    """
+    from obs.adapters.snmp.adapter import SnmpAdapter
     from obs.core.event_bus import DataValueEvent, get_event_bus
-    from obs.core.write_router import WriteRouter
 
     fed = []
     events = []
 
-    async def record_write(self, dp_id, binding_id, value):
-        fed.append((dp_id, str(binding_id), value))
+    # Recorded where the value reaches the instance: proof it was found by ID.
+    async def record_write(self, binding, value):
+        fed.append((binding.datapoint_id, str(binding.id), value))
 
     async def record_event(event):
         if event.datapoint_id == CURRENT_VERSION.id:
             events.append(event)
 
-    monkeypatch.setattr(WriteRouter, "write_binding", record_write)
+    monkeypatch.setattr(SnmpAdapter, "write", record_write)
     get_event_bus().subscribe(DataValueEvent, record_event)
     version = (await _value(client, auth_headers, CURRENT_VERSION))["value"]
-    inst = await _create_instance(client, auth_headers)
+    inst = await _create_instance(client, auth_headers, enabled=True)
     url = f"/api/v1/datapoints/{CURRENT_VERSION.id}/bindings"
     imported_id = str(uuid.uuid4())
     payload = {
@@ -247,16 +254,58 @@ async def test_new_system_bindings_get_the_value_without_a_value_event(client, a
         resp = await client.post(url, json={"adapter_instance_id": inst["id"], "direction": "DEST", "config": {}}, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         created_id = resp.json()["id"]
+        assert fed == [(CURRENT_VERSION.id, created_id, version)]
+        fed.clear()
+
         resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
         assert resp.status_code == 200, resp.text
         assert resp.json()["bindings_created"] == 1
-        assert fed == [(CURRENT_VERSION.id, created_id, version), (CURRENT_VERSION.id, imported_id, version)]
+        assert sorted(fed) == sorted([(CURRENT_VERSION.id, created_id, version), (CURRENT_VERSION.id, imported_id, version)])
         assert events == []
     finally:
         get_event_bus().unsubscribe(DataValueEvent, record_event)
         for binding_id in (created_id, imported_id):
             if binding_id:
                 await client.delete(f"{url}/{binding_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/adapters/instances/{inst['id']}", headers=auth_headers)
+
+
+def _write_flow(dp_id, node_type="datapoint_write") -> dict:
+    return {"nodes": [{"id": "w", "type": node_type, "position": {"x": 0, "y": 0}, "data": {"datapoint_id": str(dp_id)}}], "edges": []}
+
+
+async def test_logic_can_read_but_not_write_a_system_datapoint(client, auth_headers):
+    """The event bus drops a Logic write: such a graph would report writes that never happen."""
+    resp = await client.post(
+        "/api/v1/logic/graphs",
+        json={"name": f"SysWrite-{uuid.uuid4().hex[:6]}", "flow_data": _write_flow(UPDATE_CHANNEL.id)},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "read-only system DataPoint" in resp.json()["detail"]
+
+    resp = await client.post(
+        "/api/v1/logic/graphs",
+        json={"name": f"SysRead-{uuid.uuid4().hex[:6]}", "flow_data": _write_flow(UPDATE_CHANNEL.id, "datapoint_read")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    await client.delete(f"/api/v1/logic/graphs/{resp.json()['id']}", headers=auth_headers)
+
+
+async def test_config_import_refuses_a_logic_graph_writing_a_system_datapoint(client, auth_headers):
+    graph_id = str(uuid.uuid4())
+    payload = {
+        "obs_version": "5",
+        "exported_at": "2026-10-17T00:00:00",
+        "datapoints": [],
+        "bindings": [],
+        "logic_graphs": [{"id": graph_id, "name": "SysWriteImport", "description": "", "enabled": True, "flow_data": _write_flow(LAST_CHECK.id)}],
+    }
+    resp = await client.post("/api/v1/config/import", json=payload, headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    assert any("read-only system DataPoint" in error for error in resp.json()["errors"])
+    assert (await client.get(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)).status_code == 404
 
 
 # ---------------------------------------------------------------------------

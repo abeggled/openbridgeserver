@@ -55,7 +55,8 @@ Version getrennt.
 
 Für Visu und Logik legt OBS automatisch fünf Datenpunkte an, die wie andere Datenpunkte
 gelesen, aber weder umbenannt, dupliziert, gelöscht noch beschrieben werden können (weder
-über das Admin-GUI noch über API, MQTT oder Adapter). Ihre IDs sind auf allen Installationen
+über das Admin-GUI noch über API, MQTT, Adapter oder Logik — ein Logikblatt kann sie lesen, aber
+nicht als Ziel eines Schreib-Bausteins oder einer Wertsequenz verwenden). Ihre IDs sind auf allen Installationen
 gleich, damit Visu- und Logik-Konfigurationen übertragbar bleiben.
 
 | Datenpunkt | Typ | Inhalt |

@@ -528,6 +528,15 @@ class UpdateCheckService:
             return
         await self._resend_system_bindings(instance_id)
 
+    def track_instances(self, instances: Any) -> None:
+        """Record the connection state of the instances that started before the subscription.
+
+        They got the values from the start-up publish; without this their first
+        status update (e.g. a KNX tunnel warning) would count as a new connection.
+        """
+        for instance in instances:
+            self._instance_connected[instance._instance_id] = bool(getattr(instance, "connected", False))
+
     async def handle_instance_started(self, event: Any) -> None:
         """Re-send the system values to an instance the registry just (re)started (#1370)."""
         self._instance_connected[event.instance_id] = event.connected

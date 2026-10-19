@@ -52,7 +52,7 @@ from obs.logic.models import (
     NodeTypeDef,
 )
 from obs.logic.registry import get_node_type, list_node_types
-from obs.logic.validation import validate_timer_durations
+from obs.logic.validation import validate_timer_durations, validate_write_targets
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
     """Translate shared persistence validation to an API error."""
     try:
         validate_timer_durations(flow_data)
+        validate_write_targets(flow_data)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 

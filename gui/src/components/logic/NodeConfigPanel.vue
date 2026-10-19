@@ -2881,15 +2881,18 @@ function onValueMapCustomChange() {
 }
 
 // ── DataPoint picker ───────────────────────────────────────────────────────
+// Read-only system DataPoints (#1370) can be read, never written: no write target.
+function writableDps(items) {
+  return items.filter(dp => !dp.system)
+}
+
 async function searchDps() {
   try {
-    if (dpSearch.value.length < 1) {
-      const { data } = await dpApi.list(0, 50)
-      dpResults.value = data.items || data
-    } else {
-      const { data } = await searchApi.search({ q: dpSearch.value, size: 50 })
-      dpResults.value = data.items || data
-    }
+    const { data } = dpSearch.value.length < 1
+      ? await dpApi.list(0, 50)
+      : await searchApi.search({ q: dpSearch.value, size: 50 })
+    const items = data.items || data
+    dpResults.value = isWrite.value ? writableDps(items) : items
   } catch { dpResults.value = [] }
 }
 
@@ -2909,7 +2912,7 @@ function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; ste
 function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index + 1, 0, { ...steps[index] }); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; syncSequencePickerState(); emitUpdate() }
-async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
+async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = writableDps(data.items || data); sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
 function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearchDrafts.value[index] = ''; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function normaliseUrlTargetInput(value) {

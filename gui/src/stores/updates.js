@@ -86,6 +86,10 @@ export const useUpdatesStore = defineStore('updates', () => {
     try {
       const { data } = await request()
       show(ticket, data)
+      // Notes loaded before or during the check or channel switch describe the
+      // previous result: read them again. Its newer request supersedes any
+      // still in flight. Never loaded means nothing is shown, nothing to renew.
+      if (notesRequests > 0) fetchReleaseNotes()
       return data
     } finally {
       mutationEpoch += 1

@@ -69,6 +69,29 @@ describe('NodeConfigPanel datapoint_read — connection tab', () => {
     w.unmount()
   })
 
+  it.each([
+    ['datapoint_write', false],
+    ['datapoint_read', true],
+  ])('%s offers read-only system DataPoints: %s (#1370)', async (type, offered) => {
+    const items = [
+      { id: 'dp-1', name: 'Licht Wohnzimmer', data_type: 'BOOLEAN' },
+      { id: 'sys', name: 'OBS Update Channel', data_type: 'STRING', system: true },
+    ]
+    dpList.mockResolvedValue({ data: { items } })
+    dpSearch.mockResolvedValue({ data: { items } })
+    const w = await mountPanel(type, { datapoint_name: '' })
+    await flushPromises()
+    const shown = () => w.findAll('button').map(b => b.text())
+    expect(shown().some(text => text.includes('Licht Wohnzimmer'))).toBe(true)
+    expect(shown().some(text => text.includes('OBS Update Channel'))).toBe(offered)
+    // Also after a search by name.
+    await w.get('[data-testid="dp-search"]').setValue('OBS')
+    await w.get('[data-testid="dp-search"]').trigger('input')
+    await flushPromises()
+    expect(shown().some(text => text.includes('OBS Update Channel'))).toBe(offered)
+    w.unmount()
+  })
+
   it('calls searchApi.search when search input has text', async () => {
     const w = await mountPanel('datapoint_read', { datapoint_name: '' })
     await flushPromises()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from types import SimpleNamespace
@@ -594,3 +595,49 @@ async def test_a_user_datapoint_binding_never_reaches_the_write_router():
     """The resend is for system DataPoints only — it must not require a WriteRouter."""
     with patch("obs.core.write_router.get_write_router", side_effect=AssertionError("must not be called")):
         await bindings_api._resend_system_value(uuid.uuid4(), str(uuid.uuid4()))
+
+
+# ---------------------------------------------------------------------------
+# Logic may read a system DataPoint but never write it
+# ---------------------------------------------------------------------------
+
+
+def _flow(*nodes):
+    from obs.logic.models import FlowData
+
+    return FlowData.model_validate(
+        {"nodes": [{"id": f"n{i}", "type": t, "position": {"x": 0, "y": 0}, "data": d} for i, (t, d) in enumerate(nodes)], "edges": []}
+    )
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        ("datapoint_write", {"datapoint_id": str(UPDATE_CHANNEL.id)}),
+        ("value_sequence", {"steps": [{"datapoint_id": str(uuid.uuid4())}, {"datapoint_id": str(LAST_CHECK.id)}]}),
+        ("value_sequence", {"steps": json.dumps([{"datapoint_id": str(UPDATE_AVAILABLE.id)}])}),
+    ],
+)
+def test_logic_cannot_write_a_system_datapoint(node):
+    from obs.logic.validation import validate_write_targets
+
+    with pytest.raises(ValueError, match="read-only system DataPoint"):
+        validate_write_targets(_flow(node))
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        ("datapoint_read", {"datapoint_id": str(UPDATE_CHANNEL.id)}),
+        ("datapoint_write", {"datapoint_id": str(uuid.uuid4())}),
+        ("datapoint_write", {}),
+        ("value_sequence", {"steps": "not json"}),
+        ("value_sequence", {"steps": {"datapoint_id": str(UPDATE_CHANNEL.id)}}),
+        ("value_sequence", {"steps": ["not a step", {"datapoint_id": str(uuid.uuid4())}]}),
+        ("value_sequence", {}),
+    ],
+)
+def test_logic_may_read_system_datapoints_and_write_others(node):
+    from obs.logic.validation import validate_write_targets
+
+    validate_write_targets(_flow(node))

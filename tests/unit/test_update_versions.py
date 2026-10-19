@@ -279,6 +279,12 @@ def test_is_newer_versioned_installed_whose_release_lacks_a_date():
     assert is_newer(nightly, parse_version("2026.10.0"), [installed_release, nightly]) is None
 
 
+def test_is_newer_finds_the_installed_rc_whatever_its_case():
+    nightly = _release("nightly-20261017", datetime(2026, 10, 17, tzinfo=UTC))
+    installed_release = _release("2026.10.0-RC1", datetime(2026, 10, 10, tzinfo=UTC))
+    assert is_newer(nightly, parse_version("2026.10.0-rc1"), [installed_release, nightly]) is True
+
+
 # ---------------------------------------------------------------------------
 # update_check configuration section
 # ---------------------------------------------------------------------------

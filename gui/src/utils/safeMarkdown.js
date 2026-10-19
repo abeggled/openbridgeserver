@@ -12,8 +12,9 @@
 // [label](url) links and bare http(s) URLs. HTML comments are dropped.
 
 const FENCE_RE = /^\s*(```|~~~)/
-// A closing # sequence only counts after whitespace (CommonMark): `## C#` keeps its #.
-const HEADING_RE = /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/
+// Linear on any input: the closing # sequence is stripped by headingText(), not
+// here — a lazy text group before optional whitespace backtracks quadratically.
+const HEADING_RE = /^(#{1,6})[ \t]+(.*)$/
 const BULLET_RE = /^\s*[-*+]\s+(.*)$/
 const ORDERED_RE = /^\s*\d{1,9}[.)]\s+(.*)$/
 // Bounded repetitions keep the scan for an unmatched `, ** or [ short, and the
@@ -63,6 +64,15 @@ export function parseInline(text) {
   return nodes
 }
 
+// A closing # sequence only counts after whitespace (CommonMark): `## C#` keeps its #.
+function headingText(raw) {
+  const text = raw.trimEnd()
+  let end = text.length
+  while (end > 0 && text[end - 1] === '#') end -= 1
+  if (end === text.length || (end > 0 && !/\s/.test(text[end - 1]))) return text
+  return text.slice(0, end).trimEnd()
+}
+
 export function parseMarkdown(source) {
   if (typeof source !== 'string' || !source) return []
   const lines = source.replace(/<!--[\s\S]*?(-->|$)/g, '').replace(/\r\n?/g, '\n').split('\n')
@@ -95,7 +105,7 @@ export function parseMarkdown(source) {
     if (heading) {
       flushParagraph()
       flushList()
-      blocks.push({ type: 'heading', level: heading[1].length, children: parseInline(heading[2]) })
+      blocks.push({ type: 'heading', level: heading[1].length, children: parseInline(headingText(heading[2])) })
       continue
     }
     const bullet = BULLET_RE.exec(line)

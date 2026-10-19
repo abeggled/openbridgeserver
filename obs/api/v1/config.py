@@ -33,7 +33,6 @@ from obs.api.v1.bindings import (
     _ensure_webhook_slug_free,
     _ensure_webhook_target_allowed,
     _json_config,
-    _resend_system_value,
     _validate_adapter_binding,
     _webhook_config_with_token,
 )
@@ -45,7 +44,7 @@ from obs.datetime_format import DATETIME_SETTING_KEYS, validate_datetime_setting
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CAPABILITIES, LOGIC_CREATE_CAPABILITY
 from obs.logic.models import FlowData
-from obs.logic.validation import validate_timer_durations
+from obs.logic.validation import validate_timer_durations, validate_write_targets
 from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 from obs.regional_format import REGIONAL_SETTING_KEYS, validate_regional_setting
@@ -936,7 +935,6 @@ async def import_config(
             result.errors.append(f"AdapterInstance {ai.id}: {exc}")
 
     # --- Bindings ---
-    fed_system_bindings: list[tuple[str, str]] = []
     for b_data in body.bindings:
         try:
             b_id = b_data.id
@@ -1036,8 +1034,6 @@ async def import_config(
                     ),
                 )
                 result.bindings_created += 1
-            if is_system_datapoint(effective_dp_id):
-                fed_system_bindings.append((effective_dp_id, b_id))
         except Exception as exc:
             logger.exception(f"Binding {b_data.id} failed")
             result.errors.append(f"Binding {b_data.id}: {exc}")
@@ -1083,7 +1079,9 @@ async def import_config(
     for lg in body.logic_graphs:
         try:
             row = await db.fetchone("SELECT id FROM logic_graphs WHERE id=?", (lg.id,))
-            validate_timer_durations(FlowData.model_validate(lg.flow_data))
+            flow = FlowData.model_validate(lg.flow_data)
+            validate_timer_durations(flow)
+            validate_write_targets(flow)
             flow_json = json.dumps(lg.flow_data)
             if row:
                 await db.execute_and_commit(
@@ -1136,7 +1134,8 @@ async def import_config(
             logger.exception("Logic manager reload failed")
             result.errors.append(f"Logic manager reload: {exc}")
 
-    # Restart all adapter instances so they pick up new configs and bindings
+    # Restart all adapter instances so they pick up new configs and bindings; each
+    # started instance also gets the system DataPoint values again (#1370)
     try:
         from obs.adapters import registry as adapter_registry
         from obs.core.event_bus import get_event_bus
@@ -1148,10 +1147,6 @@ async def import_config(
     except Exception as exc:
         logger.exception("Adapter restart failed")
         result.errors.append(f"Adapter restart failed: {exc}")
-
-    # Imported (DEST) bindings on system DataPoints get their current value (#1370).
-    for system_dp_id, system_binding_id in fed_system_bindings:
-        await _resend_system_value(uuid.UUID(system_dp_id), system_binding_id)
 
     # --- FontAwesome API Key ---
     if body.fa_api_key:

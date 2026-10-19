@@ -124,6 +124,18 @@ describe('parseMarkdown', () => {
   it('keeps a # that belongs to the heading text', () => {
     expect(parseMarkdown('## Support for C#')[0].children).toEqual([{ type: 'text', text: 'Support for C#' }])
     expect(parseMarkdown('## Closed ##')[0].children).toEqual([{ type: 'text', text: 'Closed' }])
+    expect(parseMarkdown('## Plain   ')[0].children).toEqual([{ type: 'text', text: 'Plain' }])
+    // Only a closing sequence: an empty heading (CommonMark).
+    expect(parseMarkdown('### ###')[0]).toEqual({ type: 'heading', level: 3, children: [] })
+  })
+
+  it('parses a heading with a long whitespace run in linear time', () => {
+    // The previous pattern backtracked quadratically: about 1 s for 40,000 spaces.
+    const line = `# a${' '.repeat(200_000)}b`
+    const started = performance.now()
+    const [heading] = parseMarkdown(line)
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(heading.children.at(-1).text.endsWith('b')).toBe(true)
   })
 
   it('switches between bullet and numbered lists', () => {

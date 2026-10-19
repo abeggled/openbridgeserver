@@ -147,6 +147,36 @@ describe('useUpdatesStore', () => {
     expect(store.notesLoading).toBe(false)
   })
 
+  it('reads the release notes again after a check or channel switch', async () => {
+    let finishCheck
+    updatesApiMock.check.mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve }))
+    updatesApiMock.setChannel.mockResolvedValueOnce({ data: { channel: 'nightly' } })
+    updatesApiMock.releaseNotes
+      .mockResolvedValueOnce({ data: [{ version: '2026.10.0' }] })
+      .mockResolvedValueOnce({ data: [{ version: '2026.10.0' }, { version: '2026.11.0' }] })
+      .mockResolvedValueOnce({ data: [{ version: 'nightly-20261019' }] })
+    const store = await useStore()
+
+    // Notes opened while the check is still running answer the old result.
+    const check = store.checkNow()
+    await store.fetchReleaseNotes()
+    expect(store.releaseNotes).toEqual([{ version: '2026.10.0' }])
+    finishCheck({ data: { latest_version: '2026.11.0', release_notes_count: 2 } })
+    await check
+    await vi.waitFor(() => expect(store.releaseNotes).toHaveLength(2))
+
+    await store.setChannel('nightly')
+    await vi.waitFor(() => expect(store.releaseNotes).toEqual([{ version: 'nightly-20261019' }]))
+    expect(updatesApiMock.releaseNotes).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not load release notes nobody asked for', async () => {
+    updatesApiMock.check.mockResolvedValueOnce({ data: { latest_version: '2026.11.0' } })
+    const store = await useStore()
+    await store.checkNow()
+    expect(updatesApiMock.releaseNotes).not.toHaveBeenCalled()
+  })
+
   it('drops a stale mutation answer and reads the final state back', async () => {
     let finishCheck
     updatesApiMock.check.mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve }))
