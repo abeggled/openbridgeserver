@@ -120,6 +120,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     ws_manager = init_ws_manager()
     bus.subscribe(DataValueEvent, ws_manager.handle_value_event)
 
+    # 7b. Visu alarms — conditions start from the current values, nothing is raised at startup
+    from obs.visu_alarms import init_visu_alarm_engine, reload_visu_alarms
+
+    alarm_engine = init_visu_alarm_engine(registry.get_value)
+    await reload_visu_alarms(db)
+    bus.subscribe(DataValueEvent, alarm_engine.handle_value_event)
+
     # 6. Write Router
     #    Path A: MQTT dp/{uuid}/set → adapters (external commands)
     #    Path B: DataValueEvent → DEST/BOTH bindings (cross-protocol propagation)
