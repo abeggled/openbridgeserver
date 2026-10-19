@@ -51,6 +51,15 @@ from obs.visu_devices import VISU_DEVICES_KEY, parse_visu_devices
 
 logger = logging.getLogger(__name__)
 
+
+async def _reload_visu_alarms(db: Database) -> None:
+    """Apply the stored Visu alarm definitions; a failure must not fail an import or reset."""
+    try:
+        await reload_visu_alarms(db)
+    except Exception:
+        logger.exception("Reloading the Visu alarms failed")
+
+
 router = APIRouter(tags=["config"])
 
 _EXPORT_VERSION = "5"
@@ -1262,7 +1271,7 @@ async def import_config(
             result.errors.append(f"AppSetting {s.key}: {exc}")
 
     # Imported alarm definitions take effect right away (nothing is raised by the import).
-    await reload_visu_alarms(db)
+    await _reload_visu_alarms(db)
 
     # Apply imported date/time settings immediately. Logic graphs may already
     # have been reloaded above, but their executor receives this hot
@@ -1573,7 +1582,7 @@ async def factory_reset(
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'de')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('region_format', 'auto')")
         await db.execute_and_commit("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('currency', 'auto')")
-        await reload_visu_alarms(db)
+        await _reload_visu_alarms(db)
         from obs.logic.manager import get_logic_manager
 
         get_logic_manager().update_app_config(
