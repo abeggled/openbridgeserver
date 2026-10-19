@@ -7,6 +7,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException, WebSocketDisconnect
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 import obs.api.v1.visu_alarms as alarms_api
+from obs.api.v1 import config as config_api
 from obs.core.event_bus import DataValueEvent
 from obs.db.database import Database
 from obs.visu_alarms import (
@@ -265,6 +267,42 @@ async def test_reload_reads_the_stored_definitions(db):
     await db.execute_and_commit("DELETE FROM app_settings WHERE key = ?", (VISU_ALARMS_KEY,))
     await reload_visu_alarms(db)
     assert get_visu_alarm_engine().active() == []
+
+
+class _EmptyRegistry:
+    def all(self) -> list:
+        return []
+
+
+async def test_config_import_validates_visu_alarms_and_applies_them(db, monkeypatch):
+    body = config_api.ConfigExport(
+        obs_version="test",
+        exported_at="2026-10-19T00:00:00+00:00",
+        datapoints=[],
+        bindings=[],
+        app_settings=[
+            config_api.ExportedAppSetting(key=VISU_ALARMS_KEY, value="[{broken"),
+            config_api.ExportedAppSetting(key="history.backend", value="sqlite"),
+        ],
+    )
+    monkeypatch.setattr(config_api, "get_registry", lambda: _EmptyRegistry())
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        rejected = await config_api.import_config(body=body, _user="admin", db=db)
+        body.app_settings[0] = config_api.ExportedAppSetting(key=VISU_ALARMS_KEY, value=dump_visu_alarms([alarm()]))
+        accepted = await config_api.import_config(body=body, _user="admin", db=db)
+
+    assert any(e.startswith(f"AppSetting {VISU_ALARMS_KEY}") for e in rejected.errors)
+    assert rejected.app_settings_upserted == 1  # the unrelated key still went through
+    assert accepted.errors == []
+    assert accepted.app_settings_upserted == 2
+    assert await alarms_api.get_visu_alarms(db=db, _admin="admin") == [alarm()]
+    await get_visu_alarm_engine().handle_value_event(event(True))  # the import applied the alarm
+    assert [a["id"] for a in await alarms_api.get_active_visu_alarms()] == ["post"]
 
 
 async def test_acknowledge_route():
