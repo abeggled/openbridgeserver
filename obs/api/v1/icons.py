@@ -23,7 +23,8 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from obs.api.audit import contract_audit, set_contract_audit_summary
-from obs.api.auth import get_admin_user, get_current_user
+from obs.api.auth import Principal, get_admin_user, get_current_user
+from obs.api.v1.visu import _optional_visu_principal, anonymous_visible_icon_names, session_tokens_from_request
 from obs.config import get_settings
 from obs.db.database import Database, get_db
 
@@ -237,12 +238,22 @@ class FontAwesomeRequest(BaseModel):
 
 @router.get("/", response_model=IconListOut)
 async def list_icons(
-    _user: str = Depends(get_current_user),
+    request: Request,
+    principal: Principal | None = Depends(_optional_visu_principal),
+    db: Database = Depends(get_db),
 ) -> IconListOut:
-    """List all installed SVG icons (name, file size, inline SVG content)."""
+    """List the installed SVG icons (name, file size, inline SVG content).
+
+    Signed-in callers get every icon. The Visu is also used without login, so a
+    visitor without one gets the icons of the pages they may view — public and
+    read-only pages, and PIN pages they unlocked (see anonymous_visible_icon_names).
+    """
+    allowed = None if principal else await anonymous_visible_icon_names(db, session_tokens_from_request(request))
     icons_dir = _icons_dir()
     items: list[IconOut] = []
     for svg_file in sorted(icons_dir.glob("*.svg")):
+        if allowed is not None and svg_file.stem not in allowed:
+            continue
         try:
             raw = svg_file.read_bytes()
             try:
@@ -488,9 +499,13 @@ async def update_icons_settings(
 @router.get("/{name}")
 async def get_icon(
     name: str,
-    _user: str = Depends(get_current_user),
+    request: Request,
+    principal: Principal | None = Depends(_optional_visu_principal),
+    db: Database = Depends(get_db),
 ) -> Response:
-    """Return the raw SVG content of a single icon."""
+    """Return the raw SVG content of a single icon (same visibility as list_icons)."""
+    if principal is None and name not in await anonymous_visible_icon_names(db, session_tokens_from_request(request)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Anmeldung erforderlich")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,

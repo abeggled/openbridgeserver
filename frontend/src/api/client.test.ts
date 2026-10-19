@@ -5,9 +5,12 @@ import {
   cancelTokenRefresh,
   clearAuthTokens,
   displaySettings,
+  getAllSessionTokens,
+  icons,
   messageArchives,
   refreshAccessToken,
   scheduleTokenRefresh,
+  setSessionToken,
   setTokens,
   visu,
   visuBackgrounds,
@@ -959,5 +962,47 @@ describe('proactive token refresh', () => {
     expect(vi.getTimerCount() - baseline).toBe(0)
     cancelTokenRefresh()
     expect(vi.getTimerCount() - baseline).toBe(0)
+  })
+})
+
+describe('PIN session tokens for the icon list', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
+  afterEach(() => {
+    sessionStorage.clear()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('collects every valid PIN token and drops expired ones', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-19T10:00:00Z'))
+    setSessionToken('page-a', 'token-a', 3600)
+    setSessionToken('page-b', 'token-b', 10)
+    sessionStorage.setItem('session_legacy', 'legacy-token') // old plain-string format
+    sessionStorage.setItem('unrelated', 'x')
+
+    vi.setSystemTime(new Date('2026-10-19T10:01:00Z')) // page-b expired
+
+    expect(getAllSessionTokens().sort()).toEqual(['legacy-token', 'token-a'])
+    expect(sessionStorage.getItem('session_page-b')).toBeNull()
+  })
+
+  it('sends the tokens with the icon list, and no header without tokens', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ total: 0, icons: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await icons.list()
+    expect(fetchMock.mock.calls[0][1].headers['X-Session-Tokens']).toBeUndefined()
+
+    setSessionToken('page-a', 'token-a')
+    setSessionToken('page-b', 'token-b')
+    await icons.list()
+    expect(fetchMock.mock.calls[1][1].headers['X-Session-Tokens'].split(',').sort()).toEqual(['token-a', 'token-b'])
   })
 })

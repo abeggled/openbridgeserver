@@ -12,6 +12,12 @@ Zeigt alle installierten Icons als durchsuchbares Raster. Mehrfachauswahl per Kl
 ermöglicht Export (als Sammlung) oder Löschen der ausgewählten Icons; „Alle wählen"/„Alle
 abwählen" wirkt auf die aktuell gefilterte/durchsuchte Liste.
 
+**Icons in der Visu ohne Anmeldung:** Wer die Visu ohne Anmeldung nutzt, bekommt nur die Icons
+der Seiten, die er sehen darf — Icons auf öffentlichen und „Nur lesen“-Seiten sowie die
+Seiten-Symbole der Übersicht; Icons auf PIN-geschützten Seiten erst nach Eingabe der PIN. Icons,
+die nur auf Seiten mit „Anmeldung erforderlich“ verwendet werden oder gar nicht verwendet sind,
+bleiben ohne Anmeldung unsichtbar. Angemeldete Benutzer sehen alle Icons.
+
 ## SVG Icons importieren {#settings-icons-import}
 
 Icons per Drag & Drop oder Dateiauswahl hochladen — einzelne SVG-Dateien oder ein ZIP-Archiv
