@@ -423,6 +423,39 @@ describe('SettingsView KNX project import', () => {
 
     wrapper.unmount()
   })
+
+  it('names the group addresses a read-only system DataPoint already serves', async () => {
+    // The backend skips those rows (#1370); without this line the user only sees
+    // fewer DataPoints than addresses and no reason for it.
+    knxprojApi.import.mockResolvedValueOnce({
+      data: { imported: 3, created: 1, updated: 1, skipped_system: 1, locations: 0, trades: 0, hierarchies: [] },
+    })
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    await selectKnxProjectFile(wrapper)
+    await findKnxImportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1 übersprungen (Gruppenadresse bereits von einem System-Datenpunkt bedient)')
+
+    wrapper.unmount()
+  })
+
+  it('says nothing about skipped addresses when none were skipped', async () => {
+    knxprojApi.import.mockResolvedValueOnce({
+      data: { imported: 2, created: 2, updated: 0, skipped_system: 0, locations: 0, trades: 0, hierarchies: [] },
+    })
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    await selectKnxProjectFile(wrapper)
+    await findKnxImportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('2 DataPoints neu angelegt')
+    expect(wrapper.text()).not.toContain('übersprungen')
+
+    wrapper.unmount()
+  })
 })
 
 describe('SettingsView import/export coverage', () => {

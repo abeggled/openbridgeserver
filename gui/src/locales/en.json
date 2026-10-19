@@ -3380,6 +3380,7 @@
       "knxImportResultOk": "{n} group addresses imported",
       "knxImportResultCreated": ", {n} data points created",
       "knxImportResultUpdated": ", {n} updated",
+      "knxImportResultSkippedSystem": ", {n} skipped (group address already served by a system data point)",
       "knxImportResultLocations": ", {n} rooms/buildings",
       "knxImportResultTrades": ", {n} trades",
       "importResultOk": "Restore OK: {objects} objects, {bindings} bindings",

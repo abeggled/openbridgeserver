@@ -6,9 +6,10 @@ import asyncio
 import json
 import logging
 import random
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -795,3 +796,81 @@ async def test_init_get_and_reset(env, monkeypatch):
     assert isinstance(enabled._source, GitHubReleaseSource)
     await enabled.stop()
     svc.reset_update_service()
+
+
+# ---------------------------------------------------------------------------
+# Re-send on adapter (re)connect (#1370)
+# ---------------------------------------------------------------------------
+
+
+def _status(*, connected, instance_id, severity="ok"):
+    from obs.core.event_bus import AdapterStatusEvent
+
+    return AdapterStatusEvent(adapter_type="KNX", connected=connected, instance_id=instance_id, severity=severity)
+
+
+@pytest.fixture
+def resend_router():
+    router = SimpleNamespace(resend_system_bindings=AsyncMock(return_value=1))
+    with patch("obs.core.write_router.get_write_router", return_value=router):
+        yield router
+
+
+def _bare_service():
+    return UpdateCheckService(AsyncMock(), AsyncMock(), source=None, installed_version="2026.10.0")
+
+
+async def test_connecting_instance_gets_the_system_values_resent(resend_router):
+    instance_id = uuid.uuid4()
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    resend_router.resend_system_bindings.assert_awaited_once_with(instance_id)
+
+
+async def test_a_repeated_connected_announcement_does_not_resend(resend_router):
+    instance_id = uuid.uuid4()
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    # e.g. ioBroker reporting its socket stable again — the link never dropped.
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert resend_router.resend_system_bindings.await_count == 1
+
+
+async def test_an_instance_that_reconnects_gets_the_values_again(resend_router):
+    instance_id = uuid.uuid4()
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    # A restart from the Admin GUI, or a link outage: the adapter publishes the
+    # disconnect, so the next connection is a transition again.
+    await service.handle_adapter_status(_status(connected=False, instance_id=instance_id))
+    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert resend_router.resend_system_bindings.await_count == 2
+
+
+async def test_a_disconnect_alone_never_writes(resend_router):
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=False, instance_id=uuid.uuid4()))
+    resend_router.resend_system_bindings.assert_not_awaited()
+
+
+async def test_a_status_without_an_instance_is_ignored(resend_router):
+    service = _bare_service()
+    await service.handle_adapter_status(_status(connected=True, instance_id=None))
+    resend_router.resend_system_bindings.assert_not_awaited()
+
+
+async def test_a_failing_resend_is_logged_and_swallowed(caplog):
+    router = SimpleNamespace(resend_system_bindings=AsyncMock(side_effect=RuntimeError("no router")))
+    service = _bare_service()
+    with patch("obs.core.write_router.get_write_router", return_value=router):
+        await service.handle_adapter_status(_status(connected=True, instance_id=uuid.uuid4()))
+    assert "could not re-send system values" in caplog.text
+
+
+async def test_lifespan_subscribes_the_handler_to_adapter_status():
+    import inspect
+
+    from obs import main as main_module
+
+    source = inspect.getsource(main_module.lifespan)
+    assert "bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)" in source

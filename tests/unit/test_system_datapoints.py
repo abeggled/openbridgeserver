@@ -389,10 +389,12 @@ async def test_knx_import_leaves_a_system_datapoint_and_its_dest_binding_alone(d
         SimpleNamespace(address="1/1/2", name="Fresh", dpt="9.001"),
         SimpleNamespace(address="1/1/3", name="Shared", dpt="9.001"),
     ]
-    created, updated = await knxproj_api._bulk_import_datapoints(records, "KNX-Test", "SOURCE", db, now)
+    created, updated, skipped_system = await knxproj_api._bulk_import_datapoints(records, "KNX-Test", "SOURCE", db, now)
     # The GA OBS sends its own value to is skipped: no second DataPoint that
-    # would read it back. A user DataPoint on a shared GA is updated as usual.
-    assert (created, updated) == (1, 1)
+    # would read it back, and the skip is counted so the import can report it
+    # instead of leaving the missing DataPoint unexplained. A user DataPoint on
+    # a shared GA is updated as usual.
+    assert (created, updated, skipped_system) == (1, 1, 1)
     ga_1 = await db.fetchall("SELECT id FROM adapter_bindings WHERE config LIKE '%1/1/1%'")
     assert [row["id"] for row in ga_1] == ["b-sys"]
     assert (await db.fetchone("SELECT name FROM datapoints WHERE id=?", (str(user_dp.id),)))["name"] == "Shared"
@@ -445,18 +447,23 @@ def _value_state(value, quality):
     ],
 )
 async def test_new_binding_on_a_system_datapoint_gets_the_current_value(dp_id, state, written):
-    router = SimpleNamespace(write_binding=AsyncMock())
+    router = WriteRouter(AsyncMock(), SimpleNamespace(get_value=lambda _id: state))
+    router.write_binding = AsyncMock()
     binding_id = uuid.uuid4()
-    with (
-        patch.object(bindings_api, "get_registry", return_value=SimpleNamespace(get_value=lambda _id: state)),
-        patch("obs.core.write_router.get_write_router", return_value=router),
-    ):
-        await bindings_api._resend_system_value(dp_id, str(binding_id))
+    assert await router.resend_system_value(dp_id, binding_id) is written
     if written:
         # Only the new binding is written; no value event re-fires other consumers.
         router.write_binding.assert_awaited_once_with(dp_id, binding_id, "2026.10.0")
     else:
         router.write_binding.assert_not_awaited()
+
+
+async def test_binding_routes_delegate_the_resend_to_the_write_router():
+    router = SimpleNamespace(resend_system_value=AsyncMock(return_value=True))
+    binding_id = uuid.uuid4()
+    with patch("obs.core.write_router.get_write_router", return_value=router):
+        await bindings_api._resend_system_value(CURRENT_VERSION.id, str(binding_id))
+    router.resend_system_value.assert_awaited_once_with(CURRENT_VERSION.id, binding_id)
 
 
 async def test_write_binding_writes_only_the_named_binding(db, registry, monkeypatch):
@@ -480,3 +487,86 @@ async def test_write_binding_writes_only_the_named_binding(db, registry, monkeyp
     await router.write_binding(LATEST_VERSION.id, target, "2026.10.0")
     await router.write_binding(LATEST_VERSION.id, target, "2026.10.0")
     assert written == [(target, "2026.10.0")] * 2
+
+
+# ---------------------------------------------------------------------------
+# Re-sending the constant system values to a (re)connected adapter instance
+# ---------------------------------------------------------------------------
+
+
+async def _insert_binding(db, binding_id, dp_id, *, instance_id, direction="DEST", enabled=1, adapter_type="MQTT"):
+    now = "2026-10-17T00:00:00+00:00"
+    await db.execute_and_commit(
+        "INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        (str(binding_id), str(dp_id), adapter_type, str(instance_id), direction, '{"topic": "t"}', enabled, now, now),
+    )
+
+
+async def test_reconnected_instance_gets_every_system_value_it_writes(db, registry):
+    """The channel and the installed version never change, so a dropped write is never retried."""
+    instance_id, other_instance = uuid.uuid4(), uuid.uuid4()
+    wanted = {
+        uuid.uuid4(): UPDATE_CHANNEL.id,  # DEST on this instance
+        uuid.uuid4(): CURRENT_VERSION.id,
+    }
+    for binding_id, dp_id in wanted.items():
+        await _insert_binding(db, binding_id, dp_id, instance_id=instance_id)
+    both_id = uuid.uuid4()
+    await _insert_binding(db, both_id, LATEST_VERSION.id, instance_id=instance_id, direction="BOTH")
+    # None of these may be written: wrong instance, disabled, observer-only, SOURCE, user DataPoint.
+    user_dp = await registry.create(DataPointCreate(name="User", data_type="STRING"))
+    for dp_id, kwargs in (
+        (UPDATE_CHANNEL.id, {"instance_id": other_instance}),
+        (UPDATE_CHANNEL.id, {"instance_id": instance_id, "enabled": 0}),
+        (UPDATE_CHANNEL.id, {"instance_id": instance_id, "adapter_type": "MESSAGE", "direction": "SOURCE"}),
+        (LAST_CHECK.id, {"instance_id": instance_id, "direction": "SOURCE"}),
+        (user_dp.id, {"instance_id": instance_id}),
+    ):
+        await _insert_binding(db, uuid.uuid4(), dp_id, **kwargs)
+
+    registry.get_value(UPDATE_CHANNEL.id).update("stable", "good")
+    registry.get_value(CURRENT_VERSION.id).update("2026.10.0", "good")
+    registry.get_value(user_dp.id).update("user", "good")
+    # LATEST_VERSION has no result yet, so its BOTH binding is matched but not written.
+
+    router = WriteRouter(db, registry)
+    router.write_binding = AsyncMock()
+    assert await router.resend_system_bindings(instance_id) == 2
+    assert {call.args[:2] for call in router.write_binding.await_args_list} == {(dp, b) for b, dp in wanted.items()}
+    assert both_id not in {call.args[1] for call in router.write_binding.await_args_list}
+
+
+async def test_resend_to_an_instance_without_system_bindings_writes_nothing(db, registry):
+    router = WriteRouter(db, registry)
+    router.write_binding = AsyncMock()
+    assert await router.resend_system_bindings(uuid.uuid4()) == 0
+    router.write_binding.assert_not_awaited()
+
+
+async def test_a_failing_resend_does_not_stop_the_remaining_bindings(db, registry, caplog):
+    instance_id = uuid.uuid4()
+    first, second = sorted([uuid.uuid4(), uuid.uuid4()])
+    await _insert_binding(db, first, UPDATE_CHANNEL.id, instance_id=instance_id)
+    await _insert_binding(db, second, CURRENT_VERSION.id, instance_id=instance_id)
+    registry.get_value(UPDATE_CHANNEL.id).update("stable", "good")
+    registry.get_value(CURRENT_VERSION.id).update("2026.10.0", "good")
+
+    router = WriteRouter(db, registry)
+    calls = []
+
+    async def _write(dp_id, binding_id, value):
+        calls.append(binding_id)
+        if len(calls) == 1:
+            raise RuntimeError("adapter exploded")
+
+    router.write_binding = _write
+    assert await router.resend_system_bindings(instance_id) == 1
+    assert len(calls) == 2
+    assert "could not re-send system value" in caplog.text
+
+
+async def test_a_user_datapoint_binding_never_reaches_the_write_router():
+    """The resend is for system DataPoints only — it must not require a WriteRouter."""
+    with patch("obs.core.write_router.get_write_router", side_effect=AssertionError("must not be called")):
+        await bindings_api._resend_system_value(uuid.uuid4(), str(uuid.uuid4()))

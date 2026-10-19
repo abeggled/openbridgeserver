@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.api.setup import announce_setup_mode
     from obs.api.v1.websocket import init_ws_manager
     from obs.config import get_settings
-    from obs.core.event_bus import DataValueEvent, init_event_bus
+    from obs.core.event_bus import AdapterStatusEvent, DataValueEvent, init_event_bus
     from obs.core.mqtt_client import init_mqtt_client
     from obs.core.registry import init_registry
     from obs.core.write_router import init_write_router
@@ -172,6 +172,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.update.service import init_update_service
 
     update_service = await init_update_service(db, bus, settings.update_check)
+    # An adapter that was down during the publish above dropped the write; the
+    # values never change on their own, so a connection re-sends them (#1370).
+    bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)
 
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",

@@ -28,7 +28,7 @@ import time
 import uuid
 from typing import Any
 
-from obs.core.system_datapoints import SYSTEM_SOURCE_ADAPTER, is_system_datapoint
+from obs.core.system_datapoints import SYSTEM_DATAPOINTS, SYSTEM_SOURCE_ADAPTER, is_system_datapoint
 
 _MAX_CACHED_VALUE_CHARS = 8192
 _CACHE_TAG_STR_DIGEST = "__str_digest__"
@@ -301,6 +301,49 @@ class WriteRouter:
             suppress_confirmation_actions=True,
             only_binding_id=binding_id,
         )
+
+    async def resend_system_value(self, dp_id: uuid.UUID, binding_id: uuid.UUID) -> bool:
+        """Feed one binding the current value of a read-only system DataPoint (#1370).
+
+        Returns whether a value was written: there is none to send before the
+        first check, and nothing is sent for a user DataPoint, whose value the
+        adapter receives through the ordinary value events.
+        """
+        if not is_system_datapoint(dp_id):
+            return False
+        state = self._registry.get_value(dp_id)
+        if state is None or state.quality != "good" or state.value is None:
+            return False
+        await self.write_binding(dp_id, binding_id, state.value)
+        return True
+
+    async def resend_system_bindings(self, instance_id: uuid.UUID | str) -> int:
+        """Re-send the system DataPoint values this instance writes to (#1370).
+
+        The values of a system DataPoint are constants between checks — the
+        channel and the installed version never change at runtime — and the
+        update service sends each value only when it changes. A write that was
+        dropped because the adapter was down would therefore never be retried,
+        so every instance that (re)connects gets them again. Returns the number
+        of bindings written.
+        """
+        ids = [str(definition.id) for definition in SYSTEM_DATAPOINTS]
+        rows = await self._db.fetchall(
+            f"""SELECT id, datapoint_id FROM adapter_bindings
+                WHERE adapter_instance_id=? AND direction IN ('DEST','BOTH') AND enabled=1
+                  AND adapter_type <> 'MESSAGE' AND datapoint_id IN ({",".join("?" * len(ids))})""",
+            (str(instance_id), *ids),
+        )
+        written = 0
+        for row in rows:
+            try:
+                if await self.resend_system_value(uuid.UUID(str(row["datapoint_id"])), uuid.UUID(str(row["id"]))):
+                    written += 1
+            except Exception:
+                logger.exception("WriteRouter: could not re-send system value for binding %s", row["id"])
+        if written:
+            logger.info("WriteRouter: re-sent %d system DataPoint value(s) to instance %s", written, instance_id)
+        return written
 
     # ------------------------------------------------------------------
     # Shared helper

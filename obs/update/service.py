@@ -269,6 +269,9 @@ class UpdateCheckService:
         # not sent again, so a MESSAGE binding or Logic graph on e.g. "OBS Update
         # Available" does not fire on every twelve-hourly check.
         self._published: dict[Any, tuple[Any, str]] = {}
+        # adapter instance → last connection state seen, so only a transition to
+        # connected re-sends the values (an adapter may re-announce a connection).
+        self._instance_connected: dict[Any, bool] = {}
         self._channel_derived = False
         self.next_check_at: datetime | None = None
 
@@ -496,6 +499,32 @@ class UpdateCheckService:
         await self._publish(LATEST_VERSION, state.latest_version, "good" if known and state.latest_version else "uncertain", force)
         await self._publish(UPDATE_AVAILABLE, state.update_available, "good" if known and state.update_available is not None else "uncertain", force)
         await self._publish(LAST_CHECK, state.last_check_at, "good" if state.last_check_at else "uncertain", force)
+
+    async def handle_adapter_status(self, event: Any) -> None:
+        """Re-send the system values to an adapter instance that just connected (#1370).
+
+        ``publish_datapoints`` sends a value only when it changes, and the
+        channel and the installed version never change at runtime. An adapter
+        that was down during the start-up publish — a KNX/IP router powered up
+        after OBS, a device behind a link that came back, an instance restarted
+        from the Admin GUI — silently dropped that single write and would never
+        be offered the value again. Its DEST bindings therefore get the current
+        values whenever it reports a connection.
+        """
+        instance_id = getattr(event, "instance_id", None)
+        if instance_id is None:
+            return
+        connected = bool(getattr(event, "connected", False))
+        was_connected = self._instance_connected.get(instance_id, False)
+        self._instance_connected[instance_id] = connected
+        if not connected or was_connected:
+            return
+        try:
+            from obs.core.write_router import get_write_router
+
+            await get_write_router().resend_system_bindings(instance_id)
+        except Exception:
+            logger.exception("Update check: could not re-send system values to instance %s", instance_id)
 
     async def _publish(self, definition: SystemDataPointDef, value: Any, quality: str, force: bool) -> None:
         from obs.core.event_bus import DataValueEvent

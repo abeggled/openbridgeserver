@@ -85,6 +85,9 @@ class ImportResult(BaseModel):
     imported: int
     created: int = 0
     updated: int = 0
+    # Gruppenadressen, die ein schreibgeschützter System-Datenpunkt (#1370) bereits
+    # bedient: kein DataPoint angelegt, damit die GA nicht doppelt beschrieben wird.
+    skipped_system: int = 0
     locations: int = 0
     functions: int = 0
     trades: int = 0
@@ -160,11 +163,13 @@ async def _bulk_import_datapoints(
     direction: str,
     db: Database,
     now: str,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Erstellt DataPoints + KNX-Bindings für alle records in einer DB-Transaktion.
     Bestehende Bindings (gleiche group_address + adapter_instance) werden aktualisiert.
 
-    Returns: (created, updated)
+    Returns: (created, updated, skipped_system) — skipped_system zählt die
+    Gruppenadressen, die ein schreibgeschützter System-Datenpunkt (#1370)
+    bereits bedient und für die deshalb kein DataPoint angelegt wird.
     """
     from obs.adapters.knx.dpt_registry import DPTRegistry
     from obs.core.registry import ValueState, _row_to_datapoint, get_registry
@@ -212,6 +217,9 @@ async def _bulk_import_datapoints(
     dp_updates: list[tuple] = []
     binding_updates: list[tuple] = []
     new_dp_ids: list[str] = []  # für Registry-Update
+    # Gruppenadressen, die schon ein System-Datenpunkt bedient (#1370) — übersprungen,
+    # aber im Ergebnis ausgewiesen, damit der fehlende DataPoint erklärt ist.
+    skipped_system: list[str] = []
 
     base_time = datetime.fromisoformat(now)
 
@@ -238,6 +246,7 @@ async def _bulk_import_datapoints(
             dp_updates.append((record.name, data_type, unit, row_ts, existing["dp_id"]))
             binding_updates.append((config_json, direction, row_ts, existing["binding_id"]))
         elif record.address in system_gas:
+            skipped_system.append(record.address)
             continue
         else:
             dp_id = str(uuid_mod.uuid4())
@@ -329,7 +338,13 @@ async def _bulk_import_datapoints(
         # here (adapter not loaded, transient I/O) must not fail the import.
         logger.exception("Adapter-Instanz %s konnte nicht neu geladen werden", adapter_instance_id)
 
-    return len(dp_inserts), len(dp_updates)
+    if skipped_system:
+        logger.warning(
+            "KNX-Import: %d Gruppenadresse(n) übersprungen — bereits von einem System-Datenpunkt bedient (#1370): %s",
+            len(skipped_system),
+            ", ".join(sorted(skipped_system)),
+        )
+    return len(dp_inserts), len(dp_updates), len(skipped_system)
 
 
 async def _knx_device_schema_ready(db: Database) -> bool:
@@ -989,9 +1004,10 @@ async def import_knxproj_file(
 
     created = 0
     updated = 0
+    skipped_system = 0
     if adapter_name:
         # Mit Adapter: DataPoints + Bindings bulk anlegen
-        created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
+        created, updated, skipped_system = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
 
     hierarchy_results = await _create_requested_hierarchies(
         db,
@@ -1022,6 +1038,8 @@ async def import_knxproj_file(
     if adapter_name:
         extra.append(f"{created} DataPoints neu erstellt")
         extra.append(f"{updated} aktualisiert")
+        if skipped_system:
+            extra.append(f"{skipped_system} übersprungen (bereits von einem System-Datenpunkt bedient)")
     created_hierarchies = [result for result in hierarchy_results if result.status == "created"]
     failed_hierarchies = [result for result in hierarchy_results if result.status != "created"]
     if created_hierarchies:
@@ -1035,6 +1053,7 @@ async def import_knxproj_file(
         imported=len(records),
         created=created,
         updated=updated,
+        skipped_system=skipped_system,
         locations=locations_count,
         functions=functions_count,
         trades=trades_count,
@@ -1137,13 +1156,17 @@ async def import_ga_csv_file(
         return result
 
     # Mit Adapter: DataPoints + Bindings bulk anlegen
-    created, updated = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
+    created, updated, skipped_system = await _bulk_import_datapoints(records, adapter_name, direction, db, now)
 
+    msg = f"{created} DataPoints neu erstellt, {updated} aktualisiert"
+    if skipped_system:
+        msg += f", {skipped_system} übersprungen (bereits von einem System-Datenpunkt bedient)"
     result = ImportResult(
         imported=created + updated,
         created=created,
         updated=updated,
-        message=f"{created} DataPoints neu erstellt, {updated} aktualisiert",
+        skipped_system=skipped_system,
+        message=msg,
     )
     if request is not None:
         set_contract_audit_summary(

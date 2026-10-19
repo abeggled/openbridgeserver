@@ -2877,6 +2877,9 @@ async function doKnxImport() {
     let msg = t('settings.importexport.knxImportResultOk', { n: data.imported })
     if (data.created  > 0) msg += t('settings.importexport.knxImportResultCreated',   { n: data.created })
     if (data.updated  > 0) msg += t('settings.importexport.knxImportResultUpdated',   { n: data.updated })
+    // Named, not silent: a GA a read-only system DataPoint already writes to gets
+    // no second DataPoint, and the missing one would otherwise look like a bug (#1370).
+    if (data.skipped_system > 0) msg += t('settings.importexport.knxImportResultSkippedSystem', { n: data.skipped_system })
     if (data.locations > 0) msg += t('settings.importexport.knxImportResultLocations', { n: data.locations })
     if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
     knxResult.value = { ok: true, text: msg, hierarchies: Array.isArray(data.hierarchies) ? data.hierarchies : [] }

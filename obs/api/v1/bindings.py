@@ -52,14 +52,13 @@ async def _resend_system_value(dp_id: uuid.UUID, binding_id: uuid.UUID | str) ->
     also re-fire every Logic graph, MESSAGE notification and other binding of
     the DataPoint.
     """
+    # Checked here too: a binding on a user DataPoint must not depend on the
+    # WriteRouter being initialized at all — its value arrives by value event.
     if not is_system_datapoint(dp_id):
-        return
-    state = get_registry().get_value(dp_id)
-    if state is None or state.quality != "good" or state.value is None:
         return
     from obs.core.write_router import get_write_router
 
-    await get_write_router().write_binding(dp_id, uuid.UUID(str(binding_id)), state.value)
+    await get_write_router().resend_system_value(dp_id, uuid.UUID(str(binding_id)))
 
 
 async def _clear_stale_external_write_enabled(dp_id: uuid.UUID, *, adapter_type: str, enabled: bool) -> None:
