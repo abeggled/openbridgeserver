@@ -117,6 +117,32 @@ describe('BindingForm — read-only system DataPoint (#1370)', () => {
     expect(wrapper.find('[data-testid="system-dest-only-hint"]').exists()).toBe(true)
   })
 
+  it('refuses a read-only ioBroker state instead of switching to SOURCE', async () => {
+    const iobroker = { listInstances: vi.fn().mockResolvedValue({ data: [{ id: 'iob-1', name: 'ioBroker', adapter_type: 'IOBROKER' }] }) }
+    const pick = async (props, state) => {
+      const { wrapper } = await mountBindingForm(props, iobroker)
+      await wrapper.find('[data-testid="select-adapter-instance"]').setValue('iob-1')
+      await flushPromises()
+      const form = wrapper.findComponent({ name: 'BindingFormIoBroker' })
+      form.vm.$emit('select-iobroker-state', state)
+      await flushPromises()
+      return form
+    }
+
+    let form = await pick({ dpSystem: true }, { id: 'info.version', write: false })
+    expect(form.props('form').direction).toBe('DEST')
+    expect(form.props('cfg').state_id).toBeFalsy()
+    expect(form.props('iobrokerBrowseError')).toContain('schreibgeschützt')
+
+    form = await pick({ dpSystem: true }, { id: 'obs.version', write: true })
+    expect(form.props('form').direction).toBe('DEST')
+    expect(form.props('cfg').state_id).toBe('obs.version')
+
+    form = await pick({}, { id: 'info.version', write: false })
+    expect(form.props('form').direction).toBe('SOURCE')
+    expect(form.props('cfg').state_id).toBe('info.version')
+  })
+
   it('keeps every direction and instance for ordinary DataPoints', async () => {
     const { wrapper } = await mountBindingForm({}, instances)
     expect(wrapper.findAll('[data-testid="select-adapter-instance"] option')).toHaveLength(6)

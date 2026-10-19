@@ -410,6 +410,7 @@
         "selectIoBrokerInstanceFirst": "Please select an ioBroker instance first",
         "noStatesFound": "No states found",
         "ioBrokerStatesLoadFailed": "Could not load ioBroker states",
+        "ioBrokerStateNotWritable": "This ioBroker state is read-only and cannot receive the value of a system DataPoint",
         "noOidsFound": "No OIDs found",
         "snmpWalkFailed": "SNMP walk failed",
         "invalidJson": "Invalid JSON: {msg}",

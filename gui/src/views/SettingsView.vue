@@ -2313,7 +2313,8 @@ async function loadHistoryFilterDps() {
   histFilterLoading.value = true
   try {
     const { data } = await dpApi.listAll()
-    histAllDps.value = data.items ?? []
+    // Read-only system DataPoints (#1370) refuse every change: no toggle for them.
+    histAllDps.value = (data.items ?? []).filter(dp => !dp.system)
   } catch { /* non-critical */ }
   finally { histFilterLoading.value = false }
 }

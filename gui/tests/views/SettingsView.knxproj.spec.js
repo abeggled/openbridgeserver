@@ -122,6 +122,7 @@ beforeEach(() => {
         items: [
           { id: 'dp-temp', name: 'Temperature', data_type: 'FLOAT', unit: '°C', record_history: false },
           { id: 'dp-switch', name: 'Switch', data_type: 'BOOLEAN', unit: null, record_history: true },
+          { id: 'dp-sys', name: 'OBS Update Channel', data_type: 'STRING', unit: null, record_history: false, system: true },
         ],
       },
     }),
@@ -659,6 +660,20 @@ describe('SettingsView history and icon coverage', () => {
     await flushPromises()
     expect(dpApi.update).toHaveBeenCalledWith('dp-temp', { record_history: true })
 
+    // Read-only system DataPoints get neither a toggle nor a bulk request (#1370).
+    await wrapper.find('[data-testid="input-history-filter-search"]').setValue('')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="toggle-history-dp-sys"]').exists()).toBe(false)
+    expect(dpApi.update.mock.calls.some(([id]) => id === 'dp-sys')).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('shows an empty history filter when the DataPoint list has no items', async () => {
+    dpApi.listAll.mockResolvedValue({ data: {} })
+    const wrapper = await mountSettingsView()
+    await openTab(wrapper, 'Historie DB')
+    expect(wrapper.find('[data-testid="history-filter-empty"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

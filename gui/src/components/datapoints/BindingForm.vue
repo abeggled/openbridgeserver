@@ -873,6 +873,12 @@ async function browseIoBrokerStates() {
 }
 
 function selectIoBrokerState(state) {
+  // A system DataPoint can only send (#1370): a state ioBroker marks read-only
+  // is no target for it, and switching to SOURCE would be refused on save.
+  if (props.dpSystem && !state.write) {
+    iobrokerBrowseError.value = t('adapters.bindingForm.errors.ioBrokerStateNotWritable')
+    return
+  }
   cfg.state_id = state.id
   if (state.type && !cfg.source_data_type) {
     const t = String(state.type).toLowerCase()

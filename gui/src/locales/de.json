@@ -410,6 +410,7 @@
         "selectIoBrokerInstanceFirst": "Bitte zuerst eine ioBroker-Instanz wählen",
         "noStatesFound": "Keine States gefunden",
         "ioBrokerStatesLoadFailed": "ioBroker-States konnten nicht geladen werden",
+        "ioBrokerStateNotWritable": "Dieser ioBroker-State ist schreibgeschützt und kann keinen Wert eines System-DataPoints empfangen",
         "noOidsFound": "Keine OIDs gefunden",
         "snmpWalkFailed": "SNMP Walk fehlgeschlagen",
         "invalidJson": "Ungültiges JSON: {msg}",
