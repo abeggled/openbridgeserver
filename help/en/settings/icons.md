@@ -12,11 +12,6 @@ Shows all installed icons as a searchable grid. Multi-select by clicking enables
 collection) or deletion of the selected icons; "Select all"/"Deselect all" act on the
 currently filtered/searched list.
 
-**Icons in the Visu without login:** a visitor using the Visu without login only gets the icons
-of the pages they may view — icons on public and read-only pages and the page icons of the
-overview; icons on PIN-protected pages once the PIN was entered. Icons used only on pages that
-require a login, or not used at all, stay invisible without login. Signed-in users see every icon.
-
 ## Import SVG icons {#settings-icons-import}
 
 Upload icons via drag & drop or file selection — individual SVG files or a ZIP archive
@@ -36,3 +31,10 @@ a (persistently stored) FontAwesome PRO API key, PRO icons and additional styles
 Thin, Duotone alongside Solid/Regular/Brands) also become available. Icon names are entered
 comma-separated; the imported filename automatically includes the chosen style (e.g.
 `abacus-solid.svg`).
+
+## Icons in the Visu without login
+
+A visitor using the Visu without login only gets the icons
+of the pages they may view — icons on public and read-only pages and the page icons of the
+overview; icons on PIN-protected pages once the PIN was entered. Icons used only on pages that
+require a login, or not used at all, stay invisible without login. Signed-in users see every icon.
