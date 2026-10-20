@@ -191,7 +191,7 @@ test('Uhr wortuhr-Modus: Buchstabenraster wird gerendert, 110 Zellen vorhanden',
     await expect(wortuhrEl).toBeVisible({ timeout: 5_000 })
 
     // 11 Spalten × 10 Zeilen = 110 Zellen
-    const zellen = wortuhrEl.locator('div > div')
+    const zellen = wortuhrEl.locator('[data-testid="uhr-wortuhr-cell"]')
     await expect(zellen).toHaveCount(110, { timeout: 3_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
@@ -222,7 +222,7 @@ test('Uhr wortuhr-Modus: ES und IST sind immer in Akzentfarbe', async ({ page })
     // Prüfe, dass mindestens einige Zellen die Akzentfarbe haben
     // (ES und IST sind immer aktiv → mindestens 5 hervorgehobene Buchstaben)
     // Browser normalisieren Hex → rgb(r, g, b), daher Konvertierung nötig
-    const hervorgehobeneZellen = await wortuhrEl.locator('div > div').evaluateAll(
+    const hervorgehobeneZellen = await wortuhrEl.locator('[data-testid="uhr-wortuhr-cell"]').evaluateAll(
       (cells, accentColor) => {
         const r = parseInt(accentColor.slice(1, 3), 16)
         const g = parseInt(accentColor.slice(3, 5), 16)

@@ -851,7 +851,13 @@
       "timezoneHint": "(optional, empty = local)",
       "modeDigital": "Digital",
       "modeAnalog": "Analog",
-      "modeWortuhr": "Word clock"
+      "modeWortuhr": "Word clock",
+      "minuteDots": "Minute dots in the corners",
+      "minuteDotsHint": "Shows the minutes between the 5-minute steps as 1–4 dots in the corners (e.g. \"quarter to six\" + 2 dots = 17:47). The words then round down instead of to the nearest step.",
+      "timezonePlaceholder": "e.g. Asia/Tokyo",
+      "timezoneFormat": "IANA format, e.g.",
+      "optional": "(optional)",
+      "labelPlaceholder": "e.g. Living room"
     },
     "valuedisplay": {
       "title": "Value display",
