@@ -38,11 +38,16 @@ def _png(width: int, height: int) -> bytes:
     )
 
 
-def _jpeg(width: int, height: int, *, prefix: bytes = b"") -> bytes:
-    """SOI, an APP0 segment, optional extra bytes, then a baseline SOF0 header with the size."""
+_JPEG_SOS = b"\xff\xda" + struct.pack(">H", 8) + b"\x01\x01\x00\x00\x3f\x00"
+
+
+def _jpeg(width: int, height: int, *, prefix: bytes = b"", scan: bool = True) -> bytes:
+    """SOI, an APP0 segment, optional extra bytes, a baseline SOF0 header with the size, then
+    (unless ``scan`` is False) the start of scan with some image data, and EOI."""
     app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
     sof0 = b"\xff\xc0" + struct.pack(">HBHHB", 11, 8, height, width, 1) + b"\x01\x11\x00"
-    return b"\xff\xd8" + app0 + prefix + sof0 + b"\xff\xd9"
+    body = _JPEG_SOS + b"\x12\x34" if scan else b""
+    return b"\xff\xd8" + app0 + prefix + sof0 + body + b"\xff\xd9"
 
 
 def _svg_with_href(element: str, value: str, *, xlink: bool = False) -> bytes:
@@ -119,6 +124,16 @@ class TestSanitizeRasterDataUri:
         out = _sanitize_svg(_svg_with_href(element, _PNG_URI, xlink=xlink))
         assert _href_of(out, element) is None
 
+    def test_strips_embedded_raster_over_the_size_cap(self, monkeypatch):
+        monkeypatch.setattr(icons_api, "_RASTER_MAX_BYTES", len(_png(2, 1)))
+        assert _href_of(_sanitize_svg(_svg_with_href("image", _PNG_URI)), "image") == _PNG_URI
+        big_uri = "data:image/png;base64," + base64.b64encode(_png(2, 1) + b"\x00").decode()
+        assert _href_of(_sanitize_svg(_svg_with_href("image", big_uri)), "image") is None
+
+    def test_base64_size_matches_the_decoded_payload(self):
+        for data in (b"", b"a", b"ab", b"abc", _png(3, 2)):
+            assert icons_api._base64_size(base64.b64encode(data).decode()) == len(data)
+
     def test_still_strips_event_handlers_on_image(self):
         payload = f'<svg xmlns="http://www.w3.org/2000/svg"><image href="{_PNG_URI}" onload="alert(1)"/></svg>'.encode()
         out = _sanitize_svg(payload).decode()
@@ -164,6 +179,12 @@ class TestRasterSize:
     def test_jpeg_without_sof(self):
         assert _jpeg_size(b"\xff\xd8\xff\xd9") is None
 
+    def test_jpeg_with_headers_only(self):
+        assert _jpeg_size(_jpeg(640, 480, scan=False)) is None
+
+    def test_jpeg_scan_before_any_frame_header(self):
+        assert _jpeg_size(b"\xff\xd8" + _JPEG_SOS + b"\x12\x34\xff\xd9") is None
+
 
 # ---------------------------------------------------------------------------
 # _raster_to_svg
@@ -205,6 +226,7 @@ class TestRasterToSvg:
             _png(1, 1)[:16] + struct.pack(">II", 0, 5) + _png(1, 1)[24:],  # zero width
             _png(1, 1)[:16] + struct.pack(">II", 5, 16385) + _png(1, 1)[24:],  # too high
             b"\xff\xd8\xff\xd9",  # JPEG without SOF
+            _jpeg(8, 8, scan=False),  # JPEG that ends after its headers
         ],
     )
     def test_unreadable_image_is_rejected(self, content):

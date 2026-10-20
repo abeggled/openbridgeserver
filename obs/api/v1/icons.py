@@ -50,6 +50,7 @@ _RASTER_MAX_BYTES = 1024 * 1024  # per image; the icon list endpoint inlines eve
 _RASTER_MAX_DIMENSION = 16384
 # JPEG start-of-frame markers carry the image size (C4 = DHT, C8 = JPG, CC = DAC are not SOF).
 _JPEG_SOF_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_JPEG_SOS_MARKER = 0xDA  # start of scan: the compressed image data follows
 _ICON_FILE_SUFFIXES = (".svg", ".png", ".jpg", ".jpeg")
 
 
@@ -186,7 +187,12 @@ def _sanitize_svg(content: bytes) -> bytes:
                 del elem.attrib[attr]
             elif attr_name in {"href", "xlink:href"} and normalized_scheme.startswith(("javascript:", "data:")):
                 # An embedded raster image (e.g. a PNG placed in Inkscape) cannot run script.
-                if tag_name == "image" and _RASTER_DATA_URI_RE.fullmatch(normalized_scheme):
+                # It gets the same size cap as a PNG/JPEG upload, since the icon list inlines it.
+                if (
+                    tag_name == "image"
+                    and _RASTER_DATA_URI_RE.fullmatch(normalized_scheme)
+                    and _base64_size(normalized_scheme.partition(",")[2]) <= _RASTER_MAX_BYTES
+                ):
                     continue
                 del elem.attrib[attr]
 
@@ -200,6 +206,11 @@ def _sanitize_svg(content: bytes) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=False)
 
 
+def _base64_size(payload: str) -> int:
+    """Decoded size of a base64 payload, without decoding it."""
+    return len(payload) * 3 // 4 - payload.count("=")
+
+
 def _png_size(content: bytes) -> tuple[int, int] | None:
     """Width/height from the IHDR chunk, which the PNG spec requires to come first."""
     if len(content) < 24 or content[12:16] != b"IHDR":
@@ -208,7 +219,12 @@ def _png_size(content: bytes) -> tuple[int, int] | None:
 
 
 def _jpeg_size(content: bytes) -> tuple[int, int] | None:
-    """Width/height from the first start-of-frame segment of a JPEG."""
+    """Width/height from the start-of-frame segment of a JPEG.
+
+    Only counts once the start-of-scan marker follows: a file that ends after its headers has
+    no image data and would render blank.
+    """
+    size = None
     pos = 2  # skip SOI
     while pos + 4 <= len(content):
         if content[pos] != 0xFF:
@@ -220,11 +236,13 @@ def _jpeg_size(content: bytes) -> tuple[int, int] | None:
         if marker == 0x01 or 0xD0 <= marker <= 0xD7:  # markers without a length field
             pos += 2
             continue
+        if marker == _JPEG_SOS_MARKER:
+            return size
         if marker in _JPEG_SOF_MARKERS:
             if pos + 9 > len(content):
                 return None
             height, width = struct.unpack(">HH", content[pos + 5 : pos + 9])
-            return width, height
+            size = width, height
         (segment_length,) = struct.unpack(">H", content[pos + 2 : pos + 4])
         pos += 2 + segment_length
     return None

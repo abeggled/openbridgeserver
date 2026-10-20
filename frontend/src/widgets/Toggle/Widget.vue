@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { datapoints } from '@/api/client'
 import type { WriteContext } from '@/api/client'
-import { useIcons } from '@/composables/useIcons'
+import { isRasterDataUri, useIcons } from '@/composables/useIcons'
 import type { DataPointValue } from '@/types'
 
 type DisplayMode = 'switch' | 'icon_only' | 'icon_text'
@@ -121,11 +121,19 @@ function sanitizeSvg(svg: string): string {
     const normalized = normalizeSchemeValue(value)
     return normalized.startsWith('javascript:') || normalized.startsWith('data:')
   }
+  // An <image> that only embeds a PNG/JPEG/GIF/WebP data URI (an imported raster icon) cannot
+  // run script and stays; every other <image> is removed.
+  const isHrefAttr = (attr: Attr) => ['href', 'xlink:href'].includes(attr.name.toLowerCase())
+  const isRasterImage = (el: Element) => {
+    const hrefs = Array.from(el.attributes).filter(isHrefAttr)
+    return hrefs.length > 0 && hrefs.every((attr) => isRasterDataUri(normalizeSchemeValue(attr.value)))
+  }
 
   const allNodes = Array.from(root.getElementsByTagName('*'))
   for (const el of allNodes) {
     const tag = el.tagName.toLowerCase()
-    if (blockedTags.has(tag)) {
+    const rasterImage = tag === 'image' && isRasterImage(el)
+    if (blockedTags.has(tag) && !rasterImage) {
       el.remove()
       continue
     }
@@ -136,7 +144,7 @@ function sanitizeSvg(svg: string): string {
         el.removeAttribute(attr.name)
         continue
       }
-      if ((name === 'href' || name === 'xlink:href') && isDangerousHref(value)) {
+      if ((name === 'href' || name === 'xlink:href') && isDangerousHref(value) && !rasterImage) {
         el.removeAttribute(attr.name)
       }
     }

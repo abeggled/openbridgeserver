@@ -22,8 +22,13 @@ const URL_FUNCTION_ATTRIBUTES = new Set([
 // import, or a bitmap placed in Inkscape) cannot run script — unlike data:image/svg+xml.
 const RASTER_DATA_URI_RE = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]*={0,2}$/
 
+/** `normalizedValue` is lower-cased, with control characters and whitespace removed. */
+export function isRasterDataUri(normalizedValue: string): boolean {
+  return RASTER_DATA_URI_RE.test(normalizedValue)
+}
+
 function isEmbeddedRasterImage(el: Element, normalizedValue: string): boolean {
-  return el.localName.toLowerCase() === 'image' && RASTER_DATA_URI_RE.test(normalizedValue)
+  return el.localName.toLowerCase() === 'image' && isRasterDataUri(normalizedValue)
 }
 
 function stripAsciiControlsAndWhitespace(raw: string): string {
