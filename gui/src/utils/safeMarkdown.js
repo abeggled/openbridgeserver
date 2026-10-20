@@ -20,7 +20,8 @@ const ORDERED_RE = /^\s*\d{1,9}[.)]\s+(.*)$/
 // Bounded repetitions keep the scan for an unmatched `, ** or [ short, and the
 // global regex is advanced through lastIndex instead of re-slicing, so a
 // long paragraph stays linear (release bodies may be ~125k characters).
-const INLINE_RE = /(`[^`\n]{1,500}`)|(\*\*[^*\n]{1,500}\*\*|__[^_\n]{1,500}__)|(\[[^\]\n]{1,500}\]\((?:[^()\s]|\([^()\s]{0,500}\)){1,2000}\))|(https?:\/\/[^\s<>()]{1,2000}[^\s<>().,;:!?'"])/g
+// Like GitHub, __ never emphasises inside a word: snake__case__name stays text.
+const INLINE_RE = /(`[^`\n]{1,500}`)|(\*\*[^*\n]{1,500}\*\*|(?<![\p{L}\p{N}_])__[^_\n]{1,500}__(?![\p{L}\p{N}_]))|(\[[^\]\n]{1,500}\]\((?:[^()\s]|\([^()\s]{0,500}\)){1,2000}\))|(https?:\/\/[^\s<>()]{1,2000}[^\s<>().,;:!?'"])/gu
 
 export function safeHref(url) {
   if (typeof url !== 'string') return null

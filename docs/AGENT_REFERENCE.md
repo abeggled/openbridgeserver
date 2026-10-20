@@ -373,7 +373,8 @@ Services initialize in this fixed order (reverse-order shutdown):
 5. RingBuffer
 6. History plugin
 7. WebSocket Manager
-8. WriteRouter (MQTT `dp/{uuid}/set` → adapters; cross-protocol propagation)
+8. WriteRouter (MQTT `dp/{uuid}/set` → adapters; cross-protocol propagation; re-sends the system
+   DataPoint values to every adapter instance that (re)connects, subscribed before step 9, #1370)
 9. Protocol adapters (`@register` decorator triggers self-registration on import)
 10. Logic Engine
 11. Autobackup Scheduler (`init_autobackup_scheduler` from `obs/api/v1/autobackup.py`)

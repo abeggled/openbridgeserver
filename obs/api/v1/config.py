@@ -19,7 +19,7 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -58,13 +58,6 @@ _SYSTEM_DP_PARAMS = tuple(sorted(str(dp_id) for dp_id in SYSTEM_DATAPOINT_IDS))
 _NOT_SYSTEM_DP_SQL = f"NOT IN ({', '.join('?' * len(_SYSTEM_DP_PARAMS))})"
 # app_settings keys of the update check, see obs/update/service.py.
 _UPDATE_SETTING_PREFIX = "update."
-
-
-def _forget_user_datapoints(reg: Any) -> None:
-    """Drop the bulk-deleted DataPoints from the registry; the system ones stay live."""
-    for dp_id in [dp_id for dp_id in reg._points if not is_system_datapoint(dp_id)]:
-        del reg._points[dp_id]
-        reg._values.pop(dp_id, None)
 
 
 _EXPORT_VERSION = "5"
@@ -738,8 +731,7 @@ async def import_db(
 
             # Registry neu laden
             reg = get_registry()
-            reg._points.clear()
-            reg._values.clear()
+            reg.forget()
             await reg.load_from_db()
 
         # Logic Engine neu starten
@@ -1547,7 +1539,7 @@ async def factory_reset(
             await db.execute("DELETE FROM authz_node_roles WHERE node_type='adapter_instance'")
             await db.execute("DELETE FROM adapter_instances")
             await db.execute(f"DELETE FROM datapoints WHERE id {_NOT_SYSTEM_DP_SQL}", _SYSTEM_DP_PARAMS)
-        _forget_user_datapoints(get_registry())
+        get_registry().forget(keep=SYSTEM_DATAPOINT_IDS)
     except Exception as exc:
         logger.exception("DataPoints and adapters reset failed")
         result.errors.append(f"DataPoints and adapters reset failed: {exc}")
@@ -1701,7 +1693,7 @@ async def clear_datapoints(
             await db.execute("DELETE FROM adapter_bindings")
             await db.execute("DELETE FROM authz_node_roles WHERE node_type='datapoint'")
             await db.execute(f"DELETE FROM datapoints WHERE id {_NOT_SYSTEM_DP_SQL}", _SYSTEM_DP_PARAMS)
-        _forget_user_datapoints(get_registry())
+        get_registry().forget(keep=SYSTEM_DATAPOINT_IDS)
         await adapter_registry.start_all(get_event_bus(), db)
     except Exception as exc:
         logger.exception("DataPoints clear failed")

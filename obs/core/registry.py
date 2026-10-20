@@ -30,6 +30,19 @@ logger = logging.getLogger(__name__)
 _INSERT_DATAPOINT_SQL = """INSERT INTO datapoints
    (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, external_write_enabled, created_at, updated_at)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+# What _ensure_system_datapoints() restores on a system DataPoint.
+_SYSTEM_DATAPOINT_FIELDS = (
+    "name",
+    "data_type",
+    "unit",
+    "tags",
+    "mqtt_topic",
+    "mqtt_alias",
+    "persist_value",
+    "record_history",
+    "control_class",
+    "external_write_enabled",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -149,31 +162,47 @@ class DataPointRegistry:
         end up with exactly one row per deterministic ID.
         """
         for definition in SYSTEM_DATAPOINTS:
+            expected = DataPoint(
+                id=definition.id,
+                name=definition.name,
+                data_type=definition.data_type,
+                tags=[SYSTEM_TAG],
+                persist_value=False,
+                record_history=False,
+            )
             row = await self._db.fetchone("SELECT * FROM datapoints WHERE id=?", (str(definition.id),))
             if row is None:
-                dp = DataPoint(
-                    id=definition.id,
-                    name=definition.name,
-                    data_type=definition.data_type,
-                    tags=[SYSTEM_TAG],
-                    persist_value=False,
-                    record_history=False,
-                )
-                await self._db.execute_and_commit(_INSERT_DATAPOINT_SQL, self._insert_params(dp))
+                await self._db.execute_and_commit(_INSERT_DATAPOINT_SQL, self._insert_params(expected))
                 logger.info("DataPointRegistry: created system DataPoint '%s' (%s)", definition.name, definition.id)
                 continue
+            # Every field the API would let an admin change: none of them can be
+            # changed back through it, since it refuses edits to system DataPoints.
             current = _row_to_datapoint(row)
-            if (current.name, current.data_type, current.persist_value, current.external_write_enabled) != (
-                definition.name,
-                definition.data_type,
-                False,
-                False,
-            ):
+            if any(getattr(current, name) != getattr(expected, name) for name in _SYSTEM_DATAPOINT_FIELDS):
                 await self._db.execute_and_commit(
-                    "UPDATE datapoints SET name=?, data_type=?, persist_value=0, external_write_enabled=0, updated_at=? WHERE id=?",
-                    (definition.name, definition.data_type, datetime.now(UTC).isoformat(), str(definition.id)),
+                    """UPDATE datapoints SET name=?, data_type=?, unit=NULL, tags=?, mqtt_topic=?, mqtt_alias=NULL,
+                       persist_value=0, record_history=0, control_class=?, external_write_enabled=0, updated_at=? WHERE id=?""",
+                    (
+                        expected.name,
+                        expected.data_type,
+                        json.dumps(expected.tags),
+                        expected.mqtt_topic,
+                        expected.control_class,
+                        datetime.now(UTC).isoformat(),
+                        str(definition.id),
+                    ),
                 )
                 logger.warning("DataPointRegistry: restored definition of system DataPoint '%s' (%s)", definition.name, definition.id)
+
+    def forget(self, keep: Any = ()) -> None:
+        """Drop every DataPoint except those in *keep* from memory, without touching the database.
+
+        For the bulk deletes of config reset and restore, which remove the rows
+        themselves inside their own transaction.
+        """
+        for dp_id in [dp_id for dp_id in self._points if dp_id not in keep]:
+            del self._points[dp_id]
+            self._values.pop(dp_id, None)
 
     # ------------------------------------------------------------------
     # Read

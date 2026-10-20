@@ -61,6 +61,18 @@ describe('parseInline', () => {
     expect(parseInline('__x__')).toEqual([{ type: 'strong', text: 'x' }])
   })
 
+  it('never emphasises __ inside a word, like GitHub', () => {
+    for (const text of ['snake__case__name', 'a__b__', '__b__c', 'größe__x__']) {
+      expect(parseInline(text)).toEqual([{ type: 'text', text }])
+    }
+    // Between punctuation it is emphasis on GitHub too: obs/__init__.py.
+    expect(parseInline('obs/__init__.py')).toEqual([
+      { type: 'text', text: 'obs/' },
+      { type: 'strong', text: 'init' },
+      { type: 'text', text: '.py' },
+    ])
+  })
+
   it('drops unsafe link targets but keeps the label', () => {
     expect(parseInline('[click](javascript:alert(1))')).toEqual([{ type: 'text', text: 'click' }])
     expect(parseInline('[x](data:text/html,1)')).toEqual([{ type: 'text', text: 'x' }])

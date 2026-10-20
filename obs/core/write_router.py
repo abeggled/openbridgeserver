@@ -145,6 +145,10 @@ class WriteRouter:
         from obs.adapters.base import ConfirmationOrderTracker
 
         self._confirmation_order_tracker = ConfirmationOrderTracker()
+        # Registered adapter instances last seen connected (#1370): only a
+        # transition to connected re-sends the system values, since an adapter
+        # may re-announce a connection it never lost (e.g. a KNX tunnel warning).
+        self._connected_instances: set[str] = set()
 
     # ------------------------------------------------------------------
     # Path 1 — inbound MQTT dp/{uuid}/set
@@ -316,6 +320,53 @@ class WriteRouter:
             return False
         await self.write_binding(dp_id, binding_id, state.value)
         return True
+
+    async def handle_adapter_status(self, event: Any) -> None:
+        """Re-send the system values to an adapter instance that just connected (#1370).
+
+        The update service sends a system value only when it changes, and the
+        channel and the installed version never change at runtime. An adapter
+        that was down when they were sent — a KNX/IP router powered up after OBS,
+        a device behind a link that came back — silently dropped that single
+        write and would never be offered the value again.
+
+        Only system DataPoints get this: a user DataPoint's DEST binding may drive
+        an actuator, a scene or a door opener, and replaying its last value on
+        every reconnect would trigger it again.
+        """
+        instance_id = getattr(event, "instance_id", None)
+        if instance_id is None:
+            return
+        key = str(instance_id)
+        if not getattr(event, "connected", False):
+            self._connected_instances.discard(key)
+            return
+        from obs.adapters import registry as adapter_registry
+
+        # An instance being (re)started reports its connection from inside
+        # connect(), before the registry holds it: a write now would find no
+        # instance by ID. handle_instance_started takes over once it is there.
+        if key in self._connected_instances or adapter_registry.get_instance_by_id(key) is None:
+            return
+        self._connected_instances.add(key)
+        await self._resend_system_bindings_logged(key)
+
+    async def handle_instance_started(self, event: Any) -> None:
+        """Re-send the system values to an instance the adapter registry just (re)started (#1370)."""
+        from obs.adapters import registry as adapter_registry
+
+        key = str(event.instance_id)
+        # Stopped or deleted instances leave no event behind; drop them here.
+        self._connected_instances = {i for i in self._connected_instances if i != key and adapter_registry.get_instance_by_id(i) is not None}
+        if event.connected:
+            self._connected_instances.add(key)
+            await self._resend_system_bindings_logged(key)
+
+    async def _resend_system_bindings_logged(self, instance_id: str) -> None:
+        try:
+            await self.resend_system_bindings(instance_id)
+        except Exception:
+            logger.exception("WriteRouter: could not re-send system values to instance %s", instance_id)
 
     async def resend_system_bindings(self, instance_id: uuid.UUID | str) -> int:
         """Re-send the system DataPoint values this instance writes to (#1370).

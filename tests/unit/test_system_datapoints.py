@@ -167,15 +167,30 @@ async def test_load_creates_each_system_datapoint_once(db, registry):
         "data_type='FLOAT'",
         "persist_value=1",
         "external_write_enabled=1",
+        # Not editable through the API either, so only a restore can undo them (#1370 review).
+        "record_history=1",
+        "tags='[]'",
+        "unit='kWh'",
+        "mqtt_alias='obs/latest'",
+        "mqtt_topic='elsewhere'",
+        "control_class='central_plant'",
     ],
 )
 async def test_load_restores_a_tampered_definition(db, registry, tampering, caplog):
+    pristine = registry.get(LATEST_VERSION.id).model_dump(exclude={"created_at", "updated_at"})
     await db.execute_and_commit(f"UPDATE datapoints SET {tampering} WHERE id=?", (str(LATEST_VERSION.id),))
     reloaded = DataPointRegistry(db=db, mqtt_client=AsyncMock(), event_bus=AsyncMock())
     await reloaded.load_from_db()
-    dp = reloaded.get(LATEST_VERSION.id)
-    assert (dp.name, dp.data_type, dp.persist_value, dp.external_write_enabled) == ("OBS Latest Version", "STRING", False, False)
+    assert reloaded.get(LATEST_VERSION.id).model_dump(exclude={"created_at", "updated_at"}) == pristine
     assert "restored definition" in caplog.text
+
+
+async def test_load_leaves_an_intact_definition_alone(db, registry, caplog):
+    before = (await db.fetchone("SELECT updated_at FROM datapoints WHERE id=?", (str(LATEST_VERSION.id),)))["updated_at"]
+    await DataPointRegistry(db=db, mqtt_client=AsyncMock(), event_bus=AsyncMock()).load_from_db()
+    after = (await db.fetchone("SELECT updated_at FROM datapoints WHERE id=?", (str(LATEST_VERSION.id),)))["updated_at"]
+    assert before == after
+    assert "restored definition" not in caplog.text
 
 
 async def test_registry_refuses_update_and_delete(registry):
@@ -250,6 +265,26 @@ async def test_value_write_is_refused_even_for_admins(api_registry, db):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def loaded_adapters():
+    # Importing an adapter module registers its class, as obs/main.py does.
+    import obs.adapters.anwesenheit.adapter
+    import obs.adapters.knx.adapter
+    import obs.adapters.message.adapter
+    import obs.adapters.mqtt.adapter
+    import obs.adapters.webhook.adapter
+    import obs.adapters.zeitschaltuhr.adapter  # noqa: F401
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "bindable"),
+    [("KNX", True), ("MQTT", True), ("MESSAGE", True), ("ZEITSCHALTUHR", False), ("ANWESENHEITSSIMULATION", False), ("WEBHOOK", False)],
+)
+def test_system_bindable_follows_the_adapter_class(adapter_type, bindable, loaded_adapters):
+    """One answer for the API guard and for the Admin GUI's instance list."""
+    assert bindings_api.system_datapoint_bindable(adapter_type) is bindable
+
+
 @pytest.mark.parametrize(
     ("dp_id", "adapter_type", "direction", "allowed"),
     [
@@ -258,13 +293,16 @@ async def test_value_write_is_refused_even_for_admins(api_registry, db):
         (UPDATE_AVAILABLE.id, "KNX", "SOURCE", False),
         (UPDATE_AVAILABLE.id, "MQTT", "BOTH", False),
         (uuid.uuid4(), "KNX", "SOURCE", True),
-        # Timer and presence simulation never pass a value on, even as DEST.
+        # Timer, presence simulation and webhook never pass a value on, even as DEST.
         (UPDATE_AVAILABLE.id, "ZEITSCHALTUHR", "DEST", False),
         (UPDATE_AVAILABLE.id, "ANWESENHEITSSIMULATION", "DEST", False),
+        (UPDATE_AVAILABLE.id, "WEBHOOK", "DEST", False),
         (uuid.uuid4(), "ZEITSCHALTUHR", "DEST", True),
+        # A type that is not loaded is judged by the direction alone.
+        (UPDATE_AVAILABLE.id, "NOT_LOADED", "DEST", True),
     ],
 )
-def test_system_datapoints_only_feed_bindings(dp_id, adapter_type, direction, allowed):
+def test_system_datapoints_only_feed_bindings(dp_id, adapter_type, direction, allowed, loaded_adapters):
     if allowed:
         bindings_api._ensure_system_datapoint_binding_allowed(dp_id, adapter_type, direction)
         return
@@ -293,15 +331,16 @@ async def test_mqtt_set_on_a_system_datapoint_is_ignored(registry, caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_forget_user_datapoints_keeps_the_system_ones():
-    user_id = uuid.uuid4()
-    reg = SimpleNamespace(
-        _points={UPDATE_CHANNEL.id: object(), user_id: object()},
-        _values={UPDATE_CHANNEL.id: ValueState(), user_id: ValueState()},
-    )
-    config_api._forget_user_datapoints(reg)
-    assert set(reg._points) == {UPDATE_CHANNEL.id}
-    assert set(reg._values) == {UPDATE_CHANNEL.id}
+async def test_forget_keeps_only_the_given_datapoints(registry):
+    user = await registry.create(DataPointCreate(name="User", data_type="FLOAT"))
+    registry.forget(keep=SYSTEM_DATAPOINT_IDS)
+    assert {dp.id for dp in registry.all()} == set(SYSTEM_DATAPOINT_IDS)
+    assert registry.get_value(user.id) is None
+    assert registry.get_value(UPDATE_CHANNEL.id) is not None
+    # The rows are the caller's business.
+    assert await registry._db.fetchone("SELECT id FROM datapoints WHERE id=?", (str(user.id),)) is not None
+    registry.forget()
+    assert registry.count() == 0
 
 
 @pytest.mark.parametrize("variant", ["missing", "ok", "failing"])
@@ -589,6 +628,181 @@ async def test_a_failing_resend_does_not_stop_the_remaining_bindings(db, registr
     assert await router.resend_system_bindings(instance_id) == 1
     assert len(calls) == 2
     assert "could not re-send system value" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Re-send on adapter (re)connect (#1370)
+# ---------------------------------------------------------------------------
+
+
+def _status(*, connected, instance_id, severity="ok"):
+    from obs.core.event_bus import AdapterStatusEvent
+
+    return AdapterStatusEvent(adapter_type="KNX", connected=connected, instance_id=instance_id, severity=severity)
+
+
+def _started(*, connected, instance_id):
+    from obs.core.event_bus import AdapterInstanceStartedEvent
+
+    return AdapterInstanceStartedEvent(instance_id=instance_id, adapter_type="KNX", connected=connected)
+
+
+@pytest.fixture
+def registered():
+    """Instance IDs the adapter registry holds; a status of any other instance comes from inside connect()."""
+    ids: set = set()
+    with patch("obs.adapters.registry.get_instance_by_id", side_effect=lambda instance_id: object() if str(instance_id) in ids else None):
+        yield ids
+
+
+@pytest.fixture
+def router():
+    router = WriteRouter(AsyncMock(), AsyncMock())
+    router.resend_system_bindings = AsyncMock(return_value=1)
+    return router
+
+
+async def test_connecting_instance_gets_the_system_values_resent(router, registered):
+    instance_id = uuid.uuid4()
+    registered.add(str(instance_id))
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    router.resend_system_bindings.assert_awaited_once_with(str(instance_id))
+
+
+async def test_a_repeated_connected_announcement_does_not_resend(router, registered):
+    instance_id = uuid.uuid4()
+    registered.add(str(instance_id))
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    # e.g. a KNX tunnel warning or ioBroker reporting its socket stable again.
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id, severity="warning"))
+    assert router.resend_system_bindings.await_count == 1
+
+
+async def test_an_instance_that_reconnects_gets_the_values_again(router, registered):
+    instance_id = uuid.uuid4()
+    registered.add(str(instance_id))
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    await router.handle_adapter_status(_status(connected=False, instance_id=instance_id))
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert router.resend_system_bindings.await_count == 2
+
+
+async def test_a_disconnect_alone_never_writes(router):
+    await router.handle_adapter_status(_status(connected=False, instance_id=uuid.uuid4()))
+    router.resend_system_bindings.assert_not_awaited()
+
+
+async def test_a_status_without_an_instance_is_ignored(router):
+    await router.handle_adapter_status(_status(connected=True, instance_id=None))
+    router.resend_system_bindings.assert_not_awaited()
+
+
+async def test_a_failing_resend_is_logged_and_swallowed(router, registered, caplog):
+    instance_id = uuid.uuid4()
+    registered.add(str(instance_id))
+    router.resend_system_bindings.side_effect = RuntimeError("adapter exploded")
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert "could not re-send system values" in caplog.text
+
+
+async def test_a_restarted_instance_gets_the_values_once_it_is_registered(router, registered):
+    """restart_instance(): connect() reports the connection before the registry holds the instance."""
+    instance_id = uuid.uuid4()
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    router.resend_system_bindings.assert_not_awaited()
+
+    registered.add(str(instance_id))
+    await router.handle_instance_started(_started(connected=True, instance_id=instance_id))
+    router.resend_system_bindings.assert_awaited_once_with(str(instance_id))
+    # A later "still connected" announcement is no new connection.
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert router.resend_system_bindings.await_count == 1
+
+
+async def test_a_restart_of_a_connected_instance_resends(router, registered):
+    instance_id = uuid.uuid4()
+    registered.add(str(instance_id))
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    # The new instance under the same ID never announced a disconnect.
+    await router.handle_instance_started(_started(connected=True, instance_id=instance_id))
+    assert router.resend_system_bindings.await_count == 2
+
+
+async def test_an_instance_started_offline_gets_the_values_when_it_connects(router, registered):
+    instance_id = uuid.uuid4()
+    registered.add(str(instance_id))
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    # Restarted while its router is down: the start reports no connection.
+    await router.handle_instance_started(_started(connected=False, instance_id=instance_id))
+    assert router.resend_system_bindings.await_count == 1
+    await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    assert router.resend_system_bindings.await_count == 2
+
+
+async def test_instances_gone_from_the_registry_are_forgotten(router, registered):
+    """A stopped or deleted instance leaves no event; the next start drops it."""
+    gone, kept, started = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    registered.update({str(gone), str(kept), str(started)})
+    for instance_id in (gone, kept):
+        await router.handle_adapter_status(_status(connected=True, instance_id=instance_id))
+    registered.discard(str(gone))
+    await router.handle_instance_started(_started(connected=True, instance_id=started))
+    assert router._connected_instances == {str(kept), str(started)}
+
+
+async def test_lifespan_subscribes_the_write_router_before_the_adapters_start():
+    """No connection may slip past: the handlers are in place before start_all() (#1370)."""
+    import inspect
+
+    from obs import main as main_module
+
+    source = inspect.getsource(main_module.lifespan)
+    status_sub = source.index("bus.subscribe(AdapterStatusEvent, write_router.handle_adapter_status)")
+    started_sub = source.index("bus.subscribe(AdapterInstanceStartedEvent, write_router.handle_instance_started)")
+    assert max(status_sub, started_sub) < source.index("await adapter_registry.start_all(")
+
+
+async def test_restart_instance_resends_only_after_registering_the_instance(monkeypatch):
+    """The Admin GUI restart path end to end: a resend during connect() found no instance by ID."""
+    from obs.adapters import registry as adapter_registry
+    from obs.core.event_bus import AdapterInstanceStartedEvent, AdapterStatusEvent
+
+    instance_id = str(uuid.uuid4())
+    bus = EventBus()
+
+    class _ConnectingAdapter:
+        adapter_type = "KNX"
+
+        def __init__(self, event_bus, config, instance_id, name):
+            self._bus, self._id, self.connected = event_bus, instance_id, False
+
+        async def connect(self):
+            # Like KnxAdapter.connect(): the status goes out before connect() returns.
+            self.connected = True
+            await self._bus.publish(AdapterStatusEvent(adapter_type="KNX", connected=True, instance_id=self._id))
+
+        async def reload_bindings(self, bindings):
+            pass
+
+    monkeypatch.setitem(adapter_registry._adapters, "KNX", _ConnectingAdapter)
+    monkeypatch.setattr(adapter_registry, "_instances", {})
+    found_at_resend = []
+
+    async def _resend(resend_id):
+        found_at_resend.append(adapter_registry.get_instance_by_id(resend_id))
+
+    router = WriteRouter(AsyncMock(), AsyncMock())
+    router.resend_system_bindings = _resend
+    bus.subscribe(AdapterStatusEvent, router.handle_adapter_status)
+    bus.subscribe(AdapterInstanceStartedEvent, router.handle_instance_started)
+    db = SimpleNamespace(
+        fetchone=AsyncMock(return_value={"id": instance_id, "adapter_type": "KNX", "name": "Line 2", "config": "{}"}),
+        fetchall=AsyncMock(return_value=[]),
+    )
+    new = await adapter_registry.restart_instance(instance_id, bus, db)
+
+    assert new is not None
+    assert found_at_resend == [new]
 
 
 async def test_a_user_datapoint_binding_never_reaches_the_write_router():

@@ -127,6 +127,8 @@ async def test_timer_and_presence_simulation_cannot_bind_a_system_datapoint(clie
     assert resp.status_code == 422, resp.text
     assert adapter_type in resp.json()["detail"]
     assert (await client.get(url, headers=auth_headers)).json() == []
+    # The Admin GUI does not offer the instance in the first place.
+    assert inst["system_bindable"] is False
 
 
 async def test_config_import_cannot_repoint_an_existing_system_binding(client, auth_headers):
@@ -459,6 +461,8 @@ async def test_concurrent_manual_checks_queued_behind_channel_change(client, aut
     monkeypatch.setattr(service, "_releases", [])
     monkeypatch.setattr(service, "_releases_fetched_at", datetime(2026, 10, 18, tzinfo=UTC))
     monkeypatch.setattr(service, "_etag", None)
+    # Earlier tests' checks would hold the manual cool-down.
+    monkeypatch.setattr(service, "_last_attempt_at", None)
 
     entered = asyncio.Event()
     release = asyncio.Event()

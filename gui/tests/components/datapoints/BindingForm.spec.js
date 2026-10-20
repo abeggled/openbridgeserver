@@ -93,11 +93,11 @@ describe('BindingForm — read-only system DataPoint (#1370)', () => {
   const instances = {
     listInstances: vi.fn().mockResolvedValue({
       data: [
-        { id: 'mqtt-inst-1', name: 'MQTT Test', adapter_type: 'MQTT' },
-        { id: 'message-inst-1', name: 'Notifications', adapter_type: 'MESSAGE', config: {} },
-        { id: 'timer-1', name: 'Timer', adapter_type: 'ZEITSCHALTUHR' },
-        { id: 'webhook-1', name: 'Hook', adapter_type: 'WEBHOOK' },
-        { id: 'presence-1', name: 'Presence', adapter_type: 'ANWESENHEITSSIMULATION' },
+        { id: 'mqtt-inst-1', name: 'MQTT Test', adapter_type: 'MQTT', system_bindable: true },
+        { id: 'message-inst-1', name: 'Notifications', adapter_type: 'MESSAGE', config: {}, system_bindable: true },
+        { id: 'timer-1', name: 'Timer', adapter_type: 'ZEITSCHALTUHR', system_bindable: false },
+        { id: 'webhook-1', name: 'Hook', adapter_type: 'WEBHOOK', system_bindable: false },
+        { id: 'presence-1', name: 'Presence', adapter_type: 'ANWESENHEITSSIMULATION', system_bindable: false },
       ],
     }),
   }

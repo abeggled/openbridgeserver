@@ -6,10 +6,9 @@ import asyncio
 import json
 import logging
 import random
-import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -200,6 +199,79 @@ async def test_fetch_failures_map_to_stable_codes(response, etag, code):
     assert exc_info.value.code == code
 
 
+def _paged(pages, *, host="https://api.example"):
+    """Handler serving *pages* with GitHub's Link header (its next links use /repositories/<id>)."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        index = int(request.url.params.get("page", "1"))
+        headers = {"ETag": f'W/"page{index}"'}
+        if index < len(pages):
+            headers["Link"] = f'<{host}/repositories/1/releases?per_page=100&page={index + 1}>; rel="next"'
+        return httpx.Response(200, json=pages[index - 1], headers=headers)
+
+    return handler, seen
+
+
+async def test_fetch_follows_every_page_and_keeps_the_first_etag():
+    """The installed release may sit beyond the first hundred (#1370 review)."""
+    handler, seen = _paged([PAYLOAD[:2], PAYLOAD[2:4], PAYLOAD[4:]])
+    result = await _source(handler).fetch('W/"old"')
+    assert result == FetchResult(not_modified=False, etag='W/"page1"', payload=PAYLOAD)
+    # Only the first page is conditional: its ETag is the one stored.
+    assert [r.headers.get("if-none-match") for r in seen] == ['W/"old"', None, None]
+
+
+async def test_fetch_stops_at_the_page_limit(monkeypatch):
+    monkeypatch.setattr(svc, "MAX_RELEASE_PAGES", 2)
+    handler, seen = _paged([[_gh("2026.10.0")], [_gh("2026.9.0")], [_gh("2026.8.0")]])
+    result = await _source(handler).fetch(None)
+    assert [r["tag_name"] for r in result.payload] == ["2026.10.0", "2026.9.0"]
+    assert len(seen) == 2
+
+
+async def test_fetch_never_follows_a_next_link_to_another_host():
+    handler, seen = _paged([[_gh("2026.10.0")], [_gh("2026.9.0")]], host="https://evil.example")
+    result = await _source(handler).fetch(None)
+    assert [r["tag_name"] for r in result.payload] == ["2026.10.0"]
+    assert len(seen) == 1
+
+
+async def test_fetch_ignores_a_next_link_without_url():
+    response = httpx.Response(200, json=[], headers={"Link": '<>; rel="next"'})
+    result = await _source(lambda r: response).fetch(None)
+    assert result.payload == []
+
+
+async def test_fetch_does_not_page_a_payload_that_is_no_list():
+    """classify_releases reports it; there is nothing to append pages to."""
+    response = httpx.Response(200, json={"message": "?"}, headers={"Link": '<https://api.example/x?page=2>; rel="next"'})
+    result = await _source(lambda r: response).fetch(None)
+    assert result.payload == {"message": "?"}
+
+
+@pytest.mark.parametrize(
+    ("second", "code"),
+    [
+        (httpx.Response(200, json={"message": "?"}), "invalid_response"),
+        (httpx.Response(403, headers={"X-RateLimit-Remaining": "0"}), "rate_limited"),
+        (httpx.Response(502), "http_status"),
+    ],
+)
+async def test_a_failing_later_page_fails_the_whole_fetch(second, code):
+    """A partial list could drop the installed release and flip the answer."""
+
+    def handler(request):
+        if request.url.params.get("page") == "2":
+            return second
+        return httpx.Response(200, json=[_gh("2026.10.0")], headers={"Link": '<https://api.example/repositories/1/releases?page=2>; rel="next"'})
+
+    with pytest.raises(UpdateCheckError) as exc_info:
+        await _source(handler).fetch(None)
+    assert exc_info.value.code == code
+
+
 async def test_fetch_network_error():
     def handler(request):
         raise httpx.ConnectError("boom", request=request)
@@ -295,9 +367,6 @@ async def test_load_reads_naive_timestamps_as_utc(env):
     service = _service(env, FakeSource())
     await service.load()
     assert service.state.last_check_at == datetime(2026, 10, 16, 8, tzinfo=UTC)
-    # Comparing with the aware clock must not raise; a day old: outside the cool-down.
-    _state, ran = await service.check_now()
-    assert ran is True
 
 
 async def test_load_tolerates_odd_field_types(env):
@@ -492,6 +561,25 @@ async def test_manual_check_respects_the_cooldown(env):
     env.clock.advance(1)
     assert (await service.check_now())[1] is True
     assert len(source.etags) == 2
+
+
+async def test_manual_check_after_the_clock_was_set_back(env):
+    service = _service(env, FakeSource(FetchResult(False, None, PAYLOAD), FetchResult(False, None, PAYLOAD)))
+    await service.load()
+    await service.check_now()
+    env.clock.advance(-3600)
+    assert (await service.check_now())[1] is True
+
+
+async def test_a_restored_last_check_does_not_start_the_cooldown(env):
+    """The previous process checked just before the restart (#1370 review)."""
+    await _store_state(env.db, last_check_at=env.clock.now.isoformat())
+    service = _service(env, FakeSource(FetchResult(False, None, PAYLOAD)))
+    await service.load()
+    assert service.state.last_check_at == env.clock.now
+    # Nothing cached in this process yet: a channel switch must get its answer.
+    state, checked = await service.set_channel("nightly")
+    assert (state.latest_version, checked) == ("nightly-20261017", True)
 
 
 async def test_manual_check_joins_a_running_check(env):
@@ -796,186 +884,3 @@ async def test_init_get_and_reset(env, monkeypatch):
     assert isinstance(enabled._source, GitHubReleaseSource)
     await enabled.stop()
     svc.reset_update_service()
-
-
-# ---------------------------------------------------------------------------
-# Re-send on adapter (re)connect (#1370)
-# ---------------------------------------------------------------------------
-
-
-def _status(*, connected, instance_id, severity="ok"):
-    from obs.core.event_bus import AdapterStatusEvent
-
-    return AdapterStatusEvent(adapter_type="KNX", connected=connected, instance_id=instance_id, severity=severity)
-
-
-@pytest.fixture
-def registered():
-    """Instance IDs the adapter registry holds; a status of any other instance comes from inside connect()."""
-    ids: set = set()
-    with patch("obs.adapters.registry.get_instance_by_id", side_effect=lambda instance_id: object() if instance_id in ids else None):
-        yield ids
-
-
-@pytest.fixture
-def resend_router(registered):
-    router = SimpleNamespace(resend_system_bindings=AsyncMock(return_value=1))
-    with patch("obs.core.write_router.get_write_router", return_value=router):
-        yield router
-
-
-def _bare_service():
-    return UpdateCheckService(AsyncMock(), AsyncMock(), source=None, installed_version="2026.10.0")
-
-
-async def test_connecting_instance_gets_the_system_values_resent(resend_router, registered):
-    instance_id = uuid.uuid4()
-    registered.add(instance_id)
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    resend_router.resend_system_bindings.assert_awaited_once_with(instance_id)
-
-
-async def test_a_repeated_connected_announcement_does_not_resend(resend_router, registered):
-    instance_id = uuid.uuid4()
-    registered.add(instance_id)
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    # e.g. ioBroker reporting its socket stable again — the link never dropped.
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    assert resend_router.resend_system_bindings.await_count == 1
-
-
-async def test_an_instance_that_reconnects_gets_the_values_again(resend_router, registered):
-    instance_id = uuid.uuid4()
-    registered.add(instance_id)
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    # A restart from the Admin GUI, or a link outage: the adapter publishes the
-    # disconnect, so the next connection is a transition again.
-    await service.handle_adapter_status(_status(connected=False, instance_id=instance_id))
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    assert resend_router.resend_system_bindings.await_count == 2
-
-
-async def test_a_disconnect_alone_never_writes(resend_router):
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=False, instance_id=uuid.uuid4()))
-    resend_router.resend_system_bindings.assert_not_awaited()
-
-
-async def test_a_status_without_an_instance_is_ignored(resend_router):
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=True, instance_id=None))
-    resend_router.resend_system_bindings.assert_not_awaited()
-
-
-async def test_a_failing_resend_is_logged_and_swallowed(caplog, registered):
-    router = SimpleNamespace(resend_system_bindings=AsyncMock(side_effect=RuntimeError("no router")))
-    service = _bare_service()
-    instance_id = uuid.uuid4()
-    registered.add(instance_id)
-    with patch("obs.core.write_router.get_write_router", return_value=router):
-        await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    assert "could not re-send system values" in caplog.text
-
-
-def _started(*, connected, instance_id):
-    from obs.core.event_bus import AdapterInstanceStartedEvent
-
-    return AdapterInstanceStartedEvent(instance_id=instance_id, adapter_type="KNX", connected=connected)
-
-
-async def test_a_restarted_instance_gets_the_values_once_it_is_registered(resend_router, registered):
-    """restart_instance(): connect() reports the connection before the registry holds the instance."""
-    instance_id = uuid.uuid4()
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    resend_router.resend_system_bindings.assert_not_awaited()
-
-    registered.add(instance_id)
-    await service.handle_instance_started(_started(connected=True, instance_id=instance_id))
-    resend_router.resend_system_bindings.assert_awaited_once_with(instance_id)
-    # A later "still connected" announcement is no new connection.
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    assert resend_router.resend_system_bindings.await_count == 1
-
-
-async def test_an_instance_started_offline_gets_the_values_when_it_connects(resend_router, registered):
-    instance_id = uuid.uuid4()
-    registered.add(instance_id)
-    service = _bare_service()
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    # Restarted while its router is down: the start reports no connection.
-    await service.handle_instance_started(_started(connected=False, instance_id=instance_id))
-    assert resend_router.resend_system_bindings.await_count == 1
-    await service.handle_adapter_status(_status(connected=True, instance_id=instance_id))
-    assert resend_router.resend_system_bindings.await_count == 2
-
-
-async def test_instances_running_at_subscription_are_not_new_connections(resend_router, registered):
-    """They got the start-up publish; their first status update is no reconnect."""
-    up, down = uuid.uuid4(), uuid.uuid4()
-    registered.update({up, down})
-    service = _bare_service()
-    service.track_instances([SimpleNamespace(_instance_id=up, connected=True), SimpleNamespace(_instance_id=down, connected=False)])
-    # e.g. a KNX tunnel warning: still connected.
-    await service.handle_adapter_status(_status(connected=True, instance_id=up, severity="warning"))
-    resend_router.resend_system_bindings.assert_not_awaited()
-    # The one that was down at start-up connects now: that is a new connection.
-    await service.handle_adapter_status(_status(connected=True, instance_id=down))
-    resend_router.resend_system_bindings.assert_awaited_once_with(down)
-
-
-async def test_lifespan_subscribes_the_handler_to_adapter_status():
-    import inspect
-
-    from obs import main as main_module
-
-    source = inspect.getsource(main_module.lifespan)
-    assert "bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)" in source
-    assert "bus.subscribe(AdapterInstanceStartedEvent, update_service.handle_instance_started)" in source
-    assert "update_service.track_instances(adapter_registry.get_all_instances().values())" in source
-
-
-async def test_restart_instance_resends_only_after_registering_the_instance(monkeypatch):
-    """The Admin GUI restart path end to end: a resend during connect() found no instance by ID."""
-    from obs.adapters import registry as adapter_registry
-    from obs.core.event_bus import AdapterInstanceStartedEvent, AdapterStatusEvent
-
-    instance_id = str(uuid.uuid4())
-    bus = EventBus()
-
-    class _ConnectingAdapter:
-        adapter_type = "KNX"
-
-        def __init__(self, event_bus, config, instance_id, name):
-            self._bus, self._id, self.connected = event_bus, instance_id, False
-
-        async def connect(self):
-            # Like KnxAdapter.connect(): the status goes out before connect() returns.
-            self.connected = True
-            await self._bus.publish(AdapterStatusEvent(adapter_type="KNX", connected=True, instance_id=self._id))
-
-        async def reload_bindings(self, bindings):
-            pass
-
-    monkeypatch.setitem(adapter_registry._adapters, "KNX", _ConnectingAdapter)
-    monkeypatch.setattr(adapter_registry, "_instances", {})
-    found_at_resend = []
-
-    async def _resend(resend_id):
-        found_at_resend.append(adapter_registry.get_instance_by_id(resend_id))
-
-    service = _bare_service()
-    bus.subscribe(AdapterStatusEvent, service.handle_adapter_status)
-    bus.subscribe(AdapterInstanceStartedEvent, service.handle_instance_started)
-    db = SimpleNamespace(
-        fetchone=AsyncMock(return_value={"id": instance_id, "adapter_type": "KNX", "name": "Line 2", "config": "{}"}),
-        fetchall=AsyncMock(return_value=[]),
-    )
-    with patch("obs.core.write_router.get_write_router", return_value=SimpleNamespace(resend_system_bindings=_resend)):
-        new = await adapter_registry.restart_instance(instance_id, bus, db)
-
-    assert new is not None
-    assert found_at_resend == [new]

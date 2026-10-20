@@ -373,9 +373,6 @@ const THROTTLE_FACTORS = { ms: 1, s: 1000, min: 60_000, h: 3_600_000 }
 // Adapter types that only ever observe values, so the direction select is
 // hidden and SOURCE is forced (see the watcher further down and submit()).
 const DIRECTION_LOCKED_TYPES = ['ANWESENHEITSSIMULATION', 'MESSAGE', 'WEBHOOK']
-// Of those plus the timer, only MESSAGE may watch a read-only system DataPoint;
-// the others would write into it, which the backend refuses (#1370).
-const SYSTEM_EXCLUDED_TYPES = ['ANWESENHEITSSIMULATION', 'WEBHOOK', 'ZEITSCHALTUHR']
 
 const form = reactive({
   adapter_instance_id:  '',
@@ -640,7 +637,9 @@ const groupedDpts = computed(() => {
 const groupedInstances = computed(() => {
   const groups = {}
   for (const inst of allInstances.value) {
-    if (props.dpSystem && SYSTEM_EXCLUDED_TYPES.includes(inst.adapter_type)) continue
+    // A read-only system DataPoint (#1370) only goes to adapters that pass its
+    // value on or watch it; the backend decides which (system_bindable).
+    if (props.dpSystem && inst.system_bindable === false) continue
     if (!groups[inst.adapter_type]) groups[inst.adapter_type] = []
     groups[inst.adapter_type].push(inst)
   }

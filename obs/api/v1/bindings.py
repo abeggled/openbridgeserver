@@ -253,7 +253,21 @@ async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     await adapter_registry.reload_instance_bindings(instance_id, db)
 
 
-_SOURCE_ONLY_ADAPTER_TYPES = frozenset({"ZEITSCHALTUHR", "ANWESENHEITSSIMULATION"})
+def system_datapoint_bindable(adapter_type: str) -> bool:
+    """Whether an adapter type may bind a read-only system DataPoint at all (#1370).
+
+    MESSAGE only watches the value. Every other adapter needs a DEST binding
+    that passes it on, which the timer, the presence simulation and the webhook
+    never do — they only write into their DataPoint. The Admin GUI offers
+    instances by the same answer (AdapterInstanceOut.system_bindable).
+    """
+    if adapter_type == "MESSAGE":
+        return True
+    from obs.adapters import registry as adapter_registry
+
+    cls = adapter_registry.get_class(adapter_type)
+    # An adapter type that is not loaded is judged by the direction alone.
+    return cls is None or cls.writes_values
 
 
 def _ensure_system_datapoint_binding_allowed(dp_id: uuid.UUID | str, adapter_type: str, direction: str) -> None:
@@ -269,9 +283,7 @@ def _ensure_system_datapoint_binding_allowed(dp_id: uuid.UUID | str, adapter_typ
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "System DataPoints are read-only: only DEST bindings are allowed",
         )
-    # The timer and the presence simulation only ever write into their DataPoint;
-    # a DEST binding of theirs would never pass the value on.
-    if adapter_type in _SOURCE_ONLY_ADAPTER_TYPES:
+    if not system_datapoint_bindable(adapter_type):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"System DataPoints are read-only: {adapter_type} bindings cannot use them",

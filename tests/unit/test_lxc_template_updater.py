@@ -458,9 +458,56 @@ def test_a_manual_build_without_nightly_date_is_no_nightly(tmp_path):
     assert (code, version) == (0, "2026.11.0")
 
 
+def _run_meta(tmp_path: Path, nightly_date: str, *, ref: str = "refs/heads/main", tag: str | None = None) -> tuple[int, dict[str, str]]:
+    """Run the "Set template metadata" step in a throwaway repo; returns its exit code and outputs."""
+    import yaml
+
+    steps = yaml.safe_load(_workflow_text())["jobs"]["build"]["steps"]
+    (step,) = [s for s in steps if s.get("name") == "Set template metadata"]
+    assert step["env"]["NIGHTLY_DATE"] == "${{ inputs.nightly_date }}"
+    script = step["run"].replace("${{ env.TEMPLATE_NAME }}", "openbridgeserver").replace("${{ matrix.arch }}", "amd64")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run([*git, "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp_path, check=True)
+    if tag:
+        subprocess.run([*git, "tag", tag], cwd=tmp_path, check=True)
+    output = tmp_path / "github_output"
+    env = {
+        **os.environ,
+        "NIGHTLY_DATE": nightly_date,
+        "GITHUB_REF_SAFE": ref,
+        "GITHUB_REF_NAME_SAFE": ref.rsplit("/", 1)[-1],
+        "GITHUB_OUTPUT": str(output),
+    }
+    result = subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    lines = output.read_text(encoding="utf-8").splitlines() if output.exists() else []
+    return result.returncode, dict(line.split("=", 1) for line in lines)
+
+
 def test_an_invalid_nightly_date_fails_the_build(tmp_path):
-    code, version = _run_stamp(tmp_path, "2026-10-19")
-    assert (code, version) == (1, "")
+    code, outputs = _run_meta(tmp_path, "2026-10-19")
+    assert (code, outputs) == (1, {})
+
+
+def test_a_nightly_on_an_already_tagged_commit_is_named_after_its_own_tag(tmp_path):
+    """/opt/obs/version gets this value and wins over obs/version (PR #1371 Codex review)."""
+    code, outputs = _run_meta(tmp_path, "20261020", tag="nightly-20261019")
+    assert code == 0
+    assert outputs["version"] == "nightly-20261020"
+    assert outputs["app_bundle_file"] == "openbridgeserver-app-bundle_nightly-20261020.tar.gz"
+
+
+def test_a_tag_push_and_a_manual_run_keep_their_versions(tmp_path):
+    code, outputs = _run_meta(tmp_path, "", ref="refs/tags/2026.11.0")
+    assert (code, outputs["version"]) == (0, "2026.11.0")
+    manual = tmp_path / "manual"
+    manual.mkdir()
+    code, outputs = _run_meta(manual, "", tag="2026.10.0")
+    assert (code, outputs["version"]) == (0, "2026.10.0")
+
+
+def test_the_template_root_marker_carries_the_metadata_version():
+    assert 'echo "${{ steps.meta.outputs.version }}" | sudo tee "$ROOTFS/opt/obs/version"' in _workflow_text()
 
 
 def test_nightly_dispatcher_uses_one_date_for_stamp_and_release_tag():

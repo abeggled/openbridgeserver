@@ -129,6 +129,10 @@ class AdapterBase(ABC):
     config_schema: type[BaseModel]  # API: /adapters/{type}/schema
     binding_config_schema: type[BaseModel]  # API: /adapters/{type}/binding-schema
     hidden: bool = False  # True = not shown in "create instance" UI
+    # False = a DEST binding never passes the DataPoint's value on (the adapter
+    # only produces or watches values); decides which adapters may bind a
+    # read-only system DataPoint (#1370).
+    writes_values: bool = True
     delegation_capabilities: frozenset[AdapterDelegationCapability] = frozenset()
 
     def __init__(

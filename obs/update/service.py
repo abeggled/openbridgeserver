@@ -55,6 +55,8 @@ INITIAL_DELAY_MAX_MINUTES = 719
 MANUAL_CHECK_COOLDOWN_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 15.0
 RELEASES_PER_PAGE = 100
+# Upper bound on followed pages, against a Link header that never ends.
+MAX_RELEASE_PAGES = 10
 
 
 def resolve_installed_version(package_version: str | None = None, install_root: Path | None = None) -> str:
@@ -62,10 +64,11 @@ def resolve_installed_version(package_version: str | None = None, install_root: 
 
     ``obs/version`` (``obs.__version__``) is stamped at build time. An LXC
     installation also has ``<install root>/version``, which ``obs-update`` writes
-    with the exact release tag it installed — for a nightly bundle that is the
-    only place that says ``nightly-YYYYMMDD``, because the bundle's own stamp is
-    the base version from RELEASENOTES.md. That file wins when it holds a
-    version inside the contract.
+    with the exact release tag it installed, and which a fresh LXC template
+    carries from its build. Bundles built before #1370 stamp a nightly with the
+    base version from RELEASENOTES.md, so for them that file is the only place
+    that says ``nightly-YYYYMMDD``. It wins when it holds a version inside the
+    contract.
     """
     package_version = (obs.__version__ if package_version is None else package_version).strip()
     root = Path(obs.__file__).resolve().parent.parent if install_root is None else install_root
@@ -106,30 +109,57 @@ class GitHubReleaseSource:
         self._transport = transport
 
     async def fetch(self, etag: str | None) -> FetchResult:
+        """All pages of the release list; the ETag belongs to the first one.
+
+        Every new release lands on the first page, so an unchanged first page
+        (304) means an unchanged list. The later pages matter all the same: the
+        installed release, whose publication date orders it against nightlies,
+        falls off the first page once a hundred newer releases exist.
+        """
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": f"openbridgeserver/{obs.__version__}",
         }
-        if etag:
-            headers["If-None-Match"] = etag
         try:
             async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport, follow_redirects=True) as client:
-                response = await client.get(self._url, params={"per_page": RELEASES_PER_PAGE}, headers=headers)
+                first_headers = {**headers, "If-None-Match": etag} if etag else headers
+                response = await client.get(self._url, params={"per_page": RELEASES_PER_PAGE}, headers=first_headers)
+                # A 304 only means something when this request carried a cached ETag.
+                if response.status_code == 304 and etag:
+                    return FetchResult(not_modified=True, etag=response.headers.get("etag") or etag)
+                first_etag = response.headers.get("etag")
+                payload = _json_page(response)
+                pages = 1
+                while isinstance(payload, list) and (next_url := self._next_page(response)) and pages < MAX_RELEASE_PAGES:
+                    response = await client.get(next_url, headers=headers)
+                    page = _json_page(response)
+                    if not isinstance(page, list):
+                        raise UpdateCheckError("invalid_response", "release page is not a JSON array")
+                    payload.extend(page)
+                    pages += 1
         except httpx.HTTPError as exc:
             raise UpdateCheckError("network", type(exc).__name__) from exc
-        # A 304 only means something when this request carried a cached ETag.
-        if response.status_code == 304 and etag:
-            return FetchResult(not_modified=True, etag=response.headers.get("etag") or etag)
-        if response.status_code in (403, 429) and response.headers.get("x-ratelimit-remaining") == "0":
-            raise UpdateCheckError("rate_limited", str(response.status_code))
-        if response.status_code != 200:
-            raise UpdateCheckError("http_status", str(response.status_code))
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise UpdateCheckError("invalid_response", "body is not JSON") from exc
-        return FetchResult(not_modified=False, etag=response.headers.get("etag"), payload=payload)
+        return FetchResult(not_modified=False, etag=first_etag, payload=payload)
+
+    def _next_page(self, response: httpx.Response) -> str | None:
+        """The ``Link: rel="next"`` URL, followed only on the configured API host."""
+        url = response.links.get("next", {}).get("url")
+        if not url:
+            return None
+        target, own = httpx.URL(url), httpx.URL(self._url)
+        return url if (target.scheme, target.host, target.port) == (own.scheme, own.host, own.port) else None
+
+
+def _json_page(response: httpx.Response) -> Any:
+    if response.status_code in (403, 429) and response.headers.get("x-ratelimit-remaining") == "0":
+        raise UpdateCheckError("rate_limited", str(response.status_code))
+    if response.status_code != 200:
+        raise UpdateCheckError("http_status", str(response.status_code))
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise UpdateCheckError("invalid_response", "body is not JSON") from exc
 
 
 @dataclass
@@ -261,6 +291,8 @@ class UpdateCheckService:
         # change can be answered from it without asking GitHub again.
         self._releases: list[Release] | None = None
         self._releases_fetched_at: datetime | None = None
+        # The last check attempt of this process; the manual cool-down counts from it.
+        self._last_attempt_at: datetime | None = None
         self._etag: str | None = None
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
@@ -269,9 +301,6 @@ class UpdateCheckService:
         # not sent again, so a MESSAGE binding or Logic graph on e.g. "OBS Update
         # Available" does not fire on every twelve-hourly check.
         self._published: dict[Any, tuple[Any, str]] = {}
-        # adapter instance → last connection state seen, so only a transition to
-        # connected re-sends the values (an adapter may re-announce a connection).
-        self._instance_connected: dict[Any, bool] = {}
         self._channel_derived = False
         self.next_check_at: datetime | None = None
 
@@ -408,7 +437,10 @@ class UpdateCheckService:
         others take its result. Returns the state and whether this call ran a check.
         """
         async with self._lock:
-            last = self._state.last_check_at
+            # This process's own attempt, not the restored last_check_at: after a
+            # restart nothing is cached, and a check the previous process ran just
+            # before must not leave e.g. a channel switch without an answer.
+            last = self._last_attempt_at
             # A last check "in the future" (clock set back since) must not block checks.
             if last is not None and 0 <= (self._clock() - last).total_seconds() < MANUAL_CHECK_COOLDOWN_SECONDS:
                 return self._state, False
@@ -417,6 +449,7 @@ class UpdateCheckService:
     async def _attempt(self) -> None:
         now = self._clock()
         self._state.last_check_at = now
+        self._last_attempt_at = now
         try:
             result = await self._source.fetch(self._etag if self._releases is not None else None)
             if result.not_modified:
@@ -499,57 +532,6 @@ class UpdateCheckService:
         await self._publish(LATEST_VERSION, state.latest_version, "good" if known and state.latest_version else "uncertain", force)
         await self._publish(UPDATE_AVAILABLE, state.update_available, "good" if known and state.update_available is not None else "uncertain", force)
         await self._publish(LAST_CHECK, state.last_check_at, "good" if state.last_check_at else "uncertain", force)
-
-    async def handle_adapter_status(self, event: Any) -> None:
-        """Re-send the system values to an adapter instance that just connected (#1370).
-
-        ``publish_datapoints`` sends a value only when it changes, and the
-        channel and the installed version never change at runtime. An adapter
-        that was down during the start-up publish — a KNX/IP router powered up
-        after OBS, a device behind a link that came back, an instance restarted
-        from the Admin GUI — silently dropped that single write and would never
-        be offered the value again. Its DEST bindings therefore get the current
-        values whenever it reports a connection.
-        """
-        instance_id = getattr(event, "instance_id", None)
-        if instance_id is None:
-            return
-        connected = bool(getattr(event, "connected", False))
-        was_connected = self._instance_connected.get(instance_id, False)
-        self._instance_connected[instance_id] = connected
-        if not connected or was_connected:
-            return
-        from obs.adapters import registry as adapter_registry
-
-        # An instance (re)started from the Admin GUI reports its connection from
-        # inside connect(), before the registry holds it: a write now would find
-        # no instance by ID. handle_instance_started sends the values instead.
-        if adapter_registry.get_instance_by_id(instance_id) is None:
-            return
-        await self._resend_system_bindings(instance_id)
-
-    def track_instances(self, instances: Any) -> None:
-        """Record the connection state of the instances that started before the subscription.
-
-        They got the values from the start-up publish; without this their first
-        status update (e.g. a KNX tunnel warning) would count as a new connection.
-        """
-        for instance in instances:
-            self._instance_connected[instance._instance_id] = bool(getattr(instance, "connected", False))
-
-    async def handle_instance_started(self, event: Any) -> None:
-        """Re-send the system values to an instance the registry just (re)started (#1370)."""
-        self._instance_connected[event.instance_id] = event.connected
-        if event.connected:
-            await self._resend_system_bindings(event.instance_id)
-
-    async def _resend_system_bindings(self, instance_id: Any) -> None:
-        try:
-            from obs.core.write_router import get_write_router
-
-            await get_write_router().resend_system_bindings(instance_id)
-        except Exception:
-            logger.exception("Update check: could not re-send system values to instance %s", instance_id)
 
     async def _publish(self, definition: SystemDataPointDef, value: Any, quality: str, force: bool) -> None:
         from obs.core.event_bus import DataValueEvent

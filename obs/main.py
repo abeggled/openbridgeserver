@@ -129,6 +129,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     write_router = init_write_router(db, registry, event_bus=bus)
     mqtt.on_write_request(write_router.handle)
     bus.subscribe(DataValueEvent, write_router.handle_value_event)
+    #    Path C: an adapter instance (re)connects → it gets the system DataPoint
+    #    values again (#1370). Subscribed before any adapter starts, so no
+    #    connection can slip past it.
+    bus.subscribe(AdapterStatusEvent, write_router.handle_adapter_status)
+    bus.subscribe(AdapterInstanceStartedEvent, write_router.handle_instance_started)
 
     # 7. MQTT connect
     await mqtt.start()
@@ -172,11 +177,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.update.service import init_update_service
 
     update_service = await init_update_service(db, bus, settings.update_check)
-    # An adapter that was down during the publish above dropped the write; the
-    # values never change on their own, so a connection re-sends them (#1370).
-    bus.subscribe(AdapterStatusEvent, update_service.handle_adapter_status)
-    bus.subscribe(AdapterInstanceStartedEvent, update_service.handle_instance_started)
-    update_service.track_instances(adapter_registry.get_all_instances().values())
 
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",
