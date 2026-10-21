@@ -8,7 +8,7 @@
         </div>
         <div class="flex items-center gap-1">
           <HelpButton help-id="settings-visu-devices" />
-          <button type="button" class="btn-primary btn-sm" :disabled="loading" data-testid="btn-add-visu-device" @click="addDevice">
+          <button type="button" class="btn-primary btn-sm" :disabled="loading || loadFailed" data-testid="btn-add-visu-device" @click="addDevice">
             {{ $t('settings.visuDevices.addButton') }}
           </button>
         </div>
@@ -106,7 +106,8 @@
           data-testid="visu-devices-msg"
         >{{ msg.text }}</div>
 
-        <div v-if="!loading" class="flex justify-end">
+        <!-- After a failed load the list is incomplete: saving it would delete the stored devices. -->
+        <div v-if="!loading && !loadFailed" class="flex justify-end">
           <button type="button" class="btn-primary" :disabled="saving || hasErrors" data-testid="btn-save-visu-devices" @click="save">
             <Spinner v-if="saving" size="sm" color="white" />
             {{ $t('common.save') }}
@@ -133,6 +134,7 @@ const { t } = useI18n()
 const devices = ref([])
 const pages = ref([])
 const loading = ref(true)
+const loadFailed = ref(false)
 const saving = ref(false)
 const msg = ref(null)
 const copiedKey = ref(null)
@@ -249,6 +251,7 @@ onMounted(async () => {
     devices.value = deviceRes.data.map(device => toRow(device))
     pages.value = pageRes.data
   } catch {
+    loadFailed.value = true
     msg.value = { ok: false, text: t('settings.visuDevices.loadError') }
   } finally {
     loading.value = false

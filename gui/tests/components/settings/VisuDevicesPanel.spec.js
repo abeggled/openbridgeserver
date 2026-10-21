@@ -77,6 +77,9 @@ describe('VisuDevicesPanel', () => {
 
     expect(wrapper.get('[data-testid="visu-devices-msg"]').text()).toBe('Geräte konnten nicht geladen werden.')
     expect(wrapper.find('[data-testid="spinner"]').exists()).toBe(false)
+    // The list is incomplete: saving it would delete every stored profile.
+    expect(wrapper.find('[data-testid="btn-save-visu-devices"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="btn-add-visu-device"]').attributes('disabled')).toBeDefined()
   })
 
   it('suggests the slug from the name until it is edited by hand', async () => {
