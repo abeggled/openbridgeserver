@@ -27,9 +27,10 @@ async function login() {
     // neu angemeldet werden (Issue #1160)
     await store.login(res.access_token, res.refresh_token)
     ws.connect()
-    // Zurück zur ursprünglichen Seite oder zur Übersicht
+    // Zurück zur ursprünglichen Seite oder zur Übersicht. `replace`: die
+    // Anmeldeseite soll nicht im Verlauf bleiben, sonst führt „zurück“ hierher.
     const redirect = route.query.redirect as string | undefined
-    router.push(redirect ?? { name: 'tree' })
+    router.replace(redirect ?? { name: 'tree' })
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : t('login.failed')
   } finally {

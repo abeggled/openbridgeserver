@@ -138,15 +138,18 @@ async function load() {
     const currentNode = visuStore.getNode(props.id)
     const { access: effectiveAccess, definingId } = resolveAccessNode(props.id)
 
-    // Access-Check: protected → PIN-Auth (Vererbung berücksichtigen)
+    // Access-Check: protected → PIN-Auth (Vererbung berücksichtigen).
+    // `replace`, nicht `push`: die Anmeldeseite ersetzt den Verlaufseintrag der
+    // Seite und wird nach der Anmeldung ihrerseits ersetzt — sonst bliebe sie
+    // im Verlauf stehen, und „zurück“ (Link-Widget) landete auf dem PIN-Dialog.
     if (effectiveAccess === 'protected' && !visuStore.hasSessionToken(definingId)) {
-      router.push({ name: 'pin-auth', params: { id: definingId } })
+      router.replace({ name: 'pin-auth', params: { id: definingId } })
       return
     }
 
-    // Access-Check: user → JWT-Login erforderlich
+    // Access-Check: user → JWT-Login erforderlich (ebenso per `replace`)
     if (effectiveAccess === 'user' && !getJwt()) {
-      router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+      router.replace({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
       return
     }
 
@@ -195,7 +198,7 @@ function onUnauthorized() {
   // Direkt umleiten statt über load(): das wartet zuerst auf den Breadcrumb,
   // den das Backend für einen verborgenen privaten Knoten ohne Anmeldung mit
   // 404 beantwortet — der Zugriffs-Check dahinter würde nie erreicht.
-  router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+  router.replace({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
 }
 
 onMounted(() => {

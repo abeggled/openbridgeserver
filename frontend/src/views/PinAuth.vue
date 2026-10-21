@@ -19,8 +19,9 @@ async function submit() {
   loading.value = true
   try {
     await store.authenticatePin(props.id, pin.value)
-    // Erfolg → zurück zur Seite
-    router.push({ name: 'viewer', params: { id: props.id } })
+    // Erfolg → zurück zur Seite. `replace`: der PIN-Dialog soll nicht im
+    // Verlauf bleiben, sonst führt „zurück“ von der Seite wieder hierher.
+    router.replace({ name: 'viewer', params: { id: props.id } })
   } catch {
     error.value = t('pin.wrongPin')
     pin.value = ''
