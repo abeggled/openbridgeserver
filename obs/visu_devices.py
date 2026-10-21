@@ -61,6 +61,12 @@ class VisuDevice(BaseModel):
         return value or None
 
 
+class VisuDeviceOut(VisuDevice):
+    # True when the start page no longer exists (e.g. it was deleted): the Visu then opens
+    # the overview, while the Admin GUI keeps showing the stale choice until it is replaced.
+    start_node_missing: bool = False
+
+
 class VisuDevicesIn(BaseModel):
     devices: list[VisuDevice] = Field(default_factory=list, max_length=MAX_VISU_DEVICES)
 

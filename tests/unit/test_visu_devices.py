@@ -18,6 +18,7 @@ from obs.visu_devices import (
     MAX_VISU_DEVICES,
     VISU_DEVICES_KEY,
     VisuDevice,
+    VisuDeviceOut,
     VisuDevicesIn,
     dump_visu_devices,
     load_visu_devices,
@@ -148,7 +149,7 @@ async def test_put_stores_profiles_and_writes_audit(db):
     result = await update_visu_devices(body=body, request=_request("/api/v1/system/visu-devices"), db=db, _admin="admin")
 
     assert result == body.devices
-    assert await get_visu_devices(db=db) == body.devices
+    assert await get_visu_devices(db=db) == [VisuDeviceOut(**d.model_dump()) for d in body.devices]
     row = await db.fetchone("SELECT value FROM app_settings WHERE key = ?", (VISU_DEVICES_KEY,))
     assert json.loads(row["value"])[0] == {"slug": "panel", "name": "Panel", "start_node_id": "start-1", "return_after_s": 90}
     audit = await db.fetchone("SELECT * FROM audit_log_entries WHERE action = 'system.visu_devices.updated'")
@@ -156,6 +157,24 @@ async def test_put_stores_profiles_and_writes_audit(db):
     assert audit["actor"] == "admin"
     assert audit["resource_type"] == "visu_devices"
     assert audit["resource_id"] == "global"
+
+
+async def test_get_reports_a_deleted_start_page_but_keeps_it(db):
+    await _create_page(db, "kept")
+    await _create_page(db, "gone")
+    body = VisuDevicesIn(
+        devices=[
+            {"slug": "a", "name": "A", "start_node_id": "kept"},
+            {"slug": "b", "name": "B", "start_node_id": "gone"},
+            {"slug": "c", "name": "C"},
+        ]
+    )
+    await update_visu_devices(body=body, request=_request("/api/v1/system/visu-devices"), db=db, _admin="admin")
+    await db.execute_and_commit("DELETE FROM visu_nodes WHERE id = 'gone'")
+
+    devices = await get_visu_devices(db=db)
+
+    assert [(d.start_node_id, d.start_node_missing) for d in devices] == [("kept", False), ("gone", True), (None, False)]
 
 
 async def test_put_without_start_pages_skips_the_lookup(db):
@@ -225,6 +244,6 @@ async def test_config_import_validates_visu_devices_and_passes_other_keys(db, mo
     assert rejected.app_settings_upserted == 1  # the unrelated key still went through
     assert accepted.errors == []
     assert accepted.app_settings_upserted == 2
-    assert await get_visu_devices(db=db) == [VisuDevice(slug="panel", name="Panel", return_after_s=30)]
+    assert await get_visu_devices(db=db) == [VisuDeviceOut(slug="panel", name="Panel", return_after_s=30)]
     row = await db.fetchone("SELECT value FROM app_settings WHERE key = 'history.backend'")
     assert row["value"] == "sqlite"
