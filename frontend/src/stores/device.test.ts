@@ -11,6 +11,7 @@ const { useDeviceStore, DEVICE_STORAGE_KEY } = await import('./device')
 const DEVICES: VisuDevice[] = [
   { slug: 'panel', name: 'Wandpanel', start_node_id: 'page-1', return_after_s: 90 },
   { slug: 'handy', name: 'Handy', start_node_id: null, return_after_s: 0 },
+  { slug: 'kiosk', name: 'Kiosk', start_node_id: 'deleted-page', return_after_s: 60, start_node_missing: true },
 ]
 
 beforeEach(() => {
@@ -51,6 +52,16 @@ describe('useDeviceStore', () => {
 
     expect(store.profile?.slug).toBe('handy')
     expect(store.startRoute).toEqual({ name: 'tree' })
+  })
+
+  it('uses the overview when the start page was deleted', async () => {
+    const store = useDeviceStore()
+    store.select('kiosk')
+    await store.load()
+
+    expect(store.profile?.start_node_id).toBe('deleted-page')
+    expect(store.startRoute).toEqual({ name: 'tree' })
+    expect(store.returnAfterMs).toBe(60_000)
   })
 
   it('has no profile for a slug the server does not know', async () => {

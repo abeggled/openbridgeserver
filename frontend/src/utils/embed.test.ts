@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { isEmbedded } from './embed'
 
 afterEach(() => {
+  window.name = ''
   sessionStorage.clear()
   window.history.replaceState(null, '', '/')
-  vi.restoreAllMocks()
 })
 
 describe('isEmbedded', () => {
@@ -21,10 +21,9 @@ describe('isEmbedded', () => {
     expect(isEmbedded()).toBe(true)
   })
 
-  it('falls back to the URL when storage is blocked', () => {
-    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
-    window.history.replaceState(null, '', '/visu/page-1?embed=1')
-    expect(isEmbedded()).toBe(true)
+  it('ignores the old shared sessionStorage flag, so a reloaded main Visu stays normal', () => {
+    // Before, the alarm popup frame wrote this into the storage it shares with the main window.
+    sessionStorage.setItem('visu_embed', '1')
     window.history.replaceState(null, '', '/visu/page-1')
     expect(isEmbedded()).toBe(false)
   })

@@ -30,9 +30,9 @@ export const useDeviceStore = defineStore('device', () => {
 
   const profile = computed(() => devices.value.find(device => device.slug === slug.value) ?? null)
 
-  /** Wohin „Start“ führt: die Startseite des Profils, sonst die Übersicht. */
+  /** Wohin „Start“ führt: die Startseite des Profils, sonst (auch wenn sie gelöscht wurde) die Übersicht. */
   const startRoute = computed<RouteLocationRaw>(() =>
-    profile.value?.start_node_id
+    profile.value?.start_node_id && !profile.value.start_node_missing
       ? { name: 'viewer', params: { id: profile.value.start_node_id } }
       : { name: 'tree' },
   )

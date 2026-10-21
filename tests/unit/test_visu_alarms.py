@@ -154,6 +154,31 @@ async def test_events_for_other_datapoints_and_initialisation_are_ignored():
     assert engine.active() == []
 
 
+async def test_initialisation_sets_the_baseline_without_raising_or_ending():
+    engine = VisuAlarmEngine()
+    engine.configure([alarm()])
+
+    # A logic sheet's first run writes B=true: no alarm, but the condition is now "met" ...
+    await engine.handle_value_event(event(True, initialization=True))
+    assert engine.active() == []
+    # ... so the same value from a later regular run is no rising edge.
+    await engine.handle_value_event(event(True))
+    assert engine.active() == []
+    # The next real change from false to true raises the alarm.
+    await engine.handle_value_event(event(False))
+    await engine.handle_value_event(event(True))
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+
+async def test_initialisation_never_ends_a_running_alarm():
+    engine = VisuAlarmEngine()
+    engine.configure([alarm(ack_button=False, end_on_clear=True)])
+    await engine.handle_value_event(event(True))
+
+    await engine.handle_value_event(event(False, initialization=True))
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+
 async def test_several_alarms_on_one_datapoint_and_newest_first():
     engine = VisuAlarmEngine()
     engine.configure([alarm(id="low", operator=">", compare_value=1), alarm(id="high", operator=">", compare_value=5)])

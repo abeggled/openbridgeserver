@@ -208,8 +208,6 @@ class VisuAlarmEngine:
 
     # ── runtime ──────────────────────────────────────────────────────────────
     async def handle_value_event(self, event: DataValueEvent) -> None:
-        if event.initialization:
-            return
         alarms = self._by_datapoint.get(str(event.datapoint_id))
         if not alarms:
             return
@@ -218,6 +216,10 @@ class VisuAlarmEngine:
             met = evaluate_condition(event.value, alarm.operator, alarm.compare_value)
             was = self._condition.get(alarm.id, False)
             self._condition[alarm.id] = met
+            if event.initialization:
+                # Start-up values (e.g. a logic sheet's first run) only set the baseline,
+                # so the same value arriving again later is not mistaken for a rising edge.
+                continue
             if met and not was and alarm.id not in self._active:
                 self._active[alarm.id] = _Active(alarm, datetime.now(UTC))
                 changed = True

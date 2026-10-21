@@ -242,7 +242,7 @@ describe('VisuViewer session end', () => {
 
 describe('VisuViewer embedded as alarm popup', () => {
   afterEach(() => {
-    sessionStorage.clear()
+    window.name = ''
     window.history.replaceState(null, '', '/')
   })
 
