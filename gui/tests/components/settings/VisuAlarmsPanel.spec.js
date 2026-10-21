@@ -97,6 +97,11 @@ describe('VisuAlarmsPanel', () => {
     visuDevicesApi.pages.mockRejectedValueOnce(new Error('offline'))
     const failed = await mountPanel()
     expect(failed.get('[data-testid="visu-alarms-msg"]').text()).toBe('Alarme konnten nicht geladen werden.')
+    // The list is incomplete: saving it would delete every stored alarm.
+    expect(failed.find('[data-testid="btn-save-visu-alarms"]').exists()).toBe(false)
+    expect(failed.get('[data-testid="btn-add-visu-alarm"]').attributes('disabled')).toBeDefined()
+    expect(empty.find('[data-testid="btn-save-visu-alarms"]').exists()).toBe(true)
+    expect(empty.get('[data-testid="btn-add-visu-alarm"]').attributes('disabled')).toBeUndefined()
   })
 
   it('creates a complete message alarm for selected devices', async () => {

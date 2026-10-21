@@ -43,8 +43,8 @@ def alarm(**overrides) -> VisuAlarm:
     return VisuAlarm(**data)
 
 
-def event(value, datapoint=DP, **kwargs) -> DataValueEvent:
-    return DataValueEvent(datapoint_id=uuid.UUID(datapoint), value=value, quality="good", source_adapter="TEST", **kwargs)
+def event(value, datapoint=DP, quality="good", **kwargs) -> DataValueEvent:
+    return DataValueEvent(datapoint_id=uuid.UUID(datapoint), value=value, quality=quality, source_adapter="TEST", **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -170,6 +170,24 @@ async def test_initialisation_sets_the_baseline_without_raising_or_ending():
     assert [a["id"] for a in engine.active()] == ["post"]
 
 
+@pytest.mark.parametrize("quality", ["bad", "uncertain"])
+async def test_events_without_good_quality_change_nothing(quality):
+    engine = VisuAlarmEngine()
+    engine.configure([alarm(id="not-true", operator="!=", ack_button=False, end_on_clear=True), alarm(id="true")])
+
+    # A failed poll (value None) must not raise "!= true" ...
+    await engine.handle_value_event(event(None, quality=quality))
+    assert engine.active() == []
+    # ... must not end a running alarm ...
+    await engine.handle_value_event(event(True))
+    await engine.handle_value_event(event(False, quality=quality))
+    assert [a["id"] for a in engine.active()] == ["true"]
+    # ... and must not move the baseline: the same good value again is no new edge.
+    engine.acknowledge("true")
+    await engine.handle_value_event(event(True))
+    assert engine.active() == []
+
+
 async def test_initialisation_never_ends_a_running_alarm():
     engine = VisuAlarmEngine()
     engine.configure([alarm(ack_button=False, end_on_clear=True)])
@@ -215,11 +233,13 @@ async def test_listeners_get_the_full_list_and_stalled_ones_only_the_newest():
     for i in range(20):
         await engine.handle_value_event(event(i % 2 == 0))
         engine.acknowledge("post")
-    assert queue.qsize() == 16
+    # A client that read nothing gets only the current state, not 20 stale ones in a row.
+    assert queue.qsize() == 1
+    assert queue.get_nowait() == engine.active() == []
     engine.unlisten(queue)
     await engine.handle_value_event(event(False))
     await engine.handle_value_event(event(True))
-    assert queue.qsize() == 16
+    assert queue.empty()
 
 
 def test_singleton_helpers():

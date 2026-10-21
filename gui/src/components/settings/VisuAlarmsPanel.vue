@@ -8,7 +8,7 @@
         </div>
         <div class="flex items-center gap-1">
           <HelpButton help-id="settings-visu-alarms" />
-          <button type="button" class="btn-primary btn-sm" :disabled="loading" data-testid="btn-add-visu-alarm" @click="addAlarm">
+          <button type="button" class="btn-primary btn-sm" :disabled="loading || loadFailed" data-testid="btn-add-visu-alarm" @click="addAlarm">
             {{ $t('settings.visuAlarms.addButton') }}
           </button>
         </div>
@@ -184,7 +184,8 @@
           data-testid="visu-alarms-msg"
         >{{ msg.text }}</div>
 
-        <div v-if="!loading" class="flex justify-end">
+        <!-- After a failed load the list is incomplete: saving it would delete the stored alarms. -->
+        <div v-if="!loading && !loadFailed" class="flex justify-end">
           <button type="button" class="btn-primary" :disabled="saving || hasErrors" data-testid="btn-save-visu-alarms" @click="save">
             <Spinner v-if="saving" size="sm" color="white" />
             {{ $t('common.save') }}
@@ -215,6 +216,7 @@ const pages = ref([])
 const devices = ref([])
 const dpNames = ref({})
 const loading = ref(true)
+const loadFailed = ref(false)
 const saving = ref(false)
 const msg = ref(null)
 
@@ -335,6 +337,7 @@ onMounted(async () => {
     devices.value = deviceRes.data
     await loadDatapointNames([...new Set(alarms.value.map(a => a.datapoint_id))])
   } catch {
+    loadFailed.value = true
     msg.value = { ok: false, text: t('settings.visuAlarms.loadError') }
   } finally {
     loading.value = false

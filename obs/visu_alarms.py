@@ -208,6 +208,10 @@ class VisuAlarmEngine:
 
     # ── runtime ──────────────────────────────────────────────────────────────
     async def handle_value_event(self, event: DataValueEvent) -> None:
+        # A failed read (quality bad/uncertain, usually value None) says nothing about the
+        # physical state: it must neither raise nor end an alarm, nor move the baseline.
+        if event.quality != "good":
+            return
         alarms = self._by_datapoint.get(str(event.datapoint_id))
         if not alarms:
             return
@@ -270,8 +274,9 @@ class VisuAlarmEngine:
     def _notify(self) -> None:
         snapshot = self.active()
         for queue in list(self._listeners):
-            if queue.full():
-                # A stalled client only needs the newest state.
+            # Every snapshot is the full list, so a client only needs the newest one: drop
+            # whatever it has not read yet instead of replaying stale states later.
+            while not queue.empty():
                 queue.get_nowait()
             queue.put_nowait(snapshot)
 
