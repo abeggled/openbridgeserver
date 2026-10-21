@@ -122,6 +122,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { visuDevicesApi } from '@/api/client'
+import { copyText } from '@/utils/clipboard'
 import HelpButton from '@/components/ui/HelpButton.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -188,7 +189,8 @@ function onNameInput(device) {
 }
 
 function slugValid(device) {
-  return SLUG_RE.test(device.slug)
+  // `none` releases a device from its profile (`?device=none`), so it cannot name one.
+  return SLUG_RE.test(device.slug) && device.slug !== 'none'
 }
 
 function rowError(device) {
@@ -209,7 +211,7 @@ function deviceLink(device) {
 
 async function copyLink(device) {
   try {
-    await navigator.clipboard.writeText(deviceLink(device))
+    await copyText(deviceLink(device))
     copiedKey.value = device._key
   } catch {
     msg.value = { ok: false, text: t('settings.visuDevices.copyFailed') }

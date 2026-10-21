@@ -67,7 +67,7 @@ def test_slug_accepts_url_friendly_values(slug):
     assert VisuDevice(slug=slug, name="X").slug == slug
 
 
-@pytest.mark.parametrize("slug", ["Handy", "-handy", "handy-", "visu pc", "ä", "a" * 41, ""])
+@pytest.mark.parametrize("slug", ["Handy", "-handy", "handy-", "visu pc", "ä", "a" * 41, "", "none"])
 def test_slug_rejects_other_values(slug):
     with pytest.raises(ValueError):
         VisuDevice(slug=slug, name="X")

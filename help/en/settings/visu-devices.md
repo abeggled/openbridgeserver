@@ -17,7 +17,7 @@ Each profile has:
 | Field | Meaning |
 |---|---|
 | **Name** | Free text such as "Hallway wall panel". Shown in the Visu's device selector. |
-| **Identifier** | Short name for the link: lowercase letters, digits and hyphens only (e.g. `hallway-panel`). Suggested while you type the name. |
+| **Identifier** | Short name for the link: lowercase letters, digits and hyphens only (e.g. `hallway-panel`). Suggested while you type the name. `none` is reserved (see below). |
 | **Start page** | The page the Visu opens with on this device. "Overview" keeps the previous behaviour. |
 | **Return after** | Seconds without touch, mouse, wheel or keyboard input after which the Visu goes back to the start page. `0` = never. |
 

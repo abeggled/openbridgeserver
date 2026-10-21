@@ -3554,7 +3554,7 @@
       "copyFailed": "Der Link konnte nicht in die Zwischenablage kopiert werden. Bitte von Hand markieren und kopieren.",
       "deleteButtonTitle": "Gerät entfernen",
       "errorName": "Bitte einen Namen angeben.",
-      "errorSlug": "Die Kennung darf nur Kleinbuchstaben, Ziffern und Bindestriche enthalten (nicht am Anfang oder Ende, max. 40 Zeichen).",
+      "errorSlug": "Die Kennung darf nur Kleinbuchstaben, Ziffern und Bindestriche enthalten (nicht am Anfang oder Ende, max. 40 Zeichen); „none“ ist reserviert.",
       "errorDuplicate": "Diese Kennung ist bereits vergeben.",
       "errorReturn": "Bitte eine ganze Zahl zwischen 0 und 86400 Sekunden angeben.",
       "errorMissingPage": "Die gewählte Startseite existiert nicht mehr. Bitte eine andere wählen.",

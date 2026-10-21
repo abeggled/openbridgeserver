@@ -3554,7 +3554,7 @@
       "copyFailed": "The link could not be copied to the clipboard. Please select and copy it by hand.",
       "deleteButtonTitle": "Remove device",
       "errorName": "Please enter a name.",
-      "errorSlug": "The identifier may only contain lowercase letters, digits and hyphens (not at the start or end, max. 40 characters).",
+      "errorSlug": "The identifier may only contain lowercase letters, digits and hyphens (not at the start or end, max. 40 characters); \"none\" is reserved.",
       "errorDuplicate": "This identifier is already in use.",
       "errorReturn": "Please enter a whole number between 0 and 86400 seconds.",
       "errorMissingPage": "The selected start page no longer exists. Please choose another one.",
