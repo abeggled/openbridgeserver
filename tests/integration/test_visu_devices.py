@@ -68,7 +68,13 @@ async def test_put_stores_profiles_and_get_returns_them_without_login(client, au
         {"slug": "handy", "name": "Handy", "start_node_id": None, "return_after_s": 0},
     ]
     assert resp.json() == expected
-    assert (await client.get(URL)).json() == expected
+    # The public list also says whether each start page still exists.
+    assert (await client.get(URL)).json() == [{**d, "start_node_missing": False} for d in expected]
+
+    # A deleted start page stays stored (the Admin GUI marks it), but the Visu learns it is gone.
+    resp = await client.delete(f"/api/v1/visu/nodes/{page_id}", headers=auth_headers)
+    assert resp.status_code in (200, 204), resp.text
+    assert [d["start_node_missing"] for d in (await client.get(URL)).json()] == [True, False]
 
 
 async def test_put_requires_login(client, reset_devices):
@@ -128,4 +134,4 @@ async def test_config_import_rejects_invalid_profiles_but_keeps_valid_ones(clien
     document["app_settings"] = [{"key": "visu.devices", "value": json.dumps(good)}]
     resp = await client.post("/api/v1/config/import", json=document, headers=auth_headers)
     assert resp.status_code == 200, resp.text
-    assert (await client.get(URL)).json() == good
+    assert (await client.get(URL)).json() == [{**d, "start_node_missing": False} for d in good]
