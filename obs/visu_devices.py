@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 VISU_DEVICES_KEY = "visu.devices"
 MAX_VISU_DEVICES = 50
 MAX_RETURN_AFTER_S = 86_400  # one day
+# ``/visu/?device=none`` releases a device from its profile, so no profile may be called that.
+RELEASE_SLUG = "none"
 
 # Lowercase letters, digits and inner hyphens — the slug ends up in a URL.
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$")
@@ -45,6 +47,8 @@ class VisuDevice(BaseModel):
     def _check_slug(cls, value: str) -> str:
         if not _SLUG_RE.match(value):
             raise ValueError("slug must consist of lowercase letters, digits and inner hyphens (max. 40 characters)")
+        if value == RELEASE_SLUG:
+            raise ValueError(f"slug '{RELEASE_SLUG}' is reserved: ?device={RELEASE_SLUG} releases a device from its profile")
         return value
 
     @field_validator("name")

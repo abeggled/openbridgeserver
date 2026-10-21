@@ -19,7 +19,7 @@ Jedes Profil hat:
 | Feld | Bedeutung |
 |---|---|
 | **Name** | Frei wählbare Bezeichnung, z. B. „Wandpanel Flur“. Erscheint in der Geräte-Auswahl der Visu. |
-| **Kennung** | Kurzer Name für den Link, nur Kleinbuchstaben, Ziffern und Bindestriche (z. B. `wandpanel-flur`). Wird beim Tippen des Namens vorgeschlagen. |
+| **Kennung** | Kurzer Name für den Link, nur Kleinbuchstaben, Ziffern und Bindestriche (z. B. `wandpanel-flur`). Wird beim Tippen des Namens vorgeschlagen. `none` ist reserviert (siehe unten). |
 | **Startseite** | Die Seite, mit der die Visu auf diesem Gerät öffnet. „Übersicht“ behält das bisherige Verhalten. |
 | **Rücksprung nach** | Zeit in Sekunden ohne Berührung, Maus-, Rad- oder Tastatureingabe, nach der die Visu zur Startseite zurückkehrt. `0` = nie. |
 

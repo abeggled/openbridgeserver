@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
+const copyText = vi.fn()
+vi.mock('@/utils/clipboard', () => ({ copyText: (...args) => copyText(...args) }))
+
 let visuDevicesApi
 
 const PAGES = [
@@ -178,27 +181,27 @@ describe('VisuDevicesPanel', () => {
     expect(wrapper.get('[data-testid="visu-devices-msg"]').text()).toBe('Speichern fehlgeschlagen.')
   })
 
-  it('copies the device link and reports a blocked clipboard', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  it('copies the device link through the HTTP-safe helper and reports a failure', async () => {
+    copyText.mockReset().mockResolvedValue(undefined)
     const wrapper = await mountPanel()
 
     await row(wrapper, 0).get('[data-testid="btn-copy-visu-device-link"]').trigger('click')
     await flushPromises()
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/visu/?device=panel`)
+    expect(copyText).toHaveBeenCalledWith(`${window.location.origin}/visu/?device=panel`)
     expect(row(wrapper, 0).get('[data-testid="btn-copy-visu-device-link"]').text()).toBe('Kopiert ✓')
     expect(row(wrapper, 1).get('[data-testid="btn-copy-visu-device-link"]').text()).toBe('Kopieren')
 
-    writeText.mockRejectedValueOnce(new Error('denied'))
+    copyText.mockRejectedValueOnce(new Error('clipboard_copy_failed'))
     await row(wrapper, 1).get('[data-testid="btn-copy-visu-device-link"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="visu-devices-msg"]').text()).toContain('nicht in die Zwischenablage')
   })
 
-  it('disables copying while the slug is invalid', async () => {
+  it.each(['-bad', 'none'])('disables copying and saving while the slug is "%s"', async (slug) => {
     const wrapper = await mountPanel()
-    await row(wrapper, 0).get('[data-testid="input-visu-device-slug"]').setValue('-bad')
+    await row(wrapper, 0).get('[data-testid="input-visu-device-slug"]').setValue(slug)
 
     expect(row(wrapper, 0).get('[data-testid="btn-copy-visu-device-link"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="btn-save-visu-devices"]').attributes('disabled')).toBeDefined()
   })
 })
