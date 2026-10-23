@@ -57,6 +57,21 @@ _SHARED_BUS_SEMS: dict[tuple[str, int], asyncio.Semaphore] = {}
 # host:port configured, so the promised turnaround also holds when a zero-delay
 # sibling completes a transaction on the shared bus.
 _SHARED_BUS_DELAYS: dict[tuple[str, int], float] = {}
+# Active per-instance delay contributions for each endpoint, so disconnect() can
+# recompute (or drop) the endpoint policy instead of letting the max grow
+# monotonically and leave a stale throttle after a sibling lowers it or leaves.
+_SHARED_BUS_MEMBERS: dict[tuple[str, int], dict[int, float]] = {}
+
+
+def _recompute_shared_delay(key: tuple[str, int]) -> None:
+    """Recompute the endpoint delay from the still-active members, or drop the
+    endpoint once the last instance has unregistered."""
+    members = _SHARED_BUS_MEMBERS.get(key)
+    if members:
+        _SHARED_BUS_DELAYS[key] = max(members.values())
+    else:
+        _SHARED_BUS_DELAYS.pop(key, None)
+        _SHARED_BUS_MEMBERS.pop(key, None)
 
 
 def _shared_bus_sem(host: str, port: int) -> asyncio.Semaphore:
@@ -183,12 +198,12 @@ class ModbusTcpAdapter(AdapterBase):
         if cfg.shared_bus:
             self._io_sem = _shared_bus_sem(cfg.host, cfg.port)
             self._shared_bus_key = (cfg.host, cfg.port)
-            # Enforce one delay policy per shared endpoint: keep the largest
-            # delay configured by any sibling so the interval holds bus-wide.
-            _SHARED_BUS_DELAYS[self._shared_bus_key] = max(
-                _SHARED_BUS_DELAYS.get(self._shared_bus_key, 0.0),
-                cfg.inter_read_delay_ms,
-            )
+            # Enforce one delay policy per shared endpoint: the interval must hold
+            # bus-wide, so the endpoint adopts the largest delay any *active* sibling
+            # configured. Register this instance's contribution and recompute, so a
+            # later disconnect() drops it instead of leaving a stale throttle.
+            _SHARED_BUS_MEMBERS.setdefault(self._shared_bus_key, {})[id(self)] = cfg.inter_read_delay_ms
+            _recompute_shared_delay(self._shared_bus_key)
         else:
             self._io_sem = asyncio.Semaphore(1) if cfg.serialize_reads else None
             self._shared_bus_key = None
@@ -235,6 +250,13 @@ class ModbusTcpAdapter(AdapterBase):
             if self._client:
                 async with self._client_lifecycle():
                     self._client.close()
+            # Drop this instance's shared-bus delay contribution so a lowered delay
+            # or a removed sibling no longer throttles the endpoint permanently.
+            if self._shared_bus_key is not None:
+                members = _SHARED_BUS_MEMBERS.get(self._shared_bus_key)
+                if members is not None:
+                    members.pop(id(self), None)
+                _recompute_shared_delay(self._shared_bus_key)
             await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------

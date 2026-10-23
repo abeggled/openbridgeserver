@@ -2300,6 +2300,48 @@ class TestSharedEndpointDelayPolicy:
         assert adapter._shared_bus_key is None
         assert adapter._effective_delay() == 30
 
+    async def test_disconnect_drops_stale_endpoint_delay(self):
+        """Codex P2 (2026-08-25): a high-delay instance that disconnects must stop
+        throttling the endpoint, so a zero-delay replacement sees no turnaround gap."""
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS, _SHARED_BUS_MEMBERS
+
+        host, port = "10.9.9.9", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        _SHARED_BUS_MEMBERS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True}
+
+        old, _ = _make_tcp({**base, "inter_read_delay_ms": 5000})
+        await self._connect(old)
+        assert _SHARED_BUS_DELAYS[(host, port)] == 5000
+
+        await old.disconnect()
+
+        replacement, _ = _make_tcp({**base, "inter_read_delay_ms": 0})
+        await self._connect(replacement)
+        # the stale 5000 ms throttle must be gone
+        assert replacement._effective_delay() == 0
+        assert _SHARED_BUS_DELAYS.get((host, port)) == 0
+
+    async def test_last_disconnect_removes_endpoint_entirely(self):
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS, _SHARED_BUS_MEMBERS
+
+        host, port = "10.9.9.10", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        _SHARED_BUS_MEMBERS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True, "inter_read_delay_ms": 100}
+
+        a, _ = _make_tcp(base)
+        b, _ = _make_tcp(base)
+        await self._connect(a)
+        await self._connect(b)
+        assert _SHARED_BUS_DELAYS[(host, port)] == 100
+
+        await a.disconnect()
+        assert _SHARED_BUS_DELAYS[(host, port)] == 100  # one sibling left
+        await b.disconnect()
+        assert (host, port) not in _SHARED_BUS_DELAYS  # last gone -> dropped
+        assert (host, port) not in _SHARED_BUS_MEMBERS
+
 
 class TestSharedBusAcquireTimeout:
     """A wedged cross-instance shared_bus semaphore must not block forever: the
