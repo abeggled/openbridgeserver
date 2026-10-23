@@ -2,6 +2,7 @@
  * Vue Router — open bridge server Visu
  *
  * Routen:
+ *   /visu/              → Startseite des Geräteprofils, sonst /tree
  *   /visu/tree          → Baumübersicht aller sichtbaren Knoten
  *   /visu/:id           → Viewer (PAGE oder LOCATION Auto-Übersicht)
  *   /visu/:id/auth      → PIN-Eingabe für protected-Knoten
@@ -10,13 +11,22 @@
 
 import { createRouter, createWebHistory } from 'vue-router'
 import { getJwt, getIsAdmin } from '@/api/client'
+import { useDeviceStore } from '@/stores/device'
 
 const router = createRouter({
   history: createWebHistory('/visu/'),
   routes: [
     {
+      // Leitet immer weiter: zur Startseite des Geräteprofils, sonst zur Übersicht.
+      // Ein statisches `redirect` ginge nicht — es wird vor jedem Guard aufgelöst.
       path: '/',
-      redirect: '/tree',
+      name: 'start',
+      component: () => import('@/views/VisuTree.vue'),
+      beforeEnter: async () => {
+        const device = useDeviceStore()
+        await device.load()
+        return device.startRoute
+      },
     },
     {
       path: '/login',
@@ -60,6 +70,8 @@ const router = createRouter({
 // ── Navigation Guard ──────────────────────────────────────────────────────────
 
 router.beforeEach((to) => {
+  // `?device=` darf an jeder Visu-URL hängen und merkt sich das Profil.
+  useDeviceStore().applyQuery(to.query)
   if (to.meta.requiresAuth && !getJwt()) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }

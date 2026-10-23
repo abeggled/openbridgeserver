@@ -1362,6 +1362,11 @@
       </div>
     </div>
 
+    <!-- ── Visu-Geräte ── -->
+    <div v-if="activeTab === 'visudevices' && (auth.isAdmin || isDemo)" class="max-w-3xl" data-testid="visudevices-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+      <VisuDevicesPanel />
+    </div>
+
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
@@ -1590,6 +1595,7 @@ import Badge            from '@/components/ui/Badge.vue'
 import Spinner          from '@/components/ui/Spinner.vue'
 import HierarchyManager from '@/components/HierarchyManager.vue'
 import UserRightsEditor from '@/components/settings/UserRightsEditor.vue'
+import VisuDevicesPanel from '@/components/settings/VisuDevicesPanel.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
@@ -1797,6 +1803,7 @@ const tabs = computed(() => [
   ...(auth.isAdmin || isDemo.value ? [{ id: 'security', label: t('settings.tabs.security') }] : []),
   ...(auth.isAdmin || isDemo.value ? [{ id: 'support', label: t('settings.tabs.support') }] : []),
   { id: 'links',        label: t('settings.tabs.links') },
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'visudevices', label: t('settings.tabs.visuDevices') }] : []),
   { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'importexport', label: t('settings.tabs.importexport') }] : []),
   { id: 'icons',        label: t('settings.tabs.icons') },

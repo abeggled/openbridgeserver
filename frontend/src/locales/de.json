@@ -215,7 +215,11 @@
       "public": "Öffentlich",
       "publicDesc": "Ohne Anmeldung, interaktiv",
       "pinDesc": "PIN-Eingabe erforderlich"
-    }
+    },
+    "device": "Gerät:",
+    "deviceNone": "— kein Profil —",
+    "deviceUnknown": "Unbekannt ({slug})",
+    "productName": "open bridge server"
   },
   "picker": {
     "notFound": "Objekt nicht gefunden",

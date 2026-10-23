@@ -2948,7 +2948,8 @@
       "icons": "Icons",
       "history": "Historie DB",
       "security": "Sicherheit",
-      "support": "Support"
+      "support": "Support",
+      "visuDevices": "Visu-Geräte"
     },
     "general": {
       "title": "Allgemeine Einstellungen",
@@ -3532,6 +3533,34 @@
         "result": "Zurückgesetzt: {dp} Objekte, {bindings} Verknüpfungen, {adapters} Adapter, {knxga} KNX-GAs, {logic} Logikblätter gelöscht.",
         "resultIcons": ", {n} Icons"
       }
+    },
+    "visuDevices": {
+      "title": "Visu-Geräte",
+      "desc": "Startseite und automatischer Rücksprung je Gerät, z. B. Handy oder Wandpanel. Ein Gerät übernimmt sein Profil über den Link oder die Auswahl auf der Visu-Übersicht.",
+      "addButton": "+ Gerät",
+      "empty": "Noch keine Geräte angelegt. Ohne Profil öffnet die Visu wie bisher die Übersicht.",
+      "name": "Name",
+      "namePlaceholder": "z. B. Wandpanel Flur",
+      "slug": "Kennung (für den Link)",
+      "slugPlaceholder": "z. B. wandpanel-flur",
+      "startPage": "Startseite",
+      "startOverview": "— Übersicht —",
+      "missingPage": "(gelöschte Seite)",
+      "returnAfter": "Rücksprung zur Startseite nach (Sekunden)",
+      "returnAfterHint": "0 = nie. Zählt ab der letzten Berührung, Maus- oder Tastatureingabe.",
+      "link": "Link:",
+      "copy": "Kopieren",
+      "copied": "Kopiert ✓",
+      "copyFailed": "Der Link konnte nicht in die Zwischenablage kopiert werden. Bitte von Hand markieren und kopieren.",
+      "deleteButtonTitle": "Gerät entfernen",
+      "errorName": "Bitte einen Namen angeben.",
+      "errorSlug": "Die Kennung darf nur Kleinbuchstaben, Ziffern und Bindestriche enthalten (nicht am Anfang oder Ende, max. 40 Zeichen); „none“ ist reserviert.",
+      "errorDuplicate": "Diese Kennung ist bereits vergeben.",
+      "errorReturn": "Bitte eine ganze Zahl zwischen 0 und 86400 Sekunden angeben.",
+      "errorMissingPage": "Die gewählte Startseite existiert nicht mehr. Bitte eine andere wählen.",
+      "saved": "Geräte gespeichert.",
+      "saveError": "Speichern fehlgeschlagen.",
+      "loadError": "Geräte konnten nicht geladen werden."
     }
   },
   "knxDevices": {

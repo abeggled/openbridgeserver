@@ -6,6 +6,7 @@ import { useVisuStore } from '@/stores/visu'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { useThemeStore } from '@/stores/theme'
+import { useDeviceStore } from '@/stores/device'
 import { WidgetRegistry } from '@/widgets/registry'
 import MissingWidget from '@/widgets/MissingWidget.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
@@ -50,6 +51,7 @@ const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const visuStore = useVisuStore()
+const device    = useDeviceStore()
 const dpStore = useDatapointsStore()
 const ws = useWebSocket()
 const theme = useThemeStore()
@@ -167,6 +169,10 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
+    if (isConcealedProfileStart()) {
+      router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+      return
+    }
     error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
@@ -176,6 +182,16 @@ async function load() {
     nodeAppearedWhileLoading = false
     await load()
   }
+}
+
+// Die Startseite eines Geräteprofils, die laut Server existiert, aber im anonym
+// gefilterten Baum fehlt, verlangt eine Anmeldung. Der Breadcrumb dazu antwortet
+// ohne Anmeldung mit 404 — ohne diese Prüfung bliebe statt des Logins die
+// Fehlerseite stehen.
+function isConcealedProfileStart(): boolean {
+  if (getJwt() || visuStore.getNode(props.id)) return false
+  const profile = device.profile
+  return profile?.start_node_id === props.id && !profile.start_node_missing
 }
 
 // Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
