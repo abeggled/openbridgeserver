@@ -31,3 +31,11 @@ verwendet; mit einem (persistent gespeicherten) FontAwesome-PRO-API-Key stehen z
 PRO-Icons und weitere Styles (Light, Thin, Duotone neben Solid/Regular/Brands) zur Verfügung.
 Icon-Namen werden kommagetrennt eingegeben; der importierte Dateiname enthält automatisch den
 gewählten Style (z. B. `abacus-solid.svg`).
+
+## Icons in der Visu ohne Anmeldung
+
+Wer die Visu ohne Anmeldung nutzt, bekommt nur die Icons
+der Seiten, die er sehen darf — Icons auf öffentlichen und „Nur lesen“-Seiten sowie die
+Seiten-Symbole der Übersicht; Icons auf PIN-geschützten Seiten erst nach Eingabe der PIN. Icons,
+die nur auf Seiten mit „Anmeldung erforderlich“ verwendet werden oder gar nicht verwendet sind,
+bleiben ohne Anmeldung unsichtbar. Angemeldete Benutzer sehen alle Icons.
