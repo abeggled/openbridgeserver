@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VisuViewer from './VisuViewer.vue'
 
 const mocks = vi.hoisted(() => {
@@ -30,7 +30,8 @@ const mocks = vi.hoisted(() => {
     loadPage: vi.fn().mockResolvedValue(undefined),
     hasSessionToken: () => false,
   })
-  return { node, store, loadBreadcrumb, push: vi.fn(), getJwt: vi.fn() }
+  const device: { profile: { start_node_id: string | null; start_node_missing?: boolean } | null } = { profile: null }
+  return { node, store, loadBreadcrumb, push: vi.fn(), getJwt: vi.fn(), device }
 })
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
@@ -52,6 +53,7 @@ vi.mock('@/stores/datapoints', () => ({
 }))
 
 vi.mock('@/stores/theme', () => ({ useThemeStore: () => ({ isDark: false, toggle: vi.fn() }) }))
+vi.mock('@/stores/device', () => ({ useDeviceStore: () => mocks.device }))
 
 vi.mock('@/composables/useWebSocket', () => ({
   useWebSocket: () => ({ connect: vi.fn(), disconnect: vi.fn(), connected: { value: true } }),
@@ -78,6 +80,7 @@ describe('VisuViewer session end', () => {
     mocks.store.loadPage.mockClear()
     mocks.store.loadTree.mockClear()
     mocks.loadBreadcrumb.mockReset()
+    mocks.device.profile = null
     mocks.loadBreadcrumb.mockResolvedValue(undefined)
     mocks.getJwt.mockReturnValue('jwt-1')
     mocks.node.access = 'user'
@@ -140,6 +143,50 @@ describe('VisuViewer session end', () => {
     await flushPromises()
 
     expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    wrapper.unmount()
+  })
+
+  it('sends a concealed profile start page to the login instead of the error page', async () => {
+    // Die Startseite des Geräteprofils ist privat: der anonyme Baum verbirgt sie,
+    // der Breadcrumb antwortet mit 404 — der Server bestätigt aber, dass sie existiert.
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValue(new Error('common.loadError'))
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).toHaveBeenCalledWith({ name: 'login', query: { redirect: '/page-1' } })
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['a different page', { start_node_id: 'page-2', start_node_missing: false }],
+    ['a deleted start page', { start_node_id: 'page-1', start_node_missing: true }],
+    ['no profile', null],
+  ])('keeps the error page for an unknown node with %s', async (_label, profile) => {
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValue(new Error('common.loadError'))
+    mocks.device.profile = profile
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('keeps the error page while logged in even for the profile start page', async () => {
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue('jwt-1')
+    mocks.loadBreadcrumb.mockRejectedValue(new Error('common.loadError'))
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -237,5 +284,26 @@ describe('VisuViewer session end', () => {
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
+  })
+})
+
+describe('VisuViewer embedded as alarm popup', () => {
+  afterEach(() => {
+    window.name = ''
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('shows the header normally and hides it with ?embed=1', async () => {
+    mocks.getJwt.mockReturnValue('jwt-1')
+    const normal = mountViewer()
+    await flushPromises()
+    expect(normal.find('header').exists()).toBe(true)
+    normal.unmount()
+
+    window.history.replaceState(null, '', '/visu/page-1?embed=1')
+    const embedded = mountViewer()
+    await flushPromises()
+    expect(embedded.find('header').exists()).toBe(false)
+    embedded.unmount()
   })
 })

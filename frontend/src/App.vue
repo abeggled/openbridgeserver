@@ -5,6 +5,10 @@ import { useWebSocket } from '@/composables/useWebSocket'
 import { getJwt } from '@/api/client'
 import { useThemeStore } from '@/stores/theme'
 import { useFormatStore } from '@/stores/format'
+import { useDeviceStore } from '@/stores/device'
+import { useIdleReturn } from '@/composables/useIdleReturn'
+import AlarmOverlay from '@/components/AlarmOverlay.vue'
+import { isEmbedded } from '@/utils/embed'
 
 const ws = useWebSocket()
 // Theme-Store initialisieren (setzt dark-Klasse auf <html>)
@@ -17,8 +21,15 @@ const format = useFormatStore()
 const { locale } = useI18n()
 watch(locale, (code) => format.setUiLanguage(String(code)), { immediate: true })
 
+// Geräteprofil (Startseite + Rücksprung) — zentral im Admin-GUI gepflegt.
+const device = useDeviceStore()
+// Eine eingebettete Visu (Alarm-Seite im Popup) zeigt selbst keine Alarme und springt nicht zurück.
+const embedded = isEmbedded()
+if (!embedded) useIdleReturn()
+
 onMounted(() => {
   format.load()
+  device.load()
   // WebSocket nur starten wenn JWT vorhanden (Live-Werte für eingeloggte User)
   if (getJwt()) {
     ws.connect()
@@ -28,4 +39,5 @@ onMounted(() => {
 
 <template>
   <RouterView />
+  <AlarmOverlay v-if="!embedded" />
 </template>

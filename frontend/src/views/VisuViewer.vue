@@ -6,6 +6,7 @@ import { useVisuStore } from '@/stores/visu'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { useThemeStore } from '@/stores/theme'
+import { useDeviceStore } from '@/stores/device'
 import { WidgetRegistry } from '@/widgets/registry'
 import MissingWidget from '@/widgets/MissingWidget.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
@@ -19,6 +20,7 @@ import {
   parseBackgroundPresentation,
 } from '@/utils/backgroundPresentation'
 import type { WidgetInstance } from '@/types'
+import { isEmbedded } from '@/utils/embed'
 
 // Alle Widgets registrieren (self-registering via import)
 import '@/widgets/ValueDisplay/index'
@@ -50,12 +52,15 @@ const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const visuStore = useVisuStore()
+const device    = useDeviceStore()
 const dpStore = useDatapointsStore()
 const ws = useWebSocket()
 const theme = useThemeStore()
 
 const loading = ref(true)
 const error = ref('')
+// Als Alarm-Popup eingebettet: nur die Seite, ohne Kopfzeile.
+const embedded = isEmbedded()
 
 const node = computed(() => visuStore.getNode(props.id))
 const isPage = computed(() => node.value?.type === 'PAGE')
@@ -167,6 +172,10 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
+    if (isConcealedProfileStart()) {
+      router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+      return
+    }
     error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
@@ -176,6 +185,16 @@ async function load() {
     nodeAppearedWhileLoading = false
     await load()
   }
+}
+
+// Die Startseite eines Geräteprofils, die laut Server existiert, aber im anonym
+// gefilterten Baum fehlt, verlangt eine Anmeldung. Der Breadcrumb dazu antwortet
+// ohne Anmeldung mit 404 — ohne diese Prüfung bliebe statt des Logins die
+// Fehlerseite stehen.
+function isConcealedProfileStart(): boolean {
+  if (getJwt() || visuStore.getNode(props.id)) return false
+  const profile = device.profile
+  return profile?.start_node_id === props.id && !profile.start_node_missing
 }
 
 // Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
@@ -275,7 +294,7 @@ function widgetChrome(w: WidgetInstance): string {
 <template>
   <div class="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col">
     <!-- Header -->
-    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between gap-4 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
+    <header v-if="!embedded" class="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between gap-4 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
       <div class="flex items-center gap-2">
         <button

@@ -225,6 +225,20 @@ export const settingsApi = {
   displaySettings: () => api.get('/system/display-settings'),
 }
 
+// ── Visu device profiles ───────────────────────────────────────────────────
+export const visuDevicesApi = {
+  list:   ()        => api.get('/system/visu-devices'),
+  update: (devices) => api.put('/system/visu-devices', { devices }),
+  // Visu pages for the start-page selector; an admin sees the whole tree.
+  pages:  ()        => api.get('/visu/tree'),
+}
+
+// ── Visu alarms ────────────────────────────────────────────────────────────
+export const visuAlarmsApi = {
+  list:   ()       => api.get('/system/visu-alarms'),
+  update: (alarms) => api.put('/system/visu-alarms', { alarms }),
+}
+
 // ── History Settings ───────────────────────────────────────────────────────
 export const historySettingsApi = {
   get:    ()     => api.get('/system/history/settings'),

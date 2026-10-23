@@ -24,6 +24,11 @@ PUBLIC_ROUTE_ALLOWLIST: Final[frozenset[RouteSignature]] = frozenset(
         ("GET", "/api/v1/system/health"),
         # Display formatting for the Visu, which is served to anonymous/PIN users (#1073).
         ("GET", "/api/v1/system/display-settings"),
+        # Device profiles (start page, return-to-start) for the same anonymous/PIN Visu.
+        ("GET", "/api/v1/system/visu-devices"),
+        # Visu alarms: the active list and its live channel reach anonymous/PIN Visu devices too.
+        ("GET", "/api/v1/system/visu-alarms/active"),
+        ("WEBSOCKET", "/api/v1/system/visu-alarms/ws"),
         # First-run setup (#1229): tells the Admin GUI whether the installation
         # still has to be claimed. Reachable before any principal can exist.
         ("GET", "/api/v1/setup/status"),
@@ -140,6 +145,11 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/system/adapters"): "read_live",
     ("GET", "/api/v1/system/datatypes"): "read_live",
     ("GET", "/api/v1/system/display-settings"): "public",
+    ("GET", "/api/v1/system/visu-devices"): "public",
+    ("GET", "/api/v1/system/visu-alarms"): "read_live",
+    ("GET", "/api/v1/system/visu-alarms/active"): "public",
+    ("WEBSOCKET", "/api/v1/system/visu-alarms/ws"): "public",
+    ("POST", "/api/v1/system/visu-alarms/{alarm_id}/acknowledge"): "data_mutation",
     ("GET", "/api/v1/setup/status"): "public",
     ("GET", "/api/v1/system/health"): "public",
     ("GET", "/api/v1/system/history/settings"): "read_live",
@@ -254,6 +264,8 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("PUT", "/api/v1/system/history/settings"): "config_mutation",
     ("PUT", "/api/v1/system/log-level"): "config_mutation",
     ("PUT", "/api/v1/system/settings"): "config_mutation",
+    ("PUT", "/api/v1/system/visu-devices"): "config_mutation",
+    ("PUT", "/api/v1/system/visu-alarms"): "config_mutation",
     ("PUT", "/api/v1/visu/nodes/{node_id}/move"): "config_mutation",
     ("PUT", "/api/v1/visu/nodes/{node_id}/users"): "config_mutation",
     ("PUT", "/api/v1/visu/pages/{node_id}"): "config_mutation",
