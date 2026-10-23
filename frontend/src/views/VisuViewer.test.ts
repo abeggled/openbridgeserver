@@ -30,13 +30,13 @@ const mocks = vi.hoisted(() => {
     loadPage: vi.fn().mockResolvedValue(undefined),
     hasSessionToken: () => false,
   })
-  return { node, store, loadBreadcrumb, push: vi.fn(), getJwt: vi.fn() }
+  return { node, store, loadBreadcrumb, push: vi.fn(), replace: vi.fn(), getJwt: vi.fn() }
 })
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: mocks.push, currentRoute: { value: { fullPath: '/page-1' } } }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace, currentRoute: { value: { fullPath: '/page-1' } } }),
 }))
 
 vi.mock('@/stores/visu', () => ({
@@ -75,6 +75,7 @@ function mountViewer() {
 describe('VisuViewer session end', () => {
   beforeEach(() => {
     mocks.push.mockClear()
+    mocks.replace.mockClear()
     mocks.store.loadPage.mockClear()
     mocks.store.loadTree.mockClear()
     mocks.loadBreadcrumb.mockReset()
@@ -84,17 +85,42 @@ describe('VisuViewer session end', () => {
     mocks.store.nodes = [mocks.node]
   })
 
+  it('replaces itself with the login when a private page is opened without a session', async () => {
+    mocks.getJwt.mockReturnValue(null)
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    // `replace`, not `push`: the login must not stay in the history behind the page
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'login', query: { redirect: '/page-1' } })
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('replaces itself with the PIN dialog when a protected page has no session token', async () => {
+    mocks.node.access = 'protected'
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'pin-auth', params: { id: 'page-1' } })
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('leaves a private page for the login route when the session ends', async () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Der proaktive Refresh wurde endgültig abgelehnt und hat die Tokens geräumt
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
-    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -102,6 +128,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Ohne Anmeldung verbirgt das Backend den privaten Knoten mit 404 — ein
     // erneutes load() liefe in den Fehlerpfad, bevor es umleiten könnte.
@@ -110,7 +137,8 @@ describe('VisuViewer session end', () => {
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
-    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -118,11 +146,13 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.replace).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -134,12 +164,14 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
-    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -148,6 +180,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
@@ -202,6 +235,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Die Berechtigung wurde entzogen: die Erneuerung holt den Baum neu und
     // der angezeigte Knoten fehlt darin.
@@ -216,6 +250,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Navigation auf einen Knoten, den der Baum (noch) nicht kennt: das ist
     // kein Entzug, sondern lädt bereits über den id-Watcher.
@@ -231,6 +266,7 @@ describe('VisuViewer session end', () => {
     await flushPromises()
     wrapper.unmount()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))

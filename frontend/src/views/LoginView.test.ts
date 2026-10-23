@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   storeLogin: vi.fn().mockResolvedValue(undefined),
   wsConnect: vi.fn(),
   push: vi.fn(),
+  replace: vi.fn(),
+  query: {} as Record<string, string>,
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -15,8 +17,8 @@ vi.mock('vue-i18n', () => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: mocks.push }),
-  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
+  useRoute: () => ({ query: mocks.query }),
 }))
 
 vi.mock('@/api/client', () => ({
@@ -40,6 +42,8 @@ describe('LoginView', () => {
     mocks.login.mockReset()
     mocks.storeLogin.mockClear()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
+    mocks.query = {}
   })
 
   it('hands both tokens from the login response to the store', async () => {
@@ -56,7 +60,23 @@ describe('LoginView', () => {
     await flushPromises()
 
     expect(mocks.storeLogin).toHaveBeenCalledWith('jwt-1', 'refresh-1')
-    expect(mocks.push).toHaveBeenCalledWith({ name: 'tree' })
+    // `replace`: the login form must not stay in the history behind the page
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'tree' })
+    expect(mocks.push).not.toHaveBeenCalled()
+  })
+
+  it('returns to the page it was sent from, replacing itself in the history', async () => {
+    mocks.login.mockResolvedValue({ access_token: 'jwt-1', refresh_token: 'refresh-1', token_type: 'bearer' })
+    mocks.query = { redirect: '/page-1' }
+
+    const wrapper = mountLogin()
+    await wrapper.find('input[type="text"]').setValue('admin')
+    await wrapper.find('input[type="password"]').setValue('secret')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith('/page-1')
+    expect(mocks.push).not.toHaveBeenCalled()
   })
 
   it('shows the API error message and keeps the user on the form', async () => {
@@ -70,6 +90,7 @@ describe('LoginView', () => {
 
     expect(mocks.storeLogin).not.toHaveBeenCalled()
     expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.replace).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('login.invalidCredentials')
   })
 })

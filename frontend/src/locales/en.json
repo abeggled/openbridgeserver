@@ -651,7 +651,8 @@
       "showIcon": "Show icon",
       "preserveIconColor": "Preserve SVG icon color (no black/white)",
       "targetPage": "Target page",
-      "title": "Link"
+      "title": "Link",
+      "historyBack": "Back to the previously visited page (no history: target page)"
     },
     "qrcode": {
       "title": "QR code",
