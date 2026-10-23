@@ -449,9 +449,12 @@ class ModbusTcpAdapter(AdapterBase):
             except asyncio.CancelledError:
                 return
             except Exception:
-                # pymodbus turns a CancelledError raised while awaiting a response into
-                # ModbusIOException("Request cancelled outside library"). The task is
-                # still marked as cancelling, so honour the cancel instead of polling on.
+                # Defence in depth: with pymodbus < 3.16 a CancelledError raised
+                # while awaiting a response surfaced here as
+                # ModbusIOException("Request cancelled outside library"). main now
+                # pins pymodbus >= 3.16.1, which propagates CancelledError cleanly,
+                # so this no longer fires for that case. The task may still be
+                # marked as cancelling, so honour the cancel instead of polling on.
                 if _cancel_requested():
                     return
                 logger.exception("Modbus TCP poll error (binding %s)", binding.id)
