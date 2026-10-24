@@ -21,6 +21,8 @@ LXC nightlies are intentionally handled differently from Docker nightlies. GitHu
 
 For nightly LXC builds, the nightly LXC workflow dispatches the existing `lxc-template.yml` workflow. That keeps the release and nightly LXC templates on the same build path instead of duplicating the template logic.
 
+The dispatcher passes the UTC date of the nightly release tag as the `nightly_date` input, and the build stamps `obs/version` as `nightly-<that date>-<short-sha>`. The update check (#1370) therefore recognises the install as exactly that nightly, even when the build runs past midnight. A manual `lxc-template.yml` run without that input keeps the `RELEASENOTES.md` stamp and is not reported as a nightly.
+
 The existing LXC workflow uploads these GitHub Actions artifacts:
 
 - `lxc-amd64`

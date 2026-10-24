@@ -59,6 +59,16 @@ beforeEach(() => {
       getDebugStatus: vi.fn().mockResolvedValue({ data: { active: false, level: 'INFO', until: null } }),
     },
     helpApi: { index: vi.fn().mockResolvedValue({ data: { helpIds: {} } }) },
+    updatesApi: {
+      status: vi.fn().mockResolvedValue({
+        data: {
+          enabled: true, channel: 'stable', channels: ['stable', 'pre-release', 'nightly'],
+          installed_version: '2026.10.0', latest_version: '2026.10.0', latest_url: null,
+          update_available: false, last_check_at: null, last_success_at: null, next_check_at: null,
+          last_error: null, last_error_detail: null, stale: false, checking: false, release_notes_count: 0,
+        },
+      }),
+    },
   }))
 })
 
@@ -297,5 +307,70 @@ describe('SettingsView — help buttons on the remaining tabs (#896)', () => {
 
     expect(helpStore.isOpen).toBe(true)
     expect(helpStore.currentHelpId).toBe(id)
+  })
+})
+
+describe('SettingsView — Updates tab (#1370)', () => {
+  it('shows the update panel with its help button only on the Updates tab', async () => {
+    const wrapper = await mountSettingsView()
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(false)
+    const tab = wrapper.findAll('button').find(button => button.text() === 'Updates')
+    await tab.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="update-installed"]').text()).toBe('2026.10.0')
+    expect(helpButton(wrapper, 'settings-updates').exists()).toBe(true)
+  })
+})
+
+describe('SettingsView — update notice opens the Updates tab while mounted (#1370)', () => {
+  it('switches to the Updates tab when the notice requests it', async () => {
+    const wrapper = await mountSettingsView()
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(false)
+    const { useUpdatesStore } = await import('@/stores/updates')
+    useUpdatesStore().requestUpdatesTab()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
+  })
+
+  it('follows Back and Forward across the history entry the notice added', async () => {
+    window.history.replaceState(null, '', '/settings')
+    const wrapper = await mountSettingsView()
+    const shows = (tab) => wrapper.findAll('button').find(button => button.text() === tab).classes().includes('border-blue-500')
+    const navigate = async (url) => {
+      window.history.replaceState(null, '', url)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      await flushPromises()
+    }
+    // Without a notice a parameterless entry keeps the tab the user picked.
+    await navigate('/settings')
+    expect(shows('Allgemein')).toBe(true)
+
+    // The view's own store instance: earlier tests in this file leave theirs mounted.
+    window.history.pushState(null, '', '/settings?tab=updates')
+    wrapper.vm.updatesStore.requestUpdatesTab()
+    await flushPromises()
+    wrapper.vm.updatesStore.requestUpdatesTab() // a second click still returns to General
+    await flushPromises()
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
+
+    await navigate('/settings')
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(false)
+    expect(shows('Allgemein')).toBe(true)
+
+    await navigate('/settings?tab=updates')
+    expect(wrapper.find('[data-testid="updates-tab"]').exists()).toBe(true)
+
+    // General → Details → Links → Details → Back returns to Links.
+    await navigate('/settings')
+    await wrapper.findAll('button').find(button => button.text() === 'Links').trigger('click')
+    window.history.pushState(null, '', '/settings?tab=updates')
+    wrapper.vm.updatesStore.requestUpdatesTab()
+    await flushPromises()
+    await navigate('/settings')
+    expect(shows('Links')).toBe(true)
+
+    wrapper.unmount()
+    window.history.replaceState(null, '', '/')
   })
 })

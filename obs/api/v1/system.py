@@ -16,6 +16,10 @@ DELETE /api/v1/system/nav-links/{id}   delete a custom nav link (admin only)
 GET    /api/v1/system/logs             recent log entries from in-memory buffer
 GET    /api/v1/system/log-level        read current root log level (admin only)
 PUT    /api/v1/system/log-level        change log level at runtime (admin only)
+GET    /api/v1/system/update-status    update check status of the active channel
+GET    /api/v1/system/update-status/release-notes  release notes up to the latest version
+POST   /api/v1/system/update-status/check          check for updates now (admin only)
+PUT    /api/v1/system/update-channel   change the update channel (admin only)
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ from obs.regional_format import (
     resolve_region_format,
     validate_regional_setting,
 )
+from obs.update.versions import Channel
 
 logger = logging.getLogger(__name__)
 
@@ -780,3 +785,129 @@ async def set_log_level(
     set_log_buffer_level(lvl)
     writer = AuditLogWriter(db, build_audit_context(request, _admin))
     await writer.write_contract("PUT", "/api/v1/system/log-level", resource_id="global")
+
+
+# ---------------------------------------------------------------------------
+# Update check (issue #1370)
+# ---------------------------------------------------------------------------
+
+
+class UpdateStatusOut(BaseModel):
+    enabled: bool
+    channel: str
+    channels: list[str]
+    installed_version: str
+    latest_version: str | None
+    latest_url: str | None
+    update_available: bool | None
+    last_check_at: datetime | None
+    last_success_at: datetime | None
+    next_check_at: datetime | None
+    # Stable key under ``updates.errors.*`` in the Admin GUI locales; None after a successful check.
+    last_error: str | None
+    last_error_detail: str | None
+    # The last check failed, so the shown result may be out of date.
+    stale: bool
+    checking: bool
+    release_notes_count: int
+
+
+class ReleaseNoteOut(BaseModel):
+    version: str
+    name: str
+    published_at: str | None
+    url: str
+    body: str
+
+
+class UpdateChannelIn(BaseModel):
+    channel: Channel
+
+
+def _update_service():
+    from obs.update.service import get_optional_update_service
+
+    service = get_optional_update_service()
+    if service is None:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Update check not initialized")
+    return service
+
+
+def _update_status_out(service) -> UpdateStatusOut:
+    from obs.update.versions import CHANNELS
+
+    state = service.state
+    return UpdateStatusOut(
+        enabled=service.enabled,
+        channel=state.channel,
+        channels=list(CHANNELS),
+        installed_version=state.installed_version,
+        latest_version=state.latest_version,
+        latest_url=state.latest_url,
+        update_available=state.update_available,
+        last_check_at=state.last_check_at,
+        last_success_at=state.last_success_at,
+        next_check_at=service.next_check_at,
+        last_error=state.last_error,
+        last_error_detail=state.last_error_detail,
+        stale=state.last_error is not None and state.last_success_at is not None,
+        checking=service.checking,
+        release_notes_count=len(state.release_notes),
+    )
+
+
+@router.get("/update-status", response_model=UpdateStatusOut)
+async def get_update_status(_user: str = Depends(get_current_user)) -> UpdateStatusOut:
+    """Cached result of the last update check — never asks GitHub itself."""
+    return _update_status_out(_update_service())
+
+
+@router.get("/update-status/release-notes", response_model=list[ReleaseNoteOut])
+async def get_update_release_notes(_user: str = Depends(get_current_user)) -> list[ReleaseNoteOut]:
+    """Release notes of the active channel's versions newer than the installed one, oldest first."""
+    return [ReleaseNoteOut(**note.__dict__) for note in _update_service().state.release_notes]
+
+
+@router.post("/update-status/check", response_model=UpdateStatusOut)
+async def check_for_updates(
+    request: Request = None,  # type: ignore[assignment]
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> UpdateStatusOut:
+    """Check GitHub for a newer version now. Admin only."""
+    service = _update_service()
+    if not service.enabled:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail="Update check is disabled (update_check.enabled = false)")
+    state, ran = await service.check_now()
+    if ran:
+        # Only an actual request to GitHub is audited — not a call answered from
+        # the cool-down or by joining a check that was already running.
+        writer = AuditLogWriter(db, build_audit_context(request, _admin))
+        outcome = AuditOutcome.FAILED if state.last_error else AuditOutcome.SUCCESS
+        await writer.write_contract("POST", "/api/v1/system/update-status/check", resource_id="global", outcome=outcome)
+    return _update_status_out(service)
+
+
+@router.put("/update-channel", response_model=UpdateStatusOut)
+async def set_update_channel(
+    body: UpdateChannelIn,
+    request: Request = None,  # type: ignore[assignment]
+    _admin: str = Depends(get_admin_user),
+    db: Database = Depends(get_db),
+) -> UpdateStatusOut:
+    """Switch the update channel. Admin only."""
+    service = _update_service()
+    before = service.state.channel
+    state, checked = await service.set_channel(body.channel)
+    writer = AuditLogWriter(db, build_audit_context(request, _admin))
+    await writer.write_contract(
+        "PUT",
+        "/api/v1/system/update-channel",
+        resource_id="global",
+        details={"before": before, "after": body.channel},
+    )
+    if checked:
+        # The switch asked GitHub: audited like a manual check.
+        outcome = AuditOutcome.FAILED if state.last_error else AuditOutcome.SUCCESS
+        await writer.write_contract("POST", "/api/v1/system/update-status/check", resource_id="global", outcome=outcome)
+    return _update_status_out(service)

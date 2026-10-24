@@ -23,6 +23,11 @@
       {{ $t('common.demoMode') }}
     </div>
 
+    <!-- ── Updates (#1370) ── -->
+    <div v-if="activeTab === 'updates'" class="flex flex-col gap-4 max-w-xl" data-testid="updates-tab">
+      <UpdateSettingsPanel />
+    </div>
+
     <!-- ── Allgemein ── -->
     <div v-if="activeTab === 'general'" class="flex flex-col gap-4 max-w-md">
 
@@ -1596,6 +1601,8 @@ import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 import HelpButton     from '@/components/ui/HelpButton.vue'
+import UpdateSettingsPanel from '@/components/updates/UpdateSettingsPanel.vue'
+import { useUpdatesStore } from '@/stores/updates'
 import { formatCurrency, formatNumber } from '@/utils/numberFormat'
 import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/composables/useRegionalFormat'
 
@@ -1796,6 +1803,7 @@ const tabs = computed(() => [
   { id: 'apikeys',      label: t('settings.tabs.apikeys') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'security', label: t('settings.tabs.security') }] : []),
   ...(auth.isAdmin || isDemo.value ? [{ id: 'support', label: t('settings.tabs.support') }] : []),
+  { id: 'updates',      label: t('settings.tabs.updates') },
   { id: 'links',        label: t('settings.tabs.links') },
   { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'importexport', label: t('settings.tabs.importexport') }] : []),
@@ -1808,6 +1816,30 @@ watch(
   () => tabs.value.map((tab) => tab.id).join('|'),
   () => activateTabFromRoute(),
 )
+
+// The global update notice links here; while this view is already open the
+// URL alone cannot switch tabs (tab clicks do not touch it), so the notice
+// also signals through the store (#1370). Its link adds a history entry, so
+// Back/Forward must follow it: an entry with ?tab= shows that tab, the entry
+// without it the tab that was open before the notice switched.
+const updatesStore = useUpdatesStore()
+let tabBeforeNotice = null
+watch(
+  () => updatesStore.updatesTabRequests,
+  () => {
+    // A repeated click while Updates is open keeps the tab to return to.
+    if (activeTab.value !== 'updates') tabBeforeNotice = activeTab.value
+    activeTab.value = 'updates'
+  },
+)
+
+function onHistoryNavigation() {
+  const tab = new URLSearchParams(window.location.search).get('tab')
+  if (tabs.value.some((item) => item.id === tab)) activeTab.value = tab
+  else if (tabBeforeNotice !== null) activeTab.value = tabBeforeNotice
+}
+onMounted(() => window.addEventListener('popstate', onHistoryNavigation))
+onUnmounted(() => window.removeEventListener('popstate', onHistoryNavigation))
 
 // ── URL Target Allowlist ──────────────────────────────────────────────────
 const urlTargetsLoading = ref(false)
@@ -2281,7 +2313,8 @@ async function loadHistoryFilterDps() {
   histFilterLoading.value = true
   try {
     const { data } = await dpApi.listAll()
-    histAllDps.value = data.items ?? []
+    // Read-only system DataPoints (#1370) refuse every change: no toggle for them.
+    histAllDps.value = (data.items ?? []).filter(dp => !dp.system)
   } catch { /* non-critical */ }
   finally { histFilterLoading.value = false }
 }
@@ -2844,6 +2877,9 @@ async function doKnxImport() {
     let msg = t('settings.importexport.knxImportResultOk', { n: data.imported })
     if (data.created  > 0) msg += t('settings.importexport.knxImportResultCreated',   { n: data.created })
     if (data.updated  > 0) msg += t('settings.importexport.knxImportResultUpdated',   { n: data.updated })
+    // Named, not silent: a GA a read-only system DataPoint already writes to gets
+    // no second DataPoint, and the missing one would otherwise look like a bug (#1370).
+    if (data.skipped_system > 0) msg += t('settings.importexport.knxImportResultSkippedSystem', { n: data.skipped_system })
     if (data.locations > 0) msg += t('settings.importexport.knxImportResultLocations', { n: data.locations })
     if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
     knxResult.value = { ok: true, text: msg, hierarchies: Array.isArray(data.hierarchies) ? data.hierarchies : [] }

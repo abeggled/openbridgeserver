@@ -28,6 +28,8 @@ import time
 import uuid
 from typing import Any
 
+from obs.core.system_datapoints import SYSTEM_DATAPOINTS, SYSTEM_SOURCE_ADAPTER, is_system_datapoint
+
 _MAX_CACHED_VALUE_CHARS = 8192
 _CACHE_TAG_STR_DIGEST = "__str_digest__"
 _CACHE_TAG_REPR_DIGEST = "__repr_digest__"
@@ -143,6 +145,10 @@ class WriteRouter:
         from obs.adapters.base import ConfirmationOrderTracker
 
         self._confirmation_order_tracker = ConfirmationOrderTracker()
+        # Registered adapter instances last seen connected (#1370): only a
+        # transition to connected re-sends the system values, since an adapter
+        # may re-announce a connection it never lost (e.g. a KNX tunnel warning).
+        self._connected_instances: set[str] = set()
 
     # ------------------------------------------------------------------
     # Path 1 — inbound MQTT dp/{uuid}/set
@@ -164,6 +170,10 @@ class WriteRouter:
         dp = self._registry.get(dp_id)
         if dp is None:
             logger.warning("Write request for unknown DataPoint %s — ignored", dp_id)
+            return
+        if is_system_datapoint(dp_id):
+            # Not even forwarded to a DEST binding: the value would not come from OBS (#1370).
+            logger.warning("Write request for read-only system DataPoint %s — ignored", dp_id)
             return
 
         rows = await self._db.fetchall(
@@ -231,7 +241,9 @@ class WriteRouter:
         )
 
         if event.quality != "good" or event.value is None:
-            logger.warning(
+            # A system DataPoint without a result yet (#1370) is expected, not a fault.
+            logger.log(
+                logging.DEBUG if getattr(event, "source_adapter", None) == SYSTEM_SOURCE_ADAPTER else logging.WARNING,
                 "WriteRouter: skip DataValueEvent propagation for dp=%s due to quality=%s value=%r",
                 event.datapoint_id,
                 event.quality,
@@ -276,6 +288,114 @@ class WriteRouter:
             suppress_confirmation_actions=True,
         )
 
+    async def write_binding(self, dp_id: uuid.UUID, binding_id: uuid.UUID, value: Any) -> None:
+        """Write *value* to one DEST/BOTH binding of *dp_id* only (#1370).
+
+        Feeds a newly attached binding the DataPoint's current value without a
+        value event, which would reach every other consumer of the DataPoint too.
+        The binding counts as new: a value cached from its previous target or
+        state must not let send-on-change or the throttle swallow the write.
+        """
+        self._last_value.pop(binding_id, None)
+        self._last_sent.pop(binding_id, None)
+        await self._write_to_dest_bindings(
+            dp_id,
+            value,
+            skip_binding_id=None,
+            suppress_confirmation_actions=True,
+            only_binding_id=binding_id,
+        )
+
+    async def resend_system_value(self, dp_id: uuid.UUID, binding_id: uuid.UUID) -> bool:
+        """Feed one binding the current value of a read-only system DataPoint (#1370).
+
+        Returns whether a value was written: there is none to send before the
+        first check, and nothing is sent for a user DataPoint, whose value the
+        adapter receives through the ordinary value events.
+        """
+        if not is_system_datapoint(dp_id):
+            return False
+        state = self._registry.get_value(dp_id)
+        if state is None or state.quality != "good" or state.value is None:
+            return False
+        await self.write_binding(dp_id, binding_id, state.value)
+        return True
+
+    async def handle_adapter_status(self, event: Any) -> None:
+        """Re-send the system values to an adapter instance that just connected (#1370).
+
+        The update service sends a system value only when it changes, and the
+        channel and the installed version never change at runtime. An adapter
+        that was down when they were sent — a KNX/IP router powered up after OBS,
+        a device behind a link that came back — silently dropped that single
+        write and would never be offered the value again.
+
+        Only system DataPoints get this: a user DataPoint's DEST binding may drive
+        an actuator, a scene or a door opener, and replaying its last value on
+        every reconnect would trigger it again.
+        """
+        instance_id = getattr(event, "instance_id", None)
+        if instance_id is None:
+            return
+        key = str(instance_id)
+        if not getattr(event, "connected", False):
+            self._connected_instances.discard(key)
+            return
+        from obs.adapters import registry as adapter_registry
+
+        # An instance being (re)started reports its connection from inside
+        # connect(), before the registry holds it: a write now would find no
+        # instance by ID. handle_instance_started takes over once it is there.
+        if key in self._connected_instances or adapter_registry.get_instance_by_id(key) is None:
+            return
+        self._connected_instances.add(key)
+        await self._resend_system_bindings_logged(key)
+
+    async def handle_instance_started(self, event: Any) -> None:
+        """Re-send the system values to an instance the adapter registry just (re)started (#1370)."""
+        from obs.adapters import registry as adapter_registry
+
+        key = str(event.instance_id)
+        # Stopped or deleted instances leave no event behind; drop them here.
+        self._connected_instances = {i for i in self._connected_instances if i != key and adapter_registry.get_instance_by_id(i) is not None}
+        if event.connected:
+            self._connected_instances.add(key)
+            await self._resend_system_bindings_logged(key)
+
+    async def _resend_system_bindings_logged(self, instance_id: str) -> None:
+        try:
+            await self.resend_system_bindings(instance_id)
+        except Exception:
+            logger.exception("WriteRouter: could not re-send system values to instance %s", instance_id)
+
+    async def resend_system_bindings(self, instance_id: uuid.UUID | str) -> int:
+        """Re-send the system DataPoint values this instance writes to (#1370).
+
+        The values of a system DataPoint are constants between checks — the
+        channel and the installed version never change at runtime — and the
+        update service sends each value only when it changes. A write that was
+        dropped because the adapter was down would therefore never be retried,
+        so every instance that (re)connects gets them again. Returns the number
+        of bindings written.
+        """
+        ids = [str(definition.id) for definition in SYSTEM_DATAPOINTS]
+        rows = await self._db.fetchall(
+            f"""SELECT id, datapoint_id FROM adapter_bindings
+                WHERE adapter_instance_id=? AND direction IN ('DEST','BOTH') AND enabled=1
+                  AND adapter_type <> 'MESSAGE' AND datapoint_id IN ({",".join("?" * len(ids))})""",
+            (str(instance_id), *ids),
+        )
+        written = 0
+        for row in rows:
+            try:
+                if await self.resend_system_value(uuid.UUID(str(row["datapoint_id"])), uuid.UUID(str(row["id"]))):
+                    written += 1
+            except Exception:
+                logger.exception("WriteRouter: could not re-send system value for binding %s", row["id"])
+        if written:
+            logger.info("WriteRouter: re-sent %d system DataPoint value(s) to instance %s", written, instance_id)
+        return written
+
     # ------------------------------------------------------------------
     # Shared helper
     # ------------------------------------------------------------------
@@ -286,6 +406,7 @@ class WriteRouter:
         value: Any,
         skip_binding_id: uuid.UUID | None,
         suppress_confirmation_actions: bool = False,
+        only_binding_id: uuid.UUID | None = None,
     ) -> None:
         from obs.adapters import registry as adapter_registry
         from obs.adapters.base import ConfirmationActionToken, ConfirmationOrderTracker
@@ -293,8 +414,9 @@ class WriteRouter:
 
         rows = await self._db.fetchall(
             """SELECT * FROM adapter_bindings
-               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1 AND adapter_type <> 'MESSAGE'""",
-            (str(dp_id),),
+               WHERE datapoint_id=? AND direction IN ('DEST','BOTH') AND enabled=1 AND adapter_type <> 'MESSAGE'
+                 AND (? IS NULL OR id=?)""",
+            (str(dp_id), *([str(only_binding_id)] * 2 if only_binding_id else [None, None])),
         )
         if not rows:
             logger.debug("No writable bindings for DataPoint %s", dp_id)
@@ -330,7 +452,9 @@ class WriteRouter:
             instance = None
             if binding.adapter_instance_id:
                 instance = adapter_registry.get_instance_by_id(binding.adapter_instance_id)
-            if instance is None:
+            # A targeted write (#1370) is meant for exactly this instance: another
+            # one of the same type would put the value on a different line.
+            if instance is None and not (only_binding_id and binding.adapter_instance_id):
                 instance = adapter_registry.get_instance(binding.adapter_type)
 
             if instance is None:
