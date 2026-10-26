@@ -96,6 +96,28 @@ class MosquittoSettings(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class UpdateCheckSettings(BaseModel):
+    """Online check for newer OBS releases (issue #1370).
+
+    ``enabled: false`` turns off every request to GitHub, scheduled and manual —
+    for installations without internet access. The system DataPoints keep
+    reporting the update channel and the installed version.
+    """
+
+    enabled: bool = True
+    repository: str = "abeggled/openbridgeserver"
+    api_url: str = "https://api.github.com"
+
+    @field_validator("repository")
+    @classmethod
+    def _check_repository(cls, v: str) -> str:
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", v):
+            raise ValueError("repository must look like 'owner/name'")
+        return v
+
+
 class YamlConfigSource(PydanticBaseSettingsSource):
     """Load settings from a YAML file. Missing file is silently ignored."""
 
@@ -221,6 +243,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     mosquitto: MosquittoSettings = Field(default_factory=MosquittoSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
+    update_check: UpdateCheckSettings = Field(default_factory=UpdateCheckSettings)
 
     @staticmethod
     def _database_path_from_input(result: dict[str, Any], database_key: str | None, default_path: str) -> str:

@@ -71,6 +71,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # The Dockerfile stamps obs/version from this build-arg and ignores the
+          # file written above; without it the image reports "dev-version" and
+          # the update check (#1370) cannot tell it is a nightly.
+          build-args: |
+            OBS_VERSION=${{ steps.nightly.outputs.version }}
 
       - name: Prune old nightly container versions
         # Only runs when the build-and-push step succeeded, so a failed nightly

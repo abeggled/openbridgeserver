@@ -647,6 +647,8 @@
       "activeIndicatorLine": "Linie (unten)",
       "activeIndicatorNone": "Keine",
       "defaultLabel": "Link",
+      "iconSize": "Icon-Größe (px)",
+      "iconSizeHint": "0 = Standardgröße. Breite SVG-Icons behalten ihr Seitenverhältnis.",
       "labelPlaceholder": "z.B. Wohnzimmer",
       "noTarget": "Kein Ziel",
       "showArrow": "Navigationspfeil (→) anzeigen",

@@ -373,10 +373,17 @@ Services initialize in this fixed order (reverse-order shutdown):
 5. RingBuffer
 6. History plugin
 7. WebSocket Manager
-8. WriteRouter (MQTT `dp/{uuid}/set` → adapters; cross-protocol propagation)
+8. WriteRouter (MQTT `dp/{uuid}/set` → adapters; cross-protocol propagation; re-sends the system
+   DataPoint values to every adapter instance that (re)connects, subscribed before step 9, #1370)
 9. Protocol adapters (`@register` decorator triggers self-registration on import)
 10. Logic Engine
 11. Autobackup Scheduler (`init_autobackup_scheduler` from `obs/api/v1/autobackup.py`)
+12. DB maintenance scheduler (`obs/db/maintenance.py`)
+13. Update check (`init_update_service` from `obs/update/service.py`, issue #1370) — publishes the
+    read-only system DataPoints of `obs/core/system_datapoints.py` (created by the DataPoint
+    Registry on every load) and schedules the first GitHub check a random 0–719 minutes later.
+    `update_check.enabled: false` in `config.yaml` turns every request to GitHub off; the
+    integration test session does that.
 
 ### Core Data Flow
 

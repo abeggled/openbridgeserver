@@ -233,6 +233,14 @@ export const visuDevicesApi = {
   pages:  ()        => api.get('/visu/tree'),
 }
 
+// ── Update Check (#1370) ──────────────────────────────────────────────────
+export const updatesApi = {
+  status:       ()        => api.get('/system/update-status'),
+  releaseNotes: ()        => api.get('/system/update-status/release-notes'),
+  check:        ()        => api.post('/system/update-status/check'),
+  setChannel:   (channel) => api.put('/system/update-channel', { channel }),
+}
+
 // ── History Settings ───────────────────────────────────────────────────────
 export const historySettingsApi = {
   get:    ()     => api.get('/system/history/settings'),

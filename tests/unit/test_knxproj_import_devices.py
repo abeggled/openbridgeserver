@@ -388,7 +388,7 @@ async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(monk
         SimpleNamespace(address="1/1/1", name="Existing GA", dpt="DPT1.001"),
         SimpleNamespace(address="1/1/2", name="New GA", dpt=None),
     ]
-    created, updated = await knxproj_api._bulk_import_datapoints(
+    created, updated, skipped_system = await knxproj_api._bulk_import_datapoints(
         records=records,
         adapter_name="knx-main",
         direction="SOURCE",
@@ -398,6 +398,7 @@ async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(monk
 
     assert created == 1
     assert updated == 1
+    assert skipped_system == 0
     assert db.executemany.await_count == 4
     assert db.commit.await_count == 1
 

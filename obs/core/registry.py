@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from obs.core.json import json_dumps
+from obs.core.system_datapoints import SYSTEM_DATAPOINTS, SYSTEM_TAG, SystemDataPointError, is_system_datapoint
 from obs.models.datapoint import DataPoint, DataPointCreate, DataPointUpdate
 from obs.models.types import DataTypeRegistry
 
@@ -29,6 +30,19 @@ logger = logging.getLogger(__name__)
 _INSERT_DATAPOINT_SQL = """INSERT INTO datapoints
    (id, name, data_type, unit, tags, mqtt_topic, mqtt_alias, persist_value, record_history, control_class, external_write_enabled, created_at, updated_at)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+# What _ensure_system_datapoints() restores on a system DataPoint.
+_SYSTEM_DATAPOINT_FIELDS = (
+    "name",
+    "data_type",
+    "unit",
+    "tags",
+    "mqtt_topic",
+    "mqtt_alias",
+    "persist_value",
+    "record_history",
+    "control_class",
+    "external_write_enabled",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +108,7 @@ class DataPointRegistry:
 
     async def load_from_db(self) -> int:
         """Load all DataPoints from DB into memory. Returns count loaded."""
+        await self._ensure_system_datapoints()
         rows = await self._db.fetchall("SELECT * FROM datapoints ORDER BY created_at, id")
         for row in rows:
             dp = _row_to_datapoint(row)
@@ -138,6 +153,56 @@ class DataPointRegistry:
             logger.info("DataPointRegistry: restored %d persisted values", restored)
 
         return len(self._points)
+
+    async def _ensure_system_datapoints(self) -> None:
+        """Create the backend-managed system DataPoints, or restore their definition.
+
+        Runs on every load (start-up and database restore), so a fresh
+        installation, an upgraded one and one restored from an older backup all
+        end up with exactly one row per deterministic ID.
+        """
+        for definition in SYSTEM_DATAPOINTS:
+            expected = DataPoint(
+                id=definition.id,
+                name=definition.name,
+                data_type=definition.data_type,
+                tags=[SYSTEM_TAG],
+                persist_value=False,
+                record_history=False,
+            )
+            row = await self._db.fetchone("SELECT * FROM datapoints WHERE id=?", (str(definition.id),))
+            if row is None:
+                await self._db.execute_and_commit(_INSERT_DATAPOINT_SQL, self._insert_params(expected))
+                logger.info("DataPointRegistry: created system DataPoint '%s' (%s)", definition.name, definition.id)
+                continue
+            # Every field the API would let an admin change: none of them can be
+            # changed back through it, since it refuses edits to system DataPoints.
+            current = _row_to_datapoint(row)
+            if any(getattr(current, name) != getattr(expected, name) for name in _SYSTEM_DATAPOINT_FIELDS):
+                await self._db.execute_and_commit(
+                    """UPDATE datapoints SET name=?, data_type=?, unit=NULL, tags=?, mqtt_topic=?, mqtt_alias=NULL,
+                       persist_value=0, record_history=0, control_class=?, external_write_enabled=0, updated_at=? WHERE id=?""",
+                    (
+                        expected.name,
+                        expected.data_type,
+                        json.dumps(expected.tags),
+                        expected.mqtt_topic,
+                        expected.control_class,
+                        datetime.now(UTC).isoformat(),
+                        str(definition.id),
+                    ),
+                )
+                logger.warning("DataPointRegistry: restored definition of system DataPoint '%s' (%s)", definition.name, definition.id)
+
+    def forget(self, keep: Any = ()) -> None:
+        """Drop every DataPoint except those in *keep* from memory, without touching the database.
+
+        For the bulk deletes of config reset and restore, which remove the rows
+        themselves inside their own transaction.
+        """
+        for dp_id in [dp_id for dp_id in self._points if dp_id not in keep]:
+            del self._points[dp_id]
+            self._values.pop(dp_id, None)
 
     # ------------------------------------------------------------------
     # Read
@@ -234,6 +299,8 @@ class DataPointRegistry:
 
     async def update(self, dp_id: uuid.UUID, payload: DataPointUpdate) -> DataPoint:
         dp = self.get_or_raise(dp_id)
+        if is_system_datapoint(dp_id):
+            raise SystemDataPointError(dp_id)
         updates = payload.model_dump(exclude_none=True, exclude={"value"})
         for clearable_field in ("unit", "mqtt_alias"):
             if clearable_field in payload.model_fields_set:
@@ -300,6 +367,8 @@ class DataPointRegistry:
 
     async def delete(self, dp_id: uuid.UUID) -> None:
         self.get_or_raise(dp_id)  # raises KeyError if not found
+        if is_system_datapoint(dp_id):
+            raise SystemDataPointError(dp_id)
         async with self._db.transaction():
             await self._db.execute(
                 "DELETE FROM authz_node_roles WHERE node_type='datapoint' AND node_id=?",

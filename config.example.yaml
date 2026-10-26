@@ -53,3 +53,12 @@ security:
   # Optional override. By default OBS writes this to OBS_SECRET_FILE_DIR when
   # set, otherwise to "secrets/url-target-allowlist.yaml" next to the database.
   # url_target_allowlist_path: /data/secrets/url-target-allowlist.yaml
+
+# Online check for newer OBS releases (Settings → Updates in the Admin UI).
+# The update channel itself (stable | pre-release | nightly) is stored in the
+# database and chosen in the Admin UI. Set enabled: false on hosts without
+# internet access — no request to GitHub is made then, scheduled or manual.
+update_check:
+  enabled: true
+  repository: abeggled/openbridgeserver
+  api_url: https://api.github.com
