@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import random
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -606,28 +607,68 @@ async def test_manual_check_joins_a_running_check(env):
     assert len(source.etags) == 1
 
 
-async def test_load_waits_for_a_running_check(env):
-    gate = asyncio.Event()
+class GatedSource(FakeSource):
+    """A FakeSource whose requests hang until ``gate`` is set."""
 
-    class SlowSource(FakeSource):
-        async def fetch(self, etag):
-            await gate.wait()
-            return await super().fetch(etag)
+    def __init__(self, *results):
+        super().__init__(*results)
+        self.gate = asyncio.Event()
 
-    service = _service(env, SlowSource(FetchResult(False, None, PAYLOAD)))
+    async def fetch(self, etag):
+        await self.gate.wait()
+        return await super().fetch(etag)
+
+
+async def test_load_does_not_wait_for_a_running_github_request(env):
+    source = GatedSource(FetchResult(False, None, PAYLOAD))
+    service = _service(env, source)
     await service.load()
     running = asyncio.create_task(service.check())
     await asyncio.sleep(0)
-    reload = asyncio.create_task(service.load())
-    for _ in range(5):
-        await asyncio.sleep(0)
-    assert not reload.done()
-    gate.set()
+    await asyncio.wait_for(service.load(), timeout=1)
+    source.gate.set()
     finished = await running
-    await reload
-    # The reload saw the check's persisted result instead of tearing it apart.
-    assert finished.latest_version == service.state.latest_version == "2026.10.0"
-    assert service.state.last_check_at == finished.last_check_at
+    # The check took its result over onto the reloaded state.
+    assert finished is service.state
+    assert service.state.latest_version == "2026.10.0"
+
+
+@pytest.mark.parametrize("operation", ["set_channel", "keep_after_restore"])
+async def test_admin_operations_do_not_wait_for_a_running_github_request(env, operation):
+    """A slow or unresponsive GitHub must not block a channel change or a restore (#1371 review)."""
+    source = GatedSource(FetchResult(False, None, PAYLOAD), FetchResult(False, None, PAYLOAD))
+    service = _service(env, source)
+    await service.load()
+    # A cached release list answers the channel change; without one it joins the check.
+    source.gate.set()
+    await service.check()
+    source.gate.clear()
+    running = asyncio.create_task(service.check())
+    await asyncio.sleep(0)
+    assert service.checking
+    if operation == "set_channel":
+        await asyncio.wait_for(service.set_channel("pre-release"), timeout=1)
+    else:
+        await asyncio.wait_for(service.keep_after_restore(), timeout=1)
+    assert not running.done()
+    source.gate.set()
+    state = await running
+    assert not service.checking
+    # The result is evaluated for the channel current when it arrived.
+    expected = "2026.11.0-RC1" if operation == "set_channel" else "2026.10.0"
+    assert (state.latest_version, _dp(env, LATEST_VERSION)) == (expected, (expected, "good"))
+
+
+async def test_a_cancelled_check_is_no_longer_running(env):
+    service = _service(env, GatedSource(FetchResult(False, None, PAYLOAD)))
+    await service.load()
+    running = asyncio.create_task(service.check())
+    await asyncio.sleep(0)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert not service.checking
+    assert service.state.last_check_at is None
 
 
 async def test_manual_checks_queued_behind_the_lock_ask_github_once(env):
@@ -674,6 +715,93 @@ async def test_unchanged_values_are_not_published_again(env):
     assert seen == [LAST_CHECK.id]
     await service.publish_datapoints(force=True)
     assert len(seen) == 6
+
+
+async def test_only_restored_values_are_published_as_initialization(env):
+    source = FakeSource(FetchResult(False, None, PAYLOAD))
+    service = _service(env, source)
+    seen = []
+
+    async def record(event):
+        seen.append(event.initialization)
+
+    env.bus.subscribe(DataValueEvent, record)
+    await service.load()
+    assert seen == [True] * 5
+    seen.clear()
+    await service.check()
+    assert seen and not any(seen)
+    seen.clear()
+    await service.keep_after_restore()
+    assert seen == [True] * 5
+
+
+async def test_an_unchanged_update_does_not_notify_again_after_restart_or_restore(env, monkeypatch):
+    """MESSAGE on "OBS Update Available" fires once, not on every start-up or restore (#1371 review)."""
+    from pydantic import BaseModel
+
+    from obs.adapters.message.adapter import MessageAdapter
+    from obs.adapters.message.providers import registry as providers
+    from obs.adapters.message.providers.base import MessageSendResult
+
+    class Config(BaseModel):
+        enabled: bool = True
+        targets: dict[str, dict] = {}
+
+    provider = SimpleNamespace(
+        provider_type="update-test",
+        config_schema=Config,
+        target_schema=BaseModel,
+        send=AsyncMock(return_value=MessageSendResult("update-test", "default", True)),
+    )
+    monkeypatch.setitem(providers._providers, "update-test", provider)
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: env.registry)
+    binding = SimpleNamespace(
+        id=uuid.uuid4(),
+        datapoint_id=UPDATE_AVAILABLE.id,
+        direction="SOURCE",
+        config={
+            "operator": "==",
+            "compare_value": "true",
+            "message": "Update available",
+            "providers": [{"provider": "update-test", "target": "default"}],
+            "send_on_change": True,
+        },
+    )
+    adapters = []
+
+    async def start_message_adapter():
+        # A fresh adapter, as after a restart or the restore's start_all().
+        adapter = MessageAdapter(event_bus=env.bus, config={"providers": {"update-test": {"enabled": True, "targets": {"default": {}}}}})
+        await adapter.connect()
+        await adapter.reload_bindings([binding])
+        adapters.append(adapter)
+        return adapter
+
+    async def sends(adapter):
+        for _ in range(5):
+            while adapter._send_tasks:
+                await asyncio.gather(*list(adapter._send_tasks))
+            await asyncio.sleep(0)
+        return provider.send.await_count
+
+    try:
+        adapter = await start_message_adapter()
+        service = _service(env, FakeSource(FetchResult(False, None, PAYLOAD)))
+        await service.load()
+        await service.check()
+        assert await sends(adapter) == 1
+        # Restart: a new process restores the same result.
+        adapter = await start_message_adapter()
+        await _service(env, FakeSource()).load()
+        assert await sends(adapter) == 1
+        # Database restore in the running process.
+        adapter = await start_message_adapter()
+        await service.keep_after_restore()
+        assert await sends(adapter) == 1
+    finally:
+        for adapter in adapters:
+            await adapter.disconnect()
 
 
 async def test_a_clock_set_back_does_not_block_manual_checks(env):

@@ -294,7 +294,11 @@ class UpdateCheckService:
         # The last check attempt of this process; the manual cool-down counts from it.
         self._last_attempt_at: datetime | None = None
         self._etag: str | None = None
+        # Guards the state; never held across a GitHub request, so a channel
+        # change or a database restore does not wait for a slow fetch.
         self._lock = asyncio.Lock()
+        # Serialises check attempts (fetch included) among themselves.
+        self._check_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._check_running = False
         # Last (value, quality) sent per system DataPoint: unchanged values are
@@ -330,8 +334,8 @@ class UpdateCheckService:
         Runs once at start-up; after a database restore keep_after_restore()
         writes this installation's channel and status back instead.
         """
-        # Under the lock: a check in flight must not split its result between
-        # the state it started with and the one restored from the database.
+        # Under the lock: a check taking its result over must not split it
+        # between the state it started with and the one restored from the database.
         async with self._lock:
             row = await self._db.fetchone("SELECT value FROM app_settings WHERE key = ?", (CHANNEL_SETTING_KEY,))
             channel = row["value"] if row and row["value"] in CHANNELS else None
@@ -353,7 +357,8 @@ class UpdateCheckService:
             restored = _restore_state(raw_state, channel, self._installed_version)
             self._state = restored or UpdateState(channel=channel, installed_version=self._installed_version)
             # The registry starts every DataPoint empty: send all values once.
-            await self.publish_datapoints(force=True)
+            # Restored, not changed: a MESSAGE binding must not notify again.
+            await self.publish_datapoints(force=True, initialization=True)
 
     async def keep_after_restore(self) -> None:
         """Write this installation's channel and status back after a database restore.
@@ -367,7 +372,7 @@ class UpdateCheckService:
             await _write_setting(self._db, CHANNEL_SETTING_KEY, self._state.channel)
             await self._write_derived_marker()
             await _write_setting(self._db, STATE_SETTING_KEY, self._state.to_json())
-            await self.publish_datapoints(force=True)
+            await self.publish_datapoints(force=True, initialization=True)
 
     async def _write_derived_marker(self) -> None:
         if self._channel_derived:
@@ -409,34 +414,55 @@ class UpdateCheckService:
 
     async def check(self) -> UpdateState:
         """Run one check attempt. Never raises for network or data errors."""
-        async with self._lock:
-            return await self._check_locked()
+        async with self._check_lock:
+            return await self._check_serialized()
 
-    async def _check_locked(self) -> UpdateState:
-        """The check itself; the caller holds ``self._lock``."""
+    async def _check_serialized(self) -> UpdateState:
+        """The check itself; the caller holds ``self._check_lock``.
+
+        The GitHub request runs outside ``self._lock``; only taking its result
+        over and persisting it is done under it, against the state current then
+        (e.g. a channel chosen while the request was in flight).
+        """
         self._check_running = True
         try:
-            await self._attempt()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Update check: unexpected failure")
-            self._record_failure(UpdateCheckError("internal"))
+            now = self._clock()
+            self._last_attempt_at = now
+            releases: list[Release] | None = None
+            failure: UpdateCheckError | None = None
+            try:
+                releases, etag = await self._fetch_releases()
+            except asyncio.CancelledError:
+                raise
+            except UpdateCheckError as exc:
+                failure = exc
+            except Exception:
+                logger.exception("Update check: unexpected failure")
+                failure = UpdateCheckError("internal")
+            async with self._lock:
+                self._state.last_check_at = now
+                if failure is not None:
+                    self._record_failure(failure)
+                else:
+                    self._releases = releases
+                    self._releases_fetched_at = now
+                    self._etag = etag
+                    self._apply_evaluation(now)
+                await self._persist_and_publish()
+                return self._state
         finally:
             self._check_running = False
-        await self._persist_and_publish()
-        return self._state
 
     async def check_now(self) -> tuple[UpdateState, bool]:
         """Manual check from the Admin GUI.
 
         Does not ask GitHub again within the cool-down after the previous
-        attempt. The cool-down is evaluated only once the lock is held: callers
-        queued behind a running check or a channel change would otherwise all
-        pass it and each send a request; this way the first one checks and the
-        others take its result. Returns the state and whether this call ran a check.
+        attempt. The cool-down is evaluated only once the check lock is held:
+        callers queued behind a running check would otherwise all pass it and
+        each send a request; this way the first one checks and the others take
+        its result. Returns the state and whether this call ran a check.
         """
-        async with self._lock:
+        async with self._check_lock:
             # This process's own attempt, not the restored last_check_at: after a
             # restart nothing is cached, and a check the previous process ran just
             # before must not leave e.g. a channel switch without an answer.
@@ -444,28 +470,18 @@ class UpdateCheckService:
             # A last check "in the future" (clock set back since) must not block checks.
             if last is not None and 0 <= (self._clock() - last).total_seconds() < MANUAL_CHECK_COOLDOWN_SECONDS:
                 return self._state, False
-            return await self._check_locked(), True
+            return await self._check_serialized(), True
 
-    async def _attempt(self) -> None:
-        now = self._clock()
-        self._state.last_check_at = now
-        self._last_attempt_at = now
+    async def _fetch_releases(self) -> tuple[list[Release] | None, str | None]:
+        """The classified release list and its ETag; raises UpdateCheckError."""
+        # Only checks touch the cache, and they are serialised by _check_lock.
+        result = await self._source.fetch(self._etag if self._releases is not None else None)
+        if result.not_modified:
+            return self._releases, result.etag
         try:
-            result = await self._source.fetch(self._etag if self._releases is not None else None)
-            if result.not_modified:
-                releases = self._releases
-            else:
-                try:
-                    releases = classify_releases(result.payload)
-                except TypeError as exc:
-                    raise UpdateCheckError("invalid_response", str(exc)) from exc
-        except UpdateCheckError as exc:
-            self._record_failure(exc)
-            return
-        self._releases = releases
-        self._releases_fetched_at = now
-        self._etag = result.etag
-        self._apply_evaluation(now)
+            return classify_releases(result.payload), result.etag
+        except TypeError as exc:
+            raise UpdateCheckError("invalid_response", str(exc)) from exc
 
     def _record_failure(self, exc: UpdateCheckError) -> None:
         self._state.last_error = exc.code
@@ -524,16 +540,27 @@ class UpdateCheckService:
             logger.exception("Update check: could not persist status")
         await self.publish_datapoints()
 
-    async def publish_datapoints(self, *, force: bool = False) -> None:
+    async def publish_datapoints(self, *, force: bool = False, initialization: bool = False) -> None:
+        """Send the system DataPoints; unchanged values only with ``force``.
+
+        ``initialization`` marks values restored rather than changed (start-up,
+        database restore): they still reach the registry and DEST bindings, but
+        notification subscribers such as MESSAGE ignore them, so an unchanged
+        "update available" does not notify again after every restart.
+        """
         state = self._state
         known = state.last_success_at is not None
-        await self._publish(UPDATE_CHANNEL, state.channel, "good", force)
-        await self._publish(CURRENT_VERSION, state.installed_version, "good", force)
-        await self._publish(LATEST_VERSION, state.latest_version, "good" if known and state.latest_version else "uncertain", force)
-        await self._publish(UPDATE_AVAILABLE, state.update_available, "good" if known and state.update_available is not None else "uncertain", force)
-        await self._publish(LAST_CHECK, state.last_check_at, "good" if state.last_check_at else "uncertain", force)
+        values = (
+            (UPDATE_CHANNEL, state.channel, "good"),
+            (CURRENT_VERSION, state.installed_version, "good"),
+            (LATEST_VERSION, state.latest_version, "good" if known and state.latest_version else "uncertain"),
+            (UPDATE_AVAILABLE, state.update_available, "good" if known and state.update_available is not None else "uncertain"),
+            (LAST_CHECK, state.last_check_at, "good" if state.last_check_at else "uncertain"),
+        )
+        for definition, value, quality in values:
+            await self._publish(definition, value, quality, force, initialization)
 
-    async def _publish(self, definition: SystemDataPointDef, value: Any, quality: str, force: bool) -> None:
+    async def _publish(self, definition: SystemDataPointDef, value: Any, quality: str, force: bool, initialization: bool) -> None:
         from obs.core.event_bus import DataValueEvent
 
         sent = (value if quality == "good" else None, quality)
@@ -546,6 +573,7 @@ class UpdateCheckService:
                     value=sent[0],
                     quality=quality,
                     source_adapter=SYSTEM_SOURCE_ADAPTER,
+                    initialization=initialization,
                 )
             )
             self._published[definition.id] = sent
