@@ -35,6 +35,7 @@ async def _write(client, auth_headers, dp_id: str, value) -> None:
 async def reset_alarms(client, auth_headers):
     yield
     await client.put(URL, json={"alarms": []}, headers=auth_headers)
+    await client.put("/api/v1/system/visu-devices", json={"devices": []}, headers=auth_headers)
 
 
 async def test_configuration_is_admin_only(client, reset_alarms):
@@ -67,6 +68,16 @@ async def test_value_change_raises_alarm_visible_and_acknowledgeable_without_log
         "sound": True,
         "devices": ["wandpanel"],
     }
+    # The device profile must exist, otherwise the alarm would never show anywhere.
+    resp = await client.put(URL, json={"alarms": [alarm]}, headers=auth_headers)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Unknown device profile: wandpanel"
+    resp = await client.put(
+        "/api/v1/system/visu-devices",
+        json={"devices": [{"slug": "wandpanel", "name": "Wandpanel"}]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
     resp = await client.put(URL, json={"alarms": [alarm]}, headers=auth_headers)
     assert resp.status_code == 200, resp.text
     assert (await client.get(URL, headers=auth_headers)).json()[0]["title"] == "Post ist gekommen"
@@ -86,7 +97,9 @@ async def test_value_change_raises_alarm_visible_and_acknowledgeable_without_log
     }
     assert "value" not in active[0]
 
-    assert (await client.post(f"{URL}/post/acknowledge")).status_code == 204  # no login
+    # A page of another site cannot acknowledge; the Visu itself (same origin) can, without login.
+    assert (await client.post(f"{URL}/post/acknowledge", headers={"Origin": "http://evil.example"})).status_code == 403
+    assert (await client.post(f"{URL}/post/acknowledge", headers={"Origin": "http://testserver"})).status_code == 204
     assert (await client.get(f"{URL}/active")).json() == []
     assert (await client.post(f"{URL}/post/acknowledge")).status_code == 404
 

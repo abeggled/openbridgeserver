@@ -158,7 +158,7 @@
             <!-- Geräte -->
             <fieldset class="flex flex-col gap-1.5">
               <legend class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{{ $t('settings.visuAlarms.devices') }}</legend>
-              <p v-if="devices.length === 0" class="text-xs text-slate-500">{{ $t('settings.visuAlarms.noDevices') }}</p>
+              <p v-if="devices.length === 0 && missingDevices(alarm).length === 0" class="text-xs text-slate-500">{{ $t('settings.visuAlarms.noDevices') }}</p>
               <template v-else>
                 <p class="text-xs text-slate-500">{{ $t('settings.visuAlarms.devicesHint') }}</p>
                 <label v-for="device in devices" :key="device.slug" class="flex items-center gap-2 text-sm cursor-pointer">
@@ -170,6 +170,17 @@
                     @change="toggleDevice(alarm, device.slug)"
                   />
                   {{ device.name }}
+                </label>
+                <!-- Profiles the alarm still names but that were renamed or deleted: shown ticked so they can be unticked. -->
+                <label v-for="slug in missingDevices(alarm)" :key="`missing-${slug}`" class="flex items-center gap-2 text-sm cursor-pointer text-red-400">
+                  <input
+                    type="checkbox"
+                    class="w-4 h-4 rounded accent-blue-500"
+                    checked
+                    :data-testid="`check-visu-alarm-device-missing-${slug}`"
+                    @change="toggleDevice(alarm, slug)"
+                  />
+                  {{ $t('settings.visuAlarms.missingDevice', { slug }) }}
                 </label>
               </template>
             </fieldset>
@@ -264,6 +275,13 @@ function toggleDevice(alarm, slug) {
   alarm.devices = alarm.devices.includes(slug) ? alarm.devices.filter(s => s !== slug) : [...alarm.devices, slug]
 }
 
+const deviceSlugs = computed(() => new Set(devices.value.map(device => device.slug)))
+
+/** Device profiles the alarm is restricted to that no longer exist (renamed or deleted). */
+function missingDevices(alarm) {
+  return alarm.devices.filter(slug => !deviceSlugs.value.has(slug))
+}
+
 function rowError(alarm) {
   if (!alarm.name.trim()) return 'settings.visuAlarms.errorName'
   if (!alarm.datapoint_id) return 'settings.visuAlarms.errorDatapoint'
@@ -271,6 +289,7 @@ function rowError(alarm) {
   if (alarm.display === 'page' && !alarm.page_id) return 'settings.visuAlarms.errorPage'
   if (alarm.display === 'page' && !pageIds.value.has(alarm.page_id)) return 'settings.visuAlarms.errorMissingPage'
   if (!alarm.ack_button && !alarm.end_on_clear) return 'settings.visuAlarms.errorEnd'
+  if (missingDevices(alarm).length > 0) return 'settings.visuAlarms.errorMissingDevice'
   return ''
 }
 

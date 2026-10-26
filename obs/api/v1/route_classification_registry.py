@@ -29,6 +29,9 @@ PUBLIC_ROUTE_ALLOWLIST: Final[frozenset[RouteSignature]] = frozenset(
         # Visu alarms: the active list and its live channel reach anonymous/PIN Visu devices too.
         ("GET", "/api/v1/system/visu-alarms/active"),
         ("WEBSOCKET", "/api/v1/system/visu-alarms/ws"),
+        # Acknowledging an alarm is public too (wall panels without login). The route rejects
+        # cross-origin requests and audits every acknowledgement; it writes no datapoint.
+        ("POST", "/api/v1/system/visu-alarms/{alarm_id}/acknowledge"),
         # First-run setup (#1229): tells the Admin GUI whether the installation
         # still has to be claimed. Reachable before any principal can exist.
         ("GET", "/api/v1/setup/status"),
@@ -149,7 +152,7 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/system/visu-alarms"): "read_live",
     ("GET", "/api/v1/system/visu-alarms/active"): "public",
     ("WEBSOCKET", "/api/v1/system/visu-alarms/ws"): "public",
-    ("POST", "/api/v1/system/visu-alarms/{alarm_id}/acknowledge"): "data_mutation",
+    ("POST", "/api/v1/system/visu-alarms/{alarm_id}/acknowledge"): "public",
     ("GET", "/api/v1/setup/status"): "public",
     ("GET", "/api/v1/system/health"): "public",
     ("GET", "/api/v1/system/history/settings"): "read_live",

@@ -226,6 +226,45 @@ async def test_configure_starts_from_current_values_and_keeps_or_ends_active_ala
     assert engine.active() == []  # removed alarm ends
 
 
+async def test_editing_an_active_alarm_to_end_on_clear_only_ends_it_when_already_clear():
+    engine = VisuAlarmEngine()
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(True))
+    await engine.handle_value_event(event(False))  # ack-only alarm: stays active although clear
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+    # The admin removes the button and switches to "end on clear" while the condition is false:
+    # the alarm could never end again, so it ends now.
+    engine.configure([alarm(ack_button=False, end_on_clear=True)])
+    assert engine.active() == []
+
+
+async def test_editing_an_active_alarm_to_end_on_clear_only_keeps_it_while_the_condition_holds():
+    class _State:
+        value = True
+
+    engine = VisuAlarmEngine(value_getter=lambda _dp: _State())
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(False))
+    await engine.handle_value_event(event(True))
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+    engine.configure([alarm(ack_button=False, end_on_clear=True)])
+    assert [a["id"] for a in engine.active()] == ["post"]  # condition still met: ends on the next clear
+    await engine.handle_value_event(event(False))
+    assert engine.active() == []
+
+
+async def test_editing_an_active_alarm_keeps_it_while_it_still_has_a_button():
+    engine = VisuAlarmEngine()
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(True))
+    await engine.handle_value_event(event(False))
+
+    engine.configure([alarm(title="Neuer Titel")])
+    assert [(a["id"], a["title"]) for a in engine.active()] == [("post", "Neuer Titel")]
+
+
 async def test_listeners_get_the_full_list_and_stalled_ones_only_the_newest():
     engine = VisuAlarmEngine()
     engine.configure([alarm()])
@@ -270,8 +309,16 @@ async def db():
         await database.disconnect()
 
 
-def _request(path: str = "/api/v1/system/visu-alarms") -> Request:
-    return Request({"type": "http", "method": "PUT", "path": path, "headers": [], "client": ("127.0.0.1", 1), "query_string": b""})
+def _request(path: str = "/api/v1/system/visu-alarms", headers: dict[str, str] | None = None) -> Request:
+    raw_headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    return Request({"type": "http", "method": "PUT", "path": path, "headers": raw_headers, "client": ("127.0.0.1", 1), "query_string": b""})
+
+
+async def _store_devices(db: Database, *slugs: str) -> None:
+    await db.execute_and_commit(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('visu.devices', ?)",
+        (json.dumps([{"slug": slug, "name": slug.title(), "start_node_id": None, "return_after_s": 0} for slug in slugs]),),
+    )
 
 
 async def test_put_stores_applies_and_audits(db):
@@ -350,26 +397,102 @@ async def test_config_import_validates_visu_alarms_and_applies_them(db, monkeypa
     assert [a["id"] for a in await alarms_api.get_active_visu_alarms()] == ["post"]
 
 
-async def test_acknowledge_route():
+async def test_acknowledge_route_ends_the_alarm_and_audits_it(db):
     engine = get_visu_alarm_engine()
     engine.configure([alarm()])
     await engine.handle_value_event(event(True))
     acknowledge = alarms_api.acknowledge_visu_alarm.__wrapped__  # without the rate limiter
 
-    await acknowledge("post", request=_request())
+    await acknowledge("post", request=_request(headers={"Host": "obs.local", "Origin": "http://obs.local"}), db=db)
     assert engine.active() == []
+    audit = await db.fetchone("SELECT * FROM audit_log_entries WHERE action = 'system.visu_alarm.acknowledged'")
+    assert (audit["actor"], audit["principal_type"], audit["resource_type"], audit["resource_id"]) == ("anonymous", "anonymous", "visu_alarm", "post")
+    assert audit["remote_addr"] == "127.0.0.1"
+
     with pytest.raises(HTTPException) as exc:
-        await acknowledge("post", request=_request())
+        await acknowledge("post", request=_request(), db=db)
     assert exc.value.status_code == 404
+    assert await db.fetchone("SELECT COUNT(*) AS n FROM audit_log_entries WHERE action = 'system.visu_alarm.acknowledged'") is not None
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Host": "obs.local", "Origin": "http://evil.example"},
+        {"Host": "obs.local:8080", "Origin": "http://obs.local"},  # other port = other origin
+        {"Host": "obs.local", "Origin": "null"},  # sandboxed frame / file: page
+        {"Host": "internal:8080", "X-Forwarded-Host": "obs.example.org", "Origin": "http://internal:8080"},
+    ],
+)
+async def test_acknowledge_rejects_requests_from_other_sites(db, headers):
+    engine = get_visu_alarm_engine()
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(True))
+    acknowledge = alarms_api.acknowledge_visu_alarm.__wrapped__
+
+    with pytest.raises(HTTPException) as exc:
+        await acknowledge("post", request=_request(headers=headers), db=db)
+
+    assert exc.value.status_code == 403
+    assert [a["id"] for a in engine.active()] == ["post"]  # still active, nothing audited
+    assert await db.fetchone("SELECT 1 FROM audit_log_entries WHERE action = 'system.visu_alarm.acknowledged'") is None
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},  # no Origin: not a browser
+        {"Host": "obs.local:8080", "Origin": "http://obs.local:8080"},
+        {"Host": "OBS.local", "Origin": "https://obs.LOCAL"},  # scheme may differ behind a TLS proxy
+        {"Host": "internal:8080", "X-Forwarded-Host": "obs.example.org, proxy", "Origin": "https://obs.example.org"},
+    ],
+)
+async def test_acknowledge_accepts_the_visu_itself(db, headers):
+    engine = get_visu_alarm_engine()
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(True))
+
+    await alarms_api.acknowledge_visu_alarm.__wrapped__("post", request=_request(headers=headers), db=db)
+
+    assert engine.active() == []
+
+
+async def test_put_rejects_unknown_device_profiles_and_accepts_known_ones(db):
+    await _store_devices(db, "panel")
+    body = VisuAlarmsIn(alarms=[alarm(devices=["panel", "kitchen"]).model_dump()])
+
+    with pytest.raises(HTTPException) as exc:
+        await alarms_api.update_visu_alarms(body=body, request=_request(), db=db, _admin="admin")
+    assert (exc.value.status_code, exc.value.detail) == (422, "Unknown device profile: kitchen")
+    assert await alarms_api.get_visu_alarms(db=db, _admin="admin") == []
+
+    body = VisuAlarmsIn(alarms=[alarm(devices=["panel"]).model_dump()])
+    assert await alarms_api.update_visu_alarms(body=body, request=_request(), db=db, _admin="admin") == body.alarms
+
+
+async def test_put_without_device_restriction_needs_no_profiles(db):
+    body = VisuAlarmsIn(alarms=[alarm().model_dump()])
+    assert await alarms_api.update_visu_alarms(body=body, request=_request(), db=db, _admin="admin") == body.alarms
 
 
 # ── Live channel ──────────────────────────────────────────────────────────────
+
+
+async def _memory_db():
+    # The acknowledge route writes an audit entry; a fresh in-memory database per request is enough.
+    database = Database(":memory:")
+    await database.connect()
+    try:
+        yield database
+    finally:
+        await database.disconnect()
 
 
 def _app() -> FastAPI:
     app = FastAPI()
     app.include_router(alarms_api.router, prefix="/api/v1/system")
     app.state.limiter = alarms_api.limiter
+    app.dependency_overrides[alarms_api.get_db] = _memory_db
     return app
 
 

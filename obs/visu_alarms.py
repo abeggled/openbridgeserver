@@ -196,6 +196,11 @@ class VisuAlarmEngine:
             self._by_datapoint.setdefault(alarm.datapoint_id, []).append(alarm)
         self._condition = {a.id: self._current_condition(a) for a in self._alarms}
         self._active = {aid: _Active(by_id[aid], act.since) for aid, act in self._active.items() if aid in by_id}
+        # An active alarm whose new definition has no acknowledge button ends only when
+        # its condition clears. If the condition is already false now, that end has
+        # passed — the alarm ends here instead of staying on every Visu with no button
+        # until the condition happens to go true and false again.
+        self._active = {aid: act for aid, act in self._active.items() if act.alarm.ack_button or self._condition[aid]}
         self._notify()
 
     def _current_condition(self, alarm: VisuAlarm) -> bool:

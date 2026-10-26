@@ -181,6 +181,36 @@ describe('VisuAlarmsPanel', () => {
     expect(card(w, 0).get('[data-testid="visu-alarm-error"]').text()).toBe('Die gewählte Seite existiert nicht mehr.')
   })
 
+  it('shows a renamed or deleted device profile ticked in red and blocks saving until it is unticked', async () => {
+    visuAlarmsApi.list.mockResolvedValueOnce({ data: [alarm({ devices: ['kitchen', 'panel'] })] })
+    const w = await mountPanel()
+    await open(w, 0)
+
+    const missing = card(w, 0).get('[data-testid="check-visu-alarm-device-missing-kitchen"]')
+    expect(missing.element.checked).toBe(true)
+    expect(card(w, 0).text()).toContain('Gerät „kitchen“ (umbenannt oder gelöscht)')
+    expect(card(w, 0).get('[data-testid="visu-alarm-error"]').text()).toContain('existiert nicht mehr')
+    expect(w.get('[data-testid="btn-save-visu-alarms"]').attributes('disabled')).toBeDefined()
+
+    await missing.trigger('change')
+    await flushPromises()
+    expect(card(w, 0).find('[data-testid="check-visu-alarm-device-missing-kitchen"]').exists()).toBe(false)
+    expect(card(w, 0).find('[data-testid="visu-alarm-error"]').exists()).toBe(false)
+    await w.get('[data-testid="btn-save-visu-alarms"]').trigger('click')
+    await flushPromises()
+    expect(visuAlarmsApi.update.mock.calls.at(-1)[0][0].devices).toEqual(['panel'])
+  })
+
+  it('still shows a stale device profile when no profiles exist at all', async () => {
+    visuDevicesApi.list.mockResolvedValueOnce({ data: [] })
+    visuAlarmsApi.list.mockResolvedValueOnce({ data: [alarm({ devices: ['kitchen'] })] })
+    const w = await mountPanel()
+    await open(w, 0)
+
+    expect(card(w, 0).text()).not.toContain('Keine Visu-Geräte angelegt')
+    expect(card(w, 0).get('[data-testid="check-visu-alarm-device-missing-kitchen"]').element.checked).toBe(true)
+  })
+
   it('says that alarms go to every Visu without device profiles', async () => {
     visuDevicesApi.list.mockResolvedValueOnce({ data: [] })
     const w = await mountPanel()

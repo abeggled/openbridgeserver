@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi import status as http_status
@@ -32,6 +33,7 @@ from obs.visu_alarms import (
     get_visu_alarm_engine,
     load_visu_alarms,
 )
+from obs.visu_devices import VISU_DEVICES_KEY, load_visu_devices
 
 router = APIRouter(tags=["visu-alarms"])
 
@@ -58,6 +60,7 @@ async def update_visu_alarms(
     """Replace all alarm definitions and apply them right away. Admin only."""
     await _require_existing("datapoints", {a.datapoint_id for a in body.alarms}, db, "Unknown datapoint")
     await _require_existing("visu_nodes", {a.page_id for a in body.alarms if a.page_id}, db, "Unknown page")
+    await _require_known_device_profiles({slug for a in body.alarms for slug in a.devices}, db)
     async with db.transaction():
         await db.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
@@ -79,6 +82,31 @@ async def _require_existing(table: str, ids: set[str], db: Database, message: st
         raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_CONTENT, f"{message}: {', '.join(unknown)}")
 
 
+async def _require_known_device_profiles(slugs: set[str], db: Database) -> None:
+    """An alarm restricted to a device profile that does not exist would never show anywhere."""
+    if not slugs:
+        return
+    row = await db.fetchone("SELECT value FROM app_settings WHERE key = ?", (VISU_DEVICES_KEY,))
+    known = {device.slug for device in load_visu_devices(row["value"] if row else None)}
+    unknown = sorted(slugs - known)
+    if unknown:
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown device profile: {', '.join(unknown)}")
+
+
+def _is_cross_origin(request: Request) -> bool:
+    """True when a browser sends the request from a page of another site.
+
+    A body-less POST is a CORS "simple request": a page on any other host in the
+    LAN could send it without a preflight — but always with an Origin header. A
+    same-origin Visu sends the server's own origin, non-browser clients send none.
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return False
+    own_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    return urlsplit(origin).netloc.lower() != own_host.split(",")[0].strip().lower()
+
+
 @router.get("/visu-alarms/active", response_model=list[ActiveVisuAlarm])
 async def get_active_visu_alarms() -> list[dict]:
     """Active alarms, newest first. Public — see the module docstring."""
@@ -87,10 +115,20 @@ async def get_active_visu_alarms() -> list[dict]:
 
 @router.post("/visu-alarms/{alarm_id}/acknowledge", status_code=http_status.HTTP_204_NO_CONTENT)
 @limiter.limit("30/minute")
-async def acknowledge_visu_alarm(alarm_id: str, request: Request) -> None:
-    """End an active alarm that offers an acknowledge button — on every Visu. Public."""
+async def acknowledge_visu_alarm(alarm_id: str, request: Request, db: Database = Depends(get_db)) -> None:
+    """End an active alarm that offers an acknowledge button — on every Visu.
+
+    Public on purpose: the Visu runs on anonymous and PIN-only wall panels that
+    must be able to acknowledge. In place of a login there are two guards — a
+    request from a page of another site is rejected, and every acknowledgement
+    is written to the audit log with the caller's address.
+    """
+    if _is_cross_origin(request):
+        raise HTTPException(http_status.HTTP_403_FORBIDDEN, "Cross-origin acknowledge rejected")
     if not get_visu_alarm_engine().acknowledge(alarm_id):
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "No active alarm to acknowledge")
+    writer = AuditLogWriter(db, build_audit_context(request, None))
+    await writer.write("system.visu_alarm.acknowledged", resource_type="visu_alarm", resource_id=alarm_id)
 
 
 @router.websocket("/visu-alarms/ws")
