@@ -235,7 +235,9 @@
       "bindingDisabled": "Deaktiviert",
       "graphDisabled": "Deaktiviert"
     },
-    "allAdapters": "Alle Adapter"
+    "allAdapters": "Alle Adapter",
+    "system": "System",
+    "systemReadOnly": "Systemdatenpunkt: wird von OBS verwaltet und kann nur gelesen werden."
   },
   "adapters": {
     "title": "Adapter-Instanzen",
@@ -384,6 +386,7 @@
       "directionWrite": "Schreiben (to adapter)",
       "directionReadWrite": "Lesen/Schreiben (von/auf Adapter)",
       "timerReadOnlyHint": "Die Zeitschaltuhr ist eine reine Quelle — nur Lesen möglich.",
+      "systemDestOnlyHint": "System-DataPoints sind schreibgeschützt: Ihr Wert kann nur gesendet werden.",
       "groupAddressLabel": "Gruppenadresse *",
       "groupAddressPlaceholder": "z.B. 1/2/3 oder Name suchen …",
       "selectDpt": "DPT wählen …",
@@ -407,6 +410,7 @@
         "selectIoBrokerInstanceFirst": "Bitte zuerst eine ioBroker-Instanz wählen",
         "noStatesFound": "Keine States gefunden",
         "ioBrokerStatesLoadFailed": "ioBroker-States konnten nicht geladen werden",
+        "ioBrokerStateNotWritable": "Dieser ioBroker-State ist schreibgeschützt und kann keinen Wert eines System-DataPoints empfangen",
         "noOidsFound": "Keine OIDs gefunden",
         "snmpWalkFailed": "SNMP Walk fehlgeschlagen",
         "invalidJson": "Ungültiges JSON: {msg}",
@@ -2948,7 +2952,8 @@
       "icons": "Icons",
       "history": "Historie DB",
       "security": "Sicherheit",
-      "support": "Support"
+      "support": "Support",
+      "updates": "Updates"
     },
     "general": {
       "title": "Allgemeine Einstellungen",
@@ -3375,6 +3380,7 @@
       "knxImportResultOk": "{n} Gruppenadressen importiert",
       "knxImportResultCreated": ", {n} DataPoints neu angelegt",
       "knxImportResultUpdated": ", {n} aktualisiert",
+      "knxImportResultSkippedSystem": ", {n} übersprungen (Gruppenadresse bereits von einem System-Datenpunkt bedient)",
       "knxImportResultLocations": ", {n} Räume/Gebäude",
       "knxImportResultTrades": ", {n} Gewerke",
       "importResultOk": "Wiederherstellung OK: {objects} Objekte, {bindings} Verknüpfungen",
@@ -3809,5 +3815,57 @@
     "unavailable": "Für diesen Bereich ist noch keine Hilfe verfügbar.",
     "systemUnavailable": "Die Hilfe-Inhalte sind auf diesem Server aktuell nicht verfügbar.",
     "openInNewTab": "In neuem Tab öffnen"
+  },
+  "updates": {
+    "title": "Updates",
+    "channel": "Update-Kanal",
+    "channels": {
+      "stable": "Stable",
+      "pre-release": "Pre-Release",
+      "nightly": "Nightly"
+    },
+    "channelHints": {
+      "stable": "Meldet ausschließlich reguläre Releases.",
+      "pre-release": "Meldet reguläre Releases und Release Candidates, aber keine Nightlies.",
+      "nightly": "Meldet ausschließlich tägliche Nightly-Builds – nicht für den Produktivbetrieb gedacht."
+    },
+    "checkNow": "Jetzt prüfen",
+    "actionFailed": "Die Aktion ist fehlgeschlagen. Bitte später erneut versuchen.",
+    "status": {
+      "installed": "Installierte Version",
+      "latest": "Neueste Version",
+      "availability": "Update",
+      "available": "Update verfügbar",
+      "upToDate": "Aktuell",
+      "unknown": "Unbekannt",
+      "lastSuccess": "Letzte erfolgreiche Prüfung",
+      "lastCheck": "Letzter Prüfversuch",
+      "nextCheck": "Nächste automatische Prüfung",
+      "never": "noch nie",
+      "stale": "Die letzte Prüfung ist fehlgeschlagen – der angezeigte Stand ist möglicherweise veraltet.",
+      "disabled": "Die Online-Prüfung ist in der Konfiguration deaktiviert (update_check.enabled = false)."
+    },
+    "errors": {
+      "network": "Der Update-Server war nicht erreichbar.",
+      "rate_limited": "GitHub hat die Anfrage wegen zu vieler Zugriffe abgelehnt.",
+      "http_status": "Der Update-Server hat mit einem Fehler geantwortet.",
+      "invalid_response": "Die Antwort des Update-Servers war ungültig.",
+      "internal": "Die Prüfung ist mit einem internen Fehler fehlgeschlagen."
+    },
+    "notice": {
+      "title": "Neue Version {version} verfügbar",
+      "details": "Kanal: {channel} · installiert: {installed} · neueste: {latest} · geprüft: {checked}",
+      "releaseNotes": "Release Notes",
+      "openSettings": "Details"
+    },
+    "releaseNotes": {
+      "title": "Release Notes",
+      "range": "Änderungen nach {installed} bis einschließlich {latest}",
+      "empty": "Keine Release Notes vorhanden.",
+      "loadError": "Die Release Notes konnten nicht geladen werden.",
+      "openOnGithub": "Auf GitHub öffnen"
+    },
+    "statusLoadError": "Der Update-Status konnte nicht geladen werden.",
+    "retry": "Erneut versuchen"
   }
 }

@@ -33,10 +33,15 @@ jobs:
           # Record a timestamp just before dispatch so we can identify the run
           # we triggered (and not an unrelated concurrent one).
           DISPATCH_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # One date for the build's version stamp and the release tag below:
+          # a build that runs past UTC midnight must not stamp a different day.
+          NIGHTLY_DATE="$(date -u -d "$DISPATCH_TS" +%Y%m%d)"
           gh workflow run lxc-template.yml \
             --repo "$REPO" \
-            --ref main
+            --ref main \
+            -f nightly_date="$NIGHTLY_DATE"
           echo "dispatch_ts=$DISPATCH_TS" >> "$GITHUB_OUTPUT"
+          echo "nightly_date=$NIGHTLY_DATE" >> "$GITHUB_OUTPUT"
 
       - name: Wait for dispatched build to finish
         id: watch
@@ -96,11 +101,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          NIGHTLY_DATE: ${{ steps.dispatch.outputs.nightly_date }}
         run: |
           set -euo pipefail
 
-          TAG="nightly-$(date -u +%Y%m%d)"
-          DAY="$(date -u +%Y-%m-%d)"
+          TAG="nightly-${NIGHTLY_DATE}"
+          DAY="$(date -u -d "$NIGHTLY_DATE" +%Y-%m-%d)"
           RUN_ID="${{ steps.watch.outputs.run_id }}"
           TARGET_SHA="$(gh run view "$RUN_ID" --repo "$REPO" --json headSha --jq .headSha)"
 
