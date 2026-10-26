@@ -74,9 +74,66 @@ function headingText(raw) {
   return text.slice(0, end).trimEnd()
 }
 
+// Drops HTML comments outside code spans. Like a CommonMark HTML block, an
+// unterminated comment hides the rest of the text up to the next fence. Each
+// indexOf only moves forward, so the scan stays linear however many `<!--` or
+// backticks the text holds.
+function stripComments(text) {
+  let out = ''
+  // Text before `copied` is in `out`; `scan` is where the next code span or comment is looked for.
+  let copied = 0
+  let scan = 0
+  let open = text.indexOf('<!--')
+  let lineEnd = -1
+  while (open >= 0) {
+    const tick = text.indexOf('`', scan)
+    if (tick >= 0 && tick < open) {
+      // A code span on one line keeps its content, `<!--` included.
+      const close = text.indexOf('`', tick + 1)
+      if (lineEnd < tick) {
+        lineEnd = text.indexOf('\n', tick)
+        if (lineEnd < 0) lineEnd = text.length
+      }
+      scan = close >= 0 && close < lineEnd ? close + 1 : tick + 1
+      if (scan > open) open = text.indexOf('<!--', scan)
+      continue
+    }
+    out += text.slice(copied, open)
+    const end = text.indexOf('-->', open + 4)
+    if (end < 0) return out
+    copied = scan = end + 3
+    open = text.indexOf('<!--', scan)
+  }
+  return out + text.slice(copied)
+}
+
+// Comments are stripped between fenced code blocks only: code shows them verbatim.
+function stripCommentsOutsideFences(lines) {
+  const out = []
+  let chunk = []
+  const flush = () => {
+    if (chunk.length) out.push(...stripComments(chunk.join('\n')).split('\n'))
+    chunk = []
+  }
+  for (let i = 0; i < lines.length; i++) {
+    if (!FENCE_RE.test(lines[i])) {
+      chunk.push(lines[i])
+      continue
+    }
+    flush()
+    // The same fence matching as parseMarkdown() below.
+    const fence = lines[i].trim().slice(0, 3)
+    out.push(lines[i++])
+    while (i < lines.length && !lines[i].trim().startsWith(fence)) out.push(lines[i++])
+    if (i < lines.length) out.push(lines[i])
+  }
+  flush()
+  return out
+}
+
 export function parseMarkdown(source) {
   if (typeof source !== 'string' || !source) return []
-  const lines = source.replace(/<!--[\s\S]*?(-->|$)/g, '').replace(/\r\n?/g, '\n').split('\n')
+  const lines = stripCommentsOutsideFences(source.replace(/\r\n?/g, '\n').split('\n'))
   const blocks = []
   let paragraph = []
   let list = null

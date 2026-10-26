@@ -601,6 +601,33 @@ async def test_reconnected_instance_gets_every_system_value_it_writes(db, regist
     assert both_id not in {call.args[1] for call in router.write_binding.await_args_list}
 
 
+@pytest.mark.parametrize(("first_of_type", "expected"), [(True, 1), (False, 0)])
+async def test_a_binding_without_instance_id_is_resent_through_the_type_fallback(db, registry, first_of_type, expected):
+    """A config import may leave adapter_instance_id out; writes reach it via the first instance of its type."""
+    instance_id = uuid.uuid4()
+    binding_id = uuid.uuid4()
+    now = "2026-10-17T00:00:00+00:00"
+    await db.execute_and_commit(
+        "INSERT INTO adapter_bindings (id, datapoint_id, adapter_type, adapter_instance_id, direction, config, enabled, created_at, updated_at)"
+        " VALUES (?,?,?,NULL,'DEST','{}',1,?,?)",
+        (str(binding_id), str(CURRENT_VERSION.id), "KNX", now, now),
+    )
+    registry.get_value(CURRENT_VERSION.id).update("2026.10.0", "good")
+    instance, other = SimpleNamespace(adapter_type="KNX"), SimpleNamespace(adapter_type="KNX")
+    router = WriteRouter(db, registry)
+    router.write_binding = AsyncMock()
+    with (
+        patch("obs.adapters.registry.get_instance_by_id", return_value=instance),
+        patch("obs.adapters.registry.get_instance", return_value=instance if first_of_type else other),
+    ):
+        assert await router.resend_system_bindings(instance_id) == expected
+    if expected:
+        router.write_binding.assert_awaited_once_with(CURRENT_VERSION.id, binding_id, "2026.10.0")
+    else:
+        # Another instance of the type writes it; this one must not.
+        router.write_binding.assert_not_awaited()
+
+
 async def test_resend_to_an_instance_without_system_bindings_writes_nothing(db, registry):
     router = WriteRouter(db, registry)
     router.write_binding = AsyncMock()

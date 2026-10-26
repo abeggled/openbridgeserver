@@ -167,6 +167,40 @@ describe('parseMarkdown', () => {
     ])
   })
 
+  it('keeps comments inside fenced code and the text after it (#1371 review)', () => {
+    expect(parseMarkdown('```html\n<!-- open\n```\n## Later\n<!-- gone -->kept')).toEqual([
+      { type: 'code', text: '<!-- open' },
+      { type: 'heading', level: 2, children: [{ type: 'text', text: 'Later' }] },
+      { type: 'paragraph', children: [{ type: 'text', text: 'kept' }] },
+    ])
+  })
+
+  it('keeps a comment opener inside inline code', () => {
+    expect(parseMarkdown('Use `<!--` to start.\n\n# Later')).toEqual([
+      { type: 'paragraph', children: [{ type: 'text', text: 'Use ' }, { type: 'code', text: '<!--' }, { type: 'text', text: ' to start.' }] },
+      { type: 'heading', level: 1, children: [{ type: 'text', text: 'Later' }] },
+    ])
+  })
+
+  it('drops comments after code spans and unmatched backticks', () => {
+    const text = (md) => parseMarkdown(md).flatMap((b) => b.children).map((n) => n.text).join('')
+    // Two spans on one line, then a comment.
+    expect(text('`a` `b` <!-- c --> d')).toBe('a b  d')
+    // A backtick without a partner opens no code span.
+    expect(text('a ` b <!-- c --> d')).toBe('a ` b  d')
+    // A partner on a later line does not protect a comment; the joined
+    // paragraph then reads `b c` as inline code.
+    expect(text('a `b\nc` <!-- x --> d')).toBe('a b c  d')
+  })
+
+  it('strips comments in linear time', () => {
+    const spans = '`x` '.repeat(50_000)
+    const started = performance.now()
+    const [paragraph] = parseMarkdown(`${spans}<!-- c -->end\n${'<!--'.repeat(50_000)}`)
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(paragraph.children.at(-1).text).toBe(' end')
+  })
+
   it('keeps embedded HTML as literal text', () => {
     expect(parseMarkdown('<script>alert(1)</script>')).toEqual([
       { type: 'paragraph', children: [{ type: 'text', text: '<script>alert(1)</script>' }] },

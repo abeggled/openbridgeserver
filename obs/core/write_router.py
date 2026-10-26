@@ -377,13 +377,23 @@ class WriteRouter:
         dropped because the adapter was down would therefore never be retried,
         so every instance that (re)connects gets them again. Returns the number
         of bindings written.
+
+        A binding without an instance ID (e.g. from a config import that left it
+        out) is written through the first instance of its type, so it belongs to
+        this instance exactly when that fallback resolves to it.
         """
+        from obs.adapters import registry as adapter_registry
+
+        instance = adapter_registry.get_instance_by_id(str(instance_id))
+        adapter_type = getattr(instance, "adapter_type", None)
+        fallback_type = adapter_type if adapter_type and adapter_registry.get_instance(adapter_type) is instance else None
         ids = [str(definition.id) for definition in SYSTEM_DATAPOINTS]
         rows = await self._db.fetchall(
             f"""SELECT id, datapoint_id FROM adapter_bindings
-                WHERE adapter_instance_id=? AND direction IN ('DEST','BOTH') AND enabled=1
+                WHERE (adapter_instance_id=? OR (adapter_instance_id IS NULL AND adapter_type=?))
+                  AND direction IN ('DEST','BOTH') AND enabled=1
                   AND adapter_type <> 'MESSAGE' AND datapoint_id IN ({",".join("?" * len(ids))})""",
-            (str(instance_id), *ids),
+            (str(instance_id), fallback_type, *ids),
         )
         written = 0
         for row in rows:
