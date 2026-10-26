@@ -96,3 +96,8 @@ async def test_icons_follow_page_access_without_login(client, auth_headers, icon
 
     # Signed in: everything, as before.
     assert {public_icon, pin_icon, user_icon} <= await _names(client, auth_headers)
+
+    # Rejected credentials are a 401 on both routes, not a silent fall-back to the anonymous list.
+    for rejected in ({"Authorization": "Bearer not-a-jwt"}, {"X-API-Key": "unknown-api-key"}):
+        assert (await client.get("/api/v1/icons/", headers=rejected)).status_code == 401, rejected
+        assert (await client.get(f"/api/v1/icons/{public_icon}", headers=rejected)).status_code == 401, rejected

@@ -20,11 +20,12 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from obs.api.audit import contract_audit, set_contract_audit_summary
-from obs.api.auth import Principal, get_admin_user, get_current_user
-from obs.api.v1.visu import _optional_visu_principal, anonymous_visible_icon_names, session_tokens_from_request
+from obs.api.auth import Principal, get_admin_user, get_current_principal, get_current_user
+from obs.api.v1.visu import anonymous_visible_icon_names, session_tokens_from_request
 from obs.config import get_settings
 from obs.db.database import Database, get_db
 
@@ -236,10 +237,32 @@ class FontAwesomeRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+_icon_bearer = HTTPBearer(auto_error=False)
+_icon_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def _icon_principal(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_icon_bearer),
+    api_key: str | None = Depends(_icon_api_key_header),
+    db: Database = Depends(get_db),
+) -> Principal | None:
+    """The caller's principal, or None only when no credentials were sent at all.
+
+    Rejected credentials (an expired or malformed JWT, an unknown API key) stay a
+    401 like on every other route. Falling back to the anonymous list instead would
+    hand an expired admin session a "successful" partial answer, which the Admin GUI
+    shows as icons gone missing, and would hide the auth error from integrations.
+    """
+    if credentials is None and api_key is None:
+        return None
+    return await get_current_principal(credentials=credentials, api_key=api_key, db=db, request=request)
+
+
 @router.get("/", response_model=IconListOut)
 async def list_icons(
     request: Request,
-    principal: Principal | None = Depends(_optional_visu_principal),
+    principal: Principal | None = Depends(_icon_principal),
     db: Database = Depends(get_db),
 ) -> IconListOut:
     """List the installed SVG icons (name, file size, inline SVG content).
@@ -500,12 +523,10 @@ async def update_icons_settings(
 async def get_icon(
     name: str,
     request: Request,
-    principal: Principal | None = Depends(_optional_visu_principal),
+    principal: Principal | None = Depends(_icon_principal),
     db: Database = Depends(get_db),
 ) -> Response:
     """Return the raw SVG content of a single icon (same visibility as list_icons)."""
-    if principal is None and name not in await anonymous_visible_icon_names(db, session_tokens_from_request(request)):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Anmeldung erforderlich")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -518,6 +539,10 @@ async def get_icon(
             status.HTTP_400_BAD_REQUEST,
             "Ungültiger Icon-Name",
         )
+
+    # Only a valid name is worth the visibility lookup (it reads the whole Visu tree).
+    if principal is None and name not in await anonymous_visible_icon_names(db, session_tokens_from_request(request)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Anmeldung erforderlich")
 
     icons_dir = _icons_dir().resolve()
     svg_file = (icons_dir / f"{safe_name}.svg").resolve()

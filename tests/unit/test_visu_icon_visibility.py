@@ -12,10 +12,11 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
 
 import obs.api.v1.icons as icons_api
-from obs.api.auth import Principal
+from obs.api.auth import Principal, create_access_token
 from obs.api.v1.sessions import create_session
 from obs.api.v1.visu import anonymous_visible_icon_names, session_tokens_from_request
 from obs.db.database import Database
@@ -134,3 +135,100 @@ async def test_get_icon_follows_the_same_visibility(db, icons_dir):
     assert unlocked.media_type == "image/svg+xml"
     signed_in = await icons_api.get_icon(name="private-only", request=_request(), principal=ADMIN, db=db)
     assert signed_in.media_type == "image/svg+xml"
+
+
+# ── one query for the whole tree ─────────────────────────────────────────────
+
+
+class _CountingDb:
+    """Counts the queries a call issues; everything else goes to the real database."""
+
+    def __init__(self, inner: Database) -> None:
+        self.inner = inner
+        self.queries = 0
+
+    async def fetchall(self, *args, **kwargs):
+        self.queries += 1
+        return await self.inner.fetchall(*args, **kwargs)
+
+    async def fetchone(self, *args, **kwargs):
+        self.queries += 1
+        return await self.inner.fetchone(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+async def test_visibility_is_computed_with_a_single_query(db):
+    counting = _CountingDb(db)
+
+    names = await anonymous_visible_icon_names(counting, [create_session("pin")])
+
+    assert counting.queries == 1
+    assert names == PUBLIC | {"pin-only", "pin-child-only"}
+
+
+async def test_inherited_access_is_resolved_in_memory_for_deep_trees(db):
+    # A chain of 30 levels below the PIN area: every level inherits "protected" from "pin".
+    now = datetime.now(UTC).isoformat()
+    parent = "pin-child"
+    for depth in range(30):
+        node_id = f"deep-{depth}"
+        await db.execute_and_commit(
+            "INSERT INTO visu_nodes (id, parent_id, name, type, node_order, icon, page_config, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'PAGE', 0, ?, ?, ?, ?)",
+            (node_id, parent, node_id, f"svg:deep-tile-{depth}", _page(f"svg:deep-{depth}"), now, now),
+        )
+        parent = node_id
+    counting = _CountingDb(db)
+
+    locked = await anonymous_visible_icon_names(counting, [])
+    unlocked = await anonymous_visible_icon_names(counting, [create_session("pin")])
+
+    assert counting.queries == 2
+    assert {f"deep-tile-{d}" for d in range(30)} <= locked
+    assert "deep-29" not in locked
+    assert {f"deep-{d}" for d in range(30)} <= unlocked
+
+
+async def test_get_icon_rejects_an_invalid_name_before_reading_the_tree(db, icons_dir):
+    counting = _CountingDb(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await icons_api.get_icon(name="../etc/passwd", request=_request(), principal=None, db=counting)
+
+    assert exc.value.status_code == 400
+    assert counting.queries == 0
+
+
+# ── rejected credentials stay a 401 ──────────────────────────────────────────
+
+
+async def test_no_credentials_means_anonymous(db):
+    assert await icons_api._icon_principal(request=_request(), credentials=None, api_key=None, db=db) is None
+
+
+@pytest.mark.parametrize(
+    ("credentials", "api_key"),
+    [
+        (HTTPAuthorizationCredentials(scheme="Bearer", credentials="not-a-jwt"), None),
+        (None, "unknown-api-key"),
+    ],
+)
+async def test_rejected_credentials_raise_instead_of_falling_back_to_anonymous(db, credentials, api_key):
+    with pytest.raises(HTTPException) as exc:
+        await icons_api._icon_principal(request=_request(), credentials=credentials, api_key=api_key, db=db)
+
+    assert exc.value.status_code == 401
+
+
+async def test_valid_credentials_yield_the_principal(db):
+    await db.execute_and_commit(
+        "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES ('alice', 'x', 0, ?)",
+        (datetime.now(UTC).isoformat(),),
+    )
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=create_access_token("alice"))
+
+    principal = await icons_api._icon_principal(request=_request(), credentials=credentials, api_key=None, db=db)
+
+    assert principal == Principal(subject="alice", type="user", is_admin=False)

@@ -337,10 +337,40 @@ async def anonymous_visible_icon_names(db: Database, session_tokens: list[str]) 
 
     Icons used only on login-only pages, or not used at all, stay hidden.
     """
+    # One query for the whole tree; the inherited access is then resolved in memory
+    # (same rule as _resolve_access_with_node), memoised per node, instead of one
+    # query per ancestor for every node on every anonymous request.
+    rows = await db.fetchall(
+        """SELECT vn.id, vn.parent_id, vn.icon, vn.page_config, avp.access_mode
+           FROM visu_nodes AS vn
+           LEFT JOIN authz_visu_page_policies AS avp ON avp.node_id = vn.id""",
+    )
+    nodes = {row["id"]: row for row in rows}
+    resolved: dict[str, tuple[str, str | None]] = {}
+
+    def effective_access(node_id: str) -> tuple[str, str | None]:
+        path: list[str] = []
+        current: str | None = node_id
+        while True:
+            if current is None or current not in nodes or current in path:
+                result: tuple[str, str | None] = ("public", None)
+                break
+            if current in resolved:
+                result = resolved[current]
+                break
+            if nodes[current]["access_mode"] is not None:
+                result = (nodes[current]["access_mode"], current)
+                path.append(current)
+                break
+            path.append(current)
+            current = nodes[current]["parent_id"]
+        for visited in path:
+            resolved[visited] = result
+        return result
+
     names: set[str] = set()
-    rows = await db.fetchall("SELECT id, icon, page_config FROM visu_nodes")
     for row in rows:
-        access, defining_node_id = await _resolve_access_with_node(db, row["id"])
+        access, defining_node_id = effective_access(row["id"])
         if access == "user":
             continue
         _collect_svg_icon_names(row["icon"], names)
