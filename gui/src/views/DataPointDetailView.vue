@@ -8,6 +8,7 @@
           <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ dp.name }}</h2>
           <p class="text-sm text-slate-500 font-mono mt-0.5">{{ dp.id }}</p>
         </div>
+        <Badge v-if="dp.system" variant="muted" :title="$t('datapoints.systemReadOnly')" data-testid="dp-system-badge">{{ $t('datapoints.system') }}</Badge>
         <Badge variant="info">{{ dp.data_type }}</Badge>
         <Badge :variant="qualityVariant(liveState?.quality ?? dp.quality)" dot>
           {{ qualityLabel(liveState?.quality ?? dp.quality) ?? '—' }}
@@ -33,6 +34,9 @@
         <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-1">
           <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{{ $t('datapoints.detail.writeValue') }}</div>
           <div v-if="bindingsLoading" class="flex items-center py-1"><Spinner size="sm" /></div>
+          <div v-else-if="dp.system" class="text-xs text-slate-500" data-testid="dp-system-readonly">
+            {{ $t('datapoints.systemReadOnly') }}
+          </div>
           <div v-else-if="canWriteValue" class="flex flex-wrap items-center gap-2">
             <template v-if="dp.data_type === 'BOOLEAN'">
               <button
@@ -100,7 +104,7 @@
           <dt class="text-slate-500">{{ $t('datapoints.detail.updatedAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ fmtDateTime(dp.updated_at) }}</dd>
         </dl>
         <div class="flex gap-3 mt-5">
-          <button @click="showEdit = true" class="btn-secondary btn-sm">{{ $t('common.edit') }}</button>
+          <button v-if="!dp.system" @click="showEdit = true" class="btn-secondary btn-sm" data-testid="btn-edit-dp">{{ $t('common.edit') }}</button>
           <RouterLink :to="`/history?dp=${dp.id}`" class="btn-secondary btn-sm">{{ $t('datapoints.detail.historyLink') }}</RouterLink>
         </div>
       </div>
@@ -226,7 +230,7 @@
 
     <!-- Binding form Modal -->
     <Modal v-model="showBindingForm" :title="editBinding ? $t('datapoints.detail.bindingModalEdit') : $t('datapoints.detail.bindingModalNew')" max-width="xl">
-      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" :dp-data-type="dp?.data_type ?? 'UNKNOWN'" :dp-unit="dp?.unit ?? ''" @save="onBindingSave" @cancel="showBindingForm = false" />
+      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" :dp-data-type="dp?.data_type ?? 'UNKNOWN'" :dp-unit="dp?.unit ?? ''" :dp-system="dp?.system === true" @save="onBindingSave" @cancel="showBindingForm = false" />
     </Modal>
 
     <!-- Delete binding confirm -->

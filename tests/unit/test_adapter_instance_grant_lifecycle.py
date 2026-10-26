@@ -215,7 +215,7 @@ async def test_factory_reset_removes_adapter_instances_bindings_and_grants(
     instance_id = str(uuid.uuid4())
     await _insert_instance_with_binding(db, instance_id)
     await _insert_grant(db, principal_id="alice", node_type="adapter_instance", node_id=instance_id)
-    registry = SimpleNamespace(_points={}, _values={})
+    registry = SimpleNamespace(forget=lambda keep=(): None)
     monkeypatch.setattr(config_api, "get_registry", lambda: registry)
 
     with (
@@ -249,7 +249,7 @@ async def test_factory_reset_rolls_back_adapter_resources_and_grants_together(
         BEGIN SELECT RAISE(ABORT, 'reject factory adapter delete'); END
         """
     )
-    registry = SimpleNamespace(_points={}, _values={})
+    registry = SimpleNamespace(forget=lambda keep=(): None)
     monkeypatch.setattr(config_api, "get_registry", lambda: registry)
 
     with (

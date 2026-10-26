@@ -14,6 +14,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from obs.core.event_bus import AdapterInstanceStartedEvent
+
 logger = logging.getLogger(__name__)
 
 _adapters: dict[str, type] = {}  # adapter_type → AdapterBase Klasse
@@ -120,6 +122,7 @@ async def start_all(event_bus: Any, db: Any, value_getter: Any = None) -> None:
                 (instance_id,),
             )
             bindings, issues = await reload_instance_from_rows(instance, binding_rows)
+            await _announce_started(event_bus, instance_id, adapter_type, instance)
 
             logger.info(
                 "Adapter gestartet: %s '%s' (%d Bindings, %d invalid skipped)",
@@ -186,6 +189,17 @@ def get_status() -> dict[str, dict]:
     return result
 
 
+async def _announce_started(event_bus: Any, instance_id: str, adapter_type: str, instance: Any) -> None:
+    """Erst jetzt ist die Instanz per ID auffindbar und kennt ihre Bindings (#1370)."""
+    await event_bus.publish(
+        AdapterInstanceStartedEvent(
+            instance_id=uuid.UUID(instance_id),
+            adapter_type=adapter_type,
+            connected=bool(getattr(instance, "connected", False)),
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Hot-Reload einer einzelnen Instanz (für API: PATCH /instances/{id})
 # ---------------------------------------------------------------------------
@@ -232,6 +246,7 @@ async def restart_instance(instance_id: str, event_bus: Any, db: Any, value_gett
             (instance_id,),
         )
         bindings, issues = await reload_instance_from_rows(instance, binding_rows)
+        await _announce_started(event_bus, instance_id, row["adapter_type"], instance)
 
         logger.info(
             "Adapter neu gestartet: %s '%s' (%d Bindings, %d invalid skipped)",

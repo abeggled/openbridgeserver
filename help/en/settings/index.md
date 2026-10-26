@@ -16,6 +16,7 @@ tabbed page. Which tabs are visible depends on the signed-in user's permissions 
 | [API Keys](./apikeys) | Keys for programmatic access to the API |
 | [Security](./security) | Security check and security-relevant events |
 | [Support](./support) | Diagnostics package, debug mode, and remote support access |
+| [Updates](./updates) | Update channel, update check, release notes and system data points |
 | [Links](./links) | Custom links in the sidebar |
 | [Hierarchy](./hierarchy) | Tree structures (e.g. building, floor, room) for grouping data points and Logic graphs |
 | [Data Management](./importexport) | Import and export of configuration, database, and KNX project |

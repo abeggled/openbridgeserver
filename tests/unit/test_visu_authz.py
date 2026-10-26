@@ -1165,7 +1165,7 @@ async def test_factory_reset_removes_visu_page_grants_and_preserves_unrelated_gr
                (principal_type, principal_id, node_type, node_id, role, effect)
            VALUES ('user', 'alice', 'logic_capability', 'http_request', 'resident', 'deny')"""
     )
-    monkeypatch.setattr(config_api, "get_registry", lambda: SimpleNamespace(_points={}, _values={}))
+    monkeypatch.setattr(config_api, "get_registry", lambda: SimpleNamespace(forget=lambda keep=(): None))
 
     with (
         patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
