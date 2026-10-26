@@ -16,6 +16,7 @@ tabbed page. Which tabs are visible depends on the signed-in user's permissions 
 | [API Keys](./apikeys) | Keys for programmatic access to the API |
 | [Security](./security) | Security check and security-relevant events |
 | [Support](./support) | Diagnostics package, debug mode, and remote support access |
+| [Updates](./updates) | Update channel, update check, release notes and system data points |
 | [Links](./links) | Custom links in the sidebar |
 | [Visu devices](./visu-devices) | Start page and automatic return per Visu device |
 | [Visu alarms](./visu-alarms) | Bring messages or pages to the foreground of the Visu on events |

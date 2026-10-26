@@ -235,7 +235,9 @@
       "bindingDisabled": "Disabled",
       "graphDisabled": "Disabled"
     },
-    "allAdapters": "All adapters"
+    "allAdapters": "All adapters",
+    "system": "System",
+    "systemReadOnly": "System DataPoint: managed by OBS and read-only."
   },
   "adapters": {
     "title": "Adapter Instances",
@@ -384,6 +386,7 @@
       "directionWrite": "Write (to adapter)",
       "directionReadWrite": "Read/Write (from/to adapter)",
       "timerReadOnlyHint": "The timer is a read-only source.",
+      "systemDestOnlyHint": "System DataPoints are read-only: their value can only be sent.",
       "groupAddressLabel": "Group address *",
       "groupAddressPlaceholder": "e.g. 1/2/3 or search name …",
       "selectDpt": "Select DPT …",
@@ -407,6 +410,7 @@
         "selectIoBrokerInstanceFirst": "Please select an ioBroker instance first",
         "noStatesFound": "No states found",
         "ioBrokerStatesLoadFailed": "Could not load ioBroker states",
+        "ioBrokerStateNotWritable": "This ioBroker state is read-only and cannot receive the value of a system DataPoint",
         "noOidsFound": "No OIDs found",
         "snmpWalkFailed": "SNMP walk failed",
         "invalidJson": "Invalid JSON: {msg}",
@@ -2950,7 +2954,8 @@
       "security": "Security",
       "support": "Support",
       "visuDevices": "Visu devices",
-      "visuAlarms": "Visu alarms"
+      "visuAlarms": "Visu alarms",
+      "updates": "Updates"
     },
     "general": {
       "title": "General settings",
@@ -3377,6 +3382,7 @@
       "knxImportResultOk": "{n} group addresses imported",
       "knxImportResultCreated": ", {n} data points created",
       "knxImportResultUpdated": ", {n} updated",
+      "knxImportResultSkippedSystem": ", {n} skipped (group address already served by a system data point)",
       "knxImportResultLocations": ", {n} rooms/buildings",
       "knxImportResultTrades": ", {n} trades",
       "importResultOk": "Restore OK: {objects} objects, {bindings} bindings",
@@ -3886,5 +3892,57 @@
     "unavailable": "No help is available for this section yet.",
     "systemUnavailable": "Help content is currently unavailable on this server.",
     "openInNewTab": "Open in new tab"
+  },
+  "updates": {
+    "title": "Updates",
+    "channel": "Update channel",
+    "channels": {
+      "stable": "Stable",
+      "pre-release": "Pre-release",
+      "nightly": "Nightly"
+    },
+    "channelHints": {
+      "stable": "Reports regular releases only.",
+      "pre-release": "Reports regular releases and release candidates, but no nightlies.",
+      "nightly": "Reports daily nightly builds only – not meant for production use."
+    },
+    "checkNow": "Check now",
+    "actionFailed": "The action failed. Please try again later.",
+    "status": {
+      "installed": "Installed version",
+      "latest": "Latest version",
+      "availability": "Update",
+      "available": "Update available",
+      "upToDate": "Up to date",
+      "unknown": "Unknown",
+      "lastSuccess": "Last successful check",
+      "lastCheck": "Last check attempt",
+      "nextCheck": "Next automatic check",
+      "never": "never",
+      "stale": "The last check failed – the result shown may be out of date.",
+      "disabled": "The online check is disabled in the configuration (update_check.enabled = false)."
+    },
+    "errors": {
+      "network": "The update server could not be reached.",
+      "rate_limited": "GitHub rejected the request because of too many requests.",
+      "http_status": "The update server answered with an error.",
+      "invalid_response": "The update server sent an invalid response.",
+      "internal": "The check failed with an internal error."
+    },
+    "notice": {
+      "title": "New version {version} available",
+      "details": "Channel: {channel} · installed: {installed} · latest: {latest} · checked: {checked}",
+      "releaseNotes": "Release notes",
+      "openSettings": "Details"
+    },
+    "releaseNotes": {
+      "title": "Release notes",
+      "range": "Changes after {installed} up to and including {latest}",
+      "empty": "No release notes available.",
+      "loadError": "The release notes could not be loaded.",
+      "openOnGithub": "Open on GitHub"
+    },
+    "statusLoadError": "The update status could not be loaded.",
+    "retry": "Try again"
   }
 }

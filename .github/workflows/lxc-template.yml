@@ -7,6 +7,12 @@ on:
       - '!nightly-*'  # nightly-lxc.yml creates these; must not trigger a real release/build
 
   workflow_dispatch:
+    inputs:
+      nightly_date:
+        description: 'Set by nightly-lxc.yml only: the UTC date (YYYYMMDD) of the nightly release this build becomes'
+        required: false
+        type: string
+        default: ''
 
 env:
   TEMPLATE_NAME: openbridgeserver
@@ -52,9 +58,20 @@ jobs:
         env:
           GITHUB_REF_SAFE: ${{ github.ref }}
           GITHUB_REF_NAME_SAFE: ${{ github.ref_name }}
+          NIGHTLY_DATE: ${{ inputs.nightly_date }}
         run: |
           # On a tag push use the tag name directly; fall back for manual runs
-          if [[ "$GITHUB_REF_SAFE" == refs/tags/* ]]; then
+          if [[ -n "$NIGHTLY_DATE" ]]; then
+            # A nightly: the tag nightly-lxc.yml publishes this build under. It
+            # also lands in /opt/obs/version, which the update check (#1370)
+            # prefers over obs/version — `git describe` would name whatever tag
+            # already sits on this commit, e.g. the previous nightly.
+            if ! [[ "$NIGHTLY_DATE" =~ ^[0-9]{8}$ ]]; then
+              echo "Invalid nightly_date: $NIGHTLY_DATE" >&2
+              exit 1
+            fi
+            VERSION="nightly-${NIGHTLY_DATE}"
+          elif [[ "$GITHUB_REF_SAFE" == refs/tags/* ]]; then
             VERSION="$GITHUB_REF_NAME_SAFE"
             if ! [[ "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
               echo "Invalid tag format: $VERSION" >&2
@@ -121,7 +138,19 @@ jobs:
           chmod +x obs-update
 
       - name: Stamp version file
+        env:
+          NIGHTLY_DATE: ${{ inputs.nightly_date }}
         run: |
+          if [[ -n "$NIGHTLY_DATE" ]]; then
+            # A nightly: nightly-lxc.yml passes the date of the release tag it
+            # publishes, so the stamp matches that tag even when the build runs
+            # past UTC midnight. Stamped like the nightly Docker image, the update
+            # check (#1370) recognises the install as that nightly. Any other
+            # manual run keeps the RELEASENOTES stamp below. The metadata step
+            # has already validated NIGHTLY_DATE.
+            echo "nightly-${NIGHTLY_DATE}-$(git rev-parse --short=7 HEAD)" > obs/version
+            exit 0
+          fi
           BASE=$(grep -m1 '^## ' RELEASENOTES.md | sed 's/^## *//')
           TAG="${{ steps.meta.outputs.version }}"
           if [[ "$TAG" =~ (-RC[0-9]*)$ ]]; then RC="${BASH_REMATCH[1]}"; else RC=""; fi

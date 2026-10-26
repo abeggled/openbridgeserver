@@ -372,6 +372,7 @@ class ZeitschaltuhrAdapter(AdapterBase):
     adapter_type = "ZEITSCHALTUHR"
     config_schema = ZeitschaltuhrConfig
     binding_config_schema = ZeitschaltuhrBindingConfig
+    writes_values = False
 
     def __init__(
         self,
