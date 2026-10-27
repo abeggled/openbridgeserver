@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import obs.api.v1.icons as icons_api
+from obs.api.auth import Principal
 from obs.api.v1.icons import (
     _fa_cdn_svg,
     _fa_exchange_token,
@@ -24,6 +25,9 @@ _SIMPLE_SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>'
 # ---------------------------------------------------------------------------
 # _icons_dir — non-in-memory DB path (lines 98-105)
 # ---------------------------------------------------------------------------
+
+
+_ADMIN_PRINCIPAL = Principal(subject="admin", type="user", is_admin=True)
 
 
 def test_icons_dir_non_memory_path(monkeypatch, tmp_path):
@@ -71,7 +75,7 @@ async def test_list_icons_skips_unreadable_file(tmp_path, monkeypatch):
     bad.touch()
     bad.chmod(0o000)
     try:
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 0
     finally:
         bad.chmod(0o644)
@@ -83,7 +87,7 @@ async def test_list_icons_invalid_svg_returns_empty_content(tmp_path, monkeypatc
     monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
     broken = tmp_path / "broken.svg"
     broken.write_bytes(b"<svg><unclosed")  # invalid XML
-    result = await icons_api.list_icons(_user="admin")
+    result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
     assert result.total == 1
     assert result.icons[0].content == ""
 
@@ -196,7 +200,7 @@ async def test_get_icon_secure_filename_mismatch(tmp_path, monkeypatch):
 
     # Alphanumeric with dots — secure_filename keeps dots but regex rejects
     with pytest.raises(HTTPException) as exc_info:
-        await icons_api.get_icon(name="icon.extra", _user="admin")
+        await icons_api.get_icon(name="icon.extra", request=None, principal=_ADMIN_PRINCIPAL, db=None)
     assert exc_info.value.status_code == 400
 
 
@@ -207,7 +211,7 @@ async def test_get_icon_path_traversal_rejected(tmp_path, monkeypatch):
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        await icons_api.get_icon(name="valid" * 50, _user="admin")
+        await icons_api.get_icon(name="valid" * 50, request=None, principal=_ADMIN_PRINCIPAL, db=None)
     # Either 400 (invalid name regex) or 404 (not found) — either is acceptable
     assert exc_info.value.status_code in (400, 404)
 
@@ -730,5 +734,5 @@ async def test_get_icon_leading_underscore_rejected(tmp_path, monkeypatch):
 
     # "_icon" passes regex but secure_filename changes it → 400
     with pytest.raises(HTTPException) as exc_info:
-        await icons_api.get_icon(name="_icon", _user="admin")
+        await icons_api.get_icon(name="_icon", request=None, principal=_ADMIN_PRINCIPAL, db=None)
     assert exc_info.value.status_code == 400
