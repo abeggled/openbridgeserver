@@ -36,4 +36,5 @@ stays stored but does not trigger.
   accepted from the Visu itself (not from other web pages) and is written to the audit log with the
   device's address.
 - Alarms are part of the app settings and therefore included in configuration export, backups and
-  factory reset. Active alarms end when the server restarts.
+  factory reset. Active alarms end when the server restarts; the first value a datapoint
+  reports afterwards counts as its baseline and does not raise an alarm yet.

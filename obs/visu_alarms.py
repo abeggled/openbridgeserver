@@ -10,7 +10,9 @@ becomes false again, as configured per alarm.
 Definitions are configured centrally in the Admin GUI and stored as one JSON
 document under the `visu.alarms` app setting (like `visu.devices`), so backup,
 export/import and factory reset carry them along. Active alarms live in memory
-only: a restart never raises an alarm whose condition was already true before.
+only: a restart never raises an alarm whose condition was already true before —
+a datapoint without a known value at start-up gets its baseline from the first
+value it reports, which is therefore never treated as a change.
 
 What reaches the Visu is the alarm's display data the administrator wrote —
 never datapoint values — so the channel can serve anonymous viewers as well.
@@ -177,6 +179,10 @@ class VisuAlarmEngine:
         self._alarms: list[VisuAlarm] = []
         self._by_datapoint: dict[str, list[VisuAlarm]] = {}
         self._condition: dict[str, bool] = {}
+        # Alarms whose datapoint had no value yet when they were configured (typically
+        # right after a restart with persist_value=false): their first good value only
+        # sets the baseline, it is not an edge.
+        self._unknown: set[str] = set()
         self._active: dict[str, _Active] = {}
         self._listeners: set[asyncio.Queue[list[dict[str, Any]]]] = set()
 
@@ -186,15 +192,23 @@ class VisuAlarmEngine:
 
         Conditions start from the datapoints' current values, so an alarm only
         fires on a *change* after it was saved — never for a state that was
-        already present. Active alarms that were removed or disabled end; the
-        others keep running with their updated display data.
+        already present. A datapoint without a value yet (after a restart, before
+        the adapter's first reading) takes that first reading as its baseline.
+        Active alarms that were removed or disabled end; the others keep running
+        with their updated display data.
         """
         self._alarms = [a for a in alarms if a.enabled]
         by_id = {a.id: a for a in self._alarms}
         self._by_datapoint = {}
         for alarm in self._alarms:
             self._by_datapoint.setdefault(alarm.datapoint_id, []).append(alarm)
-        self._condition = {a.id: self._current_condition(a) for a in self._alarms}
+        self._condition = {}
+        self._unknown = set()
+        for alarm in self._alarms:
+            condition = self._current_condition(alarm)
+            if condition is None:
+                self._unknown.add(alarm.id)
+            self._condition[alarm.id] = bool(condition)
         self._active = {aid: _Active(by_id[aid], act.since) for aid, act in self._active.items() if aid in by_id}
         # An active alarm whose new definition has no acknowledge button ends only when
         # its condition clears. If the condition is already false now, that end has
@@ -203,12 +217,14 @@ class VisuAlarmEngine:
         self._active = {aid: act for aid, act in self._active.items() if act.alarm.ack_button or self._condition[aid]}
         self._notify()
 
-    def _current_condition(self, alarm: VisuAlarm) -> bool:
+    def _current_condition(self, alarm: VisuAlarm) -> bool | None:
+        """The condition for the datapoint's current value; None when there is no value yet."""
         if self._value_getter is None:
+            # No registry wired (tests): nothing to know, start from "not met".
             return False
         state = self._value_getter(uuid.UUID(alarm.datapoint_id))
         if state is None or getattr(state, "value", None) is None:
-            return False
+            return None
         return evaluate_condition(state.value, alarm.operator, alarm.compare_value)
 
     # ── runtime ──────────────────────────────────────────────────────────────
@@ -225,6 +241,10 @@ class VisuAlarmEngine:
             met = evaluate_condition(event.value, alarm.operator, alarm.compare_value)
             was = self._condition.get(alarm.id, False)
             self._condition[alarm.id] = met
+            if alarm.id in self._unknown:
+                # First value since the restart: the baseline, not a change.
+                self._unknown.discard(alarm.id)
+                continue
             if event.initialization:
                 # Start-up values (e.g. a logic sheet's first run) only set the baseline,
                 # so the same value arriving again later is not mistaken for a rising edge.

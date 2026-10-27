@@ -217,6 +217,9 @@ async def test_configure_starts_from_current_values_and_keeps_or_ends_active_ala
 
     await engine.handle_value_event(event(True))  # already true before: no edge
     assert engine.active() == []
+    await engine.handle_value_event(event(True, datapoint=DP2))  # no value before: the first reading is the baseline
+    assert engine.active() == []
+    await engine.handle_value_event(event(False, datapoint=DP2))
     await engine.handle_value_event(event(True, datapoint=DP2))
     assert [a["id"] for a in engine.active()] == ["phone"]
 
@@ -224,6 +227,61 @@ async def test_configure_starts_from_current_values_and_keeps_or_ends_active_ala
     assert engine.active()[0]["title"] == "Telefon klingelt"  # still active, updated display
     engine.configure([alarm()])
     assert engine.active() == []  # removed alarm ends
+
+
+class _Registry:
+    """A DataPointRegistry stand-in: value_getter(uuid) -> state with .value, or None."""
+
+    def __init__(self, **values):
+        self.values = values  # datapoint id -> value (missing = no value yet)
+
+    def __call__(self, datapoint_id):
+        value = self.values.get(str(datapoint_id))
+        return None if value is None else SimpleNamespace(value=value)
+
+
+async def test_first_value_after_a_restart_is_the_baseline_not_an_edge():
+    # persist_value=false: after a restart the registry has no value until the adapter reports one.
+    engine = VisuAlarmEngine(value_getter=_Registry())
+    engine.configure([alarm()])
+
+    # The retained MQTT message / KNX start-up read arrives as an ordinary event.
+    await engine.handle_value_event(event(True))
+    assert engine.active() == []
+    # The same value again is still no change; a real change afterwards raises.
+    await engine.handle_value_event(event(True))
+    assert engine.active() == []
+    await engine.handle_value_event(event(False))
+    await engine.handle_value_event(event(True))
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+
+async def test_a_failed_first_read_does_not_use_up_the_baseline():
+    engine = VisuAlarmEngine(value_getter=_Registry())
+    engine.configure([alarm()])
+
+    await engine.handle_value_event(event(None, quality="bad"))
+    await engine.handle_value_event(event(True))  # still the first good value: baseline
+    assert engine.active() == []
+
+
+async def test_a_known_value_at_configure_time_keeps_the_normal_edge_detection():
+    engine = VisuAlarmEngine(value_getter=_Registry(**{DP: False}))
+    engine.configure([alarm()])
+
+    await engine.handle_value_event(event(True))
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+
+async def test_a_value_already_true_at_configure_time_raises_nothing_until_a_new_edge():
+    engine = VisuAlarmEngine(value_getter=_Registry(**{DP: True}))
+    engine.configure([alarm()])
+
+    await engine.handle_value_event(event(True))
+    assert engine.active() == []
+    await engine.handle_value_event(event(False))
+    await engine.handle_value_event(event(True))
+    assert len(engine.active()) == 1
 
 
 async def test_editing_an_active_alarm_to_end_on_clear_only_ends_it_when_already_clear():
@@ -419,9 +477,11 @@ async def test_acknowledge_route_ends_the_alarm_and_audits_it(db):
     "headers",
     [
         {"Host": "obs.local", "Origin": "http://evil.example"},
-        {"Host": "obs.local:8080", "Origin": "http://obs.local"},  # other port = other origin
         {"Host": "obs.local", "Origin": "null"},  # sandboxed frame / file: page
         {"Host": "internal:8080", "X-Forwarded-Host": "obs.example.org", "Origin": "http://internal:8080"},
+        # The browser's own verdict wins, whatever Origin and Host look like.
+        {"Host": "obs.local", "Origin": "http://obs.local", "Sec-Fetch-Site": "cross-site"},
+        {"Host": "obs.local", "Origin": "http://obs.local:8081", "Sec-Fetch-Site": "same-site"},  # another app, other port
     ],
 )
 async def test_acknowledge_rejects_requests_from_other_sites(db, headers):
@@ -445,6 +505,13 @@ async def test_acknowledge_rejects_requests_from_other_sites(db, headers):
         {"Host": "obs.local:8080", "Origin": "http://obs.local:8080"},
         {"Host": "OBS.local", "Origin": "https://obs.LOCAL"},  # scheme may differ behind a TLS proxy
         {"Host": "internal:8080", "X-Forwarded-Host": "obs.example.org, proxy", "Origin": "https://obs.example.org"},
+        # nginx ACCESS_SPEC: `proxy_set_header Host $host` drops the port the browser used.
+        {"Host": "obs", "Origin": "https://obs:8443"},
+        # nginx GATEWAY_SPEC: Host is the upstream address — the browser's Sec-Fetch-Site still says same-origin.
+        {"Host": "127.0.0.1:18080", "Origin": "https://obs:8443", "Sec-Fetch-Site": "same-origin"},
+        {"Host": "127.0.0.1:18080", "Sec-Fetch-Site": "none"},  # direct navigation
+        # Vite dev server / a configured front-end origin (settings.cors.origins).
+        {"Host": "127.0.0.1:8080", "Origin": "http://localhost:5173"},
     ],
 )
 async def test_acknowledge_accepts_the_visu_itself(db, headers):

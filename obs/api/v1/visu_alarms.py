@@ -23,6 +23,7 @@ from fastapi import status as http_status
 
 from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, limiter
+from obs.config import get_settings
 from obs.db.database import Database, get_db
 from obs.visu_alarms import (
     VISU_ALARMS_KEY,
@@ -96,15 +97,28 @@ async def _require_known_device_profiles(slugs: set[str], db: Database) -> None:
 def _is_cross_origin(request: Request) -> bool:
     """True when a browser sends the request from a page of another site.
 
-    A body-less POST is a CORS "simple request": a page on any other host in the
-    LAN could send it without a preflight — but always with an Origin header. A
-    same-origin Visu sends the server's own origin, non-browser clients send none.
+    A body-less POST is a CORS "simple request": a page on any other host or port
+    in the LAN could send it without a preflight. Three checks, in this order:
+
+    1. ``Sec-Fetch-Site`` — every current browser sends it, and the browser works it
+       out itself, so a reverse proxy that rewrites ``Host`` cannot break it.
+       ``same-origin`` (and ``none``, a direct navigation) pass, anything else is
+       rejected.
+    2. Without it, a request without ``Origin`` does not come from a browser page.
+    3. Otherwise the ``Origin`` host name must match ``X-Forwarded-Host``/``Host``
+       (name only — behind a proxy the ports usually differ) or be one of the
+       configured ``cors.origins``.
     """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site:
+        return fetch_site.lower() not in ("same-origin", "none")
     origin = request.headers.get("origin")
     if not origin:
         return False
-    own_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-    return urlsplit(origin).netloc.lower() != own_host.split(",")[0].strip().lower()
+    if origin in get_settings().cors.origins:
+        return False
+    own = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    return (urlsplit(origin).hostname or "").lower() != (urlsplit(f"//{own}").hostname or "").lower()
 
 
 @router.get("/visu-alarms/active", response_model=list[ActiveVisuAlarm])

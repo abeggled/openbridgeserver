@@ -37,4 +37,5 @@ verhindern das Speichern. Ein deaktivierter Alarm bleibt gespeichert, löst aber
   Wandpanel funktioniert; es wird nur von der Visu selbst angenommen (nicht von fremden Webseiten)
   und mit Adresse des Geräts im Audit-Log protokolliert.
 - Die Alarme sind Teil der App-Einstellungen und damit in Konfigurations-Export, Backup und
-  Werksreset enthalten. Aktive Alarme enden bei einem Neustart des Servers.
+  Werksreset enthalten. Aktive Alarme enden bei einem Neustart des Servers; der erste Wert, den
+  ein Datenpunkt danach meldet, gilt als Ausgangszustand und löst noch keinen Alarm aus.

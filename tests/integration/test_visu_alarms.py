@@ -99,6 +99,7 @@ async def test_value_change_raises_alarm_visible_and_acknowledgeable_without_log
 
     # A page of another site cannot acknowledge; the Visu itself (same origin) can, without login.
     assert (await client.post(f"{URL}/post/acknowledge", headers={"Origin": "http://evil.example"})).status_code == 403
+    assert (await client.post(f"{URL}/post/acknowledge", headers={"Origin": "http://testserver", "Sec-Fetch-Site": "cross-site"})).status_code == 403
     assert (await client.post(f"{URL}/post/acknowledge", headers={"Origin": "http://testserver"})).status_code == 204
     assert (await client.get(f"{URL}/active")).json() == []
     assert (await client.post(f"{URL}/post/acknowledge")).status_code == 404
