@@ -47,8 +47,9 @@ Im aufgeklappten Zustand einer Instanz:
 - **Speichern** — übernimmt Änderungen und verbindet den Adapter neu.
 - **Neu verbinden** — trennt und verbindet die bestehende Konfiguration neu, ohne sie zu
   ändern.
-- **Importieren** (nur ioBroker) — übernimmt ioBroker-States als neue OBS-Objekte samt
-  Verknüpfung.
+- **Importieren** (ioBroker und Home Assistant) — übernimmt States bzw. Entities als neue
+  OBS-Objekte samt Verknüpfung; für Home Assistant siehe
+  [Home Assistant](#adapters-homeassistant).
 - **Objekte verwalten** (nur Anwesenheitssimulation) — wählt simulierte Boolean-/
   Integer-Objekte aus und verwaltet deren Bindings.
 - **Bindings migrieren** — verschiebt alle Verknüpfungen dieser Instanz auf eine andere
@@ -59,6 +60,135 @@ Im aufgeklappten Zustand einer Instanz:
 
 „Aktiviert" schaltet die Instanz komplett aus, ohne sie zu löschen — eine deaktivierte
 Instanz behält ihre Konfiguration und Bindings, verbindet sich aber nicht.
+
+## Home Assistant {#adapters-homeassistant}
+
+Der Adapter `HOME_ASSISTANT` bindet eine bestehende Home-Assistant-Instanz an. Home Assistant
+bleibt die Laufzeit für die Geräteintegrationen (z. B. Sonos, Velux); OBS bleibt führend für
+Objekte, Logik, Berechtigungen, Historie und Visualisierung. Mehrere Instanzen sind möglich.
+
+### Verbindung und Token
+
+- **Host/Port/SSL** — Adresse der Home-Assistant-Instanz (Standard-Port 8123).
+- **Zugriffstoken** — ein *langlebiges Zugriffstoken* aus dem Home-Assistant-Profil.
+  Für Entity-Zustände und Aktionen genügt ein normaler Benutzer. Geräte-, Bereichs- und
+  Integrationsangaben im Entity-Browser liefert Home Assistant nur einem
+  **Administrator**-Token; ohne sie funktioniert alles andere unverändert, der Browser
+  weist dann darauf hin.
+- Das Token wird nur an Home Assistant gesendet, nie protokolliert, und Nutzern ohne
+  Administratorrechte in OBS nie angezeigt.
+
+Der Status wechselt erst nach erfolgreicher Anmeldung auf *Verbunden*. OBS hält eine einzige
+WebSocket-Verbindung je Instanz, prüft sie alle 30 s per Ping und verbindet sich nach einem
+Abbruch mit wachsender Wartezeit (1 s bis 60 s) neu. Ein ungültiges Token wird als
+*Token ungültig* angezeigt.
+
+### Synchronisation und Qualität
+
+OBS abonniert nur die Entities, die von lesenden Verknüpfungen (Quelle/Beides) gebraucht
+werden. Nach jedem Verbindungsaufbau und nach jeder Änderung der Verknüpfungen liefert Home
+Assistant einen vollständigen Schnappschuss: eine neue Verknüpfung erhält ihren Wert sofort,
+und Änderungen während eines Verbindungsabbruchs gehen nicht verloren.
+
+| Home-Assistant-Zustand | Wert in OBS | Qualität |
+|---|---|---|
+| normaler Zustand | neuer Wert | good |
+| `unknown`, Übergangszustand (z. B. `locking`, `opening`) | letzter stabiler Wert | uncertain |
+| `unavailable`, Fehlerzustand (z. B. `jammed`), Entity entfernt | letzter stabiler Wert | bad |
+| Verbindung zu Home Assistant verloren | letzter stabiler Wert | bad |
+
+Nach einem Neustart von OBS gilt der gespeicherte Wert des Objekts als letzter stabiler Wert,
+auch wenn Home Assistant gerade nicht erreichbar ist. Eine Änderung an den Verknüpfungen sendet
+unveränderte Werte nicht erneut an andere Adapter.
+
+Nur Werte mit Qualität *good* werden an andere Verknüpfungen weitergereicht.
+
+### Entities importieren
+
+**Importieren** in der Instanz öffnet den Entity-Browser der verbundenen Instanz:
+
+1. Entities suchen und nach Domain, Bereich, Integration, Gerät und Verfügbarkeit filtern.
+2. Je Entity den vorgeschlagenen Eintrag anhaken oder aufklappen und gezielt wählen:
+   den Zustand mit einem passenden **Profil**, den Zustand ohne Profil (nur lesen) oder
+   einzelne **Attribute** (z. B. `current_position`, `volume_level`). Ein Attribut wird immer
+   nur lesend importiert; zum Steuern das passende Profil (z. B. *Position*) anhaken.
+3. **Vorschau** zeigt ohne jede Änderung, was entstehen würde: Name, Datentyp, Einheit,
+   Richtung, Tags, Lese-Zuordnung, Aktionen und die Boolesche Konvention (z. B.
+   *true = verriegelt*).
+4. **Importieren** legt nur Einträge mit Status *neu* an.
+
+Der Import ist wiederholbar: bereits verknüpfte Entities erscheinen als *vorhanden* und werden
+übersprungen. Wurde eine Entity in Home Assistant umbenannt, erkennt OBS sie an ihrer
+Registry-Identität und meldet einen *Konflikt*, statt ein Duplikat anzulegen. Ebenso ist es
+ein *Konflikt*, wenn derselbe Zustand bzw. dasselbe Attribut schon manuell (ohne Profil)
+verknüpft ist. Bestehende Objekte und Verknüpfungen werden nie überschrieben.
+
+### Profile
+
+Ein Profil beschreibt deklarativ, wie ein Zustand gelesen und welche Home-Assistant-Aktion
+beim Schreiben ausgelöst wird — ohne Templates oder Ausdrücke.
+
+| Profil | OBS-Wert | Aktion | Lesen |
+|---|---|---|---|
+| Verriegelt (`lock`) | true/false | `lock.lock` / `lock.unlock` | `locked` → true; `unlocked`, `open` → false |
+| Öffnen (`lock`) | Befehl | `lock.open` | — |
+| Offen/geschlossen (`cover`, `valve`) | true/false | `open_cover`/`close_cover` bzw. `open_valve`/`close_valve` | `open` → true; `closed` → false |
+| Position (`cover`, `valve`) | 0–100 | `set_cover_position` / `set_valve_position`, Feld `position` | Attribut `current_position` |
+| Stopp (`cover`, `valve`, `media_player`) | Befehl | `stop_cover` / `stop_valve` / `media_stop` | — |
+| Ein/Aus (`switch`, `input_boolean`, `fan`, `light`) | true/false | `turn_on` / `turn_off` | `on` → true |
+| Helligkeit (`light`) | 0–255 | `light.turn_on`, Feld `brightness` | Attribut `brightness` |
+| Zahlenwert (`number`, `input_number`) | Zahl | `set_value`, Feld `value` | Zustand |
+| Auswahl (`select`, `input_select`) | Text | `select_option`, Feld `option` | Zustand |
+| Text (`text`, `input_text`) | Text | `set_value`, Feld `value` | Zustand |
+| Drücken (`button`) / Szene (`scene`) | Befehl | `button.press` / `scene.turn_on` | — |
+| Medienplayer | Status, Lautstärke (0–1), Stumm, Quelle, Titel, Interpret, Wiedergabe/Pause, Ein/Aus, Weiter/Zurück | `media_play`/`media_pause`, `volume_set`, `volume_mute`, `select_source`, … | Zustand bzw. Attribute |
+
+**Befehls-Profile** lösen ihre Aktion nur bei `true` aus; `false` bewirkt nichts. Auf einem
+Zahlen-Objekt gelten 1 und 0 als `true` und `false`; ein Wert ohne zugeordnete Aktion gilt als
+fehlgeschlagener Schreibvorgang. Passt der Datentyp eines Profils nicht zum Objekt, weist das
+Verknüpfungsformular darauf hin. Ein Profil
+wird nur angeboten, wenn die Entity die nötige Funktion meldet. Mehrdeutige Domains
+(Alarmanlage, Klima, Staubsauger, Rasenmäher, Medienplayer-Wiedergabe gegenüber Ein/Aus)
+erhalten nie eine stillschweigende Schreibzuordnung: ohne ausdrücklich gewähltes Profil
+werden sie nur lesend importiert.
+
+Beispiele: Ein **Velux**-Dachfenster wird mit *Offen/geschlossen*, dem Attribut
+`current_position` (Profil *Position*) und *Stopp* vollständig bedienbar. Ein **Sonos**-Player
+mit *Status*, *Lautstärke*, *Stumm*, *Wiedergabe/Pause* sowie *Weiter*/*Zurück*.
+
+### Verknüpfung bearbeiten
+
+Im Verknüpfungsformular lassen sich Profil, Attribut und die **aufgelöste Zuordnung**
+einsehen und ändern. Entity-ID, Attribut, Service Domain, Service Name und Service Data Key
+sind durchsuchbar: Beim Tippen schlägt OBS die Entities, Attribute, Domains, Aktionen und
+Datenfelder der gewählten, verbundenen Instanz vor. Freie Eingabe bleibt möglich, etwa wenn
+Home Assistant gerade nicht erreichbar ist. Der Entity-Browser im Import-Dialog sucht ebenfalls
+schon während der Eingabe. Die manuellen Felder *Service Domain*, *Service Name* und
+*Service Data Key* funktionieren wie bisher und haben Vorrang vor einem Profil — bestehende
+Verknüpfungen verhalten sich daher unverändert, eine Migration ist nicht nötig.
+Unter *Erweiterte Zuordnung (JSON)* sind zusätzlich möglich:
+
+- `action` — eine Aktion `{"domain", "name", "target", "data", "value_path"}`; der Wert
+  des Objekts landet im Feld `value_path`;
+- `write_actions` — wertabhängige Aktionen, z. B.
+  `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
+- `state_map`, `transitional_states`, `fault_states` — eigene Lese-Normalisierung.
+
+Die Aktion wird nach dem typisierten Objektwert gewählt; Formel und Wertzuordnung der
+Verknüpfung verändern nur den gesendeten Wert, nie die Auswahl der Aktion.
+
+### Grenzen und Fehlersuche
+
+- Lehnt Home Assistant eine Aktion ab, gilt der Schreibvorgang als fehlgeschlagen und die
+  Instanz zeigt die Warnung *Home Assistant hat … abgelehnt*, bis eine Aktion wieder gelingt.
+- Komplexe Aktionen (z. B. `play_media`, Gruppierung, Warteschlangen) und Antworten von
+  Aktionen werden nicht abgebildet.
+- *Token ungültig*: Token in Home Assistant neu erzeugen und in der Instanz eintragen.
+- Entity-IDs müssen dem Home-Assistant-Format `domain.name` entsprechen (Kleinbuchstaben,
+  Ziffern, `_`); eine ungültige Verknüpfung wird übersprungen, die übrigen laufen weiter.
+- Keine Geräte-/Bereichsangaben im Browser: Token eines Administrators verwenden.
+- Ein Objekt zeigt Qualität *bad*: Entity in Home Assistant prüfen (`unavailable`, entfernt)
+  oder Verbindung der Instanz prüfen.
 
 ## Webhook: eingehender HTTP-Aufruf als Quelle {#adapters-webhook}
 

@@ -344,6 +344,21 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("resource_count", "payload_sha256"),
     ),
+    ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import-preview"): _policy(
+        "adapter_instance",
+        "adapter.homeassistant.import_previewed",
+        result=True,
+        capability="adapter.declared",
+        details=("resource_count", "payload_sha256"),
+    ),
+    ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import"): _policy(
+        "adapter_instance",
+        "adapter.homeassistant.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        capability="adapter.create_datapoint+link_binding",
+        details=("resource_count", "payload_sha256", "error_count"),
+    ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import-preview"): _policy(
         "adapter_instance",
         "adapter.iobroker.import_previewed",

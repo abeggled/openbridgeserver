@@ -1,0 +1,365 @@
+"""Home Assistant entity browser filters and import planning (#1392).
+
+Pure functions: the API layer fetches entities from the live adapter and the
+existing bindings from the database, this module decides what an import would
+create.  Nothing here mutates anything, so the preview and the import share
+exactly the same plan.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, Field
+
+from obs.adapters.homeassistant.profiles import (
+    AMBIGUOUS_DOMAINS,
+    PROFILES,
+    HaBindingConfig,
+    HaProfile,
+    default_profile,
+    profile_supported,
+    profiles_for_domain,
+    resolve,
+)
+
+ENTITY_ID_PATTERN = r"^[a-z0-9_]+\.[a-z0-9_]+$"
+
+
+class HaImportSelection(BaseModel):
+    entity_id: str = Field(pattern=ENTITY_ID_PATTERN, max_length=255)
+    attribute: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_]+$", max_length=128)
+    # "auto" = proposed profile (visible in the preview); None = plain value, no profile
+    profile: str | None = Field(default="auto", max_length=64)
+    direction: Literal["auto", "SOURCE", "DEST", "BOTH"] = "auto"
+
+
+class HaImportRequest(BaseModel):
+    selections: list[HaImportSelection] = Field(default_factory=list, max_length=500)
+    tags: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=20)
+    persist_value: bool = True
+    record_history: bool = True
+
+
+class HaImportCandidate(BaseModel):
+    entity_id: str
+    attribute: str | None = None
+    profile: str | None = None
+    name: str
+    data_type: str
+    unit: str | None = None
+    direction: str
+    tags: list[str]
+    config: dict[str, Any]
+    mapping: dict[str, Any] | None = None
+    convention: str | None = None
+    status: Literal["new", "exists", "conflict", "unsupported"] = "new"
+    reason: str | None = None
+    existing_binding_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Browse filters
+# ---------------------------------------------------------------------------
+
+
+def filter_entities(
+    entities: list[dict[str, Any]],
+    *,
+    q: str = "",
+    domain: str = "",
+    area: str = "",
+    device: str = "",
+    platform: str = "",
+    availability: str = "",
+    offset: int = 0,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Filter, facet and page the entity list."""
+    needle = q.strip().lower()
+
+    def matches(item: dict[str, Any], skip: str = "") -> bool:
+        if needle and needle not in item["entity_id"].lower() and needle not in str(item.get("name") or "").lower():
+            return False
+        if skip != "domain" and domain and item["domain"] != domain:
+            return False
+        if skip != "area" and area and item.get("area") != area:
+            return False
+        if skip != "device" and device and item.get("device") != device:
+            return False
+        if skip != "platform" and platform and item.get("platform") != platform:
+            return False
+        if availability == "available" and not item.get("available"):
+            return False
+        return not (availability == "unavailable" and item.get("available"))
+
+    hits = [item for item in entities if matches(item)]
+
+    def facet(key: str) -> list[str]:
+        return sorted({str(item[key]) for item in entities if item.get(key) and matches(item, skip=key)})
+
+    return {
+        "total": len(hits),
+        "items": [_with_profiles(item) for item in hits[offset : offset + limit]],
+        "facets": {"domain": facet("domain"), "area": facet("area"), "device": facet("device"), "platform": facet("platform")},
+    }
+
+
+def _state_obj(item: dict[str, Any]) -> dict[str, Any]:
+    return {"state": item.get("state"), "attributes": item.get("attributes") or {}}
+
+
+def _with_profiles(item: dict[str, Any]) -> dict[str, Any]:
+    state_obj = _state_obj(item)
+    proposed = default_profile(item["domain"], state_obj)
+    profiles = []
+    for profile in profiles_for_domain(item["domain"]):
+        ok, reason = profile_supported(profile, state_obj)
+        profiles.append({"id": profile.id, "supported": ok, "reason": reason})
+    return {**item, "profiles": profiles, "default_profile": proposed.id if proposed else None}
+
+
+# ---------------------------------------------------------------------------
+# Import planning
+# ---------------------------------------------------------------------------
+
+
+def _infer_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, int):
+        return "INTEGER"
+    if isinstance(value, float):
+        return "FLOAT"
+    if isinstance(value, str):
+        try:
+            float(value)
+        except ValueError:
+            return "STRING"
+        return "FLOAT"
+    return "STRING"
+
+
+def _state_type(item: dict[str, Any]) -> str:
+    """Conservative OBS type for a plain state read (legacy coercion)."""
+    state = item.get("state")
+    if item["domain"] in ("switch", "input_boolean", "binary_sensor", "light", "fan") and state in ("on", "off"):
+        return "BOOLEAN"
+    if state in ("unknown", "unavailable", None):
+        return "FLOAT" if item.get("unit") else "STRING"
+    return "FLOAT" if _infer_type(state) == "FLOAT" else "STRING"
+
+
+def mapping_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """Human-readable resolved mapping, as shown by preview and the binding form."""
+    bc = HaBindingConfig(**config)
+    mapping = resolve(bc)
+    write: Any = None
+    if mapping.mode in ("legacy", "default"):
+        write = {"mode": mapping.mode}
+    elif mapping.write_actions is not None:
+        write = {k: a.model_dump(exclude_defaults=True) for k, a in mapping.write_actions.items()}
+    elif mapping.action is not None:
+        write = mapping.action.model_dump(exclude_defaults=True)
+    return {
+        "mode": mapping.mode,
+        "read": {
+            "attribute": mapping.attribute,
+            "state_map": mapping.state_map,
+            "transitional_states": sorted(mapping.transitional_states),
+            "fault_states": sorted(mapping.fault_states),
+        },
+        "write": write,
+    }
+
+
+def _choose_profile(sel: HaImportSelection, item: dict[str, Any]) -> tuple[HaProfile | None, str | None]:
+    domain = item["domain"]
+    state_obj = _state_obj(item)
+    if sel.profile is None:
+        return None, None
+    if sel.profile == "auto":
+        if sel.attribute:
+            for profile in profiles_for_domain(domain):
+                if profile.attribute == sel.attribute and not profile.explicit_only and profile_supported(profile, state_obj)[0]:
+                    return profile, None
+            return None, None
+        return default_profile(domain, state_obj), None
+    profile = PROFILES.get(sel.profile)
+    if profile is None or domain not in profile.domains or (sel.attribute and sel.attribute != profile.attribute):
+        return None, "profileNotApplicable"
+    ok, reason = profile_supported(profile, state_obj)
+    return (profile, None) if ok else (None, reason)
+
+
+def _name(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile | None) -> str:
+    base = str(item.get("name") or item["entity_id"])
+    if sel.attribute:
+        return f"{base} ({sel.attribute})"
+    if profile is not None and not profile.default:
+        return f"{base} ({profile.id.split('.', 1)[1]})"
+    return base
+
+
+def _tags(item: dict[str, Any], extra: list[str]) -> list[str]:
+    tags = ["homeassistant", item["domain"]]
+    for key in ("platform", "area", "device_class"):
+        if item.get(key):
+            tags.append(str(item[key]))
+    tags.extend(t.strip() for t in extra if t.strip())
+    seen: set[str] = set()
+    return [t for t in tags if not (t in seen or seen.add(t))]
+
+
+def _identity(config: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    return str(config.get("entity_id")), config.get("attribute") or None, config.get("profile") or None
+
+
+def _read_source(config: dict[str, Any]) -> tuple[str, str | None] | None:
+    """(entity_id, attribute) a mapping reads; None for a pure command profile."""
+    profile = PROFILES.get(config.get("profile") or "")
+    if profile is not None and profile.direction == "DEST":
+        return None
+    attribute = config.get("attribute") or (profile.attribute if profile else None)
+    return str(config.get("entity_id")), attribute or None
+
+
+def plan_import(
+    entities: list[dict[str, Any]],
+    request: HaImportRequest,
+    existing: list[tuple[str, dict[str, Any]]],
+) -> list[HaImportCandidate]:
+    """Plan the import. *existing* holds (binding_id, config) of this instance."""
+    by_id = {item["entity_id"]: item for item in entities}
+    by_identity = {_identity(cfg): binding_id for binding_id, cfg in existing}
+    # Same entity value, mapped by hand (no profile) on one side: importing it again
+    # would create a second object for the same device value.
+    manual_reads: dict[tuple[str, str | None], str] = {}
+    profiled_reads: dict[tuple[str, str | None], str] = {}
+    for binding_id, cfg in existing:
+        source = _read_source(cfg)
+        if source is not None:
+            (profiled_reads if cfg.get("profile") else manual_reads).setdefault(source, binding_id)
+    by_uid = {
+        (cfg.get("ha_uid"), cfg.get("attribute") or None, cfg.get("profile") or None): (binding_id, cfg)
+        for binding_id, cfg in existing
+        if cfg.get("ha_uid")
+    }
+
+    result: list[HaImportCandidate] = []
+    planned: dict[tuple[str, str | None, str | None], int] = {}
+    for sel in request.selections:
+        item = by_id.get(sel.entity_id)
+        if item is None:
+            result.append(_unsupported(sel, "entityNotFound"))
+            continue
+        profile, reason = _choose_profile(sel, item)
+        if reason:
+            result.append(_unsupported(sel, reason))
+            continue
+        candidate = _candidate(item, sel, profile, request.tags)
+        if candidate.status == "unsupported":
+            result.append(candidate)
+            continue
+
+        identity = _identity(candidate.config)
+        if identity in planned:
+            # The same binding selected twice (e.g. an attribute and its profile):
+            # plan it once, with the wider direction the user asked for.
+            first = result[planned[identity]]
+            if candidate.direction == "BOTH":
+                first.direction = "BOTH"
+            continue
+        planned[identity] = len(result)
+        if identity in by_identity:
+            candidate.status, candidate.reason = "exists", "bindingExists"
+            candidate.existing_binding_id = by_identity[identity]
+        elif (uid_match := by_uid.get((candidate.config.get("ha_uid"), identity[1], identity[2]))) is not None:
+            # Same HA registry entry under another entity_id: renamed in HA.
+            candidate.status, candidate.reason = "conflict", "entityRenamed"
+            candidate.existing_binding_id = uid_match[0]
+        elif (overlap := _overlap(candidate.config, manual_reads, profiled_reads)) is not None:
+            candidate.status, candidate.reason = "conflict", "entityAlreadyBound"
+            candidate.existing_binding_id = overlap
+        result.append(candidate)
+    return result
+
+
+def _overlap(config: dict[str, Any], manual_reads: dict, profiled_reads: dict) -> str | None:
+    source = _read_source(config)
+    if source is None:
+        return None
+    # A manual existing binding conflicts with any candidate; a manual candidate with any binding.
+    return manual_reads.get(source) or (profiled_reads.get(source) if not config.get("profile") else None)
+
+
+def _unsupported(sel: HaImportSelection, reason: str) -> HaImportCandidate:
+    return HaImportCandidate(
+        entity_id=sel.entity_id,
+        attribute=sel.attribute,
+        profile=sel.profile if sel.profile != "auto" else None,
+        name=sel.entity_id,
+        data_type="STRING",
+        direction=sel.direction,
+        tags=[],
+        config={},
+        status="unsupported",
+        reason=reason,
+    )
+
+
+def _candidate(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile | None, extra_tags: list[str]) -> HaImportCandidate:
+    attrs = item.get("attributes") or {}
+    domain = item["domain"]
+    reason: str | None = None
+
+    if profile is not None:
+        data_type = _state_type(item) if profile.data_type == "AUTO" else profile.data_type
+        # Ticking an attribute means "read this value": it never silently becomes a write binding.
+        default_direction = "SOURCE" if sel.attribute and profile.direction == "BOTH" else profile.direction
+        unit = profile.unit or (item.get("unit") if profile.attribute is None else None)
+        read_attribute = None  # the profile defines what is read
+    elif sel.attribute:
+        if sel.attribute not in attrs:
+            reason = "attributeUnavailable"
+        data_type = _infer_type(attrs.get(sel.attribute))
+        default_direction, unit, read_attribute = "SOURCE", None, sel.attribute
+    else:
+        data_type, default_direction, unit, read_attribute = _state_type(item), "SOURCE", item.get("unit"), None
+
+    direction = default_direction if sel.direction == "auto" else sel.direction
+    if reason is None and direction in ("DEST", "BOTH"):
+        if profile is None:
+            reason = "writeNeedsProfile"
+        elif profile.direction == "SOURCE":
+            reason = "profileReadOnly"
+    if reason is None and direction in ("SOURCE", "BOTH") and profile is not None and profile.direction == "DEST":
+        reason = "profileWriteOnly"
+
+    config: dict[str, Any] = {"entity_id": item["entity_id"]}
+    if read_attribute:
+        config["attribute"] = read_attribute
+    if profile is not None:
+        config["profile"] = profile.id
+    if item.get("ha_uid"):
+        config["ha_uid"] = item["ha_uid"]
+
+    candidate = HaImportCandidate(
+        entity_id=item["entity_id"],
+        attribute=sel.attribute,
+        profile=profile.id if profile else None,
+        name=_name(item, sel, profile),
+        data_type=data_type,
+        unit=unit,
+        direction=direction,
+        tags=_tags(item, extra_tags),
+        config=config,
+        convention=profile.convention if profile else None,
+    )
+    if reason is None and profile is None and domain in AMBIGUOUS_DOMAINS and sel.attribute is None:
+        candidate.reason = "ambiguousReadOnly"  # informational: imported read-only
+    if reason is not None:
+        candidate.status, candidate.reason = "unsupported", reason
+        return candidate
+    candidate.mapping = mapping_summary(config)
+    return candidate
