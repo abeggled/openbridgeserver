@@ -21,6 +21,7 @@ WidgetRegistry.register({
     preserve_icon_color: false,
     label_size: 'sm',
     active_indicator: 'none',
+    icon_size: 0,
   },
   compatibleTypes: ['*'],
   noDatapoint: true,

@@ -643,6 +643,8 @@
       "activeIndicatorLine": "Line (bottom)",
       "activeIndicatorNone": "None",
       "defaultLabel": "Link",
+      "iconSize": "Icon size (px)",
+      "iconSizeHint": "0 = default size. Wide SVG icons keep their aspect ratio.",
       "labelPlaceholder": "e.g. Living room",
       "noTarget": "No target",
       "showArrow": "Show navigation arrow (→)",

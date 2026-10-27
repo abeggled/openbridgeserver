@@ -131,6 +131,19 @@ describe('useAuthStore', () => {
     expect(store.isLoggedIn).toBe(false)
   })
 
+  it('updates isLoggedIn after a login and a logout when it was already read', async () => {
+    authApiMock.login.mockResolvedValue({ data: { access_token: 'at', refresh_token: 'rt' } })
+    authApiMock.me.mockResolvedValue({ data: { id: 1 } })
+    const { useAuthStore } = await import('@/stores/auth')
+    const store = useAuthStore()
+    // Read on the login page, before the token exists: a cached false must not survive.
+    expect(store.isLoggedIn).toBe(false)
+    await store.login('admin', 'secret')
+    expect(store.isLoggedIn).toBe(true)
+    store.logout()
+    expect(store.isLoggedIn).toBe(false)
+  })
+
   it('isAdmin reflects user.is_admin', async () => {
     const { useAuthStore } = await import('@/stores/auth')
     const store = useAuthStore()

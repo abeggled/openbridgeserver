@@ -47,7 +47,13 @@ from obs.api.auth import Principal, get_admin_user, get_current_principal, get_c
 from obs.api.authz import AuthzAction
 from obs.api.authz_service import adapter_delegates, authorize_adapter_instance, filter_authorized_datapoints
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
-from obs.api.v1.bindings import _ensure_binding_mutation_scope, _json_config, _validate_adapter_binding
+from obs.api.v1.bindings import (
+    _ensure_binding_mutation_scope,
+    _json_config,
+    _resend_system_value,
+    _validate_adapter_binding,
+    system_datapoint_bindable,
+)
 from obs.api.v1.redaction import REDACTED
 from obs.db.database import Database, get_db
 
@@ -75,6 +81,8 @@ class AdapterInstanceOut(BaseModel):
     status_detail_code: str | None = None  # key suffix under adapters.statusDetail.*
     status_detail_params: dict = {}
     bindings: int
+    # May bind a read-only system DataPoint (#1370), see system_datapoint_bindable().
+    system_bindable: bool = True
     created_at: str
     updated_at: str
 
@@ -401,6 +409,7 @@ def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
         status_detail_code=getattr(instance, "last_detail_code", None) if instance else None,
         status_detail_params=getattr(instance, "last_detail_params", {}) if instance else {},
         bindings=len(instance.get_bindings()) if instance else 0,
+        system_bindable=system_datapoint_bindable(row["adapter_type"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -932,6 +941,9 @@ async def migrate_instance_bindings(
 
     await adapter_registry.reload_instance_bindings(source_id, db)
     await adapter_registry.reload_instance_bindings(target_id, db)
+    # A system DataPoint's binding on the new instance gets the current value (#1370).
+    for binding_row in bindings_to_migrate:
+        await _resend_system_value(uuid.UUID(str(binding_row["datapoint_id"])), binding_row["id"])
 
     result = BindingMigrationResult(
         source_instance_id=source_instance_id,

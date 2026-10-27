@@ -176,6 +176,11 @@ class _RegistryStub:
     def get_value(self, dp_id):
         return self._values.get(dp_id)
 
+    def forget(self, keep=()):
+        for dp_id in [dp_id for dp_id in self._points if dp_id not in keep]:
+            del self._points[dp_id]
+            self._values.pop(dp_id, None)
+
     async def load_from_db(self):
         pass
 
@@ -671,13 +676,14 @@ async def test_import_config_updates_existing_binding(monkeypatch):
 
     bind_id = str(uuid.uuid4())
     # fetchone returns existing row
-    db = _DbStub(fetchone_result=_row({"id": bind_id, "adapter_type": "mqtt", "adapter_instance_id": None}))
+    dp_id = str(uuid.uuid4())
+    db = _DbStub(fetchone_result=_row({"id": bind_id, "datapoint_id": dp_id, "adapter_type": "mqtt", "adapter_instance_id": None}))
 
     body = _make_config_export(
         bindings=[
             config_api.ExportedBinding(
                 id=bind_id,
-                datapoint_id=str(uuid.uuid4()),
+                datapoint_id=dp_id,
                 adapter_type="mqtt",
                 direction="SOURCE",
                 config={"topic": "test"},
@@ -1484,8 +1490,6 @@ async def test_import_db_records_stop_and_restart_failures_but_completes(monkeyp
     monkeypatch.setattr("obs.config.get_settings", lambda: settings)
 
     reg = MagicMock()
-    reg._points = {}
-    reg._values = {}
     reg.load_from_db = AsyncMock()
     monkeypatch.setattr(config_api, "get_registry", lambda: reg)
 
