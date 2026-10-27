@@ -139,7 +139,7 @@ beim Schreiben ausgelöst wird — ohne Templates oder Ausdrücke.
 | Position (`cover`, `valve`) | 0–100 | `set_cover_position` / `set_valve_position`, Feld `position` | Attribut `current_position` |
 | Stopp (`cover`, `valve`, `media_player`) | Befehl | `stop_cover` / `stop_valve` / `media_stop` | — |
 | Ein/Aus (`switch`, `input_boolean`, `fan`, `light`) | true/false | `turn_on` / `turn_off` | `on` → true |
-| Helligkeit (`light`) | 0–255 | `light.turn_on`, Feld `brightness` | Attribut `brightness` |
+| Helligkeit (`light`) | 0–255 | `light.turn_on`, Feld `brightness` | Attribut `brightness`; ausgeschaltet → 0 |
 | Zahlenwert (`number`, `input_number`) | Zahl | `set_value`, Feld `value` | Zustand |
 | Auswahl (`select`, `input_select`) | Text | `select_option`, Feld `option` | Zustand |
 | Text (`text`, `input_text`) | Text | `set_value`, Feld `value` | Zustand |

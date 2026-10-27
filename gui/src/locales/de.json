@@ -1507,7 +1507,8 @@
         "text_value": "Text",
         "button_press": "Drücken (Befehl)",
         "scene_activate": "Szene aktivieren (Befehl)"
-      }
+      },
+      "refreshFailed": "Import abgeschlossen; die Vorschau konnte danach nicht aktualisiert werden. Zum Prüfen die Vorschau neu laden."
     }
   },
   "history": {

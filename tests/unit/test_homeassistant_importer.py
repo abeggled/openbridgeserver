@@ -328,3 +328,13 @@ class TestReviewFollowUps:
             {"entity_id": "light.desk", "profile": "light.brightness", "direction": "DEST"},
         )
         assert same.direction == "DEST"
+
+
+def test_widened_candidate_takes_part_in_the_duplicate_check():
+    merged, manual = _plan(
+        {"entity_id": "light.desk", "profile": "light.brightness", "direction": "DEST"},
+        {"entity_id": "light.desk", "profile": "light.brightness", "direction": "SOURCE"},
+        {"entity_id": "light.desk", "attribute": "brightness", "profile": None},
+    )
+    assert (merged.status, merged.direction) == ("new", "BOTH")
+    assert (manual.status, manual.reason) == ("conflict", "selectedTwice")

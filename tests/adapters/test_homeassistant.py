@@ -506,6 +506,18 @@ class TestStateChangedFallback:
         await _bind(adapter, make_binding({"entity_id": "sensor.other"}))
         assert [m["type"] for m in fake_ha.socket.sent].count("subscribe_entities") == 1
 
+    async def test_fallback_keeps_its_subscription_when_the_entity_set_changes(self, adapter, mock_bus, fake_ha):
+        await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))
+        other = make_binding({"entity_id": "sensor.other"})
+        await _bind(adapter, make_binding({"entity_id": "sensor.temp"}), other)
+        types = [m["type"] for m in fake_ha.socket.sent]
+        assert types.count("subscribe_events") == 1
+        assert "unsubscribe_events" not in types
+        assert types.count("get_states") == 2  # a new snapshot covers the new entity
+        assert _values(mock_bus, other) == [(1, "good")]
+        await _bind(adapter)  # nothing bound any more: drop the subscription
+        assert fake_ha.socket.sent[-1]["type"] == "unsubscribe_events"
+
 
 # ---------------------------------------------------------------------------
 # Read

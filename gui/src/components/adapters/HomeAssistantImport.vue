@@ -125,6 +125,7 @@
         unsupported: result.skipped_unsupported,
       }) }}
       <div v-for="e in result.errors" :key="e" class="text-red-400">{{ e }}</div>
+      <div v-if="refreshFailed" class="text-amber-500" data-testid="ha-refresh-failed">{{ $t('adapters.homeassistant.refreshFailed') }}</div>
     </div>
 
     <!-- Preview -->
@@ -194,6 +195,7 @@ const expanded = reactive({})
 const selected = ref(new Map())
 const plan = ref([])
 const result = ref(null)
+const refreshFailed = ref(false)
 
 const selections = computed(() => [...selected.value.values()])
 const importableCount = computed(() => plan.value.filter(c => c.status === 'new').length)
@@ -233,7 +235,10 @@ function attributeNames(item) {
 }
 
 function errorText(e, fallbackKey) {
-  return e?.response?.data?.detail ?? t(fallbackKey)
+  const detail = e?.response?.data?.detail
+  // FastAPI validation errors (422) carry a list of { loc, msg } objects
+  if (Array.isArray(detail)) return detail.map(d => d?.msg ?? String(d)).join('; ') || t(fallbackKey)
+  return detail ?? t(fallbackKey)
 }
 
 // Live search while typing; Enter still searches immediately.
@@ -293,14 +298,23 @@ async function preview() {
 async function runImport() {
   busy.value = 'import'
   error.value = null
+  refreshFailed.value = false
   try {
     const { data } = await adapterApi.haImport(props.instance.id, payload())
     result.value = data
+  } catch (e) {
+    error.value = errorText(e, 'adapters.homeassistant.importFailed')
+    busy.value = null
+    return
+  }
+  try {
     // Re-plan so what was just created shows as existing.
     const { data: fresh } = await adapterApi.haImportPreview(props.instance.id, payload())
     plan.value = fresh.preview
-  } catch (e) {
-    error.value = errorText(e, 'adapters.homeassistant.importFailed')
+  } catch {
+    // The import itself succeeded: never offer the stale plan for a second import.
+    plan.value = []
+    refreshFailed.value = true
   } finally {
     busy.value = null
   }

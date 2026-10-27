@@ -181,8 +181,14 @@ class TestProfileTable:
         assert profile_supported(PROFILES["lock.open"], {"attributes": {"supported_features": 0}}) == (False, "featureMissing")
         assert profile_supported(PROFILES["lock.open"], {"attributes": {"supported_features": 1}}) == (True, None)
         assert profile_supported(PROFILES["lock.open"], {"attributes": {}}) == (True, None)
-        assert profile_supported(PROFILES["light.brightness"], {"attributes": {}}) == (False, "attributeMissing")
-        assert profile_supported(PROFILES["light.brightness"], None) == (True, None)
+        assert profile_supported(PROFILES["cover.position"], {"attributes": {}}) == (False, "attributeMissing")
+        assert profile_supported(PROFILES["cover.position"], None) == (True, None)
+        # an off light has no brightness attribute but can still be dimmed
+        assert profile_supported(PROFILES["light.brightness"], {"state": "off", "attributes": {"supported_color_modes": ["brightness"]}}) == (
+            True,
+            None,
+        )
+        assert profile_supported(PROFILES["light.brightness"], {"attributes": {"supported_color_modes": ["onoff"]}}) == (False, "featureMissing")
 
 
 # ---------------------------------------------------------------------------
@@ -433,3 +439,22 @@ class TestDirection:
     )
     def test_direction_problem(self, config, direction, problem):
         assert (direction_problem(HaBindingConfig(**config), direction) is not None) is problem
+
+
+class TestMissingAttributeValues:
+    @pytest.mark.parametrize(
+        ("state", "attrs", "expected"),
+        [
+            ("off", {}, (0, "good", True)),  # HA drops brightness while off
+            ("off", {"brightness": None}, (0, "good", True)),
+            ("on", {}, (None, "uncertain", False)),
+            ("on", {"brightness": 128}, (128, "good", True)),
+        ],
+    )
+    def test_light_brightness(self, state, attrs, expected):
+        assert _read({"entity_id": "light.t", "profile": "light.brightness"}, state, attrs) == expected
+
+    def test_only_for_the_profiles_own_attribute(self):
+        # an explicit other attribute does not inherit brightness' "off" value
+        assert _read({"entity_id": "light.t", "profile": "light.brightness", "attribute": "color_temp"}, "off", {}) == (None, "uncertain", False)
+        assert _read({"entity_id": "media_player.t", "profile": "media_player.volume"}, "off", {}) == (None, "uncertain", False)

@@ -1507,7 +1507,8 @@
         "text_value": "Text",
         "button_press": "Press (command)",
         "scene_activate": "Activate scene (command)"
-      }
+      },
+      "refreshFailed": "Import finished; the preview could not be refreshed afterwards. Reload the preview to check."
     }
   },
   "history": {

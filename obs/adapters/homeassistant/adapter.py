@@ -361,7 +361,9 @@ class HomeAssistantAdapter(AdapterBase):
             for entity_id in wanted:
                 await self._publish_entity(entity_id)
             return
-        if self._sub_id is not None:
+        # The unfiltered state_changed subscription of the fallback already covers
+        # every entity: keep it and only take a new snapshot.
+        if self._sub_id is not None and (self._sub_mode == "entities" or not wanted):
             await conn.unsubscribe(self._sub_id)
             self._sub_id = None
         self._sub_entities = wanted
@@ -383,7 +385,8 @@ class HomeAssistantAdapter(AdapterBase):
                     raise
                 logger.info("HA WebSocket: filtered subscribe_entities unsupported (%s), using state_changed events", exc.code)
                 self._sub_mode = "events"
-        self._sub_id = await conn.subscribe({"type": "subscribe_events", "event_type": "state_changed"}, self._on_state_changed_event)
+        if self._sub_id is None:
+            self._sub_id = await conn.subscribe({"type": "subscribe_events", "event_type": "state_changed"}, self._on_state_changed_event)
         states = await conn.command({"type": "get_states"})
         snapshot = {s["entity_id"]: s for s in states or [] if isinstance(s, dict) and s.get("entity_id") in self._entity_map}
         self._entity_cache.update(snapshot)
@@ -516,10 +519,14 @@ class HomeAssistantAdapter(AdapterBase):
         if cached is not None and time.monotonic() - cached[0] < BROWSE_CACHE_SECONDS:
             return cached[1]
 
-        states = await conn.command({"type": "get_states"}) or []
-        entities_reg = await self._optional_command(conn, "config/entity_registry/list")
-        devices_reg = await self._optional_command(conn, "config/device_registry/list")
-        areas_reg = await self._optional_command(conn, "config/area_registry/list")
+        # One multiplexed connection: the four lists are fetched concurrently.
+        states, entities_reg, devices_reg, areas_reg = await asyncio.gather(
+            conn.command({"type": "get_states"}),
+            self._optional_command(conn, "config/entity_registry/list"),
+            self._optional_command(conn, "config/device_registry/list"),
+            self._optional_command(conn, "config/area_registry/list"),
+        )
+        states = states or []
         entity_meta = {e.get("entity_id"): e for e in entities_reg or [] if isinstance(e, dict)}
         devices = {d.get("id"): d for d in devices_reg or [] if isinstance(d, dict)}
         areas = {a.get("area_id"): a.get("name") for a in areas_reg or [] if isinstance(a, dict)}

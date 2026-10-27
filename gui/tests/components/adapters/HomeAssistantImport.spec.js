@@ -248,6 +248,36 @@ describe('HomeAssistantImport', () => {
     expect(w.find('[data-testid="ha-load"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('keeps a successful import successful when the refresh fails', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValueOnce({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 1, created_bindings: 1, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    api.haImportPreview.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'offline' } } })
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-result"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-refresh-failed"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-error"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-import-btn"]').attributes('disabled')).toBeDefined()
+  })
+
+  it.each([
+    [[{ loc: ['body', 'selections'], msg: 'List should have at most 500 items' }, { msg: 'second' }], 'List should have at most 500 items; second'],
+    [['plain'], 'plain'],
+    [[], 'Vorschau konnte nicht erstellt werden'],
+  ])('renders validation error lists readably (%#)', async (detail, text) => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockRejectedValueOnce({ response: { status: 422, data: { detail } } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-error"]').text()).toBe(text)
+  })
+
   it('exposes load for the parent', async () => {
     api.haEntities.mockResolvedValue(page())
     const w = await mk()

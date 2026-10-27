@@ -275,6 +275,7 @@ def plan_import(
             first = result[planned[identity]]
             if candidate.direction != first.direction:
                 first.direction = "BOTH"  # SOURCE + DEST, or either + BOTH
+                _register_planned_read(first, planned_manual, planned_profiled)  # it may read only now
             continue
         planned[identity] = len(result)
         if identity in by_identity:
@@ -289,10 +290,16 @@ def plan_import(
             candidate.existing_binding_id = overlap
         elif _overlap(candidate.config, planned_manual, planned_profiled) is not None:
             candidate.status, candidate.reason = "conflict", "selectedTwice"
-        if candidate.status == "new" and (source := _read_source(candidate.config)) is not None and candidate.direction != "DEST":
-            (planned_profiled if candidate.profile else planned_manual).setdefault(source, candidate.entity_id)
+        _register_planned_read(candidate, planned_manual, planned_profiled)
         result.append(candidate)
     return result
+
+
+def _register_planned_read(candidate: HaImportCandidate, planned_manual: dict, planned_profiled: dict) -> None:
+    """Remember what a planned new candidate reads, for the duplicate check of later ones."""
+    source = _read_source(candidate.config)
+    if candidate.status == "new" and source is not None and candidate.direction != "DEST":
+        (planned_profiled if candidate.profile else planned_manual).setdefault(source, candidate.entity_id)
 
 
 def _overlap(config: dict[str, Any], manual_reads: dict, profiled_reads: dict) -> str | None:

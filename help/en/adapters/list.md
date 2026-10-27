@@ -128,7 +128,7 @@ without templates or expressions.
 | Position (`cover`, `valve`) | 0–100 | `set_cover_position` / `set_valve_position`, field `position` | attribute `current_position` |
 | Stop (`cover`, `valve`, `media_player`) | command | `stop_cover` / `stop_valve` / `media_stop` | — |
 | On/off (`switch`, `input_boolean`, `fan`, `light`) | true/false | `turn_on` / `turn_off` | `on` → true |
-| Brightness (`light`) | 0–255 | `light.turn_on`, field `brightness` | attribute `brightness` |
+| Brightness (`light`) | 0–255 | `light.turn_on`, field `brightness` | attribute `brightness`; off → 0 |
 | Number value (`number`, `input_number`) | number | `set_value`, field `value` | state |
 | Selected option (`select`, `input_select`) | text | `select_option`, field `option` | state |
 | Text (`text`, `input_text`) | text | `set_value`, field `value` | state |

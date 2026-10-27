@@ -174,49 +174,52 @@ class HaConnection:
     # Commands
     # ------------------------------------------------------------------
 
-    async def _request(self, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    async def _request(
+        self,
+        payload: dict[str, Any],
+        timeout: float,
+        before_send: Callable[[int], None] | None = None,
+    ) -> dict[str, Any]:
         if self.closed:
             raise ConnectionError("connection closed")
         self._next_id += 1
         msg_id = self._next_id
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
+        if before_send is not None:
+            before_send(msg_id)
         try:
             await self._ws.send(json.dumps({**payload, "id": msg_id}))
             return await asyncio.wait_for(fut, timeout)
         finally:
             self._pending.pop(msg_id, None)
 
-    async def command(self, payload: dict[str, Any], timeout: float = 30.0) -> Any:
-        msg = await self._request(payload, timeout)
+    @staticmethod
+    def _result(msg: dict[str, Any]) -> Any:
         if not msg.get("success", False):
             error = msg.get("error") or {}
             raise HaCommandError(str(error.get("code", "unknown_error")), str(error.get("message", "")))
         return msg.get("result")
 
+    async def command(self, payload: dict[str, Any], timeout: float = 30.0) -> Any:
+        return self._result(await self._request(payload, timeout))
+
     async def subscribe(self, payload: dict[str, Any], callback: EventCallback, timeout: float = 30.0) -> int:
         """Start a subscription; events for it go to *callback* in arrival order."""
-        if self.closed:
-            raise ConnectionError("connection closed")
-        self._next_id += 1
-        msg_id = self._next_id
-        # Registered before sending: the first event may follow the result immediately.
-        self._subscriptions[msg_id] = callback
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pending[msg_id] = fut
+        ids: list[int] = []
+
+        def register(msg_id: int) -> None:
+            # Registered before sending: the first event may follow the result immediately.
+            ids.append(msg_id)
+            self._subscriptions[msg_id] = callback
+
         try:
-            await self._ws.send(json.dumps({**payload, "id": msg_id}))
-            msg = await asyncio.wait_for(fut, timeout)
+            self._result(await self._request(payload, timeout, before_send=register))
         except BaseException:
-            self._subscriptions.pop(msg_id, None)
+            if ids:
+                self._subscriptions.pop(ids[0], None)
             raise
-        finally:
-            self._pending.pop(msg_id, None)
-        if not msg.get("success", False):
-            self._subscriptions.pop(msg_id, None)
-            error = msg.get("error") or {}
-            raise HaCommandError(str(error.get("code", "unknown_error")), str(error.get("message", "")))
-        return msg_id
+        return ids[0]
 
     async def unsubscribe(self, subscription_id: int) -> None:
         if self._subscriptions.pop(subscription_id, None) is None or self.closed:

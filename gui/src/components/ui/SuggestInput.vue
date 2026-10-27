@@ -1,7 +1,6 @@
 <template>
   <div ref="container" class="relative">
     <input
-      ref="inputRef"
       :value="modelValue"
       :class="['input w-full', inputClass]"
       :placeholder="placeholder"
@@ -61,7 +60,6 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'select'])
 
 const container = ref(null)
-const inputRef = ref(null)
 const open = ref(false)
 const loading = ref(false)
 const searched = ref(false)
@@ -125,6 +123,7 @@ function select(item) {
 }
 
 function close() {
+  clearTimeout(timer)  // a search still waiting for its debounce is no longer wanted
   open.value = false
   active.value = -1
 }

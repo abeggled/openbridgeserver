@@ -190,7 +190,10 @@ class HaProfile:
     explicit_only: bool = False
     # Only offered when this condition on the entity holds
     when: str | None = None  # "position" → current_position attribute present
-    extra: dict[str, Any] = field(default_factory=dict)
+    # Not offered when an attribute has exactly this value (e.g. an on/off-only light)
+    excluded_if: dict[str, Any] = field(default_factory=dict)
+    # Value of a missing attribute in a given entity state (e.g. brightness 0 while off)
+    missing_values: dict[str, Any] = field(default_factory=dict)
 
 
 _ON_OFF = {"on": True, "off": False}
@@ -234,7 +237,9 @@ _PROFILE_LIST: tuple[HaProfile, ...] = (
         "BOTH",
         attribute="brightness",
         action=ProfileAction("turn_on", value_path="brightness"),
-        when="brightness",
+        # HA drops the brightness attribute while a light is off: that is brightness 0.
+        missing_values={"off": 0},
+        excluded_if={"supported_color_modes": ["onoff"]},
     ),
     HaProfile(
         "lock.boolean_locked",
@@ -481,6 +486,8 @@ def profile_supported(profile: HaProfile, state_obj: dict[str, Any] | None) -> t
         return False, "featureMissing"
     if profile.when and state_obj is not None and profile.when not in attrs:
         return False, "attributeMissing"
+    if any(attrs.get(key) == value for key, value in profile.excluded_if.items()):
+        return False, "featureMissing"
     return True, None
 
 
@@ -540,6 +547,7 @@ class ResolvedMapping:
     value_kind: ValueKind
     action: HaAction | None = None
     write_actions: dict[str, HaAction] | None = None
+    missing_values: dict[str, Any] = field(default_factory=dict)
 
 
 def _materialize(action: ProfileAction, entity_id: str) -> HaAction:
@@ -571,7 +579,9 @@ def resolve(bc: HaBindingConfig) -> ResolvedMapping:
             write_actions = {k: _materialize(a, bc.entity_id) for k, a in profile.write_actions.items()}
     else:
         mode = "default"
-    return ResolvedMapping(mode, attribute, state_map, transitional, fault, value_kind, action, write_actions)
+    # The profile's "missing attribute" values only apply to the attribute it reads.
+    missing = profile.missing_values if profile is not None and attribute == profile.attribute else {}
+    return ResolvedMapping(mode, attribute, state_map, transitional, fault, value_kind, action, write_actions, missing)
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +644,8 @@ def normalize(mapping: ResolvedMapping, state_obj: dict[str, Any] | None) -> tup
 
     if mapping.attribute:
         raw = (state_obj.get("attributes") or {}).get(mapping.attribute)
+        if raw is None and state in mapping.missing_values:
+            return mapping.missing_values[state], GOOD, True
         if mapping.value_kind in ("auto", "string") and raw is None:
             return None, GOOD, True  # e.g. no media title while idle
         return _typed(raw, mapping.value_kind, coerce=False)

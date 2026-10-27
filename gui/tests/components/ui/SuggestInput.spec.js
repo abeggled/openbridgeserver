@@ -48,6 +48,20 @@ describe('SuggestInput', () => {
     }
   })
 
+  it('drops a pending search when the dropdown closes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { w, fetchSuggestions } = mk({ debounceMs: 100 })
+      await w.find('[data-testid="s"]').setValue('lo')
+      await w.find('[data-testid="s"]').trigger('keydown', { key: 'Escape' })
+      vi.advanceTimersByTime(200)
+      expect(fetchSuggestions).not.toHaveBeenCalled()
+      w.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('navigates with the keyboard', async () => {
     const { w } = mk()
     const input = w.find('[data-testid="s"]')
