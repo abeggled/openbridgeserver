@@ -4,6 +4,9 @@
  * Jede Berührung, Maus-, Rad- oder Tastatureingabe startet die Wartezeit neu.
  * Nur in der normalen Ansicht (Seite oder Übersicht) wird zurückgesprungen —
  * nie aus dem Editor, der Verwaltung oder einer Login-/PIN-Eingabe.
+ *
+ * Bedienung innerhalb eines eingebetteten Fensters (IFrame-Widget) erreicht die
+ * Visu nicht; solange so ein Fenster den Fokus hat, pausiert der Rücksprung.
  */
 
 import { onMounted, onUnmounted, watch } from 'vue'
@@ -31,14 +34,28 @@ export function useIdleReturn() {
     timer = device.returnAfterMs > 0 ? setTimeout(returnToStart, device.returnAfterMs) : null
   }
 
+  function pause() {
+    if (timer !== null) clearTimeout(timer)
+    timer = null
+  }
+
+  // Das Fenster verliert den Fokus an einen Rahmen: der Nutzer bedient dessen Inhalt.
+  function onBlur() {
+    if (document.activeElement?.tagName === 'IFRAME') pause()
+  }
+
   onMounted(() => {
     for (const event of ACTIVITY_EVENTS) window.addEventListener(event, arm, { passive: true })
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', arm)
     arm()
   })
 
   onUnmounted(() => {
     for (const event of ACTIVITY_EVENTS) window.removeEventListener(event, arm)
-    if (timer !== null) clearTimeout(timer)
+    window.removeEventListener('blur', onBlur)
+    window.removeEventListener('focus', arm)
+    pause()
   })
 
   // Profilwechsel oder geänderte Zeit gelten sofort; ein Seitenwechsel zählt als Bedienung.

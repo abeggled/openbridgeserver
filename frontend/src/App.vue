@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { getJwt } from '@/api/client'
@@ -27,14 +27,19 @@ const device = useDeviceStore()
 const embedded = isEmbedded()
 if (!embedded) useIdleReturn()
 
+let stopDeviceRefresh: (() => void) | null = null
+
 onMounted(() => {
   format.load()
   device.load()
+  stopDeviceRefresh = device.keepFresh()
   // WebSocket nur starten wenn JWT vorhanden (Live-Werte für eingeloggte User)
   if (getJwt()) {
     ws.connect()
   }
 })
+
+onUnmounted(() => stopDeviceRefresh?.())
 </script>
 
 <template>

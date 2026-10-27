@@ -152,3 +152,43 @@ describe('useIdleReturn', () => {
     expect(push).not.toHaveBeenCalled()
   })
 })
+
+describe('useIdleReturn with an embedded frame', () => {
+  afterEach(() => {
+    delete (document as { activeElement?: unknown }).activeElement
+  })
+
+  function focusIframe() {
+    const iframe = document.createElement('iframe')
+    document.body.appendChild(iframe)
+    Object.defineProperty(document, 'activeElement', { value: iframe, configurable: true })
+    window.dispatchEvent(new Event('blur'))
+    return iframe
+  }
+
+  it('pauses while a frame has the focus and re-arms when the focus comes back', async () => {
+    await setup({ start_node_id: 'page-1', return_after_s: 5 })
+
+    const iframe = focusIframe()
+    vi.advanceTimersByTime(60_000)
+    await settle()
+    expect(router.currentRoute.value.fullPath).toBe('/page-2')  // the user works inside the frame
+
+    iframe.remove()
+    delete (document as { activeElement?: unknown }).activeElement
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    window.dispatchEvent(new Event('focus'))
+    vi.advanceTimersByTime(5_000)
+    await settle()
+    expect(router.currentRoute.value.fullPath).toBe('/page-1')
+  })
+
+  it('keeps counting when the window loses the focus to another application', async () => {
+    await setup({ start_node_id: 'page-1', return_after_s: 5 })
+
+    window.dispatchEvent(new Event('blur'))  // activeElement is the body, not a frame
+    vi.advanceTimersByTime(5_000)
+    await settle()
+    expect(router.currentRoute.value.fullPath).toBe('/page-1')
+  })
+})
