@@ -105,7 +105,7 @@ async def test_browse_import_and_write_through_write_router(client, auth_headers
 
         selections = {
             "selections": [
-                {"entity_id": "lock.shed"},
+                {"entity_id": "lock.shed", "name": "Gartenhaus Schloss"},
                 {"entity_id": "cover.roof"},
                 {"entity_id": "cover.roof", "profile": "cover.position"},
                 {"entity_id": "cover.roof", "profile": "cover.stop"},
@@ -137,6 +137,8 @@ async def test_browse_import_and_write_through_write_router(client, auth_headers
         rows = (await client.get(f"/api/v1/adapters/instances/{instance_id}/bindings", headers=auth_headers)).json()
         by_key = {(r["config"]["entity_id"], r["config"].get("profile")): r["datapoint_id"] for r in rows}
         lock_dp = by_key[("lock.shed", "lock.boolean_locked")]
+        lock = (await client.get(f"/api/v1/datapoints/{lock_dp}", headers=auth_headers)).json()
+        assert lock["name"] == "Gartenhaus Schloss"  # name edited in the preview
         position_dp = by_key[("cover.roof", "cover.position")]
         stop_dp = by_key[("cover.roof", "cover.stop")]
         play_dp = by_key[("media_player.kitchen", "media_player.play_pause")]

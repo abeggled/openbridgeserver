@@ -1508,7 +1508,10 @@
         "button_press": "Drücken (Befehl)",
         "scene_activate": "Szene aktivieren (Befehl)"
       },
-      "refreshFailed": "Import abgeschlossen; die Vorschau konnte danach nicht aktualisiert werden. Zum Prüfen die Vorschau neu laden."
+      "refreshFailed": "Import abgeschlossen; die Vorschau konnte danach nicht aktualisiert werden. Zum Prüfen die Vorschau neu laden.",
+      "nameLabel": "Objektname",
+      "resetName": "Vorschlag wiederherstellen: {name}",
+      "nameHint": "Namen neuer Objekte lassen sich hier vor dem Import ändern."
     }
   },
   "history": {

@@ -1508,7 +1508,10 @@
         "button_press": "Press (command)",
         "scene_activate": "Activate scene (command)"
       },
-      "refreshFailed": "Import finished; the preview could not be refreshed afterwards. Reload the preview to check."
+      "refreshFailed": "Import finished; the preview could not be refreshed afterwards. Reload the preview to check.",
+      "nameLabel": "Object name",
+      "resetName": "Restore proposal: {name}",
+      "nameHint": "The names of new objects can be changed here before the import."
     }
   },
   "history": {

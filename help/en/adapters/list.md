@@ -105,7 +105,9 @@ Only values with quality *good* are passed on to other bindings.
    read only; to control the device tick the matching profile (e.g. *Position*).
 3. **Preview** shows without any change what would be created: name, data type, unit,
    direction, tags, read mapping, actions and the Boolean convention (e.g. *true = locked*).
-4. **Import** only creates entries with status *new*.
+4. The **name** of a new object can be changed right in the preview; the arrow icon restores the
+   proposal.
+5. **Import** only creates entries with status *new*.
 
 The import can be repeated: entities already bound show as *exists* and are skipped. If an
 entity was renamed in Home Assistant, OBS recognizes it by its registry identity and reports a

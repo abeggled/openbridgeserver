@@ -338,3 +338,33 @@ def test_widened_candidate_takes_part_in_the_duplicate_check():
     )
     assert (merged.status, merged.direction) == ("new", "BOTH")
     assert (manual.status, manual.reason) == ("conflict", "selectedTwice")
+
+
+class TestNameOverride:
+    def test_own_name_replaces_the_proposal(self):
+        c = _one(entity_id="lock.shed", name="  Gartenhaus Schloss ")
+        assert (c.name, c.proposed_name) == ("Gartenhaus Schloss", "Shed")
+
+    def test_blank_name_keeps_the_proposal(self):
+        assert _one(entity_id="lock.shed", name="   ").name == "Shed"
+        assert _one(entity_id="lock.shed").name == "Shed"
+
+    def test_too_long_name_is_rejected(self):
+        with pytest.raises(ValidationError):
+            HaImportSelection(entity_id="lock.shed", name="x" * 256)
+
+    def test_long_friendly_name_is_truncated(self):
+        entity = _entity("sensor.long", "1", {"friendly_name": "y" * 300})
+        request = HaImportRequest(selections=[HaImportSelection(entity_id="sensor.long", attribute=None)])
+        (c,) = plan_import([entity], request, [])
+        assert len(c.name) == 255 and c.name == c.proposed_name
+
+    def test_candidates_point_back_to_their_selection(self):
+        ghost, lock, cover = _plan(
+            {"entity_id": "sensor.ghost"},
+            {"entity_id": "lock.shed"},
+            {"entity_id": "lock.shed"},  # duplicate: planned once
+            {"entity_id": "cover.roof"},
+        )
+        assert (ghost.selection, lock.selection, cover.selection) == (0, 1, 3)
+        assert ghost.proposed_name == "sensor.ghost"

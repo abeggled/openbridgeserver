@@ -130,11 +130,34 @@
 
     <!-- Preview -->
     <div v-if="plan.length" class="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden" data-testid="ha-plan">
+      <div class="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 text-xs text-slate-500">{{ $t('adapters.homeassistant.nameHint') }}</div>
       <div class="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-700/50">
         <div v-for="(c, i) in plan" :key="i" class="px-3 py-2 text-xs flex flex-col gap-0.5" :class="{ 'opacity-60': c.status !== 'new' }" :data-testid="`ha-plan-${i}`">
           <div class="flex items-center gap-2 min-w-0">
             <Badge :variant="STATUS_VARIANT[c.status]" size="xs">{{ $t(`adapters.homeassistant.status.${c.status}`) }}</Badge>
-            <span class="text-sm truncate">{{ c.name }}</span>
+            <template v-if="c.status === 'new'">
+              <input
+                :value="c.name"
+                maxlength="255"
+                class="input py-0.5 text-sm flex-1 min-w-0"
+                :aria-label="$t('adapters.homeassistant.nameLabel')"
+                :data-testid="`ha-name-${i}`"
+                @input="setName(c, $event.target.value)"
+                @blur="normalizeName(c)"
+              />
+              <button
+                v-if="c.name !== c.proposed_name"
+                type="button"
+                class="btn-icon shrink-0"
+                :title="$t('adapters.homeassistant.resetName', { name: c.proposed_name })"
+                :aria-label="$t('adapters.homeassistant.resetName', { name: c.proposed_name })"
+                :data-testid="`ha-name-reset-${i}`"
+                @click="resetName(c)"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              </button>
+            </template>
+            <span v-else class="text-sm truncate">{{ c.name }}</span>
             <Badge variant="info" size="xs">{{ c.data_type }}</Badge>
             <Badge variant="muted" size="xs">{{ c.direction }}</Badge>
             <span v-if="c.unit" class="text-slate-500">{{ c.unit }}</span>
@@ -223,7 +246,10 @@ function isSelected(s) {
 function toggle(s, on) {
   const next = new Map(selected.value)
   if (on) next.set(selectionKey(s), s)
-  else next.delete(selectionKey(s))
+  else {
+    next.delete(selectionKey(s))
+    delete nameOverrides[selectionKey(s)]
+  }
   selected.value = next
   plan.value = []
 }
@@ -272,9 +298,29 @@ async function load(newOffset) {
   }
 }
 
+// Object names edited in the preview, keyed like the selection they belong to.
+const nameOverrides = reactive({})
+
+function setName(c, value) {
+  c.name = value
+  const key = selectionKey(selections.value[c.selection])
+  const name = value.trim()
+  if (name && name !== c.proposed_name) nameOverrides[key] = name
+  else delete nameOverrides[key]
+}
+function normalizeName(c) {
+  if (!c.name.trim()) c.name = c.proposed_name
+}
+function resetName(c) {
+  setName(c, c.proposed_name)
+}
+
 function payload() {
   return {
-    selections: selections.value,
+    selections: selections.value.map(s => {
+      const name = nameOverrides[selectionKey(s)]
+      return name ? { ...s, name } : s
+    }),
     tags: options.tags.split(',').map(s => s.trim()).filter(Boolean),
     persist_value: options.persist_value,
     record_history: options.record_history,

@@ -285,3 +285,60 @@ describe('HomeAssistantImport', () => {
     expect(api.haEntities).toHaveBeenCalled()
   })
 })
+
+describe('HomeAssistantImport — editing names in the preview', () => {
+  const OTHER = { ...NEW_LOCK, entity_id: 'climate.living', name: 'Living', proposed_name: 'Living', selection: 1 }
+
+  async function previewed() {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    await w.find('[data-testid="ha-select-climate.living"]').setValue(true)
+    api.haImportPreview.mockResolvedValue({
+      data: { preview: [{ ...NEW_LOCK, proposed_name: 'Shed', selection: 0 }, OTHER, { ...UNSUPPORTED, selection: 1 }] },
+    })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    return w
+  }
+
+  it('sends an edited name with its selection only', async () => {
+    const w = await previewed()
+    expect(w.find('[data-testid="ha-name-2"]').exists()).toBe(false)  // not new: plain text
+    await w.find('[data-testid="ha-name-0"]').setValue('  Gartenhaus ')
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 2, created_bindings: 2, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    const sent = api.haImport.mock.calls[0][1].selections
+    expect(sent[0]).toEqual({ entity_id: 'lock.shed', attribute: null, profile: 'lock.boolean_locked', name: 'Gartenhaus' })
+    expect(sent[1]).toEqual({ entity_id: 'climate.living', attribute: null, profile: null })
+  })
+
+  it('resets to the proposal, also via an empty field', async () => {
+    const w = await previewed()
+    const input = w.find('[data-testid="ha-name-0"]')
+    await input.setValue('Anders')
+    await w.find('[data-testid="ha-name-reset-0"]').trigger('click')
+    expect(input.element.value).toBe('Shed')
+    expect(w.find('[data-testid="ha-name-reset-0"]').exists()).toBe(false)
+    await input.setValue('')
+    await input.trigger('blur')
+    expect(input.element.value).toBe('Shed')
+    await input.setValue('Shed2')
+    await input.trigger('blur')
+    expect(input.element.value).toBe('Shed2')
+    await input.setValue('Shed')  // the proposal again: no override
+    api.haImportPreview.mockClear()
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    expect(api.haImportPreview.mock.calls[0][1].selections[0].name).toBeUndefined()
+  })
+
+  it('forgets the name of a deselected entry', async () => {
+    const w = await previewed()
+    await w.find('[data-testid="ha-name-0"]').setValue('Gartenhaus')
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(false)
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockClear()
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    expect(api.haImportPreview.mock.calls[0][1].selections.find(s => s.entity_id === 'lock.shed').name).toBeUndefined()
+  })
+})

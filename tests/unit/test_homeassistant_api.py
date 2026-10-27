@@ -471,3 +471,13 @@ def test_adapters_without_a_direction_hook_are_validated_as_before():
     from obs.api.v1.bindings import _validate_adapter_binding
 
     _validate_adapter_binding("IOBROKER", "DEST", {"state_id": "a.0.x"})
+
+
+async def test_import_uses_the_edited_name(monkeypatch, db):
+    instance_id = await _instance(db)
+    _live(monkeypatch)
+    registry = SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())), delete=AsyncMock())
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: registry)
+    monkeypatch.setattr("obs.api.v1.bindings.create_binding", AsyncMock())
+    await adapters_api.ha_import_entities(instance_id, _request({"entity_id": "lock.shed", "name": "Gartenhaus"}), _user=ADMIN, db=db)
+    assert registry.create.await_args.args[0].name == "Gartenhaus"

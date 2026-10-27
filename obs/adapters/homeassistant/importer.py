@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from obs.adapters.homeassistant.profiles import (
     AMBIGUOUS_DOMAINS,
@@ -24,6 +24,7 @@ from obs.adapters.homeassistant.profiles import (
 )
 
 ENTITY_ID_PATTERN = r"^[a-z0-9_]+\.[a-z0-9_]+$"
+NAME_MAX = 255  # DataPointCreate.name
 
 
 class HaImportSelection(BaseModel):
@@ -32,6 +33,13 @@ class HaImportSelection(BaseModel):
     # "auto" = proposed profile (visible in the preview); None = plain value, no profile
     profile: str | None = Field(default="auto", max_length=64)
     direction: Literal["auto", "SOURCE", "DEST", "BOTH"] = "auto"
+    # Name of the DataPoint to create; None/blank = the proposed name
+    name: str | None = Field(default=None, max_length=NAME_MAX)
+
+    @field_validator("name")
+    @classmethod
+    def _blank_name_is_proposal(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
 
 
 class HaImportRequest(BaseModel):
@@ -46,6 +54,8 @@ class HaImportCandidate(BaseModel):
     attribute: str | None = None
     profile: str | None = None
     name: str
+    proposed_name: str = ""  # what the name is without the user's override
+    selection: int = 0  # index of the selection this candidate comes from
     data_type: str
     unit: str | None = None
     direction: str
@@ -198,10 +208,10 @@ def _choose_profile(sel: HaImportSelection, item: dict[str, Any]) -> tuple[HaPro
 def _name(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile | None) -> str:
     base = str(item.get("name") or item["entity_id"])
     if sel.attribute:
-        return f"{base} ({sel.attribute})"
-    if profile is not None and not profile.default:
-        return f"{base} ({profile.id.split('.', 1)[1]})"
-    return base
+        base = f"{base} ({sel.attribute})"
+    elif profile is not None and not profile.default:
+        base = f"{base} ({profile.id.split('.', 1)[1]})"
+    return base[:NAME_MAX]  # a long friendly name must not make the import fail
 
 
 def _tags(item: dict[str, Any], extra: list[str]) -> list[str]:
@@ -254,16 +264,17 @@ def plan_import(
 
     result: list[HaImportCandidate] = []
     planned: dict[tuple[str, str | None, str | None], int] = {}
-    for sel in request.selections:
+    for index, sel in enumerate(request.selections):
         item = by_id.get(sel.entity_id)
         if item is None:
-            result.append(_unsupported(sel, "entityNotFound"))
+            result.append(_unsupported(sel, index, "entityNotFound"))
             continue
         profile, reason = _choose_profile(sel, item)
         if reason:
-            result.append(_unsupported(sel, reason))
+            result.append(_unsupported(sel, index, reason))
             continue
         candidate = _candidate(item, sel, profile, request.tags)
+        candidate.selection = index
         if candidate.status == "unsupported":
             result.append(candidate)
             continue
@@ -310,12 +321,14 @@ def _overlap(config: dict[str, Any], manual_reads: dict, profiled_reads: dict) -
     return manual_reads.get(source) or (profiled_reads.get(source) if not config.get("profile") else None)
 
 
-def _unsupported(sel: HaImportSelection, reason: str) -> HaImportCandidate:
+def _unsupported(sel: HaImportSelection, index: int, reason: str) -> HaImportCandidate:
     return HaImportCandidate(
         entity_id=sel.entity_id,
         attribute=sel.attribute,
         profile=sel.profile if sel.profile != "auto" else None,
         name=sel.entity_id,
+        proposed_name=sel.entity_id,
+        selection=index,
         data_type="STRING",
         direction=sel.direction,
         tags=[],
@@ -368,7 +381,8 @@ def _candidate(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile 
         entity_id=item["entity_id"],
         attribute=sel.attribute,
         profile=profile.id if profile else None,
-        name=_name(item, sel, profile),
+        name=sel.name or _name(item, sel, profile),
+        proposed_name=_name(item, sel, profile),
         data_type=data_type,
         unit=unit,
         direction=direction,

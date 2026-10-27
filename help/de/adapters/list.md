@@ -115,7 +115,9 @@ Nur Werte mit Qualität *good* werden an andere Verknüpfungen weitergereicht.
 3. **Vorschau** zeigt ohne jede Änderung, was entstehen würde: Name, Datentyp, Einheit,
    Richtung, Tags, Lese-Zuordnung, Aktionen und die Boolesche Konvention (z. B.
    *true = verriegelt*).
-4. **Importieren** legt nur Einträge mit Status *neu* an.
+4. Den **Namen** neuer Objekte kannst du in der Vorschau direkt ändern; das Pfeilsymbol stellt
+   den Vorschlag wieder her.
+5. **Importieren** legt nur Einträge mit Status *neu* an.
 
 Der Import ist wiederholbar: bereits verknüpfte Entities erscheinen als *vorhanden* und werden
 übersprungen. Wurde eine Entity in Home Assistant umbenannt, erkennt OBS sie an ihrer
