@@ -7,7 +7,8 @@
 export const HA_MAPPING_KEYS = ['action', 'write_actions', 'state_map', 'transitional_states', 'fault_states']
 
 export function entityDomain(entityId) {
-  return String(entityId ?? '').split('.', 1)[0]
+  // HA (and the backend validator) treat entity ids case-insensitively.
+  return String(entityId ?? '').trim().toLowerCase().split('.', 1)[0]
 }
 
 export function profileLabelKey(profileId) {

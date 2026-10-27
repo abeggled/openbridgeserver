@@ -122,6 +122,12 @@ def _capabilities(attrs: dict[str, Any]) -> dict[str, Any]:
     return {k: attrs[k] for k in _CAPABILITY_ATTRIBUTES if k in attrs}
 
 
+def _retrieve_exception(fut: asyncio.Future) -> None:
+    # A shared fetch whose callers all gave up must not log "exception never retrieved".
+    if not fut.cancelled():
+        fut.exception()
+
+
 def _same_value(a: Any, b: Any) -> bool:
     """Equality that keeps booleans apart from numbers (``1 == True`` in Python)."""
     if isinstance(a, bool) or isinstance(b, bool):
@@ -187,6 +193,8 @@ class HomeAssistantAdapter(AdapterBase):
         self._last_good: dict[Any, Any] = {}
         self._last_published: dict[Any, tuple[Any, str]] = {}
         self._fresh_events: set[str] | None = None
+        self._resync_tasks: set[asyncio.Task] = set()
+        self._browse_inflight: asyncio.Future | None = None
         self._write_specs: dict[Any, tuple[dict[str, Any], HaBindingConfig, ResolvedMapping]] = {}
         # binding id → what its published value depends on; a change republishes it
         self._signatures: dict[Any, tuple[Any, ...]] = {}
@@ -238,6 +246,10 @@ class HomeAssistantAdapter(AdapterBase):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._ws_task
             self._ws_task = None
+        for task in list(self._resync_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await self._close_connection()
 
         if self._http_client:
@@ -258,6 +270,7 @@ class HomeAssistantAdapter(AdapterBase):
         # A new connection tries the filtered subscription again (HA may have been upgraded).
         self._sub_mode = "entities"
         self._browse_cache = None
+        self._browse_inflight = None
         self._services_cache = None
         if conn is not None:
             await conn.close()
@@ -355,6 +368,13 @@ class HomeAssistantAdapter(AdapterBase):
         self._write_specs = {k: v for k, v in self._write_specs.items() if k in bound}
 
         logger.info("HA adapter: %d entity subscription(s): %s", len(self._entity_map), sorted(self._entity_map))
+        # Never make the caller (a binding save) wait for Home Assistant to answer:
+        # _sub_lock serializes the runs, each one subscribes the then-current bindings.
+        task = asyncio.create_task(self._resync(), name="ha-adapter-resync")
+        self._resync_tasks.add(task)
+        task.add_done_callback(self._resync_tasks.discard)
+
+    async def _resync(self) -> None:
         try:
             await self._sync_subscription(close_on_error=True)
         except Exception as exc:  # noqa: BLE001 -- any failure is handled by a supervised reconnect
@@ -559,7 +579,14 @@ class HomeAssistantAdapter(AdapterBase):
         cached = self._browse_cache
         if cached is not None and time.monotonic() - cached[0] < BROWSE_CACHE_SECONDS:
             return cached[1]
+        # Concurrent callers share one fetch: a full get_states can be megabytes.
+        if self._browse_inflight is None or self._browse_inflight.done():
+            self._browse_inflight = asyncio.ensure_future(self._fetch_entities(conn))
+            self._browse_inflight.add_done_callback(_retrieve_exception)
+        # shield: one caller giving up must not cancel the fetch the others wait for
+        return await asyncio.shield(self._browse_inflight)
 
+    async def _fetch_entities(self, conn: HaConnection) -> dict[str, Any]:
         # One multiplexed connection: the four lists are fetched concurrently.
         states, entities_reg, devices_reg, areas_reg = await asyncio.gather(
             conn.command({"type": "get_states"}),

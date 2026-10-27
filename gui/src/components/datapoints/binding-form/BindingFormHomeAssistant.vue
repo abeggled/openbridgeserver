@@ -175,22 +175,23 @@ let servicesPromise = null
 let servicesFor = null
 const entityCache = new Map()  // `${instance}|${entity_id}` → entity, so a switched instance never answers
 
-async function searchEntities(query, limit) {
+async function searchEntities(params) {
   if (!props.selectedInstanceId) return []
-  const { data } = await adapterApi.haEntities(props.selectedInstanceId, { q: query, limit })
+  const { data } = await adapterApi.haEntities(props.selectedInstanceId, params)
   for (const item of data.items) entityCache.set(`${props.selectedInstanceId}|${item.entity_id}`, item)
   return data.items
 }
 
 async function suggestEntities(query) {
-  return entitySuggestions(await searchEntities(query, 30))
+  return entitySuggestions(await searchEntities({ q: query, limit: 30 }))
 }
 
 async function suggestAttributes(query) {
-  const id = props.cfg.entity_id
+  const id = String(props.cfg.entity_id ?? '').trim().toLowerCase()
   if (!id) return []
   const key = `${props.selectedInstanceId}|${id}`
-  if (!entityCache.has(key)) await searchEntities(id, 10)
+  // Exact lookup: a substring search may fill its page with similar ids first.
+  if (!entityCache.has(key)) await searchEntities({ entity_id: id, limit: 1 })
   return attributeSuggestions(entityCache.get(key), query)
 }
 

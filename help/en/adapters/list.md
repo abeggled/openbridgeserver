@@ -164,6 +164,7 @@ needed. *Advanced mapping (JSON)* additionally accepts:
   value goes into the field `value_path`;
 - `write_actions` — value-dependent actions, e.g.
   `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
+  an empty `{}` counts as not set, the profile's actions stay;
 - `state_map`, `transitional_states`, `fault_states` — custom read normalization. With an
   attribute, `state_map` applies to its value; values that are not text are looked up as JSON
   (`true`, `1`, `null`).

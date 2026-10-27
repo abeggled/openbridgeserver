@@ -323,7 +323,35 @@ class TestSubscription:
         a._cfg = a.config_schema(**a._config)
         a._sync_subscription = AsyncMock(side_effect=RuntimeError("x"))
         await a.reload_bindings([make_binding({"entity_id": "sensor.temp"})])
+        await settle()  # the resubscription runs in the background
         assert a.last_detail_code == "subscribeFailed"
+
+    async def test_reload_never_waits_for_home_assistant(self, adapter, fake_ha):
+        answer = asyncio.Event()
+        subscribe = adapter._conn.subscribe
+
+        async def slow_subscribe(*args, **kwargs):
+            await answer.wait()  # a slow or half-dead HA
+            return await subscribe(*args, **kwargs)
+
+        adapter._conn.subscribe = slow_subscribe
+        await asyncio.wait_for(adapter.reload_bindings([make_binding({"entity_id": "sensor.temp"})]), 1)
+        assert len(adapter._resync_tasks) == 1
+        answer.set()
+        await settle()
+        assert adapter._resync_tasks == set()
+        assert adapter._sub_entities == ("sensor.temp",)
+
+    async def test_disconnect_cancels_a_pending_resubscription(self, adapter):
+        async def never_answers(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        adapter._conn.subscribe = never_answers
+        await adapter.reload_bindings([make_binding({"entity_id": "sensor.temp"})])
+        await settle()
+        (task,) = adapter._resync_tasks
+        await adapter.disconnect()
+        assert task.cancelled()
 
     async def test_attribute_added_and_removed(self, adapter, mock_bus, fake_ha):
         b = make_binding({"entity_id": "light.desk", "attribute": "brightness"})
@@ -443,6 +471,7 @@ class TestSubscription:
 
         adapter._subscribe = fail
         await adapter.reload_bindings([make_binding({"entity_id": "lock.shed"})])
+        await settle()
         assert used.closed
         newer.close.assert_not_awaited()
         adapter._conn = None
@@ -749,6 +778,49 @@ class TestBrowse:
         sent = len(fake_ha.socket.sent)
         await adapter.browse_entities()
         assert len(fake_ha.socket.sent) == sent
+
+    async def test_concurrent_browses_share_one_fetch(self, adapter, fake_ha):
+        before = [m["type"] for m in fake_ha.socket.sent].count("get_states")
+        first, second = await asyncio.gather(adapter.browse_entities(), adapter.browse_entities())
+        assert first is second
+        assert [m["type"] for m in fake_ha.socket.sent].count("get_states") == before + 1
+
+    async def test_failed_shared_fetch_is_retried_by_the_next_call(self, adapter, fake_ha):
+        command = adapter._conn.command
+        adapter._conn.command = AsyncMock(side_effect=RuntimeError("boom"))
+        results = await asyncio.gather(adapter.browse_entities(), adapter.browse_entities(), return_exceptions=True)
+        assert [type(r) for r in results] == [RuntimeError, RuntimeError]
+        adapter._conn.command = command
+        assert (await adapter.browse_entities())["entities"]
+
+    async def test_a_caller_giving_up_leaves_the_shared_fetch_running(self, adapter):
+        gate = asyncio.Event()
+        command = adapter._conn.command
+
+        async def slow(payload, *args, **kwargs):
+            await gate.wait()
+            return await command(payload, *args, **kwargs)
+
+        adapter._conn.command = slow
+        impatient = asyncio.create_task(adapter.browse_entities())
+        patient = asyncio.create_task(adapter.browse_entities())
+        await settle()
+        impatient.cancel()
+        gate.set()
+        assert (await patient)["entities"]
+        assert impatient.cancelled()
+
+    def test_retrieve_exception_ignores_cancelled_futures(self):
+        loop = asyncio.new_event_loop()
+        try:
+            cancelled, failed = loop.create_future(), loop.create_future()
+            cancelled.cancel()
+            failed.set_exception(RuntimeError("x"))
+            ha_adapter._retrieve_exception(cancelled)
+            ha_adapter._retrieve_exception(failed)
+            assert failed._log_traceback is False
+        finally:
+            loop.close()
 
     async def test_browse_without_admin_token_has_no_metadata(self, adapter, fake_ha):
         fake_ha.registries = False

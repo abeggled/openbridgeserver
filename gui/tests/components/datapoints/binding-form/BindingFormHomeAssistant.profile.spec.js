@@ -111,6 +111,12 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
     expect(cfg.profile).toBe('unknown.profile')  // not in the catalog: left to the backend
   })
 
+  it('offers the profiles of a mixed-case entity id', async () => {
+    const { w } = await mk({ entity_id: 'Lock.Shed', profile: 'lock.boolean_locked' })
+    const options = w.findAll('[data-testid="config-field-profile"] option').map(o => o.attributes('value'))
+    expect(options).toEqual(['', 'lock.boolean_locked'])  // no extra "unknown profile" entry
+  })
+
   it('keeps the profile while the entity id is retyped', async () => {
     const { w, cfg } = await mk({ entity_id: 'lock.shed', profile: 'lock.boolean_locked' })
     const input = w.find('[data-testid="config-field-entity_id"]')

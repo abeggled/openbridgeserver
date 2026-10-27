@@ -49,9 +49,10 @@ describe('BindingFormHomeAssistant — searchable fields', () => {
   })
 
   it('suggests the attributes of the chosen entity, reusing the search cache', async () => {
-    const { w } = await mk({ entity_id: 'lock.shed' })
+    const { w } = await mk({ entity_id: ' Lock.Shed ' })
     expect(await focus(w, 'attribute')).toEqual([expect.stringContaining('battery')])
-    expect(api.haEntities).toHaveBeenCalledWith('ha-1', { q: 'lock.shed', limit: 10 })
+    // exact lookup: a substring search could fill its page with similar ids first
+    expect(api.haEntities).toHaveBeenCalledWith('ha-1', { entity_id: 'lock.shed', limit: 1 })
     await focus(w, 'attribute')
     expect(api.haEntities).toHaveBeenCalledTimes(1)
   })
@@ -62,12 +63,14 @@ describe('BindingFormHomeAssistant — searchable fields', () => {
     api.haEntities.mockResolvedValue({ data: { items: [{ ...SHED, attributes: { other: 1 } }], total: 1, facets: {} } })
     await w.setProps({ selectedInstanceId: 'ha-2' })
     expect(await focus(w, 'attribute')).toEqual([expect.stringContaining('other')])
-    expect(api.haEntities).toHaveBeenLastCalledWith('ha-2', { q: 'lock.shed', limit: 10 })
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-2', { entity_id: 'lock.shed', limit: 1 })
   })
 
   it('offers no attributes without an entity', async () => {
     const { w } = await mk()
     expect(await focus(w, 'attribute')).toEqual([])
+    const unset = await mk({ entity_id: null })
+    expect(await focus(unset.w, 'attribute')).toEqual([])
     expect(api.haEntities).not.toHaveBeenCalled()
   })
 

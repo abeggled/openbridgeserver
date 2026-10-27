@@ -38,6 +38,9 @@ from obs.core.json import jsonable
 _IDENT = r"^[a-z0-9_]+$"
 ENTITY_ID_PATTERN = r"^[a-z0-9_]+\.[a-z0-9_]+$"
 _ENTITY_ID = re.compile(ENTITY_ID_PATTERN)
+# HA attribute keys are free text (templates and custom integrations use spaces,
+# hyphens, capitals): only control characters are refused.
+ATTRIBUTE_PATTERN = r"^[^\x00-\x1f\x7f]*$"
 _PATH = r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$"
 _TARGET_KEYS = frozenset({"entity_id", "device_id", "area_id", "floor_id", "label_id"})
 
@@ -78,7 +81,7 @@ class HaAction(BaseModel):
 
 class HaBindingConfig(BaseModel):
     entity_id: str  # e.g. "light.living_room"
-    attribute: str | None = None  # None → state field; "brightness" → attribute
+    attribute: str | None = Field(default=None, pattern=ATTRIBUTE_PATTERN, max_length=255)  # None → state field
     # Legacy write fields (pre-#1392) — take precedence over everything below.
     service_domain: str | None = None  # override: e.g. "homeassistant"
     service_name: str | None = None  # override: e.g. "toggle", "set_value"
@@ -94,6 +97,12 @@ class HaBindingConfig(BaseModel):
     read_as: Literal["auto", "boolean", "number", "string"] | None = None
     # Stable import identity: hash of the HA registry unique_id (never the raw id).
     ha_uid: str | None = Field(default=None, pattern=r"^[0-9a-f]{16,64}$")
+
+    @field_validator("write_actions", mode="before")
+    @classmethod
+    def _empty_write_actions(cls, value: Any) -> Any:
+        # {} would replace the profile's actions with none: every write a silent no-op.
+        return None if value == {} else value
 
     @field_validator("entity_id")
     @classmethod

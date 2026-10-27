@@ -178,6 +178,7 @@ Unter *Erweiterte Zuordnung (JSON)* sind zusätzlich möglich:
   des Objekts landet im Feld `value_path`;
 - `write_actions` — wertabhängige Aktionen, z. B.
   `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
+  ein leeres `{}` gilt als nicht gesetzt, die Aktionen des Profils bleiben;
 - `state_map`, `transitional_states`, `fault_states` — eigene Lese-Normalisierung. Mit
   einem Attribut gilt `state_map` für dessen Wert; Werte, die kein Text sind, werden als JSON
   nachgeschlagen (`true`, `1`, `null`).

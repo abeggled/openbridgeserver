@@ -71,6 +71,11 @@ def _one(**selection):
 
 
 class TestFilter:
+    def test_exact_entity_id_lookup(self):
+        page = filter_entities(ENTITIES, entity_id=" Sensor.Temp ")
+        assert [i["entity_id"] for i in page["items"]] == ["sensor.temp"]
+        assert filter_entities(ENTITIES, entity_id="sensor.tem")["total"] == 0  # no substring match
+
     def test_text_domain_area_and_paging(self):
         page = filter_entities(ENTITIES, q="ROOF")
         assert [i["entity_id"] for i in page["items"]] == ["cover.roof"]
@@ -284,7 +289,8 @@ class TestPlan:
         with pytest.raises(ValidationError):
             HaImportSelection(entity_id="Not An Entity")
         with pytest.raises(ValidationError):
-            HaImportSelection(entity_id="a.b", attribute="x;y")
+            HaImportSelection(entity_id="a.b", attribute="x\ny")
+        assert HaImportSelection(entity_id="a.b", attribute="Next Departure").attribute == "Next Departure"
         with pytest.raises(ValidationError):
             HaImportSelection(entity_id="a.b", direction="UP")
         with pytest.raises(ValidationError):

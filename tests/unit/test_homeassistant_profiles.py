@@ -77,10 +77,17 @@ class TestBindingSchema:
     def test_minimal_config_is_default_mode(self):
         assert resolve(HaBindingConfig(entity_id="switch.fan")).mode == "default"
 
+    def test_empty_write_actions_mean_none_and_free_text_attributes_are_valid(self):
+        bc = HaBindingConfig(entity_id="light.a", profile="light.on_off", write_actions={})
+        assert bc.write_actions is None
+        assert resolve(bc).mode == "profile"  # the profile's actions stay in force
+        assert HaBindingConfig(entity_id="sensor.bus", attribute="Next Departure").attribute == "Next Departure"
+
     @pytest.mark.parametrize(
         "config",
         [
-            {"entity_id": "lock.x", "action": {"domain": "lock", "name": "lock"}, "write_actions": {}},
+            {"entity_id": "lock.x", "action": {"domain": "lock", "name": "lock"}, "write_actions": {"true": {"domain": "lock", "name": "lock"}}},
+            {"entity_id": "lock.x", "attribute": "bad\nkey"},
             {"entity_id": "lock.x", "service_name": "lock", "action": {"domain": "lock", "name": "lock"}},
             {"entity_id": "lock.x", "service_domain": "lock", "write_actions": {"true": {"domain": "lock", "name": "lock"}}},
             {"entity_id": "lock.x", "profile": "nope"},
@@ -454,7 +461,7 @@ class TestDirection:
             ({"entity_id": "sensor.t", "profile": "sensor.value"}, "BOTH", True),
             ({"entity_id": "sensor.t", "profile": "sensor.value", "service_name": "x"}, "BOTH", False),
             ({"entity_id": "sensor.t", "profile": "sensor.value", "action": {"domain": "a", "name": "b"}}, "DEST", False),
-            ({"entity_id": "sensor.t", "profile": "sensor.value", "write_actions": {}}, "DEST", False),
+            ({"entity_id": "sensor.t", "profile": "sensor.value", "write_actions": {}}, "DEST", True),  # {} is no action
             ({"entity_id": "cover.t", "profile": "cover.stop"}, "DEST", False),
             ({"entity_id": "cover.t", "profile": "cover.stop"}, "SOURCE", True),
             ({"entity_id": "cover.t", "profile": "cover.stop"}, "BOTH", True),

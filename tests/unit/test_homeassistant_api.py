@@ -112,7 +112,7 @@ def _request(*selections) -> HaImportRequest:
 
 
 async def _browse(instance_id, principal=ADMIN, db=None, **filters):
-    params = {"q": "", "domain": "", "area": "", "device": "", "platform": "", "availability": "", "offset": 0, "limit": 100}
+    params = {"q": "", "domain": "", "area": "", "device": "", "platform": "", "availability": "", "entity_id": "", "offset": 0, "limit": 100}
     params.update(filters)
     return await adapters_api.ha_browse_entities(instance_id, **params, _user=principal, db=db)
 
@@ -192,6 +192,8 @@ async def test_browse_filters_and_metadata_flag(monkeypatch, db):
     assert [i["entity_id"] for i in page.items] == ["lock.shed"]
     assert page.metadata_available is False
     assert page.facets["domain"] == ["lock", "sensor"]
+    exact = await _browse(instance_id, db=db, entity_id="Sensor.Temp")
+    assert [i["entity_id"] for i in exact.items] == ["sensor.temp"]
 
 
 # ---------------------------------------------------------------------------

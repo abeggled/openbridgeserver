@@ -1644,6 +1644,7 @@ async def ha_browse_entities(
     device: str = Query("", max_length=200),
     platform: str = Query("", max_length=64),
     availability: str = Query("", pattern="^(|available|unavailable)$"),
+    entity_id: str = Query("", max_length=255),
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     _user: Principal | str = Depends(get_current_principal),
@@ -1660,6 +1661,7 @@ async def ha_browse_entities(
         device=device,
         platform=platform,
         availability=availability,
+        entity_id=entity_id,
         offset=offset,
         limit=limit,
     )

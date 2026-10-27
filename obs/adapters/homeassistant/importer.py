@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from obs.adapters.homeassistant.profiles import (
     AMBIGUOUS_DOMAINS,
+    ATTRIBUTE_PATTERN,
     ENTITY_ID_PATTERN,
     PROFILES,
     HaBindingConfig,
@@ -30,7 +31,7 @@ NAME_MAX = 255  # DataPointCreate.name
 
 class HaImportSelection(BaseModel):
     entity_id: str = Field(pattern=ENTITY_ID_PATTERN, max_length=255)
-    attribute: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_]+$", max_length=128)
+    attribute: str | None = Field(default=None, pattern=ATTRIBUTE_PATTERN, max_length=255)
     # "auto" = proposed profile (visible in the preview); None = plain value, no profile
     profile: str | None = Field(default="auto", max_length=64)
     direction: Literal["auto", "SOURCE", "DEST", "BOTH"] = "auto"
@@ -83,13 +84,17 @@ def filter_entities(
     device: str = "",
     platform: str = "",
     availability: str = "",
+    entity_id: str = "",
     offset: int = 0,
     limit: int = 100,
 ) -> dict[str, Any]:
-    """Filter, facet and page the entity list."""
+    """Filter, facet and page the entity list; *entity_id* matches exactly."""
     needle = q.strip().lower()
+    exact = entity_id.strip().lower()
 
     def matches(item: dict[str, Any], skip: str = "") -> bool:
+        if exact and item["entity_id"] != exact:
+            return False
         if needle and needle not in item["entity_id"].lower() and needle not in str(item.get("name") or "").lower():
             return False
         if skip != "domain" and domain and item["domain"] != domain:

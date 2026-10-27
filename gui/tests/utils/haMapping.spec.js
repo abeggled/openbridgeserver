@@ -48,6 +48,7 @@ describe('haMapping keys', () => {
   it('extracts the domain and filters profiles', () => {
     expect(entityDomain('input_number.t')).toBe('input_number')
     expect(entityDomain(undefined)).toBe('')
+    expect(entityDomain(' Light.Kitchen ')).toBe('light')
     expect(profilesForEntity(CATALOG, 'input_number.t').map(p => p.id)).toEqual(['number.value'])
     expect(profilesForEntity(null, 'lock.x')).toEqual([])
   })
