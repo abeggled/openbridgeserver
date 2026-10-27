@@ -25,8 +25,8 @@
 
     <div class="flex items-center gap-3 text-sm">
       <HelpButton help-id="adapters-homeassistant" />
-      <button class="btn-secondary btn-sm" :disabled="busy !== null" data-testid="ha-load" @click="load(0)">
-        <Spinner v-if="busy === 'load'" size="xs" color="slate" />
+      <button class="btn-secondary btn-sm" :disabled="loading" data-testid="ha-load" @click="load(0)">
+        <Spinner v-if="loading" size="xs" color="slate" />
         {{ $t('adapters.homeassistant.load') }}
       </button>
       <span v-if="loaded" class="text-slate-500" data-testid="ha-hits">{{ $t('adapters.homeassistant.hits', { n: total }) }}</span>
@@ -83,8 +83,8 @@
         </div>
       </div>
       <div v-if="paged" class="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 flex items-center gap-2 text-xs">
-        <button class="btn-secondary btn-sm" :disabled="offset === 0 || busy !== null" data-testid="ha-prev" @click="load(Math.max(0, offset - LIMIT))">{{ $t('adapters.homeassistant.prev') }}</button>
-        <button class="btn-secondary btn-sm" :disabled="!hasNext || busy !== null" data-testid="ha-next" @click="load(offset + LIMIT)">{{ $t('adapters.homeassistant.next') }}</button>
+        <button class="btn-secondary btn-sm" :disabled="offset === 0 || loading" data-testid="ha-prev" @click="load(Math.max(0, offset - LIMIT))">{{ $t('adapters.homeassistant.prev') }}</button>
+        <button class="btn-secondary btn-sm" :disabled="!hasNext || loading" data-testid="ha-next" @click="load(offset + LIMIT)">{{ $t('adapters.homeassistant.next') }}</button>
       </div>
     </div>
     <p v-else-if="loaded && !error" class="text-sm text-slate-500" data-testid="ha-empty">{{ $t('adapters.homeassistant.noEntities') }}</p>
@@ -212,7 +212,8 @@ const total = ref(0)
 const offset = ref(0)
 const loaded = ref(false)
 const metadataAvailable = ref(true)
-const busy = ref(null)
+const busy = ref(null)  // preview / import; searching may run alongside, never clears it
+const loading = ref(false)
 const error = ref(null)
 const expanded = reactive({})
 const selected = ref(new Map())
@@ -279,7 +280,7 @@ let loadSeq = 0
 async function load(newOffset) {
   clearTimeout(queryTimer)
   const mine = ++loadSeq
-  busy.value = 'load'
+  loading.value = true
   error.value = null
   try {
     const params = { ...filters, offset: newOffset, limit: LIMIT }
@@ -294,7 +295,7 @@ async function load(newOffset) {
   } catch (e) {
     if (mine === loadSeq) error.value = errorText(e, 'adapters.homeassistant.loadError')
   } finally {
-    if (mine === loadSeq) busy.value = null
+    if (mine === loadSeq) loading.value = false
   }
 }
 

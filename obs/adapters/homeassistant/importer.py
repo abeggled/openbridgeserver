@@ -248,6 +248,8 @@ def plan_import(
     existing: list[tuple[str, dict[str, Any], str]],
 ) -> list[HaImportCandidate]:
     """Plan the import. *existing* holds (binding_id, config, direction) of this instance."""
+    # Stored configs keep what the user typed; the adapter matches entity ids lowercased.
+    existing = [(binding_id, {**cfg, "entity_id": str(cfg.get("entity_id")).strip().lower()}, direction) for binding_id, cfg, direction in existing]
     by_id = {item["entity_id"]: item for item in entities}
     by_identity = {_identity(cfg): binding_id for binding_id, cfg, _direction in existing}
     # Same entity value, mapped by hand (no profile) on one side: importing it again

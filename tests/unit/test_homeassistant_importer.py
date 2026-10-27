@@ -206,6 +206,15 @@ class TestPlan:
         assert len(result) == 1
         assert (result[0].status, result[0].reason, result[0].existing_binding_id) == ("exists", "bindingExists", "b1")
 
+    def test_stored_entity_ids_are_matched_case_insensitively(self):
+        existing = [
+            ("b1", {"entity_id": " Lock.Shed", "profile": "lock.boolean_locked"}),
+            ("m1", {"entity_id": "Light.Desk", "attribute": "brightness"}),
+        ]
+        lock, brightness = _plan({"entity_id": "lock.shed"}, {"entity_id": "light.desk", "attribute": "brightness"}, existing=existing)
+        assert (lock.status, lock.existing_binding_id) == ("exists", "b1")
+        assert (brightness.status, brightness.reason, brightness.existing_binding_id) == ("conflict", "entityAlreadyBound", "m1")
+
     def test_attribute_selection_is_read_only_unless_the_profile_is_chosen(self):
         assert _one(entity_id="cover.roof", attribute="current_position").direction == "SOURCE"
         (merged,) = _plan(

@@ -506,6 +506,25 @@ class TestStateChangedFallback:
         await _bind(adapter, make_binding({"entity_id": "sensor.other"}))
         assert [m["type"] for m in fake_ha.socket.sent].count("subscribe_entities") == 1
 
+    async def test_events_during_the_snapshot_request_win_over_its_answer(self, adapter, mock_bus, fake_ha):
+        b = make_binding({"entity_id": "sensor.temp"})
+        await _bind(adapter, b)
+        command = adapter._conn.command
+
+        async def command_then_event(payload, *args, **kwargs):
+            result = await command(payload, *args, **kwargs)
+            if payload["type"] == "get_states":
+                # HA changes the entity right after answering; the event worker
+                # applies it before the snapshot is merged.
+                fake_ha.set_state("sensor.temp", "30")
+                await settle()
+            return result
+
+        adapter._conn.command = command_then_event
+        await _bind(adapter, b, make_binding({"entity_id": "sensor.other"}))
+        assert _values(mock_bus, b) == [(21.5, "good"), (30, "good")]
+        assert adapter._entity_cache["sensor.temp"]["state"] == "30"
+
     async def test_fallback_keeps_its_subscription_when_the_entity_set_changes(self, adapter, mock_bus, fake_ha):
         await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))
         other = make_binding({"entity_id": "sensor.other"})
@@ -778,3 +797,45 @@ class TestBrowse:
         conn = MagicMock()
         conn.command = AsyncMock(return_value={"x": 1})
         assert await HomeAssistantAdapter._optional_command(conn, "config/area_registry/list") is None
+
+
+# ---------------------------------------------------------------------------
+# Comparison with the DataPoint value (#1392 review)
+# ---------------------------------------------------------------------------
+
+
+class TestDataPointValue:
+    def test_same_value_keeps_booleans_apart_from_numbers(self):
+        assert ha_adapter._same_value(1, 1.0)
+        assert ha_adapter._same_value(False, False)
+        assert not ha_adapter._same_value(1, True)
+        assert not ha_adapter._same_value(False, 0)
+        assert not ha_adapter._same_value(True, False)
+
+    async def test_a_number_turning_into_a_boolean_is_published(self, adapter, mock_bus, fake_ha):
+        b = make_binding({"entity_id": "sensor.temp"})
+        fake_ha.set_state("sensor.temp", "1")
+        await _bind(adapter, b)
+        fake_ha.set_state("sensor.temp", "on")
+        await settle()
+        values = [e.value for e in _events(mock_bus) if e.binding_id == b.id]
+        assert values == [1, True] and type(values[1]) is bool
+
+    async def test_degrade_and_recovery_use_the_current_datapoint_value(self, monkeypatch, adapter, mock_bus, fake_ha):
+        b = make_binding({"entity_id": "lock.shed", "profile": "lock.boolean_locked"})
+        values: dict = {}
+        registry = MagicMock()
+        registry.get_value = lambda dp_id: MagicMock(value=values[dp_id]) if dp_id in values else None
+        monkeypatch.setattr("obs.core.registry.get_registry", lambda: registry)
+        await _bind(adapter, b)
+        values[b.datapoint_id] = False  # another binding (e.g. KNX) changed the DataPoint
+        fake_ha.set_state("lock.shed", "unavailable")
+        await settle()
+        fake_ha.set_state("lock.shed", "locked")
+        await settle()
+        flags = [(e.value, e.quality, e.suppress_write_propagation) for e in _events(mock_bus) if e.binding_id == b.id]
+        assert flags == [
+            (True, "good", False),
+            (False, "bad", False),  # degrading keeps the DataPoint's value, not HA's last one
+            (True, "good", False),  # HA's value differs from the DataPoint: propagate it
+        ]

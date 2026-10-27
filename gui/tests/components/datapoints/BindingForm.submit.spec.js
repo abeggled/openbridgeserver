@@ -212,6 +212,20 @@ describe('BindingForm — HOME_ASSISTANT edit keeps the declarative mapping (#13
     w.unmount()
   })
 
+  it('unblocks saving when the HA form is mounted again with a valid mapping', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'ha-1')
+    const area = w.find('[data-testid="config-field-ha-advanced"]')
+    await area.setValue('{broken')
+    await area.trigger('blur')
+    await selectInstance(w, 'mqtt-1')
+    await selectInstance(w, 'ha-1')
+    expect(w.find('[data-testid="ha-advanced-invalid"]').exists()).toBe(false)
+    await submit(w)
+    expect(createBinding).toHaveBeenCalledWith('dp-1', expect.objectContaining({ adapter_instance_id: 'ha-1' }))
+    w.unmount()
+  })
+
   it('drops empty mapping keys and a missing profile', async () => {
     const w = await mountForm({
       initial: {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from types import SimpleNamespace
@@ -484,3 +485,21 @@ async def test_import_uses_the_edited_name(monkeypatch, db):
     monkeypatch.setattr("obs.api.v1.bindings.create_binding", AsyncMock())
     await adapters_api.ha_import_entities(instance_id, _request({"entity_id": "lock.shed", "name": "Gartenhaus"}), _user=ADMIN, db=db)
     assert registry.create.await_args.args[0].name == "Gartenhaus"
+
+
+async def test_parallel_imports_of_one_instance_create_each_object_once(monkeypatch, db):
+    instance_id = await _instance(db)
+    _live(monkeypatch)
+    registry = SimpleNamespace(create=AsyncMock(side_effect=lambda dp: SimpleNamespace(id=uuid.uuid4())), delete=AsyncMock())
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: registry)
+
+    async def create_binding(_dp_id, body, _principal, database):
+        await asyncio.sleep(0)  # the other import runs here without the lock
+        await _binding(database, instance_id, body.config)
+
+    monkeypatch.setattr("obs.api.v1.bindings.create_binding", create_binding)
+    first, second = await asyncio.gather(
+        *(adapters_api.ha_import_entities(instance_id, _request({"entity_id": "lock.shed"}), _user=ADMIN, db=db) for _ in range(2)),
+    )
+    assert sorted((r.created_datapoints, r.skipped_existing) for r in (first, second)) == [(0, 1), (1, 0)]
+    assert (await db.fetchone("SELECT COUNT(*) AS n FROM adapter_bindings"))["n"] == 1

@@ -111,6 +111,20 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
     expect(cfg.profile).toBe('unknown.profile')  // not in the catalog: left to the backend
   })
 
+  it('keeps the profile while the entity id is retyped', async () => {
+    const { w, cfg } = await mk({ entity_id: 'lock.shed', profile: 'lock.boolean_locked' })
+    const input = w.find('[data-testid="config-field-entity_id"]')
+    for (const partial of ['', 'l', 'lo', 'lock', 'lock.', 'lock.f', ' Lock.Front ']) {
+      await input.setValue(partial)
+      expect(cfg.profile).toBe('lock.boolean_locked')
+    }
+    await input.setValue(' Cover.Roof')
+    expect(cfg.profile).toBe('')
+    const cleared = { ...cfg, entity_id: null, profile: 'cover.position' }
+    await w.setProps({ cfg: cleared })
+    expect(cleared.profile).toBe('cover.position')  // no entity at all: nothing to compare
+  })
+
   it('offers the read type as a dropdown', async () => {
     const { w, cfg } = await mk({ entity_id: 'sensor.t', read_as: '' })
     const options = w.findAll('[data-testid="config-field-read_as"] option').map(o => o.attributes('value'))
@@ -132,7 +146,7 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
     await area.setValue('{oops')
     await area.trigger('blur')
     expect(w.find('[data-testid="ha-advanced-invalid"]').exists()).toBe(true)
-    expect(w.emitted('advanced-validity')).toEqual([[true], [false]])
+    expect(w.emitted('advanced-validity')).toEqual([[true], [true], [false]])  // mount, valid, invalid
     expect(cfg.write_actions).toEqual({ true: { domain: 'lock', name: 'open' } })
   })
 })

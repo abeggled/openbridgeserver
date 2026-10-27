@@ -151,6 +151,7 @@ const props = defineProps({
 const emit = defineEmits(['advanced-validity'])
 
 const READ_AS = ['auto', 'boolean', 'number', 'string']
+const COMPLETE_ENTITY_ID = /^[a-z0-9_]+\.[a-z0-9_]+$/
 const catalog = ref([])
 const advancedText = ref(advancedMappingText(props.cfg))
 const advancedInvalid = ref(false)
@@ -220,13 +221,17 @@ function applyAdvanced() {
 }
 
 // A profile only fits its own domain(s): drop it when the entity moves to another one,
-// instead of letting the save fail with a 422.
-watch(() => entityDomain(props.cfg.entity_id), (domain) => {
+// instead of letting the save fail with a 422. Only complete entity ids count — while
+// the id is being retyped, its partial domain says nothing.
+watch(() => String(props.cfg.entity_id ?? '').trim().toLowerCase(), (entityId) => {
+  if (!COMPLETE_ENTITY_ID.test(entityId)) return
   const profile = catalog.value.find(p => p.id === props.cfg.profile)
-  if (profile && !profile.domains.includes(domain)) props.cfg.profile = ''
+  if (profile && !profile.domains.includes(entityDomain(entityId))) props.cfg.profile = ''
 })
 
 onMounted(async () => {
+  // A fresh form shows the stored, valid mapping: drop a stale "invalid" from an earlier one.
+  emit('advanced-validity', true)
   try {
     const { data } = await adapterApi.haProfiles()
     catalog.value = data

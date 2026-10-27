@@ -115,6 +115,13 @@ def _capabilities(attrs: dict[str, Any]) -> dict[str, Any]:
     return {k: attrs[k] for k in _CAPABILITY_ATTRIBUTES if k in attrs}
 
 
+def _same_value(a: Any, b: Any) -> bool:
+    """Equality that keeps booleans apart from numbers (``1 == True`` in Python)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    return a == b
+
+
 def _text(value: Any) -> str | None:
     return str(value)[:200] if isinstance(value, str) and value else None
 
@@ -172,6 +179,7 @@ class HomeAssistantAdapter(AdapterBase):
         # binding id → last value published with quality good (after formula/value_map)
         self._last_good: dict[Any, Any] = {}
         self._last_published: dict[Any, tuple[Any, str]] = {}
+        self._fresh_events: set[str] | None = None
         # binding id → what its published value depends on; a change republishes it
         self._signatures: dict[Any, tuple[Any, ...]] = {}
         self._sub_lock = asyncio.Lock()
@@ -396,8 +404,15 @@ class HomeAssistantAdapter(AdapterBase):
                 self._sub_mode = "events"
         if self._sub_id is None:
             self._sub_id = await conn.subscribe({"type": "subscribe_events", "event_type": "state_changed"}, self._on_state_changed_event)
+        # state_changed events applied while get_states was pending are newer than its answer.
+        self._fresh_events = set()
         states = await conn.command({"type": "get_states"})
-        snapshot = {s["entity_id"]: s for s in states or [] if isinstance(s, dict) and s.get("entity_id") in self._entity_map}
+        fresh, self._fresh_events = self._fresh_events, None
+        snapshot = {
+            s["entity_id"]: s
+            for s in states or []
+            if isinstance(s, dict) and s.get("entity_id") in self._entity_map and s.get("entity_id") not in fresh
+        }
         self._entity_cache.update(snapshot)
         await self._complete_snapshot(set(snapshot))
 
@@ -439,6 +454,8 @@ class HomeAssistantAdapter(AdapterBase):
         entity_id = data.get("entity_id")
         if entity_id not in self._entity_map:
             return
+        if self._fresh_events is not None:
+            self._fresh_events.add(entity_id)
         new_state = data.get("new_state")
         if new_state:
             self._entity_cache[entity_id] = new_state
@@ -458,16 +475,17 @@ class HomeAssistantAdapter(AdapterBase):
                 await self._publish_binding(binding, None)
 
     def _last_known(self, binding: Any) -> Any:
-        """Last good value of a binding; after a restart the value the registry restored."""
-        if binding.id in self._last_good:
-            return self._last_good[binding.id]
+        """The DataPoint's current value (other bindings may have changed it since HA did).
+
+        Falls back to the last good HA value when the registry has no state for it.
+        """
         try:
             from obs.core.registry import get_registry
 
             state = get_registry().get_value(binding.datapoint_id)
         except RuntimeError:  # registry not initialised (tests, shutdown)
-            return None
-        return state.value if state is not None else None
+            state = None
+        return state.value if state is not None else self._last_good.get(binding.id)
 
     async def _publish_binding(self, binding: Any, state_obj: dict[str, Any] | None) -> None:
         mapping = self._mappings.get(binding.id)
@@ -490,16 +508,16 @@ class HomeAssistantAdapter(AdapterBase):
             logger.exception("HA adapter: error processing binding %s", binding.id)
             return
 
-        key = (pub_value, quality)
-        if self._last_published.get(binding.id) == key:
+        last = self._last_published.get(binding.id)
+        if last is not None and last[1] == quality and _same_value(last[0], pub_value):
             return
         # The value HA reports again after a reconnect, an OBS start or a degraded
         # state is no new value: update the DataPoint (quality), but never re-send it
         # to other bindings or re-trigger logic — that could re-fire actuators.
-        unchanged = stable and pub_value == self._last_known(binding)
+        unchanged = stable and _same_value(pub_value, self._last_known(binding))
         if stable:
             self._last_good[binding.id] = pub_value
-        self._last_published[binding.id] = key
+        self._last_published[binding.id] = (pub_value, quality)
         if quality == BAD and state_obj is None:
             logger.debug("HA adapter: binding %s has no entity state (removed or disconnected)", binding.id)
         logger.debug("HA adapter: dp=%s value=%r quality=%s", binding.datapoint_id, pub_value, quality)

@@ -1687,6 +1687,11 @@ async def _ensure_ha_import_authority(db: Database, principal: Principal, instan
     return instance
 
 
+# Plan + create of one instance must not interleave: two parallel imports would both
+# plan the same entities as new and create every object twice.
+_HA_IMPORT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 async def _ha_import_plan(instance: Any, instance_id: str, body: HaImportRequest, db: Database) -> list[HaImportCandidate]:
     data = await _ha_entities(instance)
     rows = await db.fetchall("SELECT id, config, direction FROM adapter_bindings WHERE adapter_instance_id=?", (instance_id,))
@@ -1734,24 +1739,25 @@ async def ha_import_entities(
     principal = _principal_from_dependency(_user)
     instance = await _ensure_ha_import_authority(db, principal, str(instance_id))
 
-    candidates = await _ha_import_plan(instance, str(instance_id), body, db)
-    result = HaImportResult(preview=candidates)
-    skipped = {"exists": "skipped_existing", "conflict": "skipped_conflicts", "unsupported": "skipped_unsupported"}
-    specs: list[_ImportSpec] = []
-    for item in candidates:
-        if item.status in skipped:
-            setattr(result, skipped[item.status], getattr(result, skipped[item.status]) + 1)
-            continue
-        specs.append(_ImportSpec(item.entity_id, item.name, item.data_type, item.unit, item.tags, item.direction, item.config))
-    created, result.errors = await _create_imported_objects(
-        specs,
-        instance_id=instance_id,
-        principal=principal,
-        db=db,
-        persist_value=body.persist_value,
-        record_history=body.record_history,
-        label="Home-Assistant",
-    )
+    async with _HA_IMPORT_LOCKS.setdefault(str(instance_id), asyncio.Lock()):
+        candidates = await _ha_import_plan(instance, str(instance_id), body, db)
+        result = HaImportResult(preview=candidates)
+        skipped = {"exists": "skipped_existing", "conflict": "skipped_conflicts", "unsupported": "skipped_unsupported"}
+        specs: list[_ImportSpec] = []
+        for item in candidates:
+            if item.status in skipped:
+                setattr(result, skipped[item.status], getattr(result, skipped[item.status]) + 1)
+                continue
+            specs.append(_ImportSpec(item.entity_id, item.name, item.data_type, item.unit, item.tags, item.direction, item.config))
+        created, result.errors = await _create_imported_objects(
+            specs,
+            instance_id=instance_id,
+            principal=principal,
+            db=db,
+            persist_value=body.persist_value,
+            record_history=body.record_history,
+            label="Home-Assistant",
+        )
     result.created_datapoints = result.created_bindings = created
     _bulk_mutation_result(
         request,

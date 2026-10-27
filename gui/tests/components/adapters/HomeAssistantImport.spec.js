@@ -266,6 +266,27 @@ describe('HomeAssistantImport', () => {
     expect(w.find('[data-testid="ha-import-btn"]').attributes('disabled')).toBeDefined()
   })
 
+  it('keeps the import blocked while a search runs alongside it', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValue({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    let finishImport
+    api.haImport.mockImplementationOnce(() => new Promise(r => { finishImport = r }))
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    api.haEntities.mockResolvedValue(page([LOCK]))
+    await w.vm.load(0)
+    await flushPromises()
+    expect(w.find('[data-testid="ha-load"]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-testid="ha-import-btn"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeDefined()
+    finishImport({ data: { created_datapoints: 1, created_bindings: 1, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    await flushPromises()
+    expect(api.haImport).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
   it.each([
     [[{ loc: ['body', 'selections'], msg: 'List should have at most 500 items' }, { msg: 'second' }], 'List should have at most 500 items; second'],
     [['plain'], 'plain'],
