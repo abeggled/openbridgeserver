@@ -193,6 +193,10 @@ class HaConnection:
             return await asyncio.wait_for(fut, timeout)
         finally:
             self._pending.pop(msg_id, None)
+            # A close during send() fails the future too: mark that error as seen,
+            # or asyncio logs "Future exception was never retrieved".
+            if fut.done() and not fut.cancelled():
+                fut.exception()
 
     @staticmethod
     def _result(msg: dict[str, Any]) -> Any:

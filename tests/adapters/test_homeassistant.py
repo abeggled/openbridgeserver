@@ -682,8 +682,19 @@ class TestWrite:
             await adapter.write(make_binding({"entity_id": "switch.fan"}), True)
         adapter._connected = False
         await adapter.write(make_binding({"entity_id": "switch.fan"}), False)
-        assert adapter._action_failed is False
         assert adapter.last_detail_code == "haActionFailed"
+
+    async def test_rejected_action_while_reconnecting_keeps_the_connection_status(self, adapter, fake_ha):
+        await adapter._publish_status(False, "WebSocket Fehler — reconnecting", code="wsErrorReconnecting")
+        fake_ha.service_errors["switch.turn_on"] = (400, {"message": "no"})
+        with pytest.raises(HaActionError):
+            await adapter.write(make_binding({"entity_id": "switch.fan"}), True)
+        assert adapter.last_detail_code == "wsErrorReconnecting"
+
+    async def test_success_never_clears_a_foreign_warning(self, adapter, fake_ha):
+        await adapter._publish_status(True, "skipped", severity="warning", code="invalidBindingsSkipped")
+        await adapter.write(make_binding({"entity_id": "switch.fan"}), True)
+        assert adapter.last_detail_code == "invalidBindingsSkipped"
 
     async def test_write_without_client_raises(self, mock_bus):
         a = HomeAssistantAdapter(event_bus=mock_bus, config={"token": "t"})

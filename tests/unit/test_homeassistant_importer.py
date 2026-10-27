@@ -168,7 +168,25 @@ class TestPlan:
         c = _one(entity_id="climate.living", attribute="temperature")
         assert (c.data_type, c.profile, c.direction) == ("FLOAT", None, "SOURCE")
         c = _one(entity_id="light.desk", attribute="brightness", profile=None)
-        assert c.data_type == "INTEGER"
+        # a whole number now may be fractional later: the DataPoint must accept that
+        assert (c.data_type, c.config["read_as"]) == ("FLOAT", "number")
+
+    def test_two_default_profiles_of_one_entity_get_distinct_names(self):
+        plain, position = _plan({"entity_id": "cover.roof"}, {"entity_id": "cover.roof", "profile": "cover.position"})
+        assert (plain.profile, plain.name) == ("cover.boolean_open", "Roof window")
+        assert (position.name, position.proposed_name) == ("Roof window (position)", "Roof window (position)")
+
+    def test_merged_selection_keeps_its_edited_name(self):
+        (merged,) = _plan(
+            {"entity_id": "cover.roof", "attribute": "current_position"},
+            {"entity_id": "cover.roof", "profile": "cover.position", "name": "Dachfenster Position"},
+        )
+        assert merged.name == "Dachfenster Position"
+        (first_wins,) = _plan(
+            {"entity_id": "cover.roof", "attribute": "current_position", "name": "Erster"},
+            {"entity_id": "cover.roof", "profile": "cover.position", "name": "Zweiter"},
+        )
+        assert first_wins.name == "Erster"
 
     def test_ambiguous_domain_imports_read_only_with_notice(self):
         c = _one(entity_id="climate.living")

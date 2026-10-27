@@ -139,9 +139,8 @@ def _with_profiles(item: dict[str, Any]) -> dict[str, Any]:
 def _infer_type(value: Any) -> str:
     if isinstance(value, bool):
         return "BOOLEAN"
-    if isinstance(value, int):
-        return "INTEGER"
-    if isinstance(value, float):
+    if isinstance(value, (int, float)):
+        # A whole number now may be fractional later (21 -> 21.5): numbers read as FLOAT.
         return "FLOAT"
     if isinstance(value, str):
         try:
@@ -216,7 +215,9 @@ def _name(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile | Non
     base = str(item.get("name") or item["entity_id"])
     if sel.attribute:
         base = f"{base} ({sel.attribute})"
-    elif profile is not None and not profile.default:
+    elif profile is not None and profile is not default_profile(item["domain"], _state_obj(item)):
+        # Only the entity's proposed profile keeps the plain name: two default profiles
+        # of one entity (cover open/closed + position) must not share it.
         base = f"{base} ({profile.id.split('.', 1)[1]})"
     return base[:NAME_MAX]  # a long friendly name must not make the import fail
 
@@ -293,6 +294,8 @@ def plan_import(
             # The same binding selected twice (e.g. an attribute and its profile):
             # plan it once, with the wider direction the user asked for.
             first = result[planned[identity]]
+            if sel.name and request.selections[first.selection].name is None:
+                first.name = sel.name  # the name edited for the merged selection
             if candidate.direction != first.direction:
                 first.direction = "BOTH"  # SOURCE + DEST, or either + BOTH
                 # It may read only now: check and register that read like a new one.

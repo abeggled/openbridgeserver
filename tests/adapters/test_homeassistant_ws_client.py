@@ -246,3 +246,26 @@ async def test_queued_events_of_an_unsubscribed_subscription_are_dropped():
     assert handler.await_count == before
     assert conn._events.empty()
     await conn.close()
+
+
+@pytest.mark.parametrize("close_first", [True, False])
+async def test_failed_send_leaves_no_unretrieved_future_error(close_first):
+    fake = FakeHomeAssistant(token=TOKEN)
+    conn = await _open(fake)
+    futures: list[asyncio.Future] = []
+
+    async def send(_data):
+        futures.extend(conn._pending.values())
+        if close_first:  # the reader saw the close first and failed the pending future
+            conn._mark_closed(ConnectionError("closed"))
+        raise ConnectionError("send failed")
+
+    conn._ws.send = send
+    with pytest.raises(ConnectionError, match="send failed"):
+        await conn.command({"type": "get_states"})
+    (fut,) = futures
+    assert fut.done() is close_first
+    if close_first:
+        # retrieved by the client: asyncio's "never retrieved" check sees it as handled
+        assert fut._log_traceback is False
+    await conn.close()

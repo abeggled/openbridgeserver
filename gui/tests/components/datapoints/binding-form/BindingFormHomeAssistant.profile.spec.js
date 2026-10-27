@@ -125,6 +125,32 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
     expect(cleared.profile).toBe('cover.position')  // no entity at all: nothing to compare
   })
 
+  it('shows mapping changes made outside the textarea, but never while typing', async () => {
+    const cfg = { ...BASE, entity_id: 'lock.shed', state_map: { locked: 1 } }
+    const w = mount(BindingFormHomeAssistant, { props: { cfg } })
+    await flushPromises()
+    const area = w.find('[data-testid="config-field-ha-advanced"]')
+    await area.setValue('{broken')
+    await area.trigger('blur')
+    expect(w.find('[data-testid="ha-advanced-invalid"]').exists()).toBe(true)
+    // the form is refilled with another binding: its mapping replaces the stale text
+    await w.setProps({ cfg: { ...cfg, state_map: null, action: { domain: 'lock', name: 'open' } } })
+    expect(JSON.parse(area.element.value)).toEqual({ action: { domain: 'lock', name: 'open' } })
+    expect(w.find('[data-testid="ha-advanced-invalid"]').exists()).toBe(false)
+    expect(w.emitted('advanced-validity').at(-1)).toEqual([true])
+    // a change while the user edits the textarea leaves their text alone
+    await area.trigger('focus')
+    await area.setValue('{"fault_states": ["jammed"]}')
+    await w.setProps({ cfg: { ...cfg, state_map: { open: true } } })
+    expect(area.element.value).toBe('{"fault_states": ["jammed"]}')
+    // and an external change while the text is valid only refreshes the text
+    await area.trigger('blur')
+    const count = w.emitted('advanced-validity').length
+    await w.setProps({ cfg: { ...cfg, state_map: { closed: false } } })
+    expect(JSON.parse(area.element.value)).toEqual({ state_map: { closed: false } })
+    expect(w.emitted('advanced-validity')).toHaveLength(count)
+  })
+
   it('offers the read type as a dropdown', async () => {
     const { w, cfg } = await mk({ entity_id: 'sensor.t', read_as: '' })
     const options = w.findAll('[data-testid="config-field-read_as"] option').map(o => o.attributes('value'))

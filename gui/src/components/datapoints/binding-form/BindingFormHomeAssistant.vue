@@ -119,6 +119,7 @@
       rows="5"
       spellcheck="false"
       data-testid="config-field-ha-advanced"
+      @focus="editingAdvanced = true"
       @blur="applyAdvanced"
     />
     <p v-if="advancedInvalid" class="text-xs text-red-400" data-testid="ha-advanced-invalid">{{ $t('adapters.bindingForm.haAdvancedInvalid') }}</p>
@@ -160,6 +161,7 @@ const COMPLETE_ENTITY_ID = /^[a-z0-9_]+\.[a-z0-9_]+$/
 const catalog = ref([])
 const advancedText = ref(advancedMappingText(props.cfg))
 const advancedInvalid = ref(false)
+const editingAdvanced = ref(false)
 
 const profiles = computed(() => profilesForEntity(catalog.value, props.cfg.entity_id))
 const unknownProfile = computed(() => !!props.cfg.profile && !profiles.value.some(p => p.id === props.cfg.profile))
@@ -218,7 +220,19 @@ async function suggestDataKeys(query) {
   return fieldSuggestions(await loadServices(), actionDomain(), props.cfg.service_name, query)
 }
 
+// The mapping may change outside the textarea (form refilled, profile cleared): show it,
+// or the next blur would write the old text back over it. Never while the user types.
+watch(() => advancedMappingText(props.cfg), (text) => {
+  if (editingAdvanced.value) return
+  advancedText.value = text
+  if (advancedInvalid.value) {
+    advancedInvalid.value = false
+    emit('advanced-validity', true)
+  }
+})
+
 function applyAdvanced() {
+  editingAdvanced.value = false
   const parsed = parseAdvancedMapping(advancedText.value)
   advancedInvalid.value = !parsed.ok
   if (parsed.ok) Object.assign(props.cfg, parsed.value)

@@ -197,7 +197,6 @@ class HomeAssistantAdapter(AdapterBase):
         self._snapshot_expected: set[str] | None = None
         self._browse_cache: tuple[float, dict[str, Any]] | None = None
         self._services_cache: tuple[float, list[dict[str, Any]]] | None = None
-        self._action_failed = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -695,10 +694,9 @@ class HomeAssistantAdapter(AdapterBase):
             message = _ha_error_message(resp)
             raise HaActionError(f"{action} for {bc.entity_id} failed: HTTP {resp.status_code} {message}".rstrip())
         logger.info("HA adapter write: %s entity=%s value=%r", action, bc.entity_id, value)
-        if self._action_failed:
-            self._action_failed = False
-            if self._connected:
-                await self._publish_connected()
+        # Clear only our own warning: never a status another component set meanwhile.
+        if self._connected and self.last_detail_code == "haActionFailed":
+            await self._publish_connected()
 
     def _write_spec(self, binding: Any) -> tuple[HaBindingConfig, ResolvedMapping]:
         """Validated config + resolved mapping of a binding, cached until its config changes."""
@@ -711,7 +709,8 @@ class HomeAssistantAdapter(AdapterBase):
         return bc, mapping
 
     async def _report_action_failure(self, action: str) -> None:
-        self._action_failed = True
+        if not self._connected:
+            return  # the connection status ("reconnecting") says more than a rejected action
         await self._publish_status(
             self._connected,
             f"Home Assistant hat {action} abgelehnt",
