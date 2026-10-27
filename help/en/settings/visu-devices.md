@@ -35,12 +35,15 @@ The profile is chosen **on the device itself** and stored in its browser:
   the top right.
 
 From then on `/visu/` opens the profile's start page on that device. Changes to the start page or
-return time in the Admin GUI apply the next time the Visu is loaded on the device.
+return time in the Admin GUI reach a running Visu within a few minutes, at the latest on the next
+load; if the server was briefly unreachable when the Visu started, it fetches the profiles on its own.
 
 ### Details
 
 - The Visu only returns from the normal view (a page or the overview) — never from the editor,
   the page management or a login or PIN prompt.
+- The Visu cannot see input inside an embedded frame (IFrame widget); while such a frame has the
+  focus, the return is paused.
 - A start page protected by a PIN or login still asks for it when opened. The profile itself
   holds no credentials.
 - If the start page is deleted, the device opens the overview instead; the row in the tab stays

@@ -39,12 +39,16 @@ Das Profil wird **auf dem Gerät selbst** gewählt und dort im Browser gespeiche
   Auswahl **Gerät**.
 
 Danach öffnet `/visu/` auf diesem Gerät direkt die Startseite des Profils. Änderungen an Startseite
-oder Rücksprungzeit im Admin-GUI gelten beim nächsten Laden der Visu auf dem Gerät.
+oder Rücksprungzeit im Admin-GUI erreichen eine laufende Visu innerhalb weniger Minuten, spätestens
+beim nächsten Laden; war der Server beim Start der Visu kurz nicht erreichbar, holt sie die Profile
+von selbst nach.
 
 ### Verhalten im Detail
 
 - Zurückgesprungen wird nur aus der normalen Ansicht (Seite oder Übersicht) — nie aus dem
   Editor, der Seitenverwaltung oder einer Login- bzw. PIN-Eingabe.
+- Bedienung innerhalb eines eingebetteten Fensters (IFrame-Widget) sieht die Visu nicht; solange so
+  ein Fenster den Fokus hat, pausiert der Rücksprung.
 - Ist die Startseite mit PIN oder Login geschützt, fragt die Visu beim Öffnen wie gewohnt danach.
   Das Profil selbst enthält keine Zugangsdaten.
 - Wird die Startseite gelöscht, öffnet das Gerät stattdessen die Übersicht; im Reiter ist die Zeile

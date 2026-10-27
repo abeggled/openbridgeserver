@@ -15,6 +15,12 @@ import { visuDevices, type VisuDevice } from '@/api/client'
 
 export const DEVICE_STORAGE_KEY = 'visu_device'
 
+// Neuer Versuch nach einem Fehler: ab 5 s, verdoppelt bis 1 min. Danach alle 5 min,
+// damit Änderungen im Admin-GUI auch ein Wandpanel erreichen, das nie neu geladen wird.
+const RETRY_MIN_MS = 5_000
+const RETRY_MAX_MS = 60_000
+const REFRESH_INTERVAL_MS = 5 * 60_000
+
 function readStoredSlug(): string | null {
   try {
     return localStorage.getItem(DEVICE_STORAGE_KEY)
@@ -26,7 +32,10 @@ function readStoredSlug(): string | null {
 export const useDeviceStore = defineStore('device', () => {
   const slug = ref<string | null>(readStoredSlug())
   const devices = ref<VisuDevice[]>([])
+  /** Mindestens eine Liste ist angekommen (auch eine leere). */
+  const loaded = ref(false)
   let loading: Promise<void> | null = null
+  let retryDelayMs = RETRY_MIN_MS
 
   const profile = computed(() => devices.value.find(device => device.slug === slug.value) ?? null)
 
@@ -39,12 +48,50 @@ export const useDeviceStore = defineStore('device', () => {
 
   const returnAfterMs = computed(() => (profile.value?.return_after_s ?? 0) * 1000)
 
-  /** Lädt die Profile einmal; ein Fehler lässt die Visu ohne Profil weiterlaufen. */
+  /**
+   * Lädt die Profile einmal; ein Fehler lässt die Visu ohne Profil weiterlaufen.
+   * Ein Fehler wird nicht gemerkt — der nächste Aufruf versucht es erneut, und
+   * eine schon geladene Liste bleibt bei einem späteren Fehler erhalten.
+   */
   function load(): Promise<void> {
     loading ??= visuDevices.list()
-      .then((list) => { devices.value = list })
-      .catch(() => { devices.value = [] })
+      .then((list) => { devices.value = list; loaded.value = true; retryDelayMs = RETRY_MIN_MS })
+      .catch(() => { loading = null })
     return loading
+  }
+
+  /** Holt die Profile neu, auch wenn sie schon da sind. */
+  function reload(): Promise<void> {
+    loading = null
+    return load()
+  }
+
+  /**
+   * Hält die Profile auf einem Dauerläufer aktuell: solange noch keine Liste da
+   * ist, neuer Versuch mit wachsendem Abstand; danach regelmäßig sowie sobald die
+   * Verbindung zurückkommt oder die Seite wieder sichtbar wird. Gibt die
+   * Stop-Funktion zurück.
+   */
+  function keepFresh(intervalMs = REFRESH_INTERVAL_MS): () => void {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => {
+      clearTimeout(timer)
+      timer = setTimeout(async () => {
+        if (!loaded.value) retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS)
+        await reload()
+        schedule()
+      }, loaded.value ? intervalMs : retryDelayMs)
+    }
+    const refreshNow = () => { void reload().then(schedule) }
+    const onVisibility = () => { if (document.visibilityState === 'visible') refreshNow() }
+    window.addEventListener('online', refreshNow)
+    document.addEventListener('visibilitychange', onVisibility)
+    schedule()
+    return () => {
+      window.removeEventListener('online', refreshNow)
+      document.removeEventListener('visibilitychange', onVisibility)
+      clearTimeout(timer)
+    }
   }
 
   function select(next: string | null) {
@@ -64,5 +111,5 @@ export const useDeviceStore = defineStore('device', () => {
     select(typeof value === 'string' && value !== 'none' ? value : null)
   }
 
-  return { slug, devices, profile, startRoute, returnAfterMs, load, select, applyQuery }
+  return { slug, devices, loaded, profile, startRoute, returnAfterMs, load, reload, keepFresh, select, applyQuery }
 })

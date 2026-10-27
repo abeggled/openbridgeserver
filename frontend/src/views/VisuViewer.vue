@@ -12,7 +12,7 @@ import MissingWidget from '@/widgets/MissingWidget.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import NodeOverview from '@/components/NodeOverview.vue'
 import AuthButton from '@/components/AuthButton.vue'
-import { getJwt, getSessionToken, setWriteContext, clearWriteContext, visuBackgrounds as bgApi } from '@/api/client'
+import { ApiRequestError, getJwt, getSessionToken, setWriteContext, clearWriteContext, visuBackgrounds as bgApi } from '@/api/client'
 import {
   cssBackgroundPosition,
   cssBackgroundRepeat,
@@ -169,7 +169,7 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
-    if (isConcealedProfileStart()) {
+    if (await isConcealedProfileStart(e)) {
       router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
       return
     }
@@ -188,8 +188,17 @@ async function load() {
 // gefilterten Baum fehlt, verlangt eine Anmeldung. Der Breadcrumb dazu antwortet
 // ohne Anmeldung mit 404 — ohne diese Prüfung bliebe statt des Logins die
 // Fehlerseite stehen.
-function isConcealedProfileStart(): boolean {
-  if (getJwt() || visuStore.getNode(props.id)) return false
+const CONCEALED_STATUS = new Set([401, 403, 404])
+
+async function isConcealedProfileStart(e: unknown): Promise<boolean> {
+  if (getJwt()) return false
+  // Nur ein Baum, der wirklich angekommen ist und den Knoten nicht enthält, sagt
+  // „verborgen“. Ein Netzfehler oder ein 5xx (OBS startet gerade neu) sagt nichts
+  // über den Zugriff — dann bleibt die Fehlerseite, nicht der Login.
+  if (!visuStore.treeLoaded || visuStore.getNode(props.id)) return false
+  if (!(e instanceof ApiRequestError) || !CONCEALED_STATUS.has(e.status ?? 0)) return false
+  // Bei einem Direktaufruf der Seite können die Profile nach dem Baum eintreffen.
+  await device.load()
   const profile = device.profile
   return profile?.start_node_id === props.id && !profile.start_node_missing
 }
