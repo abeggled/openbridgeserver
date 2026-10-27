@@ -313,6 +313,17 @@ export function getSessionToken(nodeId: string): string | null {
   return raw
 }
 
+/** Alle noch gültigen PIN-Session-Tokens dieses Browsers (z. B. für den Icon-Abruf) */
+export function getAllSessionTokens(): string[] {
+  const nodeIds: string[] = []
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i)
+    if (key?.startsWith('session_')) nodeIds.push(key.slice('session_'.length))
+  }
+  // Erst sammeln, dann lesen: getSessionToken() entfernt abgelaufene Einträge.
+  return nodeIds.map(getSessionToken).filter((token): token is string => !!token)
+}
+
 export function setSessionToken(nodeId: string, token: string, expiresIn = 3600): void {
   sessionStorage.setItem(`session_${nodeId}`, JSON.stringify({
     token,
@@ -743,7 +754,12 @@ export interface IconListOut {
 }
 
 export const icons = {
-  list: () => request<IconListOut>('/icons/'),
+  // Ohne Anmeldung liefert der Server nur die Icons der Seiten, die man sehen darf —
+  // PIN-Seiten, sobald ihr PIN-Token mitgeschickt wird.
+  list: () => {
+    const tokens = getAllSessionTokens()
+    return request<IconListOut>('/icons/', tokens.length ? { headers: { 'X-Session-Tokens': tokens.join(',') } } : {})
+  },
 }
 
 // ── VISU Backgrounds ─────────────────────────────────────────────────────────
