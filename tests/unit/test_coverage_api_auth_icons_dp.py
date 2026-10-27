@@ -32,6 +32,7 @@ import obs.api.v1.search as search_api
 from obs.api.auth import (
     ChangePasswordRequest,
     LoginRequest,
+    Principal,
     RefreshRequest,
     SetMqttPasswordRequest,
     UserCreate,
@@ -56,6 +57,9 @@ from obs.models.datapoint import DataPointCreate, DataPointUpdate
 # ---------------------------------------------------------------------------
 # Helpers / Stubs
 # ---------------------------------------------------------------------------
+
+
+_ADMIN_PRINCIPAL = Principal(subject="admin", type="user", is_admin=True)
 
 
 def _make_row(**kwargs) -> dict:
@@ -1110,7 +1114,7 @@ class TestListIcons:
     @pytest.mark.asyncio
     async def test_empty_dir_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 0
         assert result.icons == []
 
@@ -1119,7 +1123,7 @@ class TestListIcons:
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
         (tmp_path / "home.svg").write_bytes(svg)
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 1
         assert result.icons[0].name == "home"
 
@@ -1130,7 +1134,7 @@ class TestListIcons:
         # but that might produce empty bytes — use an SVG that passes
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
         (tmp_path / "good.svg").write_bytes(svg)
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 1
 
 
@@ -1333,21 +1337,21 @@ class TestGetIcon:
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
         (tmp_path / "home.svg").write_bytes(svg)
-        response = await icons_api.get_icon(name="home", _user="admin")
+        response = await icons_api.get_icon(name="home", request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert response.media_type == "image/svg+xml"
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_icon_raises_404(self, tmp_path, monkeypatch):
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         with pytest.raises(HTTPException) as exc:
-            await icons_api.get_icon(name="missing", _user="admin")
+            await icons_api.get_icon(name="missing", request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_get_icon_invalid_name_raises_400(self, tmp_path, monkeypatch):
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         with pytest.raises(HTTPException) as exc:
-            await icons_api.get_icon(name="../evil", _user="admin")
+            await icons_api.get_icon(name="../evil", request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert exc.value.status_code == 400
 
 
