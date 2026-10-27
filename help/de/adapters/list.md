@@ -121,7 +121,10 @@ Der Import ist wiederholbar: bereits verknüpfte Entities erscheinen als *vorhan
 übersprungen. Wurde eine Entity in Home Assistant umbenannt, erkennt OBS sie an ihrer
 Registry-Identität und meldet einen *Konflikt*, statt ein Duplikat anzulegen. Ebenso ist es
 ein *Konflikt*, wenn derselbe Zustand bzw. dasselbe Attribut schon manuell (ohne Profil)
-verknüpft ist. Bestehende Objekte und Verknüpfungen werden nie überschrieben.
+verknüpft ist (reine Schreib-Verknüpfungen zählen dabei nicht) oder in derselben Auswahl
+zweimal vorkommt. Bestehende Objekte und Verknüpfungen werden nie überschrieben. Der Datentyp
+eines importierten Zustands richtet sich nach dem aktuellen Wert (`on`/`off` → Boolean,
+Zahl → Zahl, sonst Text), und die Verknüpfung liest den Wert später genau in diesem Typ.
 
 ### Profile
 
@@ -173,6 +176,12 @@ Unter *Erweiterte Zuordnung (JSON)* sind zusätzlich möglich:
 - `write_actions` — wertabhängige Aktionen, z. B.
   `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
 - `state_map`, `transitional_states`, `fault_states` — eigene Lese-Normalisierung.
+
+**Lesen als** legt fest, in welchen Typ der Wert umgewandelt wird (Boolean, Zahl, Text oder
+automatisch); ein unpassender Wert behält den letzten Wert mit Qualität *unsicher*. Ein Profil
+muss zur Richtung passen: ein reines Leseprofil kann nicht schreiben, ein Befehlsprofil nicht
+lesen — solche Verknüpfungen lehnt OBS beim Speichern ab. Ungültiges JSON in der erweiterten
+Zuordnung verhindert das Speichern.
 
 Die Aktion wird nach dem typisierten Objektwert gewählt; Formel und Wertzuordnung der
 Verknüpfung verändern nur den gesendeten Wert, nie die Auswahl der Aktion.

@@ -805,7 +805,16 @@
       "haAdvancedHint": "Erlaubte Schlüssel: action, write_actions, state_map, transitional_states, fault_states. Keine Templates oder Ausdrücke.",
       "haEntityIdSearchHint": "Tippen sucht in den Entities der gewählten Home-Assistant-Instanz (ID oder Name); freie Eingabe bleibt möglich.",
       "haNoSuggestions": "Keine Vorschläge — freie Eingabe möglich",
-      "haProfileTypeMismatch": "Das Profil liefert Werte vom Typ {profile}, das Objekt hat den Typ {dp}."
+      "haProfileTypeMismatch": "Das Profil liefert Werte vom Typ {profile}, das Objekt hat den Typ {dp}.",
+      "haReadAsLabel": "Lesen als",
+      "haReadAsDefault": "Wie Profil (sonst automatisch)",
+      "haReadAsHint": "Typ, in den der Home-Assistant-Wert umgewandelt wird. Ein unpassender Wert behält den letzten Wert (Qualität unsicher).",
+      "haReadAs": {
+        "auto": "Automatisch (on/off, Zahl, Text)",
+        "boolean": "Boolean (on/off)",
+        "number": "Zahl",
+        "string": "Text"
+      }
     },
     "knx": {
       "scan": {
@@ -1455,7 +1464,8 @@
         "bindingExists": "Verknüpfung existiert bereits",
         "entityRenamed": "Bereits verknüpft unter anderer Entity-ID (in Home Assistant umbenannt) — bitte bestehende Verknüpfung prüfen",
         "ambiguousReadOnly": "Mehrdeutige Domain: wird nur lesend importiert; zum Schreiben ein Profil wählen",
-        "entityAlreadyBound": "Diese Entity bzw. dieses Attribut ist bereits verknüpft (manuell oder ohne Profil) — bitte bestehende Verknüpfung prüfen"
+        "entityAlreadyBound": "Diese Entity bzw. dieses Attribut ist bereits verknüpft (manuell oder ohne Profil) — bitte bestehende Verknüpfung prüfen",
+        "selectedTwice": "Derselbe Wert ist in dieser Auswahl bereits enthalten (z. B. Profil und Zustand ohne Profil) — nur einmal importieren"
       },
       "convention": {
         "trueOn": "true = ein",

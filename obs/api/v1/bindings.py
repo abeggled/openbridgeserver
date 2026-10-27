@@ -321,6 +321,9 @@ def _validate_adapter_binding(
             binding_config = cls.binding_config_schema(**schema_config)
             if adapter_type == "MESSAGE" and enabled and instance_config is not None:
                 _validate_message_target_refs(binding_config, instance_config)
+            direction_check = getattr(cls, "validate_binding_direction", None)
+            if direction_check is not None:
+                direction_check(binding_config, direction)
         except Exception as exc:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,

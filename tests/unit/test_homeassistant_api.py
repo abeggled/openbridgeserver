@@ -444,3 +444,30 @@ async def test_failing_deferred_reload_does_not_fail_the_import(monkeypatch, db,
     result = await adapters_api.ha_import_entities(instance_id, _request({"entity_id": "lock.shed"}), _user=ADMIN, db=db)
     assert (result.created_bindings, result.errors) == (1, [])
     assert "Deferred binding reload failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("direction", "config", "ok"),
+    [
+        ("DEST", {"entity_id": "sensor.t", "profile": "sensor.value"}, False),
+        ("SOURCE", {"entity_id": "cover.t", "profile": "cover.stop"}, False),
+        ("DEST", {"entity_id": "cover.t", "profile": "cover.stop"}, True),
+        ("BOTH", {"entity_id": "lock.t", "profile": "lock.boolean_locked"}, True),
+    ],
+)
+def test_binding_validation_checks_the_profile_direction(direction, config, ok):
+    from obs.api.v1.bindings import _validate_adapter_binding
+
+    if ok:
+        _validate_adapter_binding("HOME_ASSISTANT", direction, config)
+        return
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_adapter_binding("HOME_ASSISTANT", direction, config)
+    assert exc_info.value.status_code == 422
+    assert config["profile"] in exc_info.value.detail
+
+
+def test_adapters_without_a_direction_hook_are_validated_as_before():
+    from obs.api.v1.bindings import _validate_adapter_binding
+
+    _validate_adapter_binding("IOBROKER", "DEST", {"state_id": "a.0.x"})

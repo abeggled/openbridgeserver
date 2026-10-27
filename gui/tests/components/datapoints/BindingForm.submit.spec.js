@@ -192,11 +192,31 @@ describe('BindingForm — HOME_ASSISTANT edit keeps the declarative mapping (#13
     w.unmount()
   })
 
+  it('keeps read_as and blocks saving while the advanced JSON is invalid', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'b4', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
+        config: { entity_id: 'sensor.t', read_as: 'string' },
+      },
+    })
+    const area = w.find('[data-testid="config-field-ha-advanced"]')
+    await area.setValue('{broken')
+    await area.trigger('blur')
+    await submit(w)
+    expect(updateBinding).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Ungültiges JSON')
+    await area.setValue('')
+    await area.trigger('blur')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual({ entity_id: 'sensor.t', read_as: 'string' })
+    w.unmount()
+  })
+
   it('drops empty mapping keys and a missing profile', async () => {
     const w = await mountForm({
       initial: {
         id: 'b2', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
-        config: { entity_id: 'sensor.t', profile: null, transitional_states: [], action: null },
+        config: { entity_id: 'sensor.t', profile: null, read_as: null, transitional_states: [], action: null },
       },
     })
     await submit(w)

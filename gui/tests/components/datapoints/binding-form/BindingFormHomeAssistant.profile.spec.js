@@ -100,6 +100,25 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
     expect(w.find('[data-testid="ha-write-legacy"]').exists()).toBe(true)
   })
 
+  it('drops a profile that does not fit a newly chosen entity domain', async () => {
+    const { w, cfg } = await mk({ entity_id: 'lock.shed', profile: 'lock.boolean_locked' })
+    await w.find('[data-testid="config-field-entity_id"]').setValue('lock.door')
+    expect(cfg.profile).toBe('lock.boolean_locked')  // same domain: kept
+    await w.find('[data-testid="config-field-entity_id"]').setValue('cover.roof')
+    expect(cfg.profile).toBe('')
+    cfg.profile = 'unknown.profile'
+    await w.find('[data-testid="config-field-entity_id"]').setValue('switch.x')
+    expect(cfg.profile).toBe('unknown.profile')  // not in the catalog: left to the backend
+  })
+
+  it('offers the read type as a dropdown', async () => {
+    const { w, cfg } = await mk({ entity_id: 'sensor.t', read_as: '' })
+    const options = w.findAll('[data-testid="config-field-read_as"] option').map(o => o.attributes('value'))
+    expect(options).toEqual(['', 'auto', 'boolean', 'number', 'string'])
+    await w.find('[data-testid="config-field-read_as"]').setValue('number')
+    expect(cfg.read_as).toBe('number')
+  })
+
   it('applies valid advanced JSON on blur and rejects invalid input', async () => {
     const { w, cfg } = await mk({ entity_id: 'lock.shed', state_map: { locked: 1 } })
     const area = w.find('[data-testid="config-field-ha-advanced"]')
@@ -113,6 +132,7 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
     await area.setValue('{oops')
     await area.trigger('blur')
     expect(w.find('[data-testid="ha-advanced-invalid"]').exists()).toBe(true)
+    expect(w.emitted('advanced-validity')).toEqual([[true], [false]])
     expect(cfg.write_actions).toEqual({ true: { domain: 'lock', name: 'open' } })
   })
 })

@@ -49,6 +49,7 @@ from obs.adapters.homeassistant.profiles import (
     HaBindingConfig,
     NoActionForValueError,
     ResolvedMapping,
+    direction_problem,
     entity_domain,
     identity_hash,
     normalize,
@@ -140,6 +141,13 @@ class HomeAssistantAdapter(AdapterBase):
     adapter_type = "HOME_ASSISTANT"
     config_schema = HaAdapterConfig
     binding_config_schema = HaBindingConfig
+
+    @staticmethod
+    def validate_binding_direction(binding_config: HaBindingConfig, direction: str) -> None:
+        """Reject a profile that cannot work in the binding's direction (raises ValueError)."""
+        problem = direction_problem(binding_config, direction)
+        if problem:
+            raise ValueError(problem)
 
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)

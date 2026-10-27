@@ -60,7 +60,8 @@ ENTITIES = [
 
 def _plan(*selections, existing=(), tags=()):
     request = HaImportRequest(selections=[HaImportSelection(**s) for s in selections], tags=list(tags))
-    return plan_import(ENTITIES, request, list(existing))
+    # existing entries: (binding_id, config) read as BOTH, or (binding_id, config, direction)
+    return plan_import(ENTITIES, request, [e if len(e) == 3 else (*e, "BOTH") for e in existing])
 
 
 def _one(**selection):
@@ -144,8 +145,13 @@ class TestPlan:
             {"entity_id": "light.desk", "attribute": "label"},
             {"entity_id": "light.desk", "attribute": "on"},
         )
-        assert (fan.data_type, fan.direction, fan.profile, fan.config) == ("BOOLEAN", "SOURCE", None, {"entity_id": "switch.fan"})
-        assert (brightness.data_type, brightness.config) == ("STRING", {"entity_id": "light.desk", "attribute": "label"})
+        assert (fan.data_type, fan.direction, fan.profile, fan.config) == (
+            "BOOLEAN",
+            "SOURCE",
+            None,
+            {"entity_id": "switch.fan", "read_as": "boolean"},
+        )
+        assert (brightness.data_type, brightness.config) == ("STRING", {"entity_id": "light.desk", "attribute": "label", "read_as": "string"})
         assert flag.data_type == "BOOLEAN"
         assert brightness.mapping["mode"] == "default"
 
@@ -266,3 +272,59 @@ def test_mapping_summary_modes():
     lock = mapping_summary({"entity_id": "lock.t", "profile": "lock.boolean_locked"})
     assert lock["read"]["transitional_states"] == ["locking", "opening", "unlocking"]
     assert lock["read"]["fault_states"] == ["jammed"]
+
+
+class TestReviewFollowUps:
+    @pytest.mark.parametrize(
+        ("entity", "expected_type", "read_as"),
+        [
+            (_entity("automation.x", "on"), "BOOLEAN", "boolean"),
+            (_entity("script.x", "off"), "BOOLEAN", "boolean"),
+            (_entity("climate.x", "on"), "STRING", "string"),  # ambiguous: no Boolean guess
+            (_entity("sensor.n", "unknown"), "STRING", "string"),
+            (_entity("sensor.w", "unknown", {"unit_of_measurement": "W"}), "FLOAT", "number"),
+            (_entity("sensor.m", "12"), "FLOAT", "number"),
+        ],
+    )
+    def test_plain_state_type_matches_how_it_is_read(self, entity, expected_type, read_as):
+        request = HaImportRequest(selections=[HaImportSelection(entity_id=entity["entity_id"], profile=None)])
+        (c,) = plan_import([entity], request, [])
+        assert (c.data_type, c.config["read_as"]) == (expected_type, read_as)
+
+    def test_sensor_profile_reads_as_its_inferred_type(self):
+        c = _one(entity_id="sensor.temp")
+        assert (c.profile, c.data_type, c.config["read_as"]) == ("sensor.value", "FLOAT", "number")
+        assert "read_as" not in _one(entity_id="lock.shed").config
+
+    def test_write_only_existing_binding_is_no_reader(self):
+        existing = [("w1", {"entity_id": "switch.fan", "service_name": "turn_on"}, "DEST")]
+        assert _plan({"entity_id": "switch.fan"}, existing=existing)[0].status == "new"
+        existing = [("r1", {"entity_id": "switch.fan", "service_name": "turn_on"}, "SOURCE")]
+        assert _plan({"entity_id": "switch.fan"}, existing=existing)[0].reason == "entityAlreadyBound"
+
+    def test_same_value_selected_twice_in_one_request(self):
+        profiled, plain = _plan({"entity_id": "switch.fan"}, {"entity_id": "switch.fan", "profile": None})
+        assert profiled.status == "new"
+        assert (plain.status, plain.reason) == ("conflict", "selectedTwice")
+        plain, profiled = _plan({"entity_id": "switch.fan", "profile": None}, {"entity_id": "switch.fan"})
+        assert (plain.status, profiled.status, profiled.reason) == ("new", "conflict", "selectedTwice")
+
+    def test_commands_and_rejected_candidates_do_not_block_others(self):
+        stop, state = _plan({"entity_id": "cover.roof", "profile": "cover.stop"}, {"entity_id": "cover.roof", "profile": None})
+        assert (stop.status, state.status) == ("new", "new")
+        existing = [("m1", {"entity_id": "lock.shed", "service_name": "lock"})]
+        first, second = _plan({"entity_id": "lock.shed"}, {"entity_id": "lock.shed", "profile": None, "direction": "SOURCE"}, existing=existing)
+        assert first.reason == "entityAlreadyBound"
+        assert second.reason == "bindingExists"
+
+    def test_source_plus_dest_merges_to_both(self):
+        (merged,) = _plan(
+            {"entity_id": "light.desk", "attribute": "brightness"},
+            {"entity_id": "light.desk", "profile": "light.brightness", "direction": "DEST"},
+        )
+        assert merged.direction == "BOTH"
+        (same,) = _plan(
+            {"entity_id": "light.desk", "profile": "light.brightness", "direction": "DEST"},
+            {"entity_id": "light.desk", "profile": "light.brightness", "direction": "DEST"},
+        )
+        assert same.direction == "DEST"

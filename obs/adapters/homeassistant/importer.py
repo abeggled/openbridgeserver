@@ -140,10 +140,13 @@ def _infer_type(value: Any) -> str:
     return "STRING"
 
 
+_READ_AS = {"BOOLEAN": "boolean", "INTEGER": "number", "FLOAT": "number", "STRING": "string"}
+
+
 def _state_type(item: dict[str, Any]) -> str:
-    """Conservative OBS type for a plain state read (legacy coercion)."""
+    """Conservative OBS type for a plain state read; the binding reads it as exactly that type."""
     state = item.get("state")
-    if item["domain"] in ("switch", "input_boolean", "binary_sensor", "light", "fan") and state in ("on", "off"):
+    if state in ("on", "off") and item["domain"] not in AMBIGUOUS_DOMAINS:
         return "BOOLEAN"
     if state in ("unknown", "unavailable", None):
         return "FLOAT" if item.get("unit") else "STRING"
@@ -227,22 +230,25 @@ def _read_source(config: dict[str, Any]) -> tuple[str, str | None] | None:
 def plan_import(
     entities: list[dict[str, Any]],
     request: HaImportRequest,
-    existing: list[tuple[str, dict[str, Any]]],
+    existing: list[tuple[str, dict[str, Any], str]],
 ) -> list[HaImportCandidate]:
-    """Plan the import. *existing* holds (binding_id, config) of this instance."""
+    """Plan the import. *existing* holds (binding_id, config, direction) of this instance."""
     by_id = {item["entity_id"]: item for item in entities}
-    by_identity = {_identity(cfg): binding_id for binding_id, cfg in existing}
+    by_identity = {_identity(cfg): binding_id for binding_id, cfg, _direction in existing}
     # Same entity value, mapped by hand (no profile) on one side: importing it again
-    # would create a second object for the same device value.
+    # would create a second object for the same device value. Only reading bindings count.
     manual_reads: dict[tuple[str, str | None], str] = {}
     profiled_reads: dict[tuple[str, str | None], str] = {}
-    for binding_id, cfg in existing:
+    for binding_id, cfg, direction in existing:
         source = _read_source(cfg)
-        if source is not None:
+        if source is not None and direction in ("SOURCE", "BOTH"):
             (profiled_reads if cfg.get("profile") else manual_reads).setdefault(source, binding_id)
+    # The same check between candidates of this request.
+    planned_manual: dict[tuple[str, str | None], str] = {}
+    planned_profiled: dict[tuple[str, str | None], str] = {}
     by_uid = {
         (cfg.get("ha_uid"), cfg.get("attribute") or None, cfg.get("profile") or None): (binding_id, cfg)
-        for binding_id, cfg in existing
+        for binding_id, cfg, _direction in existing
         if cfg.get("ha_uid")
     }
 
@@ -267,8 +273,8 @@ def plan_import(
             # The same binding selected twice (e.g. an attribute and its profile):
             # plan it once, with the wider direction the user asked for.
             first = result[planned[identity]]
-            if candidate.direction == "BOTH":
-                first.direction = "BOTH"
+            if candidate.direction != first.direction:
+                first.direction = "BOTH"  # SOURCE + DEST, or either + BOTH
             continue
         planned[identity] = len(result)
         if identity in by_identity:
@@ -281,6 +287,10 @@ def plan_import(
         elif (overlap := _overlap(candidate.config, manual_reads, profiled_reads)) is not None:
             candidate.status, candidate.reason = "conflict", "entityAlreadyBound"
             candidate.existing_binding_id = overlap
+        elif _overlap(candidate.config, planned_manual, planned_profiled) is not None:
+            candidate.status, candidate.reason = "conflict", "selectedTwice"
+        if candidate.status == "new" and (source := _read_source(candidate.config)) is not None and candidate.direction != "DEST":
+            (planned_profiled if candidate.profile else planned_manual).setdefault(source, candidate.entity_id)
         result.append(candidate)
     return result
 
@@ -341,6 +351,9 @@ def _candidate(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile 
         config["attribute"] = read_attribute
     if profile is not None:
         config["profile"] = profile.id
+    if profile is None or profile.data_type == "AUTO":
+        # Read as the type the DataPoint gets, so later values never mismatch it.
+        config["read_as"] = _READ_AS[data_type]
     if item.get("ha_uid"):
         config["ha_uid"] = item["ha_uid"]
 

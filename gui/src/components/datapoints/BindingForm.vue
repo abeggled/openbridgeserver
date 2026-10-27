@@ -113,6 +113,7 @@
           :cfg="cfg"
           :selected-instance-id="selectedInstanceId"
           :dp-data-type="dpDataType"
+          @advanced-validity="valid => (haAdvancedValid = valid)"
         />
 
       <!-- ioBroker -->
@@ -413,7 +414,7 @@ const cfg = reactive({
   sensor_id: '', property: 'temperature',
   // HOME_ASSISTANT
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
-  profile: '', action: null, write_actions: null, state_map: null, transitional_states: [], fault_states: [], ha_uid: '',
+  profile: '', read_as: '', action: null, write_actions: null, state_map: null, transitional_states: [], fault_states: [], ha_uid: '',
   // IOBROKER
   state_id: '', command_state_id: '', ack: false,
   // ANWESENHEITSSIMULATION
@@ -508,6 +509,7 @@ const mqttBrowseLoading = ref(false)
 const mqttBrowseError  = ref(null)
 
 // ioBroker state browser state
+const haAdvancedValid = ref(true)
 const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
@@ -688,6 +690,7 @@ watch(() => props.initial, val => {
   if (cfg.service_name     == null) cfg.service_name     = ''
   if (cfg.service_data_key == null) cfg.service_data_key = ''
   if (cfg.profile          == null) cfg.profile          = ''
+  if (cfg.read_as          == null) cfg.read_as          = ''
   // IOBROKER defaults when loading
   if (cfg.state_id         == null) cfg.state_id = ''
   if (cfg.command_state_id == null) cfg.command_state_id = ''
@@ -1364,6 +1367,7 @@ function buildConfig() {
     if (cfg.service_name?.trim())     c.service_name     = cfg.service_name.trim()
     if (cfg.service_data_key?.trim()) c.service_data_key = cfg.service_data_key.trim()
     if (cfg.profile)                  c.profile          = cfg.profile
+    if (cfg.read_as)                  c.read_as          = cfg.read_as
     // Declarative mapping (#1392) and the import identity survive an edit unchanged.
     for (const key of HA_MAPPING_KEYS) {
       const v = cfg[key]
@@ -1493,6 +1497,10 @@ function buildConfig() {
 
 async function submit() {
   error.value  = null
+  if (selectedAdapterType.value === 'HOME_ASSISTANT' && !haAdvancedValid.value) {
+    error.value = t('adapters.bindingForm.haAdvancedInvalid')  // never save the previous mapping silently
+    return
+  }
   saving.value = true
   try {
     const config     = buildConfig()

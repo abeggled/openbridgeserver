@@ -15,6 +15,7 @@ from obs.adapters.homeassistant.profiles import (
     action_key,
     coerce_state,
     default_profile,
+    direction_problem,
     identity_hash,
     normalize,
     profile_catalog,
@@ -218,7 +219,20 @@ class TestNormalize:
             ({"entity_id": "cover.t", "profile": "cover.boolean_open"}, "closing", None, (None, "uncertain", False)),
             ({"entity_id": "cover.t", "profile": "cover.position"}, "opening", {"current_position": 30}, (30, "good", True)),
             ({"entity_id": "cover.t", "profile": "cover.position"}, "open", {"current_position": "x"}, (None, "uncertain", False)),
-            ({"entity_id": "cover.t", "profile": "cover.position"}, "open", {}, (None, "good", True)),
+            ({"entity_id": "cover.t", "profile": "cover.position"}, "open", {}, (None, "uncertain", False)),
+            ({"entity_id": "cover.t", "profile": "cover.position"}, "open", {"current_position": None}, (None, "uncertain", False)),
+            ({"entity_id": "media_player.t", "profile": "media_player.mute"}, "on", {}, (None, "uncertain", False)),
+            ({"entity_id": "media_player.t", "profile": "media_player.mute"}, "on", {"is_volume_muted": 1}, (None, "uncertain", False)),
+            ({"entity_id": "media_player.t", "profile": "media_player.title"}, "on", {}, (None, "good", True)),
+            ({"entity_id": "media_player.t", "profile": "media_player.title"}, "on", {"media_title": 5}, ("5", "good", True)),
+            ({"entity_id": "sensor.t", "read_as": "string"}, "21", None, ("21", "good", True)),
+            ({"entity_id": "sensor.t", "read_as": "number"}, "eco", None, (None, "uncertain", False)),
+            ({"entity_id": "automation.t", "read_as": "boolean"}, "on", None, (True, "good", True)),
+            ({"entity_id": "automation.t", "read_as": "boolean"}, "false", None, (False, "good", True)),
+            ({"entity_id": "automation.t", "read_as": "boolean"}, "idle", None, (None, "uncertain", False)),
+            ({"entity_id": "sensor.t", "attribute": "x", "read_as": "boolean"}, "1", {"x": False}, (False, "good", True)),
+            ({"entity_id": "sensor.t", "attribute": "x", "read_as": "boolean"}, "1", {"x": 0}, (None, "uncertain", False)),
+            ({"entity_id": "sensor.t", "attribute": "x", "read_as": "auto"}, "1", {"x": None}, (None, "good", True)),
             ({"entity_id": "valve.t", "profile": "valve.boolean_open"}, "open", None, (True, "good", True)),
             # number / string kinds
             ({"entity_id": "number.t", "profile": "number.value"}, "4.5", None, (4.5, "good", True)),
@@ -396,3 +410,26 @@ class TestSelectAction:
     @pytest.mark.parametrize(("value", "key"), [(True, "true"), (False, "false"), (2.0, "2"), (2.5, "2.5"), (3, "3"), ("eco", "eco")])
     def test_action_key(self, value, key):
         assert action_key(value) == key
+
+
+class TestDirection:
+    @pytest.mark.parametrize(
+        ("config", "direction", "problem"),
+        [
+            ({"entity_id": "sensor.t", "profile": "sensor.value"}, "SOURCE", False),
+            ({"entity_id": "sensor.t", "profile": "sensor.value"}, "DEST", True),
+            ({"entity_id": "sensor.t", "profile": "sensor.value"}, "BOTH", True),
+            ({"entity_id": "sensor.t", "profile": "sensor.value", "service_name": "x"}, "BOTH", False),
+            ({"entity_id": "sensor.t", "profile": "sensor.value", "action": {"domain": "a", "name": "b"}}, "DEST", False),
+            ({"entity_id": "sensor.t", "profile": "sensor.value", "write_actions": {}}, "DEST", False),
+            ({"entity_id": "cover.t", "profile": "cover.stop"}, "DEST", False),
+            ({"entity_id": "cover.t", "profile": "cover.stop"}, "SOURCE", True),
+            ({"entity_id": "cover.t", "profile": "cover.stop"}, "BOTH", True),
+            ({"entity_id": "cover.t", "profile": "cover.stop", "attribute": "current_position"}, "BOTH", False),
+            ({"entity_id": "cover.t", "profile": "cover.stop", "state_map": {"open": True}}, "SOURCE", False),
+            ({"entity_id": "lock.t", "profile": "lock.boolean_locked"}, "BOTH", False),
+            ({"entity_id": "lock.t"}, "DEST", False),
+        ],
+    )
+    def test_direction_problem(self, config, direction, problem):
+        assert (direction_problem(HaBindingConfig(**config), direction) is not None) is problem

@@ -88,6 +88,8 @@ class HaBindingConfig(BaseModel):
     state_map: dict[str, Scalar] | None = Field(default=None, max_length=64)
     transitional_states: list[str] = Field(default_factory=list, max_length=32)
     fault_states: list[str] = Field(default_factory=list, max_length=32)
+    # How the read value is typed; None = from the profile, else the legacy coercion.
+    read_as: Literal["auto", "boolean", "number", "string"] | None = None
     # Stable import identity: hash of the HA registry unique_id (never the raw id).
     ha_uid: str | None = Field(default=None, pattern=r"^[0-9a-f]{16,64}$")
 
@@ -114,6 +116,26 @@ class HaBindingConfig(BaseModel):
             if entity_domain(self.entity_id) not in profile.domains:
                 raise ValueError(f"profile {self.profile!r} does not apply to {self.entity_id!r}")
         return self
+
+
+def direction_problem(bc: HaBindingConfig, direction: str) -> str | None:
+    """Why *bc* cannot work in *direction*, or None.
+
+    A read-only profile has nothing to write and a command profile nothing to
+    read, unless the binding supplies that side explicitly.
+    """
+    profile = PROFILES.get(bc.profile or "")
+    if profile is None:
+        return None
+    writes = direction in ("DEST", "BOTH")
+    reads = direction in ("SOURCE", "BOTH")
+    explicit_write = uses_legacy_write(bc) or bc.action is not None or bc.write_actions is not None
+    explicit_read = bool(bc.attribute) or bc.state_map is not None
+    if writes and profile.direction == "SOURCE" and not explicit_write:
+        return f"Profil {profile.id} ist nur lesend und kann nicht schreiben ({direction})"
+    if reads and profile.direction == "DEST" and not explicit_read:
+        return f"Profil {profile.id} ist ein reiner Befehl und kann nicht lesen ({direction})"
+    return None
 
 
 def uses_legacy_write(bc: HaBindingConfig) -> bool:
@@ -504,6 +526,10 @@ def _profile_action_dict(action: ProfileAction) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+ValueKind = Literal["auto", "boolean", "number", "string"]
+_KIND_BY_TYPE: dict[str, ValueKind] = {"BOOLEAN": "boolean", "FLOAT": "number", "INTEGER": "number", "STRING": "string"}
+
+
 @dataclass(frozen=True)
 class ResolvedMapping:
     mode: Literal["legacy", "write_actions", "action", "profile", "default"]
@@ -511,7 +537,7 @@ class ResolvedMapping:
     state_map: dict[str, Any] | None
     transitional_states: frozenset[str]
     fault_states: frozenset[str]
-    value_kind: Literal["auto", "number", "string"]
+    value_kind: ValueKind
     action: HaAction | None = None
     write_actions: dict[str, HaAction] | None = None
 
@@ -526,11 +552,7 @@ def resolve(bc: HaBindingConfig) -> ResolvedMapping:
     state_map = bc.state_map if bc.state_map is not None else (profile.state_map if profile else None)
     transitional = frozenset(bc.transitional_states or (profile.transitional_states if profile else ()))
     fault = frozenset(bc.fault_states or (profile.fault_states if profile else ()))
-    value_kind: Literal["auto", "number", "string"] = "auto"
-    if profile is not None and profile.data_type in ("FLOAT", "INTEGER"):
-        value_kind = "number"
-    elif profile is not None and profile.data_type == "STRING":
-        value_kind = "string"
+    value_kind: ValueKind = bc.read_as or (_KIND_BY_TYPE.get(profile.data_type, "auto") if profile else "auto")
 
     action: HaAction | None = None
     write_actions: dict[str, HaAction] | None = None
@@ -612,21 +634,41 @@ def normalize(mapping: ResolvedMapping, state_obj: dict[str, Any] | None) -> tup
 
     if mapping.attribute:
         raw = (state_obj.get("attributes") or {}).get(mapping.attribute)
-        if mapping.value_kind == "number" and raw is not None:
-            number = _to_number(raw)
-            return (number, GOOD, True) if number is not None else (None, UNCERTAIN, False)
-        return raw, GOOD, True
+        if mapping.value_kind in ("auto", "string") and raw is None:
+            return None, GOOD, True  # e.g. no media title while idle
+        return _typed(raw, mapping.value_kind, coerce=False)
 
     if mapping.state_map is not None:
         if state in mapping.state_map:
             return mapping.state_map[state], GOOD, True
         return None, UNCERTAIN, False
-    if mapping.value_kind == "number":
-        number = _to_number(state)
-        return (number, GOOD, True) if number is not None else (None, UNCERTAIN, False)
-    if mapping.value_kind == "string":
-        return state, GOOD, True
-    return coerce_state(state), GOOD, True
+    return _typed(state, mapping.value_kind, coerce=True)
+
+
+_TRUE = (True, "on", "true")
+_FALSE = (False, "off", "false")
+
+
+def _typed(raw: Any, kind: ValueKind, *, coerce: bool) -> tuple[Any, str, bool]:
+    """Type a raw value; a value that does not fit keeps the last one (uncertain)."""
+    if kind == "auto":
+        return (coerce_state(raw) if coerce else raw), GOOD, True
+    if kind == "string":
+        return str(raw), GOOD, True
+    if kind == "number":
+        value = _to_number(raw)
+    elif raw in _TRUE and not _is_number(raw):
+        value = True
+    elif raw in _FALSE and not _is_number(raw):
+        value = False
+    else:
+        value = None
+    return (value, GOOD, True) if value is not None else (None, UNCERTAIN, False)
+
+
+def _is_number(raw: Any) -> bool:
+    # 1 == True / 0 == False in Python: a numeric 1 is no Boolean state
+    return isinstance(raw, (int, float)) and not isinstance(raw, bool)
 
 
 # ---------------------------------------------------------------------------

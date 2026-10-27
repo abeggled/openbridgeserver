@@ -1692,12 +1692,12 @@ async def _ensure_ha_import_authority(db: Database, principal: Principal, instan
 
 async def _ha_import_plan(instance: Any, instance_id: str, body: HaImportRequest, db: Database) -> list[HaImportCandidate]:
     data = await _ha_entities(instance)
-    rows = await db.fetchall("SELECT id, config FROM adapter_bindings WHERE adapter_instance_id=?", (instance_id,))
+    rows = await db.fetchall("SELECT id, config, direction FROM adapter_bindings WHERE adapter_instance_id=?", (instance_id,))
     existing = []
     for row in rows:
         cfg = _json_config(row["config"])
         if cfg.get("entity_id"):
-            existing.append((str(row["id"]), cfg))
+            existing.append((str(row["id"]), cfg, row["direction"]))
     return plan_ha_import(data["entities"], body, existing)
 
 

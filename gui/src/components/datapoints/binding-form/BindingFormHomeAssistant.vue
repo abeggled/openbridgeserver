@@ -37,6 +37,15 @@
     </p>
   </div>
 
+  <div class="form-group" style="max-width:280px">
+    <label class="label">{{ $t('adapters.bindingForm.haReadAsLabel') }}</label>
+    <select v-model="cfg.read_as" class="input" data-testid="config-field-read_as">
+      <option value="">{{ $t('adapters.bindingForm.haReadAsDefault') }}</option>
+      <option v-for="kind in READ_AS" :key="kind" :value="kind">{{ $t(`adapters.bindingForm.haReadAs.${kind}`) }}</option>
+    </select>
+    <p class="hint">{{ $t('adapters.bindingForm.haReadAsHint') }}</p>
+  </div>
+
   <div class="rounded-lg border border-slate-200 dark:border-slate-700 p-3 text-xs flex flex-col gap-1" data-testid="ha-resolved-mapping">
     <div class="font-semibold text-slate-600 dark:text-slate-300">{{ $t('adapters.bindingForm.haResolvedMapping', { mode: $t(`adapters.homeassistant.mode.${resolved.mode}`) }) }}</div>
     <div v-if="resolved.convention" class="text-blue-500" data-testid="ha-convention">{{ $t(conventionKey(resolved.convention)) }}</div>
@@ -113,7 +122,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { adapterApi } from '@/api/client'
 import SuggestInput from '@/components/ui/SuggestInput.vue'
 import {
@@ -139,6 +148,9 @@ const props = defineProps({
   dpDataType: { type: String, default: '' },
 })
 
+const emit = defineEmits(['advanced-validity'])
+
+const READ_AS = ['auto', 'boolean', 'number', 'string']
 const catalog = ref([])
 const advancedText = ref(advancedMappingText(props.cfg))
 const advancedInvalid = ref(false)
@@ -203,7 +215,15 @@ function applyAdvanced() {
   const parsed = parseAdvancedMapping(advancedText.value)
   advancedInvalid.value = !parsed.ok
   if (parsed.ok) Object.assign(props.cfg, parsed.value)
+  emit('advanced-validity', parsed.ok)  // the parent blocks saving while it is invalid
 }
+
+// A profile only fits its own domain(s): drop it when the entity moves to another one,
+// instead of letting the save fail with a 422.
+watch(() => entityDomain(props.cfg.entity_id), (domain) => {
+  const profile = catalog.value.find(p => p.id === props.cfg.profile)
+  if (profile && !profile.domains.includes(domain)) props.cfg.profile = ''
+})
 
 onMounted(async () => {
   try {

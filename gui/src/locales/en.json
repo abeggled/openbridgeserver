@@ -805,7 +805,16 @@
       "haAdvancedHint": "Allowed keys: action, write_actions, state_map, transitional_states, fault_states. No templates or expressions.",
       "haEntityIdSearchHint": "Typing searches the entities of the selected Home Assistant instance (ID or name); free input stays possible.",
       "haNoSuggestions": "No suggestions — free input possible",
-      "haProfileTypeMismatch": "The profile produces {profile} values, the object has type {dp}."
+      "haProfileTypeMismatch": "The profile produces {profile} values, the object has type {dp}.",
+      "haReadAsLabel": "Read as",
+      "haReadAsDefault": "As the profile (else automatic)",
+      "haReadAsHint": "Type the Home Assistant value is converted to. A value that does not fit keeps the last value (quality uncertain).",
+      "haReadAs": {
+        "auto": "Automatic (on/off, number, text)",
+        "boolean": "Boolean (on/off)",
+        "number": "Number",
+        "string": "Text"
+      }
     },
     "knx": {
       "scan": {
@@ -1455,7 +1464,8 @@
         "bindingExists": "Binding already exists",
         "entityRenamed": "Already bound under another entity ID (renamed in Home Assistant) — please check the existing binding",
         "ambiguousReadOnly": "Ambiguous domain: imported read only; choose a profile to write",
-        "entityAlreadyBound": "This entity or attribute is already bound (manually or without a profile) — please check the existing binding"
+        "entityAlreadyBound": "This entity or attribute is already bound (manually or without a profile) — please check the existing binding",
+        "selectedTwice": "The same value is already part of this selection (e.g. profile and state without profile) — import it only once"
       },
       "convention": {
         "trueOn": "true = on",

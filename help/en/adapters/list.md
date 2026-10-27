@@ -110,8 +110,10 @@ Only values with quality *good* are passed on to other bindings.
 The import can be repeated: entities already bound show as *exists* and are skipped. If an
 entity was renamed in Home Assistant, OBS recognizes it by its registry identity and reports a
 *conflict* instead of creating a duplicate. It is also a *conflict* when the same state or
-attribute is already bound manually (without a profile). Existing objects and bindings are
-never overwritten.
+attribute is already bound manually (without a profile; write-only bindings do not count) or
+appears twice in the same selection. Existing objects and bindings are never overwritten. The
+data type of an imported state follows its current value (`on`/`off` → Boolean, number →
+number, otherwise text), and the binding later reads the value as exactly that type.
 
 ### Profiles
 
@@ -160,6 +162,11 @@ needed. *Advanced mapping (JSON)* additionally accepts:
 - `write_actions` — value-dependent actions, e.g.
   `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
 - `state_map`, `transitional_states`, `fault_states` — custom read normalization.
+
+**Read as** sets the type the value is converted to (Boolean, number, text or automatic); a
+value that does not fit keeps the last value with quality *uncertain*. A profile must fit the
+direction: a read-only profile cannot write and a command profile cannot read — OBS rejects such
+bindings when saving. Invalid JSON in the advanced mapping prevents saving.
 
 The action is chosen from the typed object value; the binding's formula and value map only
 change the value sent, never which action runs.
