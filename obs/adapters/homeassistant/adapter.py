@@ -75,8 +75,10 @@ BROWSE_CACHE_SECONDS = 30.0
 _sleep = asyncio.sleep  # module seam: tests observe the backoff without waiting
 
 # Attribute keys never exposed by the entity browser (e.g. media_player
-# entity_picture carries an access token in its URL).
-_SENSITIVE_ATTRIBUTE_PARTS = ("token", "password", "secret", "entity_picture", "access", "code")
+# entity_picture carries an access token in its URL). "code" only as the whole key:
+# error_code or country_code are ordinary values.
+_SENSITIVE_ATTRIBUTE_PARTS = ("token", "password", "secret", "entity_picture")
+_SENSITIVE_ATTRIBUTE_KEYS = frozenset({"code"})
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +106,11 @@ def _is_scalar(value: Any) -> bool:
 
 
 def _public_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in attrs.items() if _is_scalar(v) and not any(part in k.lower() for part in _SENSITIVE_ATTRIBUTE_PARTS)}
+    return {k: v for k, v in attrs.items() if _is_scalar(v) and not _is_sensitive(k.lower())}
+
+
+def _is_sensitive(key: str) -> bool:
+    return key in _SENSITIVE_ATTRIBUTE_KEYS or any(part in key for part in _SENSITIVE_ATTRIBUTE_PARTS)
 
 
 # Non-scalar attributes the profile checks read (e.g. on/off-only lights); passed

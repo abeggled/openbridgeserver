@@ -165,7 +165,7 @@ const profiles = computed(() => profilesForEntity(catalog.value, props.cfg.entit
 const unknownProfile = computed(() => !!props.cfg.profile && !profiles.value.some(p => p.id === props.cfg.profile))
 const resolved = computed(() => resolveHaMapping(props.cfg, catalog.value))
 const rows = computed(() => writeRows(resolved.value.write, resolved.value.writeKind))
-const typeMismatch = computed(() => profileTypeMismatch(catalog.value, props.cfg.profile, props.dpDataType))
+const typeMismatch = computed(() => profileTypeMismatch(catalog.value, props.cfg.profile, props.dpDataType, props.cfg.attribute))
 
 // Live suggestions from the selected instance; without one (or offline) the
 // fields stay plain free-text inputs.

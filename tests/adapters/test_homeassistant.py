@@ -706,6 +706,9 @@ class TestBrowse:
                 "volume_level": 0.3,
                 "source_list": ["a"],
                 "friendly_name": "Sonos",
+                "Code": "1234",
+                "error_code": 0,
+                "last_access": "today",
             },
         }
         fake_ha.entity_registry = [{"entity_id": "media_player.sonos", "platform": "sonos", "device_id": "d1", "unique_id": "RINCON_123"}, "junk"]
@@ -724,7 +727,8 @@ class TestBrowse:
         data = await adapter.browse_entities()
         assert data["metadata_available"] is True
         sonos = next(e for e in data["entities"] if e["entity_id"] == "media_player.sonos")
-        assert sonos["attributes"] == {"volume_level": 0.3, "friendly_name": "Sonos"}
+        # "code" is hidden only as the whole key; error_code / last_access are ordinary values
+        assert sonos["attributes"] == {"volume_level": 0.3, "friendly_name": "Sonos", "error_code": 0, "last_access": "today"}
         assert sonos["device"] == "Kitchen speaker"
         assert sonos["area"] == "Küche"
         assert sonos["platform"] == "sonos"

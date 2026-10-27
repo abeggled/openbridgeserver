@@ -25,10 +25,12 @@ export function reasonKey(code) {
 const TYPE_GROUP = { BOOLEAN: 'bool', FLOAT: 'number', INTEGER: 'number', STRING: 'text' }
 
 // { profile, dp } when the profile's value type does not fit the DataPoint, else null.
-export function profileTypeMismatch(catalog, profileId, dpDataType) {
+export function profileTypeMismatch(catalog, profileId, dpDataType, attribute = '') {
   const profile = (catalog ?? []).find(p => p.id === profileId)
   const dp = String(dpDataType ?? '').toUpperCase()
   if (!profile || !(profile.data_type in TYPE_GROUP) || !(dp in TYPE_GROUP)) return null
+  // A different attribute replaces the profile's value, and with it the profile's type.
+  if (attribute && attribute !== profile.attribute) return null
   return TYPE_GROUP[profile.data_type] === TYPE_GROUP[dp] ? null : { profile: profile.data_type, dp }
 }
 

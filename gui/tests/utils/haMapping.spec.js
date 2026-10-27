@@ -217,4 +217,9 @@ describe('profileTypeMismatch', () => {
   it('handles a missing catalog', () => {
     expect(profileTypeMismatch(null, 'a', 'INTEGER')).toBeNull()
   })
+  it('only applies to the value the profile reads', () => {
+    const lights = [{ id: 'l', data_type: 'INTEGER', attribute: 'brightness' }]
+    expect(profileTypeMismatch(cat, 'a', 'INTEGER', 'battery')).toBeNull()
+    expect(profileTypeMismatch(lights, 'l', 'BOOLEAN', 'brightness')).toEqual({ profile: 'INTEGER', dp: 'BOOLEAN' })
+  })
 })

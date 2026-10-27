@@ -513,3 +513,24 @@ async def test_deleting_an_instance_drops_its_import_lock(monkeypatch, db):
     assert str(instance_id) not in adapters_api._HA_IMPORT_LOCKS
     other = await _instance(db)  # an instance that never imported has no lock to drop
     await adapters_api.delete_instance(other, _user=ADMIN, db=db)
+
+
+async def test_reloads_after_the_deferred_block_run_immediately(monkeypatch, db):
+    instance_id = str(uuid.uuid4())
+    reload = AsyncMock()
+    monkeypatch.setattr(adapters_api.adapter_registry, "reload_instance_from_rows", reload)
+    monkeypatch.setitem(adapters_api.adapter_registry._instances, instance_id, object())
+    started = asyncio.Event()
+
+    async def late_reload():
+        await started.wait()  # runs only after the block ended, with its copied context
+        await adapters_api.adapter_registry.reload_instance_bindings(instance_id, db)
+
+    async with adapters_api.adapter_registry.deferred_binding_reloads(db):
+        task = asyncio.create_task(late_reload())
+        await adapters_api.adapter_registry.reload_instance_bindings(instance_id, db)
+        reload.assert_not_awaited()  # deferred inside the block
+    assert reload.await_count == 1  # drained at the end
+    started.set()
+    await task
+    assert reload.await_count == 2  # not swallowed by the closed set

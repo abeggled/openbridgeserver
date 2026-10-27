@@ -167,6 +167,8 @@ needed. *Advanced mapping (JSON)* additionally accepts:
 - `state_map`, `transitional_states`, `fault_states` — custom read normalization. With an
   attribute, `state_map` applies to its value; values that are not text are looked up as JSON
   (`true`, `1`, `null`).
+  An own attribute replaces the profile's value together with its type and mapping; the
+  profile's actions stay.
 
 **Read as** sets the type the value is converted to (Boolean, number, text or automatic); a
 value that does not fit keeps the last value with quality *uncertain*. A profile must fit the

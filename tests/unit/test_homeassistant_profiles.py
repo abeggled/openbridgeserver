@@ -292,6 +292,16 @@ class TestNormalize:
         assert _read(cfg, "heat", {}) == (0, "good", True)
         assert _read(cfg, "heat", {"hvac_action": "cooling"}) == (None, "uncertain", False)
 
+    def test_profile_value_type_only_applies_to_the_profile_value(self):
+        power = {"entity_id": "switch.x", "profile": "switch.on_off", "attribute": "current_power_w"}
+        assert _read(power, "on", {"current_power_w": 85}) == (85, "good", True)  # auto, not the profile's Boolean
+        assert _read({"entity_id": "switch.x", "profile": "switch.on_off"}, "on") == (True, "good", True)
+        assert _read({"entity_id": "cover.x", "profile": "cover.position", "attribute": "current_position"}, "open", {"current_position": "40"}) == (
+            40,
+            "good",
+            True,
+        )
+
     def test_profile_state_map_only_applies_to_the_profile_value(self):
         assert _read(
             {"entity_id": "lock.x", "profile": "lock.boolean_locked", "attribute": "battery", "read_as": "number"}, "locked", {"battery": 80}
@@ -472,6 +482,7 @@ class TestMissingAttributeValues:
         assert _read({"entity_id": "light.t", "profile": "light.brightness"}, state, attrs) == expected
 
     def test_only_for_the_profiles_own_attribute(self):
-        # an explicit other attribute does not inherit brightness' "off" value
-        assert _read({"entity_id": "light.t", "profile": "light.brightness", "attribute": "color_temp"}, "off", {}) == (None, "uncertain", False)
+        # an explicit other attribute inherits neither brightness' "off" value nor its type:
+        # it reads like a manual attribute binding
+        assert _read({"entity_id": "light.t", "profile": "light.brightness", "attribute": "color_temp"}, "off", {}) == (None, "good", True)
         assert _read({"entity_id": "media_player.t", "profile": "media_player.volume"}, "off", {}) == (None, "uncertain", False)

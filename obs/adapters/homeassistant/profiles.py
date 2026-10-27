@@ -560,12 +560,12 @@ def _materialize(action: ProfileAction, entity_id: str) -> HaAction:
 def resolve(bc: HaBindingConfig) -> ResolvedMapping:
     profile = PROFILES.get(bc.profile) if bc.profile else None
     attribute = bc.attribute or (profile.attribute if profile else None)
-    # A profile's state_map and "missing attribute" values only apply to the value it reads.
+    # A profile's state_map, value type and "missing attribute" values only apply to the value it reads.
     own_value = profile is not None and attribute == profile.attribute
     state_map = bc.state_map if bc.state_map is not None else (profile.state_map if own_value else None)
     transitional = frozenset(bc.transitional_states or (profile.transitional_states if profile else ()))
     fault = frozenset(bc.fault_states or (profile.fault_states if profile else ()))
-    value_kind: ValueKind = bc.read_as or (_KIND_BY_TYPE.get(profile.data_type, "auto") if profile else "auto")
+    value_kind: ValueKind = bc.read_as or (_KIND_BY_TYPE.get(profile.data_type, "auto") if own_value else "auto")
 
     action: HaAction | None = None
     write_actions: dict[str, HaAction] | None = None

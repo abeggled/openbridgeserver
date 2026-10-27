@@ -8,6 +8,7 @@ exactly the same plan.
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -144,10 +145,11 @@ def _infer_type(value: Any) -> str:
         return "FLOAT"
     if isinstance(value, str):
         try:
-            float(value)
+            number = float(value)
         except ValueError:
             return "STRING"
-        return "FLOAT"
+        # "nan"/"inf" parse as floats, but a number binding never accepts them.
+        return "FLOAT" if math.isfinite(number) else "STRING"
     return "STRING"
 
 

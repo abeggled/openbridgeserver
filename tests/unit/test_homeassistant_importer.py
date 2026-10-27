@@ -293,6 +293,8 @@ class TestReviewFollowUps:
             (_entity("sensor.n", "unknown"), "STRING", "string"),
             (_entity("sensor.w", "unknown", {"unit_of_measurement": "W"}), "FLOAT", "number"),
             (_entity("sensor.m", "12"), "FLOAT", "number"),
+            (_entity("sensor.nan", "nan"), "STRING", "string"),  # parses as float, never reads as a number
+            (_entity("sensor.inf", "inf"), "STRING", "string"),
         ],
     )
     def test_plain_state_type_matches_how_it_is_read(self, entity, expected_type, read_as):

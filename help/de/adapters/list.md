@@ -181,6 +181,8 @@ Unter *Erweiterte Zuordnung (JSON)* sind zusätzlich möglich:
 - `state_map`, `transitional_states`, `fault_states` — eigene Lese-Normalisierung. Mit
   einem Attribut gilt `state_map` für dessen Wert; Werte, die kein Text sind, werden als JSON
   nachgeschlagen (`true`, `1`, `null`).
+  Ein eigenes Attribut ersetzt den Wert des Profils mitsamt dessen Typ und Zuordnung; die
+  Aktionen des Profils bleiben.
 
 **Lesen als** legt fest, in welchen Typ der Wert umgewandelt wird (Boolean, Zahl, Text oder
 automatisch); ein unpassender Wert behält den letzten Wert mit Qualität *unsicher*. Ein Profil
