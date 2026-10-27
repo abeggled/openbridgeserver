@@ -21,6 +21,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -304,6 +305,89 @@ async def _require_visu_creation_parent(db: Database, principal: Principal, pare
         return
     await _require_discoverable_node(db, parent_id, principal)
     await _require_visu_generate(db, principal, [parent_id])
+
+
+_SVG_ICON_REF_RE = re.compile(r"^svg:([A-Za-z0-9_-]+)$")
+
+# Header carrying the PIN session tokens a Visu browser holds, comma-separated.
+# The icon list needs all of them at once — it is loaded once for every page.
+VISU_SESSION_TOKENS_HEADER = "X-Session-Tokens"
+
+
+def _collect_svg_icon_names(value: Any, names: set[str]) -> None:
+    """Collect every `svg:<name>` icon reference in a node icon or page config."""
+    if isinstance(value, str):
+        match = _SVG_ICON_REF_RE.match(value)
+        if match:
+            names.add(match.group(1))
+    elif isinstance(value, dict):
+        for item in value.values():
+            _collect_svg_icon_names(item, names)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_svg_icon_names(item, names)
+
+
+async def anonymous_visible_icon_names(db: Database, session_tokens: list[str]) -> set[str]:
+    """Icons a visitor without login may load: those the Visu would show them anyway.
+
+    - the icon of every node the tree lists for anonymous visitors (all but `user` nodes),
+    - every icon used on a `public` or `readonly` page,
+    - every icon used on a `protected` page once a valid PIN session token for it is sent.
+
+    Icons used only on login-only pages, or not used at all, stay hidden.
+    """
+    # One query for the whole tree; the inherited access is then resolved in memory
+    # (same rule as _resolve_access_with_node), memoised per node, instead of one
+    # query per ancestor for every node on every anonymous request.
+    rows = await db.fetchall(
+        """SELECT vn.id, vn.parent_id, vn.icon, vn.page_config, avp.access_mode
+           FROM visu_nodes AS vn
+           LEFT JOIN authz_visu_page_policies AS avp ON avp.node_id = vn.id""",
+    )
+    nodes = {row["id"]: row for row in rows}
+    resolved: dict[str, tuple[str, str | None]] = {}
+
+    def effective_access(node_id: str) -> tuple[str, str | None]:
+        path: list[str] = []
+        current: str | None = node_id
+        while True:
+            if current is None or current not in nodes or current in path:
+                result: tuple[str, str | None] = ("public", None)
+                break
+            if current in resolved:
+                result = resolved[current]
+                break
+            if nodes[current]["access_mode"] is not None:
+                result = (nodes[current]["access_mode"], current)
+                path.append(current)
+                break
+            path.append(current)
+            current = nodes[current]["parent_id"]
+        for visited in path:
+            resolved[visited] = result
+        return result
+
+    names: set[str] = set()
+    for row in rows:
+        access, defining_node_id = effective_access(row["id"])
+        if access == "user":
+            continue
+        _collect_svg_icon_names(row["icon"], names)
+        if access == "protected":
+            validate_id = defining_node_id or row["id"]
+            if not any(validate_session(token, validate_id) for token in session_tokens):
+                continue
+        try:
+            _collect_svg_icon_names(json.loads(row["page_config"]), names)
+        except (TypeError, ValueError):
+            continue
+    return names
+
+
+def session_tokens_from_request(request: Request) -> list[str]:
+    raw = request.headers.get(VISU_SESSION_TOKENS_HEADER, "")
+    return [token.strip() for token in raw.split(",") if token.strip()]
 
 
 def _collect_page_datapoint_ids(config: PageConfig) -> list[str]:
